@@ -1,0 +1,51 @@
+#pragma once
+
+#include "geometry/Vec2.h"
+#include "model/Entity.h"
+
+#include <optional>
+#include <vector>
+
+namespace Edraw_Desktop {
+
+// Result of a fillet/chamfer: the two source lines are trimmed in place and a
+// connector entity (arc for fillet, line for chamfer) is returned.
+struct CornerResult {
+    bool ok = false;
+    Entity connector; // arc (fillet) or line (chamfer)
+};
+
+// Round the corner between two line entities with the given radius. `near1`/
+// `near2` are pick points used to choose which side of each line is kept.
+CornerResult filletLines(Entity& l1, Entity& l2, double radius,
+                         const Vec2& near1, const Vec2& near2);
+
+// Bevel the corner between two line entities by the given setbacks.
+CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
+                         const Vec2& near1, const Vec2& near2);
+
+// Trim a line to the cutting intersection nearest the pick point, removing the
+// portion on the pick side. Returns true if modified.
+bool trimLineAt(Entity& line, const Vec2& pick,
+                const std::vector<Entity>& others);
+
+// Extend a line's nearest end to the first boundary it would meet. Returns true
+// if modified.
+bool extendLineTo(Entity& line, const Vec2& pick,
+                  const std::vector<Entity>& others);
+
+// Rectangular array: returns clones (excluding the original at row0/col0).
+std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
+                              double dx, double dy);
+
+// Explode a composite entity into its primitive parts (lines). Returns empty if
+// the entity is not explodable.
+std::vector<Entity> explodeEntity(const Entity& e);
+
+// Purge: fully separate an object into single primitives — double line -> two
+// lines, double/filleted polyline -> line segments of each run, connector ->
+// body + pin lines + text, rect/polygon/polyline -> segments. Returns empty for
+// entities that are already primitive (line, circle, arc, text...).
+std::vector<Entity> purgeEntity(const Entity& e);
+
+} // namespace Edraw_Desktop

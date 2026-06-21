@@ -1,0 +1,119 @@
+#pragma once
+
+#include "model/Document.h"
+#include "tools/ToolId.h"
+
+#include <QHash>
+#include <QMainWindow>
+#include <QStringList>
+#include <QVector>
+#include <functional>
+#include <memory>
+#include <vector>
+
+class QLabel;
+class QAction;
+class QActionGroup;
+class QTabWidget;
+class QTabBar;
+class QTableWidget;
+class QListWidget;
+class QLineEdit;
+class QComboBox;
+class QWidget;
+class QCloseEvent;
+
+namespace Edraw_Desktop {
+
+class CanvasWidget;
+class Editor;
+
+// Top-level application window: ribbon, dockable panels (layers / properties /
+// entity list), command bar, coordinate readout, and view/edit actions.
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    // Open a .dwx or .dxf by path (used by File>Open and the command line).
+    void openPath(const QString& path);
+
+protected:
+    void closeEvent(QCloseEvent* e) override;
+
+private:
+    void buildRibbon();
+    void buildPanels();
+    void buildStatusControls();
+    void buildCommandBar();
+    void buildMenus();
+    void buildDocumentArea(); // tab bar + canvas
+
+    // Multi-document management.
+    Document* addDocument(std::unique_ptr<Document> doc, const QString& path);
+    void activateIndex(int index);   // make tab `index` the active drawing
+    void closeDocument(int index);
+    bool maybeSaveDoc(int index);    // prompt to save if dirty; false => cancel
+    bool saveDocument(int index, bool forceDialog = false);
+    void updateActiveTabText();
+    void updateWindowTitleForActive();
+    int activeIndex() const;
+
+    QAction* makeToolAction(const QString& text, ToolId id);
+    QWidget* ribbonGroup(const QString& title, QWidget* content);
+    QWidget* toolRow(const QList<ToolId>& tools);
+
+    void refreshPanels();
+    void refreshLayers();
+    void refreshProperties();
+    void refreshEntityList();
+
+    void runCommand(const QString& text);
+    void submitCommand(const QString& text); // shared by command bar + dynamic input
+
+    // AutoCAD-style command registry (drives both command input and the help popup).
+    struct Command {
+        QStringList names;   // first is the canonical name; rest are aliases
+        QString category;    // Draw / Modify / Harness / Edit / View / File
+        QString desc;
+        std::function<void()> run;
+    };
+    void buildCommands();
+    void showHelp();
+    QVector<Command> commands_;
+    void arrayDialog();
+    void promptFilletRadius();
+    void promptChamferDistance();
+
+    void showConnectorDialog();
+    void showBomDialog();
+
+    void newDrawing();
+    void openDrawing();
+    void saveDwxAs();
+    void exportDxfAs();
+
+    std::vector<std::unique_ptr<Document>> docs_; // open drawings
+    QStringList docPaths_;                         // parallel file paths ("" if unsaved)
+    Document* doc_ = nullptr;                      // active drawing (raw, owned by docs_)
+    QTabBar* docTabs_ = nullptr;
+    Editor* editor_ = nullptr;
+    CanvasWidget* canvas_ = nullptr;
+
+    QActionGroup* toolGroup_ = nullptr;
+    QHash<int, QAction*> toolActions_;
+
+    QTabWidget* ribbon_ = nullptr;
+    QTableWidget* layersTable_ = nullptr;
+    QTableWidget* propsTable_ = nullptr;
+    QListWidget* entityList_ = nullptr;
+    QLineEdit* commandEdit_ = nullptr;
+    QLabel* coordLabel_ = nullptr;
+    QComboBox* layerCombo_ = nullptr;
+    QComboBox* colorCombo_ = nullptr;
+
+    bool refreshing_ = false; // guard against re-entrant table edits
+};
+
+} // namespace Edraw_Desktop

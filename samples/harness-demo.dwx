@@ -1,0 +1,27 @@
+{
+  "format": "DWX", "version": 1, "app": "Ewire", "unit": "mm",
+  "layers": [
+    { "name": "0", "color": "#ffffff", "visible": true, "locked": false, "weight": 2 },
+    { "name": "Wires", "color": "#8bdc65", "visible": true, "locked": false, "weight": 2 },
+    { "name": "Dimensions", "color": "#f5c66d", "visible": true, "locked": false, "weight": 2 }
+  ],
+  "entities": [
+    { "type": "connector", "layer": "0", "position": {"x":0,"y":0},
+      "designator":"X1", "partNumber":"MX-4P", "pinCount":4, "pitch":18, "pinLength":40, "rectWidth":44, "mirrorX":false,
+      "pins":["1","2","3","4"] },
+    { "type": "connector", "layer": "0", "position": {"x":260,"y":0},
+      "designator":"X2", "partNumber":"MX-4P", "pinCount":4, "pitch":18, "pinLength":40, "rectWidth":44, "mirrorX":true,
+      "pins":["A","B","C","D"] },
+    { "type": "wire", "layer": "Wires", "wireColor":"RD", "wireGauge":"1.0", "netName":"BATT+", "showLabel":true,
+      "points":[ {"x":84,"y":-14}, {"x":160,"y":-14}, {"x":216,"y":-14} ] },
+    { "type": "wire", "layer": "Wires", "wireColor":"BK", "wireGauge":"1.0", "netName":"GND", "showLabel":true,
+      "points":[ {"x":84,"y":-32}, {"x":216,"y":-32} ] },
+    { "type": "wire", "layer": "Wires", "wireColor":"BU", "wireGauge":"0.5", "netName":"CAN_H", "showLabel":true,
+      "points":[ {"x":84,"y":-50}, {"x":150,"y":-50}, {"x":150,"y":-68}, {"x":216,"y":-68} ] },
+    { "type": "wire", "layer": "Wires", "wireColor":"GNYE", "wireGauge":"0.75", "netName":"CAN_L", "showLabel":true,
+      "points":[ {"x":84,"y":-68}, {"x":130,"y":-68}, {"x":216,"y":-86} ] },
+    { "type": "splice", "layer": "Wires", "position": {"x":150,"y":-32} },
+    { "type": "notconnected", "layer": "0", "position": {"x":236,"y":-50} },
+    { "type": "netlabel", "layer": "0", "position": {"x":120,"y":18}, "text": "ENGINE HARNESS" }
+  ]
+}

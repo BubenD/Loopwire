@@ -1,0 +1,6 @@
+{
+  "name": "ewire",
+  "version": "0.1.0",
+  "description": "Native C++/Qt 2D CAD for wire harnesses",
+  "dependencies": []
+}
