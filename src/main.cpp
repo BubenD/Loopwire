@@ -8,7 +8,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Edraw"));
     QApplication::setOrganizationName(QStringLiteral("Whatson"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral("0.1"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/edraw.ico"))); // taskbar / title bar
 
     if (QFile qss(QStringLiteral(":/edraw.qss")); qss.open(QFile::ReadOnly | QFile::Text))

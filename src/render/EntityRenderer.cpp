@@ -9,7 +9,15 @@
 #include <QPolygonF>
 #include <QtMath>
 
+#include <algorithm>
+
 namespace Edraw_Desktop {
+
+namespace {
+int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
+}
+void EntityRenderer::setDimensionDecimals(int d) { g_dimDecimals = std::clamp(d, 0, 6); }
+int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
 
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     QString layerHex = QStringLiteral("#ffffff");
@@ -194,7 +202,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPointF a = vt.toScreen(e.a), b = vt.toScreen(e.b);
         p.drawLine(a, b);
         // Small tick marks and a length label.
-        const QString label = QStringLiteral("%1").arg(distance(e.a, e.b), 0, 'f', 1);
+        const QString label = QStringLiteral("%1").arg(distance(e.a, e.b), 0, 'f', g_dimDecimals);
         drawWorldText(p, QPointF((a.x() + b.x()) / 2.0, (a.y() + b.y()) / 2.0 - 4),
                       label, 3.0, vt.scale(), color, Qt::AlignHCenter);
         break;

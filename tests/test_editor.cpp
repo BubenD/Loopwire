@@ -327,17 +327,56 @@ int run_editor_tests() {
         }
     }
 
-    // --- After finishing a draw, the tool returns to Select; Space repeats it.
+    // --- After finishing a (single-shot) draw, the tool returns to Select; Space repeats it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Rect);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // finishes the rect
+        check(d.entities().size() == 1, "finish: rect created");
+        check(ed.tool() == ToolId::Select, "finish: returned to Select mode");
+        ed.onKey(Qt::Key_Space, Qt::NoModifier);
+        check(ed.tool() == ToolId::Rect, "finish: Space repeats last tool");
+    }
+
+    // --- Line tool draws several CONNECTED straight segments until Enter/Esc.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::Line);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // start
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);  // commits segment 1
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // commits segment 2
+        check(d.entities().size() == 2, "line-cont: each click adds a connected segment");
+        check(ed.tool() == ToolId::Line && ed.isDrafting(), "line-cont: stays in Line during the run");
+        check(near(d.entities()[0].b.x, 10.0) && near(d.entities()[1].a.x, 10.0) &&
+                  near(d.entities()[1].a.y, 0.0),
+              "line-cont: segments share the joint (connected)");
+        ed.onKey(Qt::Key_Return, Qt::NoModifier); // ends the run, stays in Line
+        check(ed.tool() == ToolId::Line && !ed.isDrafting(), "line-cont: Enter ends run, stays in Line");
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier); // start a new run
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(ed.tool() == ToolId::Select, "line-cont: Esc exits to Select");
+    }
+
+    // --- Polyline options: "u" Undo drops the last point; "c" Close finishes the loop.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier); // finishes the line
-        check(d.entities().size() == 1, "finish: line created");
-        check(ed.tool() == ToolId::Select, "finish: returned to Select mode");
-        ed.onKey(Qt::Key_Space, Qt::NoModifier);
-        check(ed.tool() == ToolId::Line, "finish: Space repeats last tool");
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({99, 99}, Qt::LeftButton, Qt::NoModifier); // a stray 4th point
+        check(ed.acceptCommandInput(QStringLiteral("u")), "pline: Undo consumed");      // drop (99,99)
+        check(ed.acceptCommandInput(QStringLiteral("c")), "pline: Close consumed");
+        check(d.entities().size() == 1, "pline: closed polyline created");
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Polyline && e.points.size() == 4 &&
+                  near(e.points.front().x, e.points.back().x) &&
+                  near(e.points.front().y, e.points.back().y),
+              "pline: Close appends the start point (loop closed)");
     }
 
     // --- Editable properties: geometry + general (meta).
@@ -475,6 +514,82 @@ int run_editor_tests() {
             auto r = roundedPolyline(pts, 3.0);
             check(r.size() > pts.size(), "roundedPolyline: adds fillet arc points");
         }
+    }
+
+    // --- Double line: grabbing a VISIBLE end joint moves only that end.
+    // Regression: with object snap on, the grab used to snap the cursor onto the
+    // invisible centerline (off the grips), so it jumped to the centerline
+    // midpoint or translated the whole line. Snap now follows the visible lines
+    // and the grab is tested against the raw click.
+    {
+        Document d; d.entities().clear();
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        dl.a = {0, 0}; dl.b = {40, 0}; dl.meta.insert("gap", 10.0);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d);
+        auto& s = ed.snapSettings();         // object snap ON (the buggy config)
+        s.objectSnap = true; s.snapEndpoint = true; s.snapMidpoint = true;
+        s.gridSnap = false; s.ortho = false; s.polar = false;
+        ed.selectAll();
+        // Click the top-left VISIBLE end (a + perpendicular offset gap/2 = (0,5)),
+        // then move and click to place it up-and-right.
+        ed.onPointerPress({0, 5}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({10, 20});
+        ed.onPointerPress({10, 20}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::DoubleLine, "dl-grab: still a double line");
+        check(near(e.b.x, 40.0) && near(e.b.y, 0.0), "dl-grab: end B unchanged (not a whole-line move)");
+        // The GRABBED visible corner (a ± perp*gap/2), not the centerline end,
+        // must land on the cursor; the pair stays parallel with the gap kept.
+        const Vec2 nrm = (e.b - e.a).normalized().perp() * 5.0; // gap/2 = 5
+        const double dTop = distance(e.a + nrm, {10, 20});
+        const double dBot = distance(e.a - nrm, {10, 20});
+        check(std::min(dTop, dBot) < 1e-3, "dl-grab: grabbed corner follows the cursor");
+    }
+
+    // --- Double line: the centerline joint at an END moves the whole end to the
+    // cursor (both lines stay centered on it). beginGripGrab must pick the NEAREST
+    // grip, so the centerline end isn't shadowed by a nearby corner grip.
+    {
+        Document d; d.entities().clear();
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        dl.a = {0, 0}; dl.b = {40, 0}; dl.meta.insert("gap", 10.0);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // centerline end A
+        ed.onPointerMove({5, 10});
+        ed.onPointerPress({5, 10}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(near(e.a.x, 5.0) && near(e.a.y, 10.0), "dl-midend: centerline end A follows the cursor");
+        check(near(e.b.x, 40.0) && near(e.b.y, 0.0), "dl-midend: end B unchanged");
+    }
+
+    // --- Double line region selection: a crossing box BETWEEN the lines (not
+    // touching either) must NOT select; touching a visible line (or fully
+    // enclosing the pair) selects.
+    {
+        Document d; d.entities().clear();
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        // gap 40 => visible lines at y = +/-20; box corners stay >10 (the click
+        // tolerance) from the lines so a press in the gap starts a region instead
+        // of click-picking the line.
+        dl.a = {0, 0}; dl.b = {40, 0}; dl.meta.insert("gap", 40.0);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) {       // c2.x<c1.x => crossing, else window
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier); // anchor on empty space
+            ed.onPointerRelease(c1, Qt::LeftButton);               // -> RectPending
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier); // opposite corner commits
+        };
+        regionSelect({20, 5}, {10, -5});    // crossing, entirely inside the gap (y in [-5,5])
+        check(ed.selection().empty(), "dl-region: crossing the gap (no line touched) does NOT select");
+        regionSelect({20, 35}, {10, -35});  // crossing, spans through both visible lines
+        check(ed.selection().size() == 1, "dl-region: crossing a visible line selects");
+        regionSelect({-5, -35}, {45, 35});  // window enclosing the whole double line
+        check(ed.selection().size() == 1, "dl-region: window enclosing both lines selects");
     }
 
     // --- Purge separates an object into single primitives.

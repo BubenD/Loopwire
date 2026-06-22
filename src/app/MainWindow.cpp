@@ -18,6 +18,10 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QColorDialog>
+#include <QCompleter>
+#include <QGroupBox>
+#include <QRadioButton>
+#include <QSlider>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -40,15 +44,18 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFrame>
+#include <QIcon>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QHash>
 #include <QMouseEvent>
 #include <QEnterEvent>
 #include <QPaintEvent>
+#include <QResizeEvent>
 #include <QCursor>
 #include <QElapsedTimer>
 
@@ -63,12 +70,12 @@ namespace {
 
 // Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
 // icon grid without external assets.
-QIcon makeToolIcon(ToolId id) {
+QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
     QPixmap pm(24, 24);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor("#cfd8e6"));
+    QPen pen(ink);
     pen.setWidthF(1.6);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
@@ -77,7 +84,7 @@ QIcon makeToolIcon(ToolId id) {
     switch (id) {
     case ToolId::Select: {
         QPolygonF a({{6, 4}, {6, 18}, {10, 14}, {13, 20}, {15, 19}, {12, 13}, {17, 13}});
-        p.setBrush(QColor("#cfd8e6"));
+        p.setBrush(ink);
         p.drawPolygon(a);
         break;
     }
@@ -110,7 +117,7 @@ QIcon makeToolIcon(ToolId id) {
     case ToolId::Chamfer: { QPolygonF a({{5, 19}, {5, 10}, {10, 5}, {19, 5}}); p.drawPolyline(a); break; }
     case ToolId::Wire: { pen.setWidthF(2.4); p.setPen(pen); p.drawLine(4, 17, 20, 7); break; }
     case ToolId::Connector: p.drawRect(6, 5, 8, 14); p.drawLine(14, 9, 20, 9); p.drawLine(14, 15, 20, 15); break;
-    case ToolId::Splice: p.setBrush(QColor("#cfd8e6")); p.drawEllipse(QPointF(12, 12), 4, 4); break;
+    case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
     case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     }
@@ -120,12 +127,14 @@ QIcon makeToolIcon(ToolId id) {
 
 // Icons for the bottom-right drafting toggles (grid / grid-snap / polar / object
 // snap), in the same flat line-art style as the tool icons.
-QIcon makeStatusIcon(const QString& which) {
+QIcon makeStatusIcon(const QString& which, const QColor& ink = QColor("#cfd8e6")) {
     QPixmap pm(22, 22);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor("#cfd8e6"));
+    QColor dimC = ink;
+    dimC.setAlpha(150); // secondary lines in gridsnap/osnap
+    QPen pen(ink);
     pen.setWidthF(1.4);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
@@ -141,7 +150,7 @@ QIcon makeStatusIcon(const QString& which) {
         }
     } else if (which == QLatin1String("gridsnap")) {
         // Grid with a cursor snapped onto a node.
-        QPen dim(QColor("#7d8aa0"));
+        QPen dim(dimC);
         dim.setWidthF(1.1);
         p.setPen(dim);
         for (int i = 0; i <= 2; ++i) {
@@ -152,7 +161,7 @@ QIcon makeStatusIcon(const QString& which) {
         p.setPen(pen);
         // Cursor arrow landing on the centre node (9.5, 9.5).
         QPolygonF a({{11, 11}, {20, 13.5}, {15.5, 15.5}, {13.5, 20}});
-        p.setBrush(QColor("#cfd8e6"));
+        p.setBrush(ink);
         p.drawPolygon(a);
         p.setBrush(Qt::NoBrush);
         p.drawEllipse(QPointF(9.5, 9.5), 1.6, 1.6);
@@ -166,7 +175,7 @@ QIcon makeStatusIcon(const QString& which) {
         p.drawPath(pa);
     } else if (which == QLatin1String("osnap")) {
         // Object snap: a snap square marker over an intersection of two lines.
-        QPen dim(QColor("#7d8aa0"));
+        QPen dim(dimC);
         dim.setWidthF(1.1);
         p.setPen(dim);
         p.drawLine(QPointF(3, 16), QPointF(19, 6));
@@ -181,6 +190,132 @@ QIcon makeStatusIcon(const QString& which) {
         // Angle wedge.
         p.drawLine(QPointF(4, 18), QPointF(19, 18));
         p.drawLine(QPointF(4, 18), QPointF(18, 6));
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+// AutoCAD-style object-snap marker glyphs for the osnap fall-menu (soft magenta,
+// like the running-osnap markers AutoCAD draws on a dark canvas).
+QIcon makeOsnapMarkerIcon(const QString& kind) {
+    QPixmap pm(18, 18);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#e2a0c6"));
+    pen.setWidthF(1.5);
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    const QPointF c(9, 9);
+    if (kind == QLatin1String("endpoint")) {
+        p.drawRect(QRectF(3.5, 3.5, 11, 11)); // square
+    } else if (kind == QLatin1String("midpoint")) {
+        p.drawPolygon(QPolygonF({{9, 3}, {15, 15}, {3, 15}})); // triangle
+    } else if (kind == QLatin1String("center")) {
+        p.drawEllipse(c, 6, 6); // circle
+    } else if (kind == QLatin1String("intersection")) {
+        p.drawLine(QPointF(3.5, 3.5), QPointF(14.5, 14.5)); // X
+        p.drawLine(QPointF(14.5, 3.5), QPointF(3.5, 14.5));
+    } else if (kind == QLatin1String("nearest")) {
+        // Hourglass / bowtie.
+        p.drawPolygon(QPolygonF({{3.5, 3.5}, {14.5, 3.5}, {3.5, 14.5}, {14.5, 14.5}}));
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+// ---- Flyout method icons (circle / arc / ellipse construction options) ----
+// Drawn in a theme-neutral blue with red point markers so they read on both the
+// dark and light menus.
+namespace {
+const QColor kGeoBlue("#5a9bf0");
+const QColor kGeoDot("#e0584f");
+void geoDot(QPainter& p, const QPointF& c) {
+    p.setPen(Qt::NoPen);
+    p.setBrush(kGeoDot);
+    p.drawEllipse(c, 1.8, 1.8);
+}
+// 48x48 canvas drawn in 24-unit space (painter scaled 2x) so the flyout icons are
+// ~200% larger and clearly visible in the menus.
+QPixmap geoCanvas() {
+    QPixmap pm(48, 48);
+    pm.fill(Qt::transparent);
+    return pm;
+}
+} // namespace
+
+QIcon makeCircleMethodIcon(int mode) {
+    QPixmap pm = geoCanvas();
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(2, 2);
+    QPen pen(kGeoBlue); pen.setWidthF(1.4);
+    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    const QPointF c(12, 12); const double r = 7.5;
+    p.drawEllipse(c, r, r);
+    switch (mode) {
+    case 0: // Center, Radius
+        p.drawLine(c, QPointF(c.x() + r, c.y())); geoDot(p, c); break;
+    case 1: // Center, Diameter
+        p.drawLine(QPointF(c.x() - r, c.y()), QPointF(c.x() + r, c.y())); geoDot(p, c); break;
+    case 2: // 2-Point
+        geoDot(p, QPointF(c.x() - r, c.y())); geoDot(p, QPointF(c.x() + r, c.y())); break;
+    default: // 3-Point
+        geoDot(p, QPointF(c.x(), c.y() - r));
+        geoDot(p, QPointF(c.x() + r * 0.87, c.y() + r * 0.5));
+        geoDot(p, QPointF(c.x() - r * 0.87, c.y() + r * 0.5));
+        break;
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+QIcon makeArcMethodIcon(int mode) {
+    QPixmap pm = geoCanvas();
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(2, 2);
+    QPen pen(kGeoBlue); pen.setWidthF(1.4);
+    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    const QPointF c(12, 14); const double r = 8.0;
+    QPainterPath path;
+    path.arcMoveTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), 20);
+    path.arcTo(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), 20, 140);
+    p.drawPath(path);
+    const QPointF s(c.x() + r * 0.94, c.y() - r * 0.34);
+    const QPointF en(c.x() - r * 0.94, c.y() - r * 0.34);
+    const QPointF md(c.x(), c.y() - r);
+    switch (mode) {
+    case 0: geoDot(p, s); geoDot(p, md); geoDot(p, en); break;       // 3-Point
+    case 1: geoDot(p, s); geoDot(p, c); geoDot(p, en); break;         // Start,Center,End
+    case 2: geoDot(p, c); geoDot(p, s); geoDot(p, en); break;         // Center,Start,End
+    default: geoDot(p, s); geoDot(p, en); break;                      // Start,End,Radius
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+QIcon makeEllipseMethodIcon(int mode) {
+    QPixmap pm = geoCanvas();
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(2, 2);
+    QPen pen(kGeoBlue); pen.setWidthF(1.4);
+    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    const QPointF c(12, 12); const double rx = 9, ry = 5.5;
+    if (mode == 2) { // Elliptical arc: partial ellipse
+        QPainterPath path;
+        path.arcMoveTo(QRectF(c.x() - rx, c.y() - ry, 2 * rx, 2 * ry), 30);
+        path.arcTo(QRectF(c.x() - rx, c.y() - ry, 2 * rx, 2 * ry), 30, 250);
+        p.drawPath(path);
+    } else {
+        p.drawEllipse(c, rx, ry);
+    }
+    if (mode == 0) geoDot(p, c);                                   // Center
+    else if (mode == 1) {                                          // Axis, End
+        geoDot(p, QPointF(c.x() - rx, c.y()));
+        geoDot(p, QPointF(c.x() + rx, c.y()));
     }
     p.end();
     return QIcon(pm);
@@ -301,6 +436,44 @@ struct ComboEntry {
     QString data;
 };
 
+// Live crosshair preview for the Options dialog: paints the crosshair with the
+// chosen size / pick-box / colour on a sample (canvas-like) background.
+class CrosshairPreview : public QWidget {
+public:
+    explicit CrosshairPreview(QWidget* parent = nullptr) : QWidget(parent) {
+        setFixedSize(160, 96);
+    }
+    void setParams(int pct, int box, const QColor& c) {
+        pct_ = pct; box_ = box; col_ = c; update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#10141b")); // matches the dark model space
+        const QPointF c(width() / 2.0, height() / 2.0);
+        const double arm = (pct_ >= 100)
+                               ? std::max(width(), height())
+                               : std::min(width(), height()) * 0.5 * pct_ / 100.0;
+        const double b = box_;
+        QPen pen(col_);
+        pen.setCosmetic(true);
+        p.setPen(pen);
+        p.drawLine(QPointF(std::max(0.0, c.x() - arm), c.y()), QPointF(c.x() - b, c.y()));
+        p.drawLine(QPointF(c.x() + b, c.y()), QPointF(std::min<double>(width(), c.x() + arm), c.y()));
+        p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - b));
+        p.drawLine(QPointF(c.x(), c.y() + b), QPointF(c.x(), std::min<double>(height(), c.y() + arm)));
+        p.drawRect(QRectF(c.x() - b, c.y() - b, 2 * b, 2 * b));
+        p.setPen(QColor("#3a3f48"));
+        p.drawRect(0, 0, width() - 1, height() - 1);
+    }
+
+private:
+    int pct_ = 100;
+    int box_ = 9;
+    QColor col_{"#cdd6e4"};
+};
+
 // A thin vertical strip shown when a panel is auto-hidden (collapsed): it shows
 // the panel name rotated, and hovering it re-expands the panel.
 class VerticalStrip : public QWidget {
@@ -321,7 +494,7 @@ protected:
     }
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.fillRect(rect(), QColor("#222a36"));
+        p.fillRect(rect(), QColor("#34373d"));
         p.setPen(QColor("#cfd8e6"));
         // A few grip dots near the top.
         p.setBrush(QColor("#8b97a8"));
@@ -356,6 +529,14 @@ public:
         poll_ = new QTimer(this);
         poll_->setInterval(200);
         QObject::connect(poll_, &QTimer::timeout, this, [this] { onPoll(); });
+        // After the user finishes resizing an unpinned side, fold it away.
+        resizeTimer_ = new QTimer(this);
+        resizeTimer_->setSingleShot(true);
+        resizeTimer_->setInterval(3000);
+        QObject::connect(resizeTimer_, &QTimer::timeout, this, [this] {
+            if (!pinned_)
+                for (auto* d : group()) d->collapse();
+        });
     }
 
     // Provide the custom title bar + the real content widget.
@@ -363,7 +544,11 @@ public:
         titleBar_ = titleBar;
         content_ = content;
         strip_ = new VerticalStrip(title_, this);
-        strip_->onEnter = [this] { if (!pinned_ && collapsed_) expand(); };
+        // Hovering any strip on this side expands the whole side group.
+        strip_->onEnter = [this] {
+            if (pinned_) return;
+            for (auto* d : group()) d->expandIfCollapsed();
+        };
         strip_->hide();
         emptyBar_ = new QWidget(this);
         emptyBar_->setFixedHeight(0);
@@ -371,27 +556,104 @@ public:
         setWidget(content_);
     }
 
+    // Register the title bar's pin button so the group can keep them in sync.
+    void setPinButton(QToolButton* b) { pinBtn_ = b; }
+    // The docks pinned/auto-hidden together as one side (left or right).
+    void setGroup(const QVector<AutoHideDock*>& peers) { peers_ = peers; }
+
+    QMainWindow* mainWin() const { return mw_; }
+
+    // Re-dock to the area nearest the given global point, or stay floating.
+    void redockNear(const QPoint& global) {
+        if (!mw_) return;
+
+        // 1) Dropped onto an existing docked panel: snap into that column and push
+        //    the existing panel down (drop on the top half -> above it; bottom half
+        //    -> below it).
+        for (QDockWidget* d : mw_->findChildren<QDockWidget*>()) {
+            if (d == this || d->isFloating() || !d->isVisible()) continue;
+            const QRect g(d->mapToGlobal(QPoint(0, 0)), d->size());
+            if (!g.contains(global)) continue;
+            const Qt::DockWidgetArea da = mw_->dockWidgetArea(d);
+            if (da == Qt::NoDockWidgetArea) continue;
+            const bool dropTopHalf = global.y() < g.center().y();
+            setFloating(false);
+            mw_->addDockWidget(da, this);
+            // splitDockWidget(first, second, Vertical): first on top, second below.
+            if (dropTopHalf)
+                mw_->splitDockWidget(this, d, Qt::Vertical);  // new panel on top
+            else
+                mw_->splitDockWidget(d, this, Qt::Vertical);  // new panel below
+            return;
+        }
+
+        // 2) Otherwise snap to the nearest main-window edge, or stay floating.
+        const QRect area(mw_->mapToGlobal(QPoint(0, 0)), mw_->size());
+        constexpr int kEdge = 70; // snap margin near a main-window edge
+        if (!area.adjusted(-30, -30, 30, 30).contains(global)) return; // keep floating
+        Qt::DockWidgetArea dwa = Qt::NoDockWidgetArea;
+        const int dl = global.x() - area.left(), dr = area.right() - global.x();
+        const int dt = global.y() - area.top(), db = area.bottom() - global.y();
+        const int m = std::min(std::min(dl, dr), std::min(dt, db));
+        if (m > kEdge) return; // dropped in the middle -> leave floating
+        if (m == dl) dwa = Qt::LeftDockWidgetArea;
+        else if (m == dr) dwa = Qt::RightDockWidgetArea;
+        else if (m == dt) dwa = Qt::TopDockWidgetArea;
+        else dwa = Qt::BottomDockWidgetArea;
+        setFloating(false);
+        mw_->addDockWidget(dwa, this);
+    }
+
     bool pinned() const { return pinned_; }
+
+    // Toggling the pin on one panel pins/unpins the whole side group.
     void setPinned(bool v) {
-        pinned_ = v;
-        if (pinned_) {
-            poll_->stop();
-            expand();
-        } else {
-            poll_->start(); // onPoll collapses once the cursor is away
+        for (auto* d : group()) {
+            d->applyPinned(v);
+            if (d->pinBtn_ && d->pinBtn_->isChecked() != v) {
+                QSignalBlocker block(d->pinBtn_);
+                d->pinBtn_->setChecked(v);
+                d->pinBtn_->setIcon(makePinIcon(v));
+            }
         }
     }
 
+    void expandIfCollapsed() { if (collapsed_) expand(); }
+
 private:
+    QVector<AutoHideDock*> group() {
+        return peers_.isEmpty() ? QVector<AutoHideDock*>{this} : peers_;
+    }
+    void applyPinned(bool v) {
+        pinned_ = v;
+        if (pinned_) { poll_->stop(); expand(); }
+        else { poll_->start(); } // onPoll collapses once the cursor is away
+    }
+
     bool horizontalArea() {
         const Qt::DockWidgetArea a = mw_->dockWidgetArea(this);
         return a != Qt::TopDockWidgetArea && a != Qt::BottomDockWidgetArea;
     }
 
+    // Is the cursor over ANY panel (or its strip) on this side?
+    bool groupInside() {
+        const QPoint c = QCursor::pos();
+        for (auto* d : group()) {
+            if (d->isFloating()) continue;
+            if (QRect(d->mapToGlobal(QPoint(0, 0)), d->size()).contains(c)) return true;
+        }
+        return false;
+    }
+
     void onPoll() {
         if (pinned_ || isFloating()) return;
-        const QRect g(mapToGlobal(QPoint(0, 0)), size());
-        if (g.contains(QCursor::pos())) {
+        // While a resize is pending, hold the panel open; it folds when the
+        // resize timer fires (3 s after the user finishes resizing).
+        if (resizeTimer_->isActive()) {
+            outside_.invalidate();
+            return;
+        }
+        if (groupInside()) {
             outside_.invalidate();
             if (collapsed_) expand();
         } else if (!collapsed_) {
@@ -405,6 +667,7 @@ private:
     void expand() {
         if (!collapsed_) return;
         collapsed_ = false;
+        suppressResize_ = true; // ignore the programmatic resize below
         setTitleBarWidget(titleBar_);
         setWidget(content_);
         content_->show();
@@ -414,6 +677,7 @@ private:
             mw_->resizeDocks({this}, {expandedExtent_},
                              horizontalExtent_ ? Qt::Horizontal : Qt::Vertical);
         outside_.invalidate();
+        QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
     }
 
     void collapse() {
@@ -421,6 +685,8 @@ private:
         horizontalExtent_ = horizontalArea();
         expandedExtent_ = horizontalExtent_ ? width() : height();
         collapsed_ = true;
+        suppressResize_ = true;
+        resizeTimer_->stop();
         setTitleBarWidget(emptyBar_);
         setWidget(strip_);
         strip_->show();
@@ -428,7 +694,22 @@ private:
             setFixedWidth(24);
         else
             setFixedHeight(24);
+        QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
     }
+
+protected:
+    // A manual resize of an unpinned panel re-arms a 3 s countdown; once the
+    // user stops dragging, the side folds away.
+    void resizeEvent(QResizeEvent* e) override {
+        QDockWidget::resizeEvent(e);
+        if (pinned_ || collapsed_ || isFloating() || suppressResize_) return;
+        if (e->oldSize().isValid() && e->size().width() != e->oldSize().width()) {
+            outside_.invalidate();
+            resizeTimer_->start();
+        }
+    }
+
+private:
 
     QMainWindow* mw_;
     QString title_;
@@ -437,11 +718,15 @@ private:
     VerticalStrip* strip_ = nullptr;
     QWidget* emptyBar_ = nullptr;
     QTimer* poll_ = nullptr;
+    QTimer* resizeTimer_ = nullptr;    // fires 3s after the user finishes resizing
     QElapsedTimer outside_;
     bool pinned_ = true;
     bool collapsed_ = false;
     bool horizontalExtent_ = true;
+    bool suppressResize_ = false;      // ignore our own (programmatic) resizes
     int expandedExtent_ = 0;
+    QToolButton* pinBtn_ = nullptr;   // the title bar's pin toggle (for group sync)
+    QVector<AutoHideDock*> peers_;     // docks on the same side (pinned as a unit)
 };
 
 // Custom panel title bar: a dots grip (the only drag handle), the title, a
@@ -450,15 +735,17 @@ class DockTitleBar : public QWidget {
 public:
     DockTitleBar(AutoHideDock* dock, const QString& title)
         : QWidget(dock), dock_(dock) {
-        setStyleSheet(QStringLiteral("background:#222a36;"));
+        setStyleSheet(QStringLiteral("background:#34373d;"));
         auto* lay = new QHBoxLayout(this);
         lay->setContentsMargins(5, 2, 5, 2);
         lay->setSpacing(6);
 
         grip_ = new QLabel(this);
         grip_->setPixmap(makeGripPixmap());
-        grip_->setCursor(Qt::SizeAllCursor);
         grip_->setToolTip(QStringLiteral("Drag to move / detach"));
+        // Transparent to mouse so the press lands on the title bar (which owns the
+        // drag), giving a reliable implicit grab for move/release.
+        grip_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         lay->addWidget(grip_);
 
         auto* lbl = new QLabel(title, this);
@@ -471,11 +758,12 @@ public:
         pin->setAutoRaise(true);
         pin->setFocusPolicy(Qt::NoFocus);
         pin->setIcon(makePinIcon(true));
-        pin->setToolTip(QStringLiteral("Pinned — click to auto-hide"));
+        pin->setToolTip(QStringLiteral("Pin / auto-hide this side"));
+        dock->setPinButton(pin);
         QObject::connect(pin, &QToolButton::toggled, dock, [pin, dock](bool on) {
             pin->setIcon(makePinIcon(on));
-            pin->setToolTip(on ? QStringLiteral("Pinned — click to auto-hide")
-                               : QStringLiteral("Auto-hide — click to pin"));
+            pin->setToolTip(on ? QStringLiteral("Pinned — click to auto-hide this side")
+                               : QStringLiteral("Auto-hide — click to pin this side"));
             dock->setPinned(on);
         });
         lay->addWidget(pin);
@@ -490,28 +778,56 @@ public:
     }
 
 protected:
-    // Only the grip starts the (native, snapping) dock move; presses there are
-    // ignored so they bubble up to the QDockWidget, while the rest of the bar
-    // consumes presses so the panel can't be dragged from anywhere else.
+    // The grip is the only drag handle. Dragging is handled explicitly (Qt's
+    // native dock drag does not work reliably through a custom title bar): a drag
+    // floats the panel and moves it; dropping near a main-window edge re-docks it.
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton && grip_->geometry().contains(e->pos())) {
-            e->ignore();
+            dragging_ = true;
+            pressGlobal_ = e->globalPosition().toPoint();
+        }
+        e->accept(); // consume so the panel never drags from anywhere but the grip
+    }
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (dragging_ && (e->buttons() & Qt::LeftButton)) {
+            const QPoint g = e->globalPosition().toPoint();
+            if (!dock_->isFloating()) {
+                if ((g - pressGlobal_).manhattanLength() < QApplication::startDragDistance()) {
+                    e->accept();
+                    return;
+                }
+                dock_->setFloating(true); // detach once the drag really starts
+            }
+            // Keep the grip roughly under the cursor (fixed offset is predictable
+            // across the dock->float transition).
+            dock_->move(g - QPoint(14, 12));
+            e->accept();
             return;
+        }
+        // Show the move cursor while hovering the grip.
+        setCursor(grip_->geometry().contains(e->pos()) ? Qt::SizeAllCursor : Qt::ArrowCursor);
+        e->accept();
+    }
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (dragging_) {
+            dragging_ = false;
+            if (dock_->isFloating())
+                dock_->redockNear(e->globalPosition().toPoint());
         }
         e->accept();
     }
-    void mouseMoveEvent(QMouseEvent* e) override { e->accept(); }
     void mouseDoubleClickEvent(QMouseEvent* e) override {
-        if (grip_->geometry().contains(e->pos())) {
-            e->ignore();
-            return;
-        }
-        e->accept(); // block double-click-to-float off the title text
+        // Double-click the grip toggles floating (like AutoCAD palettes).
+        if (grip_->geometry().contains(e->pos()))
+            dock_->setFloating(!dock_->isFloating());
+        e->accept();
     }
 
 private:
     AutoHideDock* dock_;
     QLabel* grip_;
+    bool dragging_ = false;
+    QPoint pressGlobal_;
 };
 
 } // namespace
@@ -550,12 +866,32 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         editor_->provideText(ok ? text : QString());
     });
 
+    // Restore saved drafting/snap preferences before the status toggles are built
+    // so their initial checked state reflects the last session.
+    loadSettings();
+
     buildRibbon();
     buildPanels();
     buildStatusControls();
     buildCommandBar();
     buildMenus();
     buildCommands();
+
+    // Command autocomplete: suggest/filter commands starting with the typed letters
+    // (in both the bottom command bar and the floating dynamic-input box).
+    {
+        QStringList words;
+        for (const auto& c : commands_)
+            for (const auto& n : c.names) words << n;
+        words.removeDuplicates();
+        words.sort(Qt::CaseInsensitive);
+        auto* comp = new QCompleter(words, this);
+        comp->setCaseSensitivity(Qt::CaseInsensitive);
+        comp->setFilterMode(Qt::MatchStartsWith);
+        comp->setCompletionMode(QCompleter::PopupCompletion);
+        if (commandEdit_) commandEdit_->setCompleter(comp);
+        canvas_->setCommandWords(words);
+    }
 
     newDrawing(); // start with a single empty drawing (no demo, no last session)
 
@@ -601,8 +937,10 @@ QAction* MainWindow::makeToolAction(const QString& text, ToolId id) {
     QAction* a = new QAction(makeToolIcon(id), text, this);
     a->setCheckable(true);
     a->setToolTip(text);
+    a->setData(static_cast<int>(id)); // for theme re-tinting
     toolGroup_->addAction(a);
     toolActions_.insert(static_cast<int>(id), a);
+    allToolActions_.append(a);        // every instance (duplicates across tabs too)
     connect(a, &QAction::triggered, this, [this, id] { editor_->setTool(id); });
     return a;
 }
@@ -616,7 +954,7 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     v->addWidget(content, 1);
     auto* lbl = new QLabel(title, g);
     lbl->setAlignment(Qt::AlignHCenter);
-    lbl->setStyleSheet(QStringLiteral("color:#7f8ca0; font-size:10px;"));
+    lbl->setStyleSheet(QStringLiteral("color:#55524c; font-size:10px; background:transparent;"));
     v->addWidget(lbl);
     return g;
 }
@@ -631,11 +969,65 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
     int i = 0;
     for (ToolId id : tools) {
         auto* b = new QToolButton(w);
-        b->setDefaultAction(makeToolAction(toolLabel(id), id));
+        QAction* act = makeToolAction(toolLabel(id), id);
+        b->setDefaultAction(act);
         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        b->setIconSize(QSize(22, 22));
+        b->setIconSize(QSize(24, 24)); // ~10% larger ribbon buttons
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus); // keep keyboard focus on the canvas
+
+        // Circle / Arc / Ellipse get AutoCAD-style flyouts of construction methods,
+        // each option shown with a (large) visual icon. Choosing an option also makes
+        // it the button's primary icon for the rest of the session.
+        if (id == ToolId::Circle) {
+            auto* menu = new QMenu(b);
+            auto add = [&](const QString& label, Editor::CircleMode m) {
+                menu->addAction(makeCircleMethodIcon(static_cast<int>(m)), label, this, [this, act, m] {
+                    editor_->setCircleMode(m);
+                    editor_->setTool(ToolId::Circle);
+                    act->setIcon(makeCircleMethodIcon(static_cast<int>(m))); // primary icon
+                });
+            };
+            add(QStringLiteral("Center, Radius"), Editor::CircleMode::CenterRadius);
+            add(QStringLiteral("Center, Diameter"), Editor::CircleMode::CenterDiameter);
+            add(QStringLiteral("2-Point"), Editor::CircleMode::TwoPoint);
+            add(QStringLiteral("3-Point"), Editor::CircleMode::ThreePoint);
+            act->setIcon(makeCircleMethodIcon(0)); // default = first fall-menu method
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Arc) {
+            auto* menu = new QMenu(b);
+            auto add = [&](const QString& label, Editor::ArcMode m) {
+                menu->addAction(makeArcMethodIcon(static_cast<int>(m)), label, this, [this, act, m] {
+                    editor_->setArcMode(m);
+                    editor_->setTool(ToolId::Arc);
+                    act->setIcon(makeArcMethodIcon(static_cast<int>(m)));
+                });
+            };
+            add(QStringLiteral("3-Point"), Editor::ArcMode::ThreePoint);
+            add(QStringLiteral("Start, Center, End"), Editor::ArcMode::StartCenterEnd);
+            add(QStringLiteral("Center, Start, End"), Editor::ArcMode::CenterStartEnd);
+            add(QStringLiteral("Start, End, Radius"), Editor::ArcMode::StartEndRadius);
+            act->setIcon(makeArcMethodIcon(0)); // default = first fall-menu method
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Ellipse) {
+            auto* menu = new QMenu(b);
+            auto add = [&](const QString& label, Editor::EllipseMode m) {
+                menu->addAction(makeEllipseMethodIcon(static_cast<int>(m)), label, this, [this, act, m] {
+                    editor_->setEllipseMode(m);
+                    editor_->setTool(ToolId::Ellipse);
+                    act->setIcon(makeEllipseMethodIcon(static_cast<int>(m)));
+                });
+            };
+            add(QStringLiteral("Center"), Editor::EllipseMode::Center);
+            add(QStringLiteral("Axis, End"), Editor::EllipseMode::AxisEnd);
+            add(QStringLiteral("Elliptical Arc"), Editor::EllipseMode::EllipticalArc);
+            act->setIcon(makeEllipseMethodIcon(0)); // default = first fall-menu method
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        }
+
         grid->addWidget(b, i / perRow, i % perRow);
         ++i;
     }
@@ -648,7 +1040,26 @@ void MainWindow::buildRibbon() {
 
     ribbon_ = new QTabWidget(this);
     ribbon_->setDocumentMode(true);
-    ribbon_->setFixedHeight(104);
+    ribbon_->setFixedHeight(114); // taller to fit the ~10% larger buttons
+    // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
+    // Use background-color (not the `background` shorthand) so it reliably wins
+    // over the application stylesheet's QWidget{background-color:...} rule.
+    ribbon_->setStyleSheet(QStringLiteral(
+        "QTabWidget::pane{background-color:#3a3d43;border:none;border-bottom:1px solid #2a2c31;}"
+        "QWidget{background-color:#3a3d43;color:#c9ccd1;}"
+        "QTabBar{background-color:#2f3237;}"
+        "QTabBar::tab{background-color:transparent;color:#c2c5ca;padding:5px 14px;border:none;}"
+        "QTabBar::tab:hover{color:#ffffff;}"
+        "QTabBar::tab:selected{color:#ffffff;background-color:#3a3d43;border-bottom:2px solid #3d8bfd;}"
+        "QLabel{background-color:transparent;color:#9da3ac;}"
+        "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
+        "QToolButton:hover{background-color:#484c53;border-color:#5a5f68;}"
+        "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
+        "QToolButton:pressed{background-color:#22384f;}"
+        "QFrame{color:#2a2c31;}"
+        "QComboBox{background-color:#45484f;color:#e0e2e6;border:1px solid #585c64;border-radius:2px;padding:1px 4px;}"
+        "QComboBox:hover{border-color:#3d8bfd;}"
+        "QComboBox QAbstractItemView{background-color:#3a3d43;color:#e0e2e6;selection-background-color:#294e74;selection-color:#ffffff;}"));
 
     // A ribbon tab page holds horizontal groups separated by vertical rules.
     auto makeTabPage = [&]() {
@@ -663,7 +1074,7 @@ void MainWindow::buildRibbon() {
         lay->addWidget(ribbonGroup(title, content));
         auto* rule = new QFrame(lay->parentWidget());
         rule->setFrameShape(QFrame::VLine);
-        rule->setStyleSheet(QStringLiteral("color:#222b38;"));
+        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
         lay->addWidget(rule);
     };
 
@@ -706,7 +1117,9 @@ void MainWindow::buildRibbon() {
                 {"ByLayer", ""}, {"White", "#ffffff"}, {"Red", "#ff0000"},
                 {"Yellow", "#ffff00"}, {"Green", "#00ff00"}, {"Cyan", "#00ffff"},
                 {"Blue", "#0000ff"}, {"Magenta", "#ff00ff"}};
-            editor_->setSelectionColor(map.value(colorCombo_->currentText(), QString()));
+            const QString hex = map.value(colorCombo_->currentText(), QString());
+            editor_->setCurrentColor(hex);     // applies to newly drawn entities
+            editor_->setSelectionColor(hex);   // and recolors any current selection
         });
         addGroup(lay, QStringLiteral("Properties"), propsW);
 
@@ -880,13 +1293,13 @@ void MainWindow::buildStatusControls() {
                        "QToolButton:checked{background:#1f3a5f;}"
                        "QToolButton::menu-button{width:12px;border:none;}");
 
-    // A small icon toggle (AutoCAD status-bar style). Returns the button so a
-    // dropdown ("fall menu") can be attached.
-    auto addToggle = [&](const QString& icon, const QString& tip, bool initial,
-                         auto setter) -> QToolButton* {
+    // Build an icon toggle (AutoCAD status-bar style). Returns the button; the
+    // caller groups it into a field via addField().
+    auto makeToggle = [&](const QString& icon, const QString& tip, bool initial,
+                          auto setter) -> QToolButton* {
         auto* b = new QToolButton(this);
         b->setIcon(makeStatusIcon(icon));
-        b->setIconSize(QSize(20, 20));
+        b->setIconSize(QSize(22, 22)); // ~10% larger status buttons
         b->setToolTip(tip);
         b->setCheckable(true);
         b->setChecked(initial);
@@ -894,8 +1307,35 @@ void MainWindow::buildStatusControls() {
         b->setFocusPolicy(Qt::NoFocus);
         b->setStyleSheet(toggleQss);
         connect(b, &QToolButton::toggled, this, setter);
-        statusBar()->addPermanentWidget(b);
+        statusToggleBtns_.append(b);
+        statusToggleNames_.append(icon); // icon name, for theme re-tinting
         return b;
+    };
+
+    // A separator line between fields (long) or inside a field (short).
+    auto sepLine = [this](int height, const QString& color) {
+        auto* f = new QFrame(this);
+        f->setFrameShape(QFrame::VLine);
+        f->setFrameShadow(QFrame::Plain);
+        f->setFixedHeight(height);
+        f->setStyleSheet(QStringLiteral("color:%1;").arg(color));
+        return f;
+    };
+
+    // A status "field" is a single permanent widget, so the status bar's built-in
+    // divider falls only BETWEEN fields (not between a toggle and its fall-menu).
+    // The toggle and its arrow are joined inside the field by a short inner line.
+    auto addField = [&](QToolButton* toggle, QToolButton* arrow) {
+        auto* field = new QWidget(this);
+        auto* hl = new QHBoxLayout(field);
+        hl->setContentsMargins(3, 0, 3, 0);
+        hl->setSpacing(2);
+        hl->addWidget(toggle);
+        if (arrow) {
+            hl->addWidget(sepLine(12, QStringLiteral("#5a5f68"))); // short: button | fall-menu
+            hl->addWidget(arrow);
+        }
+        statusBar()->addPermanentWidget(field);
     };
 
     // Grid size field.
@@ -903,9 +1343,10 @@ void MainWindow::buildStatusControls() {
     gridLbl->setStyleSheet(QStringLiteral("font-size:11px;color:#9aa7b8;"));
     auto* gridSpin = new QDoubleSpinBox(this);
     gridSpin->setRange(0.001, 100000.0);
-    gridSpin->setDecimals(3);
+    gridSpin->setDecimals(2);
     gridSpin->setValue(canvas_->gridSize());
     gridSpin->setMaximumWidth(74);
+    gridSpin->setButtonSymbols(QAbstractSpinBox::NoButtons); // input-only, no +/- spin
     gridSpin->setFocusPolicy(Qt::ClickFocus);
     gridSpin->setStyleSheet(QStringLiteral("QDoubleSpinBox{font-size:11px;}"));
     connect(gridSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
@@ -916,25 +1357,43 @@ void MainWindow::buildStatusControls() {
     statusBar()->addPermanentWidget(gridLbl);
     statusBar()->addPermanentWidget(gridSpin);
 
-    // Show grid.
-    addToggle(QStringLiteral("grid"), QStringLiteral("Show grid"),
-              canvas_->gridVisible(),
-              [this](bool v) { canvas_->setGridVisible(v); });
-    // Snap to grid.
-    addToggle(QStringLiteral("gridsnap"), QStringLiteral("Snap to grid"),
-              editor_->snapSettings().gridSnap,
-              [this](bool v) { editor_->snapSettings().gridSnap = v; });
-    addToggle(QStringLiteral("ortho"), QStringLiteral("Ortho mode"),
-              editor_->snapSettings().ortho,
-              [this](bool v) { editor_->snapSettings().ortho = v; });
+    // Build a "fall menu" arrow button for a field (does not add it to the bar;
+    // addField joins it to its toggle).
+    auto makeArrow = [&](QMenu* menu, const QString& tip) -> QToolButton* {
+        auto* a = new QToolButton(this);
+        a->setText(QString(QChar(0x25BE))); // ▾
+        a->setAutoRaise(true);
+        a->setFocusPolicy(Qt::NoFocus);
+        a->setToolTip(tip);
+        a->setStyleSheet(QStringLiteral(
+            "QToolButton{padding:0 2px;border:none;font-size:9px;color:#aab0b8;}"
+            "QToolButton:hover{background:#3d4148;}"));
+        connect(a, &QToolButton::clicked, this, [a, menu] {
+            menu->popup(a->mapToGlobal(QPoint(0, -menu->sizeHint().height())));
+        });
+        statusArrowBtns_.append(a);
+        return a;
+    };
 
-    // Polar tracking + a "fall menu" of common angle increments.
-    auto* polar = addToggle(QStringLiteral("polar"),
-                            QStringLiteral("Polar tracking"),
-                            editor_->snapSettings().polar,
-                            [this](bool v) { editor_->snapSettings().polar = v; });
+    addField(makeToggle(QStringLiteral("grid"), QStringLiteral("Show grid"),
+                        canvas_->gridVisible(),
+                        [this](bool v) { canvas_->setGridVisible(v); }),
+             nullptr);
+    addField(makeToggle(QStringLiteral("gridsnap"), QStringLiteral("Snap to grid"),
+                        editor_->snapSettings().gridSnap,
+                        [this](bool v) { editor_->snapSettings().gridSnap = v; }),
+             nullptr);
+    addField(makeToggle(QStringLiteral("ortho"), QStringLiteral("Ortho mode"),
+                        editor_->snapSettings().ortho,
+                        [this](bool v) { editor_->snapSettings().ortho = v; }),
+             nullptr);
+
+    // Polar tracking + a "fall menu" of common angle increments (joined arrow).
     {
-        auto* menu = new QMenu(polar);
+        auto* toggle = makeToggle(QStringLiteral("polar"), QStringLiteral("Polar tracking"),
+                                  editor_->snapSettings().polar,
+                                  [this](bool v) { editor_->snapSettings().polar = v; });
+        auto* menu = new QMenu(this);
         auto* group = new QActionGroup(menu);
         group->setExclusive(true);
         for (double deg : {5.0, 10.0, 15.0, 22.5, 30.0, 45.0, 90.0}) {
@@ -949,37 +1408,38 @@ void MainWindow::buildStatusControls() {
                     QStringLiteral("Polar tracking: %1°").arg(deg, 0, 'g'), 2000);
             });
         }
-        polar->setMenu(menu);
-        polar->setPopupMode(QToolButton::MenuButtonPopup);
+        addField(toggle, makeArrow(menu, QStringLiteral("Polar angle increments")));
     }
 
     // Object snap + a "fall menu" to pick which snap types are active.
-    auto* osnap = addToggle(QStringLiteral("osnap"),
-                            QStringLiteral("Object snap"),
-                            editor_->snapSettings().objectSnap,
-                            [this](bool v) { editor_->snapSettings().objectSnap = v; });
     {
-        auto* menu = new QMenu(osnap);
-        auto addSnap = [&](const QString& label, bool SnapSettings::*field) {
-            auto* act = menu->addAction(label);
+        auto* toggle = makeToggle(QStringLiteral("osnap"), QStringLiteral("Object snap"),
+                                  editor_->snapSettings().objectSnap,
+                                  [this](bool v) { editor_->snapSettings().objectSnap = v; });
+        auto* menu = new QMenu(this);
+        auto addSnap = [&](const QString& label, const QString& kind, bool SnapSettings::*field) {
+            auto* act = menu->addAction(makeOsnapMarkerIcon(kind), label);
             act->setCheckable(true);
             act->setChecked(editor_->snapSettings().*field);
             connect(act, &QAction::toggled, this, [this, field](bool on) {
                 editor_->snapSettings().*field = on;
             });
         };
-        addSnap(QStringLiteral("Endpoint"), &SnapSettings::snapEndpoint);
-        addSnap(QStringLiteral("Midpoint"), &SnapSettings::snapMidpoint);
-        addSnap(QStringLiteral("Center"), &SnapSettings::snapCenter);
-        addSnap(QStringLiteral("Intersection"), &SnapSettings::snapIntersection);
-        addSnap(QStringLiteral("Nearest"), &SnapSettings::snapNearest);
-        osnap->setMenu(menu);
-        osnap->setPopupMode(QToolButton::MenuButtonPopup);
+        addSnap(QStringLiteral("Endpoint"), QStringLiteral("endpoint"), &SnapSettings::snapEndpoint);
+        addSnap(QStringLiteral("Midpoint"), QStringLiteral("midpoint"), &SnapSettings::snapMidpoint);
+        addSnap(QStringLiteral("Center"), QStringLiteral("center"), &SnapSettings::snapCenter);
+        addSnap(QStringLiteral("Intersection"), QStringLiteral("intersection"), &SnapSettings::snapIntersection);
+        addSnap(QStringLiteral("Nearest"), QStringLiteral("nearest"), &SnapSettings::snapNearest);
+        menu->addSeparator();
+        connect(menu->addAction(QStringLiteral("Object Snap Settings...")), &QAction::triggered,
+                this, [this] { showOptions(); });
+        addField(toggle, makeArrow(menu, QStringLiteral("Object snap types")));
     }
 
-    addToggle(QStringLiteral("angles"), QStringLiteral("Show drawing angles"),
-              editor_->showAngles(),
-              [this](bool v) { editor_->setShowAngles(v); });
+    addField(makeToggle(QStringLiteral("angles"), QStringLiteral("Show drawing angles"),
+                        editor_->showAngles(),
+                        [this](bool v) { editor_->setShowAngles(v); }),
+             nullptr);
 }
 
 void MainWindow::buildPanels() {
@@ -1061,11 +1521,22 @@ void MainWindow::buildPanels() {
     layersTable_ = new QTableWidget(layersWidget);
     layersTable_->setColumnCount(5);
     layersTable_->setHorizontalHeaderLabels({"Status", "Name", "On", "Lock", "Color"});
-    layersTable_->horizontalHeader()->setStretchLastSection(true);
     layersTable_->verticalHeader()->setVisible(false);
-    layersTable_->setColumnWidth(0, 48);
-    layersTable_->setColumnWidth(2, 36);
-    layersTable_->setColumnWidth(3, 40);
+    // Only Name stretches; Status / On / Lock / Color keep fixed widths so they
+    // don't grow with the panel width.
+    {
+        auto* hh = layersTable_->horizontalHeader();
+        hh->setStretchLastSection(false);
+        hh->setSectionResizeMode(0, QHeaderView::Fixed);   // Status
+        hh->setSectionResizeMode(1, QHeaderView::Stretch);  // Name
+        hh->setSectionResizeMode(2, QHeaderView::Fixed);   // On
+        hh->setSectionResizeMode(3, QHeaderView::Fixed);   // Lock
+        hh->setSectionResizeMode(4, QHeaderView::Fixed);   // Color
+    }
+    layersTable_->setColumnWidth(0, 50);
+    layersTable_->setColumnWidth(2, 42);
+    layersTable_->setColumnWidth(3, 46);
+    layersTable_->setColumnWidth(4, 58);
     lv->addWidget(layersTable_);
     layersDock->setManaged(new DockTitleBar(layersDock, QStringLiteral("LAYERS")), layersWidget);
     addDockWidget(Qt::LeftDockWidgetArea, layersDock);
@@ -1145,6 +1616,14 @@ void MainWindow::buildPanels() {
         const bool additive = QApplication::keyboardModifiers() & Qt::ControlModifier;
         editor_->selectById(id, additive);
     });
+
+    // Pin / auto-hide acts on a whole side: the left column (Properties + Layers)
+    // and the right column (Entities) each pin and fold as one unit.
+    const QVector<AutoHideDock*> leftGroup{propsDock, layersDock};
+    propsDock->setGroup(leftGroup);
+    layersDock->setGroup(leftGroup);
+    const QVector<AutoHideDock*> rightGroup{listDock};
+    listDock->setGroup(rightGroup);
 }
 
 void MainWindow::buildCommandBar() {
@@ -1186,20 +1665,34 @@ void MainWindow::buildMenus() {
     fileMenu->addAction(QStringLiteral("&Save DWX..."), QKeySequence::Save, this, [this] { saveDwxAs(); });
     fileMenu->addAction(QStringLiteral("&Export DXF..."), this, [this] { exportDxfAs(); });
     fileMenu->addSeparator();
+    fileMenu->addAction(QStringLiteral("&Options..."), this, [this] { showOptions(); });
+    fileMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
+    fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
     auto* logo = new QToolButton(this);
-    logo->setText(QStringLiteral("E"));
+    logo->setIcon(QIcon(QStringLiteral(":/edraw.ico"))); // the real Edraw logo
+    logo->setIconSize(QSize(26, 26));
     logo->setToolTip(QStringLiteral("Edraw — file menu"));
     logo->setMenu(fileMenu);
     logo->setPopupMode(QToolButton::InstantPopup);
-    logo->setAutoRaise(false);
+    logo->setAutoRaise(true);
     logo->setStyleSheet(QStringLiteral(
-        "QToolButton{background:transparent;color:#c0392b;font-weight:bold;font-size:14px;"
-        "border:2px solid #c0392b;border-radius:4px;padding:0px 8px;margin:3px 6px;}"
-        "QToolButton:hover{background:rgba(192,57,43,40);}"
+        "QToolButton{background:transparent;border:none;padding:1px 6px;margin:3px 6px;}"
+        "QToolButton:hover{background:rgba(255,255,255,28);border-radius:4px;}"
         "QToolButton::menu-indicator{image:none;width:0;}"));
     menuBar()->setCornerWidget(logo, Qt::TopLeftCorner);
+
+    // Dark-gray menu bar + menus (AutoCAD-style chrome), applied directly so it
+    // does not depend on the qss resource.
+    menuBar()->setStyleSheet(QStringLiteral(
+        "QMenuBar{background-color:#2d2f34;color:#c9ccd1;}"
+        "QMenuBar::item{background-color:transparent;padding:4px 9px;}"
+        "QMenuBar::item:selected{background-color:#3d4148;color:#ffffff;}"
+        "QMenu{background-color:#33363c;color:#c9ccd1;border:1px solid #4a4e55;}"
+        "QMenu::item{padding:4px 22px;}"
+        "QMenu::item:selected{background-color:#294e74;color:#ffffff;}"
+        "QMenu::separator{height:1px;background-color:#4a4e55;margin:3px 6px;}"));
 
     QMenu* editMenu = menuBar()->addMenu(QStringLiteral("&Edit"));
     editMenu->addAction(QStringLiteral("&Undo"), QKeySequence::Undo, this, [this] { editor_->undo(); });
@@ -1218,6 +1711,366 @@ void MainWindow::buildMenus() {
                         [this] { showHelp(); });
 }
 
+// ---- Theme (Dark / Light) --------------------------------------------------
+
+void MainWindow::applyTheme(bool dark) {
+    darkTheme_ = dark;
+
+    // Palette tokens for the application stylesheet (panels / tables / inputs).
+    // The status bar + bottom command toolbar stay dark in both schemes (their
+    // icons are light), matching AutoCAD's persistent dark status strip.
+    QHash<QString, QString> t;
+    if (dark) {
+        t = {{"WIN", "#3a3d43"},   {"TEXT", "#c9ccd1"},   {"PANEL", "#3a3d43"},
+             {"ALT", "#41454c"},   {"HEADER", "#313438"}, {"LINE", "#4a4e55"},
+             {"SEL", "#294e74"},   {"SELTX", "#ffffff"},  {"INPUT", "#45484f"},
+             {"INBORD", "#585c64"},{"BTN", "#484c53"},    {"HOVER", "#525760"},
+             {"SCROLL", "#2d2f34"},{"HANDLE", "#5a5f68"}, {"TABBAR", "#2f3237"},
+             {"STBG", "#2d2f34"},  {"STTX", "#aab0b8"}};
+    } else {
+        t = {{"WIN", "#e9e9ed"},   {"TEXT", "#1e1e1e"},   {"PANEL", "#f5f5f7"},
+             {"ALT", "#ececf0"},   {"HEADER", "#dcdce0"}, {"LINE", "#c2c2c8"},
+             {"SEL", "#cfe3ff"},   {"SELTX", "#000000"},  {"INPUT", "#ffffff"},
+             {"INBORD", "#aeaeb6"},{"BTN", "#e2e2e6"},    {"HOVER", "#d4d4da"},
+             {"SCROLL", "#dedee2"},{"HANDLE", "#b4b4ba"}, {"TABBAR", "#dcdce0"},
+             {"STBG", "#dcdce0"},  {"STTX", "#33373f"}};
+    }
+    QString app = QStringLiteral(
+        "QMainWindow,QWidget{background-color:{WIN};color:{TEXT};font-size:12px;}"
+        "QStatusBar{background-color:{STBG};color:{STTX};border-top:1px solid {LINE};}"
+        "QToolBar{background-color:{STBG};border:none;spacing:2px;}"
+        "QTabWidget::pane{background-color:{WIN};border:none;border-bottom:1px solid {LINE};}"
+        "QTabBar{background:{TABBAR};}"
+        "QTabBar::tab{background:transparent;color:{TEXT};padding:5px 14px;border:none;}"
+        "QTabBar::tab:selected{color:{TEXT};border-bottom:2px solid #3d8bfd;}"
+        "QTableWidget,QListWidget{background-color:{PANEL};alternate-background-color:{ALT};"
+        "color:{TEXT};gridline-color:{LINE};selection-background-color:{SEL};"
+        "selection-color:{SELTX};border:1px solid {LINE};}"
+        "QHeaderView::section{background-color:{HEADER};color:{TEXT};padding:3px 6px;border:none;"
+        "border-right:1px solid {LINE};border-bottom:1px solid {LINE};}"
+        "QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background-color:{INPUT};color:{TEXT};"
+        "border:1px solid {INBORD};border-radius:3px;padding:2px 4px;}"
+        "QAbstractSpinBox::up-button{subcontrol-origin:border;subcontrol-position:top right;"
+        "width:18px;border-left:1px solid {INBORD};}"
+        "QAbstractSpinBox::down-button{subcontrol-origin:border;subcontrol-position:bottom right;"
+        "width:18px;border-left:1px solid {INBORD};}"
+        "QAbstractSpinBox::up-button:hover,QAbstractSpinBox::down-button:hover{background:#3d8bfd;}"
+        "QComboBox QAbstractItemView{background:{PANEL};color:{TEXT};selection-background-color:{SEL};}"
+        "QPushButton{background-color:{BTN};color:{TEXT};border:1px solid {INBORD};"
+        "border-radius:3px;padding:3px 10px;}"
+        "QPushButton:hover{background-color:{HOVER};}"
+        "QGroupBox{border:1px solid {LINE};border-radius:4px;margin-top:8px;}"
+        "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 3px;color:{TEXT};}"
+        "QCheckBox,QRadioButton,QLabel{background:transparent;color:{TEXT};}"
+        "QScrollBar:vertical{background:{SCROLL};width:10px;}"
+        "QScrollBar::handle:vertical{background:{HANDLE};border-radius:5px;min-height:20px;}"
+        "QScrollBar:horizontal{background:{SCROLL};height:10px;}"
+        "QScrollBar::handle:horizontal{background:{HANDLE};border-radius:5px;min-width:20px;}"
+        "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}");
+    for (auto it = t.cbegin(); it != t.cend(); ++it)
+        app.replace(QStringLiteral("{%1}").arg(it.key()), it.value());
+    qApp->setStyleSheet(app);
+
+    // Menu bar + menus.
+    const QString menuBg = dark ? "#2d2f34" : "#e4e4e8";
+    const QString menuTx = dark ? "#c9ccd1" : "#1e1e1e";
+    const QString menuPop = dark ? "#33363c" : "#f3f3f5";
+    const QString menuBord = dark ? "#4a4e55" : "#b8b8be";
+    menuBar()->setStyleSheet(
+        QStringLiteral("QMenuBar{background-color:%1;color:%2;}"
+                       "QMenuBar::item{background:transparent;padding:4px 9px;}"
+                       "QMenuBar::item:selected{background-color:#cfe3ff;color:#000;}"
+                       "QMenu{background-color:%3;color:%2;border:1px solid %4;}"
+                       "QMenu::item{padding:4px 22px;}"
+                       "QMenu::item:selected{background-color:#cfe3ff;color:#000;}"
+                       "QMenu::separator{height:1px;background:%4;margin:3px 6px;}")
+            .arg(menuBg, menuTx, menuPop, menuBord));
+
+    // Ribbon.
+    const QString rbBg = dark ? "#3a3d43" : "#e4e4e8";
+    const QString rbTab = dark ? "#2f3237" : "#d6d6da";
+    const QString rbTx = dark ? "#c9ccd1" : "#1e1e1e";
+    const QString rbLabel = dark ? "#9da3ac" : "#55555c";
+    const QString rbLine = dark ? "#2a2c31" : "#c2c2c8";
+    const QString rbHover = dark ? "#484c53" : "#d0e3ff";
+    const QString rbCombo = dark ? "#45484f" : "#ffffff";
+    if (ribbon_)
+        ribbon_->setStyleSheet(
+            QStringLiteral(
+                "QTabWidget::pane{background-color:%1;border:none;border-bottom:1px solid %5;}"
+                "QWidget{background-color:%1;color:%3;}"
+                "QTabBar{background-color:%2;}"
+                "QTabBar::tab{background-color:transparent;color:%3;padding:5px 14px;border:none;}"
+                "QTabBar::tab:selected{color:%3;background-color:%1;border-bottom:2px solid #3d8bfd;}"
+                "QLabel{background-color:transparent;color:%4;}"
+                "QToolButton{background-color:transparent;border:1px solid transparent;"
+                "border-radius:4px;padding:3px 6px;}"
+                "QToolButton:hover{background-color:%6;border-color:#9cc4f0;}"
+                "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
+                "QFrame{color:%5;}"
+                "QComboBox{background-color:%7;color:%3;border:1px solid %5;border-radius:2px;}"
+                "QComboBox QAbstractItemView{background-color:%7;color:%3;}")
+                .arg(rbBg, rbTab, rbTx, rbLabel, rbLine, rbHover, rbCombo));
+
+    // Ribbon tool icons: light on a dark ribbon, dark on a light ribbon. Retint
+    // EVERY tool button instance (a ToolId can appear on several tabs, so the
+    // ToolId-keyed map alone would miss the duplicates).
+    const QColor ink = dark ? QColor("#d6dae1") : QColor("#33373f");
+    for (QAction* a : allToolActions_)
+        a->setIcon(makeToolIcon(static_cast<ToolId>(a->data().toInt()), ink));
+
+    // Status-bar drafting toggles: re-tint the icons and re-style hover/checked so
+    // they read on the (now theme-coloured) status bar.
+    const QColor stInk = dark ? QColor("#cfd8e6") : QColor("#33373f");
+    for (int i = 0; i < statusToggleBtns_.size(); ++i)
+        statusToggleBtns_[i]->setIcon(makeStatusIcon(statusToggleNames_[i], stInk));
+    const QString tgl =
+        dark ? QStringLiteral("QToolButton{padding:2px;border:none;}"
+                              "QToolButton:hover{background:#3d4148;}"
+                              "QToolButton:checked{background:#294e74;}"
+                              "QToolButton::menu-button{width:12px;border:none;}")
+             : QStringLiteral("QToolButton{padding:2px;border:none;color:#33373f;}"
+                              "QToolButton:hover{background:#c8dcff;}"
+                              "QToolButton:checked{background:#bcd9fb;}"
+                              "QToolButton::menu-button{width:12px;border:none;}");
+    for (QToolButton* b : statusToggleBtns_) b->setStyleSheet(tgl);
+    const QString arrowSS =
+        dark ? QStringLiteral("QToolButton{padding:0 2px;border:none;font-size:9px;color:#aab0b8;}"
+                              "QToolButton:hover{background:#3d4148;}")
+             : QStringLiteral("QToolButton{padding:0 2px;border:none;font-size:9px;color:#44474e;}"
+                              "QToolButton:hover{background:#c8dcff;}");
+    for (QToolButton* a : statusArrowBtns_) a->setStyleSheet(arrowSS);
+
+    // The drawing canvas (model space) intentionally stays dark in both schemes,
+    // like AutoCAD's model space; only the surrounding chrome changes.
+}
+
+// ---- About dialog ----------------------------------------------------------
+
+void MainWindow::showAbout() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("About Edraw"));
+    dlg.setFixedWidth(380);
+    auto* row = new QHBoxLayout(&dlg);
+    row->setContentsMargins(20, 18, 20, 16);
+    row->setSpacing(16);
+
+    // Logo: the red square + white "E".
+    auto* logo = new QLabel(&dlg);
+    logo->setPixmap(QIcon(QStringLiteral(":/edraw.ico")).pixmap(64, 64));
+    logo->setAlignment(Qt::AlignTop);
+    row->addWidget(logo);
+
+    auto* col = new QVBoxLayout();
+    col->setSpacing(4);
+    auto* name = new QLabel(QStringLiteral("Edraw"), &dlg);
+    name->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;"));
+    auto* ver = new QLabel(QStringLiteral("Version %1").arg(QApplication::applicationVersion()),
+                           &dlg);
+    ver->setStyleSheet(QStringLiteral("color:#9aa7b8;"));
+    auto* desc = new QLabel(
+        QStringLiteral("CAD workspace for designing 2D wire-harness drawings.\n\n© ETS"),
+        &dlg);
+    desc->setWordWrap(true);
+    col->addWidget(name);
+    col->addWidget(ver);
+    col->addSpacing(6);
+    col->addWidget(desc);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok, &dlg);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    col->addSpacing(8);
+    col->addWidget(bb);
+    row->addLayout(col, 1);
+
+    dlg.exec();
+}
+
+// ---- Options dialog --------------------------------------------------------
+
+void MainWindow::showOptions() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Options"));
+    dlg.resize(560, 520);
+    auto* outer = new QVBoxLayout(&dlg);
+    auto* tabs = new QTabWidget(&dlg);
+    outer->addWidget(tabs, 1);
+
+    SnapSettings& s = editor_->snapSettings();
+
+    // ===== Display =====
+    auto* disp = new QWidget(tabs);
+    auto* df = new QFormLayout(disp);
+
+    // Wrap a slider with tick marks and a live numeric readout that updates as
+    // the handle moves over each step.
+    auto sliderRow = [disp](QSlider* sl, const QString& suffix) -> QWidget* {
+        const int span = sl->maximum() - sl->minimum();
+        sl->setTickPosition(QSlider::TicksBelow);
+        sl->setTickInterval(span >= 10 ? span / 10 : 1);
+        sl->setSingleStep(1);
+        sl->setPageStep(span >= 10 ? span / 10 : 1);
+        auto* w = new QWidget(disp);
+        auto* hl = new QHBoxLayout(w);
+        hl->setContentsMargins(0, 0, 0, 0);
+        auto* val = new QLabel(QString::number(sl->value()) + suffix, w);
+        val->setMinimumWidth(46);
+        val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        hl->addWidget(sl, 1);
+        hl->addWidget(val);
+        QObject::connect(sl, &QSlider::valueChanged, val,
+                         [val, suffix](int v) { val->setText(QString::number(v) + suffix); });
+        return w;
+    };
+
+    auto* scheme = new QComboBox(disp);
+    scheme->addItems({QStringLiteral("Dark"), QStringLiteral("Light")});
+    scheme->setCurrentIndex(darkTheme_ ? 0 : 1);
+    df->addRow(QStringLiteral("Color scheme"), scheme);
+
+    auto* crossSize = new QSlider(Qt::Horizontal, disp);
+    crossSize->setRange(5, 100);
+    crossSize->setValue(canvas_->crosshairSize());
+    df->addRow(QStringLiteral("Crosshair size (%)"), sliderRow(crossSize, QStringLiteral("%")));
+
+    auto* pickBox = new QSlider(Qt::Horizontal, disp);
+    pickBox->setRange(2, 20);
+    pickBox->setValue(canvas_->pickboxSize());
+    df->addRow(QStringLiteral("Crosshair box size"), sliderRow(pickBox, QStringLiteral(" px")));
+
+    QColor crossCol = canvas_->crosshairColor();
+    bool crossChanged = false;
+
+    // Live preview of the crosshair as size / box / colour are adjusted.
+    auto* preview = new CrosshairPreview(disp);
+    df->addRow(QStringLiteral("Preview"), preview);
+    auto refreshPrev = [preview, crossSize, pickBox, &crossCol]() {
+        preview->setParams(crossSize->value(), pickBox->value(), crossCol);
+    };
+    refreshPrev();
+    connect(crossSize, &QSlider::valueChanged, preview, [refreshPrev](int) { refreshPrev(); });
+    connect(pickBox, &QSlider::valueChanged, preview, [refreshPrev](int) { refreshPrev(); });
+
+    auto* crossColBtn = new QPushButton(QStringLiteral("Crosshair color..."), disp);
+    df->addRow(QStringLiteral("Crosshair color"), crossColBtn);
+    connect(crossColBtn, &QPushButton::clicked, &dlg, [&dlg, &crossCol, &crossChanged, refreshPrev] {
+        const QColor c = QColorDialog::getColor(crossCol, &dlg, QStringLiteral("Crosshair color"));
+        if (c.isValid()) { crossCol = c; crossChanged = true; refreshPrev(); }
+    });
+
+    QColor bgCol = canvas_->backgroundColor();
+    bool bgChanged = false;
+    auto* bgBtn = new QPushButton(QStringLiteral("Background color..."), disp);
+    df->addRow(QStringLiteral("Canvas background"), bgBtn);
+    connect(bgBtn, &QPushButton::clicked, &dlg, [&dlg, &bgCol, &bgChanged] {
+        const QColor c = QColorDialog::getColor(bgCol, &dlg, QStringLiteral("Canvas background"));
+        if (c.isValid()) { bgCol = c; bgChanged = true; }
+    });
+
+    // Grid + secondary-grid colours, each adjustable independently.
+    QColor gridCol = canvas_->gridMinorColor();
+    QColor gridCol2 = canvas_->gridMajorColor();
+    bool gridChanged = false;
+    auto* gridBtn = new QPushButton(QStringLiteral("Grid color..."), disp);
+    df->addRow(QStringLiteral("Grid color"), gridBtn);
+    connect(gridBtn, &QPushButton::clicked, &dlg, [&dlg, &gridCol, &gridChanged] {
+        const QColor c = QColorDialog::getColor(gridCol, &dlg, QStringLiteral("Grid color"));
+        if (c.isValid()) { gridCol = c; gridChanged = true; }
+    });
+    auto* grid2Btn = new QPushButton(QStringLiteral("Secondary grid color..."), disp);
+    df->addRow(QStringLiteral("Secondary grid color"), grid2Btn);
+    connect(grid2Btn, &QPushButton::clicked, &dlg, [&dlg, &gridCol2, &gridChanged] {
+        const QColor c = QColorDialog::getColor(gridCol2, &dlg, QStringLiteral("Secondary grid color"));
+        if (c.isValid()) { gridCol2 = c; gridChanged = true; }
+    });
+
+    auto* showGrid = new QCheckBox(QStringLiteral("Show grid"), disp);
+    showGrid->setChecked(canvas_->gridVisible());
+    df->addRow(QString(), showGrid);
+
+    auto* gridStep = new QDoubleSpinBox(disp);
+    gridStep->setRange(0.01, 100000.0);
+    gridStep->setDecimals(2);
+    gridStep->setValue(canvas_->gridSize());
+    gridStep->setButtonSymbols(QAbstractSpinBox::PlusMinus); // clear +/- (both work)
+    df->addRow(QStringLiteral("Grid size"), gridStep);
+    tabs->addTab(disp, QStringLiteral("Display"));
+
+    // ===== Drafting (snapping) =====
+    auto* draft = new QWidget(tabs);
+    auto* gf = new QFormLayout(draft);
+    auto* snapGrid = new QCheckBox(QStringLiteral("Snap to grid"), draft);
+    snapGrid->setChecked(s.gridSnap);
+    gf->addRow(QString(), snapGrid);
+    auto* ortho = new QCheckBox(QStringLiteral("Ortho mode"), draft);
+    ortho->setChecked(s.ortho);
+    gf->addRow(QString(), ortho);
+    auto* polar = new QCheckBox(QStringLiteral("Polar tracking"), draft);
+    polar->setChecked(s.polar);
+    gf->addRow(QString(), polar);
+    auto* polarStep = new QComboBox(draft);
+    polarStep->addItems({"5", "10", "15", "22.5", "30", "45", "90"});
+    polarStep->setCurrentText(QString::number(s.polarStepDeg, 'g'));
+    gf->addRow(QStringLiteral("Polar angle (deg)"), polarStep);
+    auto* osnap = new QCheckBox(QStringLiteral("Object snap"), draft);
+    osnap->setChecked(s.objectSnap);
+    gf->addRow(QString(), osnap);
+    auto* snEnd = new QCheckBox(QStringLiteral("Endpoint"), draft); snEnd->setChecked(s.snapEndpoint);
+    auto* snMid = new QCheckBox(QStringLiteral("Midpoint"), draft); snMid->setChecked(s.snapMidpoint);
+    auto* snCen = new QCheckBox(QStringLiteral("Center"), draft); snCen->setChecked(s.snapCenter);
+    auto* snInt = new QCheckBox(QStringLiteral("Intersection"), draft); snInt->setChecked(s.snapIntersection);
+    auto* snNear = new QCheckBox(QStringLiteral("Nearest"), draft); snNear->setChecked(s.snapNearest);
+    gf->addRow(QStringLiteral("Snap types"), snEnd);
+    gf->addRow(QString(), snMid);
+    gf->addRow(QString(), snCen);
+    gf->addRow(QString(), snInt);
+    gf->addRow(QString(), snNear);
+    tabs->addTab(draft, QStringLiteral("Drafting"));
+
+    // ===== Selection / Drawing =====
+    auto* sel = new QWidget(tabs);
+    auto* sfm = new QFormLayout(sel);
+    auto* angles = new QCheckBox(QStringLiteral("Show drawing angles"), sel);
+    angles->setChecked(editor_->showAngles());
+    sfm->addRow(QString(), angles);
+    auto* dimDec = new QSpinBox(sel);
+    dimDec->setRange(0, 6);
+    dimDec->setValue(2);
+    dimDec->setButtonSymbols(QAbstractSpinBox::PlusMinus); // clear +/- (both work)
+    sfm->addRow(QStringLiteral("Dimension decimals"), dimDec);
+    tabs->addTab(sel, QStringLiteral("Selection"));
+
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    outer->addWidget(bb);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    // Apply everything. The theme sets canvas colors; explicit picks override.
+    applyTheme(scheme->currentIndex() == 0);
+    canvas_->setCrosshairSize(crossSize->value());
+    if (crossChanged) canvas_->setCrosshairColor(crossCol);
+    if (bgChanged) canvas_->setBackgroundColor(bgCol); // auto-derives grid colours
+    if (gridChanged) canvas_->setGridColors(gridCol, gridCol2); // explicit override
+    canvas_->setGridVisible(showGrid->isChecked());
+    canvas_->setGridSize(gridStep->value());
+    s.gridSize = gridStep->value();
+    canvas_->setPickboxSize(pickBox->value());
+    s.gridSnap = snapGrid->isChecked();
+    s.ortho = ortho->isChecked();
+    s.polar = polar->isChecked();
+    s.polarStepDeg = polarStep->currentText().toDouble();
+    s.objectSnap = osnap->isChecked();
+    s.snapEndpoint = snEnd->isChecked();
+    s.snapMidpoint = snMid->isChecked();
+    s.snapCenter = snCen->isChecked();
+    s.snapIntersection = snInt->isChecked();
+    s.snapNearest = snNear->isChecked();
+    editor_->setShowAngles(angles->isChecked());
+    EntityRenderer::setDimensionDecimals(dimDec->value());
+    canvas_->update();
+}
+
 // ---- Panel refresh ---------------------------------------------------------
 
 void MainWindow::refreshPanels() {
@@ -1231,6 +2084,50 @@ void MainWindow::refreshLayers() {
     refreshing_ = true;
     const auto& ls = doc_->layers();
     const QString active = doc_->activeLayer();
+    // A checkbox centered in its cell.
+    auto centeredCheck = [this](bool checked, std::function<void(bool)> onToggle) {
+        auto* w = new QWidget(layersTable_);
+        auto* hl = new QHBoxLayout(w);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setAlignment(Qt::AlignCenter);
+        auto* cb = new QCheckBox(w);
+        cb->setChecked(checked);
+        connect(cb, &QCheckBox::toggled, this, [this, onToggle](bool v) {
+            if (refreshing_) return;
+            onToggle(v);
+            doc_->setDirty(true);
+            canvas_->update();
+        });
+        hl->addWidget(cb);
+        return w;
+    };
+    // A small color swatch centered in its cell; click to change the layer color.
+    auto colorCell = [this](int row, const QColor& c) {
+        auto* w = new QWidget(layersTable_);
+        auto* hl = new QHBoxLayout(w);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setAlignment(Qt::AlignCenter);
+        auto* sw = new QToolButton(w);
+        sw->setFixedSize(20, 14);
+        sw->setCursor(Qt::PointingHandCursor);
+        sw->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid #6b7280;}")
+                              .arg(c.name()));
+        connect(sw, &QToolButton::clicked, this, [this, row] {
+            auto& ll = doc_->layers();
+            if (row < 0 || row >= static_cast<int>(ll.size())) return;
+            const QColor chosen = QColorDialog::getColor(QColor(ll[row].color), this,
+                                                         QStringLiteral("Layer color"));
+            if (chosen.isValid()) {
+                ll[row].color = chosen.name();
+                doc_->setDirty(true);
+                refreshLayers();
+                canvas_->update();
+            }
+        });
+        hl->addWidget(sw);
+        return w;
+    };
+
     layersTable_->setRowCount(static_cast<int>(ls.size()));
     for (int r = 0; r < static_cast<int>(ls.size()); ++r) {
         auto* status = new QTableWidgetItem(ls[r].name == active ? QStringLiteral("●") : QString());
@@ -1239,18 +2136,11 @@ void MainWindow::refreshLayers() {
         status->setForeground(QColor("#5fb763"));
         layersTable_->setItem(r, 0, status);
         layersTable_->setItem(r, 1, new QTableWidgetItem(ls[r].name));
-        auto* vis = new QTableWidgetItem();
-        vis->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-        vis->setCheckState(ls[r].visible ? Qt::Checked : Qt::Unchecked);
-        layersTable_->setItem(r, 2, vis);
-        auto* lock = new QTableWidgetItem();
-        lock->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-        lock->setCheckState(ls[r].locked ? Qt::Checked : Qt::Unchecked);
-        layersTable_->setItem(r, 3, lock);
-        auto* color = new QTableWidgetItem();
-        color->setBackground(QColor(ls[r].color));
-        color->setFlags(Qt::ItemIsEnabled);
-        layersTable_->setItem(r, 4, color);
+        layersTable_->setCellWidget(
+            r, 2, centeredCheck(ls[r].visible, [this, r](bool v) { doc_->layers()[r].visible = v; }));
+        layersTable_->setCellWidget(
+            r, 3, centeredCheck(ls[r].locked, [this, r](bool v) { doc_->layers()[r].locked = v; }));
+        layersTable_->setCellWidget(r, 4, colorCell(r, QColor(ls[r].color)));
     }
     refreshing_ = false;
 
@@ -1273,6 +2163,9 @@ void MainWindow::refreshProperties() {
     const auto& sel = editor_->selection();
     propsTable_->setRowCount(0);
 
+    // Section-header band, themed so the title stays legible in light + dark.
+    const QColor hbg = darkTheme_ ? QColor("#313438") : QColor("#d2d2d8");
+    const QColor htx = darkTheme_ ? QColor("#cdd6e4") : QColor("#1e1e1e");
     auto addHeader = [&](const QString& title) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
@@ -1281,11 +2174,12 @@ void MainWindow::refreshProperties() {
         f.setBold(true);
         h->setFont(f);
         h->setFlags(Qt::ItemIsEnabled);
-        h->setBackground(QColor("#161d29"));
+        h->setBackground(hbg);
+        h->setForeground(htx);
         propsTable_->setItem(r, 0, h);
         auto* blank = new QTableWidgetItem();
         blank->setFlags(Qt::ItemIsEnabled);
-        blank->setBackground(QColor("#161d29"));
+        blank->setBackground(hbg);
         propsTable_->setItem(r, 1, blank);
     };
     auto addRow = [&](const QString& k, const QString& v) {
@@ -1353,7 +2247,7 @@ void MainWindow::refreshProperties() {
         propsTable_->setItem(r, 0, key);
         auto* sp = new QDoubleSpinBox(propsTable_);
         sp->setRange(-1e9, 1e9);
-        sp->setDecimals(3);
+        sp->setDecimals(2);
         sp->setValue(value);
         sp->setButtonSymbols(QAbstractSpinBox::NoButtons);
         connect(sp, &QDoubleSpinBox::editingFinished, this, [this, sp, apply] {
@@ -1610,8 +2504,9 @@ void MainWindow::showHelp() {
         auto* c1 = new QTableWidgetItem(b);
         if (header) {
             QFont f = c0->font(); f.setBold(true); c0->setFont(f);
-            c0->setBackground(QColor("#161d29"));
-            c1->setBackground(QColor("#161d29"));
+            const QColor hb = darkTheme_ ? QColor("#313438") : QColor("#d2d2d8");
+            c0->setBackground(hb);
+            c1->setBackground(hb);
         }
         table->setItem(r, 0, c0);
         table->setItem(r, 1, c1);
@@ -1693,12 +2588,15 @@ void MainWindow::showConnectorDialog() {
     auto* pins = new QSpinBox(&dlg);
     pins->setRange(1, 128);
     pins->setValue(spec.pinCount);
+    pins->setButtonSymbols(QAbstractSpinBox::PlusMinus);
     auto* pitch = new QDoubleSpinBox(&dlg);
     pitch->setRange(1, 200);
     pitch->setValue(spec.pitch);
+    pitch->setButtonSymbols(QAbstractSpinBox::PlusMinus);
     auto* pinLen = new QDoubleSpinBox(&dlg);
     pinLen->setRange(1, 500);
     pinLen->setValue(spec.pinLength);
+    pinLen->setButtonSymbols(QAbstractSpinBox::PlusMinus);
     auto* mirror = new QCheckBox(QStringLiteral("Pins exit left"), &dlg);
     mirror->setChecked(spec.mirrorX);
     form->addRow(QStringLiteral("Designator"), designator);
@@ -1856,7 +2754,48 @@ void MainWindow::closeEvent(QCloseEvent* e) {
             if (!maybeSaveDoc(i)) { e->ignore(); return; }
         }
     }
+    saveSettings(); // persist the drafting/snap toggles for next launch
     e->accept();
+}
+
+// ---- Persistent drafting preferences ---------------------------------------
+
+void MainWindow::loadSettings() {
+    QSettings s;
+    auto& sn = editor_->snapSettings();
+    sn.gridSnap = s.value(QStringLiteral("draft/gridSnap"), sn.gridSnap).toBool();
+    sn.ortho = s.value(QStringLiteral("draft/ortho"), sn.ortho).toBool();
+    sn.polar = s.value(QStringLiteral("draft/polar"), sn.polar).toBool();
+    sn.polarStepDeg = s.value(QStringLiteral("draft/polarStep"), sn.polarStepDeg).toDouble();
+    sn.objectSnap = s.value(QStringLiteral("draft/objectSnap"), sn.objectSnap).toBool();
+    sn.snapEndpoint = s.value(QStringLiteral("draft/snapEndpoint"), sn.snapEndpoint).toBool();
+    sn.snapMidpoint = s.value(QStringLiteral("draft/snapMidpoint"), sn.snapMidpoint).toBool();
+    sn.snapCenter = s.value(QStringLiteral("draft/snapCenter"), sn.snapCenter).toBool();
+    sn.snapIntersection = s.value(QStringLiteral("draft/snapIntersection"), sn.snapIntersection).toBool();
+    sn.snapNearest = s.value(QStringLiteral("draft/snapNearest"), sn.snapNearest).toBool();
+    sn.gridSize = s.value(QStringLiteral("draft/gridSize"), sn.gridSize).toDouble();
+    canvas_->setGridSize(sn.gridSize);
+    canvas_->setGridVisible(s.value(QStringLiteral("draft/gridVisible"), canvas_->gridVisible()).toBool());
+    editor_->setShowAngles(s.value(QStringLiteral("draft/showAngles"), editor_->showAngles()).toBool());
+}
+
+void MainWindow::saveSettings() {
+    if (!editor_) return;
+    QSettings s;
+    const auto& sn = editor_->snapSettings();
+    s.setValue(QStringLiteral("draft/gridSnap"), sn.gridSnap);
+    s.setValue(QStringLiteral("draft/ortho"), sn.ortho);
+    s.setValue(QStringLiteral("draft/polar"), sn.polar);
+    s.setValue(QStringLiteral("draft/polarStep"), sn.polarStepDeg);
+    s.setValue(QStringLiteral("draft/objectSnap"), sn.objectSnap);
+    s.setValue(QStringLiteral("draft/snapEndpoint"), sn.snapEndpoint);
+    s.setValue(QStringLiteral("draft/snapMidpoint"), sn.snapMidpoint);
+    s.setValue(QStringLiteral("draft/snapCenter"), sn.snapCenter);
+    s.setValue(QStringLiteral("draft/snapIntersection"), sn.snapIntersection);
+    s.setValue(QStringLiteral("draft/snapNearest"), sn.snapNearest);
+    s.setValue(QStringLiteral("draft/gridSize"), canvas_->gridSize());
+    s.setValue(QStringLiteral("draft/gridVisible"), canvas_->gridVisible());
+    s.setValue(QStringLiteral("draft/showAngles"), editor_->showAngles());
 }
 
 // ---- File actions ----------------------------------------------------------

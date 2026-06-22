@@ -17,9 +17,19 @@ namespace {
 void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::DoubleLine:
         out.emplace_back(e.a, e.b);
         break;
+    case EntityType::DoubleLine: {
+        // Only the two VISIBLE parallel lines — NOT the centerline. A centerline
+        // segment would put a phantom midpoint/nearest snap in the empty gap
+        // between the lines, off the grips, so grabbing a visible end would snap
+        // the cursor away and miss the joint.
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        out.emplace_back(e.a + off, e.b + off);
+        out.emplace_back(e.a - off, e.b - off);
+        break;
+    }
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
@@ -41,10 +51,21 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
 void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::DoubleLine:
         out.push_back(e.a);
         out.push_back(e.b);
         break;
+    case EntityType::DoubleLine: {
+        // The four ends of the two VISIBLE parallel lines only — no centerline
+        // ends, which would float in the gap between the lines (off the grips)
+        // and pull the cursor away when grabbing a visible joint.
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        out.push_back(e.a + off);
+        out.push_back(e.a - off);
+        out.push_back(e.b + off);
+        out.push_back(e.b - off);
+        break;
+    }
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
@@ -152,16 +173,31 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
         const Vec2 d = raw - *anchor;
         const double len = d.length();
         if (len > 1e-9) {
-            double ang = std::atan2(d.y, d.x);
-            double stepRad;
-            if (s.ortho) stepRad = M_PI / 2.0;
-            else stepRad = qDegreesToRadians(s.polarStepDeg);
-            const double snapped = std::round(ang / stepRad) * stepRad;
-            result.point = {anchor->x + len * std::cos(snapped),
-                            anchor->y + len * std::sin(snapped)};
-            result.kind = s.ortho ? SnapKind::Ortho : SnapKind::Polar;
-            result.snapped = true;
-            return result;
+            const double ang = std::atan2(d.y, d.x);
+            if (s.ortho) {
+                // Ortho is a hard constraint to the nearest 90 degrees.
+                const double stepRad = M_PI / 2.0;
+                const double snapped = std::round(ang / stepRad) * stepRad;
+                result.point = {anchor->x + len * std::cos(snapped),
+                                anchor->y + len * std::sin(snapped)};
+                result.kind = SnapKind::Ortho;
+                result.snapped = true;
+                return result;
+            }
+            // Polar: free angle, but jump to the nearest tracking increment only
+            // when the cursor is within ~2 degrees of it (AutoCAD-style).
+            const double stepRad = qDegreesToRadians(s.polarStepDeg);
+            if (stepRad > 1e-9) {
+                const double snapped = std::round(ang / stepRad) * stepRad;
+                if (std::abs(ang - snapped) <= qDegreesToRadians(2.0)) {
+                    result.point = {anchor->x + len * std::cos(snapped),
+                                    anchor->y + len * std::sin(snapped)};
+                    result.kind = SnapKind::Polar;
+                    result.snapped = true;
+                    return result;
+                }
+            }
+            // Otherwise leave the angle free (fall through to grid / none).
         }
     }
 

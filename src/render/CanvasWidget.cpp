@@ -3,12 +3,15 @@
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
 
+#include <QCompleter>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSet>
+#include <QStringListModel>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -19,6 +22,7 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setAutoFillBackground(false);
+    setCursor(Qt::BlankCursor); // hide the OS cursor; we draw an AutoCAD crosshair
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor("#10141b"));
     setPalette(pal);
@@ -153,9 +157,10 @@ void CanvasWidget::drawGrid(QPainter& p, const ViewTransform& vt) const {
     const double maxY = std::max(topLeft.y, botRight.y);
 
     // Minor grid every `step`; brighter secondary (major) grid every 5 squares.
-    QPen minorPen(QColor("#1a2230"));
+    // Kept faint (close to the canvas background) so it stays subtle.
+    QPen minorPen(gridMinor_);
     minorPen.setCosmetic(true);
-    QPen majorPen(QColor("#2c3a52"));
+    QPen majorPen(gridMajor_);
     majorPen.setCosmetic(true);
     constexpr int kMajorEvery = 5;
 
@@ -187,14 +192,27 @@ void CanvasWidget::drawOriginMarker(QPainter& p, const ViewTransform& vt) const 
     p.setPen(yPen);
     p.drawLine(QPointF(o.x(), 0), QPointF(o.x(), height()));
 
-    // Small origin square + "0,0" label.
+    // Small origin square.
     p.setPen(QPen(QColor("#9aa7b8")));
     p.setBrush(Qt::NoBrush);
     p.drawRect(QRectF(o.x() - 4, o.y() - 4, 8, 8));
+
+    // Axis letters: "Y" up the vertical axis, "X" along the horizontal axis.
+    QFont af = p.font();
+    af.setPixelSize(12);
+    af.setBold(true);
+    p.setFont(af);
+    p.setPen(QPen(QColor("#dfe6f0")));
+    p.drawText(QPointF(o.x() + 7, o.y() - 22), QStringLiteral("Y"));
+    p.drawText(QPointF(o.x() + 24, o.y() - 5), QStringLiteral("X"));
+
+    // "0,0" label below the origin.
     QFont f = p.font();
+    f.setBold(false);
     f.setPixelSize(11);
     p.setFont(f);
-    p.drawText(o + QPointF(6, 16), QStringLiteral("0,0"));
+    p.setPen(QPen(QColor("#9aa7b8")));
+    p.drawText(o + QPointF(7, 16), QStringLiteral("0,0"));
 }
 
 void CanvasWidget::paintEvent(QPaintEvent*) {
@@ -207,7 +225,7 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
     if (sceneDirty_ || sceneCache_.size() != devSize) {
         sceneCache_ = QPixmap(devSize);
         sceneCache_.setDevicePixelRatio(dpr);
-        sceneCache_.fill(QColor("#10141b"));
+        sceneCache_.fill(bgColor_);
         QPainter sp(&sceneCache_);
         sp.setRenderHint(QPainter::Antialiasing, true);
         if (doc_) {
@@ -234,6 +252,42 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
     }
+    if (cursorInside_ && !panning_) drawCrosshair(p);
+}
+
+// Full-viewport crosshair with a central pick box, AutoCAD style. Tracks the
+// snapped cursor so it locks visibly onto snap points.
+void CanvasWidget::drawCrosshair(QPainter& p) const {
+    QPointF c = lastMousePos_;
+    if (editor_ && editor_->currentSnap().snapped)
+        c = transform().toScreen(editor_->currentSnap().point);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    QPen pen(crosshairColor_);
+    pen.setCosmetic(true);
+    pen.setWidth(1);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    const double pick = pickboxPx_; // half-size of the central pick box
+    // Arm length: 100% spans the whole viewport; smaller = a compact crosshair.
+    const double arm = (crosshairPct_ >= 100)
+                           ? std::max(width(), height())
+                           : std::min(width(), height()) * 0.5 * crosshairPct_ / 100.0;
+    p.drawLine(QPointF(std::max(0.0, c.x() - arm), c.y()), QPointF(c.x() - pick, c.y()));
+    p.drawLine(QPointF(c.x() + pick, c.y()), QPointF(std::min<double>(width(), c.x() + arm), c.y()));
+    p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - pick));
+    p.drawLine(QPointF(c.x(), c.y() + pick), QPointF(c.x(), std::min<double>(height(), c.y() + arm)));
+    p.drawRect(QRectF(c.x() - pick, c.y() - pick, 2 * pick, 2 * pick));
+}
+
+void CanvasWidget::setCommandWords(const QStringList& words) {
+    if (!completer_) {
+        completer_ = new QCompleter(this);
+        completer_->setCaseSensitivity(Qt::CaseInsensitive);
+        completer_->setFilterMode(Qt::MatchStartsWith);
+        completer_->setCompletionMode(QCompleter::PopupCompletion);
+        if (dynInput_) dynInput_->setCompleter(completer_);
+    }
+    completer_->setModel(new QStringListModel(words, completer_));
 }
 
 void CanvasWidget::wheelEvent(QWheelEvent* e) {
@@ -284,12 +338,27 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     const Vec2 world = transform().toWorld(e->position());
     if (editor_) editor_->onPointerMove(world);
     emit cursorWorldMoved(world);
+    update(); // repaint so the drawn crosshair follows the cursor
+}
+
+void CanvasWidget::enterEvent(QEnterEvent* e) {
+    cursorInside_ = true;
+    lastMousePos_ = e->position().toPoint();
+    update();
+    QWidget::enterEvent(e);
+}
+
+void CanvasWidget::leaveEvent(QEvent* e) {
+    cursorInside_ = false;
+    update();
+    QWidget::leaveEvent(e);
 }
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (panning_ && (e->button() == Qt::MiddleButton || e->button() == Qt::RightButton)) {
         panning_ = false;
-        unsetCursor();
+        setCursor(Qt::BlankCursor); // resume the drawn crosshair after panning
+        update();
         e->accept();
         return;
     }
@@ -307,11 +376,17 @@ void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
 }
 
 void CanvasWidget::keyPressEvent(QKeyEvent* e) {
-    // With a draw tool active, typing a value or command character routes to the
-    // command line (direct distance entry, "g" gap option, commands, etc.).
-    if (editor_ && editor_->wantsTextInput()) {
+    // Pop the floating command field next to the crosshair:
+    //   - while drafting/a draw tool is active: any value or option character
+    //     (direct distance entry, "g" gap, "@dx,dy", commands, ...);
+    //   - when idle with the crosshair on the canvas: a letter starts a command
+    //     (AutoCAD-style command entry at the cursor).
+    if (editor_) {
         const QString t = e->text();
-        if (!t.isEmpty() && (t[0].isLetterOrNumber() || t == "." || t == "-" || t == "@")) {
+        const bool cmdChar =
+            !t.isEmpty() && (t[0].isLetterOrNumber() || t == "." || t == "-" || t == "@");
+        const bool drafting = editor_->wantsTextInput();
+        if (cmdChar && (drafting || (cursorInside_ && t[0].isLetter()))) {
             showDynInput(t); // floating input box next to the cursor
             e->accept();
             return;

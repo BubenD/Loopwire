@@ -22,6 +22,7 @@ class QLineEdit;
 class QComboBox;
 class QWidget;
 class QCloseEvent;
+class QToolButton;
 
 namespace Edraw_Desktop {
 
@@ -94,6 +95,12 @@ private:
     void saveDwxAs();
     void exportDxfAs();
 
+    void showOptions();          // AutoCAD-style Options dialog (E menu)
+    void showAbout();            // app name / description / version (E menu)
+    void loadSettings();         // restore persisted drafting/snap toggles
+    void saveSettings();         // persist drafting/snap toggles on close
+    void applyTheme(bool dark);  // re-theme chrome + canvas (Dark / Light)
+
     std::vector<std::unique_ptr<Document>> docs_; // open drawings
     QStringList docPaths_;                         // parallel file paths ("" if unsaved)
     Document* doc_ = nullptr;                      // active drawing (raw, owned by docs_)
@@ -103,6 +110,12 @@ private:
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;
+    QVector<QAction*> allToolActions_; // every tool button instance (for theme re-tint)
+
+    // Status-bar drafting toggles (re-tinted/re-styled on theme change).
+    QVector<QToolButton*> statusToggleBtns_;
+    QStringList statusToggleNames_;
+    QVector<QToolButton*> statusArrowBtns_;
 
     QTabWidget* ribbon_ = nullptr;
     QTableWidget* layersTable_ = nullptr;
@@ -114,6 +127,7 @@ private:
     QComboBox* colorCombo_ = nullptr;
 
     bool refreshing_ = false; // guard against re-entrant table edits
+    bool darkTheme_ = true;   // current color scheme
 };
 
 } // namespace Edraw_Desktop

@@ -38,6 +38,10 @@ public:
 
     // Resolve the effective stroke color for an entity (explicit or ByLayer).
     static QColor resolveColor(const Entity& e, const Document& doc);
+
+    // Number of decimals shown on dimension labels (Options dialog).
+    static void setDimensionDecimals(int d);
+    static int dimensionDecimals();
 };
 
 } // namespace Edraw_Desktop

@@ -3,11 +3,16 @@
 #include "model/Document.h"
 #include "render/EntityRenderer.h"
 
+#include <QColor>
 #include <QPixmap>
 #include <QPoint>
+#include <QStringList>
 #include <QWidget>
 
+#include <algorithm>
+
 class QLineEdit;
+class QCompleter;
 
 namespace Edraw_Desktop {
 
@@ -37,6 +42,39 @@ public:
     void setGridVisible(bool v);
     bool gridVisible() const { return gridVisible_; }
 
+    // ---- Display options (Options dialog) ----
+    int crosshairSize() const { return crosshairPct_; }   // 1..100 (% of viewport)
+    void setCrosshairSize(int pct) { crosshairPct_ = std::clamp(pct, 1, 100); update(); }
+    QColor crosshairColor() const { return crosshairColor_; }
+    void setCrosshairColor(const QColor& c) { crosshairColor_ = c; update(); }
+    int pickboxSize() const { return pickboxPx_; }
+    void setPickboxSize(int px) { pickboxPx_ = std::clamp(px, 1, 30); update(); }
+    QColor backgroundColor() const { return bgColor_; }
+    // Setting the background also re-derives the grid colors so the minor and
+    // major grid lines stay visible (lighter than a dark bg, darker than a light
+    // bg), the secondary grid a touch stronger.
+    void setBackgroundColor(const QColor& c) {
+        bgColor_ = c;
+        const int lum = (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000;
+        const QColor target = lum < 128 ? QColor(255, 255, 255) : QColor(0, 0, 0);
+        auto mix = [&](double t) {
+            return QColor(int(c.red() + (target.red() - c.red()) * t + 0.5),
+                          int(c.green() + (target.green() - c.green()) * t + 0.5),
+                          int(c.blue() + (target.blue() - c.blue()) * t + 0.5));
+        };
+        gridMinor_ = mix(0.08);
+        gridMajor_ = mix(0.20);
+        invalidateScene();
+    }
+    void setGridColors(const QColor& minor, const QColor& major) {
+        gridMinor_ = minor; gridMajor_ = major; invalidateScene();
+    }
+    QColor gridMinorColor() const { return gridMinor_; }
+    QColor gridMajorColor() const { return gridMajor_; }
+
+    // Command words for the dynamic-input autocomplete (suggests/filters as you type).
+    void setCommandWords(const QStringList& words);
+
 signals:
     void cursorWorldMoved(Vec2 world);
     // Emitted when the user commits text in the floating dynamic-input field
@@ -51,6 +89,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void enterEvent(QEnterEvent* e) override; // show the drawn crosshair
+    void leaveEvent(QEvent* e) override;      // hide it
     bool eventFilter(QObject* obj, QEvent* e) override; // dynamic-input field keys
 
     // Mark the cached static scene (grid + entities) stale so it is re-rendered
@@ -61,16 +101,27 @@ private:
     ViewTransform transform() const;
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
+    void drawCrosshair(QPainter& p) const; // AutoCAD-style full crosshair + pickbox
     void showDynInput(const QString& firstChar); // pop the field near the cursor
     void hideDynInput();
 
     QLineEdit* dynInput_ = nullptr; // floating "dynamic input" box near the cursor
+    QCompleter* completer_ = nullptr; // command autocomplete for the dynamic input
     QPoint lastMousePos_;           // canvas-local cursor position
+    bool cursorInside_ = false;     // mouse over the canvas (draw the crosshair)
 
     Document* doc_ = nullptr;
     Editor* editor_ = nullptr;
     double gridSize_ = 10.0;
     bool gridVisible_ = true;
+
+    // Display options.
+    int crosshairPct_ = 15;             // crosshair arm length (% of viewport)
+    QColor crosshairColor_{"#cdd6e4"};
+    int pickboxPx_ = 3;                 // half-size of the central pick box
+    QColor bgColor_{"#1e2832"};         // canvas (model space) background (dark slate)
+    QColor gridMinor_{"#2c3845"};
+    QColor gridMajor_{"#3a4a58"};
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change
     bool sceneDirty_ = true;

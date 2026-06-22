@@ -11,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QString>
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -72,6 +73,10 @@ public:
     void clearSelection();
     void deleteSelected();
 
+    // Current draw color applied to newly created entities (empty => ByLayer).
+    void setCurrentColor(const QString& hex) { currentColor_ = hex; }
+    const QString& currentColor() const { return currentColor_; }
+
     // Apply a common property to all selected entities.
     void setSelectionLayer(const QString& layer);
     void setSelectionColor(const QString& hex); // empty => ByLayer
@@ -79,8 +84,9 @@ public:
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
     void setGeometryValue(const QString& key, double value);         // Center X/Y, Width, Height, Radius
     void setColorsByLayer();  // strip explicit color so entities follow their layer (selection, or all)
-    void copySelection();
-    void paste();
+    void copySelection();          // Ctrl+C: copy (base point = selection bbox min)
+    void copyWithBase(bool cut);   // Ctrl+Shift+C / Ctrl+X: then pick a base point
+    void paste();                  // Ctrl+V: then click to place (relative to base)
     void undo();
     void redo();
 
@@ -102,6 +108,21 @@ public:
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
+
+    // Circle / arc / ellipse construction methods (AutoCAD-style flyouts).
+    enum class CircleMode { CenterRadius, CenterDiameter, TwoPoint, ThreePoint };
+    enum class ArcMode { ThreePoint, StartCenterEnd, CenterStartEnd, StartEndRadius };
+    enum class EllipseMode { Center, AxisEnd, EllipticalArc };
+    void setCircleMode(CircleMode m) { circleMode_ = m; }
+    void setArcMode(ArcMode m) { arcMode_ = m; }
+    void setEllipseMode(EllipseMode m) { ellipseMode_ = m; }
+    CircleMode circleMode() const { return circleMode_; }
+    ArcMode arcMode() const { return arcMode_; }
+    EllipseMode ellipseMode() const { return ellipseMode_; }
+
+    // Number of sides for the polygon tool (typed before placing the center).
+    void setPolygonSides(int n) { polygonSides_ = std::clamp(n, 3, 64); }
+    int polygonSides() const { return polygonSides_; }
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
@@ -201,12 +222,20 @@ private:
     bool editing_ = false;
     bool gripGrab_ = false;   // a joint is grabbed (follows cursor until clicked to place / Esc)
     int editMode_ = 0;        // 0 = move selection, 1 = grip edit
-    QString editEntityId_;    // entity whose grip is being dragged
+    QString editEntityId_;    // primary entity whose grip is being dragged
     int editRole_ = 0;        // GripRole (see Editor.cpp)
     int editIndex_ = 0;       // vertex/corner index for the grip
     Vec2 editLast_;           // last drag position (for move deltas)
     Vec2 editAnchor_;         // fixed reference for ortho/polar while grip-dragging
     bool editMoved_ = false;  // has the drag actually moved yet (for undo push)
+    // All joints being dragged together: a grabbed point-joint moves every
+    // coincident joint of the selected entities (shared joints stay shared).
+    struct EditGrip { QString id; int role; int index; Vec2 offset{0, 0}; };
+    std::vector<EditGrip> editGrips_;
+    // Snapshot of the selected entities at their ORIGINAL position when a move /
+    // joint drag begins: drawn as a faint ghost so the source stays visible until
+    // the new placement click commits.
+    std::vector<Entity> editGhost_;
 
     // Modify command state: collected reference points.
     std::vector<Vec2> modifyPts_;
@@ -224,6 +253,22 @@ private:
     QString wireNet_;
     double doubleLineGap_ = 10.0;
     bool showAngles_ = true; // show the live length/angle readout while drawing
+    QString currentColor_;   // color for new entities (empty => ByLayer)
+    CircleMode circleMode_ = CircleMode::CenterRadius;
+    ArcMode arcMode_ = ArcMode::ThreePoint;
+    EllipseMode ellipseMode_ = EllipseMode::Center;
+    int polygonSides_ = 6;        // hexagon by default
+    bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
+    double rectX_ = 0;            // rectangle: signed X length already entered
+
+    // Clipboard with a base point (AutoCAD COPYBASE / cut / paste-to-point).
+    Vec2 clipboardBase_{0, 0};    // reference point the clipboard is stored relative to
+    bool awaitClipBase_ = false;  // next click sets the base point (after Ctrl+Shift+C / Ctrl+X)
+    bool clipCut_ = false;        // the pending base-point op is a cut (delete originals)
+    bool pastePlacing_ = false;   // paste in progress: next click drops the contents
+    // Cut originals stay visible until the paste lands; these ids are removed when
+    // the contents are finally placed (so a cut object isn't gone mid-move).
+    std::vector<QString> cutPending_;
 };
 
 } // namespace Edraw_Desktop

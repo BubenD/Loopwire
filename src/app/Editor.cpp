@@ -21,10 +21,26 @@ namespace {
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
+// Circle through three points (circumcircle). Returns false if collinear.
+bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, double& radius) {
+    const double d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (std::abs(d) < 1e-9) return false;
+    const double a2 = a.x * a.x + a.y * a.y;
+    const double b2 = b.x * b.x + b.y * b.y;
+    const double c2 = c.x * c.x + c.y * c.y;
+    center.x = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+    center.y = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+    radius = distance(center, a);
+    return true;
+}
+
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius };
-struct Grip { Vec2 pos; GripRole role; int index; };
+// `off` is the grip's offset from its centerline reference (non-zero only for the
+// double line's parallel-line joints) so dragging keeps the grabbed point under
+// the cursor: e.a = target - off.
+struct Grip { Vec2 pos; GripRole role; int index; Vec2 off{0, 0}; };
 
 std::vector<Grip> gripsOf(const Entity& e) {
     std::vector<Grip> g;
@@ -36,19 +52,26 @@ std::vector<Grip> gripsOf(const Entity& e) {
         g.push_back({e.b, GripRole::LineB, 0});
         break;
     case EntityType::DoubleLine: {
+        // Joints on the two VISIBLE parallel lines only (no confusing centerline
+        // joint between them). Each end grip carries its offset so dragging it
+        // keeps that point under the cursor.
         const Vec2 mid = lerp(e.a, e.b, 0.5);
-        g.push_back({e.a, GripRole::LineA, 0});
-        g.push_back({mid, GripRole::LineMid, 0});
-        g.push_back({e.b, GripRole::LineB, 0});
-        // Joints at the ends and middles of the two actual parallel lines.
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-        g.push_back({e.a + off, GripRole::LineA, 0});
-        g.push_back({e.a - off, GripRole::LineA, 0});
-        g.push_back({e.b + off, GripRole::LineB, 0});
-        g.push_back({e.b - off, GripRole::LineB, 0});
-        g.push_back({mid + off, GripRole::LineMid, 0}); // middle of top line
-        g.push_back({mid - off, GripRole::LineMid, 0}); // middle of bottom line
+        const Vec2 noff = off * -1.0;
+        g.push_back({e.a + off, GripRole::LineA, 0, off});
+        g.push_back({e.a + noff, GripRole::LineA, 0, noff});
+        g.push_back({e.b + off, GripRole::LineB, 0, off});
+        g.push_back({e.b + noff, GripRole::LineB, 0, noff});
+        // Middle joint at each END (on the centerline, between that end's two
+        // corners): grabbing it moves the whole end (both lines) to the cursor,
+        // keeping it centered. off={0,0} so it tracks the centerline directly.
+        g.push_back({e.a, GripRole::LineA, 0});
+        g.push_back({e.b, GripRole::LineB, 0});
+        // A single middle joint on the centerline length-center: moves the whole
+        // double line. None of these centerline joints are region-selection points,
+        // so a crossing box passing between the lines won't select via them.
+        g.push_back({mid, GripRole::LineMid, 0});
         break;
     }
     case EntityType::Polyline:
@@ -147,6 +170,9 @@ void Editor::addEntity(Entity e) {
     if (!doc_) return;
     if (e.id.isEmpty()) e.id = uid();
     if (e.layer.isEmpty()) e.layer = doc_->activeLayer();
+    // Adopt the current draw color (empty => ByLayer) unless the entity already
+    // carries its own explicit color (e.g. wires).
+    if (e.color.isEmpty()) e.color = currentColor_;
     doc_->entities().push_back(std::move(e));
     doc_->setDirty(true);
 }
@@ -162,10 +188,17 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     double best = std::numeric_limits<double>::max();
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::DoubleLine:
     case EntityType::Dimension:
         best = segDist(e.a, e.b);
         break;
+    case EntityType::DoubleLine: {
+        // Only the two VISIBLE parallel lines select the double line — NOT the
+        // centerline / gap between them (clicking the empty middle won't pick it).
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        best = std::min(segDist(e.a + off, e.b + off), segDist(e.a - off, e.b - off));
+        break;
+    }
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
@@ -280,7 +313,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Rubber-band preview (line/rect/etc. while drawing), modify reference
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
-    if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None)
+    if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_)
         emit overlayChanged();
 }
 
@@ -309,6 +342,50 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     onPointerMove(raw);
     const Vec2 p = cursor_;
 
+    // Clipboard base-point pick (after Ctrl+Shift+C / Ctrl+X): this click stores
+    // the reference point the clipboard is relative to (then cuts if requested).
+    if (awaitClipBase_) {
+        clipboardBase_ = p;
+        awaitClipBase_ = false;
+        // For a cut, the originals STAY in place (visible) until the paste lands —
+        // they are not deleted here; we just remember them and go straight into
+        // ghost placement so the source remains until the contents are dropped.
+        if (clipCut_) cutPending_ = selected_;
+        clipCut_ = false;
+        pastePlacing_ = true;
+        emit message(QStringLiteral("Specify insertion point"));
+        emit overlayChanged();
+        return;
+    }
+    // Paste placement: drop the clipboard so its base point lands at this click.
+    if (pastePlacing_) {
+        pushUndo();
+        const Vec2 off = p - clipboardBase_;
+        // A cut only now removes the originals (kept visible until placed).
+        if (!cutPending_.empty()) {
+            auto& ents = doc_->entities();
+            ents.erase(std::remove_if(ents.begin(), ents.end(), [&](const Entity& e) {
+                           return std::find(cutPending_.begin(), cutPending_.end(), e.id) !=
+                                  cutPending_.end();
+                       }),
+                       ents.end());
+            cutPending_.clear();
+        }
+        selected_.clear();
+        for (Entity e : clipboard_) {
+            e.id = uid();
+            translateEntity(e, off);
+            selected_.push_back(e.id);
+            doc_->entities().push_back(std::move(e));
+        }
+        pastePlacing_ = false;
+        doc_->setDirty(true);
+        emit message(QStringLiteral("Pasted %1 object(s)").arg(clipboard_.size()));
+        emit selectionChanged();
+        emit changed();
+        return;
+    }
+
     if (tool_ == ToolId::Select) {
         const bool shift = mods & Qt::ShiftModifier;
 
@@ -318,6 +395,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             editing_ = false;
             gripGrab_ = false;
             editMoved_ = false;
+            editGhost_.clear(); // source ghost cleared now that it's placed
             emit message(QStringLiteral("Joint placed"));
             emit changed();
             return;
@@ -330,8 +408,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             return;
         }
         // (c) Click on a joint of a selected entity -> grab it (click to place).
-        // Shift is reserved for deselecting, so it never grabs a joint.
-        if (!shift && beginGripGrab(p)) return;
+        // Shift is reserved for deselecting, so it never grabs a joint. Use the
+        // RAW click (not the snapped cursor) so the grip you clicked is the one
+        // grabbed — snapping can pull the cursor off the visible joint (e.g. a
+        // double line's parallel end) and otherwise cause the grab to miss.
+        if (!shift && beginGripGrab(raw)) return;
 
         // (d) Click on an entity body -> accumulate selection (Shift removes),
         // and arm a body move on drag.
@@ -350,6 +431,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             editEntityId_.clear();
             editLast_ = p;
             editMoved_ = false;
+            // Snapshot the originals so they stay visible (ghost) at the source
+            // position until the move is committed on release.
+            editGhost_.clear();
+            for (const auto& sid : selected_)
+                if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
             return;
         }
         // (e) Empty space -> region selection (rectangle / hold-for-lasso).
@@ -382,6 +468,7 @@ void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     // Finish a body move drag (a click without movement just selected).
     if (editing_) {
         editing_ = false;
+        editGhost_.clear(); // committed at the new position; drop the source ghost
         if (editMoved_) { doc_->setDirty(true); emit message(QStringLiteral("Moved")); }
         emit changed();
         return;
@@ -421,10 +508,18 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     std::vector<Vec2> pts;
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::DoubleLine:
     case EntityType::Dimension:
         pts = {e.a, lerp(e.a, e.b, 0.5), e.b};
         break;
+    case EntityType::DoubleLine: {
+        // Region selection tests the two VISIBLE parallel lines' ends only — NOT
+        // the centerline or its middle joint. So a crossing box that merely passes
+        // through the gap between the lines (without touching either) won't select.
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        pts = {e.a + off, e.b + off, e.a - off, e.b - off};
+        break;
+    }
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
@@ -455,10 +550,18 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     auto pts = entitySelectPoints(e);
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::DoubleLine:
     case EntityType::Dimension:
         segs.emplace_back(e.a, e.b);
         break;
+    case EntityType::DoubleLine: {
+        // Crossing-region edges are the two VISIBLE lines (not the centerline),
+        // so only touching a real line — not the gap between them — selects it.
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        segs.emplace_back(e.a + off, e.b + off);
+        segs.emplace_back(e.a - off, e.b - off);
+        break;
+    }
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
@@ -516,7 +619,25 @@ void Editor::finishRegionSelect(bool subtract) {
             if (pointInPolygon(region, p)) ++inside;
 
         bool hit = false;
-        if (crossing) {
+        if (e.type == EntityType::DoubleLine) {
+            // A crossing region must TOUCH a visible line (cross its body or contain
+            // it) — not merely catch a joint. So decide purely from the two visible
+            // segments: crossing = a segment crosses the region boundary or lies
+            // inside; window = both segments fully enclosed.
+            const auto segs = entitySelectSegments(e);
+            if (crossing) {
+                for (const auto& s : segs) {
+                    if (pointInPolygon(region, s.first) || pointInPolygon(region, s.second)) { hit = true; break; }
+                    for (const auto& re : regionEdges)
+                        if (segmentSegmentIntersection(s.first, s.second, re.first, re.second)) { hit = true; break; }
+                    if (hit) break;
+                }
+            } else {
+                hit = !segs.empty();
+                for (const auto& s : segs)
+                    if (!(pointInPolygon(region, s.first) && pointInPolygon(region, s.second))) { hit = false; break; }
+            }
+        } else if (crossing) {
             hit = inside > 0;
             if (!hit) { // also catch segments that cross the region boundary
                 for (const auto& s : entitySelectSegments(e)) {
@@ -554,29 +675,82 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
 bool Editor::beginGripGrab(const Vec2& at) {
     if (!doc_) return false;
     const double tol = worldTolerance();
-    // Grab the first grip (joint) of any selected entity within tolerance.
+    // A "point joint" is a movable endpoint/vertex/corner whose position is set
+    // directly to the cursor (shareable between coincident primitives).
+    auto isPointJoint = [](GripRole r) {
+        return r == GripRole::LineA || r == GripRole::LineB || r == GripRole::Vertex ||
+               r == GripRole::RectCorner;
+    };
+    // Find the NEAREST grip (joint) of any selected entity within tolerance —
+    // nearest, not first, so a joint isn't shadowed by another grip that merely
+    // sits within tolerance too (e.g. a double line's corner vs its centerline end).
+    QString bestId;
+    Grip bestGrip;
+    double bestDist = tol;
+    bool found = false;
     for (const auto& id : selected_) {
         Entity* e = entityById(id);
         if (!e) continue;
         for (const auto& gr : gripsOf(*e)) {
-            if (distance(at, gr.pos) > tol) continue;
+            const double d = distance(at, gr.pos);
+            if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
+        }
+    }
+    if (found) {
+        const QString& id = bestId;
+        Entity* e = entityById(id);
+        const Grip& gr = bestGrip;
+        {
             editing_ = true;
             gripGrab_ = true; // follows the cursor until the next click places it
             editMode_ = 1;
             editEntityId_ = id;
             editRole_ = static_cast<int>(gr.role);
             editIndex_ = gr.index;
-            editLast_ = at;
+            // Anchor the drag from the joint's true position (not the raw click),
+            // so the first move delta and the ortho/polar reference are exact.
+            editLast_ = gr.pos;
             editMoved_ = false;
-            editAnchor_ = at;
+            editAnchor_ = gr.pos;
+
+            // Snapshot originals so the source stays visible (ghost) until placed.
+            editGhost_.clear();
+            for (const auto& sid : selected_)
+                if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
+
+            // Collect every coincident point-joint across the SELECTED entities so
+            // a shared joint moves on all of them at once. Non-point joints
+            // (center/radius/edge/mid) act on the single grabbed entity only.
+            editGrips_.clear();
+            if (isPointJoint(gr.role)) {
+                const Vec2 jp = gr.pos;
+                for (const auto& sid : selected_) {
+                    Entity* se = entityById(sid);
+                    if (!se) continue;
+                    for (const auto& g2 : gripsOf(*se)) {
+                        if (isPointJoint(g2.role) && distance(g2.pos, jp) < 1e-6)
+                            editGrips_.push_back({sid, static_cast<int>(g2.role), g2.index, g2.off});
+                    }
+                }
+            } else {
+                editGrips_.push_back({id, static_cast<int>(gr.role), gr.index, gr.off});
+            }
+
+            // Polar/ortho during a joint move tracks relative to the adjacent
+            // UNTOUCHED point (the other end of the segment at this joint).
             if (gr.role == GripRole::LineA) editAnchor_ = e->b;
             else if (gr.role == GripRole::LineB) editAnchor_ = e->a;
-            else if (gr.role == GripRole::Vertex && gr.index > 0 &&
-                     gr.index - 1 < static_cast<int>(e->points.size()))
-                editAnchor_ = e->points[gr.index - 1];
-            else if (gr.role == GripRole::Radius || gr.role == GripRole::Center)
+            else if (gr.role == GripRole::Vertex) {
+                if (gr.index > 0 && gr.index - 1 < static_cast<int>(e->points.size()))
+                    editAnchor_ = e->points[gr.index - 1];
+                else if (gr.index == 0 && e->points.size() > 1)
+                    editAnchor_ = e->points[1]; // first vertex -> next point
+            } else if (gr.role == GripRole::Radius || gr.role == GripRole::Center)
                 editAnchor_ = e->center;
-            emit message(QStringLiteral("Joint grabbed — move and click to place, Esc to cancel"));
+            emit message(editGrips_.size() > 1
+                             ? QStringLiteral("Shared joint grabbed (%1 objects) — click to place")
+                                   .arg(editGrips_.size())
+                             : QStringLiteral("Joint grabbed — move and click to place, Esc to cancel"));
             return true;
         }
     }
@@ -590,32 +764,60 @@ void Editor::applyEditDrag(const Vec2& target) {
         pushUndo();
         editMoved_ = true;
     }
-    if (editMode_ == 0) {
-        for (Entity* e : selectedEntities()) translateEntity(*e, delta);
-    } else if (Entity* e = entityById(editEntityId_)) {
-        switch (static_cast<GripRole>(editRole_)) {
-        case GripRole::LineA: e->a = target; break;
-        case GripRole::LineB: e->b = target; break;
-        case GripRole::LineMid: translateEntity(*e, delta); break;
+    // A double line is stored as a centerline (a..b) + gap; the two VISIBLE lines
+    // are the centerline offset by ±perp*(gap/2). A grip sits on a visible corner
+    // (a/b ± off), but the editable point is the centerline end. To make the
+    // GRABBED corner follow the cursor (not the centerline, which is the "middle"
+    // between the two lines), solve for the centerline end so that
+    //   end + perp(unit(b-a))*(gap/2)*side == cursor.
+    // The perpendicular rotates as the line direction changes, so iterate to a
+    // fixed point. `off` is {0,0} for a plain line, which collapses to end=cursor.
+    auto solveEnd = [&](bool movingIsA, Entity* e, const Vec2& off) -> Vec2 {
+        const double half = off.length();
+        if (half < 1e-9) return target;               // plain line: end = cursor
+        const Vec2 fixed = movingIsA ? e->b : e->a;
+        auto perpN = [&](const Vec2& moving) -> Vec2 {
+            const Vec2 ba = movingIsA ? (fixed - moving) : (moving - fixed); // == b-a
+            return ba.lengthSq() < 1e-18 ? Vec2{0, 0} : ba.normalized().perp();
+        };
+        Vec2 P = target - off;                        // initial guess
+        double side = 1.0;
+        if (const Vec2 n = perpN(P); n.lengthSq() > 0 && dot(off, n) < 0) side = -1.0;
+        for (int k = 0; k < 8; ++k) {
+            const Vec2 n = perpN(P);
+            if (n.lengthSq() < 1e-18) break;
+            P = target - n * (side * half);
+        }
+        return P;
+    };
+    // Apply one grip's mutation on its entity.
+    auto applyOne = [&](Entity* e, GripRole role, int index, const Vec2& off) {
+        switch (role) {
+        case GripRole::LineA: e->a = solveEnd(true, e, off); break;
+        case GripRole::LineB: e->b = solveEnd(false, e, off); break;
+        case GripRole::LineMid:
+            // The middle joint moves the whole line (stays straight, no knee).
+            translateEntity(*e, delta);
+            break;
         case GripRole::Vertex:
-            if (editIndex_ >= 0 && editIndex_ < static_cast<int>(e->points.size()))
-                e->points[editIndex_] = target;
+            if (index >= 0 && index < static_cast<int>(e->points.size()))
+                e->points[index] = target;
             break;
         case GripRole::RectCorner:
             if (e->points.size() == 4) {
-                const Vec2 opp = e->points[(editIndex_ + 2) % 4];
+                const Vec2 opp = e->points[(index + 2) % 4];
                 Bounds b; b.expand(opp); b.expand(target);
                 e->points = {{b.min.x, b.min.y}, {b.max.x, b.min.y},
                              {b.max.x, b.max.y}, {b.min.x, b.max.y}};
-            } else if (editIndex_ < static_cast<int>(e->points.size())) {
-                e->points[editIndex_] = target;
+            } else if (index < static_cast<int>(e->points.size())) {
+                e->points[index] = target;
             }
             break;
         case GripRole::RectEdge:
             // Move one wall: shift the shared coordinate of the edge's two
             // corners toward the cursor (horizontal wall -> y, vertical -> x).
             if (e->points.size() == 4) {
-                const int i = editIndex_, j = (editIndex_ + 1) % 4;
+                const int i = index, j = (index + 1) % 4;
                 Vec2& pa = e->points[i];
                 Vec2& pb = e->points[j];
                 if (std::abs(pb.x - pa.x) >= std::abs(pb.y - pa.y)) {
@@ -629,6 +831,15 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
         case GripRole::Move: translateEntity(*e, delta); break;
         }
+    };
+
+    if (editMode_ == 0) {
+        for (Entity* e : selectedEntities()) translateEntity(*e, delta);
+    } else {
+        // Move every grabbed joint (one, or all coincident shared joints).
+        for (const auto& eg : editGrips_)
+            if (Entity* e = entityById(eg.id))
+                applyOne(e, static_cast<GripRole>(eg.role), eg.index, eg.offset);
     }
     editLast_ = target;
     doc_->setDirty(true);
@@ -644,16 +855,42 @@ void Editor::onDoubleClick(const Vec2&) {
 
 void Editor::handleDrawPress(const Vec2& p) {
     switch (tool_) {
-    case ToolId::Line:
+    case ToolId::Line: {
+        // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
+        // Each completed segment is committed as its own straight line, then the
+        // run continues from that point.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() >= 2) {
+            Entity e;
+            e.layer = doc_->activeLayer();
+            e.type = EntityType::Line;
+            e.a = draftPts_[draftPts_.size() - 2];
+            e.b = draftPts_.back();
+            pushUndo();
+            addEntity(std::move(e));
+            draftPts_ = {draftPts_.back()}; // continue from the last point
+        }
+        emit message(QStringLiteral("Line: click next point — Enter ends the run, Esc exits"));
+        break;
+    }
     case ToolId::DoubleLine:
     case ToolId::Rect:
-    case ToolId::Circle:
-    case ToolId::Ellipse:
     case ToolId::Polygon:
     case ToolId::Dimension:
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
+        break;
+    case ToolId::Circle:
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() == (circleMode_ == CircleMode::ThreePoint ? 3u : 2u)) finishDraw();
+        break;
+    case ToolId::Ellipse:
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() == (ellipseMode_ == EllipseMode::AxisEnd ? 3u : 2u)) finishDraw();
         break;
     case ToolId::Arc:
         draftPts_.push_back(p);
@@ -666,7 +903,8 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Wire:
         draftPts_.push_back(p);
         drafting_ = true;
-        emit message(QStringLiteral("%1: click next point, double-click or Enter to finish")
+        emit message(QStringLiteral("%1: click next point — [C]lose, [U]ndo, "
+                                    "double-click or Enter to finish")
                          .arg(toolLabel(tool_)));
         break;
     case ToolId::Text:
@@ -711,7 +949,7 @@ void Editor::finishDraw() {
         if (draftPts_.size() < 2) return;
         const Vec2 c = draftPts_[0];
         const Vec2 v = draftPts_[1];
-        const int n = 5; // sides; wired to document setting in a later phase
+        const int n = polygonSides_; // set via the polygon sides input
         const double r = distance(c, v);
         const double a0 = std::atan2(v.y - c.y, v.x - c.x);
         e.type = EntityType::Polygon;
@@ -724,25 +962,87 @@ void Editor::finishDraw() {
     case ToolId::Circle:
         if (draftPts_.size() < 2) return;
         e.type = EntityType::Circle;
-        e.center = draftPts_[0];
-        e.radius = distance(draftPts_[0], draftPts_[1]);
+        switch (circleMode_) {
+        case CircleMode::CenterRadius:
+            e.center = draftPts_[0];
+            e.radius = distance(draftPts_[0], draftPts_[1]);
+            break;
+        case CircleMode::CenterDiameter:
+            e.center = draftPts_[0];
+            e.radius = distance(draftPts_[0], draftPts_[1]) / 2.0;
+            break;
+        case CircleMode::TwoPoint:
+            e.center = lerp(draftPts_[0], draftPts_[1], 0.5);
+            e.radius = distance(draftPts_[0], draftPts_[1]) / 2.0;
+            break;
+        case CircleMode::ThreePoint: {
+            if (draftPts_.size() < 3) return;
+            Vec2 cc; double rr = 0;
+            if (!circumcircle(draftPts_[0], draftPts_[1], draftPts_[2], cc, rr)) {
+                emit message(QStringLiteral("Points are collinear — cannot make a circle"));
+                cancelDraw();
+                return;
+            }
+            e.center = cc;
+            e.radius = rr;
+            break;
+        }
+        }
+        if (e.radius < 1e-9) { cancelDraw(); return; }
         break;
     case ToolId::Ellipse: {
         if (draftPts_.size() < 2) return;
         e.type = EntityType::Ellipse;
-        e.center = draftPts_[0];
-        e.radius = std::abs(draftPts_[1].x - draftPts_[0].x);
-        e.radiusY = std::abs(draftPts_[1].y - draftPts_[0].y);
+        if (ellipseMode_ == EllipseMode::AxisEnd) {
+            if (draftPts_.size() < 3) return;
+            // p0,p1 = endpoints of one (axis-aligned) axis; p2 = other radius.
+            e.center = lerp(draftPts_[0], draftPts_[1], 0.5);
+            e.radius = distance(draftPts_[0], draftPts_[1]) / 2.0;
+            e.radiusY = distance(e.center, draftPts_[2]);
+        } else {
+            // Center / Elliptical Arc: center + corner -> rx, ry.
+            e.center = draftPts_[0];
+            e.radius = std::abs(draftPts_[1].x - draftPts_[0].x);
+            e.radiusY = std::abs(draftPts_[1].y - draftPts_[0].y);
+            if (ellipseMode_ == EllipseMode::EllipticalArc)
+                emit message(QStringLiteral("Elliptical arc: drawn as a full ellipse"));
+        }
+        if (e.radius < 1e-9 || e.radiusY < 1e-9) { cancelDraw(); return; }
         break;
     }
     case ToolId::Arc: {
         if (draftPts_.size() < 3) return;
-        const Vec2 c = draftPts_[0];
         e.type = EntityType::Arc;
-        e.center = c;
-        e.radius = distance(c, draftPts_[1]);
-        e.startAngle = std::atan2(draftPts_[1].y - c.y, draftPts_[1].x - c.x);
-        e.endAngle = std::atan2(draftPts_[2].y - c.y, draftPts_[2].x - c.x);
+        const Vec2 p0 = draftPts_[0], p1 = draftPts_[1], p2 = draftPts_[2];
+        auto fromCenter = [&](const Vec2& c, const Vec2& s, const Vec2& en) {
+            e.center = c;
+            e.radius = distance(c, s);
+            e.startAngle = std::atan2(s.y - c.y, s.x - c.x);
+            e.endAngle = std::atan2(en.y - c.y, en.x - c.x);
+        };
+        switch (arcMode_) {
+        case ArcMode::CenterStartEnd:
+            fromCenter(p0, p1, p2); // center, start, end
+            break;
+        case ArcMode::StartCenterEnd:
+            fromCenter(p1, p0, p2); // start, center, end
+            break;
+        case ArcMode::StartEndRadius: {
+            // p0=start, p1=end, p2 sets the bulge/radius (point on the arc).
+            Vec2 cc; double rr = 0;
+            if (!circumcircle(p0, p2, p1, cc, rr)) { cancelDraw(); return; }
+            fromCenter(cc, p0, p1);
+            break;
+        }
+        case ArcMode::ThreePoint: {
+            // p0=start, p1=point on arc, p2=end.
+            Vec2 cc; double rr = 0;
+            if (!circumcircle(p0, p1, p2, cc, rr)) { cancelDraw(); return; }
+            fromCenter(cc, p0, p2);
+            break;
+        }
+        }
+        if (e.radius < 1e-9) { cancelDraw(); return; }
         break;
     }
     case ToolId::Polyline:
@@ -784,6 +1084,7 @@ void Editor::finishDraw() {
 void Editor::cancelDraw() {
     draftPts_.clear();
     drafting_ = false;
+    rectAwaitY_ = false;
 }
 
 bool Editor::applyDrawInput(const QString& text) {
@@ -826,6 +1127,37 @@ bool Editor::applyDrawInput(const QString& text) {
 bool Editor::acceptCommandInput(const QString& text) {
     const QString t = text.trimmed();
     if (t.isEmpty()) return false;
+
+    // Polygon: a whole number typed before the centre is placed sets the side count.
+    if (tool_ == ToolId::Polygon && draftPts_.empty() && !t.contains(',')) {
+        bool ok = false;
+        const int n = t.toInt(&ok);
+        if (ok && n >= 3) {
+            setPolygonSides(n);
+            emit message(QStringLiteral("Polygon sides: %1 — pick the centre").arg(polygonSides_));
+            return true;
+        }
+    }
+
+    // Rectangle dimensioned entry: after the first corner, a typed length sets the
+    // X side (in the cursor's X direction); the next length sets the Y side.
+    if (tool_ == ToolId::Rect && drafting_ && draftPts_.size() == 1 && !t.contains(',')) {
+        bool ok = false;
+        const double val = std::abs(t.toDouble(&ok));
+        if (ok) {
+            if (!rectAwaitY_) {
+                rectX_ = (cursor_.x >= draftPts_[0].x ? 1.0 : -1.0) * val;
+                rectAwaitY_ = true;
+                emit message(QStringLiteral("X length %1 — now enter the Y length").arg(val));
+                return true;
+            }
+            const double yv = (cursor_.y >= draftPts_[0].y ? 1.0 : -1.0) * val;
+            const Vec2 opp{draftPts_[0].x + rectX_, draftPts_[0].y + yv};
+            rectAwaitY_ = false;
+            handleDrawPress(opp); // places the opposite corner -> builds the rect
+            return true;
+        }
+    }
 
     // Awaiting a gap value after the user typed "g".
     if (gapInputMode_) {
@@ -879,6 +1211,36 @@ bool Editor::acceptCommandInput(const QString& text) {
             return true;
         }
         if (drafting_) { emit message(QStringLiteral("Fillet applies to polylines")); return true; }
+    }
+
+    // Polyline-family options offered "attached" while drawing: Close / Undo
+    // (AutoCAD PLINE). "c" closes the run back to the start; "u" removes the last
+    // point. Only active while a polyline/spline/wire draft is in progress.
+    const bool plineFamily = tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline ||
+                             tool_ == ToolId::Spline || tool_ == ToolId::Wire;
+    if (plineFamily && drafting_) {
+        if (t.compare(QStringLiteral("c"), Qt::CaseInsensitive) == 0 ||
+            t.compare(QStringLiteral("close"), Qt::CaseInsensitive) == 0) {
+            if (draftPts_.size() >= 3) {
+                draftPts_.push_back(draftPts_.front()); // close back to the start
+                finishDraw();
+            } else {
+                emit message(QStringLiteral("Need at least 3 points to close"));
+            }
+            return true;
+        }
+        if (t.compare(QStringLiteral("u"), Qt::CaseInsensitive) == 0 ||
+            t.compare(QStringLiteral("undo"), Qt::CaseInsensitive) == 0) {
+            if (!draftPts_.empty()) draftPts_.pop_back();
+            if (draftPts_.empty()) {
+                cancelDraw();
+                emit message(QStringLiteral("Polyline cancelled"));
+            } else {
+                emit message(QStringLiteral("Undid last point — click next, [C]lose or Enter"));
+            }
+            emit overlayChanged();
+            return true;
+        }
     }
 
     // Otherwise treat it as direct distance / coordinate input (only while
@@ -1308,26 +1670,43 @@ void Editor::deleteSelected() {
 
 void Editor::copySelection() {
     clipboard_.clear();
+    Bounds b;
+    for (const auto& id : selected_)
+        if (const Entity* e = entityById(id)) {
+            clipboard_.push_back(*e);
+            const Bounds eb = e->bounds();
+            if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+        }
+    // Quick copy: base point = lower-left of the selection extents.
+    clipboardBase_ = b.valid ? b.min : Vec2{0, 0};
+    awaitClipBase_ = false;
+    emit message(QStringLiteral("Copied %1 object(s) — Ctrl+V to place").arg(clipboard_.size()));
+}
+
+void Editor::copyWithBase(bool cut) {
+    if (selected_.empty()) {
+        emit message(QStringLiteral("Select objects first"));
+        return;
+    }
+    clipboard_.clear();
     for (const auto& id : selected_)
         if (const Entity* e = entityById(id)) clipboard_.push_back(*e);
-    emit message(QStringLiteral("Copied %1 object(s)").arg(clipboard_.size()));
+    awaitClipBase_ = true;
+    clipCut_ = cut;
+    pastePlacing_ = false;
+    emit message(cut ? QStringLiteral("Cut: specify base point")
+                     : QStringLiteral("Copy: specify base point"));
 }
 
 void Editor::paste() {
-    if (!doc_ || clipboard_.empty()) return;
-    pushUndo();
-    selected_.clear();
-    // Offset pasted copies slightly so they are distinguishable.
-    const Vec2 off{10.0, -10.0};
-    for (Entity e : clipboard_) {
-        e.id = uid();
-        translateEntity(e, off);
-        selected_.push_back(e.id);
-        doc_->entities().push_back(std::move(e));
+    if (!doc_ || clipboard_.empty()) {
+        emit message(QStringLiteral("Clipboard is empty"));
+        return;
     }
-    doc_->setDirty(true);
-    emit selectionChanged();
-    emit changed();
+    awaitClipBase_ = false;
+    pastePlacing_ = true; // the contents now follow the cursor until clicked to place
+    emit message(QStringLiteral("Specify insertion point"));
+    emit overlayChanged();
 }
 
 void Editor::undo() {
@@ -1364,6 +1743,11 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         editMoved_ = false;
         gapInputMode_ = false;
         filletInputMode_ = false;
+        awaitClipBase_ = false;
+        pastePlacing_ = false;
+        clipCut_ = false;
+        cutPending_.clear();
+        editGhost_.clear();
         regionMode_ = RegionMode::None;
         dragPath_.clear();
         if (dragTimer_) dragTimer_->stop();
@@ -1374,7 +1758,19 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     }
     if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
-        if (drafting_) { finishDraw(); return true; }
+        if (drafting_) {
+            // Line commits each segment as it goes, so Enter just ends the current
+            // run and stays in the Line tool, ready for the next run (Esc exits).
+            if (tool_ == ToolId::Line) {
+                draftPts_.clear();
+                drafting_ = false;
+                emit message(QStringLiteral("Line: pick a start point, or Esc to exit"));
+                emit changed();
+                return true;
+            }
+            finishDraw();
+            return true;
+        }
         if (regionMode_ == RegionMode::None && !editing_ && modifyPts_.empty()) {
             repeatLastTool();
             return true;
@@ -1384,8 +1780,11 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         deleteSelected();
         return true;
     }
+    const bool shift = mods & Qt::ShiftModifier;
     if (ctrl && key == Qt::Key_A) { selectAll(); return true; }
+    if (ctrl && shift && key == Qt::Key_C) { copyWithBase(false); return true; } // copy w/ base
     if (ctrl && key == Qt::Key_C) { copySelection(); return true; }
+    if (ctrl && key == Qt::Key_X) { copyWithBase(true); return true; }           // cut w/ base
     if (ctrl && key == Qt::Key_V) { paste(); return true; }
     if (ctrl && key == Qt::Key_Z) { undo(); return true; }
     if (ctrl && (key == Qt::Key_Y)) { redo(); return true; }
@@ -1396,6 +1795,51 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
+
+    // Polar tracking guide: when the cursor has locked onto a polar angle, draw a
+    // bright green ray FROM the reference point TOWARD the drawing direction,
+    // continuing to the canvas edge. The reference is the draft anchor while
+    // drawing, or the untouched joint point while moving a joint.
+    if (snapResult_.snapped && snapResult_.kind == SnapKind::Polar) {
+        std::optional<Vec2> ref;
+        if (drafting_ && !draftPts_.empty()) ref = draftPts_.back();
+        else if (editing_ && editMode_ == 1) ref = editAnchor_;
+        if (ref) {
+            const QPointF as = vt.toScreen(*ref);
+            const QPointF cs = vt.toScreen(cursor_);
+            QPointF dir = cs - as;
+            const double L = std::hypot(dir.x(), dir.y());
+            if (L > 1e-6) {
+                dir /= L;
+                constexpr double kFar = 6000.0; // beyond any canvas; Qt clips it
+                QPen gp(QColor("#19ff7e")); // bright solid green polar lock line
+                gp.setCosmetic(true);
+                gp.setWidthF(1.2);
+                p.setPen(gp);
+                p.setBrush(Qt::NoBrush);
+                // From the reference point toward (and past) the cursor.
+                p.drawLine(as, as + dir * kFar);
+            }
+        }
+    }
+
+    // Paste placement: ghost the clipboard contents so its base point follows the
+    // cursor, with a small cross at the insertion point.
+    if (pastePlacing_ && !clipboard_.empty()) {
+        const Vec2 off = cursor_ - clipboardBase_;
+        const QColor ghost(120, 200, 255, 170);
+        for (Entity e : clipboard_) {
+            translateEntity(e, off);
+            EntityRenderer::draw(p, e, *doc_, vt, ghost);
+        }
+        const QPointF c = vt.toScreen(cursor_);
+        QPen mp(QColor("#ffd166"));
+        mp.setCosmetic(true);
+        p.setPen(mp);
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(c.x() - 7, c.y()), QPointF(c.x() + 7, c.y()));
+        p.drawLine(QPointF(c.x(), c.y() - 7), QPointF(c.x(), c.y() + 7));
+    }
 
     // Region select: rectangle (Deciding / RectPending) or freeform lasso, with
     // Edraw's exact colors. Window (left->right): blue, solid, fully enclose.
@@ -1442,6 +1886,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
+    // Source ghost: while a move / joint drag is in progress, show the entities at
+    // their ORIGINAL position (faint) so it's clear where they were taken from,
+    // until the placement click commits the new position.
+    if (editing_ && !editGhost_.empty()) {
+        const QColor ghost(150, 162, 178, 110);
+        for (const auto& e : editGhost_)
+            EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
     // Selection marking: highlight each selected entity's geometry + draw grips.
     if (!selected_.empty()) {
         const QColor hi("#2bd0ff");
@@ -1453,9 +1906,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
-    // In-progress draft preview.
+    // In-progress draft preview (white, matching the line being drawn).
     if (drafting_ && !draftPts_.empty()) {
-        QPen prev(QColor("#9ad27a"));
+        QPen prev(QColor("#ffffff"));
         prev.setCosmetic(true);
         prev.setWidthF(1.4);
         prev.setStyle(Qt::DashLine);
@@ -1483,10 +1936,34 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const auto& v : run) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
-        } else if (tool_ == ToolId::Circle && pts.size() >= 2) {
-            const QPointF c = vt.toScreen(pts[0]);
-            const double r = distance(pts[0], pts[1]) * vt.scale();
-            p.drawEllipse(c, r, r);
+        } else if (tool_ == ToolId::Circle) {
+            QPointF cc;
+            double r = 0;
+            bool ok = false;
+            if (circleMode_ == CircleMode::ThreePoint) {
+                if (pts.size() >= 3) {
+                    Vec2 c2; double rr = 0;
+                    if (circumcircle(pts[0], pts[1], pts[2], c2, rr)) {
+                        cc = vt.toScreen(c2); r = rr * vt.scale(); ok = true;
+                    }
+                }
+            } else if (pts.size() >= 2) {
+                Vec2 center; double rr = 0;
+                if (circleMode_ == CircleMode::CenterRadius) {
+                    center = pts[0]; rr = distance(pts[0], pts[1]);
+                } else if (circleMode_ == CircleMode::CenterDiameter) {
+                    center = pts[0]; rr = distance(pts[0], pts[1]) / 2.0;
+                } else { // TwoPoint
+                    center = lerp(pts[0], pts[1], 0.5); rr = distance(pts[0], pts[1]) / 2.0;
+                }
+                cc = vt.toScreen(center); r = rr * vt.scale(); ok = true;
+            }
+            if (ok) p.drawEllipse(cc, r, r);
+            else {
+                QPolygonF poly;
+                for (const auto& v : pts) poly << vt.toScreen(v);
+                p.drawPolyline(poly);
+            }
         } else {
             const std::vector<Vec2> show =
                 (tool_ == ToolId::Polyline && cornerRadius_ > 0)
