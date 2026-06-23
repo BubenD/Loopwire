@@ -78,6 +78,11 @@ public:
     // One-line help of the applicable commands/options for the active draw tool,
     // shown in the bottom command bar while drawing (empty for Select/modify).
     QString drawCommandHint() const;
+    // True if the typed letter is a valid option for the active draw tool (so the
+    // flying input field should open for it). Lets the canvas ignore irrelevant
+    // letters mid-draw — e.g. "f" during a Line does nothing instead of popping a
+    // command box. Digits/coords are always accepted by the caller.
+    bool isDrawOptionChar(QChar ch) const;
     void cycleDrawInputField();              // Tab: move to the next reference field
     void lockDrawField(const QString& text); // store the typed value in the active field
     bool commitDrawFields();                 // build the point from the fields and place it

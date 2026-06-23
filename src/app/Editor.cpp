@@ -1591,6 +1591,18 @@ QString Editor::drawCommandHint() const {
     }
 }
 
+bool Editor::isDrawOptionChar(QChar ch) const {
+    const QChar c = ch.toLower();
+    switch (tool_) {
+    case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f';
+    case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g';
+    case ToolId::Spline:         return c == 'c' || c == 'u';
+    case ToolId::DoubleLine:     return c == 'g';
+    case ToolId::Arc:            return c == 'm' || c == 'i'; // "mi" mirror
+    default:                     return false; // Line/Rect/Circle/Ellipse/...: no letter options
+    }
+}
+
 QString Editor::currentDrawFieldLabel() const {
     const auto labels = drawInputFieldLabels();
     if (labels.empty()) return QString();

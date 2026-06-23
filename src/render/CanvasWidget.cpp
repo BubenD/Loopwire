@@ -46,10 +46,15 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
 }
 
 void CanvasWidget::showDynInput(const QString& firstChar) {
-    // Position just to the lower-right of the cursor, kept inside the widget.
-    QPoint pos = lastMousePos_ + QPoint(16, 8);
-    pos.setX(std::min(pos.x(), width() - dynInput_->width() - 4));
-    pos.setY(std::min(pos.y(), height() - dynInput_->height() - 4));
+    // Anchor to the visible crosshair: the snapped cursor while drawing, else the
+    // raw mouse. This keeps the field at the point you're drawing to (it must not
+    // jump to a fixed spot away from the cursor).
+    QPoint anchor = lastMousePos_;
+    if (editor_ && editor_->currentSnap().snapped)
+        anchor = transform().toScreen(editor_->currentSnap().point).toPoint();
+    QPoint pos = anchor + QPoint(16, 8);
+    pos.setX(std::clamp(pos.x(), 4, std::max(4, width() - dynInput_->width() - 4)));
+    pos.setY(std::clamp(pos.y(), 4, std::max(4, height() - dynInput_->height() - 4)));
     dynInput_->move(pos);
     dynInput_->setText(firstChar);
     // Label the box with the active reference field (Length / Radius / ...).
@@ -412,14 +417,25 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             return;
         }
         const QString t = e->text();
-        const bool cmdChar =
-            !t.isEmpty() && (t[0].isLetterOrNumber() || t == "." || t == "-" || t == "@");
+        const bool isLetter = !t.isEmpty() && t[0].isLetter();
+        const bool isValueChar =
+            !t.isEmpty() && (t[0].isDigit() || t == "." || t == "-" || t == "@" || t == ",");
         const bool drafting = editor_->wantsTextInput();
-        if (cmdChar && (drafting || (cursorInside_ && t[0].isLetter()))) {
+        bool open = false;
+        if (drafting) {
+            // While a draw tool is active: numbers/coords always (distance & x,y
+            // entry); letters ONLY if they are a real option for this tool — so a
+            // stray "f" during a Line is ignored instead of popping a command box.
+            open = isValueChar || (isLetter && editor_->isDrawOptionChar(t[0]));
+        } else if (cursorInside_ && isLetter) {
+            open = true; // idle: a letter starts a command at the cursor
+        }
+        if (open) {
             showDynInput(t); // floating input box next to the cursor
             e->accept();
             return;
         }
+        if (isLetter && drafting) { e->accept(); return; } // swallow irrelevant letters, no jump
     }
     if (editor_ && editor_->onKey(e->key(), e->modifiers())) {
         e->accept();
