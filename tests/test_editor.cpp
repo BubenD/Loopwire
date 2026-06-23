@@ -4,6 +4,7 @@
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
 
+#include <QJsonArray>
 #include <QtMath>
 #include <cmath>
 #include <cstdio>
@@ -370,6 +371,51 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Line, "line-f: tool stays Line (no jump to Fillet)");
         check(ed.acceptCommandInput(QStringLiteral("g")), "line-g: 'g' consumed by the Line tool");
         check(ed.tool() == ToolId::Line, "line-g: tool stays Line");
+    }
+
+    // --- Polyline Arc mode records a bulged (curved) segment.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.acceptCommandInput(QStringLiteral("a")), "pline-arc: 'a' enters arc mode");
+        ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier); // arc tangent to +x
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);                    // finish
+        const Entity& e = d.entities()[0];
+        const QJsonArray bulges = e.meta.value(QStringLiteral("bulges")).toArray();
+        bool anyArc = false;
+        for (const auto& v : bulges) if (std::abs(v.toDouble()) > 1e-9) anyArc = true;
+        check(e.type == EntityType::Polyline && anyArc, "pline-arc: a curved segment is stored");
+    }
+
+    // --- Polyline fillet: "f" + value rounds corners; "fc" cancels it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
+        ed.acceptCommandInput(QStringLiteral("f"));  // enter fillet-radius mode
+        ed.acceptCommandInput(QStringLiteral("5"));  // radius 5
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(near(d.entities()[0].meta.value(QStringLiteral("cornerRadius")).toDouble(), 5.0),
+              "pline-fillet: radius stored on the polyline");
+
+        Document d2; d2.entities().clear();
+        Editor ed2; ed2.setDocument(&d2); noSnap(ed2);
+        ed2.setTool(ToolId::Polyline);
+        ed2.acceptCommandInput(QStringLiteral("f"));
+        ed2.acceptCommandInput(QStringLiteral("5"));
+        check(ed2.acceptCommandInput(QStringLiteral("fc")), "pline-fillet: 'fc' consumed");
+        ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d2.entities()[0].meta.value(QStringLiteral("cornerRadius")).toDouble() == 0.0,
+              "pline-fillet: 'fc' returns to sharp corners");
     }
 
     // --- Polyline options: "u" Undo drops the last point; "c" Close finishes the loop.

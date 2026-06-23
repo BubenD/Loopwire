@@ -65,6 +65,21 @@ std::vector<Vec2> lineCircleIntersection(const Vec2& p, const Vec2& d,
 std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
                                            const Vec2& c2, double r2);
 
+// Arc between two points expressed as a polyline "bulge" = tan(included_angle/4)
+// (CCW positive; |bulge|<eps => straight). Returns the tessellated arc from p0 to
+// p1 (both endpoints included).
+std::vector<Vec2> bulgeArcPoints(const Vec2& p0, const Vec2& p1, double bulge,
+                                 int samples = 24);
+
+// Bulge for an arc that LEAVES p0 along `tangent` (unit direction of travel) and
+// ends at p1 — used to draw polyline arc segments tangent to the previous one.
+double tangentBulge(const Vec2& p0, const Vec2& p1, const Vec2& tangent);
+
+// Expand a polyline whose segments may be arcs (bulges[i] = bulge of the segment
+// ENDING at point i; index 0 unused) into a flat tessellated point list.
+std::vector<Vec2> expandBulgePolyline(const std::vector<Vec2>& points,
+                                      const std::vector<double>& bulges);
+
 // Smooth interpolating spline (Catmull-Rom) PASSING THROUGH the control points —
 // the "fit" spline. Returns a finely sampled polyline (the control points are
 // included). `samplesPerSegment` controls smoothness. <3 points: unchanged.

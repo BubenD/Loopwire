@@ -235,6 +235,11 @@ private:
     bool gapInputMode_ = false;    // command line is awaiting a gap value ("g")
     bool filletInputMode_ = false; // command line is awaiting a fillet radius ("f")
     double cornerRadius_ = 0.0;    // current polyline fillet radius (0 = sharp corners)
+    // Polyline Arc-segment mode (AutoCAD PLINE "A"/"L"): while on, each new vertex
+    // adds an arc tangent to the previous segment. draftBulges_ parallels draftPts_
+    // (bulge of the segment ENDING at that index; [0] unused).
+    bool polyArcMode_ = false;
+    std::vector<double> draftBulges_;
     QString pendingTextPos_; // serialized point while awaiting text input
     // Dynamic-input reference fields for the active draw step (Tab cycles them).
     int drawFieldIndex_ = 0;

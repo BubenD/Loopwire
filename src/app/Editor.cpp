@@ -5,6 +5,7 @@
 #include "tools/ModifyOps.h"
 
 #include <QApplication>
+#include <QJsonArray>
 #include <QPainter>
 #include <QPolygonF>
 #include <QRegularExpression>
@@ -1045,13 +1046,23 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
-    case ToolId::Wire:
+    case ToolId::Wire: {
+        // In Arc mode each new vertex makes an arc segment tangent to the previous
+        // one; draftBulges_ stays aligned with draftPts_ (bulge of the segment that
+        // ENDS at this vertex; the very first segment is always straight).
+        double bulge = 0.0;
+        if (polyArcMode_ && tool_ == ToolId::Polyline && draftPts_.size() >= 2) {
+            const Vec2 prevDir = draftPts_.back() - draftPts_[draftPts_.size() - 2];
+            bulge = tangentBulge(draftPts_.back(), p, prevDir);
+        }
         draftPts_.push_back(p);
+        draftBulges_.push_back(bulge);
         drafting_ = true;
-        emit message(QStringLiteral("%1: click next point — [C]lose, [U]ndo, "
-                                    "double-click or Enter to finish")
+        emit message(QStringLiteral("%1: click next point — [A]rc/[L]ine, [C]lose, "
+                                    "[U]ndo, Enter to finish")
                          .arg(toolLabel(tool_)));
         break;
+    }
     case ToolId::Text:
         draftPts_ = {p};
         emit textPromptRequested(QStringLiteral("Text:"));
@@ -1441,6 +1452,15 @@ void Editor::finishDraw() {
             e.meta.insert("cornerRadius", cornerRadius_);
         if (e.type == EntityType::Spline && splineMode_ == SplineMode::CV)
             e.meta.insert("splineMode", QStringLiteral("cv")); // else Fit (default)
+        // Arc segments: store bulges if any segment is curved.
+        if (e.type == EntityType::Polyline &&
+            std::any_of(draftBulges_.begin(), draftBulges_.end(),
+                        [](double b) { return std::abs(b) > 1e-9; })) {
+            QJsonArray arr;
+            for (size_t i = 0; i < e.points.size(); ++i)
+                arr.append(i < draftBulges_.size() ? draftBulges_[i] : 0.0);
+            e.meta.insert("bulges", arr);
+        }
         break;
     case ToolId::Wire:
         if (draftPts_.size() < 2) { cancelDraw(); return; }
@@ -1471,6 +1491,8 @@ void Editor::cancelDraw() {
     rectAwaitY_ = false;
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
+    draftBulges_.clear();
+    polyArcMode_ = false;
     arcMirror_ = false;
     tanPickIds_.clear();
     tanPickPts_.clear();
@@ -1559,7 +1581,9 @@ QString Editor::drawCommandHint() const {
     case ToolId::Line:
         return QStringLiteral("LINE: click points  ·  Enter ends the run  ·  Esc exits");
     case ToolId::Polyline:
-        return QStringLiteral("POLYLINE: click points  ·  [F] fillet  ·  [C] close  ·  [U] undo  ·  Enter finishes");
+        return QStringLiteral("POLYLINE: %1  ·  [A] arc / [L] line  ·  [F] fillet%2  ·  [C] close  ·  [U] undo  ·  Enter")
+            .arg(polyArcMode_ ? QStringLiteral("ARC segments") : QStringLiteral("click points"),
+                 cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
     case ToolId::DoublePolyline:
         return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet  ·  [C] close  ·  [U] undo  ·  Enter finishes");
     case ToolId::DoubleLine:
@@ -1594,7 +1618,7 @@ QString Editor::drawCommandHint() const {
 bool Editor::isDrawOptionChar(QChar ch) const {
     const QChar c = ch.toLower();
     switch (tool_) {
-    case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f';
+    case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f' || c == 'a' || c == 'l';
     case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g';
     case ToolId::Spline:         return c == 'c' || c == 'u';
     case ToolId::DoubleLine:     return c == 'g';
@@ -1835,6 +1859,16 @@ bool Editor::acceptCommandInput(const QString& text) {
         }
     }
 
+    // "fc" = fillet-cancel: stop rounding corners and go back to sharp knees.
+    if (t.compare(QStringLiteral("fc"), Qt::CaseInsensitive) == 0) {
+        if (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline) {
+            cornerRadius_ = 0.0;
+            emit message(QStringLiteral("Fillet cancelled — sharp corners"));
+            emit overlayChanged();
+            return true;
+        }
+    }
+
     // "f" = fillet option. Enters fillet-radius mode for the (double) polyline
     // tools; consumed with a hint during any other draft.
     if (t.compare(QStringLiteral("f"), Qt::CaseInsensitive) == 0) {
@@ -1871,6 +1905,7 @@ bool Editor::acceptCommandInput(const QString& text) {
         if (t.compare(QStringLiteral("u"), Qt::CaseInsensitive) == 0 ||
             t.compare(QStringLiteral("undo"), Qt::CaseInsensitive) == 0) {
             if (!draftPts_.empty()) draftPts_.pop_back();
+            if (!draftBulges_.empty()) draftBulges_.pop_back();
             if (draftPts_.empty()) {
                 cancelDraw();
                 emit message(QStringLiteral("Polyline cancelled"));
@@ -1879,6 +1914,24 @@ bool Editor::acceptCommandInput(const QString& text) {
             }
             emit overlayChanged();
             return true;
+        }
+        // Arc / Line segment mode (Polyline only).
+        if (tool_ == ToolId::Polyline) {
+            if (t.compare(QStringLiteral("a"), Qt::CaseInsensitive) == 0 ||
+                t.compare(QStringLiteral("arc"), Qt::CaseInsensitive) == 0) {
+                polyArcMode_ = true;
+                emit message(QStringLiteral("Arc segments — each click arcs tangent to the previous; "
+                                            "[L]ine to switch back"));
+                emit overlayChanged();
+                return true;
+            }
+            if (t.compare(QStringLiteral("l"), Qt::CaseInsensitive) == 0 ||
+                t.compare(QStringLiteral("line"), Qt::CaseInsensitive) == 0) {
+                polyArcMode_ = false;
+                emit message(QStringLiteral("Line segments"));
+                emit overlayChanged();
+                return true;
+            }
         }
     }
 
@@ -2681,6 +2734,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.setPen(cpen);
             QPolygonF poly;
             for (const auto& v : curve) poly << vt.toScreen(v);
+            p.drawPolyline(poly);
+        } else if (tool_ == ToolId::Polyline &&
+                   (polyArcMode_ ||
+                    std::any_of(draftBulges_.begin(), draftBulges_.end(),
+                                [](double b) { return std::abs(b) > 1e-9; }))) {
+            // Arc-segment polyline preview: placed bulges + the live (tangent) arc
+            // for the current segment to the cursor.
+            std::vector<double> bulges = draftBulges_;
+            double cur = 0.0;
+            if (polyArcMode_ && draftPts_.size() >= 2) {
+                const Vec2 prevDir = draftPts_.back() - draftPts_[draftPts_.size() - 2];
+                cur = tangentBulge(draftPts_.back(), cursor_, prevDir);
+            }
+            bulges.push_back(cur);
+            QPolygonF poly;
+            for (const auto& v : expandBulgePolyline(pts, bulges)) poly << vt.toScreen(v);
             p.drawPolyline(poly);
         } else {
             const std::vector<Vec2> show =

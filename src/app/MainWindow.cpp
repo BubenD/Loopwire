@@ -883,7 +883,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(canvas_, &CanvasWidget::contextMenuRequested, this,
             [this](const QPoint& gp) { showCanvasMenu(gp); });
-    connect(editor_, &Editor::message, this, [this](const QString& m) { statusBar()->showMessage(m); });
+    connect(editor_, &Editor::message, this, [this](const QString& m) {
+        statusBar()->showMessage(m);
+        // Option toggles (arc/fillet/…) emit messages — keep the hint in sync.
+        if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint());
+    });
     connect(editor_, &Editor::changed, this, [this] {
         canvas_->update();
         refreshPanels();

@@ -81,6 +81,25 @@ int run_geometry_tests() {
         check(none.empty(), "circleCircle: far apart -> none");
     }
 
+    // Polyline arc bulges.
+    {
+        auto arc = bulgeArcPoints({0, 0}, {10, 0}, 1.0); // bulge 1 => semicircle, r=5
+        check(arc.size() > 2 && near(arc.front().x, 0.0) && near(arc.back().x, 10.0) &&
+                  near(arc.back().y, 0.0),
+              "bulge: arc runs from p0 to p1");
+        double maxd = 0;
+        for (const auto& q : arc) maxd = std::max(maxd, std::abs(q.y));
+        check(near(maxd, 5.0, 0.1), "bulge=1 -> semicircle of radius 5");
+        check(near(tangentBulge({0, 0}, {10, 0}, {1, 0}), 0.0, 1e-9),
+              "tangentBulge: chord along the tangent -> straight");
+        check(near(tangentBulge({0, 0}, {0, 10}, {1, 0}), 1.0, 1e-6),
+              "tangentBulge: 90-degree turn -> bulge 1");
+        auto flat = expandBulgePolyline({{0, 0}, {10, 0}, {10, 10}}, {0, 0, 0});
+        check(flat.size() == 3, "expandBulge: no bulges -> points unchanged");
+        auto curved = expandBulgePolyline({{0, 0}, {10, 0}}, {0, 1.0});
+        check(curved.size() > 2, "expandBulge: a bulged segment is tessellated");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

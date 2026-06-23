@@ -212,6 +212,60 @@ std::vector<Vec2> lineCircleIntersection(const Vec2& p, const Vec2& d,
     return out;
 }
 
+std::vector<Vec2> bulgeArcPoints(const Vec2& p0, const Vec2& p1, double bulge, int samples) {
+    if (std::abs(bulge) < 1e-9) return {p0, p1};
+    const double dx = p1.x - p0.x, dy = p1.y - p0.y;
+    const double chord = std::sqrt(dx * dx + dy * dy);
+    if (chord < 1e-12) return {p0};
+    const double delta = 4.0 * std::atan(bulge); // signed central angle
+    const double half = delta / 2.0;
+    if (std::abs(std::tan(half)) < 1e-9) return {p0, p1};
+    const Vec2 mid{(p0.x + p1.x) * 0.5, (p0.y + p1.y) * 0.5};
+    const Vec2 n{-dy / chord, dx / chord}; // left normal of the chord
+    const double dist = (chord / 2.0) / std::tan(half);
+    const Vec2 c{mid.x + n.x * dist, mid.y + n.y * dist};
+    const double r = std::sqrt((p0.x - c.x) * (p0.x - c.x) + (p0.y - c.y) * (p0.y - c.y));
+    const double a0 = std::atan2(p0.y - c.y, p0.x - c.x);
+    const double pi = std::acos(-1.0);
+    const int steps = std::max(4, static_cast<int>(std::ceil(std::abs(delta) / (pi / 24.0))));
+    std::vector<Vec2> out;
+    out.reserve(steps + 1);
+    for (int i = 0; i <= steps; ++i) {
+        const double a = a0 + delta * (static_cast<double>(i) / steps);
+        out.push_back({c.x + r * std::cos(a), c.y + r * std::sin(a)});
+    }
+    return out;
+}
+
+double tangentBulge(const Vec2& p0, const Vec2& p1, const Vec2& tangent) {
+    const double cx = p1.x - p0.x, cy = p1.y - p0.y;
+    const double clen = std::sqrt(cx * cx + cy * cy);
+    const double tlen = std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y);
+    if (clen < 1e-12 || tlen < 1e-12) return 0.0;
+    const Vec2 ch{cx / clen, cy / clen};
+    const Vec2 t{tangent.x / tlen, tangent.y / tlen};
+    // Signed angle from the tangent to the chord; the tangent-arc bulge is tan(angle/2).
+    const double alpha = std::atan2(t.x * ch.y - t.y * ch.x, t.x * ch.x + t.y * ch.y);
+    return std::tan(alpha / 2.0);
+}
+
+std::vector<Vec2> expandBulgePolyline(const std::vector<Vec2>& points,
+                                      const std::vector<double>& bulges) {
+    std::vector<Vec2> out;
+    if (points.empty()) return out;
+    out.push_back(points[0]);
+    for (size_t i = 1; i < points.size(); ++i) {
+        const double b = (i < bulges.size()) ? bulges[i] : 0.0;
+        if (std::abs(b) > 1e-9) {
+            const auto arc = bulgeArcPoints(points[i - 1], points[i], b);
+            for (size_t k = 1; k < arc.size(); ++k) out.push_back(arc[k]);
+        } else {
+            out.push_back(points[i]);
+        }
+    }
+    return out;
+}
+
 std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
                                            const Vec2& c2, double r2) {
     std::vector<Vec2> out;

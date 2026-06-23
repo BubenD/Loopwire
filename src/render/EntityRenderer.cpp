@@ -4,6 +4,7 @@
 #include "harness/Harness.h"
 
 #include <QFont>
+#include <QJsonArray>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -129,6 +130,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Polyline:
         if (e.points.size() >= 2) {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
+            const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) {
                 // Offset both parallel runs first, then fillet EACH so both round.
                 const double gap = e.meta.value("gap").toDouble(10.0);
@@ -137,6 +139,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 if (cr > 0.0) { r1 = roundedPolyline(r1, cr); r2 = roundedPolyline(r2, cr); }
                 p.drawPolyline(toScreenPoly(r1, vt));
                 p.drawPolyline(toScreenPoly(r2, vt));
+            } else if (!bulgeArr.isEmpty()) {
+                // Arc segments (PLINE arc mode): expand bulges into a curved run.
+                std::vector<double> bulges;
+                for (const auto& v : bulgeArr) bulges.push_back(v.toDouble());
+                p.drawPolyline(toScreenPoly(expandBulgePolyline(e.points, bulges), vt));
             } else if (e.type == EntityType::Polyline && cr > 0.0) {
                 p.drawPolyline(toScreenPoly(roundedPolyline(e.points, cr), vt));
             } else {
