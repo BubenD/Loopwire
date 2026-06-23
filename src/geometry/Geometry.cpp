@@ -1,6 +1,7 @@
 #include "geometry/Geometry.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace Edraw_Desktop {
 
@@ -191,6 +192,38 @@ std::vector<Vec2> bsplinePoints(const std::vector<Vec2>& ctrl, int samplesPerSeg
                            p[i].y * b0 + p[i + 1].y * b1 + p[i + 2].y * b2 + p[i + 3].y * b3});
         }
     }
+    return out;
+}
+
+std::vector<Vec2> lineCircleIntersection(const Vec2& p, const Vec2& d,
+                                         const Vec2& c, double r) {
+    std::vector<Vec2> out;
+    const double len = std::sqrt(d.x * d.x + d.y * d.y);
+    if (len < 1e-12) return out;
+    const Vec2 u{d.x / len, d.y / len};
+    const double proj = (c.x - p.x) * u.x + (c.y - p.y) * u.y;
+    const Vec2 foot{p.x + u.x * proj, p.y + u.y * proj};
+    const double fx = c.x - foot.x, fy = c.y - foot.y;
+    const double dist2 = fx * fx + fy * fy;
+    if (dist2 > r * r + 1e-7) return out;
+    const double h = std::sqrt(std::max(0.0, r * r - dist2));
+    out.push_back({foot.x + u.x * h, foot.y + u.y * h});
+    if (h > 1e-9) out.push_back({foot.x - u.x * h, foot.y - u.y * h});
+    return out;
+}
+
+std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
+                                           const Vec2& c2, double r2) {
+    std::vector<Vec2> out;
+    const double dx = c2.x - c1.x, dy = c2.y - c1.y;
+    const double d = std::sqrt(dx * dx + dy * dy);
+    if (d < 1e-9 || d > r1 + r2 + 1e-7 || d < std::abs(r1 - r2) - 1e-7) return out;
+    const double a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+    const double h = std::sqrt(std::max(0.0, r1 * r1 - a * a));
+    const Vec2 mid{c1.x + dx * a / d, c1.y + dy * a / d};
+    const Vec2 perp{-dy / d * h, dx / d * h};
+    out.push_back({mid.x + perp.x, mid.y + perp.y});
+    if (h > 1e-9) out.push_back({mid.x - perp.x, mid.y - perp.y});
     return out;
 }
 

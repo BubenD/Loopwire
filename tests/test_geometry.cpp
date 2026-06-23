@@ -71,6 +71,16 @@ int run_geometry_tests() {
         check(maxY < 10.0 - 1e-3, "bspline: does not pass through interior control points");
     }
 
+    // Line/circle intersection helpers (used by tangent-circle construction).
+    {
+        auto lc = lineCircleIntersection({-50, 0}, {1, 0}, {0, 0}, 10); // x-axis through origin circle r=10
+        check(lc.size() == 2, "lineCircle: secant -> 2 points");
+        auto cc = circleCircleIntersection({0, 0}, 5, {8, 0}, 5); // overlap
+        check(cc.size() == 2 && near(cc[0].x, 4.0), "circleCircle: 2 points at x=4");
+        auto none = circleCircleIntersection({0, 0}, 1, {100, 0}, 1);
+        check(none.empty(), "circleCircle: far apart -> none");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

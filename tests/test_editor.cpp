@@ -504,6 +504,47 @@ int run_editor_tests() {
               "arc-mirror: mirrored arc takes the opposite half");
     }
 
+    // --- Circle Tan-Tan-Radius: tangent to two perpendicular lines, radius 10.
+    {
+        Document d; d.entities().clear();
+        Entity l1; l1.id = "l1"; l1.type = EntityType::Line; l1.a = {-100, 0}; l1.b = {100, 0};
+        Entity l2; l2.id = "l2"; l2.type = EntityType::Line; l2.a = {0, -100}; l2.b = {0, 100};
+        d.entities().push_back(l1);
+        d.entities().push_back(l2);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setCircleMode(Editor::CircleMode::TanTanRadius);
+        ed.setTool(ToolId::Circle);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // pick line 1 (first quadrant side)
+        ed.onPointerPress({0, 50}, Qt::LeftButton, Qt::NoModifier); // pick line 2
+        ed.acceptCommandInput(QStringLiteral("10"));                // radius
+        const Entity& c = d.entities().back();
+        check(c.type == EntityType::Circle && near(c.radius, 10.0) && near(c.center.x, 10.0) &&
+                  near(c.center.y, 10.0),
+              "ttr: circle r=10 tangent to both axes sits at (10,10)");
+    }
+
+    // --- Circle Tan-Tan-Tan: incircle of a right triangle (legs 60).
+    {
+        Document d; d.entities().clear();
+        Entity l1; l1.id = "l1"; l1.type = EntityType::Line; l1.a = {-100, 0}; l1.b = {100, 0};
+        Entity l2; l2.id = "l2"; l2.type = EntityType::Line; l2.a = {0, -100}; l2.b = {0, 100};
+        Entity l3; l3.id = "l3"; l3.type = EntityType::Line; l3.a = {60, 0}; l3.b = {0, 60};
+        d.entities().push_back(l1);
+        d.entities().push_back(l2);
+        d.entities().push_back(l3);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setCircleMode(Editor::CircleMode::TanTanTan);
+        ed.setTool(ToolId::Circle);
+        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier); // on x+y=60; finishes
+        const double r = (60.0 + 60.0 - 60.0 * std::sqrt(2.0)) / 2.0; // inradius ~17.57
+        const Entity& c = d.entities().back();
+        check(c.type == EntityType::Circle && near(c.radius, r, 1e-3) &&
+                  near(c.center.x, r, 1e-3) && near(c.center.y, r, 1e-3),
+              "ttt: incircle of the right triangle");
+    }
+
     // --- Ellipse construction: a rotated ellipse keeps its first-axis angle.
     {
         Document d; d.entities().clear();

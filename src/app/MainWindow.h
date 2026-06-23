@@ -125,6 +125,7 @@ private:
     QListWidget* entityList_ = nullptr;
     QLineEdit* commandEdit_ = nullptr;
     QLabel* coordLabel_ = nullptr;
+    QLabel* cmdHintLabel_ = nullptr; // applicable commands for the active draw tool
     QComboBox* layerCombo_ = nullptr;
     QComboBox* colorCombo_ = nullptr;
 

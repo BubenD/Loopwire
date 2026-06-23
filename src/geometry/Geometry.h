@@ -57,6 +57,14 @@ inline Vec2 pointOnCircle(const Vec2& center, double radius, double angle) {
     return {center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};
 }
 
+// Intersections of an infinite line (point + direction) with a circle (0/1/2).
+std::vector<Vec2> lineCircleIntersection(const Vec2& p, const Vec2& d,
+                                         const Vec2& c, double r);
+
+// Intersections of two circles (0/1/2 points).
+std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
+                                           const Vec2& c2, double r2);
+
 // Smooth interpolating spline (Catmull-Rom) PASSING THROUGH the control points —
 // the "fit" spline. Returns a finely sampled polyline (the control points are
 // included). `samplesPerSegment` controls smoothness. <3 points: unchanged.

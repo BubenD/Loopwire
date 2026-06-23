@@ -75,6 +75,9 @@ public:
     QString currentDrawFieldLabel() const;
     int drawInputFieldIndex() const { return drawFieldIndex_; }
     bool hasDrawInputFields() const { return !drawInputFieldLabels().empty(); }
+    // One-line help of the applicable commands/options for the active draw tool,
+    // shown in the bottom command bar while drawing (empty for Select/modify).
+    QString drawCommandHint() const;
     void cycleDrawInputField();              // Tab: move to the next reference field
     void lockDrawField(const QString& text); // store the typed value in the active field
     bool commitDrawFields();                 // build the point from the fields and place it
@@ -122,7 +125,8 @@ public:
     bool showAngles() const { return showAngles_; }
 
     // Circle / arc / ellipse construction methods (AutoCAD-style flyouts).
-    enum class CircleMode { CenterRadius, CenterDiameter, TwoPoint, ThreePoint };
+    enum class CircleMode { CenterRadius, CenterDiameter, TwoPoint, ThreePoint,
+                            TanTanRadius, TanTanTan };
     enum class ArcMode { ThreePoint, StartCenterEnd, CenterStartEnd, StartEndRadius };
     enum class EllipseMode { Center, AxisEnd, EllipticalArc };
     // Spline construction: Fit passes through the points; CV (control vertices)
@@ -193,6 +197,8 @@ private:
     Entity* entityById(const QString& id);
 
     void handleDrawPress(const Vec2& p);
+    void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects
+    void buildTangentCircle();             // solve + place once enough objects are picked
     void handleModifyPress(const Vec2& p);
     void handlePickModifyPress(const Vec2& p);
     void handlePlacementPress(const Vec2& p);
@@ -283,6 +289,13 @@ private:
     EllipseMode ellipseMode_ = EllipseMode::Center;
     SplineMode splineMode_ = SplineMode::Fit;
     bool arcMirror_ = false; // arc being drawn is flipped to the opposite sweep
+    // Tangent-circle construction (Tan-Tan-Radius / Tan-Tan-Tan): the objects the
+    // new circle must touch, the click points (to pick which solution), and the
+    // pending-radius state for TTR.
+    std::vector<QString> tanPickIds_;
+    std::vector<Vec2> tanPickPts_;
+    bool tanAwaitRadius_ = false;
+    double tanRadius_ = 50.0;
     int polygonSides_ = 6;        // hexagon by default
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered

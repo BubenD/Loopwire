@@ -1021,6 +1021,11 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (draftPts_.size() == 2) finishDraw();
         break;
     case ToolId::Circle:
+        // Tangent modes pick objects to touch instead of placing points.
+        if (circleMode_ == CircleMode::TanTanRadius || circleMode_ == CircleMode::TanTanTan) {
+            handleTangentPick(p);
+            return;
+        }
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == (circleMode_ == CircleMode::ThreePoint ? 3u : 2u)) finishDraw();
@@ -1058,6 +1063,188 @@ void Editor::handleDrawPress(const Vec2& p) {
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
     emit changed();
+}
+
+namespace {
+
+// ---- Tangent-circle construction (Tan-Tan-Radius / Tan-Tan-Tan) -------------
+// An object the new circle must be tangent to: either an (infinite) line or a circle.
+struct TanTarget {
+    bool isCircle = false;
+    Vec2 p, dir;        // line: a point on it + a direction
+    Vec2 c; double r{}; // circle: center + radius
+};
+
+std::optional<TanTarget> tanTargetOf(const Entity& e) {
+    TanTarget t;
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine:
+    case EntityType::Dimension:
+        t.isCircle = false; t.p = e.a; t.dir = e.b - e.a;
+        if (t.dir.lengthSq() < 1e-12) return std::nullopt;
+        return t;
+    case EntityType::Circle:
+    case EntityType::Arc:
+        t.isCircle = true; t.c = e.center; t.r = e.radius;
+        return t;
+    default:
+        return std::nullopt;
+    }
+}
+
+// The locus of centers at distance r from a target is a pair of lines (for a line
+// target) or a pair of concentric circles (for a circle target). A "locus" here is
+// either a line (point+dir) or a circle (center+radius).
+struct CenterLocus { bool isCircle; Vec2 p, d; Vec2 c; double r; };
+
+std::vector<CenterLocus> centerLoci(const TanTarget& t, double r) {
+    std::vector<CenterLocus> L;
+    if (!t.isCircle) {
+        const Vec2 u = t.dir.normalized();
+        const Vec2 n = u.perp();
+        L.push_back({false, t.p + n * r, u, {}, 0});
+        L.push_back({false, t.p - n * r, u, {}, 0});
+    } else {
+        L.push_back({true, {}, {}, t.c, t.r + r});          // externally tangent
+        L.push_back({true, {}, {}, t.c, std::abs(t.r - r)}); // internally tangent
+    }
+    return L;
+}
+
+std::vector<Vec2> intersectLoci(const CenterLocus& A, const CenterLocus& B) {
+    if (!A.isCircle && !B.isCircle) {
+        if (auto x = lineLineIntersection(A.p, A.p + A.d, B.p, B.p + B.d)) return {*x};
+        return {};
+    }
+    if (A.isCircle && !B.isCircle) return lineCircleIntersection(B.p, B.d, A.c, A.r);
+    if (!A.isCircle && B.isCircle) return lineCircleIntersection(A.p, A.d, B.c, B.r);
+    return circleCircleIntersection(A.c, A.r, B.c, B.r);
+}
+
+// Candidate centers for a circle of radius r tangent to both targets.
+std::vector<Vec2> ttrCenters(const TanTarget& t1, const TanTarget& t2, double r) {
+    std::vector<Vec2> out;
+    for (const auto& A : centerLoci(t1, r))
+        for (const auto& B : centerLoci(t2, r))
+            for (const auto& x : intersectLoci(A, B)) out.push_back(x);
+    return out;
+}
+
+// Candidate centers tangent to three LINE targets (incircle / excircles): the
+// center lies on an angle bisector of each pair. Returns up to 4 points.
+std::vector<Vec2> tttLineCenters(const TanTarget& a, const TanTarget& b, const TanTarget& c) {
+    std::vector<Vec2> out;
+    const Vec2 ua = a.dir.normalized(), ub = b.dir.normalized(), uc = c.dir.normalized();
+    const auto q01 = lineLineIntersection(a.p, a.p + ua, b.p, b.p + ub);
+    const auto q02 = lineLineIntersection(a.p, a.p + ua, c.p, c.p + uc);
+    if (!q01 || !q02) return out; // some lines parallel
+    for (const Vec2& b01 : {ua + ub, ua - ub})
+        for (const Vec2& b02 : {ua + uc, ua - uc}) {
+            if (b01.lengthSq() < 1e-12 || b02.lengthSq() < 1e-12) continue;
+            if (auto x = lineLineIntersection(*q01, *q01 + b01, *q02, *q02 + b02)) out.push_back(*x);
+        }
+    return out;
+}
+
+// Distance from a point to a target (perp distance to a line, ring distance to a circle).
+double distToTarget(const Vec2& pt, const TanTarget& t) {
+    if (t.isCircle) return std::abs(distance(pt, t.c) - t.r);
+    const Vec2 u = t.dir.normalized();
+    return std::abs(dot(pt - t.p, u.perp()));
+}
+
+} // namespace
+
+void Editor::handleTangentPick(const Vec2& p) {
+    auto hit = hitTest(p);
+    if (!hit) {
+        emit message(QStringLiteral("Pick an object for the circle to touch (line or circle)"));
+        return;
+    }
+    // Must be a tangentable object, and not already picked.
+    if (Entity* e = entityById(*hit); !e || !tanTargetOf(*e)) {
+        emit message(QStringLiteral("Tangent works on lines, circles and arcs"));
+        return;
+    }
+    if (std::find(tanPickIds_.begin(), tanPickIds_.end(), *hit) != tanPickIds_.end()) {
+        emit message(QStringLiteral("Object already chosen — pick a different one"));
+        return;
+    }
+    tanPickIds_.push_back(*hit);
+    tanPickPts_.push_back(p);
+
+    const int need = (circleMode_ == CircleMode::TanTanTan) ? 3 : 2;
+    if (static_cast<int>(tanPickIds_.size()) < need) {
+        emit message(QStringLiteral("Pick object %1 of %2").arg(tanPickIds_.size() + 1).arg(need));
+        return;
+    }
+    if (circleMode_ == CircleMode::TanTanRadius) {
+        tanAwaitRadius_ = true;
+        emit message(QStringLiteral("Enter the circle radius <%1>").arg(tanRadius_));
+        return;
+    }
+    buildTangentCircle(); // Tan-Tan-Tan: enough objects, solve now
+}
+
+void Editor::buildTangentCircle() {
+    if (!doc_) return;
+    std::vector<TanTarget> targets;
+    for (const auto& id : tanPickIds_)
+        if (Entity* e = entityById(id))
+            if (auto t = tanTargetOf(*e)) targets.push_back(*t);
+
+    // Reference point to choose among the multiple tangent solutions.
+    Vec2 ref{0, 0};
+    for (const auto& q : tanPickPts_) ref = ref + q;
+    if (!tanPickPts_.empty()) ref = ref * (1.0 / tanPickPts_.size());
+
+    std::vector<Vec2> centers;
+    double radius = tanRadius_;
+    if (circleMode_ == CircleMode::TanTanRadius && targets.size() >= 2) {
+        centers = ttrCenters(targets[0], targets[1], tanRadius_);
+    } else if (circleMode_ == CircleMode::TanTanTan && targets.size() >= 3) {
+        if (targets[0].isCircle || targets[1].isCircle || targets[2].isCircle) {
+            emit message(QStringLiteral("Tan-Tan-Tan currently supports three lines"));
+            tanPickIds_.clear(); tanPickPts_.clear(); tanAwaitRadius_ = false;
+            return;
+        }
+        centers = tttLineCenters(targets[0], targets[1], targets[2]);
+    }
+
+    // Pick the candidate center nearest the average of the pick points.
+    if (centers.empty()) {
+        emit message(QStringLiteral("No tangent circle fits those objects — try a different radius"));
+        tanPickIds_.clear(); tanPickPts_.clear(); tanAwaitRadius_ = false;
+        return;
+    }
+    Vec2 best = centers[0];
+    double bestD = distance(best, ref);
+    for (const auto& cc : centers) {
+        const double dd = distance(cc, ref);
+        if (dd < bestD) { bestD = dd; best = cc; }
+    }
+    if (circleMode_ == CircleMode::TanTanTan)
+        radius = distToTarget(best, targets[0]); // incircle radius = distance to a line
+
+    if (radius < 1e-6) {
+        emit message(QStringLiteral("Degenerate tangent circle"));
+        tanPickIds_.clear(); tanPickPts_.clear(); tanAwaitRadius_ = false;
+        return;
+    }
+    Entity e;
+    e.type = EntityType::Circle;
+    e.layer = doc_->activeLayer();
+    e.center = best;
+    e.radius = radius;
+    pushUndo();
+    addEntity(std::move(e));
+    tanPickIds_.clear();
+    tanPickPts_.clear();
+    tanAwaitRadius_ = false;
+    emit message(QStringLiteral("Tangent circle created"));
+    emit changed();
+    setTool(ToolId::Select);
 }
 
 namespace {
@@ -1285,6 +1472,9 @@ void Editor::cancelDraw() {
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
     arcMirror_ = false;
+    tanPickIds_.clear();
+    tanPickPts_.clear();
+    tanAwaitRadius_ = false;
 }
 
 void Editor::toggleArcMirror() {
@@ -1361,6 +1551,43 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
         return {};
     default:
         return {};
+    }
+}
+
+QString Editor::drawCommandHint() const {
+    switch (tool_) {
+    case ToolId::Line:
+        return QStringLiteral("LINE: click points  ·  Enter ends the run  ·  Esc exits");
+    case ToolId::Polyline:
+        return QStringLiteral("POLYLINE: click points  ·  [F] fillet  ·  [C] close  ·  [U] undo  ·  Enter finishes");
+    case ToolId::DoublePolyline:
+        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet  ·  [C] close  ·  [U] undo  ·  Enter finishes");
+    case ToolId::DoubleLine:
+        return QStringLiteral("DOUBLE LINE: [G] gap  ·  click two points");
+    case ToolId::Spline:
+        return QStringLiteral("SPLINE: click points  ·  [C] close  ·  [U] undo  ·  Enter finishes");
+    case ToolId::Wire:
+        return QStringLiteral("WIRE: click points  ·  double-click / Enter finishes");
+    case ToolId::Arc:
+        return QStringLiteral("ARC: pick 3 points  ·  [MI] mirror  ·  Esc cancels");
+    case ToolId::Circle:
+        if (circleMode_ == CircleMode::TanTanRadius)
+            return QStringLiteral("CIRCLE Tan-Tan-Radius: pick two objects, then type the radius");
+        if (circleMode_ == CircleMode::TanTanTan)
+            return QStringLiteral("CIRCLE Tan-Tan-Tan: pick three objects (lines)");
+        return QStringLiteral("CIRCLE: pick center then radius  ·  type Radius/Diameter (Tab switches)");
+    case ToolId::Ellipse:
+        return QStringLiteral("ELLIPSE: axis then distance  ·  type Length/Angle (Tab switches)");
+    case ToolId::Rect:
+        return QStringLiteral("RECTANGLE: two corners  ·  type X length then Y length");
+    case ToolId::Polygon:
+        return QStringLiteral("POLYGON: type # sides, pick centre then a vertex");
+    case ToolId::Dimension:
+        return QStringLiteral("DIMENSION: pick two points");
+    case ToolId::Text:
+        return QStringLiteral("TEXT: pick a point, then type the text");
+    default:
+        return QString(); // Select / modify tools have no draw hint
     }
 }
 
@@ -1460,6 +1687,19 @@ bool Editor::acceptCommandInput(const QString& text) {
         (t.compare(QStringLiteral("mi"), Qt::CaseInsensitive) == 0 ||
          t.compare(QStringLiteral("mirror"), Qt::CaseInsensitive) == 0)) {
         toggleArcMirror();
+        return true;
+    }
+
+    // Tan-Tan-Radius: after the two objects are picked, a typed number is the radius.
+    if (tanAwaitRadius_ && !t.contains(',')) {
+        bool ok = false;
+        const double r = t.toDouble(&ok);
+        if (ok && r > 0) {
+            tanRadius_ = r;
+            buildTangentCircle();
+        } else {
+            emit message(QStringLiteral("Enter a positive radius"));
+        }
         return true;
     }
 

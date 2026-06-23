@@ -261,6 +261,15 @@ QIcon makeCircleMethodIcon(int mode) {
         p.drawLine(QPointF(c.x() - r, c.y()), QPointF(c.x() + r, c.y())); geoDot(p, c); break;
     case 2: // 2-Point
         geoDot(p, QPointF(c.x() - r, c.y())); geoDot(p, QPointF(c.x() + r, c.y())); break;
+    case 4:   // Tan, Tan, Radius — two tangent lines + radius
+    case 5: { // Tan, Tan, Tan — three tangent lines
+        QPen tp(kGeoDot); tp.setWidthF(1.0); p.setPen(tp);
+        p.drawLine(QPointF(2, c.y() + r), QPointF(22, c.y() + r));            // bottom tangent
+        p.drawLine(QPointF(c.x() - r, 2), QPointF(c.x() - r, 22));            // left tangent
+        if (mode == 5) p.drawLine(QPointF(22, 2), QPointF(2, 22));            // third tangent
+        else { p.setPen(QPen(kGeoBlue)); p.drawLine(c, QPointF(c.x() + r, c.y())); } // radius
+        break;
+    }
     default: // 3-Point
         geoDot(p, QPointF(c.x(), c.y() - r));
         geoDot(p, QPointF(c.x() + r * 0.87, c.y() + r * 0.5));
@@ -883,6 +892,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(editor_, &Editor::selectionChanged, this, [this] { refreshPanels(); });
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
+        if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString& prompt) {
@@ -1018,6 +1028,9 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
             add(QStringLiteral("Center, Diameter"), Editor::CircleMode::CenterDiameter);
             add(QStringLiteral("2-Point"), Editor::CircleMode::TwoPoint);
             add(QStringLiteral("3-Point"), Editor::CircleMode::ThreePoint);
+            menu->addSeparator();
+            add(QStringLiteral("Tan, Tan, Radius"), Editor::CircleMode::TanTanRadius);
+            add(QStringLiteral("Tan, Tan, Tan"), Editor::CircleMode::TanTanTan);
             act->setIcon(makeCircleMethodIcon(0)); // default = first fall-menu method
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
@@ -1669,9 +1682,13 @@ void MainWindow::buildPanels() {
 void MainWindow::buildCommandBar() {
     auto* bar = new QToolBar(QStringLiteral("Command"), this);
     bar->setMovable(false);
+    // Applicable-commands help for the active draw tool (left of the command box).
+    cmdHintLabel_ = new QLabel(bar);
+    cmdHintLabel_->setStyleSheet(QStringLiteral("color:#8fb0d6;padding:0 10px;font-weight:600;"));
     auto* label = new QLabel(QStringLiteral("  Command: "), bar);
     commandEdit_ = new QLineEdit(bar);
     commandEdit_->setPlaceholderText(QStringLiteral("command (line, rect, circle...) — or, while drawing, a distance / x,y / @dx,dy + Enter"));
+    bar->addWidget(cmdHintLabel_);
     bar->addWidget(label);
     bar->addWidget(commandEdit_);
     addToolBar(Qt::BottomToolBarArea, bar);
