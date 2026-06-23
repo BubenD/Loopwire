@@ -137,8 +137,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // through the bends — the two runs make equal, even turns (offsetting
                 // first and rounding each run with the same radius does not).
                 const double gap = e.meta.value("gap").toDouble(10.0);
+                // Round the centerline at cr + gap/2 so BOTH runs fillet: the inner
+                // run gets radius cr (>0), the outer cr+gap — both rounded, constant
+                // gap (rounding at just cr collapses the inner knee when cr<=gap/2).
                 const std::vector<Vec2> center =
-                    (cr > 0.0) ? roundedPolyline(e.points, cr) : e.points;
+                    (cr > 0.0) ? roundedPolyline(e.points, cr + gap / 2.0) : e.points;
                 p.drawPolyline(toScreenPoly(offsetPolyline(center, gap / 2.0), vt));
                 p.drawPolyline(toScreenPoly(offsetPolyline(center, -gap / 2.0), vt));
             } else if (!bulgeArr.isEmpty()) {

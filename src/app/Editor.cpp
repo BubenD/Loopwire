@@ -2733,10 +2733,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
             p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
-            // Round the centerline first, then offset — equal, constant-gap turns.
-            const std::vector<Vec2> center =
-                (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_) : pts;
+            // Round the centerline at cr + gap/2 so both runs fillet (inner radius
+            // = cr); then offset — equal, constant-gap turns.
             const double h = doubleLineGap_ / 2.0;
+            const std::vector<Vec2> center =
+                (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_ + h) : pts;
             for (double s : {h, -h}) {
                 QPolygonF poly;
                 for (const auto& v : offsetPolyline(center, s)) poly << vt.toScreen(v);
