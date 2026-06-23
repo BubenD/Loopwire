@@ -39,7 +39,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
-                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor };
+                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth };
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
 // the cursor: e.a = target - off.
@@ -160,7 +160,15 @@ std::vector<Grip> gripsOf(const Entity& e) {
         g.push_back({axisPt(0, -e.radiusY), GripRole::EllipseMinor, 0});
         break;
     }
-    default: // text / splice / netlabel / notconnected / connector
+    case EntityType::Text: {
+        // Move grip at the anchor; for an MTEXT container, a width grip on the
+        // right edge that resizes the wrap width.
+        g.push_back({e.a, GripRole::Move, 0});
+        const double bw = e.meta.value("boxWidth").toDouble(0.0);
+        if (bw > 0.0) g.push_back({{e.a.x + bw, e.a.y}, GripRole::TextWidth, 0});
+        break;
+    }
+    default: // splice / netlabel / notconnected / connector
         g.push_back({e.a, GripRole::Move, 0});
         break;
     }
@@ -951,6 +959,9 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Center: translateEntity(*e, delta); break;
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
         case GripRole::Move: translateEntity(*e, delta); break;
+        case GripRole::TextWidth: // drag the MTEXT container's right edge
+            e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
+            break;
         case GripRole::ArcStart:
             e->radius = std::max(1e-6, distance(e->center, target));
             e->startAngle = std::atan2(target.y - e->center.y, target.x - e->center.x);

@@ -2691,6 +2691,12 @@ void MainWindow::refreshProperties() {
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("align"), v.toLower());
                  });
+        // Container wrap width (0 = no wrapping / single column). Also draggable
+        // via the right-edge grip on the object.
+        addNum(QStringLiteral("Box width"), e->meta.value(QStringLiteral("boxWidth")).toDouble(0.0),
+               [this](double v) {
+                   editor_->setSelectionTextMeta(QStringLiteral("boxWidth"), std::max(0.0, v));
+               });
     }
     refreshing_ = false;
 }

@@ -418,6 +418,23 @@ int run_editor_tests() {
               "mtext: box defines wrap width and top-left anchor");
     }
 
+    // --- MText container resize: drag the right-edge width grip.
+    {
+        Document d; d.entities().clear();
+        Entity t; t.id = "t"; t.type = EntityType::Text; t.a = {0, 40};
+        t.meta.insert("text", QStringLiteral("abc"));
+        t.meta.insert("size", 5.0);
+        t.meta.insert("boxWidth", 100.0);
+        d.entities().push_back(t);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier); // right-edge width grip
+        ed.onPointerMove({160, 40});
+        ed.onPointerPress({160, 40}, Qt::LeftButton, Qt::NoModifier);
+        check(near(d.entities()[0].meta.value(QStringLiteral("boxWidth")).toDouble(), 160.0),
+              "mtext-grip: the width grip resizes the container");
+    }
+
     // --- Polygon: default 5 sides; a typed count sets the side number.
     {
         Document d; d.entities().clear();
