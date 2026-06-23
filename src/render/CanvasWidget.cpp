@@ -38,11 +38,10 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
         "border-radius:3px;padding:1px 5px;font-size:12px;}"));
     dynInput_->hide();
     dynInput_->installEventFilter(this);
-    connect(dynInput_, &QLineEdit::returnPressed, this, [this] {
-        const QString t = dynInput_->text();
-        hideDynInput();
-        if (!t.isEmpty()) emit commandSubmitted(t);
-    });
+    // NB: Enter is handled in eventFilter() and consumed there. QLineEdit does NOT
+    // accept Return/Enter (it lets it bubble for dialog default buttons), so if we
+    // relied on returnPressed the same Enter would propagate to the canvas and
+    // finish the draft (e.g. ending a polyline right after typing a fillet radius).
 }
 
 void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeholder) {
@@ -82,6 +81,14 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
             if (ke->key() == Qt::Key_Escape) {
                 hideDynInput();
                 if (editor_) editor_->onKey(Qt::Key_Escape, Qt::NoModifier);
+                return true;
+            }
+            // Submit on Enter and CONSUME it (return true) so the key never bubbles
+            // to the canvas, where it would be read as "finish the draft".
+            if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+                const QString t = dynInput_->text();
+                hideDynInput();
+                if (!t.isEmpty()) emit commandSubmitted(t);
                 return true;
             }
             // Tab locks what's typed into the current reference field and moves to
