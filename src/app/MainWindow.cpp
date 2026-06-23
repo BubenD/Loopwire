@@ -1764,7 +1764,13 @@ void MainWindow::buildMenus() {
     editMenu->addAction(QStringLiteral("Color: By&Layer"), this, [this] { editor_->setColorsByLayer(); });
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&View"));
-    viewMenu->addAction(QStringLiteral("&Fit drawing"), QKeySequence(Qt::Key_F), this, [this] { canvas_->fitView(); });
+    // No bare "F" shortcut: a single-letter accelerator fires before the canvas
+    // sees the key, so pressing "f" while drawing would zoom-to-fit (jump to
+    // centre). Fit stays available here, via the command line (z / fit / extents),
+    // and the canvas right-click "Drawing center". Ctrl+Shift+F is a safe hotkey.
+    viewMenu->addAction(QStringLiteral("&Fit drawing"),
+                        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), this,
+                        [this] { canvas_->fitView(); });
 
     QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
     helpMenu->addAction(QStringLiteral("&Commands..."), QKeySequence::HelpContents, this,
