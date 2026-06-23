@@ -373,6 +373,16 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Line, "line-g: tool stays Line");
     }
 
+    // --- Polygon: default 5 sides; a typed count sets the side number.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polygon);
+        check(ed.polygonSides() == 5, "polygon: default is 5 sides");
+        check(ed.acceptCommandInput(QStringLiteral("8")), "polygon: side count consumed");
+        check(ed.polygonSides() == 8, "polygon: typed count sets the sides");
+    }
+
     // --- Polyline Arc mode records a bulged (curved) segment.
     {
         Document d; d.entities().clear();

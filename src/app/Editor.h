@@ -310,7 +310,7 @@ private:
     std::vector<Vec2> tanPickPts_;
     bool tanAwaitRadius_ = false;
     double tanRadius_ = 50.0;
-    int polygonSides_ = 6;        // hexagon by default
+    int polygonSides_ = 5;        // default side count (prompted on tool select)
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

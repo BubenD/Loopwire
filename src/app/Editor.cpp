@@ -211,6 +211,10 @@ void Editor::setTool(ToolId t) {
     emit toolChanged(t);
     emit message(toolLabel(t));
     emit changed();
+    // Polygon: ask for the number of sides up front (default shown); the flying
+    // field pops so the user types the count before picking the centre.
+    if (t == ToolId::Polygon)
+        emit dynamicPrompt(QStringLiteral("Number of sides <%1>").arg(polygonSides_));
 }
 
 void Editor::repeatLastTool() {
@@ -1606,7 +1610,8 @@ QString Editor::drawCommandHint() const {
     case ToolId::Rect:
         return QStringLiteral("RECTANGLE: two corners  ·  type X length then Y length");
     case ToolId::Polygon:
-        return QStringLiteral("POLYGON: type # sides, pick centre then a vertex");
+        return QStringLiteral("POLYGON (%1 sides): type a count, then pick the centre and a vertex")
+            .arg(polygonSides_);
     case ToolId::Dimension:
         return QStringLiteral("DIMENSION: pick two points");
     case ToolId::Text:
