@@ -418,6 +418,23 @@ int run_editor_tests() {
               "pline-fillet: 'fc' returns to sharp corners");
     }
 
+    // --- Double polyline (multiline) fillet: "f" + value rounds the knees.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::DoublePolyline);
+        check(ed.acceptCommandInput(QStringLiteral("f")), "mline-fillet: 'f' enters fillet mode");
+        ed.acceptCommandInput(QStringLiteral("6"));  // knee radius
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() &&
+                  near(e.meta.value(QStringLiteral("cornerRadius")).toDouble(), 6.0),
+              "mline-fillet: double polyline keeps the knee radius");
+    }
+
     // --- Polyline options: "u" Undo drops the last point; "c" Close finishes the loop.
     {
         Document d; d.entities().clear();

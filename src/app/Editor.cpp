@@ -1585,7 +1585,8 @@ QString Editor::drawCommandHint() const {
             .arg(polyArcMode_ ? QStringLiteral("ARC segments") : QStringLiteral("click points"),
                  cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
     case ToolId::DoublePolyline:
-        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet  ·  [C] close  ·  [U] undo  ·  Enter finishes");
+        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [C] close  ·  [U] undo  ·  Enter")
+            .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  click two points");
     case ToolId::Spline:
