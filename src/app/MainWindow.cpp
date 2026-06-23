@@ -321,6 +321,30 @@ QIcon makeEllipseMethodIcon(int mode) {
     return QIcon(pm);
 }
 
+QIcon makeSplineMethodIcon(int mode) {
+    QPixmap pm = geoCanvas();
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(2, 2);
+    const QPointF a(3, 17), b(9, 5), c(15, 17), d(21, 6);
+    if (mode == 1) {
+        // CV: dashed control frame + red control dots, smooth curve nearby.
+        QPen frame(kGeoDot); frame.setStyle(Qt::DashLine); frame.setWidthF(1.0);
+        p.setPen(frame);
+        p.drawPolyline(QPolygonF({a, b, c, d}));
+    }
+    QPen pen(kGeoBlue); pen.setWidthF(1.5);
+    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    QPainterPath path;
+    path.moveTo(a);
+    path.cubicTo(b, b, QPointF((b.x() + c.x()) / 2, (b.y() + c.y()) / 2));
+    path.cubicTo(c, c, d);
+    p.drawPath(path);
+    if (mode == 0) { geoDot(p, a); geoDot(p, b); geoDot(p, c); geoDot(p, d); } // fit points on the curve
+    p.end();
+    return QIcon(pm);
+}
+
 // A 3x3 dot-matrix "grip" — the only place a panel can be grabbed to move/detach.
 QPixmap makeGripPixmap() {
     constexpr int cols = 3, rows = 3, pitch = 4;
@@ -848,6 +872,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(canvas_, &CanvasWidget::cursorWorldMoved, this, [this](Vec2 w) {
         coordLabel_->setText(QStringLiteral("%1, %2").arg(w.x, 0, 'f', 3).arg(w.y, 0, 'f', 3));
     });
+    connect(canvas_, &CanvasWidget::contextMenuRequested, this,
+            [this](const QPoint& gp) { showCanvasMenu(gp); });
     connect(editor_, &Editor::message, this, [this](const QString& m) { statusBar()->showMessage(m); });
     connect(editor_, &Editor::changed, this, [this] {
         canvas_->update();
@@ -1024,6 +1050,20 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
             add(QStringLiteral("Axis, End"), Editor::EllipseMode::AxisEnd);
             add(QStringLiteral("Elliptical Arc"), Editor::EllipseMode::EllipticalArc);
             act->setIcon(makeEllipseMethodIcon(0)); // default = first fall-menu method
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Spline) {
+            auto* menu = new QMenu(b);
+            auto add = [&](const QString& label, Editor::SplineMode m) {
+                menu->addAction(makeSplineMethodIcon(static_cast<int>(m)), label, this, [this, act, m] {
+                    editor_->setSplineMode(m);
+                    editor_->setTool(ToolId::Spline);
+                    act->setIcon(makeSplineMethodIcon(static_cast<int>(m)));
+                });
+            };
+            add(QStringLiteral("Spline Fit"), Editor::SplineMode::Fit);
+            add(QStringLiteral("Spline CV (Control Vertices)"), Editor::SplineMode::CV);
+            act->setIcon(makeSplineMethodIcon(0)); // default = Fit
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
         }
@@ -1846,6 +1886,64 @@ void MainWindow::applyTheme(bool dark) {
 }
 
 // ---- About dialog ----------------------------------------------------------
+
+void MainWindow::showCanvasMenu(const QPoint& globalPos) {
+    if (!editor_) return;
+    QMenu menu(this);
+    const bool hasSel = !editor_->selection().empty();
+
+    QAction* copy = menu.addAction(QStringLiteral("Copy"));
+    copy->setEnabled(hasSel);
+    connect(copy, &QAction::triggered, this, [this] { editor_->copySelection(); });
+
+    QAction* cut = menu.addAction(QStringLiteral("Cut"));
+    cut->setEnabled(hasSel);
+    connect(cut, &QAction::triggered, this, [this] { editor_->copyWithBase(true); });
+
+    QAction* cancel = menu.addAction(QStringLiteral("Cancel"));
+    connect(cancel, &QAction::triggered, this,
+            [this] { editor_->onKey(Qt::Key_Escape, Qt::NoModifier); });
+
+    // Mirror appears only while an arc is being drawn (flip its sweep).
+    if (editor_->isDrafting() && editor_->tool() == ToolId::Arc) {
+        QAction* mirror = menu.addAction(QStringLiteral("Mirror arc"));
+        mirror->setCheckable(true);
+        mirror->setChecked(editor_->isArcMirrored());
+        connect(mirror, &QAction::triggered, this, [this] { editor_->toggleArcMirror(); });
+    }
+
+    menu.addSeparator();
+    connect(menu.addAction(QStringLiteral("Find...")), &QAction::triggered, this,
+            [this] { findText(); });
+    connect(menu.addAction(QStringLiteral("Drawing center (zoom to fit)")), &QAction::triggered,
+            this, [this] { canvas_->fitView(); canvas_->setFocus(); });
+
+    menu.exec(globalPos);
+}
+
+void MainWindow::findText() {
+    if (!editor_ || !doc_) return;
+    bool ok = false;
+    const QString q = QInputDialog::getText(this, QStringLiteral("Find"),
+                                            QStringLiteral("Find text:"), QLineEdit::Normal,
+                                            QString(), &ok);
+    if (!ok || q.isEmpty()) return;
+    // Select every Text entity whose content contains the query (case-insensitive).
+    editor_->clearSelection();
+    int count = 0;
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Text) continue;
+        if (e.meta.value(QStringLiteral("text")).toString().contains(q, Qt::CaseInsensitive)) {
+            editor_->selectById(e.id, /*additive=*/true);
+            ++count;
+        }
+    }
+    statusBar()->showMessage(count ? QStringLiteral("Found %1 matching text object(s)").arg(count)
+                                   : QStringLiteral("No text matching \"%1\"").arg(q),
+                             3000);
+    canvas_->update();
+    canvas_->setFocus();
+}
 
 void MainWindow::showAbout() {
     QDialog dlg(this);

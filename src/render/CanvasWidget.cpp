@@ -4,6 +4,7 @@
 #include "geometry/Geometry.h"
 
 #include <QCompleter>
+#include <QContextMenuEvent>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QKeyEvent>
@@ -51,6 +52,8 @@ void CanvasWidget::showDynInput(const QString& firstChar) {
     pos.setY(std::min(pos.y(), height() - dynInput_->height() - 4));
     dynInput_->move(pos);
     dynInput_->setText(firstChar);
+    // Label the box with the active reference field (Length / Radius / ...).
+    dynInput_->setPlaceholderText(editor_ ? editor_->currentDrawFieldLabel() : QString());
     dynInput_->show();
     dynInput_->raise();
     dynInput_->setFocus(Qt::OtherFocusReason);
@@ -71,6 +74,17 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
             if (ke->key() == Qt::Key_Escape) {
                 hideDynInput();
                 if (editor_) editor_->onKey(Qt::Key_Escape, Qt::NoModifier);
+                return true;
+            }
+            // Tab locks what's typed into the current reference field and moves to
+            // the next one (Length->Angle, X radius->Y radius, ...) — the box stays
+            // open so the next value can be typed.
+            if ((ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab) && editor_ &&
+                editor_->drawInputFieldLabels().size() > 1) {
+                editor_->lockDrawField(dynInput_->text());
+                editor_->cycleDrawInputField();
+                dynInput_->clear();
+                dynInput_->setPlaceholderText(editor_->currentDrawFieldLabel());
                 return true;
             }
         } else if (e->type() == QEvent::FocusOut) {
@@ -309,8 +323,14 @@ void CanvasWidget::wheelEvent(QWheelEvent* e) {
     e->accept();
 }
 
+void CanvasWidget::contextMenuEvent(QContextMenuEvent* e) {
+    // Right-click: the host (MainWindow) builds and shows the canvas menu.
+    emit contextMenuRequested(e->globalPos());
+    e->accept();
+}
+
 void CanvasWidget::mousePressEvent(QMouseEvent* e) {
-    if (e->button() == Qt::MiddleButton || e->button() == Qt::RightButton) {
+    if (e->button() == Qt::MiddleButton) { // middle-drag pans (right-click = menu)
         panning_ = true;
         lastPanPos_ = e->pos();
         setCursor(Qt::ClosedHandCursor);
@@ -355,7 +375,7 @@ void CanvasWidget::leaveEvent(QEvent* e) {
 }
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
-    if (panning_ && (e->button() == Qt::MiddleButton || e->button() == Qt::RightButton)) {
+    if (panning_ && e->button() == Qt::MiddleButton) {
         panning_ = false;
         setCursor(Qt::BlankCursor); // resume the drawn crosshair after panning
         update();
@@ -382,6 +402,15 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     //   - when idle with the crosshair on the canvas: a letter starts a command
     //     (AutoCAD-style command entry at the cursor).
     if (editor_) {
+        // Tab switches the active dynamic-input reference field (Length<->Angle,
+        // X radius<->Y radius, ...) even before the input box has been opened.
+        if (e->key() == Qt::Key_Tab && editor_->drawInputFieldLabels().size() > 1) {
+            editor_->cycleDrawInputField();
+            if (!dynInput_->isVisible()) showDynInput(QString());
+            dynInput_->setPlaceholderText(editor_->currentDrawFieldLabel());
+            e->accept();
+            return;
+        }
         const QString t = e->text();
         const bool cmdChar =
             !t.isEmpty() && (t[0].isLetterOrNumber() || t == "." || t == "-" || t == "@");

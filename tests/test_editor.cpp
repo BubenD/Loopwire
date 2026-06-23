@@ -379,6 +379,224 @@ int run_editor_tests() {
               "pline: Close appends the start point (loop closed)");
     }
 
+    // --- Picking a DRAW tool clears the selection; a MODIFY tool keeps it.
+    {
+        Document d; d.entities().clear();
+        Entity ln; ln.id = "l"; ln.type = EntityType::Line; ln.a = {0, 0}; ln.b = {10, 0};
+        d.entities().push_back(ln);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        check(ed.selection().size() == 1, "deselect-on-draw: object selected first");
+        ed.setTool(ToolId::Circle);
+        check(ed.selection().empty(), "deselect-on-draw: draw tool clears the selection");
+        ed.selectAll();
+        ed.setTool(ToolId::Move);
+        check(ed.selection().size() == 1, "deselect-on-draw: modify tool keeps the selection");
+    }
+
+    // --- Dynamic input reference fields (AutoCAD-style Tab cycling).
+    {
+        // Line segment: Length + Angle. Lock 50, Tab to Angle, lock 90 -> (0,50).
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Line);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const auto labels = ed.drawInputFieldLabels();
+        check(labels.size() == 2 && labels[0] == QStringLiteral("Length") &&
+                  labels[1] == QStringLiteral("Angle"),
+              "dynin: line offers Length + Angle");
+        ed.lockDrawField(QStringLiteral("50"));
+        ed.cycleDrawInputField(); // Tab -> Angle
+        check(ed.currentDrawFieldLabel() == QStringLiteral("Angle"), "dynin: Tab switches to Angle");
+        ed.lockDrawField(QStringLiteral("90"));
+        check(ed.commitDrawFields(), "dynin: commit consumed");
+        check(d.entities().size() == 1 && near(d.entities()[0].b.x, 0.0) &&
+                  near(d.entities()[0].b.y, 50.0),
+              "dynin: Length 50 @ Angle 90 -> (0,50)");
+    }
+    {
+        // Circle: a typed Radius builds the circle directly.
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setCircleMode(Editor::CircleMode::CenterRadius);
+        ed.setTool(ToolId::Circle);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // center
+        const auto labels = ed.drawInputFieldLabels();
+        check(labels.size() == 1 && labels[0] == QStringLiteral("Radius"), "dynin: circle offers Radius");
+        ed.lockDrawField(QStringLiteral("25"));
+        check(ed.commitDrawFields(), "dynin: circle commit");
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Circle &&
+                  near(d.entities()[0].radius, 25.0),
+              "dynin: typed Radius 25");
+    }
+    {
+        // Ellipse (3-point): axis via Length+Angle, then the other half-axis Distance.
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setEllipseMode(Editor::EllipseMode::Center);
+        ed.setTool(ToolId::Ellipse);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // center
+        auto labels = ed.drawInputFieldLabels();
+        check(labels.size() == 2 && labels[0] == QStringLiteral("Length") &&
+                  labels[1] == QStringLiteral("Angle"),
+              "dynin: ellipse axis = Length + Angle");
+        ed.lockDrawField(QStringLiteral("30"));   // axis length
+        ed.cycleDrawInputField();
+        ed.lockDrawField(QStringLiteral("0"));    // axis angle 0 -> axis along +X
+        check(ed.commitDrawFields(), "dynin: ellipse axis commit");
+        labels = ed.drawInputFieldLabels();
+        check(labels.size() == 1 && labels[0] == QStringLiteral("Distance"),
+              "dynin: ellipse minor = Distance");
+        ed.lockDrawField(QStringLiteral("10"));
+        check(ed.commitDrawFields(), "dynin: ellipse minor commit");
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Ellipse && near(e.radius, 30.0) && near(e.radiusY, 10.0) &&
+                  near(e.rotation, 0.0),
+              "dynin: ellipse a=30 b=10 rotation=0");
+    }
+
+    // --- Arc construction: a 3-point arc passes through the middle point (the
+    // renderer sweeps CCW, so start/end are ordered to cover the mid).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setArcMode(Editor::ArcMode::ThreePoint);
+        ed.setTool(ToolId::Arc);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);   // start
+        ed.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier);   // point on arc (upper)
+        ed.onPointerPress({-10, 0}, Qt::LeftButton, Qt::NoModifier);  // end
+        check(d.entities().size() == 1, "arc: created");
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Arc && near(e.center.x, 0.0) && near(e.center.y, 0.0) &&
+                  near(e.radius, 10.0),
+              "arc: center origin, radius 10");
+        // CCW from start(0) to end(pi) sweeps the UPPER half through (0,10).
+        check(near(e.startAngle, 0.0) && near(e.endAngle, M_PI), "arc: CCW spans the upper half");
+    }
+    {
+        // Same start/end but the on-arc point is BELOW: the sweep must flip so it
+        // covers the lower half (start/end swapped).
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setArcMode(Editor::ArcMode::ThreePoint);
+        ed.setTool(ToolId::Arc);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, -10}, Qt::LeftButton, Qt::NoModifier);  // lower
+        ed.onPointerPress({-10, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(near(e.startAngle, M_PI) && near(e.endAngle, 0.0),
+              "arc: flips to span the lower half through (0,-10)");
+    }
+    {
+        // "mi" mirror flips the arc to the opposite sweep (swaps start/end).
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setArcMode(Editor::ArcMode::ThreePoint);
+        ed.setTool(ToolId::Arc);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.acceptCommandInput(QStringLiteral("mi")), "arc-mirror: 'mi' consumed");
+        check(ed.isArcMirrored(), "arc-mirror: toggled on");
+        ed.onPointerPress({-10, 0}, Qt::LeftButton, Qt::NoModifier); // finishes
+        const Entity& e = d.entities()[0];
+        // Un-mirrored would be start=0,end=pi (upper). Mirrored swaps -> lower half.
+        check(near(e.startAngle, M_PI) && near(e.endAngle, 0.0),
+              "arc-mirror: mirrored arc takes the opposite half");
+    }
+
+    // --- Ellipse construction: a rotated ellipse keeps its first-axis angle.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setEllipseMode(Editor::EllipseMode::AxisEnd);
+        ed.setTool(ToolId::Ellipse);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // axis end 1
+        ed.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier);  // axis end 2 (vertical)
+        ed.onPointerPress({-3, 5}, Qt::LeftButton, Qt::NoModifier);  // other half-axis (perp dist 3)
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Ellipse && near(e.center.x, 0.0) && near(e.center.y, 5.0) &&
+                  near(e.radius, 5.0) && near(e.radiusY, 3.0) && near(e.rotation, M_PI / 2.0),
+              "ellipse: vertical axis -> a=5 b=3 rotation=90deg");
+    }
+
+    // --- Crossing region that merely TOUCHES a curve (circle ring) selects it.
+    {
+        Document d; d.entities().clear();
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 100;
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) { // c2.x<c1.x => crossing
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        };
+        regionSelect({40, 110}, {20, 90}); // straddles the ring near (31,95)
+        check(ed.selection().size() == 1, "crossing-curve: box touching the circle ring selects it");
+        regionSelect({40, 40}, {20, 20});  // well inside, far from ring and center
+        check(ed.selection().empty(), "crossing-curve: box not touching the ring does not select");
+    }
+
+    // --- Arc joints: dragging the start endpoint sets its angle (and radius).
+    {
+        Document d; d.entities().clear();
+        Entity a; a.id = "a"; a.type = EntityType::Arc; a.center = {0, 0}; a.radius = 10;
+        a.startAngle = 0.0; a.endAngle = M_PI / 2.0;
+        d.entities().push_back(a);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier); // start endpoint grip
+        ed.onPointerMove({0, -10});
+        ed.onPointerPress({0, -10}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Arc && near(e.radius, 10.0) && near(e.startAngle, -M_PI / 2.0),
+              "arc-grip: start endpoint drag sets angle + radius");
+    }
+
+    // --- Ellipse joints: dragging a major-axis endpoint sets size + rotation.
+    {
+        Document d; d.entities().clear();
+        Entity el; el.id = "e"; el.type = EntityType::Ellipse; el.center = {0, 0};
+        el.radius = 10; el.radiusY = 5; el.rotation = 0;
+        d.entities().push_back(el);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier); // major-axis endpoint grip
+        ed.onPointerMove({0, 20});
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Ellipse && near(e.radius, 20.0) && near(e.rotation, M_PI / 2.0),
+              "ellipse-grip: major axis follows the cursor (size + rotation)");
+    }
+
+    // --- Spline Fit vs CV: a CV spline records its mode; Fit is the default.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setSplineMode(Editor::SplineMode::CV);
+        ed.setTool(ToolId::Spline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier); // finish
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Spline &&
+                  d.entities()[0].meta.value("splineMode").toString() == QLatin1String("cv"),
+              "spline-mode: CV spline tagged 'cv'");
+
+        Document d2; d2.entities().clear();
+        Editor ed2; ed2.setDocument(&d2); noSnap(ed2);
+        ed2.setSplineMode(Editor::SplineMode::Fit);
+        ed2.setTool(ToolId::Spline);
+        ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d2.entities().size() == 1 &&
+                  d2.entities()[0].meta.value("splineMode").toString().isEmpty(),
+              "spline-mode: Fit spline has no cv tag (default)");
+    }
+
     // --- Editable properties: geometry + general (meta).
     {
         Document d; d.entities().clear();

@@ -116,8 +116,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
-    case EntityType::Polyline:
     case EntityType::Spline:
+        // Fit (default) passes through the points; CV is a B-spline shaped by them.
+        if (e.points.size() >= 3) {
+            const bool cv = e.meta.value("splineMode").toString() == QLatin1String("cv");
+            p.drawPolyline(toScreenPoly(cv ? bsplinePoints(e.points) : splinePoints(e.points), vt));
+        } else if (e.points.size() == 2) {
+            p.drawLine(vt.toScreen(e.points[0]), vt.toScreen(e.points[1]));
+        }
+        break;
+
+    case EntityType::Polyline:
         if (e.points.size() >= 2) {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) {

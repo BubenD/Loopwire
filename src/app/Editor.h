@@ -67,6 +67,18 @@ public:
         return drafting_ || isDrawTool(tool_) || gapInputMode_ || filletInputMode_;
     }
 
+    // Dynamic-input reference fields (AutoCAD-style). For the current draw step
+    // these are the typed references — line/segment: Length + Angle; circle:
+    // Radius or Diameter; ellipse: X radius + Y radius. Tab cycles the active
+    // field; a committed value feeds the next point. Empty when not applicable.
+    std::vector<QString> drawInputFieldLabels() const;
+    QString currentDrawFieldLabel() const;
+    int drawInputFieldIndex() const { return drawFieldIndex_; }
+    bool hasDrawInputFields() const { return !drawInputFieldLabels().empty(); }
+    void cycleDrawInputField();              // Tab: move to the next reference field
+    void lockDrawField(const QString& text); // store the typed value in the active field
+    bool commitDrawFields();                 // build the point from the fields and place it
+
     // Edit actions.
     void selectAll();
     void selectById(const QString& id, bool additive = false);
@@ -113,12 +125,21 @@ public:
     enum class CircleMode { CenterRadius, CenterDiameter, TwoPoint, ThreePoint };
     enum class ArcMode { ThreePoint, StartCenterEnd, CenterStartEnd, StartEndRadius };
     enum class EllipseMode { Center, AxisEnd, EllipticalArc };
+    // Spline construction: Fit passes through the points; CV (control vertices)
+    // is shaped by them (a B-spline).
+    enum class SplineMode { Fit, CV };
     void setCircleMode(CircleMode m) { circleMode_ = m; }
     void setArcMode(ArcMode m) { arcMode_ = m; }
     void setEllipseMode(EllipseMode m) { ellipseMode_ = m; }
+    void setSplineMode(SplineMode m) { splineMode_ = m; }
+    // Flip the arc being drawn to the opposite (mirrored) sweep — the "mi" option
+    // while the Arc tool is active (also offered in the canvas right-click menu).
+    void toggleArcMirror();
+    bool isArcMirrored() const { return arcMirror_; }
     CircleMode circleMode() const { return circleMode_; }
     ArcMode arcMode() const { return arcMode_; }
     EllipseMode ellipseMode() const { return ellipseMode_; }
+    SplineMode splineMode() const { return splineMode_; }
 
     // Number of sides for the polygon tool (typed before placing the center).
     void setPolygonSides(int n) { polygonSides_ = std::clamp(n, 3, 64); }
@@ -204,6 +225,9 @@ private:
     bool filletInputMode_ = false; // command line is awaiting a fillet radius ("f")
     double cornerRadius_ = 0.0;    // current polyline fillet radius (0 = sharp corners)
     QString pendingTextPos_; // serialized point while awaiting text input
+    // Dynamic-input reference fields for the active draw step (Tab cycles them).
+    int drawFieldIndex_ = 0;
+    std::vector<std::optional<double>> drawFieldVals_;
 
     // Region-selection state machine (Edraw model):
     //   first click on empty space -> RectPending (rubber-band rectangle),
@@ -257,6 +281,8 @@ private:
     CircleMode circleMode_ = CircleMode::CenterRadius;
     ArcMode arcMode_ = ArcMode::ThreePoint;
     EllipseMode ellipseMode_ = EllipseMode::Center;
+    SplineMode splineMode_ = SplineMode::Fit;
+    bool arcMirror_ = false; // arc being drawn is flipped to the opposite sweep
     int polygonSides_ = 6;        // hexagon by default
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered

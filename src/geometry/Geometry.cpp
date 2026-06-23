@@ -137,4 +137,61 @@ std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
     return out;
 }
 
+std::vector<Vec2> splinePoints(const std::vector<Vec2>& pts, int samplesPerSegment) {
+    const int n = static_cast<int>(pts.size());
+    if (n < 3) return pts;
+    const int seg = std::max(2, samplesPerSegment);
+    std::vector<Vec2> out;
+    out.reserve(static_cast<size_t>((n - 1) * seg + 1));
+    // Catmull-Rom through every point; duplicate the ends so the curve reaches them.
+    auto at = [&](int i) -> Vec2 { return pts[std::clamp(i, 0, n - 1)]; };
+    out.push_back(pts[0]);
+    for (int i = 0; i < n - 1; ++i) {
+        const Vec2 p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+        for (int s = 1; s <= seg; ++s) {
+            const double t = static_cast<double>(s) / seg;
+            const double t2 = t * t, t3 = t2 * t;
+            // Catmull-Rom basis (tension 0.5).
+            const double b0 = -0.5 * t3 + t2 - 0.5 * t;
+            const double b1 = 1.5 * t3 - 2.5 * t2 + 1.0;
+            const double b2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+            const double b3 = 0.5 * t3 - 0.5 * t2;
+            out.push_back({p0.x * b0 + p1.x * b1 + p2.x * b2 + p3.x * b3,
+                           p0.y * b0 + p1.y * b1 + p2.y * b2 + p3.y * b3});
+        }
+    }
+    return out;
+}
+
+std::vector<Vec2> bsplinePoints(const std::vector<Vec2>& ctrl, int samplesPerSegment) {
+    const int n = static_cast<int>(ctrl.size());
+    if (n < 3) return ctrl;
+    const int seg = std::max(2, samplesPerSegment);
+    // Clamp the ends by tripling the first and last control points so the curve
+    // starts and ends exactly on them (uniform cubic B-spline otherwise floats).
+    std::vector<Vec2> p;
+    p.reserve(n + 4);
+    p.push_back(ctrl.front());
+    p.push_back(ctrl.front());
+    for (const auto& c : ctrl) p.push_back(c);
+    p.push_back(ctrl.back());
+    p.push_back(ctrl.back());
+    std::vector<Vec2> out;
+    out.push_back(ctrl.front());
+    for (size_t i = 0; i + 3 < p.size(); ++i) {
+        for (int s = 1; s <= seg; ++s) {
+            const double t = static_cast<double>(s) / seg;
+            const double t2 = t * t, t3 = t2 * t;
+            const double ompt = 1.0 - t;
+            const double b0 = ompt * ompt * ompt / 6.0;
+            const double b1 = (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0;
+            const double b2 = (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0;
+            const double b3 = t3 / 6.0;
+            out.push_back({p[i].x * b0 + p[i + 1].x * b1 + p[i + 2].x * b2 + p[i + 3].x * b3,
+                           p[i].y * b0 + p[i + 1].y * b1 + p[i + 2].y * b2 + p[i + 3].y * b3});
+        }
+    }
+    return out;
+}
+
 } // namespace Edraw_Desktop

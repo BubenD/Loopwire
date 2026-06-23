@@ -57,4 +57,15 @@ inline Vec2 pointOnCircle(const Vec2& center, double radius, double angle) {
     return {center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};
 }
 
+// Smooth interpolating spline (Catmull-Rom) PASSING THROUGH the control points —
+// the "fit" spline. Returns a finely sampled polyline (the control points are
+// included). `samplesPerSegment` controls smoothness. <3 points: unchanged.
+std::vector<Vec2> splinePoints(const std::vector<Vec2>& pts, int samplesPerSegment = 16);
+
+// Clamped uniform cubic B-spline shaped by the control points (the "CV" spline):
+// it is pulled toward, but does NOT pass through, the interior control points; the
+// ends are clamped so it starts/ends at the first/last control point. <3 points:
+// unchanged.
+std::vector<Vec2> bsplinePoints(const std::vector<Vec2>& ctrl, int samplesPerSegment = 16);
+
 } // namespace Edraw_Desktop

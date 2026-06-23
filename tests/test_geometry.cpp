@@ -46,6 +46,31 @@ int run_geometry_tests() {
     b.expand({-3, 5});
     check(near(b.min.x, -3.0) && near(b.max.y, 5.0), "bounds expand");
 
+    // Spline: a smooth curve that passes through its control points.
+    {
+        std::vector<Vec2> ctrl = {{0, 0}, {10, 10}, {20, 0}};
+        auto curve = splinePoints(ctrl, 8);
+        check(curve.size() > ctrl.size(), "spline: tessellated into many points");
+        check(near(curve.front().x, 0.0) && near(curve.front().y, 0.0) &&
+                  near(curve.back().x, 20.0) && near(curve.back().y, 0.0),
+              "spline: passes through the endpoints");
+        // Fewer than 3 points: returned unchanged.
+        std::vector<Vec2> two = {{0, 0}, {5, 5}};
+        check(splinePoints(two).size() == 2, "spline: <3 points unchanged");
+
+        // CV B-spline: clamped to the endpoints, but pulled toward (not through) the
+        // interior control point.
+        auto cv = bsplinePoints(ctrl, 8);
+        check(cv.size() > ctrl.size(), "bspline: tessellated");
+        check(near(cv.front().x, 0.0) && near(cv.front().y, 0.0) &&
+                  near(cv.back().x, 20.0) && near(cv.back().y, 0.0),
+              "bspline: clamped to the endpoints");
+        // The apex stays below the control point (10,10) since CV doesn't interpolate it.
+        double maxY = 0;
+        for (const auto& q : cv) maxY = std::max(maxY, q.y);
+        check(maxY < 10.0 - 1e-3, "bspline: does not pass through interior control points");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

@@ -80,10 +80,13 @@ signals:
     // Emitted when the user commits text in the floating dynamic-input field
     // (value, coordinate, or command) — the host routes it like the command bar.
     void commandSubmitted(const QString& text);
+    // Right-click on the canvas: the host shows a context menu at this global pos.
+    void contextMenuRequested(const QPoint& globalPos);
 
 protected:
     void paintEvent(QPaintEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;

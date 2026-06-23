@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QPainter>
 #include <QPolygonF>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUuid>
 #include <QtMath>
@@ -36,11 +37,47 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
-enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius };
+enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
+                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor };
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
 // the cursor: e.a = target - off.
 struct Grip { Vec2 pos; GripRole role; int index; Vec2 off{0, 0}; };
+
+std::vector<Vec2> regularPolygonPoints(const Vec2& center, const Vec2& vertex, int sides, int vertexIndex = 0) {
+    const int n = std::clamp(sides, 3, 64);
+    const double r = distance(center, vertex);
+    const double a0 = std::atan2(vertex.y - center.y, vertex.x - center.x) -
+                      2.0 * M_PI * vertexIndex / n;
+    std::vector<Vec2> pts;
+    pts.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const double a = a0 + 2.0 * M_PI * i / n;
+        pts.push_back({center.x + r * std::cos(a), center.y + r * std::sin(a)});
+    }
+    return pts;
+}
+
+Vec2 polygonCenter(const std::vector<Vec2>& points) {
+    Vec2 c{0, 0};
+    if (points.empty()) return c;
+    for (const Vec2& p : points) c = c + p;
+    return c * (1.0 / static_cast<double>(points.size()));
+}
+
+void drawDraftValueBox(QPainter& p, const QPointF& at, const QString& label, const QColor& textColor) {
+    QFont f = p.font();
+    f.setPixelSize(12);
+    p.setFont(f);
+    const QFontMetricsF fm(f);
+    const QRectF box(at.x() + 14, at.y() - 28, fm.horizontalAdvance(label) + 10, 20);
+    p.setPen(QPen(QColor("#3a3320")));
+    p.setBrush(QColor(20, 24, 32, 220));
+    p.drawRect(box);
+    p.setPen(QPen(textColor));
+    p.drawText(box, Qt::AlignCenter, label);
+    p.setBrush(Qt::NoBrush);
+}
 
 std::vector<Grip> gripsOf(const Entity& e) {
     std::vector<Grip> g;
@@ -98,10 +135,30 @@ std::vector<Grip> gripsOf(const Entity& e) {
         g.push_back({{e.center.x, e.center.y + e.radius}, GripRole::Radius, 0});
         g.push_back({{e.center.x, e.center.y - e.radius}, GripRole::Radius, 0});
         break;
-    case EntityType::Arc:
-    case EntityType::Ellipse:
+    case EntityType::Arc: {
+        // Center + the two endpoints + the midpoint of the arc.
         g.push_back({e.center, GripRole::Center, 0});
+        g.push_back({pointOnCircle(e.center, e.radius, e.startAngle), GripRole::ArcStart, 0});
+        g.push_back({pointOnCircle(e.center, e.radius, e.endAngle), GripRole::ArcEnd, 0});
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * M_PI;
+        g.push_back({pointOnCircle(e.center, e.radius, e.startAngle + sweep / 2.0),
+                     GripRole::ArcMid, 0});
         break;
+    }
+    case EntityType::Ellipse: {
+        // Center + the four axis endpoints (rotated with the ellipse).
+        const double c = std::cos(e.rotation), s = std::sin(e.rotation);
+        auto axisPt = [&](double ax, double ay) {
+            return Vec2{e.center.x + ax * c - ay * s, e.center.y + ax * s + ay * c};
+        };
+        g.push_back({e.center, GripRole::Center, 0});
+        g.push_back({axisPt(e.radius, 0), GripRole::EllipseMajor, 0});
+        g.push_back({axisPt(-e.radius, 0), GripRole::EllipseMajor, 0});
+        g.push_back({axisPt(0, e.radiusY), GripRole::EllipseMinor, 0});
+        g.push_back({axisPt(0, -e.radiusY), GripRole::EllipseMinor, 0});
+        break;
+    }
     default: // text / splice / netlabel / notconnected / connector
         g.push_back({e.a, GripRole::Move, 0});
         break;
@@ -142,6 +199,12 @@ void Editor::setTool(ToolId t) {
     gapInputMode_ = false;
     filletInputMode_ = false;
     regionMode_ = RegionMode::None;
+    // Starting to draw/place a new primitive clears any current selection (its
+    // grips would otherwise linger). Modify tools keep the selection they act on.
+    if ((isDrawTool(t) || isPlacementTool(t)) && !selected_.empty()) {
+        selected_.clear();
+        emit selectionChanged();
+    }
     tool_ = t;
     if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
     emit toolChanged(t);
@@ -563,10 +626,17 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         break;
     }
     case EntityType::Polyline:
-    case EntityType::Spline:
     case EntityType::Wire:
         for (size_t i = 1; i < e.points.size(); ++i) segs.emplace_back(e.points[i - 1], e.points[i]);
         break;
+    case EntityType::Spline: {
+        // Tessellate the smooth curve so a crossing region that touches the drawn
+        // curve (not just the control polygon) selects it.
+        const bool cv = e.meta.value("splineMode").toString() == QLatin1String("cv");
+        const auto curve = cv ? bsplinePoints(e.points) : splinePoints(e.points);
+        for (size_t i = 1; i < curve.size(); ++i) segs.emplace_back(curve[i - 1], curve[i]);
+        break;
+    }
     case EntityType::Rect:
     case EntityType::Polygon:
     case EntityType::Hatch:
@@ -574,6 +644,44 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         for (size_t i = 0; i < e.points.size(); ++i)
             segs.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
         break;
+    case EntityType::Circle: {
+        // Tessellate the circle so touching the drawn ring selects it (crossing).
+        const int n = 48;
+        Vec2 prev = pointOnCircle(e.center, e.radius, 0.0);
+        for (int i = 1; i <= n; ++i) {
+            const Vec2 cur = pointOnCircle(e.center, e.radius, 2.0 * M_PI * i / n);
+            segs.emplace_back(prev, cur);
+            prev = cur;
+        }
+        break;
+    }
+    case EntityType::Arc: {
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * M_PI;
+        const int n = std::max(6, static_cast<int>(std::ceil(sweep / (M_PI / 24.0))));
+        Vec2 prev = pointOnCircle(e.center, e.radius, e.startAngle);
+        for (int i = 1; i <= n; ++i) {
+            const Vec2 cur = pointOnCircle(e.center, e.radius, e.startAngle + sweep * i / n);
+            segs.emplace_back(prev, cur);
+            prev = cur;
+        }
+        break;
+    }
+    case EntityType::Ellipse: {
+        const int n = 64;
+        const double c = std::cos(e.rotation), s = std::sin(e.rotation);
+        auto pt = [&](double t) -> Vec2 {
+            const double x = e.radius * std::cos(t), y = e.radiusY * std::sin(t);
+            return {e.center.x + x * c - y * s, e.center.y + x * s + y * c};
+        };
+        Vec2 prev = pt(0.0);
+        for (int i = 1; i <= n; ++i) {
+            const Vec2 cur = pt(2.0 * M_PI * i / n);
+            segs.emplace_back(prev, cur);
+            prev = cur;
+        }
+        break;
+    }
     default:
         break;
     }
@@ -745,7 +853,10 @@ bool Editor::beginGripGrab(const Vec2& at) {
                     editAnchor_ = e->points[gr.index - 1];
                 else if (gr.index == 0 && e->points.size() > 1)
                     editAnchor_ = e->points[1]; // first vertex -> next point
-            } else if (gr.role == GripRole::Radius || gr.role == GripRole::Center)
+            } else if (gr.role == GripRole::Radius || gr.role == GripRole::Center ||
+                       gr.role == GripRole::ArcStart || gr.role == GripRole::ArcEnd ||
+                       gr.role == GripRole::ArcMid || gr.role == GripRole::EllipseMajor ||
+                       gr.role == GripRole::EllipseMinor)
                 editAnchor_ = e->center;
             emit message(editGrips_.size() > 1
                              ? QStringLiteral("Shared joint grabbed (%1 objects) — click to place")
@@ -800,8 +911,13 @@ void Editor::applyEditDrag(const Vec2& target) {
             translateEntity(*e, delta);
             break;
         case GripRole::Vertex:
-            if (index >= 0 && index < static_cast<int>(e->points.size()))
-                e->points[index] = target;
+            if (index >= 0 && index < static_cast<int>(e->points.size())) {
+                if (e->type == EntityType::Polygon && e->points.size() >= 3)
+                    e->points = regularPolygonPoints(polygonCenter(e->points), target,
+                                                     static_cast<int>(e->points.size()), index);
+                else
+                    e->points[index] = target;
+            }
             break;
         case GripRole::RectCorner:
             if (e->points.size() == 4) {
@@ -830,6 +946,28 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Center: translateEntity(*e, delta); break;
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
         case GripRole::Move: translateEntity(*e, delta); break;
+        case GripRole::ArcStart:
+            e->radius = std::max(1e-6, distance(e->center, target));
+            e->startAngle = std::atan2(target.y - e->center.y, target.x - e->center.x);
+            break;
+        case GripRole::ArcEnd:
+            e->radius = std::max(1e-6, distance(e->center, target));
+            e->endAngle = std::atan2(target.y - e->center.y, target.x - e->center.x);
+            break;
+        case GripRole::ArcMid:
+            e->radius = std::max(1e-6, distance(e->center, target));
+            break;
+        case GripRole::EllipseMajor:
+            // The major axis follows the cursor: it sets both the semi-axis and rotation.
+            e->radius = std::max(1e-6, distance(e->center, target));
+            e->rotation = std::atan2(target.y - e->center.y, target.x - e->center.x);
+            break;
+        case GripRole::EllipseMinor: {
+            // The minor semi-axis is the cursor's distance along the perpendicular.
+            const Vec2 majorDir{std::cos(e->rotation), std::sin(e->rotation)};
+            e->radiusY = std::max(1e-6, std::abs(dot(target - e->center, majorDir.perp())));
+            break;
+        }
         }
     };
 
@@ -888,9 +1026,11 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (draftPts_.size() == (circleMode_ == CircleMode::ThreePoint ? 3u : 2u)) finishDraw();
         break;
     case ToolId::Ellipse:
+        // All modes are 3-point (AutoCAD): axis (two points or center+endpoint)
+        // then a distance for the other half-axis.
         draftPts_.push_back(p);
         drafting_ = true;
-        if (draftPts_.size() == (ellipseMode_ == EllipseMode::AxisEnd ? 3u : 2u)) finishDraw();
+        if (draftPts_.size() == 3) finishDraw();
         break;
     case ToolId::Arc:
         draftPts_.push_back(p);
@@ -914,8 +1054,100 @@ void Editor::handleDrawPress(const Vec2& p) {
     default:
         break;
     }
+    // The next step starts on a fresh set of reference fields.
+    drawFieldIndex_ = 0;
+    drawFieldVals_.clear();
     emit changed();
 }
+
+namespace {
+
+// Build an Arc from its construction points, set up so the renderer's CCW sweep
+// traces the intended arc (AutoCAD arcs go counter-clockwise from start to end).
+// For 3-point / start-end-bulge modes the middle point decides the direction.
+// Needs 3 points; returns nullopt if degenerate.
+std::optional<Entity> buildArcEntity(Editor::ArcMode mode, const std::vector<Vec2>& pts,
+                                     bool mirror = false) {
+    if (pts.size() < 3) return std::nullopt;
+    const Vec2 p0 = pts[0], p1 = pts[1], p2 = pts[2];
+    Entity e;
+    e.type = EntityType::Arc;
+    // start/end chosen so a CCW sweep from start to end passes through `mid`.
+    auto ccwThrough = [&](const Vec2& c, const Vec2& s, const Vec2& mid, const Vec2& en) {
+        e.center = c;
+        e.radius = distance(c, s);
+        auto norm = [](double a) {
+            const double t = 2.0 * M_PI;
+            a = std::fmod(a, t);
+            if (a < 0) a += t;
+            return a;
+        };
+        const double as = std::atan2(s.y - c.y, s.x - c.x);
+        const double ae = std::atan2(en.y - c.y, en.x - c.x);
+        const double am = std::atan2(mid.y - c.y, mid.x - c.x);
+        if (norm(am - as) <= norm(ae - as)) { e.startAngle = as; e.endAngle = ae; }
+        else { e.startAngle = ae; e.endAngle = as; }
+    };
+    switch (mode) {
+    case Editor::ArcMode::CenterStartEnd: // center, start, end (CCW start->end)
+        e.center = p0;
+        e.radius = distance(p0, p1);
+        e.startAngle = std::atan2(p1.y - p0.y, p1.x - p0.x);
+        e.endAngle = std::atan2(p2.y - p0.y, p2.x - p0.x);
+        break;
+    case Editor::ArcMode::StartCenterEnd: // start, center, end (CCW start->end)
+        e.center = p1;
+        e.radius = distance(p1, p0);
+        e.startAngle = std::atan2(p0.y - p1.y, p0.x - p1.x);
+        e.endAngle = std::atan2(p2.y - p1.y, p2.x - p1.x);
+        break;
+    case Editor::ArcMode::StartEndRadius: { // start, end, point-on-arc (bulge)
+        Vec2 cc; double rr = 0;
+        if (!circumcircle(p0, p2, p1, cc, rr)) return std::nullopt;
+        ccwThrough(cc, p0, p2, p1);
+        break;
+    }
+    case Editor::ArcMode::ThreePoint: { // start, point-on-arc, end
+        Vec2 cc; double rr = 0;
+        if (!circumcircle(p0, p1, p2, cc, rr)) return std::nullopt;
+        ccwThrough(cc, p0, p1, p2);
+        break;
+    }
+    }
+    if (e.radius < 1e-9) return std::nullopt;
+    // Mirror: take the complementary arc (the renderer sweeps CCW, so swapping the
+    // start/end angles flips the bulge to the opposite half).
+    if (mirror) std::swap(e.startAngle, e.endAngle);
+    return e;
+}
+
+// Build a (possibly rotated) Ellipse from its construction points, AutoCAD-style:
+//  - Center:        p0=center, p1=axis endpoint (half-axis a + rotation), p2=other half-axis.
+//  - Axis,End/Arc:  p0,p1=endpoints of axis 1, p2=distance for the other half-axis.
+// The first axis sets the rotation; the third point's perpendicular distance to
+// the center is the other semi-axis. Needs 3 points.
+std::optional<Entity> buildEllipseEntity(Editor::EllipseMode mode, const std::vector<Vec2>& pts) {
+    if (pts.size() < 3) return std::nullopt;
+    const Vec2 p0 = pts[0], p1 = pts[1], p2 = pts[2];
+    const Vec2 axis = p1 - p0;
+    const double axisLen = axis.length();
+    if (axisLen < 1e-9) return std::nullopt;
+    const Vec2 center = (mode == Editor::EllipseMode::Center) ? p0 : lerp(p0, p1, 0.5);
+    const double a = (mode == Editor::EllipseMode::Center) ? axisLen : axisLen / 2.0;
+    const Vec2 u = axis / axisLen;
+    const Vec2 n = u.perp();
+    const double b = std::abs(dot(p2 - center, n));
+    if (a < 1e-9 || b < 1e-9) return std::nullopt;
+    Entity e;
+    e.type = EntityType::Ellipse;
+    e.center = center;
+    e.radius = a;   // semi-axis along the rotated local X (the first axis)
+    e.radiusY = b;  // semi-axis along the rotated local Y
+    e.rotation = std::atan2(u.y, u.x);
+    return e;
+}
+
+} // namespace
 
 void Editor::finishDraw() {
     if (!doc_ || draftPts_.empty()) { cancelDraw(); return; }
@@ -949,14 +1181,8 @@ void Editor::finishDraw() {
         if (draftPts_.size() < 2) return;
         const Vec2 c = draftPts_[0];
         const Vec2 v = draftPts_[1];
-        const int n = polygonSides_; // set via the polygon sides input
-        const double r = distance(c, v);
-        const double a0 = std::atan2(v.y - c.y, v.x - c.x);
         e.type = EntityType::Polygon;
-        for (int i = 0; i < n; ++i) {
-            const double a = a0 + 2.0 * M_PI * i / n;
-            e.points.push_back({c.x + r * std::cos(a), c.y + r * std::sin(a)});
-        }
+        e.points = regularPolygonPoints(c, v, polygonSides_);
         break;
     }
     case ToolId::Circle:
@@ -991,58 +1217,27 @@ void Editor::finishDraw() {
         if (e.radius < 1e-9) { cancelDraw(); return; }
         break;
     case ToolId::Ellipse: {
-        if (draftPts_.size() < 2) return;
-        e.type = EntityType::Ellipse;
-        if (ellipseMode_ == EllipseMode::AxisEnd) {
-            if (draftPts_.size() < 3) return;
-            // p0,p1 = endpoints of one (axis-aligned) axis; p2 = other radius.
-            e.center = lerp(draftPts_[0], draftPts_[1], 0.5);
-            e.radius = distance(draftPts_[0], draftPts_[1]) / 2.0;
-            e.radiusY = distance(e.center, draftPts_[2]);
-        } else {
-            // Center / Elliptical Arc: center + corner -> rx, ry.
-            e.center = draftPts_[0];
-            e.radius = std::abs(draftPts_[1].x - draftPts_[0].x);
-            e.radiusY = std::abs(draftPts_[1].y - draftPts_[0].y);
+        if (auto el = buildEllipseEntity(ellipseMode_, draftPts_)) {
+            const QString layer = e.layer;
+            e = *el;
+            e.layer = layer;
             if (ellipseMode_ == EllipseMode::EllipticalArc)
                 emit message(QStringLiteral("Elliptical arc: drawn as a full ellipse"));
+        } else {
+            cancelDraw();
+            return;
         }
-        if (e.radius < 1e-9 || e.radiusY < 1e-9) { cancelDraw(); return; }
         break;
     }
     case ToolId::Arc: {
-        if (draftPts_.size() < 3) return;
-        e.type = EntityType::Arc;
-        const Vec2 p0 = draftPts_[0], p1 = draftPts_[1], p2 = draftPts_[2];
-        auto fromCenter = [&](const Vec2& c, const Vec2& s, const Vec2& en) {
-            e.center = c;
-            e.radius = distance(c, s);
-            e.startAngle = std::atan2(s.y - c.y, s.x - c.x);
-            e.endAngle = std::atan2(en.y - c.y, en.x - c.x);
-        };
-        switch (arcMode_) {
-        case ArcMode::CenterStartEnd:
-            fromCenter(p0, p1, p2); // center, start, end
-            break;
-        case ArcMode::StartCenterEnd:
-            fromCenter(p1, p0, p2); // start, center, end
-            break;
-        case ArcMode::StartEndRadius: {
-            // p0=start, p1=end, p2 sets the bulge/radius (point on the arc).
-            Vec2 cc; double rr = 0;
-            if (!circumcircle(p0, p2, p1, cc, rr)) { cancelDraw(); return; }
-            fromCenter(cc, p0, p1);
-            break;
+        if (auto ar = buildArcEntity(arcMode_, draftPts_, arcMirror_)) {
+            const QString layer = e.layer;
+            e = *ar;
+            e.layer = layer;
+        } else {
+            cancelDraw();
+            return;
         }
-        case ArcMode::ThreePoint: {
-            // p0=start, p1=point on arc, p2=end.
-            Vec2 cc; double rr = 0;
-            if (!circumcircle(p0, p1, p2, cc, rr)) { cancelDraw(); return; }
-            fromCenter(cc, p0, p2);
-            break;
-        }
-        }
-        if (e.radius < 1e-9) { cancelDraw(); return; }
         break;
     }
     case ToolId::Polyline:
@@ -1057,6 +1252,8 @@ void Editor::finishDraw() {
         }
         if (e.type == EntityType::Polyline && cornerRadius_ > 0.0)
             e.meta.insert("cornerRadius", cornerRadius_);
+        if (e.type == EntityType::Spline && splineMode_ == SplineMode::CV)
+            e.meta.insert("splineMode", QStringLiteral("cv")); // else Fit (default)
         break;
     case ToolId::Wire:
         if (draftPts_.size() < 2) { cancelDraw(); return; }
@@ -1085,6 +1282,16 @@ void Editor::cancelDraw() {
     draftPts_.clear();
     drafting_ = false;
     rectAwaitY_ = false;
+    drawFieldIndex_ = 0;
+    drawFieldVals_.clear();
+    arcMirror_ = false;
+}
+
+void Editor::toggleArcMirror() {
+    arcMirror_ = !arcMirror_;
+    emit message(arcMirror_ ? QStringLiteral("Arc mirrored — drawing the opposite sweep")
+                            : QStringLiteral("Arc mirror off"));
+    emit overlayChanged();
 }
 
 bool Editor::applyDrawInput(const QString& text) {
@@ -1124,9 +1331,137 @@ bool Editor::applyDrawInput(const QString& text) {
     return true;
 }
 
+std::vector<QString> Editor::drawInputFieldLabels() const {
+    switch (tool_) {
+    case ToolId::Line:
+    case ToolId::DoubleLine:
+    case ToolId::Polyline:
+    case ToolId::DoublePolyline:
+    case ToolId::Spline:
+    case ToolId::Wire:
+    case ToolId::Dimension:
+        // A segment from the last point: length + angle.
+        if (drafting_ && !draftPts_.empty())
+            return {QStringLiteral("Length"), QStringLiteral("Angle")};
+        return {};
+    case ToolId::Circle:
+        if (drafting_ && draftPts_.size() == 1) {
+            if (circleMode_ == CircleMode::CenterDiameter || circleMode_ == CircleMode::TwoPoint)
+                return {QStringLiteral("Diameter")};
+            if (circleMode_ == CircleMode::CenterRadius)
+                return {QStringLiteral("Radius")};
+        }
+        return {};
+    case ToolId::Ellipse:
+        // Step 1 defines the first axis (length + angle); step 2 the other half-axis.
+        if (drafting_ && draftPts_.size() == 1)
+            return {QStringLiteral("Length"), QStringLiteral("Angle")};
+        if (drafting_ && draftPts_.size() == 2)
+            return {QStringLiteral("Distance")};
+        return {};
+    default:
+        return {};
+    }
+}
+
+QString Editor::currentDrawFieldLabel() const {
+    const auto labels = drawInputFieldLabels();
+    if (labels.empty()) return QString();
+    return labels[std::clamp(drawFieldIndex_, 0, static_cast<int>(labels.size()) - 1)];
+}
+
+void Editor::cycleDrawInputField() {
+    const auto labels = drawInputFieldLabels();
+    if (labels.size() < 2) return; // nothing to switch between
+    drawFieldIndex_ = (drawFieldIndex_ + 1) % static_cast<int>(labels.size());
+    emit message(QStringLiteral("%1:").arg(currentDrawFieldLabel()));
+    emit overlayChanged();
+}
+
+void Editor::lockDrawField(const QString& text) {
+    const auto labels = drawInputFieldLabels();
+    if (labels.empty()) return;
+    if (static_cast<int>(drawFieldVals_.size()) != static_cast<int>(labels.size()))
+        drawFieldVals_.assign(labels.size(), std::nullopt);
+    bool ok = false;
+    const double v = text.trimmed().toDouble(&ok);
+    if (ok && drawFieldIndex_ >= 0 && drawFieldIndex_ < static_cast<int>(drawFieldVals_.size()))
+        drawFieldVals_[drawFieldIndex_] = v;
+}
+
+bool Editor::commitDrawFields() {
+    const auto labels = drawInputFieldLabels();
+    if (labels.empty()) return false;
+    if (static_cast<int>(drawFieldVals_.size()) != static_cast<int>(labels.size()))
+        drawFieldVals_.assign(labels.size(), std::nullopt);
+
+    Vec2 target;
+    switch (tool_) {
+    case ToolId::Line:
+    case ToolId::DoubleLine:
+    case ToolId::Polyline:
+    case ToolId::DoublePolyline:
+    case ToolId::Spline:
+    case ToolId::Wire:
+    case ToolId::Dimension: {
+        const Vec2 base = draftPts_.back();
+        const Vec2 d = cursor_ - base;
+        const double len = drawFieldVals_[0].value_or(d.length());
+        const double angDeg = drawFieldVals_[1].value_or(std::atan2(d.y, d.x) * 180.0 / M_PI);
+        const double a = angDeg * M_PI / 180.0;
+        target = {base.x + len * std::cos(a), base.y + len * std::sin(a)};
+        break;
+    }
+    case ToolId::Circle: {
+        const Vec2 c = draftPts_[0];
+        const Vec2 d = cursor_ - c;
+        const double dl = d.length();
+        const Vec2 dir = dl > 1e-9 ? d / dl : Vec2{1, 0};
+        // The typed value is the radius/diameter; placing the point at that
+        // distance lets finishDraw derive the correct radius for the mode.
+        target = c + dir * drawFieldVals_[0].value_or(dl);
+        break;
+    }
+    case ToolId::Ellipse: {
+        if (draftPts_.size() == 1) {
+            // Defining the first axis endpoint: length + angle from the first point.
+            const Vec2 base = draftPts_[0];
+            const Vec2 d = cursor_ - base;
+            const double len = drawFieldVals_[0].value_or(d.length());
+            const double angDeg = drawFieldVals_[1].value_or(std::atan2(d.y, d.x) * 180.0 / M_PI);
+            const double a = angDeg * M_PI / 180.0;
+            target = {base.x + len * std::cos(a), base.y + len * std::sin(a)};
+        } else {
+            // Other half-axis: distance along the perpendicular to the first axis.
+            const Vec2 p0 = draftPts_[0], p1 = draftPts_[1];
+            const Vec2 center = (ellipseMode_ == EllipseMode::Center) ? p0 : lerp(p0, p1, 0.5);
+            const Vec2 ax = p1 - p0;
+            const Vec2 nrm = ax.lengthSq() > 1e-18 ? ax.normalized().perp() : Vec2{0, 1};
+            const double defB = std::abs(dot(cursor_ - center, nrm));
+            const double b = drawFieldVals_[0].value_or(defB);
+            const double s = dot(cursor_ - center, nrm) >= 0 ? 1.0 : -1.0;
+            target = center + nrm * (s * b);
+        }
+        break;
+    }
+    default:
+        return false;
+    }
+    handleDrawPress(target); // places the point/finishes; also resets the fields
+    return true;
+}
+
 bool Editor::acceptCommandInput(const QString& text) {
     const QString t = text.trimmed();
     if (t.isEmpty()) return false;
+
+    // "mi" / "mirror" flips the arc being drawn to the opposite sweep.
+    if (tool_ == ToolId::Arc &&
+        (t.compare(QStringLiteral("mi"), Qt::CaseInsensitive) == 0 ||
+         t.compare(QStringLiteral("mirror"), Qt::CaseInsensitive) == 0)) {
+        toggleArcMirror();
+        return true;
+    }
 
     // Polygon: a whole number typed before the centre is placed sets the side count.
     if (tool_ == ToolId::Polygon && draftPts_.empty() && !t.contains(',')) {
@@ -1135,6 +1470,48 @@ bool Editor::acceptCommandInput(const QString& text) {
         if (ok && n >= 3) {
             setPolygonSides(n);
             emit message(QStringLiteral("Polygon sides: %1 — pick the centre").arg(polygonSides_));
+            return true;
+        }
+    }
+
+    // Circle dimension entry while the first reference point is placed:
+    //   Center/Radius:   bare number = radius, "D n" = diameter
+    //   Center/Diameter: bare number = diameter, "R n" = radius
+    //   2-Point:         bare number = diameter, "R n" = radius
+    if (tool_ == ToolId::Circle && drafting_ && draftPts_.size() == 1 &&
+        circleMode_ != CircleMode::ThreePoint && !t.contains(',')) {
+        QString vtxt = t;
+        bool forceRadius = false;
+        bool forceDiameter = false;
+        const QRegularExpressionMatch m =
+            QRegularExpression(QStringLiteral("^([rRdD])\\s*[:=]?\\s*(.+)$")).match(t);
+        if (m.hasMatch()) {
+            const QString prefix = m.captured(1).toLower();
+            forceRadius = prefix == QStringLiteral("r");
+            forceDiameter = prefix == QStringLiteral("d");
+            vtxt = m.captured(2).trimmed();
+        }
+        bool ok = false;
+        const double value = std::abs(vtxt.toDouble(&ok));
+        if (ok && value > 0) {
+            Vec2 dir = cursor_ - draftPts_[0];
+            const double len = dir.length();
+            if (len < 1e-9) {
+                emit message(QStringLiteral("Move the cursor to set circle direction, then type radius or diameter"));
+                return true;
+            }
+            dir = dir / len;
+            double targetDistance = value;
+            if (forceRadius) targetDistance = value * 2.0;
+            else if (forceDiameter) targetDistance = value;
+            else if (circleMode_ == CircleMode::CenterRadius) targetDistance = value;
+            else targetDistance = value; // Center/Diameter and 2-Point use diameter distance.
+
+            if (circleMode_ == CircleMode::CenterRadius && forceRadius) targetDistance = value;
+            if (circleMode_ == CircleMode::CenterRadius && forceDiameter) targetDistance = value / 2.0;
+            if (circleMode_ == CircleMode::CenterDiameter && forceRadius) targetDistance = value * 2.0;
+            if (circleMode_ == CircleMode::TwoPoint && forceRadius) targetDistance = value * 2.0;
+            handleDrawPress(draftPts_[0] + dir * targetDistance);
             return true;
         }
     }
@@ -1240,6 +1617,18 @@ bool Editor::acceptCommandInput(const QString& text) {
             }
             emit overlayChanged();
             return true;
+        }
+    }
+
+    // Typed reference value for the active dynamic-input field (Length/Angle,
+    // Radius, Diameter, X/Y radius): a bare number feeds the current field and
+    // builds the point. Coordinate entry ("x,y"/"@dx,dy") still falls through.
+    if (drafting_ && !t.contains(',') && hasDrawInputFields()) {
+        bool ok = false;
+        t.toDouble(&ok);
+        if (ok) {
+            lockDrawField(t);
+            if (commitDrawFields()) return true;
         }
     }
 
@@ -1923,6 +2312,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& v : {Vec2{a.x, a.y}, Vec2{b.x, a.y}, Vec2{b.x, b.y}, Vec2{a.x, b.y}})
                 poly << vt.toScreen(v);
             p.drawPolygon(poly);
+        } else if (tool_ == ToolId::Polygon && pts.size() >= 2) {
+            QPolygonF poly;
+            for (const Vec2& v : regularPolygonPoints(pts[0], pts[1], polygonSides_))
+                poly << vt.toScreen(v);
+            p.drawPolygon(poly);
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 off = (pts[1] - pts[0]).normalized().perp() * (doubleLineGap_ / 2.0);
             p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
@@ -1939,11 +2333,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else if (tool_ == ToolId::Circle) {
             QPointF cc;
             double r = 0;
+            Vec2 centerWorld;
+            double radiusWorld = 0;
             bool ok = false;
             if (circleMode_ == CircleMode::ThreePoint) {
                 if (pts.size() >= 3) {
                     Vec2 c2; double rr = 0;
                     if (circumcircle(pts[0], pts[1], pts[2], c2, rr)) {
+                        centerWorld = c2; radiusWorld = rr;
                         cc = vt.toScreen(c2); r = rr * vt.scale(); ok = true;
                     }
                 }
@@ -1956,14 +2353,50 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 } else { // TwoPoint
                     center = lerp(pts[0], pts[1], 0.5); rr = distance(pts[0], pts[1]) / 2.0;
                 }
+                centerWorld = center; radiusWorld = rr;
                 cc = vt.toScreen(center); r = rr * vt.scale(); ok = true;
             }
-            if (ok) p.drawEllipse(cc, r, r);
+            if (ok) {
+                p.drawEllipse(cc, r, r);
+                p.drawLine(cc, vt.toScreen(pts.back()));
+                const QString valueLabel =
+                    QStringLiteral("R %1  D %2").arg(radiusWorld, 0, 'f', 2)
+                                                .arg(radiusWorld * 2.0, 0, 'f', 2);
+                const QPointF labelAt = vt.toScreen(centerWorld + Vec2{radiusWorld, 0});
+                drawDraftValueBox(p, labelAt, valueLabel, QColor("#ffd166"));
+            }
             else {
                 QPolygonF poly;
                 for (const auto& v : pts) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
+        } else if (tool_ == ToolId::Arc) {
+            // Live arc preview built from the placed points + the cursor.
+            if (auto a = buildArcEntity(arcMode_, pts, arcMirror_)) {
+                EntityRenderer::draw(p, *a, *doc_, vt, QColor("#ffffff"));
+            } else {
+                QPolygonF poly;
+                for (const auto& v : pts) poly << vt.toScreen(v);
+                p.drawPolyline(poly);
+            }
+        } else if (tool_ == ToolId::Ellipse) {
+            // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
+            if (auto el = buildEllipseEntity(ellipseMode_, pts)) {
+                EntityRenderer::draw(p, *el, *doc_, vt, QColor("#ffffff"));
+            } else {
+                QPolygonF poly;
+                for (const auto& v : pts) poly << vt.toScreen(v);
+                p.drawPolyline(poly);
+            }
+        } else if (tool_ == ToolId::Spline) {
+            // Live spline preview: the actual fit (through points) or CV curve.
+            const std::vector<Vec2> curve =
+                (pts.size() >= 3)
+                    ? (splineMode_ == SplineMode::CV ? bsplinePoints(pts) : splinePoints(pts))
+                    : pts;
+            QPolygonF poly;
+            for (const auto& v : curve) poly << vt.toScreen(v);
+            p.drawPolyline(poly);
         } else {
             const std::vector<Vec2> show =
                 (tool_ == ToolId::Polyline && cornerRadius_ > 0)
