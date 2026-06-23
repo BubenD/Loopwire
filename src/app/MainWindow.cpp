@@ -25,6 +25,7 @@
 #include <QComboBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QFontComboBox>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -33,6 +34,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QCloseEvent>
@@ -105,6 +107,7 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
     case ToolId::Ellipse: p.drawEllipse(QPointF(12, 12), 8, 5); break;
     case ToolId::Spline: { QPainterPath pa; pa.moveTo(4, 16); pa.cubicTo(8, 2, 16, 22, 20, 8); p.drawPath(pa); break; }
     case ToolId::Text: { QFont f = p.font(); f.setPixelSize(16); f.setBold(true); p.setFont(f); p.drawText(pm.rect(), Qt::AlignCenter, "A"); break; }
+    case ToolId::MText: { QFont f = p.font(); f.setPixelSize(11); f.setBold(true); p.setFont(f); p.drawText(QRect(2, 2, 20, 20), Qt::AlignLeft | Qt::AlignTop, "A"); p.drawLine(9, 8, 20, 8); p.drawLine(5, 14, 20, 14); p.drawLine(5, 19, 20, 19); break; }
     case ToolId::Dimension: p.drawLine(5, 12, 19, 12); p.drawLine(5, 8, 5, 16); p.drawLine(19, 8, 19, 16); break;
     case ToolId::Move: p.drawLine(12, 4, 12, 20); p.drawLine(4, 12, 20, 12); p.drawLine(12, 4, 9, 7); p.drawLine(12, 4, 15, 7); p.drawLine(4, 12, 7, 9); p.drawLine(4, 12, 7, 15); break;
     case ToolId::Rotate: { QPainterPath pa; pa.moveTo(18, 8); pa.arcTo(5, 5, 14, 14, 40, 280); p.drawPath(pa); p.drawLine(18, 8, 15, 7); p.drawLine(18, 8, 19, 11); break; }
@@ -899,11 +902,32 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
-    connect(editor_, &Editor::textPromptRequested, this, [this](const QString& prompt) {
-        bool ok = false;
-        const QString text = QInputDialog::getText(this, QStringLiteral("Edraw"), prompt,
-                                                   QLineEdit::Normal, QString(), &ok);
-        editor_->provideText(ok ? text : QString());
+    connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
+        // Rich text editor: multiline for the MText tool, single-line for Text.
+        const bool multiline = editor_->tool() == ToolId::MText;
+        QString text;
+        double size = 5.0;
+        QString font;
+        bool bold = false, italic = false;
+        if (showTextDialog(multiline, text, size, font, bold, italic) && !text.isEmpty())
+            editor_->commitText(text, size, font, bold, italic);
+        else
+            editor_->commitText(QString(), size, font, bold, italic); // cancel: clears the pending point
+    });
+    connect(editor_, &Editor::editTextRequested, this, [this](const QString& id) {
+        if (!doc_) return;
+        const Entity* found = nullptr;
+        for (const auto& e : doc_->entities())
+            if (e.id == id) { found = &e; break; }
+        if (!found) return;
+        QString text = found->meta.value(QStringLiteral("text")).toString();
+        double size = found->meta.value(QStringLiteral("size")).toDouble(5.0);
+        QString font = found->meta.value(QStringLiteral("font")).toString();
+        bool bold = found->meta.value(QStringLiteral("bold")).toBool();
+        bool italic = found->meta.value(QStringLiteral("italic")).toBool();
+        const bool multiline = text.contains(QLatin1Char('\n'));
+        if (showTextDialog(multiline, text, size, font, bold, italic))
+            editor_->applyTextEdit(id, text, size, font, bold, italic);
     });
 
     // Restore saved drafting/snap preferences before the status toggles are built
@@ -1144,7 +1168,7 @@ void MainWindow::buildRibbon() {
                  toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
                           ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                           ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Text,
-                          ToolId::Polygon}));
+                          ToolId::MText, ToolId::Polygon}));
         addGroup(lay, QStringLiteral("Modify"),
                  toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                           ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
@@ -1916,6 +1940,98 @@ void MainWindow::applyTheme(bool dark) {
 }
 
 // ---- About dialog ----------------------------------------------------------
+
+bool MainWindow::showTextDialog(bool multiline, QString& text, double& size, QString& font,
+                                bool& bold, bool& italic) {
+    QDialog dlg(this);
+    dlg.setWindowTitle(multiline ? QStringLiteral("Multiline text") : QStringLiteral("Text"));
+    dlg.setMinimumWidth(420);
+    auto* lay = new QVBoxLayout(&dlg);
+
+    // Font / size / style row.
+    auto* row = new QHBoxLayout();
+    auto* fontCombo = new QFontComboBox(&dlg);
+    if (!font.isEmpty()) fontCombo->setCurrentFont(QFont(font));
+    auto* sizeSpin = new QDoubleSpinBox(&dlg);
+    sizeSpin->setRange(0.1, 1000.0);
+    sizeSpin->setDecimals(2);
+    sizeSpin->setValue(size > 0 ? size : 5.0);
+    sizeSpin->setPrefix(QStringLiteral("H "));
+    auto* boldBtn = new QToolButton(&dlg);
+    boldBtn->setText(QStringLiteral("B"));
+    boldBtn->setCheckable(true);
+    boldBtn->setChecked(bold);
+    { QFont bf = boldBtn->font(); bf.setBold(true); boldBtn->setFont(bf); }
+    auto* italicBtn = new QToolButton(&dlg);
+    italicBtn->setText(QStringLiteral("I"));
+    italicBtn->setCheckable(true);
+    italicBtn->setChecked(italic);
+    { QFont itf = italicBtn->font(); itf.setItalic(true); italicBtn->setFont(itf); }
+    row->addWidget(fontCombo, 1);
+    row->addWidget(sizeSpin);
+    row->addWidget(boldBtn);
+    row->addWidget(italicBtn);
+    lay->addLayout(row);
+
+    // Text body (multiline or single line).
+    auto* edit = new QPlainTextEdit(&dlg);
+    edit->setPlainText(text);
+    if (!multiline) edit->setFixedHeight(40);
+    else edit->setMinimumHeight(120);
+    lay->addWidget(edit);
+
+    // Case conversion buttons.
+    auto* caseRow = new QHBoxLayout();
+    auto* upBtn = new QPushButton(QStringLiteral("UPPERCASE"), &dlg);
+    auto* loBtn = new QPushButton(QStringLiteral("lowercase"), &dlg);
+    auto* titleBtn = new QPushButton(QStringLiteral("Title Case"), &dlg);
+    connect(upBtn, &QPushButton::clicked, &dlg,
+            [edit] { edit->setPlainText(edit->toPlainText().toUpper()); });
+    connect(loBtn, &QPushButton::clicked, &dlg,
+            [edit] { edit->setPlainText(edit->toPlainText().toLower()); });
+    connect(titleBtn, &QPushButton::clicked, &dlg, [edit] {
+        const QStringList words = edit->toPlainText().toLower().split(QLatin1Char(' '));
+        QStringList out;
+        for (QString w : words) {
+            if (!w.isEmpty()) w[0] = w[0].toUpper();
+            out << w;
+        }
+        edit->setPlainText(out.join(QLatin1Char(' ')));
+    });
+    caseRow->addWidget(upBtn);
+    caseRow->addWidget(loBtn);
+    caseRow->addWidget(titleBtn);
+    caseRow->addStretch();
+    lay->addLayout(caseRow);
+
+    // A live font preview applied to the editor itself.
+    auto applyPreview = [edit, fontCombo, boldBtn, italicBtn] {
+        QFont pf = fontCombo->currentFont();
+        pf.setBold(boldBtn->isChecked());
+        pf.setItalic(italicBtn->isChecked());
+        pf.setPointSize(12);
+        edit->setFont(pf);
+    };
+    applyPreview();
+    connect(fontCombo, &QFontComboBox::currentFontChanged, &dlg, [applyPreview] { applyPreview(); });
+    connect(boldBtn, &QToolButton::toggled, &dlg, [applyPreview] { applyPreview(); });
+    connect(italicBtn, &QToolButton::toggled, &dlg, [applyPreview] { applyPreview(); });
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+
+    edit->setFocus();
+    if (dlg.exec() != QDialog::Accepted) return false;
+    text = edit->toPlainText();
+    if (!multiline) text.replace(QLatin1Char('\n'), QLatin1Char(' ')); // single line stays one line
+    size = sizeSpin->value();
+    font = fontCombo->currentFont().family();
+    bold = boldBtn->isChecked();
+    italic = italicBtn->isChecked();
+    return true;
+}
 
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     if (!editor_) return;

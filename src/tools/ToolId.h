@@ -20,6 +20,7 @@ enum class ToolId {
     Ellipse,
     Spline,
     Text,
+    MText,
     Dimension,
     // Harness
     Wire,
@@ -58,6 +59,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Ellipse:
     case ToolId::Spline:
     case ToolId::Text:
+    case ToolId::MText:
     case ToolId::Dimension:
     case ToolId::Wire:
         return true;
@@ -86,6 +88,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Ellipse: return QStringLiteral("Ellipse");
     case ToolId::Spline: return QStringLiteral("Spline");
     case ToolId::Text: return QStringLiteral("Text");
+    case ToolId::MText: return QStringLiteral("Multiline text");
     case ToolId::Dimension: return QStringLiteral("Dimension");
     case ToolId::Wire: return QStringLiteral("Wire");
     case ToolId::Connector: return QStringLiteral("Connector");

@@ -51,6 +51,12 @@ public:
 
     // Command-bar / dialog text completion (e.g. typed numeric value, text).
     void provideText(const QString& text);
+    // Place a styled text/mtext entity at the pending click position; `text` may
+    // contain newlines for multiline. Empty `text` cancels.
+    void commitText(const QString& text, double size, const QString& font, bool bold, bool italic);
+    // Update an existing text entity's content/style (used by double-click edit).
+    void applyTextEdit(const QString& id, const QString& text, double size,
+                       const QString& font, bool bold, bool italic);
 
     // Direct distance entry while a line/polyline/etc. is being drawn: a bare
     // number places the next point at that distance along the cursor direction;
@@ -189,6 +195,8 @@ signals:
     void message(const QString& text);
     // Tool needs free-text/numeric input (prompt shown by the host UI).
     void textPromptRequested(const QString& prompt);
+    // Double-clicked an existing text object — the host opens the editor for it.
+    void editTextRequested(const QString& id);
     // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.

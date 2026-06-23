@@ -988,10 +988,18 @@ void Editor::applyEditDrag(const Vec2& target) {
     doc_->setDirty(true);
 }
 
-void Editor::onDoubleClick(const Vec2&) {
+void Editor::onDoubleClick(const Vec2& world) {
     if (drafting_ && (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline ||
-                      tool_ == ToolId::Spline || tool_ == ToolId::Wire))
+                      tool_ == ToolId::Spline || tool_ == ToolId::Wire)) {
         finishDraw();
+        return;
+    }
+    // Double-click a text object (while idle) to re-open its editor.
+    if (tool_ == ToolId::Select) {
+        if (auto hit = hitTest(world))
+            if (Entity* e = entityById(*hit); e && e->type == EntityType::Text)
+                emit editTextRequested(*hit);
+    }
 }
 
 // ---- Draw tools ------------------------------------------------------------
@@ -1068,6 +1076,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         break;
     }
     case ToolId::Text:
+    case ToolId::MText:
         draftPts_ = {p};
         emit textPromptRequested(QStringLiteral("Text:"));
         break;
@@ -1961,19 +1970,53 @@ bool Editor::acceptCommandInput(const QString& text) {
 }
 
 void Editor::provideText(const QString& text) {
-    if (tool_ == ToolId::Text && !draftPts_.empty() && !text.isEmpty()) {
+    commitText(text, 5.0, QString(), false, false);
+}
+
+void Editor::commitText(const QString& text, double size, const QString& font, bool bold,
+                        bool italic) {
+    if ((tool_ == ToolId::Text || tool_ == ToolId::MText) && !draftPts_.empty() &&
+        !text.isEmpty()) {
         Entity e;
         e.type = EntityType::Text;
         e.layer = doc_->activeLayer();
         e.a = draftPts_[0];
         e.meta.insert("text", text);
-        e.meta.insert("size", 5.0);
+        e.meta.insert("size", size > 0 ? size : 5.0);
+        if (!font.isEmpty()) e.meta.insert("font", font);
+        if (bold) e.meta.insert("bold", true);
+        if (italic) e.meta.insert("italic", true);
         pushUndo();
         addEntity(std::move(e));
     }
     draftPts_.clear();
     emit changed();
     setTool(ToolId::Select); // return to Select after placing text
+}
+
+void Editor::applyTextEdit(const QString& id, const QString& text, double size,
+                           const QString& font, bool bold, bool italic) {
+    Entity* e = entityById(id);
+    if (!e || e->type != EntityType::Text) return;
+    pushUndo();
+    if (text.isEmpty()) {
+        // Cleared -> delete the text object.
+        auto& ents = doc_->entities();
+        ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                  [&](const Entity& x) { return x.id == id; }),
+                   ents.end());
+        selected_.clear();
+        emit selectionChanged();
+        emit changed();
+        return;
+    }
+    e->meta.insert("text", text);
+    e->meta.insert("size", size > 0 ? size : 5.0);
+    e->meta.insert("font", font);
+    e->meta.insert("bold", bold);
+    e->meta.insert("italic", italic);
+    doc_->setDirty(true);
+    emit changed();
 }
 
 // ---- Modify tools (interactive, reference-point based) ---------------------

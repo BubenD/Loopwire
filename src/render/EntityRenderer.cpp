@@ -202,15 +202,32 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Text: {
         const QString text = e.meta.value("text").toString();
+        if (text.isEmpty()) break;
         const double heightWorld = e.meta.value("size").toDouble(
             e.meta.value("height").toDouble(2.5));
         const QPointF anchor = vt.toScreen(e.a);
         QFont f = p.font();
-        const int px = std::max(1, static_cast<int>(heightWorld * vt.scale()));
-        f.setPixelSize(px);
+        const QString family = e.meta.value("font").toString();
+        if (!family.isEmpty()) f.setFamily(family);
+        f.setBold(e.meta.value("bold").toBool());
+        f.setItalic(e.meta.value("italic").toBool());
+        f.setPixelSize(std::max(1, static_cast<int>(heightWorld * vt.scale())));
         p.setFont(f);
-        // Anchor is the text baseline-ish origin; draw with Y as bottom.
-        p.drawText(QPointF(anchor.x(), anchor.y()), text);
+        p.setPen(color);
+        // Multiline: stack lines downward from the anchor (first line baseline at
+        // the anchor). Horizontal alignment per meta["align"] (left/center/right).
+        const QFontMetricsF fm(f);
+        const double lineH = fm.height();
+        const QString al = e.meta.value("align").toString();
+        const QStringList lines = text.split(QLatin1Char('\n'));
+        double y = anchor.y();
+        for (const QString& ln : lines) {
+            double x = anchor.x();
+            if (al == QLatin1String("center")) x -= fm.horizontalAdvance(ln) / 2.0;
+            else if (al == QLatin1String("right")) x -= fm.horizontalAdvance(ln);
+            p.drawText(QPointF(x, y), ln);
+            y += lineH;
+        }
         break;
     }
 

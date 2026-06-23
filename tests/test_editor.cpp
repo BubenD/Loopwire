@@ -373,6 +373,31 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Line, "line-g: tool stays Line");
     }
 
+    // --- Text: place styled multiline text, then edit its content + style.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::MText);
+        ed.onPointerPress({10, 20}, Qt::LeftButton, Qt::NoModifier); // sets the insert point
+        ed.commitText(QStringLiteral("Hello\nWorld"), 7.5, QStringLiteral("Arial"), true, false);
+        check(d.entities().size() == 1, "text: created");
+        const Entity& e = d.entities()[0];
+        const QString id = e.id;
+        check(e.type == EntityType::Text &&
+                  e.meta.value(QStringLiteral("text")).toString() == QLatin1String("Hello\nWorld") &&
+                  near(e.meta.value(QStringLiteral("size")).toDouble(), 7.5) &&
+                  e.meta.value(QStringLiteral("font")).toString() == QLatin1String("Arial") &&
+                  e.meta.value(QStringLiteral("bold")).toBool(),
+              "text: multiline content + font/size/bold stored");
+        ed.applyTextEdit(id, QStringLiteral("BYE"), 3.0, QStringLiteral("Times"), false, true);
+        const Entity& e2 = d.entities()[0];
+        check(e2.meta.value(QStringLiteral("text")).toString() == QLatin1String("BYE") &&
+                  near(e2.meta.value(QStringLiteral("size")).toDouble(), 3.0) &&
+                  e2.meta.value(QStringLiteral("italic")).toBool() &&
+                  !e2.meta.value(QStringLiteral("bold")).toBool(),
+              "text: edit updates content + style");
+    }
+
     // --- Polygon: default 5 sides; a typed count sets the side number.
     {
         Document d; d.entities().clear();
