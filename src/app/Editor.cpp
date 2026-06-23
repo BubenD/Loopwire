@@ -39,7 +39,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
-                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth };
+                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight };
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
 // the cursor: e.a = target - off.
@@ -161,11 +161,13 @@ std::vector<Grip> gripsOf(const Entity& e) {
         break;
     }
     case EntityType::Text: {
-        // Move grip at the anchor; for an MTEXT container, a width grip on the
-        // right edge that resizes the wrap width.
+        // Move grip at the anchor; for an MTEXT container, a width grip (right edge)
+        // and a height grip (bottom edge) that resize the box in X and Y.
         g.push_back({e.a, GripRole::Move, 0});
         const double bw = e.meta.value("boxWidth").toDouble(0.0);
+        const double bh = e.meta.value("boxHeight").toDouble(0.0);
         if (bw > 0.0) g.push_back({{e.a.x + bw, e.a.y}, GripRole::TextWidth, 0});
+        if (bh > 0.0) g.push_back({{e.a.x, e.a.y - bh}, GripRole::TextHeight, 0});
         break;
     }
     default: // splice / netlabel / notconnected / connector
@@ -782,6 +784,21 @@ void Editor::finishRegionSelect(bool subtract) {
 }
 
 void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const {
+    // Show the MTEXT container outline (dashed) so its width/height are visible.
+    if (e.type == EntityType::Text) {
+        const double bw = e.meta.value("boxWidth").toDouble(0.0);
+        const double bh = e.meta.value("boxHeight").toDouble(0.0);
+        if (bw > 0.0 || bh > 0.0) {
+            const QPointF tl = vt.toScreen(e.a);
+            const QPointF br = vt.toScreen({e.a.x + (bw > 0 ? bw : 0), e.a.y - (bh > 0 ? bh : 0)});
+            QPen bp(QColor(120, 200, 255, 160));
+            bp.setCosmetic(true);
+            bp.setStyle(Qt::DashLine);
+            p.setPen(bp);
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(QRectF(tl, br).normalized());
+        }
+    }
     for (const auto& g : gripsOf(e)) {
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
@@ -961,6 +978,9 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Move: translateEntity(*e, delta); break;
         case GripRole::TextWidth: // drag the MTEXT container's right edge
             e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
+            break;
+        case GripRole::TextHeight: // drag the MTEXT container's bottom edge
+            e->meta["boxHeight"] = std::max(1.0, e->a.y - target.y);
             break;
         case GripRole::ArcStart:
             e->radius = std::max(1e-6, distance(e->center, target));
@@ -2009,6 +2029,7 @@ void Editor::commitText(const QString& text, double size, const QString& font, b
             b.expand(draftPts_[1]);
             e.a = {b.min.x, b.max.y};
             if (b.width() > 1e-6) e.meta.insert("boxWidth", b.width());
+            if (b.height() > 1e-6) e.meta.insert("boxHeight", b.height());
         } else {
             e.a = draftPts_[0];
         }

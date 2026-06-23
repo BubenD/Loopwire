@@ -2697,6 +2697,10 @@ void MainWindow::refreshProperties() {
                [this](double v) {
                    editor_->setSelectionTextMeta(QStringLiteral("boxWidth"), std::max(0.0, v));
                });
+        addNum(QStringLiteral("Box height"), e->meta.value(QStringLiteral("boxHeight")).toDouble(0.0),
+               [this](double v) {
+                   editor_->setSelectionTextMeta(QStringLiteral("boxHeight"), std::max(0.0, v));
+               });
     }
     refreshing_ = false;
 }

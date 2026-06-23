@@ -425,6 +425,7 @@ int run_editor_tests() {
         t.meta.insert("text", QStringLiteral("abc"));
         t.meta.insert("size", 5.0);
         t.meta.insert("boxWidth", 100.0);
+        t.meta.insert("boxHeight", 40.0);
         d.entities().push_back(t);
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.selectAll();
@@ -433,6 +434,12 @@ int run_editor_tests() {
         ed.onPointerPress({160, 40}, Qt::LeftButton, Qt::NoModifier);
         check(near(d.entities()[0].meta.value(QStringLiteral("boxWidth")).toDouble(), 160.0),
               "mtext-grip: the width grip resizes the container");
+        // Bottom-edge height grip at (a.x, a.y - boxHeight) = (0, 0); drag to y=-30 -> height 70.
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({0, -30});
+        ed.onPointerPress({0, -30}, Qt::LeftButton, Qt::NoModifier);
+        check(near(d.entities()[0].meta.value(QStringLiteral("boxHeight")).toDouble(), 70.0),
+              "mtext-grip: the height grip resizes the container in Y");
     }
 
     // --- Polygon: default 5 sides; a typed count sets the side number.
