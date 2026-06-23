@@ -105,7 +105,10 @@ private:
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
     void drawCrosshair(QPainter& p) const; // AutoCAD-style full crosshair + pickbox
-    void showDynInput(const QString& firstChar); // pop the field near the cursor
+    // Pop the field near the cursor. `placeholder` (when non-empty) labels it for
+    // an inline value prompt (fillet radius / gap); otherwise the active reference
+    // field label is used.
+    void showDynInput(const QString& firstChar, const QString& placeholder = QString());
     void hideDynInput();
 
     QLineEdit* dynInput_ = nullptr; // floating "dynamic input" box near the cursor

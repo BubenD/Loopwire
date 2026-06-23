@@ -45,7 +45,7 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     });
 }
 
-void CanvasWidget::showDynInput(const QString& firstChar) {
+void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeholder) {
     // Anchor to the visible crosshair: the snapped cursor while drawing, else the
     // raw mouse. This keeps the field at the point you're drawing to (it must not
     // jump to a fixed spot away from the cursor).
@@ -57,8 +57,11 @@ void CanvasWidget::showDynInput(const QString& firstChar) {
     pos.setY(std::clamp(pos.y(), 4, std::max(4, height() - dynInput_->height() - 4)));
     dynInput_->move(pos);
     dynInput_->setText(firstChar);
-    // Label the box with the active reference field (Length / Radius / ...).
-    dynInput_->setPlaceholderText(editor_ ? editor_->currentDrawFieldLabel() : QString());
+    // Label the box: an explicit prompt (fillet radius / gap) wins, else the
+    // active reference field (Length / Radius / ...).
+    dynInput_->setPlaceholderText(
+        !placeholder.isEmpty() ? placeholder
+                               : (editor_ ? editor_->currentDrawFieldLabel() : QString()));
     dynInput_->show();
     dynInput_->raise();
     dynInput_->setFocus(Qt::OtherFocusReason);
@@ -118,6 +121,10 @@ void CanvasWidget::setEditor(Editor* editor) {
         connect(editor_, &Editor::selectionChanged, this, [this] { invalidateScene(); });
         // Interactive preview (cursor move / live drag) -> overlay repaint only.
         connect(editor_, &Editor::overlayChanged, this, QOverload<>::of(&QWidget::update));
+        // Inline value prompt (fillet radius / gap): pop the flying field at the
+        // cursor, pre-labelled, so the user types the value and keeps drawing.
+        connect(editor_, &Editor::dynamicPrompt, this,
+                [this](const QString& label) { showDynInput(QString(), label); });
     }
     invalidateScene();
 }

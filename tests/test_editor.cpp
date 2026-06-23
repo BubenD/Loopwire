@@ -435,6 +435,25 @@ int run_editor_tests() {
               "mline-fillet: double polyline keeps the knee radius");
     }
 
+    // --- Fillet defined MID-polyline, then keep drawing (knees round, draft continues).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.acceptCommandInput(QStringLiteral("f")), "pline-fillet-mid: 'f' mid-draw enters fillet");
+        ed.acceptCommandInput(QStringLiteral("8")); // knee radius
+        check(ed.isDrafting(), "pline-fillet-mid: still drawing after setting the radius");
+        ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier); // continue adding points
+        ed.onPointerPress({0, 40}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Polyline && e.points.size() == 4 &&
+                  near(e.meta.value(QStringLiteral("cornerRadius")).toDouble(), 8.0),
+              "pline-fillet-mid: radius set and the polyline continued (4 pts)");
+    }
+
     // --- Polyline options: "u" Undo drops the last point; "c" Close finishes the loop.
     {
         Document d; d.entities().clear();

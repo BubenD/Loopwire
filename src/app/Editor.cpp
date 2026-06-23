@@ -1850,6 +1850,7 @@ bool Editor::acceptCommandInput(const QString& text) {
         if (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline) {
             gapInputMode_ = true;
             emit message(QStringLiteral("Gap <%1>: enter value and press Enter").arg(doubleLineGap_));
+            emit dynamicPrompt(QStringLiteral("Gap"));
             return true;
         }
         // Any other active draw tool consumes "g" with a hint — it must never fall
@@ -1877,6 +1878,7 @@ bool Editor::acceptCommandInput(const QString& text) {
             filletInputMode_ = true;
             emit message(QStringLiteral("Fillet radius <%1>: enter value and press Enter")
                              .arg(cornerRadius_));
+            emit dynamicPrompt(QStringLiteral("Fillet radius"));
             return true;
         }
         // Any other active draw tool (e.g. Line) consumes "f" with a hint instead

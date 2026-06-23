@@ -189,6 +189,10 @@ signals:
     void message(const QString& text);
     // Tool needs free-text/numeric input (prompt shown by the host UI).
     void textPromptRequested(const QString& prompt);
+    // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
+    // for an inline value (e.g. fillet radius / gap) — so the user can type it
+    // immediately and keep drawing.
+    void dynamicPrompt(const QString& placeholder);
 
 private:
     double worldTolerance() const;
