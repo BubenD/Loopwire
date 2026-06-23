@@ -281,11 +281,10 @@ std::vector<Entity> purgeEntity(const Entity& e) {
         const double cr = e.meta.value("cornerRadius").toDouble(0.0);
         if (e.meta.value("double").toBool()) {
             const double gap = e.meta.value("gap").toDouble(10.0);
-            std::vector<Vec2> r1 = offsetPolyline(e.points, gap / 2.0);
-            std::vector<Vec2> r2 = offsetPolyline(e.points, -gap / 2.0);
-            if (cr > 0.0) { r1 = roundedPolyline(r1, cr); r2 = roundedPolyline(r2, cr); }
-            polylineToLines(r1, false);
-            polylineToLines(r2, false);
+            // Round the centerline first, then offset both runs (constant gap).
+            const std::vector<Vec2> center = cr > 0.0 ? roundedPolyline(e.points, cr) : e.points;
+            polylineToLines(offsetPolyline(center, gap / 2.0), false);
+            polylineToLines(offsetPolyline(center, -gap / 2.0), false);
         } else {
             polylineToLines(cr > 0.0 ? roundedPolyline(e.points, cr) : e.points, false);
         }

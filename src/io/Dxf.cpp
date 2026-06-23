@@ -160,11 +160,10 @@ QString toDxf(const Document& doc) {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
             if (e.meta.value("double").toBool()) {
                 const double gap = e.meta.value("gap").toDouble(10.0);
-                std::vector<Vec2> r1 = offsetPolyline(e.points, gap / 2.0);
-                std::vector<Vec2> r2 = offsetPolyline(e.points, -gap / 2.0);
-                if (cr > 0.0) { r1 = roundedPolyline(r1, cr); r2 = roundedPolyline(r2, cr); }
-                L << dxfPolyline(e, doc, r1, false);
-                L << dxfPolyline(e, doc, r2, false);
+                // Round the centerline first, then offset both runs (constant gap).
+                const std::vector<Vec2> center = cr > 0.0 ? roundedPolyline(e.points, cr) : e.points;
+                L << dxfPolyline(e, doc, offsetPolyline(center, gap / 2.0), false);
+                L << dxfPolyline(e, doc, offsetPolyline(center, -gap / 2.0), false);
             } else {
                 L << dxfPolyline(e, doc, cr > 0.0 ? roundedPolyline(e.points, cr) : e.points, false);
             }

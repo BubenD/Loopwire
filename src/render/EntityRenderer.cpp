@@ -132,13 +132,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
             const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) {
-                // Offset both parallel runs first, then fillet EACH so both round.
+                // Round the CENTERLINE first, THEN offset both sides. The offset of
+                // an arc is a concentric arc, so the perpendicular gap stays constant
+                // through the bends — the two runs make equal, even turns (offsetting
+                // first and rounding each run with the same radius does not).
                 const double gap = e.meta.value("gap").toDouble(10.0);
-                std::vector<Vec2> r1 = offsetPolyline(e.points, gap / 2.0);
-                std::vector<Vec2> r2 = offsetPolyline(e.points, -gap / 2.0);
-                if (cr > 0.0) { r1 = roundedPolyline(r1, cr); r2 = roundedPolyline(r2, cr); }
-                p.drawPolyline(toScreenPoly(r1, vt));
-                p.drawPolyline(toScreenPoly(r2, vt));
+                const std::vector<Vec2> center =
+                    (cr > 0.0) ? roundedPolyline(e.points, cr) : e.points;
+                p.drawPolyline(toScreenPoly(offsetPolyline(center, gap / 2.0), vt));
+                p.drawPolyline(toScreenPoly(offsetPolyline(center, -gap / 2.0), vt));
             } else if (!bulgeArr.isEmpty()) {
                 // Arc segments (PLINE arc mode): expand bulges into a curved run.
                 std::vector<double> bulges;
