@@ -2464,6 +2464,9 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         return true;
     }
     if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
+        // While a value is being awaited (fillet radius / gap), a stray Enter must
+        // NOT finish the draft — just consume it.
+        if (filletInputMode_ || gapInputMode_) return true;
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
         if (drafting_) {
             // Line commits each segment as it goes, so Enter just ends the current

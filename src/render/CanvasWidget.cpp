@@ -123,8 +123,14 @@ void CanvasWidget::setEditor(Editor* editor) {
         connect(editor_, &Editor::overlayChanged, this, QOverload<>::of(&QWidget::update));
         // Inline value prompt (fillet radius / gap): pop the flying field at the
         // cursor, pre-labelled, so the user types the value and keeps drawing.
-        connect(editor_, &Editor::dynamicPrompt, this,
-                [this](const QString& label) { showDynInput(QString(), label); });
+        // QUEUED: the prompt is emitted while the previous flying field is still
+        // handling its own Enter; reopening it synchronously would let that Enter
+        // leak to the canvas (finishDraw, ending the polyline). Deferring opens a
+        // clean field on the next event-loop pass.
+        connect(
+            editor_, &Editor::dynamicPrompt, this,
+            [this](const QString& label) { showDynInput(QString(), label); },
+            Qt::QueuedConnection);
     }
     invalidateScene();
 }
