@@ -2376,6 +2376,16 @@ void Editor::setSelectionMeta(const QString& key, const QString& value) {
     emit changed();
 }
 
+void Editor::setSelectionTextMeta(const QString& key, const QJsonValue& value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel)
+        if (e->type == EntityType::Text) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
 void Editor::setGeometryValue(const QString& key, double v) {
     auto sel = selectedEntities();
     if (sel.size() != 1) return;

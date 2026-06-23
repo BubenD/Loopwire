@@ -396,6 +396,11 @@ int run_editor_tests() {
                   e2.meta.value(QStringLiteral("italic")).toBool() &&
                   !e2.meta.value(QStringLiteral("bold")).toBool(),
               "text: edit updates content + style");
+        // Properties-panel style edit (one field at a time).
+        ed.selectById(id);
+        ed.setSelectionTextMeta(QStringLiteral("bold"), true);
+        check(d.entities()[0].meta.value(QStringLiteral("bold")).toBool(),
+              "text: setSelectionTextMeta toggles a single field");
     }
 
     // --- Polygon: default 5 sides; a typed count sets the side number.

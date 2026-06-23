@@ -26,6 +26,8 @@
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
+#include <QFontDatabase>
+#include <QJsonValue>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -2628,6 +2630,67 @@ void MainWindow::refreshProperties() {
         addRow(QStringLiteral("Center Y"), QStringLiteral("0"));
         addRow(QStringLiteral("Width"), QStringLiteral("0"));
         addRow(QStringLiteral("Height"), QStringLiteral("0"));
+    }
+
+    // --- Text section: editable content, font, height, style, justification. ---
+    if (e && e->type == EntityType::Text) {
+        const QString id = e->id;
+        addHeader(QStringLiteral("Text"));
+
+        // Contents — single-line preview; an "Edit..." button opens the full editor.
+        const QString content = e->meta.value(QStringLiteral("text")).toString();
+        {
+            const int r = propsTable_->rowCount();
+            propsTable_->insertRow(r);
+            auto* key = new QTableWidgetItem(QStringLiteral("Contents"));
+            key->setFlags(Qt::ItemIsEnabled);
+            propsTable_->setItem(r, 0, key);
+            auto* btn = new QPushButton(propsTable_);
+            QString oneLine = content;
+            oneLine.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            btn->setText(oneLine.isEmpty() ? QStringLiteral("Edit...") : oneLine.left(40));
+            connect(btn, &QPushButton::clicked, this, [this, id] {
+                editor_->emitEditText(id); // reuse the rich text dialog flow
+            });
+            propsTable_->setCellWidget(r, 1, btn);
+        }
+
+        // Font — all system families.
+        QStringList fonts = QFontDatabase::families();
+        const QString curFont = e->meta.value(QStringLiteral("font")).toString();
+        addCombo(QStringLiteral("Font"), fonts, curFont.isEmpty() ? QStringLiteral("Default") : curFont,
+                 true, [this](const QString& f) {
+                     editor_->setSelectionTextMeta(QStringLiteral("font"),
+                                                   f == QLatin1String("Default") ? QJsonValue(QString())
+                                                                                 : QJsonValue(f));
+                 });
+
+        // Height.
+        addNum(QStringLiteral("Height"), e->meta.value(QStringLiteral("size")).toDouble(5.0),
+               [this](double v) { editor_->setSelectionTextMeta(QStringLiteral("size"), v); });
+
+        // Bold / Italic / Justify dropdowns.
+        addCombo(QStringLiteral("Bold"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 e->meta.value(QStringLiteral("bold")).toBool() ? QStringLiteral("Yes")
+                                                                : QStringLiteral("No"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(QStringLiteral("bold"), v == QLatin1String("Yes"));
+                 });
+        addCombo(QStringLiteral("Italic"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 e->meta.value(QStringLiteral("italic")).toBool() ? QStringLiteral("Yes")
+                                                                  : QStringLiteral("No"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(QStringLiteral("italic"), v == QLatin1String("Yes"));
+                 });
+        const QString al = e->meta.value(QStringLiteral("align")).toString();
+        addCombo(QStringLiteral("Justify"),
+                 {QStringLiteral("Left"), QStringLiteral("Center"), QStringLiteral("Right")},
+                 al == QLatin1String("center") ? QStringLiteral("Center")
+                 : al == QLatin1String("right") ? QStringLiteral("Right")
+                                                : QStringLiteral("Left"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(QStringLiteral("align"), v.toLower());
+                 });
     }
     refreshing_ = false;
 }

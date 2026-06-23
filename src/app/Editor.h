@@ -9,6 +9,7 @@
 #include "tools/ToolId.h"
 
 #include <QElapsedTimer>
+#include <QJsonValue>
 #include <QObject>
 #include <QString>
 #include <algorithm>
@@ -57,6 +58,8 @@ public:
     // Update an existing text entity's content/style (used by double-click edit).
     void applyTextEdit(const QString& id, const QString& text, double size,
                        const QString& font, bool bold, bool italic);
+    // Ask the host to open the rich text editor for entity `id` (Properties "Edit...").
+    void emitEditText(const QString& id) { emit editTextRequested(id); }
 
     // Direct distance entry while a line/polyline/etc. is being drawn: a bare
     // number places the next point at that distance along the cursor direction;
@@ -108,6 +111,7 @@ public:
     void setSelectionColor(const QString& hex); // empty => ByLayer
     void setSelectionWeight(double weight);      // 0 => ByLayer
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
+    void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
     void setGeometryValue(const QString& key, double value);         // Center X/Y, Width, Height, Radius
     void setColorsByLayer();  // strip explicit color so entities follow their layer (selection, or all)
     void copySelection();          // Ctrl+C: copy (base point = selection bbox min)
