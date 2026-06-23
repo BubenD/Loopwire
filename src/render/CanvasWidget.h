@@ -109,6 +109,7 @@ private:
     // an inline value prompt (fillet radius / gap); otherwise the active reference
     // field label is used.
     void showDynInput(const QString& firstChar, const QString& placeholder = QString());
+    void positionDynInput(); // place the flying field just off the (snapped) cursor
     void hideDynInput();
 
     QLineEdit* dynInput_ = nullptr; // floating "dynamic input" box near the cursor

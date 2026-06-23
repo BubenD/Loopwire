@@ -44,10 +44,10 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     // finish the draft (e.g. ending a polyline right after typing a fillet radius).
 }
 
-void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeholder) {
-    // Anchor to the visible crosshair: the snapped cursor while drawing, else the
-    // raw mouse. This keeps the field at the point you're drawing to (it must not
-    // jump to a fixed spot away from the cursor).
+void CanvasWidget::positionDynInput() {
+    if (!dynInput_) return;
+    // Anchor just off the visible crosshair: the snapped cursor while drawing, else
+    // the raw mouse — so the field stays at the point you're drawing to.
     QPoint anchor = lastMousePos_;
     if (editor_ && editor_->currentSnap().snapped)
         anchor = transform().toScreen(editor_->currentSnap().point).toPoint();
@@ -55,6 +55,9 @@ void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeho
     pos.setX(std::clamp(pos.x(), 4, std::max(4, width() - dynInput_->width() - 4)));
     pos.setY(std::clamp(pos.y(), 4, std::max(4, height() - dynInput_->height() - 4)));
     dynInput_->move(pos);
+}
+
+void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeholder) {
     dynInput_->setText(firstChar);
     // Label the box: an explicit prompt (fillet radius / gap) wins, else the
     // active reference field (Length / Radius / ...).
@@ -62,6 +65,7 @@ void CanvasWidget::showDynInput(const QString& firstChar, const QString& placeho
         !placeholder.isEmpty() ? placeholder
                                : (editor_ ? editor_->currentDrawFieldLabel() : QString()));
     dynInput_->show();
+    positionDynInput(); // place it after show() so its size is known
     dynInput_->raise();
     dynInput_->setFocus(Qt::OtherFocusReason);
     dynInput_->setCursorPosition(dynInput_->text().length());
@@ -382,6 +386,9 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     }
     const Vec2 world = transform().toWorld(e->position());
     if (editor_) editor_->onPointerMove(world);
+    // The flying input field tracks the cursor while it's open (after onPointerMove
+    // so it follows the snapped crosshair).
+    if (dynInput_ && dynInput_->isVisible()) positionDynInput();
     emit cursorWorldMoved(world);
     update(); // repaint so the drawn crosshair follows the cursor
 }
