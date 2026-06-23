@@ -360,6 +360,18 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Select, "line-cont: Esc exits to Select");
     }
 
+    // --- "f"/"g" while the Line tool is active are consumed (hint), NOT run as
+    // commands that switch tools (regression: "f" jumped into the Fillet tool).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Line);
+        check(ed.acceptCommandInput(QStringLiteral("f")), "line-f: 'f' consumed by the Line tool");
+        check(ed.tool() == ToolId::Line, "line-f: tool stays Line (no jump to Fillet)");
+        check(ed.acceptCommandInput(QStringLiteral("g")), "line-g: 'g' consumed by the Line tool");
+        check(ed.tool() == ToolId::Line, "line-g: tool stays Line");
+    }
+
     // --- Polyline options: "u" Undo drops the last point; "c" Close finishes the loop.
     {
         Document d; d.entities().clear();

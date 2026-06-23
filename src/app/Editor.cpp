@@ -1815,7 +1815,12 @@ bool Editor::acceptCommandInput(const QString& text) {
             emit message(QStringLiteral("Gap <%1>: enter value and press Enter").arg(doubleLineGap_));
             return true;
         }
-        if (drafting_) { emit message(QStringLiteral("Gap applies to double line/polyline")); return true; }
+        // Any other active draw tool consumes "g" with a hint — it must never fall
+        // through to run the "g" command word and switch tools mid-draw.
+        if (drafting_ || isDrawTool(tool_)) {
+            emit message(QStringLiteral("Gap applies to double line/polyline"));
+            return true;
+        }
     }
 
     // "f" = fillet option. Enters fillet-radius mode for the (double) polyline
@@ -1827,7 +1832,12 @@ bool Editor::acceptCommandInput(const QString& text) {
                              .arg(cornerRadius_));
             return true;
         }
-        if (drafting_) { emit message(QStringLiteral("Fillet applies to polylines")); return true; }
+        // Any other active draw tool (e.g. Line) consumes "f" with a hint instead
+        // of running the "fillet" command and jumping into the Fillet tool.
+        if (drafting_ || isDrawTool(tool_)) {
+            emit message(QStringLiteral("Fillet applies to polylines"));
+            return true;
+        }
     }
 
     // Polyline-family options offered "attached" while drawing: Close / Undo
@@ -2629,11 +2639,34 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawPolyline(poly);
             }
         } else if (tool_ == ToolId::Spline) {
-            // Live spline preview: the actual fit (through points) or CV curve.
+            // Control polygon (the "vertices lines"): dashed frame through the
+            // placed points + cursor, with a square marker at each placed vertex.
+            QPen frame(QColor("#d98a4e"));
+            frame.setCosmetic(true);
+            frame.setStyle(Qt::DashLine);
+            p.setPen(frame);
+            QPolygonF cp;
+            for (const auto& v : pts) cp << vt.toScreen(v);
+            p.drawPolyline(cp);
+            p.setBrush(QColor("#4ea3ff"));
+            QPen vpen(QColor("#0d1117"));
+            vpen.setCosmetic(true);
+            p.setPen(vpen);
+            for (const auto& v : draftPts_) { // placed vertices (not the live cursor)
+                const QPointF s = vt.toScreen(v);
+                p.drawRect(QRectF(s.x() - 2.5, s.y() - 2.5, 5, 5));
+            }
+            p.setBrush(Qt::NoBrush);
+
+            // The smooth curve itself (fit through the points, or the CV B-spline).
             const std::vector<Vec2> curve =
                 (pts.size() >= 3)
                     ? (splineMode_ == SplineMode::CV ? bsplinePoints(pts) : splinePoints(pts))
                     : pts;
+            QPen cpen(QColor("#ffffff"));
+            cpen.setCosmetic(true);
+            cpen.setWidthF(1.6);
+            p.setPen(cpen);
             QPolygonF poly;
             for (const auto& v : curve) poly << vt.toScreen(v);
             p.drawPolyline(poly);
