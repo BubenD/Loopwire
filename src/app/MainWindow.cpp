@@ -1697,8 +1697,11 @@ void MainWindow::buildCommandBar() {
         const QString t = commandEdit_->text().trimmed();
         commandEdit_->clear();
         submitCommand(t);
-        if (editor_->wantsTextInput()) commandEdit_->setFocus(); // keep chaining input
-        else canvas_->setFocus();
+        // Always hand focus back to the canvas so the next keystroke opens the
+        // FLYING input field at the cursor (AutoCAD dynamic input) rather than
+        // staying in the bottom command bar — typing during a draw must not jump
+        // the input down to the command line.
+        canvas_->setFocus();
     });
 
     // The floating dynamic-input field (next to the cursor) submits the same way.
