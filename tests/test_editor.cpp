@@ -403,6 +403,21 @@ int run_editor_tests() {
               "text: setSelectionTextMeta toggles a single field");
     }
 
+    // --- MText: dragging a box defines the wrap-width container.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::MText);
+        ed.onPointerPress({0, 40}, Qt::LeftButton, Qt::NoModifier);   // first corner
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);  // opposite corner (100 wide)
+        ed.commitText(QStringLiteral("a fairly long run of words"), 5.0, QString(), false, false);
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Text &&
+                  near(e.meta.value(QStringLiteral("boxWidth")).toDouble(), 100.0) &&
+                  near(e.a.x, 0.0) && near(e.a.y, 40.0),
+              "mtext: box defines wrap width and top-left anchor");
+    }
+
     // --- Polygon: default 5 sides; a typed count sets the side number.
     {
         Document d; d.entities().clear();

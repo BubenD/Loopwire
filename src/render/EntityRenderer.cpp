@@ -216,13 +216,29 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         f.setPixelSize(std::max(1, static_cast<int>(heightWorld * vt.scale())));
         p.setFont(f);
         p.setPen(color);
-        // Multiline: stack lines downward from the anchor (first line baseline at
-        // the anchor). Horizontal alignment per meta["align"] (left/center/right).
         const QFontMetricsF fm(f);
         const double lineH = fm.height();
         const QString al = e.meta.value("align").toString();
-        const QStringList lines = text.split(QLatin1Char('\n'));
-        double y = anchor.y();
+        // MTEXT container: word-wrap each paragraph to the box width (world units).
+        const double boxPx = e.meta.value("boxWidth").toDouble(0.0) * vt.scale();
+        QStringList lines;
+        for (const QString& para : text.split(QLatin1Char('\n'))) {
+            if (boxPx <= 1.0) { lines << para; continue; }
+            QString cur;
+            for (const QString& w : para.split(QLatin1Char(' '))) {
+                const QString test = cur.isEmpty() ? w : cur + QLatin1Char(' ') + w;
+                if (!cur.isEmpty() && fm.horizontalAdvance(test) > boxPx) {
+                    lines << cur;
+                    cur = w;
+                } else {
+                    cur = test;
+                }
+            }
+            lines << cur;
+        }
+        // Stack lines downward from the anchor. With a box, drop the first baseline
+        // by the ascent so the text sits inside the container's top edge.
+        double y = anchor.y() + (boxPx > 1.0 ? fm.ascent() : 0.0);
         for (const QString& ln : lines) {
             double x = anchor.x();
             if (al == QLatin1String("center")) x -= fm.horizontalAdvance(ln) / 2.0;

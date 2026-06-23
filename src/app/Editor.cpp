@@ -1076,9 +1076,20 @@ void Editor::handleDrawPress(const Vec2& p) {
         break;
     }
     case ToolId::Text:
-    case ToolId::MText:
         draftPts_ = {p};
         emit textPromptRequested(QStringLiteral("Text:"));
+        break;
+    case ToolId::MText:
+        // AutoCAD MTEXT: drag a box (two corners) to define the wrap width, then
+        // enter the text.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() >= 2) {
+            drafting_ = false;
+            emit textPromptRequested(QStringLiteral("Text:"));
+        } else {
+            emit message(QStringLiteral("MText: pick the opposite corner of the text box"));
+        }
         break;
     default:
         break;
@@ -1980,7 +1991,16 @@ void Editor::commitText(const QString& text, double size, const QString& font, b
         Entity e;
         e.type = EntityType::Text;
         e.layer = doc_->activeLayer();
-        e.a = draftPts_[0];
+        if (tool_ == ToolId::MText && draftPts_.size() >= 2) {
+            // Anchor at the box's top-left; the width drives word wrapping.
+            Bounds b;
+            b.expand(draftPts_[0]);
+            b.expand(draftPts_[1]);
+            e.a = {b.min.x, b.max.y};
+            if (b.width() > 1e-6) e.meta.insert("boxWidth", b.width());
+        } else {
+            e.a = draftPts_[0];
+        }
         e.meta.insert("text", text);
         e.meta.insert("size", size > 0 ? size : 5.0);
         if (!font.isEmpty()) e.meta.insert("font", font);
@@ -2685,7 +2705,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         std::vector<Vec2> pts = draftPts_;
         pts.push_back(cursor_);
-        if (tool_ == ToolId::Rect && pts.size() >= 2) {
+        if ((tool_ == ToolId::Rect || tool_ == ToolId::MText) && pts.size() >= 2) {
+            // Rectangle (and the MTEXT container box) rubber-band.
             const Vec2 a = pts[0], b = pts[1];
             QPolygonF poly;
             for (const Vec2& v : {Vec2{a.x, a.y}, Vec2{b.x, a.y}, Vec2{b.x, b.y}, Vec2{a.x, b.y}})
