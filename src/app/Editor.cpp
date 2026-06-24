@@ -613,6 +613,13 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
                {e.center.x - e.radius, e.center.y}, {e.center.x, e.center.y + e.radius},
                {e.center.x, e.center.y - e.radius}};
         break;
+    case EntityType::Text: {
+        // The text's bounding rectangle corners (so window selection encloses it
+        // and crossing touches it via the edges below).
+        const Bounds b = e.bounds();
+        pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}};
+        break;
+    }
     default: {
         const Bounds b = e.bounds();
         if (b.valid) pts = {b.min, b.max, b.center()};
@@ -695,6 +702,13 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(prev, cur);
             prev = cur;
         }
+        break;
+    }
+    case EntityType::Text: {
+        // The 4 edges of the text rectangle, so a crossing region that touches the
+        // text box selects it.
+        for (size_t i = 0; i < pts.size(); ++i)
+            segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
         break;
     }
     default:

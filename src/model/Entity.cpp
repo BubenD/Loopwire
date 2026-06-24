@@ -3,6 +3,8 @@
 #include "harness/Harness.h"
 
 #include <QJsonArray>
+#include <QStringList>
+#include <algorithm>
 #include <array>
 
 namespace Edraw_Desktop {
@@ -74,7 +76,24 @@ Bounds Entity::bounds() const {
         bnds.expand({center.x + rx, center.y + ry});
         break;
     }
-    case EntityType::Text:
+    case EntityType::Text: {
+        // A rectangle from the anchor (top-left): the container box if set, else
+        // estimated from the content (so selection/grips catch the whole text).
+        bnds.expand(a);
+        const QString txt = meta.value("text").toString();
+        const double size = meta.value("size").toDouble(meta.value("height").toDouble(2.5));
+        const double spacing = std::max(1.0, meta.value("lineSpacing").toDouble(1.0));
+        const QStringList lines = txt.split(QLatin1Char('\n'));
+        int maxLen = 1;
+        for (const auto& l : lines) maxLen = std::max<int>(maxLen, l.size());
+        const double bw = meta.value("boxWidth").toDouble(0.0);
+        const double bh = meta.value("boxHeight").toDouble(0.0);
+        const double width = bw > 0.0 ? bw : maxLen * size * 0.6;
+        const double height =
+            bh > 0.0 ? bh : std::max<int>(1, lines.size()) * size * spacing * 1.3;
+        bnds.expand({a.x + width, a.y - height});
+        break;
+    }
     case EntityType::Splice:
     case EntityType::NetLabel:
     case EntityType::NotConnected:

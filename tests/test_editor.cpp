@@ -450,6 +450,31 @@ int run_editor_tests() {
               "mtext-grip: the height grip resizes the container in Y");
     }
 
+    // --- Text selection by its rectangle (window encloses, crossing touches).
+    {
+        Document d; d.entities().clear();
+        Entity t; t.id = "t"; t.type = EntityType::Text; t.a = {0, 0};
+        t.meta.insert("text", QStringLiteral("Hello"));
+        t.meta.insert("size", 10.0);
+        t.meta.insert("boxWidth", 60.0);
+        t.meta.insert("boxHeight", 20.0); // rect: (0,0) .. (60,-20)
+        d.entities().push_back(t);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) {
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        };
+        regionSelect({-10, 10}, {70, -30}); // window enclosing the rect
+        check(ed.selection().size() == 1, "text-sel: window enclosing the text rect selects");
+        regionSelect({30, -5}, {-10, -15}); // crossing through the left edge
+        check(ed.selection().size() == 1, "text-sel: crossing touching the text selects");
+        regionSelect({200, 200}, {150, 150}); // far away
+        check(ed.selection().empty(), "text-sel: a region away from the text does not select");
+    }
+
     // --- Polygon: default 5 sides; a typed count sets the side number.
     {
         Document d; d.entities().clear();
