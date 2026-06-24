@@ -811,6 +811,52 @@ int run_editor_tests() {
         check(ed.selection().empty(), "crossing-curve: box not touching the ring does not select");
     }
 
+    // --- A region catching ONLY the circle centre (not the ring) must NOT select;
+    //     a window enclosing the whole ring still selects.
+    {
+        Document d; d.entities().clear();
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 100;
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) {
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        };
+        regionSelect({10, 10}, {-10, -10});   // crossing box around the centre only
+        check(ed.selection().empty(), "circle-center: crossing only the centre does NOT select");
+        regionSelect({-10, -10}, {10, 10});   // window over the centre only (not the ring)
+        check(ed.selection().empty(), "circle-center: window over the centre only does NOT select");
+        regionSelect({-120, -120}, {120, 120}); // window enclosing the whole ring
+        check(ed.selection().size() == 1, "circle-center: window enclosing the ring selects");
+    }
+
+    // --- An arc's off-curve quadrant point caught by a region must NOT select.
+    {
+        Document d; d.entities().clear();
+        Entity a; a.id = "a"; a.type = EntityType::Arc; a.center = {0, 0}; a.radius = 100;
+        a.startAngle = 0.0; a.endAngle = M_PI / 2.0; // upper-right quarter only
+        d.entities().push_back(a);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) {
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        };
+        // Small box around the arc CENTRE (0,0) — an off-curve point; the press at
+        // (10,10) is in empty space (far from the radius-100 ring), so a region
+        // (not a click) is started.
+        regionSelect({10, 10}, {-10, -10});
+        check(ed.selection().empty(), "arc-offcurve: region on the off-curve centre does NOT select");
+        // Box straddling the real arc near 45deg (~70,70).
+        regionSelect({80, 80}, {60, 60});
+        check(ed.selection().size() == 1, "arc-offcurve: region touching the real arc selects");
+    }
+
     // --- Arc joints: dragging the start endpoint sets its angle (and radius).
     {
         Document d; d.entities().clear();

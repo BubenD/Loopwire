@@ -783,36 +783,41 @@ void Editor::finishRegionSelect(bool subtract) {
         for (const auto& p : pts)
             if (pointInPolygon(region, p)) ++inside;
 
+        // The selection test runs against the entity's REAL drawn geometry (its
+        // segments), so a region that merely catches an off-stroke point — a circle
+        // centre, an arc's off-curve quadrant, a line's mid joint — does NOT select.
+        // Only point-like entities (markers/connector) with no segments fall back to
+        // the representative points.
+        const auto segs = entitySelectSegments(e);
         bool hit = false;
-        if (e.type == EntityType::DoubleLine) {
-            // A crossing region must TOUCH a visible line (cross its body or contain
-            // it) — not merely catch a joint. So decide purely from the two visible
-            // segments: crossing = a segment crosses the region boundary or lies
-            // inside; window = both segments fully enclosed.
-            const auto segs = entitySelectSegments(e);
+        if (!segs.empty()) {
             if (crossing) {
+                // Crossing: any segment endpoint inside the region, or any segment
+                // crossing the region boundary.
                 for (const auto& s : segs) {
-                    if (pointInPolygon(region, s.first) || pointInPolygon(region, s.second)) { hit = true; break; }
+                    if (pointInPolygon(region, s.first) || pointInPolygon(region, s.second)) {
+                        hit = true;
+                        break;
+                    }
                     for (const auto& re : regionEdges)
-                        if (segmentSegmentIntersection(s.first, s.second, re.first, re.second)) { hit = true; break; }
+                        if (segmentSegmentIntersection(s.first, s.second, re.first, re.second)) {
+                            hit = true;
+                            break;
+                        }
                     if (hit) break;
                 }
             } else {
-                hit = !segs.empty();
+                // Window: the whole geometry must be enclosed (every segment end in).
+                hit = true;
                 for (const auto& s : segs)
-                    if (!(pointInPolygon(region, s.first) && pointInPolygon(region, s.second))) { hit = false; break; }
-            }
-        } else if (crossing) {
-            hit = inside > 0;
-            if (!hit) { // also catch segments that cross the region boundary
-                for (const auto& s : entitySelectSegments(e)) {
-                    for (const auto& re : regionEdges)
-                        if (segmentSegmentIntersection(s.first, s.second, re.first, re.second)) { hit = true; break; }
-                    if (hit) break;
-                }
+                    if (!(pointInPolygon(region, s.first) && pointInPolygon(region, s.second))) {
+                        hit = false;
+                        break;
+                    }
             }
         } else {
-            hit = inside == static_cast<int>(pts.size()); // fully enclosed
+            // Point-like entity: use its representative points.
+            hit = crossing ? (inside > 0) : (inside == static_cast<int>(pts.size()));
         }
         if (!hit) continue;
         auto it = std::find(selected_.begin(), selected_.end(), e.id);
