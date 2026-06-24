@@ -2163,9 +2163,30 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineSize_ = new QDoubleSpinBox(inlineBar_);
         inlineSize_->setRange(0.1, 1000.0);
         inlineSize_->setDecimals(2);
+        inlineSize_->setSingleStep(1.0);
         inlineSize_->setPrefix(QStringLiteral("H "));
-        // Height stepper shown as stacked + / - buttons.
-        inlineSize_->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+        // Native spin arrows off — we provide explicit stacked +/- buttons instead.
+        inlineSize_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        // Two vertical text-height buttons: "+" on top, "-" below, next to the field.
+        QWidget* sizeBox = new QWidget(inlineBar_);
+        auto* sizeRow = new QHBoxLayout(sizeBox);
+        sizeRow->setContentsMargins(0, 0, 0, 0);
+        sizeRow->setSpacing(2);
+        auto* sizeStack = new QVBoxLayout();
+        sizeStack->setContentsMargins(0, 0, 0, 0);
+        sizeStack->setSpacing(1);
+        QToolButton* sizePlus = new QToolButton(sizeBox);
+        sizePlus->setText(QStringLiteral("+"));
+        sizePlus->setAutoRepeat(true);
+        sizePlus->setFixedSize(20, 12);
+        QToolButton* sizeMinus = new QToolButton(sizeBox);
+        sizeMinus->setText(QString::fromUtf8("\xE2\x88\x92")); // "−"
+        sizeMinus->setAutoRepeat(true);
+        sizeMinus->setFixedSize(20, 12);
+        sizeStack->addWidget(sizePlus);
+        sizeStack->addWidget(sizeMinus);
+        sizeRow->addWidget(inlineSize_);
+        sizeRow->addLayout(sizeStack);
         inlineBold_ = new QToolButton(inlineBar_);
         inlineBold_->setText(QStringLiteral("B"));
         inlineBold_->setCheckable(true);
@@ -2197,7 +2218,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         okBtn->setText(QString::fromUtf8("\xE2\x9C\x93")); // checkmark
         auto* cancelBtn = new QToolButton(inlineBar_);
         cancelBtn->setText(QString::fromUtf8("\xE2\x9C\x95")); // x
-        for (QWidget* w : {static_cast<QWidget*>(inlineFont_), static_cast<QWidget*>(inlineSize_),
+        for (QWidget* w : {static_cast<QWidget*>(inlineFont_), static_cast<QWidget*>(sizeBox),
                            static_cast<QWidget*>(inlineBold_), static_cast<QWidget*>(inlineItalic_),
                            static_cast<QWidget*>(inlineUnderline_), static_cast<QWidget*>(inlineStrike_),
                            static_cast<QWidget*>(inlineJust_), static_cast<QWidget*>(inlineList_),
@@ -2226,6 +2247,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         };
         connect(inlineFont_, &QFontComboBox::currentFontChanged, this, [sync] { sync(); });
         connect(inlineSize_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
+        connect(sizePlus, &QToolButton::clicked, this, [this, sync] { inlineSize_->stepUp(); sync(); });
+        connect(sizeMinus, &QToolButton::clicked, this, [this, sync] { inlineSize_->stepDown(); sync(); });
         connect(inlineBold_, &QToolButton::toggled, this, [sync] { sync(); });
         connect(inlineItalic_, &QToolButton::toggled, this, [sync] { sync(); });
         connect(inlineUnderline_, &QToolButton::toggled, this, [sync] { sync(); });
@@ -2272,6 +2295,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
     inlineEdit_->setFocus();
     inlineEdit_->moveCursor(QTextCursor::End);
     canvas_->setInlineEditing(true);
+    canvas_->raiseCrosshairOverlay(); // keep the crosshair above the editor toolbar
 }
 
 void MainWindow::layoutInlineText() {
@@ -2291,6 +2315,7 @@ void MainWindow::layoutInlineText() {
     inlineEdit_->setGeometry(x, y + rulerH, w, h);
     const int barW = std::max(w, inlineBar_->sizeHint().width());
     inlineBar_->setGeometry(x, std::max(0, y - barH - 2), barW, barH);
+    canvas_->raiseCrosshairOverlay(); // stay above the editor after any relayout
 }
 
 void MainWindow::commitInlineText(bool apply) {

@@ -103,6 +103,13 @@ public:
         if (cursorInside_ && !panning_) drawCrosshair(p);
     }
 
+    // Restack the crosshair overlay on top of every sibling. The host calls this
+    // after it raise()s its own overlays (e.g. the inline text editor toolbar), so
+    // the cursor is never hidden behind them.
+    void raiseCrosshairOverlay() {
+        if (crosshairTop_) crosshairTop_->raise();
+    }
+
 protected:
     void resizeEvent(QResizeEvent* e) override;  // keep the crosshair overlay sized
     void childEvent(QChildEvent* e) override;    // keep the crosshair overlay on top
