@@ -27,7 +27,11 @@
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
 #include <QFontDatabase>
+#include <QFrame>
 #include <QJsonValue>
+#include <QKeyEvent>
+#include <QSignalBlocker>
+#include <QTextCursor>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -71,6 +75,26 @@
 namespace Edraw_Desktop {
 
 namespace {
+
+// A thin ruler bar drawn above the on-canvas text editor (AutoCAD MTEXT style):
+// a tick scale across the container width with stronger marks every 50 px.
+class InlineRuler : public QWidget {
+public:
+    using QWidget::QWidget;
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#d8d8d0"));
+        p.setPen(QColor("#3a3d43"));
+        const int h = height();
+        p.drawLine(0, h - 1, width(), h - 1);
+        for (int x = 0; x < width(); x += 10) {
+            const int top = (x % 50 == 0) ? 2 : h / 2;
+            p.drawLine(x, top, x, h - 1);
+        }
+    }
+};
 
 // Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
 // icon grid without external assets.
@@ -905,14 +929,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
-        // Rich text editor: multiline for the MText tool, single-line for Text.
-        const bool multiline = editor_->tool() == ToolId::MText;
-        QString text;
-        Editor::TextStyle style;
-        if (showTextDialog(multiline, text, style) && !text.isEmpty())
-            editor_->commitText(text, style);
-        else
-            editor_->commitText(QString(), style); // cancel: clears the pending point
+        // Begin on-canvas in-place editing at the pending insertion box.
+        Vec2 tl;
+        double w = 0, h = 0;
+        if (!editor_->pendingTextBox(tl, w, h)) return;
+        beginInlineText(QString(), QString(), Editor::TextStyle{}, tl, w, h);
     });
     connect(editor_, &Editor::editTextRequested, this, [this](const QString& id) {
         if (!doc_) return;
@@ -920,7 +941,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         for (const auto& e : doc_->entities())
             if (e.id == id) { found = &e; break; }
         if (!found) return;
-        QString text = found->meta.value(QStringLiteral("text")).toString();
         Editor::TextStyle style;
         style.size = found->meta.value(QStringLiteral("size")).toDouble(5.0);
         style.font = found->meta.value(QStringLiteral("font")).toString();
@@ -931,10 +951,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         style.lineSpacing = found->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0);
         style.list = found->meta.value(QStringLiteral("list")).toString();
         if (style.list.isEmpty()) style.list = QStringLiteral("none");
-        const bool multiline = text.contains(QLatin1Char('\n'));
-        if (showTextDialog(multiline, text, style))
-            editor_->applyTextEdit(id, text, style);
+        beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a,
+                        found->meta.value(QStringLiteral("boxWidth")).toDouble(0.0),
+                        found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0));
     });
+    connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
 
     // Restore saved drafting/snap preferences before the status toggles are built
     // so their initial checked state reflects the last session.
@@ -2065,6 +2086,167 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
     style.list = listCombo->currentData().toString();
     style.lineSpacing = spacingSpin->value();
     return true;
+}
+
+void MainWindow::beginInlineText(const QString& id, const QString& text,
+                                 const Editor::TextStyle& style, Vec2 topLeft, double boxW,
+                                 double boxH) {
+    inlineEditId_ = id;
+    inlineStyle_ = style;
+    inlineTopLeft_ = topLeft;
+    inlineBoxW_ = boxW;
+    inlineBoxH_ = boxH;
+
+    if (!inlineEdit_) {
+        inlineEdit_ = new QPlainTextEdit(canvas_);
+        inlineEdit_->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;}"));
+        inlineEdit_->installEventFilter(this);
+        inlineRuler_ = new InlineRuler(canvas_);
+
+        inlineBar_ = new QFrame(canvas_);
+        inlineBar_->setStyleSheet(QStringLiteral(
+            "QFrame{background:#3a3d43;border:1px solid #555;border-radius:3px;}"));
+        auto* bl = new QHBoxLayout(inlineBar_);
+        bl->setContentsMargins(4, 2, 4, 2);
+        bl->setSpacing(4);
+        inlineFont_ = new QFontComboBox(inlineBar_);
+        inlineFont_->setMaximumWidth(150);
+        inlineSize_ = new QDoubleSpinBox(inlineBar_);
+        inlineSize_->setRange(0.1, 1000.0);
+        inlineSize_->setDecimals(2);
+        inlineSize_->setPrefix(QStringLiteral("H "));
+        inlineBold_ = new QToolButton(inlineBar_);
+        inlineBold_->setText(QStringLiteral("B"));
+        inlineBold_->setCheckable(true);
+        { QFont bf = inlineBold_->font(); bf.setBold(true); inlineBold_->setFont(bf); }
+        inlineItalic_ = new QToolButton(inlineBar_);
+        inlineItalic_->setText(QStringLiteral("I"));
+        inlineItalic_->setCheckable(true);
+        { QFont itf = inlineItalic_->font(); itf.setItalic(true); inlineItalic_->setFont(itf); }
+        inlineJust_ = new QComboBox(inlineBar_);
+        for (const char* code : {"TL", "TC", "TR", "ML", "MC", "MR", "BL", "BC", "BR"})
+            inlineJust_->addItem(QString::fromLatin1(code), QString::fromLatin1(code));
+        inlineList_ = new QComboBox(inlineBar_);
+        inlineList_->addItem(QStringLiteral("No list"), QStringLiteral("none"));
+        inlineList_->addItem(QStringLiteral("Bullets"), QStringLiteral("bullet"));
+        inlineList_->addItem(QStringLiteral("Numbered"), QStringLiteral("number"));
+        inlineSpacing_ = new QDoubleSpinBox(inlineBar_);
+        inlineSpacing_->setRange(0.5, 4.0);
+        inlineSpacing_->setSingleStep(0.25);
+        inlineSpacing_->setPrefix(QString::fromUtf8("\xC3\x97 ")); // "× "
+        auto* okBtn = new QToolButton(inlineBar_);
+        okBtn->setText(QString::fromUtf8("\xE2\x9C\x93")); // checkmark
+        auto* cancelBtn = new QToolButton(inlineBar_);
+        cancelBtn->setText(QString::fromUtf8("\xE2\x9C\x95")); // x
+        for (QWidget* w : {static_cast<QWidget*>(inlineFont_), static_cast<QWidget*>(inlineSize_),
+                           static_cast<QWidget*>(inlineBold_), static_cast<QWidget*>(inlineItalic_),
+                           static_cast<QWidget*>(inlineJust_), static_cast<QWidget*>(inlineList_),
+                           static_cast<QWidget*>(inlineSpacing_), static_cast<QWidget*>(okBtn),
+                           static_cast<QWidget*>(cancelBtn)})
+            bl->addWidget(w);
+
+        auto sync = [this] {
+            inlineStyle_.font = inlineFont_->currentFont().family();
+            inlineStyle_.size = inlineSize_->value();
+            inlineStyle_.bold = inlineBold_->isChecked();
+            inlineStyle_.italic = inlineItalic_->isChecked();
+            inlineStyle_.justify = inlineJust_->currentData().toString();
+            inlineStyle_.list = inlineList_->currentData().toString();
+            inlineStyle_.lineSpacing = inlineSpacing_->value();
+            QFont f = inlineFont_->currentFont();
+            f.setBold(inlineStyle_.bold);
+            f.setItalic(inlineStyle_.italic);
+            f.setPixelSize(std::max(10, static_cast<int>(inlineStyle_.size * canvas_->viewScale())));
+            inlineEdit_->setFont(f);
+            inlineEdit_->setFocus();
+        };
+        connect(inlineFont_, &QFontComboBox::currentFontChanged, this, [sync] { sync(); });
+        connect(inlineSize_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
+        connect(inlineBold_, &QToolButton::toggled, this, [sync] { sync(); });
+        connect(inlineItalic_, &QToolButton::toggled, this, [sync] { sync(); });
+        connect(inlineJust_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
+        connect(inlineList_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
+        connect(inlineSpacing_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
+        connect(okBtn, &QToolButton::clicked, this, [this] { commitInlineText(true); });
+        connect(cancelBtn, &QToolButton::clicked, this, [this] { commitInlineText(false); });
+    }
+
+    {
+        const QSignalBlocker b1(inlineFont_), b2(inlineSize_), b3(inlineBold_), b4(inlineItalic_),
+            b5(inlineJust_), b6(inlineList_), b7(inlineSpacing_);
+        if (!style.font.isEmpty()) inlineFont_->setCurrentFont(QFont(style.font));
+        inlineSize_->setValue(style.size > 0 ? style.size : 5.0);
+        inlineBold_->setChecked(style.bold);
+        inlineItalic_->setChecked(style.italic);
+        inlineJust_->setCurrentIndex(std::max(
+            0, inlineJust_->findData(style.justify.isEmpty() ? QStringLiteral("TL") : style.justify)));
+        inlineList_->setCurrentIndex(std::max(
+            0, inlineList_->findData(style.list.isEmpty() ? QStringLiteral("none") : style.list)));
+        inlineSpacing_->setValue(style.lineSpacing > 0 ? style.lineSpacing : 1.0);
+    }
+    inlineEdit_->setPlainText(text);
+    {
+        QFont f = inlineFont_->currentFont();
+        f.setBold(style.bold);
+        f.setItalic(style.italic);
+        f.setPixelSize(std::max(10, static_cast<int>((style.size > 0 ? style.size : 5.0) *
+                                                     canvas_->viewScale())));
+        inlineEdit_->setFont(f);
+    }
+    layoutInlineText();
+    inlineRuler_->show();
+    inlineBar_->show();
+    inlineEdit_->show();
+    inlineBar_->raise();
+    inlineEdit_->setFocus();
+    inlineEdit_->moveCursor(QTextCursor::End);
+    canvas_->setInlineEditing(true);
+}
+
+void MainWindow::layoutInlineText() {
+    if (!inlineEdit_ || !canvas_) return;
+    const double scale = canvas_->viewScale();
+    const QPointF tl = canvas_->mapToScreen(inlineTopLeft_);
+    int w = std::max(140, inlineBoxW_ > 0 ? static_cast<int>(inlineBoxW_ * scale) : 240);
+    int h = std::max(44, inlineBoxH_ > 0 ? static_cast<int>(inlineBoxH_ * scale) : 64);
+    const int rulerH = 14;
+    const int barH = std::max(28, inlineBar_->sizeHint().height());
+    const int x = static_cast<int>(tl.x());
+    const int y = static_cast<int>(tl.y());
+    inlineRuler_->setGeometry(x, y, w, rulerH);
+    inlineEdit_->setGeometry(x, y + rulerH, w, h);
+    const int barW = std::max(w, inlineBar_->sizeHint().width());
+    inlineBar_->setGeometry(x, std::max(0, y - barH - 2), barW, barH);
+}
+
+void MainWindow::commitInlineText(bool apply) {
+    if (!inlineEdit_ || !inlineEdit_->isVisible()) return;
+    const QString text = inlineEdit_->toPlainText();
+    canvas_->setInlineEditing(false);
+    inlineEdit_->hide();
+    inlineBar_->hide();
+    inlineRuler_->hide();
+    if (apply) {
+        if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
+        else editor_->applyTextEdit(inlineEditId_, text, inlineStyle_);
+    } else if (inlineEditId_.isEmpty()) {
+        editor_->commitText(QString(), inlineStyle_); // cancel: clears the pending point/tool
+    }
+    canvas_->setFocus();
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    if (obj == inlineEdit_ && e->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(e);
+        if (ke->key() == Qt::Key_Escape) { commitInlineText(false); return true; }
+        if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
+            (ke->modifiers() & Qt::ControlModifier)) {
+            commitInlineText(true);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(obj, e);
 }
 
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {

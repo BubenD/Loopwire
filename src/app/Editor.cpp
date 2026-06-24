@@ -2025,6 +2025,23 @@ bool Editor::acceptCommandInput(const QString& text) {
     return applyDrawInput(t);
 }
 
+bool Editor::pendingTextBox(Vec2& topLeft, double& w, double& h) const {
+    if (draftPts_.empty()) return false;
+    if (tool_ == ToolId::MText && draftPts_.size() >= 2) {
+        Bounds b;
+        b.expand(draftPts_[0]);
+        b.expand(draftPts_[1]);
+        topLeft = {b.min.x, b.max.y};
+        w = b.width();
+        h = b.height();
+    } else {
+        topLeft = draftPts_[0];
+        w = 0;
+        h = 0;
+    }
+    return true;
+}
+
 void Editor::provideText(const QString& text) {
     commitText(text, TextStyle{});
 }

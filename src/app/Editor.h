@@ -69,6 +69,9 @@ public:
     void applyTextEdit(const QString& id, const QString& text, const TextStyle& s);
     // Ask the host to open the rich text editor for entity `id` (Properties "Edit...").
     void emitEditText(const QString& id) { emit editTextRequested(id); }
+    // The pending text insertion box (from the click / MText box drag) in world
+    // coords, for positioning the on-canvas editor. Returns false if none pending.
+    bool pendingTextBox(Vec2& topLeft, double& w, double& h) const;
 
     // Direct distance entry while a line/polyline/etc. is being drawn: a bare
     // number places the next point at that distance along the cursor direction;

@@ -37,6 +37,10 @@ public:
     // Zoom to fit all entities (matches Edraw fitView()).
     void fitView();
 
+    // World<->screen for overlays (e.g. the on-canvas text editor).
+    QPointF mapToScreen(const Vec2& world) const { return transform().toScreen(world); }
+    double viewScale() const { return transform().scale(); }
+
     double gridSize() const { return gridSize_; }
     void setGridSize(double g);
     void setGridVisible(bool v);
@@ -82,6 +86,13 @@ signals:
     void commandSubmitted(const QString& text);
     // Right-click on the canvas: the host shows a context menu at this global pos.
     void contextMenuRequested(const QPoint& globalPos);
+    // Bare-canvas click while the on-canvas text editor is open -> commit it.
+    void inlineCommit();
+
+public:
+    // True while the host's on-canvas text editor is active (so a canvas click
+    // commits it instead of starting a new action).
+    void setInlineEditing(bool on) { inlineEditing_ = on; }
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -135,6 +146,7 @@ private:
 
     bool panning_ = false;
     QPoint lastPanPos_;
+    bool inlineEditing_ = false; // host's on-canvas text editor is open
 
     static constexpr double kMaxViewScale = 4000.0;
     static constexpr double kMinViewScale = 0.0005;

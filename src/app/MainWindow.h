@@ -24,6 +24,9 @@ class QComboBox;
 class QWidget;
 class QCloseEvent;
 class QToolButton;
+class QPlainTextEdit;
+class QFontComboBox;
+class QDoubleSpinBox;
 
 namespace Edraw_Desktop {
 
@@ -43,6 +46,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    bool eventFilter(QObject* obj, QEvent* e) override; // inline text editor keys
 
 private:
     void buildRibbon();
@@ -100,6 +104,12 @@ private:
     // line spacing, bullets/numbering; multiline for MText). Returns false if
     // cancelled; otherwise fills text + style in/out.
     bool showTextDialog(bool multiline, QString& text, Editor::TextStyle& style);
+    // On-canvas in-place text editor: a text box + floating options bar + ruler,
+    // overlaid on the canvas at the insertion box. Commit applies to the entity.
+    void beginInlineText(const QString& id, const QString& text, const Editor::TextStyle& style,
+                         Vec2 topLeft, double boxW, double boxH);
+    void commitInlineText(bool apply);
+    void layoutInlineText(); // reposition overlay (e.g. after the bar resizes)
     void showCanvasMenu(const QPoint& globalPos); // right-click context menu on the canvas
     void findText();             // Find: locate & select text entities by content
     void showOptions();          // AutoCAD-style Options dialog (E menu)
@@ -131,6 +141,22 @@ private:
     QLineEdit* commandEdit_ = nullptr;
     QLabel* coordLabel_ = nullptr;
     QLabel* cmdHintLabel_ = nullptr; // applicable commands for the active draw tool
+
+    // On-canvas text editor overlay (children of the canvas).
+    QPlainTextEdit* inlineEdit_ = nullptr;
+    QWidget* inlineBar_ = nullptr;
+    QWidget* inlineRuler_ = nullptr;
+    QString inlineEditId_;          // empty => placing a new text
+    Editor::TextStyle inlineStyle_; // live style edited by the options bar
+    Vec2 inlineTopLeft_;
+    double inlineBoxW_ = 0, inlineBoxH_ = 0;
+    QFontComboBox* inlineFont_ = nullptr;
+    QDoubleSpinBox* inlineSize_ = nullptr;
+    QToolButton* inlineBold_ = nullptr;
+    QToolButton* inlineItalic_ = nullptr;
+    QComboBox* inlineJust_ = nullptr;
+    QComboBox* inlineList_ = nullptr;
+    QDoubleSpinBox* inlineSpacing_ = nullptr;
     QComboBox* layerCombo_ = nullptr;
     QComboBox* colorCombo_ = nullptr;
 

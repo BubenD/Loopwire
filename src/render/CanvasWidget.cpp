@@ -359,6 +359,13 @@ void CanvasWidget::contextMenuEvent(QContextMenuEvent* e) {
 }
 
 void CanvasWidget::mousePressEvent(QMouseEvent* e) {
+    // A click on the bare canvas while the on-canvas text editor is open commits it
+    // (clicks on the editor/toolbar children are handled by those widgets).
+    if (inlineEditing_ && e->button() == Qt::LeftButton) {
+        emit inlineCommit();
+        e->accept();
+        return;
+    }
     if (e->button() == Qt::MiddleButton) { // middle-drag pans (right-click = menu)
         panning_ = true;
         lastPanPos_ = e->pos();
