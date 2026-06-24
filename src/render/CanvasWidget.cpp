@@ -3,11 +3,13 @@
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
 
+#include <QChildEvent>
 #include <QCompleter>
 #include <QContextMenuEvent>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QResizeEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
@@ -18,6 +20,30 @@
 #include <cmath>
 
 namespace Edraw_Desktop {
+
+namespace {
+// Transparent, click-through child that paints nothing but the crosshair, kept
+// stacked above every other canvas child so the cursor is always visible — even
+// over the on-canvas text editor and its toolbar/ruler.
+class CrosshairTop : public QWidget {
+public:
+    explicit CrosshairTop(CanvasWidget* canvas) : QWidget(canvas), canvas_(canvas) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setFocusPolicy(Qt::NoFocus);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        canvas_->renderCrosshair(p);
+    }
+
+private:
+    CanvasWidget* canvas_;
+};
+} // namespace
 
 CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
@@ -38,6 +64,13 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
         "border-radius:3px;padding:1px 5px;font-size:12px;}"));
     dynInput_->hide();
     dynInput_->installEventFilter(this);
+
+    // The crosshair paints on a click-through overlay that we keep on top of all
+    // other children, so the cursor is never hidden behind the inline text editor.
+    crosshairTop_ = new CrosshairTop(this);
+    crosshairTop_->setGeometry(rect());
+    crosshairTop_->raise();
+    crosshairTop_->show();
     // NB: Enter is handled in eventFilter() and consumed there. QLineEdit does NOT
     // accept Return/Enter (it lets it bubble for dialog default buttons), so if we
     // relied on returnPressed the same Enter would propagate to the canvas and
@@ -295,7 +328,9 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
     }
-    if (cursorInside_ && !panning_) drawCrosshair(p);
+    // The crosshair is painted by the always-on-top `crosshairTop_` overlay (so it
+    // stays visible above the inline text editor), not here.
+    if (crosshairTop_) crosshairTop_->update();
 }
 
 // Full-viewport crosshair with a central pick box, AutoCAD style. Tracks the
@@ -320,6 +355,19 @@ void CanvasWidget::drawCrosshair(QPainter& p) const {
     p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - pick));
     p.drawLine(QPointF(c.x(), c.y() + pick), QPointF(c.x(), std::min<double>(height(), c.y() + arm)));
     p.drawRect(QRectF(c.x() - pick, c.y() - pick, 2 * pick, 2 * pick));
+}
+
+void CanvasWidget::resizeEvent(QResizeEvent* e) {
+    if (crosshairTop_) crosshairTop_->setGeometry(rect());
+    QWidget::resizeEvent(e);
+}
+
+void CanvasWidget::childEvent(QChildEvent* e) {
+    // Whenever any other child is added (e.g. the host's inline text editor), make
+    // sure the crosshair overlay is restacked on top so the cursor stays visible.
+    if (e->added() && crosshairTop_ && e->child() != crosshairTop_)
+        crosshairTop_->raise();
+    QWidget::childEvent(e);
 }
 
 void CanvasWidget::setCommandWords(const QStringList& words) {

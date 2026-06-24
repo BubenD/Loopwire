@@ -2164,6 +2164,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineSize_->setRange(0.1, 1000.0);
         inlineSize_->setDecimals(2);
         inlineSize_->setPrefix(QStringLiteral("H "));
+        // Height stepper shown as stacked + / - buttons.
+        inlineSize_->setButtonSymbols(QAbstractSpinBox::PlusMinus);
         inlineBold_ = new QToolButton(inlineBar_);
         inlineBold_->setText(QStringLiteral("B"));
         inlineBold_->setCheckable(true);

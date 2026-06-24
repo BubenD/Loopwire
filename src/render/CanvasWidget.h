@@ -96,7 +96,16 @@ public:
     // commits it instead of starting a new action).
     void setInlineEditing(bool on) { inlineEditing_ = on; }
 
+    // Paint the crosshair onto an arbitrary painter. Called by the transparent
+    // top-overlay child so the crosshair always renders ABOVE every other child
+    // widget (the on-canvas text editor, the flying input field, ...).
+    void renderCrosshair(QPainter& p) const {
+        if (cursorInside_ && !panning_) drawCrosshair(p);
+    }
+
 protected:
+    void resizeEvent(QResizeEvent* e) override;  // keep the crosshair overlay sized
+    void childEvent(QChildEvent* e) override;    // keep the crosshair overlay on top
     void paintEvent(QPaintEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;
@@ -126,6 +135,7 @@ private:
     void hideDynInput();
 
     QLineEdit* dynInput_ = nullptr; // floating "dynamic input" box near the cursor
+    QWidget* crosshairTop_ = nullptr; // transparent overlay that paints the crosshair on top
     QCompleter* completer_ = nullptr; // command autocomplete for the dynamic input
     QPoint lastMousePos_;           // canvas-local cursor position
     bool cursorInside_ = false;     // mouse over the canvas (draw the crosshair)
