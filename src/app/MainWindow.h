@@ -27,6 +27,8 @@ class QToolButton;
 class QPlainTextEdit;
 class QFontComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
+class QButtonGroup;
 
 namespace Edraw_Desktop {
 
@@ -50,6 +52,9 @@ protected:
 
 private:
     void buildRibbon();
+    void buildHatchRibbonTab();        // build the contextual "Hatch Creation" tab (hidden)
+    void showHatchRibbon(bool on);     // add/select or remove the contextual tab
+    void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -135,6 +140,13 @@ private:
     QVector<QToolButton*> statusArrowBtns_;
 
     QTabWidget* ribbon_ = nullptr;
+    // Contextual "Hatch Creation" ribbon tab (shown only while hatching).
+    QWidget* hatchTab_ = nullptr;
+    QButtonGroup* hatchPatternGroup_ = nullptr; // exclusive pattern swatch buttons
+    QDoubleSpinBox* hatchAngleSpin_ = nullptr;
+    QDoubleSpinBox* hatchScaleSpin_ = nullptr;
+    QSpinBox* hatchTranspSpin_ = nullptr;
+    QToolButton* hatchAssocBtn_ = nullptr;
     QTableWidget* layersTable_ = nullptr;
     QTableWidget* propsTable_ = nullptr;
     QListWidget* entityList_ = nullptr;

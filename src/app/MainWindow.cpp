@@ -14,6 +14,8 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QMessageBox>
+#include <QAbstractButton>
+#include <QButtonGroup>
 #include <QSpinBox>
 #include <QActionGroup>
 #include <QApplication>
@@ -1017,6 +1019,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
+        // AutoCAD-style contextual ribbon: the Hatch tool opens the "Hatch Creation"
+        // tab; any other tool closes it.
+        showHatchRibbon(t == ToolId::Hatch);
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
@@ -1234,86 +1239,9 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
             act->setIcon(makeSplineMethodIcon(0)); // default = Fit
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
-        } else if (id == ToolId::Hatch) {
-            // AutoCAD "Hatch Creation"-style options: boundary mode, pattern,
-            // angle/scale/transparency, associative. Clicking the button activates
-            // the tool with the current settings.
-            auto* menu = new QMenu(b);
-
-            menu->addSection(QStringLiteral("Boundary"));
-            auto* bmGroup = new QActionGroup(menu);
-            auto addBoundary = [&](const QString& label, Editor::HatchBoundary m) {
-                QAction* a = menu->addAction(label, this,
-                                             [this, m] { editor_->hatchStyle().boundary = m; });
-                a->setCheckable(true);
-                bmGroup->addAction(a);
-                if (editor_->hatchStyle().boundary == m) a->setChecked(true);
-            };
-            addBoundary(QStringLiteral("Pick points (define boundary)"),
-                        Editor::HatchBoundary::PickPoints);
-            addBoundary(QStringLiteral("Select object"), Editor::HatchBoundary::SelectObject);
-
-            menu->addSection(QStringLiteral("Pattern"));
-            auto* patGroup = new QActionGroup(menu);
-            const QList<QPair<QString, QString>> pats = {
-                {QStringLiteral("Solid"), QStringLiteral("solid")},
-                {QStringLiteral("ANSI31 (45\xC2\xB0 lines)"), QStringLiteral("ansi31")},
-                {QStringLiteral("ANSI32 (dense)"), QStringLiteral("ansi32")},
-                {QStringLiteral("Lines (horizontal)"), QStringLiteral("lines")},
-                {QStringLiteral("Grid"), QStringLiteral("grid")},
-                {QStringLiteral("Cross"), QStringLiteral("cross")},
-                {QStringLiteral("Dots"), QStringLiteral("dots")},
-                {QStringLiteral("Angle (user)"), QStringLiteral("angle")},
-            };
-            for (const auto& pp : pats) {
-                const QString key = pp.second;
-                QAction* a = menu->addAction(makeHatchSwatch(key), pp.first, this, [this, key] {
-                    editor_->hatchStyle().pattern = key;
-                    editor_->setTool(ToolId::Hatch);
-                });
-                a->setCheckable(true);
-                patGroup->addAction(a);
-                if (editor_->hatchStyle().pattern == key) a->setChecked(true);
-            }
-
-            menu->addSection(QStringLiteral("Properties"));
-            auto addSpin = [&](const QString& label, double mn, double mx, double step,
-                               double val, int decimals, std::function<void(double)> on) {
-                auto* row = new QWidget(menu);
-                auto* h = new QHBoxLayout(row);
-                h->setContentsMargins(20, 2, 12, 2);
-                h->setSpacing(6);
-                auto* lab = new QLabel(label, row);
-                lab->setMinimumWidth(92);
-                h->addWidget(lab);
-                auto* s = new QDoubleSpinBox(row);
-                s->setRange(mn, mx);
-                s->setSingleStep(step);
-                s->setDecimals(decimals);
-                s->setValue(val);
-                connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, on);
-                h->addWidget(s);
-                auto* wa = new QWidgetAction(menu);
-                wa->setDefaultWidget(row);
-                menu->addAction(wa);
-            };
-            addSpin(QStringLiteral("Angle"), 0, 180, 5, editor_->hatchStyle().angle, 0,
-                    [this](double v) { editor_->hatchStyle().angle = v; });
-            addSpin(QStringLiteral("Scale"), 0.1, 50, 0.25, editor_->hatchStyle().scale, 2,
-                    [this](double v) { editor_->hatchStyle().scale = v; });
-            addSpin(QStringLiteral("Transparency"), 0, 95, 5,
-                    editor_->hatchStyle().transparency, 0,
-                    [this](double v) { editor_->hatchStyle().transparency = static_cast<int>(v); });
-
-            menu->addSection(QStringLiteral("Options"));
-            QAction* assoc = menu->addAction(QStringLiteral("Associative"), this,
-                                             [this](bool on) { editor_->hatchStyle().associative = on; });
-            assoc->setCheckable(true);
-            assoc->setChecked(editor_->hatchStyle().associative);
-
-            b->setMenu(menu);
-            b->setPopupMode(QToolButton::MenuButtonPopup);
         }
+        // Hatch options live in the contextual "Hatch Creation" tab that opens when
+        // the tool is active (AutoCAD-style), so the ribbon button just starts it.
 
         grid->addWidget(b, i / perRow, i % perRow);
         ++i;
@@ -1571,8 +1499,196 @@ void MainWindow::buildRibbon() {
     top->setMovable(false);
     top->setFloatable(false);
     top->addWidget(ribbon_);
+    buildHatchRibbonTab(); // built once, added to the ribbon only while hatching
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
+}
+
+// The contextual "Hatch Creation" ribbon tab (AutoCAD-style): Boundaries | Pattern
+// | Properties | Options | Close. Built once and parented to the ribbon, but only
+// inserted as a visible tab while the Hatch tool is active (showHatchRibbon).
+void MainWindow::buildHatchRibbonTab() {
+    hatchTab_ = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(hatchTab_);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+    auto addGroup = [&](const QString& title, QWidget* content) {
+        lay->addWidget(ribbonGroup(title, content));
+        auto* rule = new QFrame(hatchTab_);
+        rule->setFrameShape(QFrame::VLine);
+        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        lay->addWidget(rule);
+    };
+    auto bigButton = [&](QWidget* parent, const QIcon& icon, const QString& text) {
+        auto* b = new QToolButton(parent);
+        b->setIcon(icon);
+        b->setText(text);
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setIconSize(QSize(24, 24));
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        return b;
+    };
+
+    // ---- Boundaries: Pick Points / Select ----
+    {
+        auto* w = new QWidget(hatchTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* pick = bigButton(w, makeToolIcon(ToolId::Hatch), QStringLiteral("Pick\nPoints"));
+        connect(pick, &QToolButton::clicked, this, [this] {
+            editor_->hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
+            editor_->setTool(ToolId::Hatch);
+            syncHatchRibbon();
+        });
+        auto* sel = bigButton(w, makeToolIcon(ToolId::Select), QStringLiteral("Select"));
+        connect(sel, &QToolButton::clicked, this, [this] {
+            editor_->hatchStyle().boundary = Editor::HatchBoundary::SelectObject;
+            editor_->setTool(ToolId::Hatch);
+            syncHatchRibbon();
+        });
+        g->addWidget(pick, 0, 0);
+        g->addWidget(sel, 0, 1);
+        addGroup(QStringLiteral("Boundaries"), w);
+    }
+
+    // ---- Pattern swatches (exclusive) ----
+    {
+        auto* w = new QWidget(hatchTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        hatchPatternGroup_ = new QButtonGroup(this);
+        hatchPatternGroup_->setExclusive(true);
+        const QList<QPair<QString, QString>> pats = {
+            {QStringLiteral("SOLID"), QStringLiteral("solid")},
+            {QStringLiteral("ANSI31"), QStringLiteral("ansi31")},
+            {QStringLiteral("ANSI32"), QStringLiteral("ansi32")},
+            {QStringLiteral("LINES"), QStringLiteral("lines")},
+            {QStringLiteral("GRID"), QStringLiteral("grid")},
+            {QStringLiteral("CROSS"), QStringLiteral("cross")},
+            {QStringLiteral("DOTS"), QStringLiteral("dots")},
+            {QStringLiteral("ANGLE"), QStringLiteral("angle")},
+        };
+        int i = 0;
+        const int perRow = 4;
+        for (const auto& pp : pats) {
+            const QString key = pp.second;
+            auto* b = bigButton(w, makeHatchSwatch(key), pp.first);
+            b->setCheckable(true);
+            b->setProperty("hatchKey", key);
+            if (editor_->hatchStyle().pattern == key) b->setChecked(true);
+            hatchPatternGroup_->addButton(b);
+            connect(b, &QToolButton::clicked, this, [this, key] {
+                editor_->hatchStyle().pattern = key;
+                if (editor_->tool() != ToolId::Hatch) editor_->setTool(ToolId::Hatch);
+                canvas_->update();
+            });
+            g->addWidget(b, i / perRow, i % perRow);
+            ++i;
+        }
+        addGroup(QStringLiteral("Pattern"), w);
+    }
+
+    // ---- Properties: Angle / Scale / Transparency ----
+    {
+        auto* w = new QWidget(hatchTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(2);
+        hatchAngleSpin_ = new QDoubleSpinBox(w);
+        hatchAngleSpin_->setRange(0, 180);
+        hatchAngleSpin_->setSingleStep(5);
+        hatchAngleSpin_->setDecimals(0);
+        hatchAngleSpin_->setValue(editor_->hatchStyle().angle);
+        connect(hatchAngleSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                [this](double v) { editor_->hatchStyle().angle = v; canvas_->update(); });
+        hatchScaleSpin_ = new QDoubleSpinBox(w);
+        hatchScaleSpin_->setRange(0.1, 50);
+        hatchScaleSpin_->setSingleStep(0.25);
+        hatchScaleSpin_->setDecimals(2);
+        hatchScaleSpin_->setValue(editor_->hatchStyle().scale);
+        connect(hatchScaleSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                [this](double v) { editor_->hatchStyle().scale = v; canvas_->update(); });
+        hatchTranspSpin_ = new QSpinBox(w);
+        hatchTranspSpin_->setRange(0, 95);
+        hatchTranspSpin_->setSingleStep(5);
+        hatchTranspSpin_->setValue(editor_->hatchStyle().transparency);
+        connect(hatchTranspSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this](int v) { editor_->hatchStyle().transparency = v; canvas_->update(); });
+        g->addWidget(new QLabel(QStringLiteral("Angle"), w), 0, 0);
+        g->addWidget(hatchAngleSpin_, 0, 1);
+        g->addWidget(new QLabel(QStringLiteral("Scale"), w), 1, 0);
+        g->addWidget(hatchScaleSpin_, 1, 1);
+        g->addWidget(new QLabel(QStringLiteral("Transp."), w), 2, 0);
+        g->addWidget(hatchTranspSpin_, 2, 1);
+        addGroup(QStringLiteral("Properties"), w);
+    }
+
+    // ---- Options: Associative ----
+    {
+        auto* w = new QWidget(hatchTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        hatchAssocBtn_ = bigButton(w, makeToolIcon(ToolId::Offset), QStringLiteral("Associative"));
+        hatchAssocBtn_->setCheckable(true);
+        hatchAssocBtn_->setChecked(editor_->hatchStyle().associative);
+        connect(hatchAssocBtn_, &QToolButton::toggled, this,
+                [this](bool on) { editor_->hatchStyle().associative = on; });
+        g->addWidget(hatchAssocBtn_, 0, 0);
+        addGroup(QStringLiteral("Options"), w);
+    }
+
+    // ---- Close Hatch Creation ----
+    {
+        auto* w = new QWidget(hatchTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* close = bigButton(w, makeToolIcon(ToolId::NotConnected), QStringLiteral("Close Hatch\nCreation"));
+        connect(close, &QToolButton::clicked, this, [this] { editor_->setTool(ToolId::Select); });
+        g->addWidget(close, 0, 0);
+        addGroup(QStringLiteral("Close"), w);
+    }
+
+    lay->addStretch(1);
+    hatchTab_->hide();
+}
+
+void MainWindow::syncHatchRibbon() {
+    if (!hatchTab_) return;
+    const auto& hs = editor_->hatchStyle();
+    if (hatchPatternGroup_)
+        for (QAbstractButton* b : hatchPatternGroup_->buttons())
+            if (b->property("hatchKey").toString() == hs.pattern) {
+                QSignalBlocker blk(b);
+                b->setChecked(true);
+            }
+    if (hatchAngleSpin_) { QSignalBlocker b(hatchAngleSpin_); hatchAngleSpin_->setValue(hs.angle); }
+    if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(hs.scale); }
+    if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(hs.transparency); }
+    if (hatchAssocBtn_) { QSignalBlocker b(hatchAssocBtn_); hatchAssocBtn_->setChecked(hs.associative); }
+}
+
+void MainWindow::showHatchRibbon(bool on) {
+    if (!hatchTab_ || !ribbon_) return;
+    const int idx = ribbon_->indexOf(hatchTab_);
+    if (on) {
+        syncHatchRibbon();
+        if (idx < 0) {
+            const int at = ribbon_->addTab(hatchTab_, QStringLiteral("Hatch Creation"));
+            ribbon_->setCurrentIndex(at);
+        } else {
+            ribbon_->setCurrentIndex(idx);
+        }
+        hatchTab_->show();
+    } else if (idx >= 0) {
+        ribbon_->removeTab(idx); // detaches but does not delete hatchTab_
+        ribbon_->setCurrentIndex(0); // back to Home
+    }
 }
 
 void MainWindow::buildStatusControls() {
