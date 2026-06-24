@@ -88,6 +88,8 @@ signals:
     void contextMenuRequested(const QPoint& globalPos);
     // Bare-canvas click while the on-canvas text editor is open -> commit it.
     void inlineCommit();
+    // The view changed (pan/zoom) — overlays anchored to world coords re-position.
+    void viewChanged();
 
 public:
     // True while the host's on-canvas text editor is active (so a canvas click

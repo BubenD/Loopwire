@@ -349,6 +349,7 @@ void CanvasWidget::wheelEvent(QWheelEvent* e) {
     view.y = cursor.y() + world.y * view.scale;
 
     invalidateScene();
+    emit viewChanged();
     e->accept();
 }
 
@@ -390,6 +391,7 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         doc_->view().x += delta.x();
         doc_->view().y += delta.y();
         invalidateScene();
+        emit viewChanged();
     }
     const Vec2 world = transform().toWorld(e->position());
     if (editor_) editor_->onPointerMove(world);

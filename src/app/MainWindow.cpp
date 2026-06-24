@@ -992,6 +992,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a);
     });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
+    // Keep the on-canvas text editor glued to its world position when panning/zooming.
+    connect(canvas_, &CanvasWidget::viewChanged, this, [this] {
+        if (inlineEdit_ && inlineEdit_->isVisible()) layoutInlineText();
+    });
 
     // Restore saved drafting/snap preferences before the status toggles are built
     // so their initial checked state reflects the last session.
