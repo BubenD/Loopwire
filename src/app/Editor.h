@@ -128,6 +128,15 @@ public:
     void setSelectionWeight(double weight);      // 0 => ByLayer
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
     void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
+    void setSelectionHatchMeta(const QString& key, const QJsonValue& value); // hatch pattern/angle/...
+
+    // Right-button drag (AutoCAD-style): press-drag-release on a selection (or the
+    // object under the cursor) moves a ghost; the drop offers Move / Copy / Cancel.
+    bool beginRightDrag(const Vec2& world); // false if there's nothing to drag
+    void updateRightDrag(const Vec2& world);
+    void commitRightDrag(bool copy);        // copy=false -> move the originals
+    void cancelRightDrag();
+    bool isRightDragging() const { return rightDrag_; }
     void setGeometryValue(const QString& key, double value);         // Center X/Y, Width, Height, Radius
     void setColorsByLayer();  // strip explicit color so entities follow their layer (selection, or all)
     void copySelection();          // Ctrl+C: copy (base point = selection bbox min)
@@ -330,6 +339,12 @@ private:
     // joint drag begins: drawn as a faint ghost so the source stays visible until
     // the new placement click commits.
     std::vector<Entity> editGhost_;
+
+    // Right-button drag state (move/copy via a drop menu).
+    bool rightDrag_ = false;
+    Vec2 rightDragStart_;
+    Vec2 rightDragCur_;
+    std::vector<Entity> rightDragGhost_; // originals snapshot, drawn translated as a preview
 
     // Modify command state: collected reference points.
     std::vector<Vec2> modifyPts_;

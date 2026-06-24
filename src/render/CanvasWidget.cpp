@@ -49,6 +49,9 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setAutoFillBackground(false);
+    // We drive the right-click menu (and right-drag move/copy) from the mouse
+    // events, so suppress the OS/Qt context-menu event.
+    setContextMenuPolicy(Qt::PreventContextMenu);
     setCursor(Qt::BlankCursor); // hide the OS cursor; we draw an AutoCAD crosshair
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor("#10141b"));
@@ -403,8 +406,8 @@ void CanvasWidget::wheelEvent(QWheelEvent* e) {
 }
 
 void CanvasWidget::contextMenuEvent(QContextMenuEvent* e) {
-    // Right-click: the host (MainWindow) builds and shows the canvas menu.
-    emit contextMenuRequested(e->globalPos());
+    // Suppressed (PreventContextMenu); the menu is driven from mouseReleaseEvent so
+    // a right-DRAG can offer Move/Copy instead.
     e->accept();
 }
 
@@ -416,10 +419,19 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
-    if (e->button() == Qt::MiddleButton) { // middle-drag pans (right-click = menu)
+    if (e->button() == Qt::MiddleButton) { // middle-drag pans
         panning_ = true;
         lastPanPos_ = e->pos();
         setCursor(Qt::ClosedHandCursor);
+        e->accept();
+        return;
+    }
+    if (e->button() == Qt::RightButton) {
+        // Right press: may become a drag (move/copy) or, if it doesn't move, the
+        // context menu (decided on release).
+        rightDown_ = true;
+        rightDragging_ = false;
+        rightPressPos_ = e->pos();
         e->accept();
         return;
     }
@@ -444,6 +456,16 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     }
     const Vec2 world = transform().toWorld(e->position());
     if (editor_) editor_->onPointerMove(world);
+    // Right-button drag: once moved past a small threshold, start (or continue)
+    // dragging the selection / object under the press point.
+    if (rightDown_ && editor_) {
+        if (!rightDragging_ &&
+            (e->pos() - rightPressPos_).manhattanLength() > 4) {
+            rightDragging_ = editor_->beginRightDrag(transform().toWorld(rightPressPos_));
+            if (!rightDragging_) rightDown_ = false; // nothing to drag -> plain menu on release
+        }
+        if (rightDragging_) editor_->updateRightDrag(world);
+    }
     // The flying input field tracks the cursor while it's open (after onPointerMove
     // so it follows the snapped crosshair).
     if (dynInput_ && dynInput_->isVisible()) positionDynInput();
@@ -470,6 +492,19 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         setCursor(inlineEditing_ ? Qt::ArrowCursor
                                  : Qt::BlankCursor); // resume the drawn crosshair after panning
         update();
+        e->accept();
+        return;
+    }
+    if (e->button() == Qt::RightButton && rightDown_) {
+        rightDown_ = false;
+        if (rightDragging_) {
+            rightDragging_ = false;
+            // Dropped after a drag: the host offers Move / Copy / Cancel.
+            emit rightDragDropped(e->globalPosition().toPoint());
+        } else {
+            // A plain right-click: the normal canvas context menu.
+            emit contextMenuRequested(e->globalPosition().toPoint());
+        }
         e->accept();
         return;
     }

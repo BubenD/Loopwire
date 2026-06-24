@@ -1005,6 +1005,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(canvas_, &CanvasWidget::contextMenuRequested, this,
             [this](const QPoint& gp) { showCanvasMenu(gp); });
+    // Right-button drag dropped: AutoCAD-style Move / Copy / Cancel menu.
+    connect(canvas_, &CanvasWidget::rightDragDropped, this, [this](const QPoint& gp) {
+        QMenu menu(this);
+        QAction* mv = menu.addAction(QStringLiteral("Move Here"));
+        QAction* cp = menu.addAction(QStringLiteral("Copy Here"));
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("Cancel"));
+        QAction* chosen = menu.exec(gp);
+        if (chosen == mv) editor_->commitRightDrag(false);
+        else if (chosen == cp) editor_->commitRightDrag(true);
+        else editor_->cancelRightDrag();
+    });
     connect(editor_, &Editor::message, this, [this](const QString& m) {
         statusBar()->showMessage(m);
         // Option toggles (arc/fillet/…) emit messages — keep the hint in sync.
@@ -1015,13 +1027,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshPanels();
         updateActiveTabText(); // reflect the dirty marker
     });
-    connect(editor_, &Editor::selectionChanged, this, [this] { refreshPanels(); });
+    connect(editor_, &Editor::selectionChanged, this, [this] {
+        refreshPanels();
+        updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
+    });
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
-        // AutoCAD-style contextual ribbon: the Hatch tool opens the "Hatch Creation"
-        // tab; any other tool closes it.
-        showHatchRibbon(t == ToolId::Hatch);
+        // AutoCAD-style contextual ribbon: the Hatch tool (or a selected hatch)
+        // opens the "Hatch Creation" tab.
+        updateHatchContext();
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
@@ -1582,9 +1597,15 @@ void MainWindow::buildHatchRibbonTab() {
             if (editor_->hatchStyle().pattern == key) b->setChecked(true);
             hatchPatternGroup_->addButton(b);
             connect(b, &QToolButton::clicked, this, [this, key] {
-                editor_->hatchStyle().pattern = key;
-                if (editor_->tool() != ToolId::Hatch) editor_->setTool(ToolId::Hatch);
-                canvas_->update();
+                // Editing a selected hatch: change its pattern in place (don't switch
+                // tools). Otherwise set the default and start the Hatch tool.
+                if (!hatchEditId_.isEmpty()) {
+                    applyHatchControl(QStringLiteral("pattern"), key);
+                } else {
+                    editor_->hatchStyle().pattern = key;
+                    if (editor_->tool() != ToolId::Hatch) editor_->setTool(ToolId::Hatch);
+                    canvas_->update();
+                }
             });
             g->addWidget(b, i / perRow, i % perRow);
             ++i;
@@ -1604,20 +1625,20 @@ void MainWindow::buildHatchRibbonTab() {
         hatchAngleSpin_->setDecimals(0);
         hatchAngleSpin_->setValue(editor_->hatchStyle().angle);
         connect(hatchAngleSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this](double v) { editor_->hatchStyle().angle = v; canvas_->update(); });
+                [this](double v) { applyHatchControl(QStringLiteral("hatchAngle"), v); });
         hatchScaleSpin_ = new QDoubleSpinBox(w);
         hatchScaleSpin_->setRange(0.1, 50);
         hatchScaleSpin_->setSingleStep(0.25);
         hatchScaleSpin_->setDecimals(2);
         hatchScaleSpin_->setValue(editor_->hatchStyle().scale);
         connect(hatchScaleSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this](double v) { editor_->hatchStyle().scale = v; canvas_->update(); });
+                [this](double v) { applyHatchControl(QStringLiteral("hatchScale"), v); });
         hatchTranspSpin_ = new QSpinBox(w);
         hatchTranspSpin_->setRange(0, 95);
         hatchTranspSpin_->setSingleStep(5);
         hatchTranspSpin_->setValue(editor_->hatchStyle().transparency);
         connect(hatchTranspSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-                [this](int v) { editor_->hatchStyle().transparency = v; canvas_->update(); });
+                [this](int v) { applyHatchControl(QStringLiteral("transparency"), v); });
         g->addWidget(new QLabel(QStringLiteral("Angle"), w), 0, 0);
         g->addWidget(hatchAngleSpin_, 0, 1);
         g->addWidget(new QLabel(QStringLiteral("Scale"), w), 1, 0);
@@ -1637,7 +1658,7 @@ void MainWindow::buildHatchRibbonTab() {
         hatchAssocBtn_->setCheckable(true);
         hatchAssocBtn_->setChecked(editor_->hatchStyle().associative);
         connect(hatchAssocBtn_, &QToolButton::toggled, this,
-                [this](bool on) { editor_->hatchStyle().associative = on; });
+                [this](bool on) { applyHatchControl(QStringLiteral("associative"), on); });
         g->addWidget(hatchAssocBtn_, 0, 0);
         addGroup(QStringLiteral("Options"), w);
     }
@@ -1660,17 +1681,71 @@ void MainWindow::buildHatchRibbonTab() {
 
 void MainWindow::syncHatchRibbon() {
     if (!hatchTab_) return;
-    const auto& hs = editor_->hatchStyle();
+    // Read from the selected hatch being edited, else from the new-hatch defaults.
+    QString pattern = editor_->hatchStyle().pattern;
+    double angle = editor_->hatchStyle().angle;
+    double scale = editor_->hatchStyle().scale;
+    int transp = editor_->hatchStyle().transparency;
+    bool assoc = editor_->hatchStyle().associative;
+    if (!hatchEditId_.isEmpty() && doc_) {
+        for (const auto& e : doc_->entities())
+            if (e.id == hatchEditId_ && e.type == EntityType::Hatch) {
+                pattern = e.meta.value(QStringLiteral("pattern")).toString(pattern);
+                angle = e.meta.value(QStringLiteral("hatchAngle")).toDouble(angle);
+                scale = e.meta.value(QStringLiteral("hatchScale")).toDouble(scale);
+                transp = e.meta.value(QStringLiteral("transparency")).toInt(transp);
+                assoc = e.meta.value(QStringLiteral("associative")).toBool(assoc);
+                break;
+            }
+    }
     if (hatchPatternGroup_)
         for (QAbstractButton* b : hatchPatternGroup_->buttons())
-            if (b->property("hatchKey").toString() == hs.pattern) {
+            if (b->property("hatchKey").toString() == pattern) {
                 QSignalBlocker blk(b);
                 b->setChecked(true);
             }
-    if (hatchAngleSpin_) { QSignalBlocker b(hatchAngleSpin_); hatchAngleSpin_->setValue(hs.angle); }
-    if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(hs.scale); }
-    if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(hs.transparency); }
-    if (hatchAssocBtn_) { QSignalBlocker b(hatchAssocBtn_); hatchAssocBtn_->setChecked(hs.associative); }
+    if (hatchAngleSpin_) { QSignalBlocker b(hatchAngleSpin_); hatchAngleSpin_->setValue(angle); }
+    if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(scale); }
+    if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(transp); }
+    if (hatchAssocBtn_) { QSignalBlocker b(hatchAssocBtn_); hatchAssocBtn_->setChecked(assoc); }
+}
+
+// Apply a control change to the selected hatch (edit mode) or to the new-hatch
+// defaults (creation mode), and repaint.
+void MainWindow::applyHatchControl(const QString& key, const QJsonValue& value) {
+    if (!hatchEditId_.isEmpty()) {
+        editor_->setSelectionHatchMeta(key, value);
+    } else {
+        auto& hs = editor_->hatchStyle();
+        if (key == QLatin1String("pattern")) hs.pattern = value.toString();
+        else if (key == QLatin1String("hatchAngle")) hs.angle = value.toDouble();
+        else if (key == QLatin1String("hatchScale")) hs.scale = value.toDouble();
+        else if (key == QLatin1String("transparency")) hs.transparency = value.toInt();
+        else if (key == QLatin1String("associative")) hs.associative = value.toBool();
+    }
+    canvas_->update();
+}
+
+// Open/close the contextual tab and decide its edit target: the Hatch tool edits
+// the new-hatch defaults; a single selected hatch (in Select) edits that hatch.
+void MainWindow::updateHatchContext() {
+    const bool creating = editor_->tool() == ToolId::Hatch;
+    QString selHatch;
+    if (!creating && doc_ && editor_->selection().size() == 1) {
+        const QString id = editor_->selection().front();
+        for (const auto& e : doc_->entities())
+            if (e.id == id && e.type == EntityType::Hatch) { selHatch = id; break; }
+    }
+    if (creating) {
+        hatchEditId_.clear();
+        showHatchRibbon(true);
+    } else if (!selHatch.isEmpty()) {
+        hatchEditId_ = selHatch;
+        showHatchRibbon(true);
+    } else {
+        hatchEditId_.clear();
+        showHatchRibbon(false);
+    }
 }
 
 void MainWindow::showHatchRibbon(bool on) {
@@ -1679,9 +1754,13 @@ void MainWindow::showHatchRibbon(bool on) {
     if (on) {
         syncHatchRibbon();
         if (idx < 0) {
-            const int at = ribbon_->addTab(hatchTab_, QStringLiteral("Hatch Creation"));
+            const int at = ribbon_->addTab(hatchTab_, hatchEditId_.isEmpty()
+                                                           ? QStringLiteral("Hatch Creation")
+                                                           : QStringLiteral("Hatch Editor"));
             ribbon_->setCurrentIndex(at);
         } else {
+            ribbon_->setTabText(idx, hatchEditId_.isEmpty() ? QStringLiteral("Hatch Creation")
+                                                            : QStringLiteral("Hatch Editor"));
             ribbon_->setCurrentIndex(idx);
         }
         hatchTab_->show();

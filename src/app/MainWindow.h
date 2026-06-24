@@ -55,6 +55,8 @@ private:
     void buildHatchRibbonTab();        // build the contextual "Hatch Creation" tab (hidden)
     void showHatchRibbon(bool on);     // add/select or remove the contextual tab
     void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
+    void updateHatchContext();         // open/close + target the tab based on tool/selection
+    void applyHatchControl(const QString& key, const QJsonValue& value); // -> selected hatch or default
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -147,6 +149,7 @@ private:
     QDoubleSpinBox* hatchScaleSpin_ = nullptr;
     QSpinBox* hatchTranspSpin_ = nullptr;
     QToolButton* hatchAssocBtn_ = nullptr;
+    QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;
     QTableWidget* propsTable_ = nullptr;
     QListWidget* entityList_ = nullptr;

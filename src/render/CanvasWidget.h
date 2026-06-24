@@ -87,6 +87,8 @@ signals:
     void commandSubmitted(const QString& text);
     // Right-click on the canvas: the host shows a context menu at this global pos.
     void contextMenuRequested(const QPoint& globalPos);
+    // Right-button DRAG dropped: the host offers Move / Copy / Cancel at this pos.
+    void rightDragDropped(const QPoint& globalPos);
     // Bare-canvas click while the on-canvas text editor is open -> commit it.
     void inlineCommit();
     // The view changed (pan/zoom) — overlays anchored to world coords re-position.
@@ -171,6 +173,10 @@ private:
 
     bool panning_ = false;
     QPoint lastPanPos_;
+    // Right-button drag (move/copy via drop menu) vs plain right-click (menu).
+    bool rightDown_ = false;
+    bool rightDragging_ = false;
+    QPoint rightPressPos_;
     bool inlineEditing_ = false; // host's on-canvas text editor is open
 
     static constexpr double kMaxViewScale = 4000.0;

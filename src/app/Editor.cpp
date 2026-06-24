@@ -2686,6 +2686,77 @@ void Editor::setSelectionTextMeta(const QString& key, const QJsonValue& value) {
     emit changed();
 }
 
+void Editor::setSelectionHatchMeta(const QString& key, const QJsonValue& value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel)
+        if (e->type == EntityType::Hatch) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+bool Editor::beginRightDrag(const Vec2& world) {
+    if (!doc_ || tool_ != ToolId::Select) return false;
+    // Drag the current selection; if nothing is selected, grab the object under
+    // the cursor (and select it).
+    if (selected_.empty()) {
+        if (auto hit = hitTest(world)) {
+            selected_ = {*hit};
+            emit selectionChanged();
+        } else {
+            return false;
+        }
+    }
+    rightDragGhost_.clear();
+    for (const auto& id : selected_)
+        if (Entity* e = entityById(id)) rightDragGhost_.push_back(*e);
+    if (rightDragGhost_.empty()) return false;
+    rightDrag_ = true;
+    rightDragStart_ = world;
+    rightDragCur_ = world;
+    emit overlayChanged();
+    return true;
+}
+
+void Editor::updateRightDrag(const Vec2& world) {
+    if (!rightDrag_) return;
+    rightDragCur_ = world;
+    emit overlayChanged();
+}
+
+void Editor::commitRightDrag(bool copy) {
+    if (!rightDrag_ || !doc_) { cancelRightDrag(); return; }
+    const Vec2 delta = rightDragCur_ - rightDragStart_;
+    pushUndo();
+    if (copy) {
+        std::vector<QString> newSel;
+        for (Entity src : rightDragGhost_) {
+            src.id = uid();
+            translateEntity(src, delta);
+            newSel.push_back(src.id);
+            doc_->entities().push_back(std::move(src));
+        }
+        selected_ = newSel; // select the copies
+    } else {
+        for (const auto& id : selected_)
+            if (Entity* e = entityById(id)) translateEntity(*e, delta);
+    }
+    rightDrag_ = false;
+    rightDragGhost_.clear();
+    doc_->setDirty(true);
+    emit message(copy ? QStringLiteral("Copied here") : QStringLiteral("Moved here"));
+    emit selectionChanged();
+    emit changed();
+}
+
+void Editor::cancelRightDrag() {
+    if (!rightDrag_) return;
+    rightDrag_ = false;
+    rightDragGhost_.clear();
+    emit overlayChanged();
+}
+
 void Editor::setGeometryValue(const QString& key, double v) {
     auto sel = selectedEntities();
     if (sel.size() != 1) return;
@@ -2798,6 +2869,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // Cancel any in-progress operation and clear the whole selection.
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
+        cancelRightDrag();
         cancelDraw();
         modifyPts_.clear();
         pickIds_.clear();
@@ -2863,6 +2935,16 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
+
+    // Right-button drag: preview the selection translated to the current offset.
+    if (rightDrag_) {
+        const Vec2 delta = rightDragCur_ - rightDragStart_;
+        const QColor ghost(120, 200, 255, 160);
+        for (Entity e : rightDragGhost_) {
+            translateEntity(e, delta);
+            EntityRenderer::draw(p, e, *doc_, vt, ghost);
+        }
+    }
 
     // Polar tracking guide: when the cursor has locked onto a polar angle, draw a
     // bright green ray FROM the reference point TOWARD the drawing direction,

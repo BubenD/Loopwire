@@ -1257,6 +1257,72 @@ int run_editor_tests() {
         check(ed.selection().size() == 1, "wipeout: interior click selects the filled region");
     }
 
+    // --- Right-button drag: move and copy.
+    {
+        // Move the selection by the drag delta.
+        {
+            Document d; d.entities().clear();
+            Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+            d.entities().push_back(l);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            ed.selectAll();
+            check(ed.beginRightDrag({0, 0}), "rdrag: begins on a selection");
+            check(ed.isRightDragging(), "rdrag: dragging flag set");
+            ed.updateRightDrag({0, 5});
+            ed.commitRightDrag(false); // Move Here
+            check(near(d.entities()[0].a.y, 5.0) && near(d.entities()[0].b.y, 5.0) &&
+                      d.entities().size() == 1,
+                  "rdrag: Move translates the originals");
+        }
+        // Copy leaves the original and adds a translated duplicate.
+        {
+            Document d; d.entities().clear();
+            Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+            d.entities().push_back(l);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            ed.selectAll();
+            ed.beginRightDrag({5, 0});
+            ed.updateRightDrag({5, 20});
+            ed.commitRightDrag(true); // Copy Here
+            check(d.entities().size() == 2, "rdrag: Copy adds a duplicate");
+            check(near(d.entities()[0].a.y, 0.0), "rdrag: Copy keeps the original");
+            check(near(d.entities()[1].a.y, 20.0) && near(d.entities()[1].b.y, 20.0),
+                  "rdrag: Copy is translated by the delta");
+        }
+        // With nothing selected, the drag grabs the object under the start point.
+        {
+            Document d; d.entities().clear();
+            Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+            d.entities().push_back(l);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            check(ed.beginRightDrag({5, 0}), "rdrag: grabs the object under the cursor");
+            check(ed.selection().size() == 1, "rdrag: selects the grabbed object");
+            ed.cancelRightDrag();
+            check(!ed.isRightDragging(), "rdrag: cancel clears the drag");
+            check(near(d.entities()[0].a.x, 0.0), "rdrag: cancel leaves geometry unchanged");
+        }
+    }
+
+    // --- Editing a selected hatch's pattern in place (Hatch Editor tab).
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Hatch;
+        h.points = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+        h.meta.insert("pattern", QStringLiteral("ansi31"));
+        d.entities().push_back(h);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("h");
+        ed.setSelectionHatchMeta(QStringLiteral("pattern"), QStringLiteral("grid"));
+        check(d.entities()[0].meta.value("pattern").toString() == QLatin1String("grid"),
+              "hatch-edit: setSelectionHatchMeta changes the selected hatch's pattern");
+        ed.setSelectionHatchMeta(QStringLiteral("hatchAngle"), 45.0);
+        check(near(d.entities()[0].meta.value("hatchAngle").toDouble(), 45.0),
+              "hatch-edit: hatch angle updates");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
