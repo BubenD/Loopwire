@@ -52,12 +52,21 @@ public:
 
     // Command-bar / dialog text completion (e.g. typed numeric value, text).
     void provideText(const QString& text);
+    // Style passed to/from the text editor (font, size, paragraph formatting).
+    struct TextStyle {
+        double size = 5.0;
+        QString font;
+        bool bold = false;
+        bool italic = false;
+        QString justify = QStringLiteral("TL"); // TL..BR (vert T/M/B + horiz L/C/R)
+        double lineSpacing = 1.0;
+        QString list = QStringLiteral("none"); // none / bullet / number
+    };
     // Place a styled text/mtext entity at the pending click position; `text` may
     // contain newlines for multiline. Empty `text` cancels.
-    void commitText(const QString& text, double size, const QString& font, bool bold, bool italic);
+    void commitText(const QString& text, const TextStyle& s);
     // Update an existing text entity's content/style (used by double-click edit).
-    void applyTextEdit(const QString& id, const QString& text, double size,
-                       const QString& font, bool bold, bool italic);
+    void applyTextEdit(const QString& id, const QString& text, const TextStyle& s);
     // Ask the host to open the rich text editor for entity `id` (Properties "Edit...").
     void emitEditText(const QString& id) { emit editTextRequested(id); }
 

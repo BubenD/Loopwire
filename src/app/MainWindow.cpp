@@ -908,13 +908,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         // Rich text editor: multiline for the MText tool, single-line for Text.
         const bool multiline = editor_->tool() == ToolId::MText;
         QString text;
-        double size = 5.0;
-        QString font;
-        bool bold = false, italic = false;
-        if (showTextDialog(multiline, text, size, font, bold, italic) && !text.isEmpty())
-            editor_->commitText(text, size, font, bold, italic);
+        Editor::TextStyle style;
+        if (showTextDialog(multiline, text, style) && !text.isEmpty())
+            editor_->commitText(text, style);
         else
-            editor_->commitText(QString(), size, font, bold, italic); // cancel: clears the pending point
+            editor_->commitText(QString(), style); // cancel: clears the pending point
     });
     connect(editor_, &Editor::editTextRequested, this, [this](const QString& id) {
         if (!doc_) return;
@@ -923,13 +921,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             if (e.id == id) { found = &e; break; }
         if (!found) return;
         QString text = found->meta.value(QStringLiteral("text")).toString();
-        double size = found->meta.value(QStringLiteral("size")).toDouble(5.0);
-        QString font = found->meta.value(QStringLiteral("font")).toString();
-        bool bold = found->meta.value(QStringLiteral("bold")).toBool();
-        bool italic = found->meta.value(QStringLiteral("italic")).toBool();
+        Editor::TextStyle style;
+        style.size = found->meta.value(QStringLiteral("size")).toDouble(5.0);
+        style.font = found->meta.value(QStringLiteral("font")).toString();
+        style.bold = found->meta.value(QStringLiteral("bold")).toBool();
+        style.italic = found->meta.value(QStringLiteral("italic")).toBool();
+        style.justify = found->meta.value(QStringLiteral("justify")).toString();
+        if (style.justify.isEmpty()) style.justify = QStringLiteral("TL");
+        style.lineSpacing = found->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0);
+        style.list = found->meta.value(QStringLiteral("list")).toString();
+        if (style.list.isEmpty()) style.list = QStringLiteral("none");
         const bool multiline = text.contains(QLatin1Char('\n'));
-        if (showTextDialog(multiline, text, size, font, bold, italic))
-            editor_->applyTextEdit(id, text, size, font, bold, italic);
+        if (showTextDialog(multiline, text, style))
+            editor_->applyTextEdit(id, text, style);
     });
 
     // Restore saved drafting/snap preferences before the status toggles are built
@@ -1943,37 +1947,62 @@ void MainWindow::applyTheme(bool dark) {
 
 // ---- About dialog ----------------------------------------------------------
 
-bool MainWindow::showTextDialog(bool multiline, QString& text, double& size, QString& font,
-                                bool& bold, bool& italic) {
+bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle& style) {
     QDialog dlg(this);
     dlg.setWindowTitle(multiline ? QStringLiteral("Multiline text") : QStringLiteral("Text"));
-    dlg.setMinimumWidth(420);
+    dlg.setMinimumWidth(460);
     auto* lay = new QVBoxLayout(&dlg);
 
     // Font / size / style row.
     auto* row = new QHBoxLayout();
     auto* fontCombo = new QFontComboBox(&dlg);
-    if (!font.isEmpty()) fontCombo->setCurrentFont(QFont(font));
+    if (!style.font.isEmpty()) fontCombo->setCurrentFont(QFont(style.font));
     auto* sizeSpin = new QDoubleSpinBox(&dlg);
     sizeSpin->setRange(0.1, 1000.0);
     sizeSpin->setDecimals(2);
-    sizeSpin->setValue(size > 0 ? size : 5.0);
+    sizeSpin->setValue(style.size > 0 ? style.size : 5.0);
     sizeSpin->setPrefix(QStringLiteral("H "));
     auto* boldBtn = new QToolButton(&dlg);
     boldBtn->setText(QStringLiteral("B"));
     boldBtn->setCheckable(true);
-    boldBtn->setChecked(bold);
+    boldBtn->setChecked(style.bold);
     { QFont bf = boldBtn->font(); bf.setBold(true); boldBtn->setFont(bf); }
     auto* italicBtn = new QToolButton(&dlg);
     italicBtn->setText(QStringLiteral("I"));
     italicBtn->setCheckable(true);
-    italicBtn->setChecked(italic);
+    italicBtn->setChecked(style.italic);
     { QFont itf = italicBtn->font(); itf.setItalic(true); italicBtn->setFont(itf); }
     row->addWidget(fontCombo, 1);
     row->addWidget(sizeSpin);
     row->addWidget(boldBtn);
     row->addWidget(italicBtn);
     lay->addLayout(row);
+
+    // Paragraph formatting row: Justification, Bullets/Numbering, Line spacing.
+    auto* fmtRow = new QHBoxLayout();
+    auto* justCombo = new QComboBox(&dlg);
+    const QVector<QPair<QString, QString>> justs = {
+        {"Top Left", "TL"},     {"Top Center", "TC"},     {"Top Right", "TR"},
+        {"Middle Left", "ML"},  {"Middle Center", "MC"},  {"Middle Right", "MR"},
+        {"Bottom Left", "BL"},  {"Bottom Center", "BC"},  {"Bottom Right", "BR"}};
+    for (const auto& j : justs) justCombo->addItem(j.first, j.second);
+    justCombo->setCurrentIndex(std::max(0, justCombo->findData(style.justify)));
+    auto* listCombo = new QComboBox(&dlg);
+    listCombo->addItem(QStringLiteral("No list"), QStringLiteral("none"));
+    listCombo->addItem(QStringLiteral("Bullets"), QStringLiteral("bullet"));
+    listCombo->addItem(QStringLiteral("Numbered"), QStringLiteral("number"));
+    listCombo->setCurrentIndex(std::max(0, listCombo->findData(style.list)));
+    auto* spacingSpin = new QDoubleSpinBox(&dlg);
+    spacingSpin->setRange(0.5, 4.0);
+    spacingSpin->setSingleStep(0.25);
+    spacingSpin->setDecimals(2);
+    spacingSpin->setValue(style.lineSpacing > 0 ? style.lineSpacing : 1.0);
+    spacingSpin->setPrefix(QStringLiteral("Line × "));
+    fmtRow->addWidget(new QLabel(QStringLiteral("Justify:"), &dlg));
+    fmtRow->addWidget(justCombo, 1);
+    fmtRow->addWidget(listCombo);
+    fmtRow->addWidget(spacingSpin);
+    lay->addLayout(fmtRow);
 
     // Text body (multiline or single line).
     auto* edit = new QPlainTextEdit(&dlg);
@@ -2028,10 +2057,13 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, double& size, QSt
     if (dlg.exec() != QDialog::Accepted) return false;
     text = edit->toPlainText();
     if (!multiline) text.replace(QLatin1Char('\n'), QLatin1Char(' ')); // single line stays one line
-    size = sizeSpin->value();
-    font = fontCombo->currentFont().family();
-    bold = boldBtn->isChecked();
-    italic = italicBtn->isChecked();
+    style.size = sizeSpin->value();
+    style.font = fontCombo->currentFont().family();
+    style.bold = boldBtn->isChecked();
+    style.italic = italicBtn->isChecked();
+    style.justify = justCombo->currentData().toString();
+    style.list = listCombo->currentData().toString();
+    style.lineSpacing = spacingSpin->value();
     return true;
 }
 
@@ -2682,15 +2714,46 @@ void MainWindow::refreshProperties() {
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("italic"), v == QLatin1String("Yes"));
                  });
-        const QString al = e->meta.value(QStringLiteral("align")).toString();
-        addCombo(QStringLiteral("Justify"),
-                 {QStringLiteral("Left"), QStringLiteral("Center"), QStringLiteral("Right")},
-                 al == QLatin1String("center") ? QStringLiteral("Center")
-                 : al == QLatin1String("right") ? QStringLiteral("Right")
-                                                : QStringLiteral("Left"),
-                 false, [this](const QString& v) {
-                     editor_->setSelectionTextMeta(QStringLiteral("align"), v.toLower());
+        // Justification: 9-point (vertical T/M/B + horizontal L/C/R).
+        static const QVector<QPair<QString, QString>> justNames = {
+            {"Top Left", "TL"},    {"Top Center", "TC"},    {"Top Right", "TR"},
+            {"Middle Left", "ML"}, {"Middle Center", "MC"}, {"Middle Right", "MR"},
+            {"Bottom Left", "BL"}, {"Bottom Center", "BC"}, {"Bottom Right", "BR"}};
+        QStringList justLabels;
+        for (const auto& j : justNames) justLabels << j.first;
+        QString curJust = e->meta.value(QStringLiteral("justify")).toString();
+        if (curJust.isEmpty()) curJust = QStringLiteral("TL");
+        QString curJustName = QStringLiteral("Top Left");
+        for (const auto& j : justNames) if (j.second == curJust) curJustName = j.first;
+        addCombo(QStringLiteral("Justify"), justLabels, curJustName, false,
+                 [this](const QString& name) {
+                     for (const auto& j : justNames)
+                         if (j.first == name) {
+                             editor_->setSelectionTextMeta(QStringLiteral("justify"), j.second);
+                             return;
+                         }
                  });
+        // Bullets / numbering.
+        const QString curList = e->meta.value(QStringLiteral("list")).toString();
+        addCombo(QStringLiteral("List"),
+                 {QStringLiteral("No list"), QStringLiteral("Bullets"), QStringLiteral("Numbered")},
+                 curList == QLatin1String("bullet")   ? QStringLiteral("Bullets")
+                 : curList == QLatin1String("number") ? QStringLiteral("Numbered")
+                                                      : QStringLiteral("No list"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(
+                         QStringLiteral("list"),
+                         v == QLatin1String("Bullets")    ? QStringLiteral("bullet")
+                         : v == QLatin1String("Numbered") ? QStringLiteral("number")
+                                                          : QStringLiteral("none"));
+                 });
+        // Line spacing factor.
+        addNum(QStringLiteral("Line spacing"),
+               e->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0),
+               [this](double v) {
+                   editor_->setSelectionTextMeta(QStringLiteral("lineSpacing"),
+                                                 v > 0 ? v : 1.0);
+               });
         // Container wrap width (0 = no wrapping / single column). Also draggable
         // via the right-edge grip on the object.
         addNum(QStringLiteral("Box width"), e->meta.value(QStringLiteral("boxWidth")).toDouble(0.0),

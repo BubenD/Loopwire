@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/Editor.h" // Editor::TextStyle used in a method signature
 #include "model/Document.h"
 #include "tools/ToolId.h"
 
@@ -95,10 +96,10 @@ private:
     void saveDwxAs();
     void exportDxfAs();
 
-    // Rich text editor dialog (font / size / bold / italic / case; multiline for
-    // MText). Returns false if cancelled; otherwise fills text + style in/out.
-    bool showTextDialog(bool multiline, QString& text, double& size, QString& font,
-                        bool& bold, bool& italic);
+    // Rich text editor dialog (font / size / bold / italic / case; justification,
+    // line spacing, bullets/numbering; multiline for MText). Returns false if
+    // cancelled; otherwise fills text + style in/out.
+    bool showTextDialog(bool multiline, QString& text, Editor::TextStyle& style);
     void showCanvasMenu(const QPoint& globalPos); // right-click context menu on the canvas
     void findText();             // Find: locate & select text entities by content
     void showOptions();          // AutoCAD-style Options dialog (E menu)

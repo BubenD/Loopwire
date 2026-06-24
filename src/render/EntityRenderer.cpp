@@ -220,17 +220,35 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         p.setFont(f);
         p.setPen(color);
         const QFontMetricsF fm(f);
-        const double lineH = fm.height();
-        const QString al = e.meta.value("align").toString();
-        // MTEXT container: word-wrap each paragraph to the box width (world units).
-        const double boxPx = e.meta.value("boxWidth").toDouble(0.0) * vt.scale();
+        const double spacing = e.meta.value("lineSpacing").toDouble(1.0);
+        const double lineH = fm.height() * (spacing > 0 ? spacing : 1.0);
+        const double boxWpx = e.meta.value("boxWidth").toDouble(0.0) * vt.scale();
+        const double boxHpx = e.meta.value("boxHeight").toDouble(0.0) * vt.scale();
+
+        // Justification: "TL".."BR" (vertical T/M/B + horizontal L/C/R). Fall back
+        // to the older "align" (left/center/right) when no justify is set.
+        QString just = e.meta.value("justify").toString();
+        if (just.size() < 2) {
+            const QString al = e.meta.value("align").toString();
+            just = QStringLiteral("T") + (al == QLatin1String("center") ? QStringLiteral("C")
+                                          : al == QLatin1String("right") ? QStringLiteral("R")
+                                                                         : QStringLiteral("L"));
+        }
+        const QChar vJust = just[0], hJust = just[1];
+
+        // Bullets / numbering: prefix each paragraph; then word-wrap to the box.
+        const QString list = e.meta.value("list").toString();
         QStringList lines;
+        int num = 1;
         for (const QString& para : text.split(QLatin1Char('\n'))) {
-            if (boxPx <= 1.0) { lines << para; continue; }
+            QString full = para;
+            if (list == QLatin1String("bullet")) full = QString::fromUtf8("• ") + para;
+            else if (list == QLatin1String("number")) full = QString::number(num++) + ". " + para;
+            if (boxWpx <= 1.0) { lines << full; continue; }
             QString cur;
-            for (const QString& w : para.split(QLatin1Char(' '))) {
+            for (const QString& w : full.split(QLatin1Char(' '))) {
                 const QString test = cur.isEmpty() ? w : cur + QLatin1Char(' ') + w;
-                if (!cur.isEmpty() && fm.horizontalAdvance(test) > boxPx) {
+                if (!cur.isEmpty() && fm.horizontalAdvance(test) > boxWpx) {
                     lines << cur;
                     cur = w;
                 } else {
@@ -239,13 +257,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             lines << cur;
         }
-        // Stack lines downward from the anchor. With a box, drop the first baseline
-        // by the ascent so the text sits inside the container's top edge.
-        double y = anchor.y() + (boxPx > 1.0 ? fm.ascent() : 0.0);
+
+        // Vertical placement within the container (screen Y grows downward; anchor
+        // is the box top). T = top, M = centre, B = bottom of the box.
+        const double totalH = lineH * lines.size();
+        const double availH = boxHpx > 1.0 ? boxHpx : totalH;
+        double blockTop = anchor.y();
+        if (vJust == QLatin1Char('M')) blockTop += (availH - totalH) / 2.0;
+        else if (vJust == QLatin1Char('B')) blockTop += availH - totalH;
+        double y = blockTop + fm.ascent();
         for (const QString& ln : lines) {
+            const double lw = fm.horizontalAdvance(ln);
+            const double avail = boxWpx > 1.0 ? boxWpx : 0.0;
             double x = anchor.x();
-            if (al == QLatin1String("center")) x -= fm.horizontalAdvance(ln) / 2.0;
-            else if (al == QLatin1String("right")) x -= fm.horizontalAdvance(ln);
+            if (hJust == QLatin1Char('C')) x += (avail - lw) / 2.0;
+            else if (hJust == QLatin1Char('R')) x += avail - lw;
             p.drawText(QPointF(x, y), ln);
             y += lineH;
         }

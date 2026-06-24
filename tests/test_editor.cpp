@@ -379,7 +379,10 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::MText);
         ed.onPointerPress({10, 20}, Qt::LeftButton, Qt::NoModifier); // sets the insert point
-        ed.commitText(QStringLiteral("Hello\nWorld"), 7.5, QStringLiteral("Arial"), true, false);
+        Editor::TextStyle st;
+        st.size = 7.5; st.font = QStringLiteral("Arial"); st.bold = true;
+        st.justify = QStringLiteral("MC"); st.lineSpacing = 1.5; st.list = QStringLiteral("bullet");
+        ed.commitText(QStringLiteral("Hello\nWorld"), st);
         check(d.entities().size() == 1, "text: created");
         const Entity& e = d.entities()[0];
         const QString id = e.id;
@@ -387,9 +390,14 @@ int run_editor_tests() {
                   e.meta.value(QStringLiteral("text")).toString() == QLatin1String("Hello\nWorld") &&
                   near(e.meta.value(QStringLiteral("size")).toDouble(), 7.5) &&
                   e.meta.value(QStringLiteral("font")).toString() == QLatin1String("Arial") &&
-                  e.meta.value(QStringLiteral("bold")).toBool(),
-              "text: multiline content + font/size/bold stored");
-        ed.applyTextEdit(id, QStringLiteral("BYE"), 3.0, QStringLiteral("Times"), false, true);
+                  e.meta.value(QStringLiteral("bold")).toBool() &&
+                  e.meta.value(QStringLiteral("justify")).toString() == QLatin1String("MC") &&
+                  near(e.meta.value(QStringLiteral("lineSpacing")).toDouble(), 1.5) &&
+                  e.meta.value(QStringLiteral("list")).toString() == QLatin1String("bullet"),
+              "text: content + font/size/bold + justify/spacing/list stored");
+        Editor::TextStyle st2;
+        st2.size = 3.0; st2.font = QStringLiteral("Times"); st2.italic = true;
+        ed.applyTextEdit(id, QStringLiteral("BYE"), st2);
         const Entity& e2 = d.entities()[0];
         check(e2.meta.value(QStringLiteral("text")).toString() == QLatin1String("BYE") &&
                   near(e2.meta.value(QStringLiteral("size")).toDouble(), 3.0) &&
@@ -410,7 +418,7 @@ int run_editor_tests() {
         ed.setTool(ToolId::MText);
         ed.onPointerPress({0, 40}, Qt::LeftButton, Qt::NoModifier);   // first corner
         ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);  // opposite corner (100 wide)
-        ed.commitText(QStringLiteral("a fairly long run of words"), 5.0, QString(), false, false);
+        ed.commitText(QStringLiteral("a fairly long run of words"), Editor::TextStyle{});
         const Entity& e = d.entities()[0];
         check(e.type == EntityType::Text &&
                   near(e.meta.value(QStringLiteral("boxWidth")).toDouble(), 100.0) &&

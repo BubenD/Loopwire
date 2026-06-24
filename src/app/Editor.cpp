@@ -2012,11 +2012,21 @@ bool Editor::acceptCommandInput(const QString& text) {
 }
 
 void Editor::provideText(const QString& text) {
-    commitText(text, 5.0, QString(), false, false);
+    commitText(text, TextStyle{});
 }
 
-void Editor::commitText(const QString& text, double size, const QString& font, bool bold,
-                        bool italic) {
+// Apply font + paragraph style fields onto a text entity's meta.
+static void writeTextStyle(Entity& e, const Editor::TextStyle& s) {
+    e.meta.insert("size", s.size > 0 ? s.size : 5.0);
+    e.meta.insert("font", s.font);
+    e.meta.insert("bold", s.bold);
+    e.meta.insert("italic", s.italic);
+    e.meta.insert("justify", s.justify.isEmpty() ? QStringLiteral("TL") : s.justify);
+    e.meta.insert("lineSpacing", s.lineSpacing > 0 ? s.lineSpacing : 1.0);
+    e.meta.insert("list", s.list.isEmpty() ? QStringLiteral("none") : s.list);
+}
+
+void Editor::commitText(const QString& text, const TextStyle& s) {
     if ((tool_ == ToolId::Text || tool_ == ToolId::MText) && !draftPts_.empty() &&
         !text.isEmpty()) {
         Entity e;
@@ -2034,10 +2044,7 @@ void Editor::commitText(const QString& text, double size, const QString& font, b
             e.a = draftPts_[0];
         }
         e.meta.insert("text", text);
-        e.meta.insert("size", size > 0 ? size : 5.0);
-        if (!font.isEmpty()) e.meta.insert("font", font);
-        if (bold) e.meta.insert("bold", true);
-        if (italic) e.meta.insert("italic", true);
+        writeTextStyle(e, s);
         pushUndo();
         addEntity(std::move(e));
     }
@@ -2046,8 +2053,7 @@ void Editor::commitText(const QString& text, double size, const QString& font, b
     setTool(ToolId::Select); // return to Select after placing text
 }
 
-void Editor::applyTextEdit(const QString& id, const QString& text, double size,
-                           const QString& font, bool bold, bool italic) {
+void Editor::applyTextEdit(const QString& id, const QString& text, const TextStyle& s) {
     Entity* e = entityById(id);
     if (!e || e->type != EntityType::Text) return;
     pushUndo();
@@ -2063,10 +2069,7 @@ void Editor::applyTextEdit(const QString& id, const QString& text, double size,
         return;
     }
     e->meta.insert("text", text);
-    e->meta.insert("size", size > 0 ? size : 5.0);
-    e->meta.insert("font", font);
-    e->meta.insert("bold", bold);
-    e->meta.insert("italic", italic);
+    writeTextStyle(*e, s);
     doc_->setDirty(true);
     emit changed();
 }
