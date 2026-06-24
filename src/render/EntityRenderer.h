@@ -42,6 +42,11 @@ public:
     // Number of decimals shown on dimension labels (Options dialog).
     static void setDimensionDecimals(int d);
     static int dimensionDecimals();
+
+    // Canvas background color, so a Wipeout fills with an opaque mask that matches
+    // the model-space background (kept in sync by the CanvasWidget).
+    static void setBackgroundColor(const QColor& c);
+    static QColor backgroundColor();
 };
 
 } // namespace Edraw_Desktop

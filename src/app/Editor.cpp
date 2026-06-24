@@ -285,11 +285,27 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         break;
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
-    case EntityType::Wipeout:
         for (size_t i = 0; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
         break;
+    case EntityType::Hatch:
+    case EntityType::Wipeout: {
+        for (size_t i = 0; i < e.points.size(); ++i)
+            best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
+        // A filled region is also pickable anywhere inside it (ray-cast test).
+        if (e.points.size() >= 3) {
+            bool inside = false;
+            for (size_t i = 0, j = e.points.size() - 1; i < e.points.size(); j = i++) {
+                const Vec2& a = e.points[i];
+                const Vec2& b = e.points[j];
+                if (((a.y > p.y) != (b.y > p.y)) &&
+                    (p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x))
+                    inside = !inside;
+            }
+            if (inside) best = 0.0;
+        }
+        break;
+    }
     case EntityType::Circle:
     case EntityType::Arc:
         best = std::abs(distance(e.center, p) - e.radius);
@@ -1047,7 +1063,8 @@ void Editor::applyEditDrag(const Vec2& target) {
 
 void Editor::onDoubleClick(const Vec2& world) {
     if (drafting_ && (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline ||
-                      tool_ == ToolId::Spline || tool_ == ToolId::Wire)) {
+                      tool_ == ToolId::Spline || tool_ == ToolId::Wire ||
+                      tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout)) {
         finishDraw();
         return;
     }
@@ -1061,8 +1078,76 @@ void Editor::onDoubleClick(const Vec2& world) {
 
 // ---- Draw tools ------------------------------------------------------------
 
+namespace {
+// Closed boundary of an entity, for "select object" hatch/wipeout. Circles and
+// ellipses are sampled into a polygon; open shapes return empty.
+std::vector<Vec2> boundaryPointsOf(const Entity& e) {
+    switch (e.type) {
+    case EntityType::Rect:
+    case EntityType::Polygon:
+    case EntityType::Polyline:
+    case EntityType::Spline:
+    case EntityType::Hatch:
+    case EntityType::Wipeout:
+        if (e.points.size() >= 3) return e.points;
+        return {};
+    case EntityType::Circle: {
+        std::vector<Vec2> pts;
+        const int n = 64;
+        for (int i = 0; i < n; ++i) {
+            const double a = 2.0 * M_PI * i / n;
+            pts.push_back({e.center.x + e.radius * std::cos(a),
+                           e.center.y + e.radius * std::sin(a)});
+        }
+        return pts;
+    }
+    case EntityType::Ellipse: {
+        std::vector<Vec2> pts;
+        const int n = 64;
+        const double c = std::cos(e.rotation), s = std::sin(e.rotation);
+        for (int i = 0; i < n; ++i) {
+            const double a = 2.0 * M_PI * i / n;
+            const double x = e.radius * std::cos(a), y = e.radiusY * std::sin(a);
+            pts.push_back({e.center.x + x * c - y * s, e.center.y + x * s + y * c});
+        }
+        return pts;
+    }
+    default:
+        return {};
+    }
+}
+} // namespace
+
 void Editor::handleDrawPress(const Vec2& p) {
     switch (tool_) {
+    case ToolId::Hatch:
+    case ToolId::Wipeout: {
+        if (hatchStyle_.boundary == HatchBoundary::SelectObject) {
+            // Click a closed object to fill it.
+            if (auto hit = hitTest(p)) {
+                if (Entity* src = entityById(*hit)) {
+                    std::vector<Vec2> bnd = boundaryPointsOf(*src);
+                    if (bnd.size() >= 3) {
+                        draftPts_ = std::move(bnd);
+                        drafting_ = true;
+                        if (hatchStyle_.associative) draftBulges_.clear();
+                        finishDraw();
+                        return;
+                    }
+                }
+            }
+            emit message(QStringLiteral(
+                "Select a closed object to fill (rectangle, polygon, circle, ellipse, polyline)"));
+            return;
+        }
+        // Pick points: accumulate boundary vertices, close with Enter/double-click.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(QStringLiteral("%1: click boundary points — Enter or double-click to close")
+                         .arg(tool_ == ToolId::Hatch ? QStringLiteral("Hatch")
+                                                     : QStringLiteral("Wipeout")));
+        break;
+    }
     case ToolId::Line: {
         // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
         // Each completed segment is committed as its own straight line, then the
@@ -1576,6 +1661,20 @@ void Editor::finishDraw() {
         e.meta.insert("netName", wireNet_);
         e.meta.insert("showLabel", true);
         break;
+    case ToolId::Hatch:
+    case ToolId::Wipeout:
+        if (draftPts_.size() < 3) { cancelDraw(); return; }
+        e.type = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
+        e.points = draftPts_;
+        if (e.type == EntityType::Hatch) {
+            e.meta.insert("pattern", hatchStyle_.pattern);
+            e.meta.insert("hatchAngle", hatchStyle_.angle);
+            e.meta.insert("hatchScale", hatchStyle_.scale);
+            if (hatchStyle_.transparency > 0)
+                e.meta.insert("transparency", hatchStyle_.transparency);
+            e.meta.insert("associative", hatchStyle_.associative);
+        }
+        break;
     default:
         cancelDraw();
         return;
@@ -1716,6 +1815,14 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("DIMENSION: pick two points");
     case ToolId::Text:
         return QStringLiteral("TEXT: pick a point, then type the text");
+    case ToolId::Hatch:
+        return hatchStyle_.boundary == HatchBoundary::SelectObject
+                   ? QStringLiteral("HATCH: click a closed object to fill  ·  (set options in the Hatch \xE2\x96\xBE menu)")
+                   : QStringLiteral("HATCH: click boundary points  ·  Enter / double-click to close  ·  Esc cancels");
+    case ToolId::Wipeout:
+        return hatchStyle_.boundary == HatchBoundary::SelectObject
+                   ? QStringLiteral("WIPEOUT: click a closed object to mask")
+                   : QStringLiteral("WIPEOUT: click boundary points  ·  Enter / double-click to close");
     default:
         return QString(); // Select / modify tools have no draw hint
     }
@@ -2826,6 +2933,17 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& v : regularPolygonPoints(pts[0], pts[1], polygonSides_))
                 poly << vt.toScreen(v);
             p.drawPolygon(poly);
+        } else if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
+            // Closed boundary rubber-band with a faint fill preview.
+            QPolygonF poly;
+            for (const auto& v : pts) poly << vt.toScreen(v);
+            if (poly.size() >= 2) {
+                p.save();
+                p.setBrush(tool_ == ToolId::Hatch ? QColor(80, 160, 255, 55)
+                                                  : QColor(40, 48, 60, 150));
+                p.drawPolygon(poly); // auto-closes the outline
+                p.restore();
+            }
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 off = (pts[1] - pts[0]).normalized().perp() * (doubleLineGap_ / 2.0);
             p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));

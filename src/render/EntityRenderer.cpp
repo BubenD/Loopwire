@@ -16,9 +16,12 @@ namespace Edraw_Desktop {
 
 namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
+QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 }
 void EntityRenderer::setDimensionDecimals(int d) { g_dimDecimals = std::clamp(d, 0, 6); }
 int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
+void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
+QColor EntityRenderer::backgroundColor() { return g_bgColor; }
 
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     QString layerHex = QStringLiteral("#ffffff");
@@ -71,6 +74,80 @@ QPolygonF toScreenPoly(const std::vector<Vec2>& pts, const ViewTransform& vt) {
     poly.reserve(static_cast<int>(pts.size()));
     for (const auto& p : pts) poly.append(vt.toScreen(p));
     return poly;
+}
+
+// Draw a family of equally spaced parallel lines (screen px) at `ang` radians,
+// covering `bb`. The caller clips to the hatch boundary.
+void drawParallelLines(QPainter& p, const QRectF& bb, double ang, double gap) {
+    if (gap < 1.5) gap = 1.5;
+    const double cx = bb.center().x(), cy = bb.center().y();
+    const double diag = std::hypot(bb.width(), bb.height()) + 4.0;
+    const double dx = std::cos(ang), dy = std::sin(ang); // line direction
+    const double nx = -dy, ny = dx;                       // normal (line stepping)
+    const double half = diag / 2.0;
+    const int n = static_cast<int>(std::ceil(diag / gap)) + 2;
+    for (int i = -n; i <= n; ++i) {
+        const double off = i * gap;
+        const double px = cx + nx * off, py = cy + ny * off;
+        p.drawLine(QPointF(px - dx * half, py - dy * half),
+                   QPointF(px + dx * half, py + dy * half));
+    }
+}
+
+// Fill a closed boundary (screen-space polygon) with a hatch pattern.
+void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor& base,
+               const ViewTransform& vt) {
+    const QString pat = e.meta.value("pattern").toString(QStringLiteral("ansi31")).toLower();
+    const double userAngle = e.meta.value("hatchAngle").toDouble(0.0) * M_PI / 180.0;
+    const double scale = std::max(0.05, e.meta.value("hatchScale").toDouble(1.0));
+    const int transp = std::clamp(e.meta.value("transparency").toInt(0), 0, 95);
+
+    QColor c = base;
+    c.setAlpha(static_cast<int>(255 * (1.0 - transp / 100.0)));
+
+    QPainterPath path;
+    path.addPolygon(poly);
+    path.closeSubpath();
+
+    p.save();
+    if (pat == QLatin1String("solid")) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawPath(path);
+        p.restore();
+        return;
+    }
+
+    p.setClipPath(path);
+    QPen hp(c);
+    hp.setCosmetic(true);
+    hp.setWidthF(1.0);
+    p.setPen(hp);
+    p.setBrush(Qt::NoBrush);
+
+    const QRectF bb = poly.boundingRect();
+    const double gap = std::max(3.0, 6.0 * scale * vt.scale()); // world ~6 units * scale
+
+    if (pat == QLatin1String("dots")) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        for (double y = bb.top(); y <= bb.bottom(); y += gap)
+            for (double x = bb.left(); x <= bb.right(); x += gap)
+                p.drawEllipse(QPointF(x, y), 1.2, 1.2);
+    } else {
+        // Base orientation per pattern, plus the user Angle.
+        std::vector<double> angles;        // degrees
+        double g = gap;
+        if (pat == QLatin1String("lines")) angles = {0};
+        else if (pat == QLatin1String("grid")) angles = {0, 90};
+        else if (pat == QLatin1String("cross")) angles = {45, 135};
+        else if (pat == QLatin1String("ansi32")) { angles = {45}; g = gap * 0.5; }
+        else if (pat == QLatin1String("angle")) angles = {0}; // driven purely by user angle
+        else angles = {45};                // ansi31 (default)
+        for (double aDeg : angles)
+            drawParallelLines(p, bb, aDeg * M_PI / 180.0 + userAngle, g);
+    }
+    p.restore();
 }
 
 // Approximate an arc with line segments for direction-agnostic drawing.
@@ -173,11 +250,39 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
-    case EntityType::Wipeout:
         if (e.points.size() >= 2)
             p.drawPolygon(toScreenPoly(e.points, vt));
         break;
+
+    case EntityType::Hatch: {
+        if (e.points.size() < 3) break;
+        const QPolygonF poly = toScreenPoly(e.points, vt);
+        drawHatch(p, poly, e, color, vt);
+        // A faint boundary so an empty/low-density hatch is still selectable.
+        if (overrideColor.isValid()) {
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(poly);
+        }
+        break;
+    }
+
+    case EntityType::Wipeout: {
+        if (e.points.size() < 3) break;
+        const QPolygonF poly = toScreenPoly(e.points, vt);
+        p.save();
+        p.setPen(Qt::NoPen);
+        p.setBrush(g_bgColor); // opaque mask matching the canvas background
+        p.drawPolygon(poly);
+        p.restore();
+        // Thin frame so the (otherwise invisible) mask can be seen and picked.
+        QPen frame(overrideColor.isValid() ? color : QColor(120, 130, 145));
+        frame.setCosmetic(true);
+        frame.setWidthF(overrideColor.isValid() ? 2.4 : 1.0);
+        p.setPen(frame);
+        p.setBrush(Qt::NoBrush);
+        p.drawPolygon(poly);
+        break;
+    }
 
     case EntityType::Circle: {
         const QPointF c = vt.toScreen(e.center);

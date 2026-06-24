@@ -22,6 +22,8 @@ enum class ToolId {
     Text,
     MText,
     Dimension,
+    Hatch,
+    Wipeout,
     // Harness
     Wire,
     Connector,
@@ -61,6 +63,8 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Text:
     case ToolId::MText:
     case ToolId::Dimension:
+    case ToolId::Hatch:
+    case ToolId::Wipeout:
     case ToolId::Wire:
         return true;
     default:
@@ -90,6 +94,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Text: return QStringLiteral("Text");
     case ToolId::MText: return QStringLiteral("Multiline text");
     case ToolId::Dimension: return QStringLiteral("Dimension");
+    case ToolId::Hatch: return QStringLiteral("Hatch");
+    case ToolId::Wipeout: return QStringLiteral("Wipeout");
     case ToolId::Wire: return QStringLiteral("Wire");
     case ToolId::Connector: return QStringLiteral("Connector");
     case ToolId::Splice: return QStringLiteral("Splice");

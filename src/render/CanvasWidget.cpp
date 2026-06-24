@@ -53,6 +53,7 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor("#10141b"));
     setPalette(pal);
+    EntityRenderer::setBackgroundColor(bgColor_); // Wipeout masks match the bg
 
     // Floating "dynamic input" box that appears next to the cursor while drawing.
     dynInput_ = new QLineEdit(this);

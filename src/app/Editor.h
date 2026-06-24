@@ -180,6 +180,21 @@ public:
     void setPolygonSides(int n) { polygonSides_ = std::clamp(n, 3, 64); }
     int polygonSides() const { return polygonSides_; }
 
+    // Hatch / Wipeout tool options (AutoCAD "Hatch Creation"-style). The boundary
+    // is either picked as a closed polygon (PickPoints) or taken from a clicked
+    // closed object (SelectObject).
+    enum class HatchBoundary { PickPoints, SelectObject };
+    struct HatchStyle {
+        QString pattern = QStringLiteral("ansi31"); // solid/ansi31/ansi32/lines/grid/cross/dots/angle
+        double angle = 0.0;     // pattern rotation (degrees)
+        double scale = 1.0;     // pattern spacing multiplier
+        int transparency = 0;   // 0..95 (%)
+        bool associative = true;
+        HatchBoundary boundary = HatchBoundary::PickPoints;
+    };
+    HatchStyle& hatchStyle() { return hatchStyle_; }
+    const HatchStyle& hatchStyle() const { return hatchStyle_; }
+
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
     // Id of the single selected connector, or empty.
@@ -338,6 +353,7 @@ private:
     std::vector<Vec2> tanPickPts_;
     bool tanAwaitRadius_ = false;
     double tanRadius_ = 50.0;
+    HatchStyle hatchStyle_;       // current Hatch/Wipeout options
     int polygonSides_ = 5;        // default side count (prompted on tool select)
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered

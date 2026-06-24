@@ -59,6 +59,7 @@ public:
     // bg), the secondary grid a touch stronger.
     void setBackgroundColor(const QColor& c) {
         bgColor_ = c;
+        EntityRenderer::setBackgroundColor(c); // keep Wipeout masks matching the bg
         const int lum = (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000;
         const QColor target = lum < 128 ? QColor(255, 255, 255) : QColor(0, 0, 0);
         auto mix = [&](double t) {

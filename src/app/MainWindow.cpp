@@ -49,6 +49,7 @@
 #include <QTableWidget>
 #include <QToolBar>
 #include <QToolButton>
+#include <QWidgetAction>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFrame>
@@ -168,6 +169,21 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
     case ToolId::Text: { QFont f = p.font(); f.setPixelSize(16); f.setBold(true); p.setFont(f); p.drawText(pm.rect(), Qt::AlignCenter, "A"); break; }
     case ToolId::MText: { QFont f = p.font(); f.setPixelSize(11); f.setBold(true); p.setFont(f); p.drawText(QRect(2, 2, 20, 20), Qt::AlignLeft | Qt::AlignTop, "A"); p.drawLine(9, 8, 20, 8); p.drawLine(5, 14, 20, 14); p.drawLine(5, 19, 20, 19); break; }
     case ToolId::Dimension: p.drawLine(5, 12, 19, 12); p.drawLine(5, 8, 5, 16); p.drawLine(19, 8, 19, 16); break;
+    case ToolId::Hatch: {
+        p.drawRect(4, 5, 16, 14);
+        // diagonal hatch lines clipped to the box
+        p.save();
+        p.setClipRect(4, 5, 16, 14);
+        for (int o = -14; o <= 16; o += 4) p.drawLine(4 + o, 19, 4 + o + 14, 5);
+        p.restore();
+        break;
+    }
+    case ToolId::Wipeout: {
+        p.drawRect(4, 5, 16, 14);
+        p.drawLine(4, 19, 20, 5); // crossed-out (masked) box
+        p.drawLine(4, 5, 20, 19);
+        break;
+    }
     case ToolId::Move: p.drawLine(12, 4, 12, 20); p.drawLine(4, 12, 20, 12); p.drawLine(12, 4, 9, 7); p.drawLine(12, 4, 15, 7); p.drawLine(4, 12, 7, 9); p.drawLine(4, 12, 7, 15); break;
     case ToolId::Rotate: { QPainterPath pa; pa.moveTo(18, 8); pa.arcTo(5, 5, 14, 14, 40, 280); p.drawPath(pa); p.drawLine(18, 8, 15, 7); p.drawLine(18, 8, 19, 11); break; }
     case ToolId::Mirror: p.drawLine(12, 4, 12, 20); { QPolygonF a({{4, 8}, {9, 12}, {4, 16}}); QPolygonF b({{20, 8}, {15, 12}, {20, 16}}); p.drawPolygon(a); p.drawPolygon(b); } break;
@@ -412,6 +428,48 @@ QIcon makeSplineMethodIcon(int mode) {
     path.cubicTo(c, c, d);
     p.drawPath(path);
     if (mode == 0) { geoDot(p, a); geoDot(p, b); geoDot(p, c); geoDot(p, d); } // fit points on the curve
+    p.end();
+    return QIcon(pm);
+}
+
+// A small pattern swatch for the Hatch pattern menu (mirrors the renderer).
+QIcon makeHatchSwatch(const QString& key) {
+    QPixmap pm(28, 20);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF box(2, 2, 24, 16);
+    QPen border(QColor("#9aa3ad"));
+    border.setWidthF(1.0);
+    p.setPen(border);
+    p.drawRect(box);
+    p.setClipRect(box);
+    QPen ink(QColor("#d6dae1"));
+    ink.setWidthF(1.0);
+    p.setPen(ink);
+    auto diag = [&](double a) {
+        const double dx = std::cos(a), dy = std::sin(a), nx = -dy, ny = dx;
+        for (int i = -8; i <= 8; ++i) {
+            const double cx = 14 + nx * i * 3.2, cy = 10 + ny * i * 3.2;
+            p.drawLine(QPointF(cx - dx * 20, cy - dy * 20), QPointF(cx + dx * 20, cy + dy * 20));
+        }
+    };
+    if (key == QLatin1String("solid")) {
+        p.fillRect(box, QColor("#d6dae1"));
+    } else if (key == QLatin1String("lines")) {
+        diag(0);
+    } else if (key == QLatin1String("grid")) {
+        diag(0); diag(M_PI / 2);
+    } else if (key == QLatin1String("cross")) {
+        diag(M_PI / 4); diag(3 * M_PI / 4);
+    } else if (key == QLatin1String("dots")) {
+        p.setBrush(QColor("#d6dae1"));
+        p.setPen(Qt::NoPen);
+        for (int y = 4; y < 18; y += 4)
+            for (int x = 4; x < 26; x += 4) p.drawEllipse(QPointF(x, y), 1.0, 1.0);
+    } else { // ansi31 / ansi32 / angle -> 45-degree lines
+        diag(M_PI / 4);
+    }
     p.end();
     return QIcon(pm);
 }
@@ -1176,6 +1234,85 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
             act->setIcon(makeSplineMethodIcon(0)); // default = Fit
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Hatch) {
+            // AutoCAD "Hatch Creation"-style options: boundary mode, pattern,
+            // angle/scale/transparency, associative. Clicking the button activates
+            // the tool with the current settings.
+            auto* menu = new QMenu(b);
+
+            menu->addSection(QStringLiteral("Boundary"));
+            auto* bmGroup = new QActionGroup(menu);
+            auto addBoundary = [&](const QString& label, Editor::HatchBoundary m) {
+                QAction* a = menu->addAction(label, this,
+                                             [this, m] { editor_->hatchStyle().boundary = m; });
+                a->setCheckable(true);
+                bmGroup->addAction(a);
+                if (editor_->hatchStyle().boundary == m) a->setChecked(true);
+            };
+            addBoundary(QStringLiteral("Pick points (define boundary)"),
+                        Editor::HatchBoundary::PickPoints);
+            addBoundary(QStringLiteral("Select object"), Editor::HatchBoundary::SelectObject);
+
+            menu->addSection(QStringLiteral("Pattern"));
+            auto* patGroup = new QActionGroup(menu);
+            const QList<QPair<QString, QString>> pats = {
+                {QStringLiteral("Solid"), QStringLiteral("solid")},
+                {QStringLiteral("ANSI31 (45\xC2\xB0 lines)"), QStringLiteral("ansi31")},
+                {QStringLiteral("ANSI32 (dense)"), QStringLiteral("ansi32")},
+                {QStringLiteral("Lines (horizontal)"), QStringLiteral("lines")},
+                {QStringLiteral("Grid"), QStringLiteral("grid")},
+                {QStringLiteral("Cross"), QStringLiteral("cross")},
+                {QStringLiteral("Dots"), QStringLiteral("dots")},
+                {QStringLiteral("Angle (user)"), QStringLiteral("angle")},
+            };
+            for (const auto& pp : pats) {
+                const QString key = pp.second;
+                QAction* a = menu->addAction(makeHatchSwatch(key), pp.first, this, [this, key] {
+                    editor_->hatchStyle().pattern = key;
+                    editor_->setTool(ToolId::Hatch);
+                });
+                a->setCheckable(true);
+                patGroup->addAction(a);
+                if (editor_->hatchStyle().pattern == key) a->setChecked(true);
+            }
+
+            menu->addSection(QStringLiteral("Properties"));
+            auto addSpin = [&](const QString& label, double mn, double mx, double step,
+                               double val, int decimals, std::function<void(double)> on) {
+                auto* row = new QWidget(menu);
+                auto* h = new QHBoxLayout(row);
+                h->setContentsMargins(20, 2, 12, 2);
+                h->setSpacing(6);
+                auto* lab = new QLabel(label, row);
+                lab->setMinimumWidth(92);
+                h->addWidget(lab);
+                auto* s = new QDoubleSpinBox(row);
+                s->setRange(mn, mx);
+                s->setSingleStep(step);
+                s->setDecimals(decimals);
+                s->setValue(val);
+                connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, on);
+                h->addWidget(s);
+                auto* wa = new QWidgetAction(menu);
+                wa->setDefaultWidget(row);
+                menu->addAction(wa);
+            };
+            addSpin(QStringLiteral("Angle"), 0, 180, 5, editor_->hatchStyle().angle, 0,
+                    [this](double v) { editor_->hatchStyle().angle = v; });
+            addSpin(QStringLiteral("Scale"), 0.1, 50, 0.25, editor_->hatchStyle().scale, 2,
+                    [this](double v) { editor_->hatchStyle().scale = v; });
+            addSpin(QStringLiteral("Transparency"), 0, 95, 5,
+                    editor_->hatchStyle().transparency, 0,
+                    [this](double v) { editor_->hatchStyle().transparency = static_cast<int>(v); });
+
+            menu->addSection(QStringLiteral("Options"));
+            QAction* assoc = menu->addAction(QStringLiteral("Associative"), this,
+                                             [this](bool on) { editor_->hatchStyle().associative = on; });
+            assoc->setCheckable(true);
+            assoc->setChecked(editor_->hatchStyle().associative);
+
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
         }
 
         grid->addWidget(b, i / perRow, i % perRow);
@@ -1242,6 +1379,8 @@ void MainWindow::buildRibbon() {
                  toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                           ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
                           ToolId::Chamfer}));
+        addGroup(lay, QStringLiteral("Draw \xE2\x96\xB8"),
+                 toolRow({ToolId::Hatch, ToolId::Wipeout}));
 
         // Properties group: Layer + Color dropdowns.
         auto* propsW = new QWidget(page);
