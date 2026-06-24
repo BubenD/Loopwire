@@ -234,6 +234,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         if (!family.isEmpty()) f.setFamily(family);
         f.setBold(e.meta.value("bold").toBool());
         f.setItalic(e.meta.value("italic").toBool());
+        f.setUnderline(e.meta.value("underline").toBool());
+        f.setStrikeOut(e.meta.value("strike").toBool());
         f.setPixelSize(std::max(1, static_cast<int>(heightWorld * vt.scale())));
         p.setFont(f);
         p.setPen(color);

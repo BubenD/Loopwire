@@ -153,6 +153,8 @@ private:
     QDoubleSpinBox* inlineSize_ = nullptr;
     QToolButton* inlineBold_ = nullptr;
     QToolButton* inlineItalic_ = nullptr;
+    QToolButton* inlineUnderline_ = nullptr;
+    QToolButton* inlineStrike_ = nullptr;
     QComboBox* inlineJust_ = nullptr;
     QComboBox* inlineList_ = nullptr;
     QDoubleSpinBox* inlineSpacing_ = nullptr;

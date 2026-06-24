@@ -982,6 +982,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         style.font = found->meta.value(QStringLiteral("font")).toString();
         style.bold = found->meta.value(QStringLiteral("bold")).toBool();
         style.italic = found->meta.value(QStringLiteral("italic")).toBool();
+        style.underline = found->meta.value(QStringLiteral("underline")).toBool();
+        style.strike = found->meta.value(QStringLiteral("strike")).toBool();
         style.justify = found->meta.value(QStringLiteral("justify")).toString();
         if (style.justify.isEmpty()) style.justify = QStringLiteral("TL");
         style.lineSpacing = found->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0);
@@ -2157,6 +2159,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         bl->setSpacing(4);
         inlineFont_ = new QFontComboBox(inlineBar_);
         inlineFont_->setMaximumWidth(150);
+        inlineFont_->setEditable(false); // a font picker, not a text field
         inlineSize_ = new QDoubleSpinBox(inlineBar_);
         inlineSize_->setRange(0.1, 1000.0);
         inlineSize_->setDecimals(2);
@@ -2169,6 +2172,14 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineItalic_->setText(QStringLiteral("I"));
         inlineItalic_->setCheckable(true);
         { QFont itf = inlineItalic_->font(); itf.setItalic(true); inlineItalic_->setFont(itf); }
+        inlineUnderline_ = new QToolButton(inlineBar_);
+        inlineUnderline_->setText(QStringLiteral("U"));
+        inlineUnderline_->setCheckable(true);
+        { QFont uf = inlineUnderline_->font(); uf.setUnderline(true); inlineUnderline_->setFont(uf); }
+        inlineStrike_ = new QToolButton(inlineBar_);
+        inlineStrike_->setText(QStringLiteral("S"));
+        inlineStrike_->setCheckable(true);
+        { QFont sf = inlineStrike_->font(); sf.setStrikeOut(true); inlineStrike_->setFont(sf); }
         inlineJust_ = new QComboBox(inlineBar_);
         for (const char* code : {"TL", "TC", "TR", "ML", "MC", "MR", "BL", "BC", "BR"})
             inlineJust_->addItem(QString::fromLatin1(code), QString::fromLatin1(code));
@@ -2186,6 +2197,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         cancelBtn->setText(QString::fromUtf8("\xE2\x9C\x95")); // x
         for (QWidget* w : {static_cast<QWidget*>(inlineFont_), static_cast<QWidget*>(inlineSize_),
                            static_cast<QWidget*>(inlineBold_), static_cast<QWidget*>(inlineItalic_),
+                           static_cast<QWidget*>(inlineUnderline_), static_cast<QWidget*>(inlineStrike_),
                            static_cast<QWidget*>(inlineJust_), static_cast<QWidget*>(inlineList_),
                            static_cast<QWidget*>(inlineSpacing_), static_cast<QWidget*>(okBtn),
                            static_cast<QWidget*>(cancelBtn)})
@@ -2196,12 +2208,16 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
             inlineStyle_.size = inlineSize_->value();
             inlineStyle_.bold = inlineBold_->isChecked();
             inlineStyle_.italic = inlineItalic_->isChecked();
+            inlineStyle_.underline = inlineUnderline_->isChecked();
+            inlineStyle_.strike = inlineStrike_->isChecked();
             inlineStyle_.justify = inlineJust_->currentData().toString();
             inlineStyle_.list = inlineList_->currentData().toString();
             inlineStyle_.lineSpacing = inlineSpacing_->value();
             QFont f = inlineFont_->currentFont();
             f.setBold(inlineStyle_.bold);
             f.setItalic(inlineStyle_.italic);
+            f.setUnderline(inlineStyle_.underline);
+            f.setStrikeOut(inlineStyle_.strike);
             f.setPixelSize(std::max(10, static_cast<int>(inlineStyle_.size * canvas_->viewScale())));
             inlineEdit_->setFont(f);
             inlineEdit_->setFocus();
@@ -2210,6 +2226,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         connect(inlineSize_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
         connect(inlineBold_, &QToolButton::toggled, this, [sync] { sync(); });
         connect(inlineItalic_, &QToolButton::toggled, this, [sync] { sync(); });
+        connect(inlineUnderline_, &QToolButton::toggled, this, [sync] { sync(); });
+        connect(inlineStrike_, &QToolButton::toggled, this, [sync] { sync(); });
         connect(inlineJust_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
         connect(inlineList_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
         connect(inlineSpacing_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
@@ -2219,11 +2237,14 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
 
     {
         const QSignalBlocker b1(inlineFont_), b2(inlineSize_), b3(inlineBold_), b4(inlineItalic_),
-            b5(inlineJust_), b6(inlineList_), b7(inlineSpacing_);
+            b5(inlineJust_), b6(inlineList_), b7(inlineSpacing_), b8(inlineUnderline_),
+            b9(inlineStrike_);
         if (!style.font.isEmpty()) inlineFont_->setCurrentFont(QFont(style.font));
         inlineSize_->setValue(style.size > 0 ? style.size : 5.0);
         inlineBold_->setChecked(style.bold);
         inlineItalic_->setChecked(style.italic);
+        inlineUnderline_->setChecked(style.underline);
+        inlineStrike_->setChecked(style.strike);
         inlineJust_->setCurrentIndex(std::max(
             0, inlineJust_->findData(style.justify.isEmpty() ? QStringLiteral("TL") : style.justify)));
         inlineList_->setCurrentIndex(std::max(
@@ -2235,6 +2256,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         QFont f = inlineFont_->currentFont();
         f.setBold(style.bold);
         f.setItalic(style.italic);
+        f.setUnderline(style.underline);
+        f.setStrikeOut(style.strike);
         f.setPixelSize(std::max(10, static_cast<int>((style.size > 0 ? style.size : 5.0) *
                                                      canvas_->viewScale())));
         inlineEdit_->setFont(f);
@@ -2943,6 +2966,18 @@ void MainWindow::refreshProperties() {
                                                                   : QStringLiteral("No"),
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("italic"), v == QLatin1String("Yes"));
+                 });
+        addCombo(QStringLiteral("Underline"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 e->meta.value(QStringLiteral("underline")).toBool() ? QStringLiteral("Yes")
+                                                                     : QStringLiteral("No"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(QStringLiteral("underline"), v == QLatin1String("Yes"));
+                 });
+        addCombo(QStringLiteral("Strikethrough"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 e->meta.value(QStringLiteral("strike")).toBool() ? QStringLiteral("Yes")
+                                                                  : QStringLiteral("No"),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionTextMeta(QStringLiteral("strike"), v == QLatin1String("Yes"));
                  });
         // Justification: 9-point (vertical T/M/B + horizontal L/C/R).
         static const QVector<QPair<QString, QString>> justNames = {

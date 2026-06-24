@@ -2087,6 +2087,8 @@ static void writeTextStyle(Entity& e, const Editor::TextStyle& s) {
     e.meta.insert("font", s.font);
     e.meta.insert("bold", s.bold);
     e.meta.insert("italic", s.italic);
+    e.meta.insert("underline", s.underline);
+    e.meta.insert("strike", s.strike);
     e.meta.insert("justify", s.justify.isEmpty() ? QStringLiteral("TL") : s.justify);
     e.meta.insert("lineSpacing", s.lineSpacing > 0 ? s.lineSpacing : 1.0);
     e.meta.insert("list", s.list.isEmpty() ? QStringLiteral("none") : s.list);

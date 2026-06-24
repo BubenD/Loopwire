@@ -58,6 +58,8 @@ public:
         QString font;
         bool bold = false;
         bool italic = false;
+        bool underline = false;
+        bool strike = false;
         QString justify = QStringLiteral("TL"); // TL..BR (vert T/M/B + horiz L/C/R)
         double lineSpacing = 1.0;
         QString list = QStringLiteral("none"); // none / bullet / number
