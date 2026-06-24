@@ -1172,9 +1172,13 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Circle, "repeat: Space re-invokes last tool");
     }
 
-    // --- Hatch: pick-points boundary + pattern/angle/scale stored in meta.
+    // --- Hatch Pick Points: one click inside an enclosed area fills it; pattern/
+    //     angle/scale/transparency are stored in meta.
     {
         Document d; d.entities().clear();
+        Entity r; r.id = "r"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {50, 0}, {50, 30}, {0, 30}};
+        d.entities().push_back(r);
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.hatchStyle().pattern = QStringLiteral("ansi31");
         ed.hatchStyle().angle = 30.0;
@@ -1182,20 +1186,37 @@ int run_editor_tests() {
         ed.hatchStyle().transparency = 25;
         ed.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
         ed.setTool(ToolId::Hatch);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
-        check(d.entities().empty(), "hatch: not committed until closed");
-        ed.onKey(Qt::Key_Return, Qt::NoModifier); // close the boundary
-        check(d.entities().size() == 1, "hatch: created on Enter");
-        const Entity& e = d.entities()[0];
-        check(e.type == EntityType::Hatch && e.points.size() == 3 &&
+        ed.onPointerPress({25, 15}, Qt::LeftButton, Qt::NoModifier); // one click INSIDE the rect
+        check(d.entities().size() == 2, "hatch-pick: one click fills the enclosing rect");
+        const Entity& e = d.entities().back();
+        check(e.type == EntityType::Hatch && e.points.size() == 4 &&
                   e.meta.value("pattern").toString() == QLatin1String("ansi31") &&
                   near(e.meta.value("hatchAngle").toDouble(), 30.0) &&
                   near(e.meta.value("hatchScale").toDouble(), 2.0) &&
                   e.meta.value("transparency").toInt() == 25,
-              "hatch: pattern/angle/scale/transparency stored");
-        check(ed.tool() == ToolId::Select, "hatch: returns to Select after closing");
+              "hatch-pick: boundary = rect + pattern/angle/scale/transparency stored");
+        check(ed.tool() == ToolId::Hatch, "hatch-pick: stays in the tool for more regions");
+        // A click in empty space (no enclosing boundary) adds nothing.
+        ed.onPointerPress({500, 500}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 2, "hatch-pick: click outside any boundary fills nothing");
+    }
+
+    // --- Hatch Pick Points picks the SMALLEST enclosing region (innermost island).
+    {
+        Document d; d.entities().clear();
+        Entity big; big.id = "big"; big.type = EntityType::Rect;
+        big.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}};
+        Entity small; small.id = "small"; small.type = EntityType::Rect;
+        small.points = {{40, 40}, {60, 40}, {60, 60}, {40, 60}};
+        d.entities().push_back(big);
+        d.entities().push_back(small);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
+        ed.setTool(ToolId::Hatch);
+        ed.onPointerPress({50, 50}, Qt::LeftButton, Qt::NoModifier); // inside both rects
+        const Entity& h = d.entities().back();
+        check(h.type == EntityType::Hatch && near(h.bounds().width(), 20.0),
+              "hatch-island: fills the smallest enclosing region");
     }
 
     // --- Hatch: "select object" mode fills a clicked closed entity.
@@ -1216,24 +1237,23 @@ int run_editor_tests() {
               "hatch-select: boundary taken from the closed object");
     }
 
-    // --- Wipeout: pick-points boundary makes a masking polygon; clicking inside
-    //     it selects (filled region is pickable).
+    // --- Wipeout: pick-points fills an enclosing shape; the filled region is
+    //     interior-pickable.
     {
         Document d; d.entities().clear();
+        Entity r; r.id = "r"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {30, 0}, {30, 30}, {0, 30}};
+        d.entities().push_back(r);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
         ed.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
         ed.setTool(ToolId::Wipeout);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);
-        ed.onDoubleClick({0, 30}); // close via double-click
-        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Wipeout &&
-                  d.entities()[0].points.size() == 4,
-              "wipeout: closed boundary polygon created");
+        ed.onPointerPress({15, 15}, Qt::LeftButton, Qt::NoModifier); // one click inside the rect
+        check(d.entities().size() == 2 && d.entities().back().type == EntityType::Wipeout &&
+                  d.entities().back().points.size() == 4,
+              "wipeout: pick-point fills the enclosing rect");
         ed.setTool(ToolId::Select);
-        ed.onPointerPress({15, 15}, Qt::LeftButton, Qt::NoModifier); // inside the mask
-        ed.onPointerRelease({15, 15}, Qt::LeftButton);
+        ed.onPointerPress({16, 16}, Qt::LeftButton, Qt::NoModifier); // inside the mask
+        ed.onPointerRelease({16, 16}, Qt::LeftButton);
         check(ed.selection().size() == 1, "wipeout: interior click selects the filled region");
     }
 

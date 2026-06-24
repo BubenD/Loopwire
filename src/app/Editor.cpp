@@ -1132,26 +1132,23 @@ void Editor::handleDrawPress(const Vec2& p) {
             if (auto hit = hitTest(p)) {
                 if (Entity* src = entityById(*hit)) {
                     std::vector<Vec2> bnd = boundaryPointsOf(*src);
-                    if (bnd.size() >= 3) {
-                        draftPts_ = std::move(bnd);
-                        drafting_ = true;
-                        if (hatchStyle_.associative) draftBulges_.clear();
-                        finishDraw();
-                        return;
-                    }
+                    if (bnd.size() >= 3) { commitHatchBoundary(bnd); return; }
                 }
             }
             emit message(QStringLiteral(
                 "Select a closed object to fill (rectangle, polygon, circle, ellipse, polyline)"));
             return;
         }
-        // Pick points: accumulate boundary vertices, close with Enter/double-click.
-        draftPts_.push_back(p);
-        drafting_ = true;
-        emit message(QStringLiteral("%1: click boundary points — Enter or double-click to close")
-                         .arg(tool_ == ToolId::Hatch ? QStringLiteral("Hatch")
-                                                     : QStringLiteral("Wipeout")));
-        break;
+        // Pick Points (AutoCAD-style): one click inside an enclosed area fills the
+        // surrounding closed boundary automatically.
+        std::vector<Vec2> bnd = pickEnclosingBoundary(p);
+        if (bnd.size() >= 3) {
+            commitHatchBoundary(bnd);
+        } else {
+            emit message(QStringLiteral(
+                "No closed boundary found around the pick point — click inside an enclosed region."));
+        }
+        return;
     }
     case ToolId::Line: {
         // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
@@ -1251,6 +1248,68 @@ void Editor::handleDrawPress(const Vec2& p) {
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
     emit changed();
+}
+
+std::vector<Vec2> Editor::pickEnclosingBoundary(const Vec2& seed) const {
+    if (!doc_) return {};
+    std::vector<Vec2> best;
+    double bestArea = std::numeric_limits<double>::max();
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked))
+            continue;
+        // Only existing CLOSED shapes form a boundary; skip fills and open shapes.
+        std::vector<Vec2> poly;
+        switch (e.type) {
+        case EntityType::Rect:
+        case EntityType::Polygon:
+        case EntityType::Circle:
+        case EntityType::Ellipse:
+            poly = boundaryPointsOf(e);
+            break;
+        case EntityType::Polyline:
+        case EntityType::Spline:
+            // A boundary only if the run is (nearly) closed.
+            if (e.points.size() >= 3 &&
+                distance(e.points.front(), e.points.back()) < worldTolerance())
+                poly = boundaryPointsOf(e);
+            break;
+        default:
+            break; // lines / double lines / hatch / wipeout / text are not boundaries
+        }
+        if (poly.size() < 3 || !pointInPolygon(poly, seed)) continue;
+        // Shoelace area: keep the SMALLEST enclosing region (innermost island).
+        double area2 = 0.0;
+        for (size_t i = 0, n = poly.size(); i < n; ++i) {
+            const Vec2& a = poly[i];
+            const Vec2& b = poly[(i + 1) % n];
+            area2 += a.x * b.y - b.x * a.y;
+        }
+        const double area = std::abs(area2) * 0.5;
+        if (area > 1e-9 && area < bestArea) { bestArea = area; best = poly; }
+    }
+    return best;
+}
+
+void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
+    if (!doc_ || pts.size() < 3) return;
+    pushUndo();
+    Entity e;
+    e.layer = doc_->activeLayer();
+    const EntityType ty = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
+    e.type = ty;
+    e.points = pts;
+    if (ty == EntityType::Hatch) {
+        e.meta.insert("pattern", hatchStyle_.pattern);
+        e.meta.insert("hatchAngle", hatchStyle_.angle);
+        e.meta.insert("hatchScale", hatchStyle_.scale);
+        if (hatchStyle_.transparency > 0) e.meta.insert("transparency", hatchStyle_.transparency);
+        e.meta.insert("associative", hatchStyle_.associative);
+    }
+    addEntity(std::move(e));
+    emit message(ty == EntityType::Hatch ? QStringLiteral("Hatch created.")
+                                         : QStringLiteral("Wipeout created."));
+    emit changed();
+    // Stay in the tool so more regions can be filled (Esc / Close exits).
 }
 
 namespace {
@@ -1822,12 +1881,12 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("TEXT: pick a point, then type the text");
     case ToolId::Hatch:
         return hatchStyle_.boundary == HatchBoundary::SelectObject
-                   ? QStringLiteral("HATCH: click a closed object to fill  ·  (set options in the Hatch \xE2\x96\xBE menu)")
-                   : QStringLiteral("HATCH: click boundary points  ·  Enter / double-click to close  ·  Esc cancels");
+                   ? QStringLiteral("HATCH: click a closed object to fill  ·  Esc exits")
+                   : QStringLiteral("HATCH: click a point inside an enclosed area to fill it  ·  Esc exits");
     case ToolId::Wipeout:
         return hatchStyle_.boundary == HatchBoundary::SelectObject
-                   ? QStringLiteral("WIPEOUT: click a closed object to mask")
-                   : QStringLiteral("WIPEOUT: click boundary points  ·  Enter / double-click to close");
+                   ? QStringLiteral("WIPEOUT: click a closed object to mask  ·  Esc exits")
+                   : QStringLiteral("WIPEOUT: click a point inside an enclosed area to mask it  ·  Esc exits");
     default:
         return QString(); // Select / modify tools have no draw hint
     }
@@ -3135,6 +3194,25 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawText(box, Qt::AlignCenter, label);
                 p.setBrush(Qt::NoBrush);
             }
+        }
+    }
+
+    // Hatch/Wipeout "Pick Points": preview the enclosed boundary under the cursor
+    // so it's clear which region a click would fill.
+    if ((tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) &&
+        hatchStyle_.boundary == HatchBoundary::PickPoints) {
+        const auto bnd = pickEnclosingBoundary(cursor_);
+        if (bnd.size() >= 3) {
+            QPolygonF poly;
+            for (const auto& v : bnd) poly << vt.toScreen(v);
+            p.save();
+            QPen hp(QColor("#2bd0ff"));
+            hp.setCosmetic(true);
+            hp.setWidthF(1.6);
+            p.setPen(hp);
+            p.setBrush(QColor(80, 160, 255, 60));
+            p.drawPolygon(poly);
+            p.restore();
         }
     }
 

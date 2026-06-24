@@ -248,6 +248,13 @@ private:
     std::vector<Entity*> selectedEntities();
     Entity* entityById(const QString& id);
 
+    // Hatch "Pick Points": the smallest closed boundary (existing closed entity)
+    // that encloses `seed`, sampled to a polygon — empty if none surrounds it.
+    std::vector<Vec2> pickEnclosingBoundary(const Vec2& seed) const;
+    // Create a Hatch/Wipeout from a boundary polygon and stay in the tool so more
+    // regions can be filled (Esc / Close exits).
+    void commitHatchBoundary(const std::vector<Vec2>& pts);
+
     void handleDrawPress(const Vec2& p);
     void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects
     void buildTangentCircle();             // solve + place once enough objects are picked
