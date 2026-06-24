@@ -466,7 +466,8 @@ void CanvasWidget::leaveEvent(QEvent* e) {
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (panning_ && e->button() == Qt::MiddleButton) {
         panning_ = false;
-        setCursor(Qt::BlankCursor); // resume the drawn crosshair after panning
+        setCursor(inlineEditing_ ? Qt::ArrowCursor
+                                 : Qt::BlankCursor); // resume the drawn crosshair after panning
         update();
         e->accept();
         return;

@@ -2140,6 +2140,10 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineEdit_ = new QPlainTextEdit(canvas_);
         inlineEdit_->setStyleSheet(QStringLiteral(
             "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;}"));
+        // Show the normal arrow cursor over the editor instead of the I-beam
+        // "cross" text cursor while editing on-canvas text.
+        inlineEdit_->setCursor(Qt::ArrowCursor);
+        inlineEdit_->viewport()->setCursor(Qt::ArrowCursor);
         inlineEdit_->installEventFilter(this);
         auto* ruler = new InlineRuler(canvas_);
         // Dragging the ruler's right handle resizes the container width.

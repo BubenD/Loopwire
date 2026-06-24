@@ -93,14 +93,19 @@ signals:
 
 public:
     // True while the host's on-canvas text editor is active (so a canvas click
-    // commits it instead of starting a new action).
-    void setInlineEditing(bool on) { inlineEditing_ = on; }
+    // commits it instead of starting a new action). While editing text we hide
+    // the AutoCAD crosshair and restore the normal OS cursor.
+    void setInlineEditing(bool on) {
+        inlineEditing_ = on;
+        setCursor(on ? Qt::ArrowCursor : Qt::BlankCursor);
+        update();
+    }
 
     // Paint the crosshair onto an arbitrary painter. Called by the transparent
     // top-overlay child so the crosshair always renders ABOVE every other child
     // widget (the on-canvas text editor, the flying input field, ...).
     void renderCrosshair(QPainter& p) const {
-        if (cursorInside_ && !panning_) drawCrosshair(p);
+        if (cursorInside_ && !panning_ && !inlineEditing_) drawCrosshair(p);
     }
 
     // Restack the crosshair overlay on top of every sibling. The host calls this
