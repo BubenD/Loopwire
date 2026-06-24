@@ -2164,33 +2164,50 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineFont_ = new QFontComboBox(inlineBar_);
         inlineFont_->setMaximumWidth(150);
         inlineFont_->setEditable(false); // a font picker, not a text field
+        // Build a numeric field with its own visible, stacked +/- buttons ("+" on
+        // top, "-" below). Used for both the text height and the line spacing.
+        const QString stepQss = QStringLiteral(
+            "QToolButton{background:#50545b;color:#f4f4f4;border:1px solid #6a6e76;"
+            "border-radius:2px;padding:0;margin:0;font:bold 12px;}"
+            "QToolButton:hover{background:#5e636b;}"
+            "QToolButton:pressed{background:#3d8bfd;}");
+        auto buildStepper = [&](QDoubleSpinBox* spin, QToolButton*& plus,
+                                QToolButton*& minus) -> QWidget* {
+            spin->setButtonSymbols(QAbstractSpinBox::NoButtons); // we draw our own
+            QWidget* box = new QWidget(inlineBar_);
+            auto* row = new QHBoxLayout(box);
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(2);
+            auto* stack = new QVBoxLayout();
+            stack->setContentsMargins(0, 0, 0, 0);
+            stack->setSpacing(1);
+            plus = new QToolButton(box);
+            plus->setText(QStringLiteral("+"));
+            plus->setAutoRepeat(true);
+            plus->setFixedSize(22, 14);
+            plus->setStyleSheet(stepQss);
+            minus = new QToolButton(box);
+            minus->setText(QString::fromUtf8("\xE2\x88\x92")); // "−"
+            minus->setAutoRepeat(true);
+            minus->setFixedSize(22, 14);
+            minus->setStyleSheet(stepQss);
+            stack->addWidget(plus);
+            stack->addWidget(minus);
+            row->addWidget(spin);
+            row->addLayout(stack);
+            return box;
+        };
+
+        QToolButton *sizePlus = nullptr, *sizeMinus = nullptr;
+        QToolButton *spacePlus = nullptr, *spaceMinus = nullptr;
+
         inlineSize_ = new QDoubleSpinBox(inlineBar_);
         inlineSize_->setRange(0.1, 1000.0);
         inlineSize_->setDecimals(2);
         inlineSize_->setSingleStep(1.0);
         inlineSize_->setPrefix(QStringLiteral("H "));
-        // Native spin arrows off — we provide explicit stacked +/- buttons instead.
-        inlineSize_->setButtonSymbols(QAbstractSpinBox::NoButtons);
-        // Two vertical text-height buttons: "+" on top, "-" below, next to the field.
-        QWidget* sizeBox = new QWidget(inlineBar_);
-        auto* sizeRow = new QHBoxLayout(sizeBox);
-        sizeRow->setContentsMargins(0, 0, 0, 0);
-        sizeRow->setSpacing(2);
-        auto* sizeStack = new QVBoxLayout();
-        sizeStack->setContentsMargins(0, 0, 0, 0);
-        sizeStack->setSpacing(1);
-        QToolButton* sizePlus = new QToolButton(sizeBox);
-        sizePlus->setText(QStringLiteral("+"));
-        sizePlus->setAutoRepeat(true);
-        sizePlus->setFixedSize(20, 12);
-        QToolButton* sizeMinus = new QToolButton(sizeBox);
-        sizeMinus->setText(QString::fromUtf8("\xE2\x88\x92")); // "−"
-        sizeMinus->setAutoRepeat(true);
-        sizeMinus->setFixedSize(20, 12);
-        sizeStack->addWidget(sizePlus);
-        sizeStack->addWidget(sizeMinus);
-        sizeRow->addWidget(inlineSize_);
-        sizeRow->addLayout(sizeStack);
+        inlineSize_->setToolTip(QStringLiteral("Text height"));
+        QWidget* sizeBox = buildStepper(inlineSize_, sizePlus, sizeMinus);
         inlineBold_ = new QToolButton(inlineBar_);
         inlineBold_->setText(QStringLiteral("B"));
         inlineBold_->setCheckable(true);
@@ -2217,7 +2234,9 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineSpacing_ = new QDoubleSpinBox(inlineBar_);
         inlineSpacing_->setRange(0.5, 4.0);
         inlineSpacing_->setSingleStep(0.25);
-        inlineSpacing_->setPrefix(QString::fromUtf8("\xC3\x97 ")); // "× "
+        inlineSpacing_->setPrefix(QString::fromUtf8("\xC3\x97 ")); // "× " (line-spacing multiplier)
+        inlineSpacing_->setToolTip(QStringLiteral("Line spacing (× the text height)"));
+        QWidget* spaceBox = buildStepper(inlineSpacing_, spacePlus, spaceMinus);
         auto* okBtn = new QToolButton(inlineBar_);
         okBtn->setText(QString::fromUtf8("\xE2\x9C\x93")); // checkmark
         auto* cancelBtn = new QToolButton(inlineBar_);
@@ -2226,7 +2245,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
                            static_cast<QWidget*>(inlineBold_), static_cast<QWidget*>(inlineItalic_),
                            static_cast<QWidget*>(inlineUnderline_), static_cast<QWidget*>(inlineStrike_),
                            static_cast<QWidget*>(inlineJust_), static_cast<QWidget*>(inlineList_),
-                           static_cast<QWidget*>(inlineSpacing_), static_cast<QWidget*>(okBtn),
+                           static_cast<QWidget*>(spaceBox), static_cast<QWidget*>(okBtn),
                            static_cast<QWidget*>(cancelBtn)})
             bl->addWidget(w);
 
@@ -2260,6 +2279,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         connect(inlineJust_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
         connect(inlineList_, &QComboBox::currentTextChanged, this, [sync] { sync(); });
         connect(inlineSpacing_, &QDoubleSpinBox::editingFinished, this, [sync] { sync(); });
+        connect(spacePlus, &QToolButton::clicked, this, [this, sync] { inlineSpacing_->stepUp(); sync(); });
+        connect(spaceMinus, &QToolButton::clicked, this, [this, sync] { inlineSpacing_->stepDown(); sync(); });
         connect(okBtn, &QToolButton::clicked, this, [this] { commitInlineText(true); });
         connect(cancelBtn, &QToolButton::clicked, this, [this] { commitInlineText(false); });
     }
