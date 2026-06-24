@@ -302,7 +302,19 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         best = std::abs(r - 1.0) * std::min(rx, ry);
         break;
     }
-    case EntityType::Text:
+    case EntityType::Text: {
+        // Hit-test the actual text rectangle (bounds() = the glyph extent), so a
+        // click/double-click lands on the text itself, not the empty container.
+        const Bounds b = e.bounds();
+        if (p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y) {
+            best = 0.0;
+        } else {
+            const Vec2 c0{b.min.x, b.min.y}, c1{b.max.x, b.min.y}, c2{b.max.x, b.max.y},
+                c3{b.min.x, b.max.y};
+            best = std::min({segDist(c0, c1), segDist(c1, c2), segDist(c2, c3), segDist(c3, c0)});
+        }
+        break;
+    }
     case EntityType::Splice:
     case EntityType::NetLabel:
     case EntityType::NotConnected:

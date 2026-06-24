@@ -473,6 +473,11 @@ int run_editor_tests() {
         check(ed.selection().size() == 1, "text-sel: crossing touching the text selects");
         regionSelect({200, 200}, {150, 150}); // far away
         check(ed.selection().empty(), "text-sel: a region away from the text does not select");
+        // Inside the empty CONTAINER (box 0..60 x 0..-20) but past the text extent
+        // (~30 x 13): must NOT select — selection is on the text, not the box.
+        regionSelect({58, -16}, {45, -19});
+        check(ed.selection().empty(),
+              "text-sel: a region in the empty container (not on the text) does not select");
     }
 
     // --- Polygon: default 5 sides; a typed count sets the side number.

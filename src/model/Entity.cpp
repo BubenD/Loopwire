@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace Edraw_Desktop {
 
@@ -77,21 +78,51 @@ Bounds Entity::bounds() const {
         break;
     }
     case EntityType::Text: {
-        // A rectangle from the anchor (top-left): the container box if set, else
-        // estimated from the content (so selection/grips catch the whole text).
-        bnds.expand(a);
+        // The actual TEXT extent (estimated glyph rectangle), NOT the container —
+        // so selection/hit-testing target the text itself. Lines wrap to boxWidth;
+        // the block is offset within the box by the justification.
         const QString txt = meta.value("text").toString();
         const double size = meta.value("size").toDouble(meta.value("height").toDouble(2.5));
         const double spacing = std::max(1.0, meta.value("lineSpacing").toDouble(1.0));
-        const QStringList lines = txt.split(QLatin1Char('\n'));
-        int maxLen = 1;
-        for (const auto& l : lines) maxLen = std::max<int>(maxLen, l.size());
         const double bw = meta.value("boxWidth").toDouble(0.0);
         const double bh = meta.value("boxHeight").toDouble(0.0);
-        const double width = bw > 0.0 ? bw : maxLen * size * 0.6;
-        const double height =
-            bh > 0.0 ? bh : std::max<int>(1, lines.size()) * size * spacing * 1.3;
-        bnds.expand({a.x + width, a.y - height});
+        const double charW = size * 0.6, lineH = size * spacing * 1.3;
+        const QStringList paras = txt.split(QLatin1Char('\n'));
+        int wrapped = 0;
+        double textW = 0.0;
+        for (const QString& para : paras) {
+            const double pw = para.size() * charW;
+            if (bw > 0.0 && pw > bw) {
+                wrapped += std::max<int>(1, static_cast<int>(std::ceil(pw / bw)));
+                textW = std::max(textW, bw);
+            } else {
+                wrapped += 1;
+                textW = std::max(textW, pw);
+            }
+        }
+        if (wrapped == 0) { wrapped = 1; }
+        if (textW < 1e-6) textW = size; // empty text: a small caret-ish box
+        const double textH = wrapped * lineH;
+
+        // Justification offset of the block within the container box.
+        QString just = meta.value("justify").toString();
+        if (just.size() < 2) {
+            const QString al = meta.value("align").toString();
+            just = QStringLiteral("T") + (al == QLatin1String("center") ? QStringLiteral("C")
+                                          : al == QLatin1String("right") ? QStringLiteral("R")
+                                                                         : QStringLiteral("L"));
+        }
+        double hOff = 0.0, vOff = 0.0;
+        if (bw > 0.0) {
+            if (just[1] == QLatin1Char('C')) hOff = (bw - textW) / 2.0;
+            else if (just[1] == QLatin1Char('R')) hOff = bw - textW;
+        }
+        if (bh > 0.0) {
+            if (just[0] == QLatin1Char('M')) vOff = (bh - textH) / 2.0;
+            else if (just[0] == QLatin1Char('B')) vOff = bh - textH;
+        }
+        bnds.expand({a.x + hOff, a.y - vOff});
+        bnds.expand({a.x + hOff + textW, a.y - vOff - textH});
         break;
     }
     case EntityType::Splice:
