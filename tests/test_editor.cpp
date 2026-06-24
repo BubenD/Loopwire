@@ -771,6 +771,27 @@ int run_editor_tests() {
               "ellipse: vertical axis -> a=5 b=3 rotation=90deg");
     }
 
+    // --- Elliptical arc: define the ellipse, then pick start + end angles.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setEllipseMode(Editor::EllipseMode::EllipticalArc);
+        ed.setTool(ToolId::Ellipse);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // axis end 1
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);  // axis end 2 -> a=10, centre (10,0)
+        ed.onPointerPress({10, 5}, Qt::LeftButton, Qt::NoModifier);  // minor distance -> b=5
+        check(d.entities().empty(), "ellarc: ellipse not committed until the angles are picked");
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);  // start angle -> 0
+        ed.onPointerPress({10, 5}, Qt::LeftButton, Qt::NoModifier);  // end angle -> pi/2 (finishes)
+        check(d.entities().size() == 1, "ellarc: created after 5 picks");
+        const Entity& e = d.entities()[0];
+        check(e.type == EntityType::Ellipse &&
+                  e.meta.value(QStringLiteral("ellipticalArc")).toBool() &&
+                  near(e.radius, 10.0) && near(e.radiusY, 5.0) &&
+                  near(e.startAngle, 0.0) && near(e.endAngle, M_PI / 2.0),
+              "ellarc: full ellipse opened to a 0..90deg arc");
+    }
+
     // --- Crossing region that merely TOUCHES a curve (circle ring) selects it.
     {
         Document d; d.entities().clear();

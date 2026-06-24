@@ -1100,13 +1100,19 @@ void Editor::handleDrawPress(const Vec2& p) {
         drafting_ = true;
         if (draftPts_.size() == (circleMode_ == CircleMode::ThreePoint ? 3u : 2u)) finishDraw();
         break;
-    case ToolId::Ellipse:
-        // All modes are 3-point (AutoCAD): axis (two points or center+endpoint)
-        // then a distance for the other half-axis.
+    case ToolId::Ellipse: {
+        // 3-point ellipse (axis + distance). Elliptical Arc adds 2 more clicks: the
+        // start angle then the end angle (so the ellipse is "opened" into an arc).
         draftPts_.push_back(p);
         drafting_ = true;
-        if (draftPts_.size() == 3) finishDraw();
+        const size_t need = (ellipseMode_ == EllipseMode::EllipticalArc) ? 5u : 3u;
+        if (draftPts_.size() == need) finishDraw();
+        else if (ellipseMode_ == EllipseMode::EllipticalArc && draftPts_.size() == 3)
+            emit message(QStringLiteral("Elliptical arc: pick the START angle"));
+        else if (ellipseMode_ == EllipseMode::EllipticalArc && draftPts_.size() == 4)
+            emit message(QStringLiteral("Elliptical arc: pick the END angle"));
         break;
+    }
     case ToolId::Arc:
         draftPts_.push_back(p);
         drafting_ = true;
@@ -1426,6 +1432,16 @@ std::optional<Entity> buildEllipseEntity(Editor::EllipseMode mode, const std::ve
     return e;
 }
 
+// Parametric angle (radians) on the ellipse boundary toward world point p — used
+// to convert the picked start/end points into elliptical-arc angles.
+double ellipseParamAngle(const Vec2& center, double rx, double ry, double rot, const Vec2& p) {
+    const double dx = p.x - center.x, dy = p.y - center.y;
+    const double c = std::cos(rot), s = std::sin(rot);
+    const double lx = dx * c + dy * s;  // inverse rotation into the ellipse's frame
+    const double ly = -dx * s + dy * c;
+    return std::atan2(ly / std::max(1e-9, ry), lx / std::max(1e-9, rx));
+}
+
 } // namespace
 
 void Editor::finishDraw() {
@@ -1500,8 +1516,15 @@ void Editor::finishDraw() {
             const QString layer = e.layer;
             e = *el;
             e.layer = layer;
-            if (ellipseMode_ == EllipseMode::EllipticalArc)
-                emit message(QStringLiteral("Elliptical arc: drawn as a full ellipse"));
+            // Elliptical arc: the 4th/5th picks set the start/end angles, opening
+            // the ellipse into an arc.
+            if (ellipseMode_ == EllipseMode::EllipticalArc && draftPts_.size() >= 5) {
+                e.startAngle =
+                    ellipseParamAngle(e.center, e.radius, e.radiusY, e.rotation, draftPts_[3]);
+                e.endAngle =
+                    ellipseParamAngle(e.center, e.radius, e.radiusY, e.rotation, draftPts_[4]);
+                e.meta.insert("ellipticalArc", true);
+            }
         } else {
             cancelDraw();
             return;
@@ -2867,7 +2890,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
         } else if (tool_ == ToolId::Ellipse) {
             // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
+            // For an elliptical arc, once the start angle is placed (4th point) the
+            // preview opens into an arc sweeping to the cursor.
             if (auto el = buildEllipseEntity(ellipseMode_, pts)) {
+                if (ellipseMode_ == EllipseMode::EllipticalArc && draftPts_.size() >= 4) {
+                    el->startAngle = ellipseParamAngle(el->center, el->radius, el->radiusY,
+                                                       el->rotation, draftPts_[3]);
+                    el->endAngle =
+                        ellipseParamAngle(el->center, el->radius, el->radiusY, el->rotation, cursor_);
+                    el->meta.insert("ellipticalArc", true);
+                }
                 EntityRenderer::draw(p, *el, *doc_, vt, QColor("#ffffff"));
             } else {
                 QPolygonF poly;

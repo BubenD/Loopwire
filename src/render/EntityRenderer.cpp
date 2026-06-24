@@ -194,14 +194,32 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 
     case EntityType::Ellipse: {
-        const QPointF c = vt.toScreen(e.center);
-        const double rx = e.radius * vt.scale();
-        const double ry = e.radiusY * vt.scale();
-        p.save();
-        p.translate(c);
-        p.rotate(-qRadiansToDegrees(e.rotation)); // screen Y is flipped
-        p.drawEllipse(QPointF(0, 0), rx, ry);
-        p.restore();
+        if (e.meta.value("ellipticalArc").toBool()) {
+            // Partial ellipse (elliptical arc): sample the rotated parametric curve
+            // from startAngle to endAngle (CCW) in world space.
+            const double cc = std::cos(e.rotation), ss = std::sin(e.rotation);
+            auto wpt = [&](double t) {
+                const double lx = e.radius * std::cos(t), ly = e.radiusY * std::sin(t);
+                return vt.toScreen({e.center.x + lx * cc - ly * ss, e.center.y + lx * ss + ly * cc});
+            };
+            double sweep = e.endAngle - e.startAngle;
+            while (sweep <= 0.0) sweep += 2.0 * M_PI;
+            const int steps = std::max(8, static_cast<int>(std::ceil(sweep / (M_PI / 60.0))));
+            QPainterPath path;
+            for (int i = 0; i <= steps; ++i) {
+                const QPointF sp = wpt(e.startAngle + sweep * i / steps);
+                if (i == 0) path.moveTo(sp);
+                else path.lineTo(sp);
+            }
+            p.drawPath(path);
+        } else {
+            const QPointF c = vt.toScreen(e.center);
+            p.save();
+            p.translate(c);
+            p.rotate(-qRadiansToDegrees(e.rotation)); // screen Y is flipped
+            p.drawEllipse(QPointF(0, 0), e.radius * vt.scale(), e.radiusY * vt.scale());
+            p.restore();
+        }
         break;
     }
 
