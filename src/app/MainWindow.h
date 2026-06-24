@@ -107,7 +107,7 @@ private:
     // On-canvas in-place text editor: a text box + floating options bar + ruler,
     // overlaid on the canvas at the insertion box. Commit applies to the entity.
     void beginInlineText(const QString& id, const QString& text, const Editor::TextStyle& style,
-                         Vec2 topLeft, double boxW, double boxH);
+                         Vec2 topLeft);
     void commitInlineText(bool apply);
     void layoutInlineText(); // reposition overlay (e.g. after the bar resizes)
     void showCanvasMenu(const QPoint& globalPos); // right-click context menu on the canvas
@@ -147,9 +147,8 @@ private:
     QWidget* inlineBar_ = nullptr;
     QWidget* inlineRuler_ = nullptr;
     QString inlineEditId_;          // empty => placing a new text
-    Editor::TextStyle inlineStyle_; // live style edited by the options bar
+    Editor::TextStyle inlineStyle_; // live style (incl. box) edited by the bar/ruler
     Vec2 inlineTopLeft_;
-    double inlineBoxW_ = 0, inlineBoxH_ = 0;
     QFontComboBox* inlineFont_ = nullptr;
     QDoubleSpinBox* inlineSize_ = nullptr;
     QToolButton* inlineBold_ = nullptr;

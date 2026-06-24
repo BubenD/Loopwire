@@ -76,24 +76,57 @@ namespace Edraw_Desktop {
 
 namespace {
 
-// A thin ruler bar drawn above the on-canvas text editor (AutoCAD MTEXT style):
-// a tick scale across the container width with stronger marks every 50 px.
+// A thin ruler bar above the on-canvas text editor (AutoCAD MTEXT style): a tick
+// scale with a left indent marker and a right WIDTH handle (diamond) you can drag
+// to resize the container. `onWidth(newWidthPx)` fires while dragging.
 class InlineRuler : public QWidget {
 public:
     using QWidget::QWidget;
+    std::function<void(int)> onWidth;
+    static constexpr int kHandle = 7; // half-size of the right diamond handle
 
 protected:
+    bool overHandle(int x) const { return std::abs(x - (width() - kHandle)) <= kHandle + 2; }
+
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
         p.fillRect(rect(), QColor("#d8d8d0"));
         p.setPen(QColor("#3a3d43"));
         const int h = height();
         p.drawLine(0, h - 1, width(), h - 1);
-        for (int x = 0; x < width(); x += 10) {
-            const int top = (x % 50 == 0) ? 2 : h / 2;
+        for (int x = 4; x < width() - kHandle; x += 10) {
+            const int top = ((x - 4) % 50 == 0) ? 2 : h / 2;
             p.drawLine(x, top, x, h - 1);
         }
+        // Left indent marker (small filled triangle).
+        QPolygon left;
+        left << QPoint(2, 2) << QPoint(2, h - 2) << QPoint(7, h - 2);
+        p.setBrush(QColor("#3a3d43"));
+        p.drawPolygon(left);
+        // Right width handle (diamond).
+        const int cx = width() - kHandle, cy = h / 2;
+        QPolygon dia;
+        dia << QPoint(cx, cy - kHandle) << QPoint(cx + kHandle, cy) << QPoint(cx, cy + kHandle)
+            << QPoint(cx - kHandle, cy);
+        p.setBrush(QColor("#3d8bfd"));
+        p.drawPolygon(dia);
     }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (dragging_) {
+            if (onWidth) onWidth(std::max(40, e->pos().x() + kHandle));
+        } else {
+            setCursor(overHandle(e->pos().x()) ? Qt::SizeHorCursor : Qt::ArrowCursor);
+        }
+    }
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && overHandle(e->pos().x())) dragging_ = true;
+    }
+    void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; }
+
+private:
+    bool dragging_ = false;
 };
 
 // Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
@@ -933,7 +966,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         Vec2 tl;
         double w = 0, h = 0;
         if (!editor_->pendingTextBox(tl, w, h)) return;
-        beginInlineText(QString(), QString(), Editor::TextStyle{}, tl, w, h);
+        Editor::TextStyle style;
+        style.boxWidth = w;
+        style.boxHeight = h;
+        beginInlineText(QString(), QString(), style, tl);
     });
     connect(editor_, &Editor::editTextRequested, this, [this](const QString& id) {
         if (!doc_) return;
@@ -951,9 +987,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         style.lineSpacing = found->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0);
         style.list = found->meta.value(QStringLiteral("list")).toString();
         if (style.list.isEmpty()) style.list = QStringLiteral("none");
-        beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a,
-                        found->meta.value(QStringLiteral("boxWidth")).toDouble(0.0),
-                        found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0));
+        style.boxWidth = found->meta.value(QStringLiteral("boxWidth")).toDouble(0.0);
+        style.boxHeight = found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0);
+        beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a);
     });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
 
@@ -2089,20 +2125,25 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
 }
 
 void MainWindow::beginInlineText(const QString& id, const QString& text,
-                                 const Editor::TextStyle& style, Vec2 topLeft, double boxW,
-                                 double boxH) {
+                                 const Editor::TextStyle& style, Vec2 topLeft) {
     inlineEditId_ = id;
     inlineStyle_ = style;
     inlineTopLeft_ = topLeft;
-    inlineBoxW_ = boxW;
-    inlineBoxH_ = boxH;
 
     if (!inlineEdit_) {
         inlineEdit_ = new QPlainTextEdit(canvas_);
         inlineEdit_->setStyleSheet(QStringLiteral(
             "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;}"));
         inlineEdit_->installEventFilter(this);
-        inlineRuler_ = new InlineRuler(canvas_);
+        auto* ruler = new InlineRuler(canvas_);
+        // Dragging the ruler's right handle resizes the container width.
+        ruler->onWidth = [this](int wpx) {
+            const double scale = canvas_->viewScale();
+            inlineStyle_.boxWidth = std::max(1.0, wpx / (scale > 1e-9 ? scale : 1.0));
+            layoutInlineText();
+            inlineEdit_->setFocus();
+        };
+        inlineRuler_ = ruler;
 
         inlineBar_ = new QFrame(canvas_);
         inlineBar_->setStyleSheet(QStringLiteral(
@@ -2208,8 +2249,11 @@ void MainWindow::layoutInlineText() {
     if (!inlineEdit_ || !canvas_) return;
     const double scale = canvas_->viewScale();
     const QPointF tl = canvas_->mapToScreen(inlineTopLeft_);
-    int w = std::max(140, inlineBoxW_ > 0 ? static_cast<int>(inlineBoxW_ * scale) : 240);
-    int h = std::max(44, inlineBoxH_ > 0 ? static_cast<int>(inlineBoxH_ * scale) : 64);
+    int w = std::max(140, inlineStyle_.boxWidth > 0 ? static_cast<int>(inlineStyle_.boxWidth * scale)
+                                                     : 240);
+    int h = std::max(44, inlineStyle_.boxHeight > 0
+                             ? static_cast<int>(inlineStyle_.boxHeight * scale)
+                             : 64);
     const int rulerH = 14;
     const int barH = std::max(28, inlineBar_->sizeHint().height());
     const int x = static_cast<int>(tl.x());

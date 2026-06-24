@@ -2055,6 +2055,10 @@ static void writeTextStyle(Entity& e, const Editor::TextStyle& s) {
     e.meta.insert("justify", s.justify.isEmpty() ? QStringLiteral("TL") : s.justify);
     e.meta.insert("lineSpacing", s.lineSpacing > 0 ? s.lineSpacing : 1.0);
     e.meta.insert("list", s.list.isEmpty() ? QStringLiteral("none") : s.list);
+    if (s.boxWidth > 0.0) e.meta.insert("boxWidth", s.boxWidth);
+    else e.meta.remove("boxWidth");
+    if (s.boxHeight > 0.0) e.meta.insert("boxHeight", s.boxHeight);
+    else e.meta.remove("boxHeight");
 }
 
 void Editor::commitText(const QString& text, const TextStyle& s) {
@@ -2063,19 +2067,21 @@ void Editor::commitText(const QString& text, const TextStyle& s) {
         Entity e;
         e.type = EntityType::Text;
         e.layer = doc_->activeLayer();
+        TextStyle s2 = s;
         if (tool_ == ToolId::MText && draftPts_.size() >= 2) {
-            // Anchor at the box's top-left; the width drives word wrapping.
+            // Anchor at the box's top-left; box dims come from the style if set
+            // (in-place ruler resize), else from the drag box.
             Bounds b;
             b.expand(draftPts_[0]);
             b.expand(draftPts_[1]);
             e.a = {b.min.x, b.max.y};
-            if (b.width() > 1e-6) e.meta.insert("boxWidth", b.width());
-            if (b.height() > 1e-6) e.meta.insert("boxHeight", b.height());
+            if (s2.boxWidth <= 0.0) s2.boxWidth = b.width();
+            if (s2.boxHeight <= 0.0) s2.boxHeight = b.height();
         } else {
             e.a = draftPts_[0];
         }
         e.meta.insert("text", text);
-        writeTextStyle(e, s);
+        writeTextStyle(e, s2);
         pushUndo();
         addEntity(std::move(e));
     }

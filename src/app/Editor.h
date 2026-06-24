@@ -61,6 +61,8 @@ public:
         QString justify = QStringLiteral("TL"); // TL..BR (vert T/M/B + horiz L/C/R)
         double lineSpacing = 1.0;
         QString list = QStringLiteral("none"); // none / bullet / number
+        double boxWidth = 0.0;  // container wrap width (0 = none)
+        double boxHeight = 0.0; // container height (0 = auto)
     };
     // Place a styled text/mtext entity at the pending click position; `text` may
     // contain newlines for multiline. Empty `text` cancels.
