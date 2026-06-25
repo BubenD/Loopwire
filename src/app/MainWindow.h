@@ -151,6 +151,9 @@ private:
     QDoubleSpinBox* hatchScaleSpin_ = nullptr;
     QSpinBox* hatchTranspSpin_ = nullptr;
     QToolButton* hatchAssocBtn_ = nullptr;
+    QToolButton* hatchJointsBtn_ = nullptr; // many-joints toggle
+    QToolButton* hatchPickBtn_ = nullptr;   // boundary: Pick Points
+    QToolButton* hatchSelectBtn_ = nullptr; // boundary: Select object
     QComboBox* hatchColorCombo_ = nullptr;
     QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;

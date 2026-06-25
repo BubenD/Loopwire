@@ -1391,6 +1391,24 @@ int run_editor_tests() {
               "hatch-nonassoc: corner grip reshapes the boundary");
     }
 
+    // --- "Multiple joints" toggle: select-object on a circle yields a dense (64)
+    //     or coarse (4) boundary.
+    {
+        auto fillCircle = [](bool many) {
+            Document d; d.entities().clear();
+            Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 50;
+            d.entities().push_back(c);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.hatchStyle().boundary = Editor::HatchBoundary::SelectObject;
+            ed.hatchStyle().manyJoints = many;
+            ed.setTool(ToolId::Hatch);
+            ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // on the ring
+            return static_cast<int>(d.entities().back().points.size());
+        };
+        check(fillCircle(false) == 4, "hatch-joints: off -> circle boundary has 4 joints");
+        check(fillCircle(true) == 64, "hatch-joints: on -> circle boundary is dense");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

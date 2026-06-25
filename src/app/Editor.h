@@ -205,6 +205,7 @@ public:
         int transparency = 0;   // 0..95 (%)
         QString color;          // explicit hex, or empty = ByLayer
         bool associative = true;
+        bool manyJoints = true; // many boundary joints on curves (off: circle->4, arc->3)
         HatchBoundary boundary = HatchBoundary::PickPoints;
     };
     HatchStyle& hatchStyle() { return hatchStyle_; }

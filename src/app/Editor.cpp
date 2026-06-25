@@ -1097,8 +1097,9 @@ void Editor::onDoubleClick(const Vec2& world) {
 
 namespace {
 // Closed boundary of an entity, for "select object" hatch/wipeout. Circles and
-// ellipses are sampled into a polygon; open shapes return empty.
-std::vector<Vec2> boundaryPointsOf(const Entity& e) {
+// ellipses are sampled into a polygon; open shapes return empty. `manyJoints`
+// chooses a dense sampling (smooth, many grips) vs a coarse one (circle -> 4).
+std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints = true) {
     switch (e.type) {
     case EntityType::Rect:
     case EntityType::Polygon:
@@ -1110,7 +1111,7 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e) {
         return {};
     case EntityType::Circle: {
         std::vector<Vec2> pts;
-        const int n = 64;
+        const int n = manyJoints ? 64 : 4; // coarse = 4 quadrant joints
         for (int i = 0; i < n; ++i) {
             const double a = 2.0 * M_PI * i / n;
             pts.push_back({e.center.x + e.radius * std::cos(a),
@@ -1120,7 +1121,7 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e) {
     }
     case EntityType::Ellipse: {
         std::vector<Vec2> pts;
-        const int n = 64;
+        const int n = manyJoints ? 64 : 4;
         const double c = std::cos(e.rotation), s = std::sin(e.rotation);
         for (int i = 0; i < n; ++i) {
             const double a = 2.0 * M_PI * i / n;
@@ -1143,7 +1144,7 @@ void Editor::handleDrawPress(const Vec2& p) {
             // Click a closed object to fill it.
             if (auto hit = hitTest(p)) {
                 if (Entity* src = entityById(*hit)) {
-                    std::vector<Vec2> bnd = boundaryPointsOf(*src);
+                    std::vector<Vec2> bnd = boundaryPointsOf(*src, hatchStyle_.manyJoints);
                     if (bnd.size() >= 3) { commitHatchBoundary(bnd); return; }
                 }
             }
@@ -1281,14 +1282,14 @@ std::vector<Vec2> Editor::pickEnclosingBoundary(const Vec2& seed) const {
         case EntityType::Polygon:
         case EntityType::Circle:
         case EntityType::Ellipse:
-            poly = boundaryPointsOf(e);
+            poly = boundaryPointsOf(e, hatchStyle_.manyJoints);
             break;
         case EntityType::Polyline:
         case EntityType::Spline:
             // A boundary only if the run is (nearly) closed.
             if (e.points.size() >= 3 &&
                 distance(e.points.front(), e.points.back()) < worldTolerance())
-                poly = boundaryPointsOf(e);
+                poly = boundaryPointsOf(e, hatchStyle_.manyJoints);
             break;
         default:
             break; // lines / double lines / hatch / wipeout / text are not boundaries

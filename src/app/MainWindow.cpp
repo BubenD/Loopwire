@@ -1201,7 +1201,7 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     v->addWidget(content, 1);
     auto* lbl = new QLabel(title, g);
     lbl->setAlignment(Qt::AlignHCenter);
-    lbl->setStyleSheet(QStringLiteral("color:#aeb4bd; font-size:10px; background:transparent;"));
+    lbl->setStyleSheet(QStringLiteral("color:#b8bdc6; font-size:11px; background:transparent;"));
     v->addWidget(lbl);
     return g;
 }
@@ -1219,7 +1219,7 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
         QAction* act = makeToolAction(toolLabel(id), id);
         b->setDefaultAction(act);
         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        b->setIconSize(QSize(24, 24)); // ~10% larger ribbon buttons
+        b->setIconSize(QSize(28, 28)); // larger ribbon buttons
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus); // keep keyboard focus on the canvas
 
@@ -1306,7 +1306,7 @@ void MainWindow::buildRibbon() {
 
     ribbon_ = new QTabWidget(this);
     ribbon_->setDocumentMode(true);
-    ribbon_->setFixedHeight(114); // taller to fit the ~10% larger buttons
+    ribbon_->setFixedHeight(132); // taller: larger icons + more room for fields/labels
     // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
     // Use background-color (not the `background` shorthand) so it reliably wins
     // over the application stylesheet's QWidget{background-color:...} rule.
@@ -1576,7 +1576,7 @@ void MainWindow::buildHatchRibbonTab() {
         b->setIcon(icon);
         b->setText(text);
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setIconSize(QSize(24, 24));
+        b->setIconSize(QSize(28, 28));
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus);
         return b;
@@ -1588,20 +1588,27 @@ void MainWindow::buildHatchRibbonTab() {
         auto* g = new QGridLayout(w);
         g->setContentsMargins(0, 0, 0, 0);
         g->setSpacing(1);
-        auto* pick = bigButton(w, makeToolIcon(ToolId::Hatch), QStringLiteral("Pick\nPoints"));
-        connect(pick, &QToolButton::clicked, this, [this] {
+        // Checkable + exclusive so the active boundary mode is clearly highlighted.
+        auto* bmGroup = new QButtonGroup(this);
+        bmGroup->setExclusive(true);
+        hatchPickBtn_ = bigButton(w, makeToolIcon(ToolId::Hatch), QStringLiteral("Pick\nPoints"));
+        hatchPickBtn_->setCheckable(true);
+        bmGroup->addButton(hatchPickBtn_);
+        connect(hatchPickBtn_, &QToolButton::clicked, this, [this] {
             editor_->hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
             editor_->setTool(ToolId::Hatch);
             syncHatchRibbon();
         });
-        auto* sel = bigButton(w, makeToolIcon(ToolId::Select), QStringLiteral("Select"));
-        connect(sel, &QToolButton::clicked, this, [this] {
+        hatchSelectBtn_ = bigButton(w, makeToolIcon(ToolId::Select), QStringLiteral("Select"));
+        hatchSelectBtn_->setCheckable(true);
+        bmGroup->addButton(hatchSelectBtn_);
+        connect(hatchSelectBtn_, &QToolButton::clicked, this, [this] {
             editor_->hatchStyle().boundary = Editor::HatchBoundary::SelectObject;
             editor_->setTool(ToolId::Hatch);
             syncHatchRibbon();
         });
-        g->addWidget(pick, 0, 0);
-        g->addWidget(sel, 0, 1);
+        g->addWidget(hatchPickBtn_, 0, 0);
+        g->addWidget(hatchSelectBtn_, 0, 1);
         addGroup(QStringLiteral("Boundaries"), w);
     }
 
@@ -1704,7 +1711,7 @@ void MainWindow::buildHatchRibbonTab() {
         addGroup(QStringLiteral("Properties"), w);
     }
 
-    // ---- Options: Associative ----
+    // ---- Options: Associative + Multiple joints ----
     {
         auto* w = new QWidget(hatchTab_);
         auto* g = new QGridLayout(w);
@@ -1715,7 +1722,18 @@ void MainWindow::buildHatchRibbonTab() {
         hatchAssocBtn_->setChecked(editor_->hatchStyle().associative);
         connect(hatchAssocBtn_, &QToolButton::toggled, this,
                 [this](bool on) { applyHatchControl(QStringLiteral("associative"), on); });
+        // Many joints: ON keeps dense boundary joints on curves (current); OFF
+        // reduces them (a circle -> 4 joints). Applies to newly created hatches.
+        hatchJointsBtn_ = bigButton(w, makeToolIcon(ToolId::Spline), QStringLiteral("Multiple\njoints"));
+        hatchJointsBtn_->setCheckable(true);
+        hatchJointsBtn_->setChecked(editor_->hatchStyle().manyJoints);
+        hatchJointsBtn_->setToolTip(QStringLiteral(
+            "On: many joints on curved boundaries (current).  Off: few joints "
+            "(circle = 4). Applies to newly created hatches."));
+        connect(hatchJointsBtn_, &QToolButton::toggled, this,
+                [this](bool on) { editor_->hatchStyle().manyJoints = on; });
         g->addWidget(hatchAssocBtn_, 0, 0);
+        g->addWidget(hatchJointsBtn_, 0, 1);
         addGroup(QStringLiteral("Options"), w);
     }
 
@@ -1766,6 +1784,14 @@ void MainWindow::syncHatchRibbon() {
     if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(scale); }
     if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(transp); }
     if (hatchAssocBtn_) { QSignalBlocker b(hatchAssocBtn_); hatchAssocBtn_->setChecked(assoc); }
+    if (hatchJointsBtn_) {
+        QSignalBlocker b(hatchJointsBtn_);
+        hatchJointsBtn_->setChecked(editor_->hatchStyle().manyJoints);
+    }
+    // Reflect the active boundary mode (Pick Points vs Select).
+    const bool sel = editor_->hatchStyle().boundary == Editor::HatchBoundary::SelectObject;
+    if (hatchPickBtn_) { QSignalBlocker b(hatchPickBtn_); hatchPickBtn_->setChecked(!sel); }
+    if (hatchSelectBtn_) { QSignalBlocker b(hatchSelectBtn_); hatchSelectBtn_->setChecked(sel); }
     if (hatchColorCombo_) {
         QSignalBlocker b(hatchColorCombo_);
         int idx = hatchColorCombo_->findData(color);
