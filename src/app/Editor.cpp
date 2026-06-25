@@ -3347,7 +3347,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
         } else if (tool_ == ToolId::Arc) {
             // Live arc preview built from the placed points + the cursor.
-            if (auto a = buildArcEntity(arcMode_, pts, arcMirror_)) {
+            auto a = buildArcEntity(arcMode_, pts, arcMirror_);
+            if (a) {
                 EntityRenderer::draw(p, *a, *doc_, vt, QColor("#ffffff"));
             } else {
                 QPolygonF poly;
@@ -3355,8 +3356,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawPolyline(poly);
             }
             // Indication line + value readout, like the other construction tools.
-            // From the arc CENTRE when the mode has one (so the radius is shown and
-            // can be typed); otherwise from the last placed point (length + angle).
+            // Prefer the explicit centre of the center-based modes (so the radius is
+            // shown live and can be typed); otherwise use the arc's computed centre
+            // so EVERY arc mode shows a radius line + value.
             std::optional<Vec2> centre;
             double guideR = 0.0;
             if (arcMode_ == ArcMode::CenterStartEnd && !draftPts_.empty()) {
@@ -3366,23 +3368,35 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             } else if (arcMode_ == ArcMode::StartCenterEnd && draftPts_.size() >= 2) {
                 centre = draftPts_[1];
                 guideR = distance(*centre, draftPts_[0]);
+            } else if (a) {
+                centre = a->center;
+                guideR = a->radius;
             }
             const Vec2 from = centre.value_or(draftPts_.back());
             const Vec2 d = cursor_ - from;
             const double len = d.length();
-            if (len > 1e-6) {
-                QPen gp(QColor("#9aa6b6"));
+            if (len > 1e-9) {
+                const QPointF fs = vt.toScreen(from);
+                const QPointF qs = vt.toScreen(cursor_);
+                // Bright radius/direction line from the centre to the cursor.
+                QPen gp(centre ? QColor("#19ff7e") : QColor("#9aa6b6"));
                 gp.setCosmetic(true);
-                gp.setStyle(Qt::DotLine);
+                gp.setWidthF(1.4);
+                if (!centre) gp.setStyle(Qt::DotLine);
                 p.setPen(gp);
                 p.setBrush(Qt::NoBrush);
-                p.drawLine(vt.toScreen(from), vt.toScreen(cursor_));
+                p.drawLine(fs, qs);
+                if (centre) { // mark the centre
+                    p.setBrush(QColor("#19ff7e"));
+                    p.drawEllipse(fs, 2.6, 2.6);
+                    p.setBrush(Qt::NoBrush);
+                }
                 double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
                 if (deg < 0) deg += 360.0;
                 const QString lbl =
                     centre ? QStringLiteral("R %1   %2\xC2\xB0").arg(guideR, 0, 'f', 2).arg(deg, 0, 'f', 1)
                            : QStringLiteral("%1   %2\xC2\xB0").arg(len, 0, 'f', 2).arg(deg, 0, 'f', 1);
-                drawDraftValueBox(p, vt.toScreen(cursor_), lbl, QColor("#ffd166"));
+                drawDraftValueBox(p, qs, lbl, QColor("#ffd166"));
             }
         } else if (tool_ == ToolId::Ellipse) {
             // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
