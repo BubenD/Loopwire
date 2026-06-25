@@ -1935,6 +1935,16 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
         if (drafting_ && draftPts_.size() == 2)
             return {QStringLiteral("Distance")};
         return {};
+    case ToolId::Arc:
+        // Center-based modes: type the radius/angle in the flying field.
+        if (drafting_ && arcMode_ == ArcMode::CenterStartEnd) {
+            if (draftPts_.size() == 1) return {QStringLiteral("Radius"), QStringLiteral("Angle")};
+            if (draftPts_.size() == 2) return {QStringLiteral("Angle")};
+        } else if (drafting_ && arcMode_ == ArcMode::StartCenterEnd) {
+            if (draftPts_.size() == 1) return {QStringLiteral("Length"), QStringLiteral("Angle")};
+            if (draftPts_.size() == 2) return {QStringLiteral("Angle")};
+        }
+        return {};
     default:
         return {};
     }
@@ -1960,6 +1970,9 @@ QString Editor::drawCommandHint() const {
     case ToolId::Wire:
         return QStringLiteral("WIRE: click points  ·  double-click / Enter finishes");
     case ToolId::Arc:
+        if (arcMode_ == ArcMode::CenterStartEnd || arcMode_ == ArcMode::StartCenterEnd)
+            return QStringLiteral("ARC: pick points  ·  type Radius/Angle (Tab switches)  ·  "
+                                  "[MI] mirror  ·  Esc cancels");
         return QStringLiteral("ARC: pick 3 points  ·  [MI] mirror  ·  Esc cancels");
     case ToolId::Circle:
         if (circleMode_ == CircleMode::TanTanRadius)
@@ -2080,6 +2093,40 @@ bool Editor::commitDrawFields() {
             const double b = drawFieldVals_[0].value_or(defB);
             const double s = dot(cursor_ - center, nrm) >= 0 ? 1.0 : -1.0;
             target = center + nrm * (s * b);
+        }
+        break;
+    }
+    case ToolId::Arc: {
+        // Build the next point from a radius and/or angle about the arc's center.
+        auto onCircle = [&](const Vec2& c, double r, int angleIdx) {
+            const Vec2 d = cursor_ - c;
+            const double angDeg =
+                drawFieldVals_[angleIdx].value_or(std::atan2(d.y, d.x) * 180.0 / M_PI);
+            const double a = angDeg * M_PI / 180.0;
+            return Vec2{c.x + r * std::cos(a), c.y + r * std::sin(a)};
+        };
+        if (arcMode_ == ArcMode::CenterStartEnd) {
+            const Vec2 c = draftPts_[0];
+            if (draftPts_.size() == 1) { // start point: Radius + Angle
+                const double r = drawFieldVals_[0].value_or(distance(c, cursor_));
+                target = onCircle(c, r, 1);
+            } else { // end point: Angle at the fixed radius
+                target = onCircle(c, distance(c, draftPts_[1]), 0);
+            }
+        } else if (arcMode_ == ArcMode::StartCenterEnd) {
+            if (draftPts_.size() == 1) { // place the center: Length + Angle from start
+                const Vec2 base = draftPts_[0];
+                const Vec2 d = cursor_ - base;
+                const double len = drawFieldVals_[0].value_or(d.length());
+                const double angDeg =
+                    drawFieldVals_[1].value_or(std::atan2(d.y, d.x) * 180.0 / M_PI);
+                const double a = angDeg * M_PI / 180.0;
+                target = {base.x + len * std::cos(a), base.y + len * std::sin(a)};
+            } else { // end point: Angle at the fixed radius about the center
+                target = onCircle(draftPts_[1], distance(draftPts_[1], draftPts_[0]), 0);
+            }
+        } else {
+            return false; // ThreePoint / StartEndRadius are click-only
         }
         break;
     }
@@ -3307,6 +3354,36 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const auto& v : pts) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
+            // Indication line + value readout, like the other construction tools.
+            // From the arc CENTRE when the mode has one (so the radius is shown and
+            // can be typed); otherwise from the last placed point (length + angle).
+            std::optional<Vec2> centre;
+            double guideR = 0.0;
+            if (arcMode_ == ArcMode::CenterStartEnd && !draftPts_.empty()) {
+                centre = draftPts_[0];
+                guideR = draftPts_.size() >= 2 ? distance(*centre, draftPts_[1])
+                                               : distance(*centre, cursor_);
+            } else if (arcMode_ == ArcMode::StartCenterEnd && draftPts_.size() >= 2) {
+                centre = draftPts_[1];
+                guideR = distance(*centre, draftPts_[0]);
+            }
+            const Vec2 from = centre.value_or(draftPts_.back());
+            const Vec2 d = cursor_ - from;
+            const double len = d.length();
+            if (len > 1e-6) {
+                QPen gp(QColor("#9aa6b6"));
+                gp.setCosmetic(true);
+                gp.setStyle(Qt::DotLine);
+                p.setPen(gp);
+                p.setBrush(Qt::NoBrush);
+                p.drawLine(vt.toScreen(from), vt.toScreen(cursor_));
+                double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
+                if (deg < 0) deg += 360.0;
+                const QString lbl =
+                    centre ? QStringLiteral("R %1   %2\xC2\xB0").arg(guideR, 0, 'f', 2).arg(deg, 0, 'f', 1)
+                           : QStringLiteral("%1   %2\xC2\xB0").arg(len, 0, 'f', 2).arg(deg, 0, 'f', 1);
+                drawDraftValueBox(p, vt.toScreen(cursor_), lbl, QColor("#ffd166"));
+            }
         } else if (tool_ == ToolId::Ellipse) {
             // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
             // For an elliptical arc, once the start angle is placed (4th point) the
@@ -3385,7 +3462,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         // Live length / angle readout of the current segment (toggle: Angles).
         if (showAngles_ && tool_ != ToolId::Rect && tool_ != ToolId::Circle &&
-            tool_ != ToolId::Ellipse) {
+            tool_ != ToolId::Ellipse && tool_ != ToolId::Arc) {
             const Vec2 anchor = draftPts_.back();
             const Vec2 v = cursor_ - anchor;
             const double len = v.length();

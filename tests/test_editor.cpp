@@ -715,6 +715,29 @@ int run_editor_tests() {
               "arc-mirror: mirrored arc takes the opposite half");
     }
 
+    // --- Arc Center,Start,End: type Radius + Angle in the dynamic-input fields.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setArcMode(Editor::ArcMode::CenterStartEnd);
+        ed.setTool(ToolId::Arc);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // centre
+        auto labels = ed.drawInputFieldLabels();
+        check(labels.size() == 2 && labels[0] == QStringLiteral("Radius") &&
+                  labels[1] == QStringLiteral("Angle"),
+              "arc-center: offers Radius + Angle for the start point");
+        ed.lockDrawField(QStringLiteral("50")); // radius
+        ed.cycleDrawInputField();
+        ed.lockDrawField(QStringLiteral("90")); // angle -> start at (0,50)
+        check(ed.commitDrawFields(), "arc-center: start committed from Radius+Angle");
+        ed.lockDrawField(QStringLiteral("0")); // end angle -> (50,0)
+        check(ed.commitDrawFields(), "arc-center: end committed from Angle");
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Arc &&
+                  near(d.entities()[0].center.x, 0.0) && near(d.entities()[0].center.y, 0.0) &&
+                  near(d.entities()[0].radius, 50.0),
+              "arc-center: arc at centre (0,0) radius 50 from typed values");
+    }
+
     // --- Circle Tan-Tan-Radius: tangent to two perpendicular lines, radius 10.
     {
         Document d; d.entities().clear();
