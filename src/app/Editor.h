@@ -370,6 +370,10 @@ private:
     QString wireGauge_ = "0.5";
     QString wireNet_;
     double doubleLineGap_ = 10.0;
+    // Double line/polyline justification: false = clicked path is the centerline;
+    // true ("ls" / line-start) = the clicked path is one edge, the parallel run is
+    // offset to one side.
+    bool dpolySideJustify_ = false;
     bool showAngles_ = true; // show the live length/angle readout while drawing
     QString currentColor_;   // color for new entities (empty => ByLayer)
     CircleMode circleMode_ = CircleMode::CenterRadius;

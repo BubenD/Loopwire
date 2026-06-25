@@ -1615,7 +1615,10 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::DoubleLine) ? EntityType::DoubleLine : EntityType::Line;
         e.a = draftPts_[0];
         e.b = draftPts_[1];
-        if (e.type == EntityType::DoubleLine) e.meta.insert("gap", doubleLineGap_);
+        if (e.type == EntityType::DoubleLine) {
+            e.meta.insert("gap", doubleLineGap_);
+            if (dpolySideJustify_) e.meta.insert("justify", QStringLiteral("side"));
+        }
         break;
     case ToolId::Dimension:
         if (draftPts_.size() < 2) return;
@@ -1710,6 +1713,7 @@ void Editor::finishDraw() {
         if (tool_ == ToolId::DoublePolyline) {
             e.meta.insert("double", true);
             e.meta.insert("gap", doubleLineGap_);
+            if (dpolySideJustify_) e.meta.insert("justify", QStringLiteral("side"));
         }
         if (e.type == EntityType::Polyline && cornerRadius_ > 0.0)
             e.meta.insert("cornerRadius", cornerRadius_);
@@ -1863,10 +1867,12 @@ QString Editor::drawCommandHint() const {
             .arg(polyArcMode_ ? QStringLiteral("ARC segments") : QStringLiteral("click points"),
                  cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
     case ToolId::DoublePolyline:
-        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [C] close  ·  [U] undo  ·  Enter")
-            .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
+        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [LS] %2  ·  [C] close  ·  [U] undo  ·  Enter")
+            .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString(),
+                 dpolySideJustify_ ? QStringLiteral("centered") : QStringLiteral("line-start"));
     case ToolId::DoubleLine:
-        return QStringLiteral("DOUBLE LINE: [G] gap  ·  click two points");
+        return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] %1  ·  click two points")
+            .arg(dpolySideJustify_ ? QStringLiteral("centered") : QStringLiteral("line-start"));
     case ToolId::Spline:
         return QStringLiteral("SPLINE: click points  ·  [C] close  ·  [U] undo  ·  Enter finishes");
     case ToolId::Wire:
@@ -1907,9 +1913,9 @@ bool Editor::isDrawOptionChar(QChar ch) const {
     const QChar c = ch.toLower();
     switch (tool_) {
     case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f' || c == 'a' || c == 'l';
-    case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g';
+    case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g' || c == 'l' || c == 's';
     case ToolId::Spline:         return c == 'c' || c == 'u';
-    case ToolId::DoubleLine:     return c == 'g';
+    case ToolId::DoubleLine:     return c == 'g' || c == 'l' || c == 's';
     case ToolId::Arc:            return c == 'm' || c == 'i'; // "mi" mirror
     default:                     return false; // Line/Rect/Circle/Ellipse/...: no letter options
     }
@@ -2144,6 +2150,21 @@ bool Editor::acceptCommandInput(const QString& text) {
         // through to run the "g" command word and switch tools mid-draw.
         if (drafting_ || isDrawTool(tool_)) {
             emit message(QStringLiteral("Gap applies to double line/polyline"));
+            return true;
+        }
+    }
+
+    // "ls" = line-start (justification) for the double tools: the clicked path is
+    // one edge and the parallel run is offset to one side, instead of the clicked
+    // path being the centerline. Holds for the angled segments too.
+    if (t.compare(QStringLiteral("ls"), Qt::CaseInsensitive) == 0) {
+        if (tool_ == ToolId::DoublePolyline || tool_ == ToolId::DoubleLine) {
+            dpolySideJustify_ = !dpolySideJustify_;
+            emit message(dpolySideJustify_
+                             ? QStringLiteral("Line start: drawing from the clicked edge "
+                                              "(parallel run offset to one side)")
+                             : QStringLiteral("Centered: the clicked path is the centerline"));
+            emit overlayChanged();
             return true;
         }
     }
@@ -3122,15 +3143,24 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.restore();
             }
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
-            const Vec2 off = (pts[1] - pts[0]).normalized().perp() * (doubleLineGap_ / 2.0);
-            p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
-            p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
+            const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
+            if (dpolySideJustify_) { // clicked path = one edge, other run +gap
+                const Vec2 off = perp * doubleLineGap_;
+                p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
+                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
+            } else {
+                const Vec2 off = perp * (doubleLineGap_ / 2.0);
+                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
+                p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
+            }
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
             // Round the centerline at cr + gap/2 so both runs fillet (inner radius
-            // = cr); then offset — equal, constant-gap turns.
+            // = cr); then offset — equal, constant-gap turns. Line-start justify
+            // shifts the clicked path to one edge (center moves out by gap/2).
             const double h = doubleLineGap_ / 2.0;
+            const std::vector<Vec2> base = dpolySideJustify_ ? offsetPolyline(pts, h) : pts;
             const std::vector<Vec2> center =
-                (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_ + h) : pts;
+                (cornerRadius_ > 0) ? roundedPolyline(base, cornerRadius_ + h) : base;
             for (double s : {h, -h}) {
                 QPolygonF poly;
                 for (const auto& v : offsetPolyline(center, s)) poly << vt.toScreen(v);

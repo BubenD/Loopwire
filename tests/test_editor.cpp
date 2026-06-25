@@ -1022,6 +1022,31 @@ int run_editor_tests() {
             check(ed.acceptCommandInput(QStringLiteral("15")), "g: value consumed");
             check(near(ed.doubleLineGap(), 15.0), "g: gap updated to 15");
         }
+        // "ls" line-start: the clicked path becomes one edge (justify=side).
+        {
+            Document d; d.entities().clear();
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.setTool(ToolId::DoublePolyline);
+            check(ed.acceptCommandInput(QStringLiteral("ls")), "ls: consumed by double polyline");
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            check(d.entities()[0].meta.value("justify").toString() == QLatin1String("side"),
+                  "ls: double polyline stores justify=side");
+            // A second "ls" toggles back to centered.
+            Document d2; d2.entities().clear();
+            Editor e2; e2.setDocument(&d2); noSnap(e2);
+            e2.setTool(ToolId::DoublePolyline);
+            e2.acceptCommandInput(QStringLiteral("ls"));
+            e2.acceptCommandInput(QStringLiteral("ls")); // back to centered
+            e2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            e2.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+            e2.onKey(Qt::Key_Return, Qt::NoModifier);
+            check(!d2.entities().empty() &&
+                      d2.entities()[0].meta.value("justify").toString().isEmpty(),
+                  "ls: toggling twice returns to centered (no justify meta)");
+        }
         // offsetPolyline produces a parallel run on each side.
         {
             std::vector<Vec2> pts = {{0, 0}, {10, 0}, {10, 10}};
