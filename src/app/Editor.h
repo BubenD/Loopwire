@@ -403,10 +403,13 @@ private:
     QString wireGauge_ = "0.5";
     QString wireNet_;
     double doubleLineGap_ = 10.0;
-    // Double line/polyline justification: false = clicked path is the centerline;
-    // true ("ls" / line-start) = the clicked path is one edge, the parallel run is
-    // offset to one side.
-    bool dpolySideJustify_ = false;
+    // Double line/polyline "ls" (line-start): the next click picks a reference line
+    // that both physical runs are extended to start from. dpolyLsArm_ awaits that
+    // pick; lsRefA_/lsRefB_ hold the picked line until the entity is committed.
+    bool dpolyLsArm_ = false;
+    bool dpolyHasLsRef_ = false;
+    Vec2 lsRefA_;
+    Vec2 lsRefB_;
     bool showAngles_ = true; // show the live length/angle readout while drawing
     QString currentColor_;   // color for new entities (empty => ByLayer)
     double currentWeight_ = 0.0; // lineweight for new entities (0 => ByLayer)

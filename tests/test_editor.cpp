@@ -1050,30 +1050,25 @@ int run_editor_tests() {
             check(ed.acceptCommandInput(QStringLiteral("15")), "g: value consumed");
             check(near(ed.doubleLineGap(), 15.0), "g: gap updated to 15");
         }
-        // "ls" line-start: the clicked path becomes one edge (justify=side).
+        // "ls" line-start: the next click picks a reference line; the double poly
+        // then stores it (both runs start from it). The reference click adds no vertex.
         {
             Document d; d.entities().clear();
-            Editor ed; ed.setDocument(&d); noSnap(ed);
+            Entity ref; ref.id = "ref"; ref.type = EntityType::Line;
+            ref.a = {0, -100}; ref.b = {0, 100}; // a vertical reference line at x=0
+            d.entities().push_back(ref);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
             ed.setTool(ToolId::DoublePolyline);
             check(ed.acceptCommandInput(QStringLiteral("ls")), "ls: consumed by double polyline");
-            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-            ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
-            ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // picks the ref line
+            ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);  // first vertex
+            ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier); // second vertex
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
-            check(d.entities()[0].meta.value("justify").toString() == QLatin1String("side"),
-                  "ls: double polyline stores justify=side");
-            // A second "ls" toggles back to centered.
-            Document d2; d2.entities().clear();
-            Editor e2; e2.setDocument(&d2); noSnap(e2);
-            e2.setTool(ToolId::DoublePolyline);
-            e2.acceptCommandInput(QStringLiteral("ls"));
-            e2.acceptCommandInput(QStringLiteral("ls")); // back to centered
-            e2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-            e2.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
-            e2.onKey(Qt::Key_Return, Qt::NoModifier);
-            check(!d2.entities().empty() &&
-                      d2.entities()[0].meta.value("justify").toString().isEmpty(),
-                  "ls: toggling twice returns to centered (no justify meta)");
+            check(d.entities().size() == 2, "ls: reference click adds no vertex");
+            const Entity& dp = d.entities().back();
+            check(dp.type == EntityType::Polyline && dp.meta.value("double").toBool() &&
+                      dp.meta.value("lsRef").toBool() && dp.points.size() == 2,
+                  "ls: double polyline stores the reference line");
         }
         // offsetPolyline produces a parallel run on each side.
         {

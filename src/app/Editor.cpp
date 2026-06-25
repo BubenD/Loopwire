@@ -1298,6 +1298,46 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints = true) {
 } // namespace
 
 void Editor::handleDrawPress(const Vec2& p) {
+    // Line-start ("ls"): this click picks the reference line whose start both runs
+    // will reach. It does NOT place a vertex — the next click starts the run.
+    if (dpolyLsArm_ && (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline)) {
+        dpolyLsArm_ = false;
+        if (auto hit = hitTest(p)) {
+            if (Entity* r = entityById(*hit)) {
+                Vec2 A{0, 0}, B{0, 0};
+                bool ok = false;
+                if (r->type == EntityType::Line || r->type == EntityType::DoubleLine ||
+                    r->type == EntityType::Dimension) {
+                    A = r->a; B = r->b; ok = true;
+                } else if (r->points.size() >= 2) {
+                    // Nearest segment of a polyline / rect / polygon / etc.
+                    const bool closed = r->type == EntityType::Rect ||
+                                        r->type == EntityType::Polygon ||
+                                        r->type == EntityType::Hatch ||
+                                        r->type == EntityType::Wipeout;
+                    double best = std::numeric_limits<double>::max();
+                    const size_t n = r->points.size();
+                    for (size_t i = 0; i + 1 < n || (closed && i < n); ++i) {
+                        const Vec2& s1 = r->points[i % n];
+                        const Vec2& s2 = r->points[(i + 1) % n];
+                        const double d = closestPointOnSegment(p, s1, s2).distance;
+                        if (d < best) { best = d; A = s1; B = s2; ok = true; }
+                        if (i + 1 >= n) break;
+                    }
+                }
+                if (ok) {
+                    lsRefA_ = A;
+                    lsRefB_ = B;
+                    dpolyHasLsRef_ = true;
+                    emit message(QStringLiteral("Reference set — click the start point"));
+                    emit overlayChanged();
+                    return;
+                }
+            }
+        }
+        emit message(QStringLiteral("Click an existing line as the reference"));
+        return;
+    }
     switch (tool_) {
     case ToolId::Line: {
         // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
@@ -1857,7 +1897,13 @@ void Editor::finishDraw() {
         e.b = draftPts_[1];
         if (e.type == EntityType::DoubleLine) {
             e.meta.insert("gap", doubleLineGap_);
-            if (dpolySideJustify_) e.meta.insert("justify", QStringLiteral("side"));
+            if (dpolyHasLsRef_) {
+                e.meta.insert("lsRef", true);
+                e.meta.insert("lsRefAx", lsRefA_.x);
+                e.meta.insert("lsRefAy", lsRefA_.y);
+                e.meta.insert("lsRefBx", lsRefB_.x);
+                e.meta.insert("lsRefBy", lsRefB_.y);
+            }
         }
         break;
     case ToolId::Dimension:
@@ -1985,7 +2031,13 @@ void Editor::finishDraw() {
         if (tool_ == ToolId::DoublePolyline) {
             e.meta.insert("double", true);
             e.meta.insert("gap", doubleLineGap_);
-            if (dpolySideJustify_) e.meta.insert("justify", QStringLiteral("side"));
+            if (dpolyHasLsRef_) {
+                e.meta.insert("lsRef", true);
+                e.meta.insert("lsRefAx", lsRefA_.x);
+                e.meta.insert("lsRefAy", lsRefA_.y);
+                e.meta.insert("lsRefBx", lsRefB_.x);
+                e.meta.insert("lsRefBy", lsRefB_.y);
+            }
         }
         if (e.type == EntityType::Polyline && cornerRadius_ > 0.0)
             e.meta.insert("cornerRadius", cornerRadius_);
@@ -2041,6 +2093,8 @@ void Editor::finishDraw() {
 void Editor::cancelDraw() {
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
+    dpolyLsArm_ = false;  // forget a pending/active line-start reference
+    dpolyHasLsRef_ = false;
     draftPts_.clear();
     drafting_ = false;
     rectAwaitY_ = false;
@@ -2149,12 +2203,12 @@ QString Editor::drawCommandHint() const {
             .arg(polyArcMode_ ? QStringLiteral("ARC segments") : QStringLiteral("click points"),
                  cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
     case ToolId::DoublePolyline:
-        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [LS] %2  ·  [C] close  ·  [U] undo  ·  Enter")
+        return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [LS] line-start%2  ·  [C] close  ·  [U] undo  ·  Enter")
             .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString(),
-                 dpolySideJustify_ ? QStringLiteral("centered") : QStringLiteral("line-start"));
+                 dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
     case ToolId::DoubleLine:
-        return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] %1  ·  click two points")
-            .arg(dpolySideJustify_ ? QStringLiteral("centered") : QStringLiteral("line-start"));
+        return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
+            .arg(dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
     case ToolId::Spline:
         return QStringLiteral("SPLINE: click points  ·  [C] close  ·  [U] undo  ·  Enter finishes");
     case ToolId::Wire:
@@ -2489,16 +2543,13 @@ bool Editor::acceptCommandInput(const QString& text) {
         }
     }
 
-    // "ls" = line-start (justification) for the double tools: the clicked path is
-    // one edge and the parallel run is offset to one side, instead of the clicked
-    // path being the centerline. Holds for the angled segments too.
+    // "ls" = line-start for the double tools: the NEXT click picks a reference line;
+    // both physical runs are then extended to start from that line.
     if (t.compare(QStringLiteral("ls"), Qt::CaseInsensitive) == 0) {
         if (tool_ == ToolId::DoublePolyline || tool_ == ToolId::DoubleLine) {
-            dpolySideJustify_ = !dpolySideJustify_;
-            emit message(dpolySideJustify_
-                             ? QStringLiteral("Line start: drawing from the clicked edge "
-                                              "(parallel run offset to one side)")
-                             : QStringLiteral("Centered: the clicked path is the centerline"));
+            dpolyLsArm_ = true;
+            emit message(QStringLiteral(
+                "Line start: click a reference line — both runs will start from it"));
             emit overlayChanged();
             return true;
         }
@@ -3514,6 +3565,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         std::vector<Vec2> pts = draftPts_;
         pts.push_back(cursor_);
+        // ls line-start: move a run's start onto the picked reference line.
+        auto extendLsStart = [&](std::vector<Vec2>& run) {
+            if (dpolyHasLsRef_ && run.size() >= 2)
+                if (auto x = lineLineIntersection(run[0], run[1], lsRefA_, lsRefB_)) run[0] = *x;
+        };
         if ((tool_ == ToolId::Rect || tool_ == ToolId::MText) && pts.size() >= 2) {
             // Rectangle (and the MTEXT container box) rubber-band.
             const Vec2 a = pts[0], b = pts[1];
@@ -3589,29 +3645,25 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
             const Vec2 off = perp * (doubleLineGap_ / 2.0);
-            p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
-            p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
-            if (dpolySideJustify_) { // ls: caps so both runs start from the clicked line
-                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[0] - off));
-                p.drawLine(vt.toScreen(pts[1] + off), vt.toScreen(pts[1] - off));
-            }
+            std::vector<Vec2> r1 = {pts[0] + off, pts[1] + off};
+            std::vector<Vec2> r2 = {pts[0] - off, pts[1] - off};
+            extendLsStart(r1);
+            extendLsStart(r2);
+            p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
+            p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
-            // Round the centerline at cr + gap/2 so both runs fillet (inner radius
-            // = cr); then offset — equal, constant-gap turns. Line-start justify
-            // shifts the clicked path to one edge (center moves out by gap/2).
+            // Round the centerline at cr + gap/2 so both runs fillet, then offset.
             const double h = doubleLineGap_ / 2.0;
             const std::vector<Vec2> center =
                 (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_ + h) : pts;
-            const std::vector<Vec2> r1 = offsetPolyline(center, h);
-            const std::vector<Vec2> r2 = offsetPolyline(center, -h);
+            std::vector<Vec2> r1 = offsetPolyline(center, h);
+            std::vector<Vec2> r2 = offsetPolyline(center, -h);
+            extendLsStart(r1); // ls: start both runs on the reference line
+            extendLsStart(r2);
             for (const auto& run : {r1, r2}) {
                 QPolygonF poly;
                 for (const auto& v : run) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
-            }
-            if (dpolySideJustify_ && !r1.empty() && !r2.empty()) { // caps at both ends
-                p.drawLine(vt.toScreen(r1.front()), vt.toScreen(r2.front()));
-                p.drawLine(vt.toScreen(r1.back()), vt.toScreen(r2.back()));
             }
         } else if (tool_ == ToolId::Circle) {
             QPointF cc;

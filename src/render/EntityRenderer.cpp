@@ -70,6 +70,19 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
     }
 }
 
+// "ls" line-start: read the stored reference line, if any.
+bool lsReferenceLine(const Entity& e, Vec2& a, Vec2& b) {
+    if (!e.meta.value("lsRef").toBool()) return false;
+    a = {e.meta.value("lsRefAx").toDouble(), e.meta.value("lsRefAy").toDouble()};
+    b = {e.meta.value("lsRefBx").toDouble(), e.meta.value("lsRefBy").toDouble()};
+    return true;
+}
+// Move a run's start vertex onto the reference line (extend along its first segment).
+void extendRunStartToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
+    if (run.size() < 2) return;
+    if (auto x = lineLineIntersection(run[0], run[1], a, b)) run[0] = *x;
+}
+
 QPolygonF toScreenPoly(const std::vector<Vec2>& pts, const ViewTransform& vt) {
     QPolygonF poly;
     poly.reserve(static_cast<int>(pts.size()));
@@ -442,17 +455,20 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::DoubleLine: {
-        // Two parallel lines, +/- gap/2 about the clicked line a-b. "ls"
-        // (justify=side) adds start/end caps so both lines start from a-b.
+        // Two parallel lines, +/- gap/2 about the clicked line a-b. "ls" extends both
+        // runs so they start on a clicked reference line.
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 perp = (e.b - e.a).normalized().perp();
         const Vec2 off = perp * (gap / 2.0);
-        p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
-        p.drawLine(vt.toScreen(e.a - off), vt.toScreen(e.b - off));
-        if (e.meta.value("justify").toString() == QLatin1String("side")) {
-            p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.a - off)); // start cap
-            p.drawLine(vt.toScreen(e.b + off), vt.toScreen(e.b - off)); // end cap
+        std::vector<Vec2> run1 = {e.a + off, e.b + off};
+        std::vector<Vec2> run2 = {e.a - off, e.b - off};
+        Vec2 ra, rb;
+        if (lsReferenceLine(e, ra, rb)) {
+            extendRunStartToLine(run1, ra, rb);
+            extendRunStartToLine(run2, ra, rb);
         }
+        p.drawLine(vt.toScreen(run1[0]), vt.toScreen(run1[1]));
+        p.drawLine(vt.toScreen(run2[0]), vt.toScreen(run2[1]));
         break;
     }
 
@@ -484,16 +500,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // gap (rounding at just cr collapses the inner knee when cr<=gap/2).
                 const std::vector<Vec2> center =
                     (cr > 0.0) ? roundedPolyline(e.points, cr + gap / 2.0) : e.points;
-                const std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
-                const std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
+                std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
+                std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
+                // Line-start (ls): extend BOTH physical runs so they start on the
+                // clicked reference line (no closing caps).
+                Vec2 ra, rb;
+                if (lsReferenceLine(e, ra, rb)) {
+                    extendRunStartToLine(run1, ra, rb);
+                    extendRunStartToLine(run2, ra, rb);
+                }
                 p.drawPolyline(toScreenPoly(run1, vt));
                 p.drawPolyline(toScreenPoly(run2, vt));
-                // Line-start (ls): cap the ends so BOTH runs touch the clicked path.
-                if (e.meta.value("justify").toString() == QLatin1String("side") &&
-                    run1.size() >= 1 && run2.size() >= 1) {
-                    p.drawLine(vt.toScreen(run1.front()), vt.toScreen(run2.front()));
-                    p.drawLine(vt.toScreen(run1.back()), vt.toScreen(run2.back()));
-                }
             } else if (!bulgeArr.isEmpty()) {
                 // Arc segments (PLINE arc mode): expand bulges into a curved run.
                 std::vector<double> bulges;
