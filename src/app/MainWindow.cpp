@@ -1386,9 +1386,16 @@ void MainWindow::buildRibbon() {
         colorCombo_ = new QComboBox(propsW);
         colorCombo_->setMinimumWidth(120);
         colorCombo_->addItems({"ByLayer", "White", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"});
-        pg->addWidget(new QLabel(QStringLiteral("Layer"), propsW), 0, 0);
+        // Bright, full-width labels so "Layer"/"Color" read clearly in dark mode.
+        auto propLabel = [&](const QString& t) {
+            auto* l = new QLabel(t, propsW);
+            l->setStyleSheet(QStringLiteral("color:#e6e9ef; background:transparent;"));
+            l->setMinimumWidth(38);
+            return l;
+        };
+        pg->addWidget(propLabel(QStringLiteral("Layer")), 0, 0);
         pg->addWidget(layerCombo_, 0, 1);
-        pg->addWidget(new QLabel(QStringLiteral("Color"), propsW), 1, 0);
+        pg->addWidget(propLabel(QStringLiteral("Color")), 1, 0);
         pg->addWidget(colorCombo_, 1, 1);
         connect(layerCombo_, &QComboBox::activated, this, [this](int) {
             const QString name = layerCombo_->currentText();
