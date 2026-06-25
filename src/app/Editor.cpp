@@ -2953,6 +2953,16 @@ void Editor::copySelection() {
     emit message(QStringLiteral("Copied %1 object(s) — Ctrl+V to place").arg(clipboard_.size()));
 }
 
+void Editor::cutSelection() {
+    if (selected_.empty()) {
+        emit message(QStringLiteral("Select objects first"));
+        return;
+    }
+    copySelection();   // fills the clipboard (base = selection bbox min)
+    deleteSelected();  // removes the originals (one undo step) — Ctrl+V re-places them
+    emit message(QStringLiteral("Cut %1 object(s) — Ctrl+V to place").arg(clipboard_.size()));
+}
+
 void Editor::copyWithBase(bool cut) {
     if (selected_.empty()) {
         emit message(QStringLiteral("Select objects first"));
@@ -3058,7 +3068,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     if (ctrl && key == Qt::Key_A) { selectAll(); return true; }
     if (ctrl && shift && key == Qt::Key_C) { copyWithBase(false); return true; } // copy w/ base
     if (ctrl && key == Qt::Key_C) { copySelection(); return true; }
-    if (ctrl && key == Qt::Key_X) { copyWithBase(true); return true; }           // cut w/ base
+    if (ctrl && key == Qt::Key_X) { cutSelection(); return true; }               // cut to clipboard
     if (ctrl && key == Qt::Key_V) { paste(); return true; }
     if (ctrl && key == Qt::Key_Z) { undo(); return true; }
     if (ctrl && (key == Qt::Key_Y)) { redo(); return true; }

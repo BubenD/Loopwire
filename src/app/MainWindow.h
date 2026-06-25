@@ -155,6 +155,7 @@ private:
     QToolButton* hatchPickBtn_ = nullptr;   // boundary: Pick Points
     QToolButton* hatchSelectBtn_ = nullptr; // boundary: Select object
     QComboBox* hatchColorCombo_ = nullptr;
+    QLabel* hatchPatternLabel_ = nullptr; // shows the selected pattern's name
     QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;
     QTableWidget* propsTable_ = nullptr;

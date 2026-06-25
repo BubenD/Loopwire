@@ -1660,20 +1660,30 @@ void MainWindow::buildHatchRibbonTab() {
         scroll->setMaximumWidth(440);
         scroll->setStyleSheet(QStringLiteral("QScrollArea{background:transparent;}"));
 
-        // Right of the gallery: a taller "expand" button opens the full picker.
+        // Holder: the selected pattern's NAME on top, then the scroll + expand row.
         auto* holder = new QWidget(hatchTab_);
-        auto* hl = new QHBoxLayout(holder);
+        auto* vbox = new QVBoxLayout(holder);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        vbox->setSpacing(1);
+        hatchPatternLabel_ = new QLabel(holder);
+        hatchPatternLabel_->setStyleSheet(
+            QStringLiteral("color:#eef0f3; font-weight:bold; background:transparent;"));
+        vbox->addWidget(hatchPatternLabel_);
+
+        auto* rowW = new QWidget(holder);
+        auto* hl = new QHBoxLayout(rowW);
         hl->setContentsMargins(0, 0, 0, 0);
         hl->setSpacing(2);
         hl->addWidget(scroll, 1);
-        auto* more = new QToolButton(holder);
+        auto* more = new QToolButton(rowW);
         more->setText(QString::fromUtf8("\xE2\x8B\xAE")); // vertical ellipsis
         more->setToolTip(QStringLiteral("More patterns…"));
         more->setAutoRaise(true);
         more->setFocusPolicy(Qt::NoFocus);
-        more->setMinimumHeight(76);
+        more->setMinimumHeight(64);
         connect(more, &QToolButton::clicked, this, [this] { showHatchPatternDialog(); });
         hl->addWidget(more);
+        vbox->addWidget(rowW, 1);
         addGroup(QStringLiteral("Pattern"), holder);
     }
 
@@ -1861,6 +1871,12 @@ void MainWindow::syncHatchRibbon() {
                 QSignalBlocker blk(b);
                 b->setChecked(true);
             }
+    if (hatchPatternLabel_) {
+        QString name = pattern;
+        for (const auto& pp : hatchPatternList())
+            if (pp.second == pattern) { name = pp.first; break; }
+        hatchPatternLabel_->setText(QStringLiteral("Pattern:  %1").arg(name));
+    }
     if (hatchAngleSpin_) { QSignalBlocker b(hatchAngleSpin_); hatchAngleSpin_->setValue(angle); }
     if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(scale); }
     if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(transp); }

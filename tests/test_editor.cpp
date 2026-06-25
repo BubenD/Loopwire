@@ -1187,6 +1187,23 @@ int run_editor_tests() {
         }
     }
 
+    // --- Ctrl+X cuts to the clipboard (removes originals); Ctrl+V re-places them.
+    {
+        Document d; d.entities().clear();
+        Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+        d.entities().push_back(l);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectAll();
+        ed.onKey(Qt::Key_X, Qt::ControlModifier); // cut
+        check(d.entities().empty(), "cut: originals removed from the document");
+        ed.onKey(Qt::Key_V, Qt::ControlModifier);                 // paste -> place mode
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // drop at the base point
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Line,
+              "cut: Ctrl+V re-places the cut object");
+        ed.onKey(Qt::Key_Z, Qt::ControlModifier); // undo the cut deletion is recoverable
+        // (no assertion on undo state; just exercising it)
+    }
+
     // --- Repeat last tool (Space / Enter when idle).
     {
         Document d; d.entities().clear();

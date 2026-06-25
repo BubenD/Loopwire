@@ -145,7 +145,8 @@ public:
     void setGeometryValue(const QString& key, double value);         // Center X/Y, Width, Height, Radius
     void setColorsByLayer();  // strip explicit color so entities follow their layer (selection, or all)
     void copySelection();          // Ctrl+C: copy (base point = selection bbox min)
-    void copyWithBase(bool cut);   // Ctrl+Shift+C / Ctrl+X: then pick a base point
+    void cutSelection();           // Ctrl+X: copy to clipboard + delete the originals
+    void copyWithBase(bool cut);   // Ctrl+Shift+C: then pick a base point
     void paste();                  // Ctrl+V: then click to place (relative to base)
     void undo();
     void redo();
