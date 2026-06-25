@@ -3588,26 +3588,20 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (ok) EntityRenderer::draw(p, temp, *doc_, vt, QColor("#ffffff"));
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
-            if (dpolySideJustify_) { // clicked path = one edge, other run +gap
-                const Vec2 off = perp * doubleLineGap_;
-                p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
-                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
-                // Caps: both lines touch the clicked line at its ends.
-                p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[0] + off));
-                p.drawLine(vt.toScreen(pts[1]), vt.toScreen(pts[1] + off));
-            } else {
-                const Vec2 off = perp * (doubleLineGap_ / 2.0);
-                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
-                p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
+            const Vec2 off = perp * (doubleLineGap_ / 2.0);
+            p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
+            p.drawLine(vt.toScreen(pts[0] - off), vt.toScreen(pts[1] - off));
+            if (dpolySideJustify_) { // ls: caps so both runs start from the clicked line
+                p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[0] - off));
+                p.drawLine(vt.toScreen(pts[1] + off), vt.toScreen(pts[1] - off));
             }
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
             // Round the centerline at cr + gap/2 so both runs fillet (inner radius
             // = cr); then offset — equal, constant-gap turns. Line-start justify
             // shifts the clicked path to one edge (center moves out by gap/2).
             const double h = doubleLineGap_ / 2.0;
-            const std::vector<Vec2> base = dpolySideJustify_ ? offsetPolyline(pts, h) : pts;
             const std::vector<Vec2> center =
-                (cornerRadius_ > 0) ? roundedPolyline(base, cornerRadius_ + h) : base;
+                (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_ + h) : pts;
             const std::vector<Vec2> r1 = offsetPolyline(center, h);
             const std::vector<Vec2> r2 = offsetPolyline(center, -h);
             for (const auto& run : {r1, r2}) {

@@ -442,21 +442,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::DoubleLine: {
-        // Two parallel lines. Centered: +/- gap/2 about a,b. Line-start justify:
-        // a,b is one edge and the other run is offset a full gap to one side.
+        // Two parallel lines, +/- gap/2 about the clicked line a-b. "ls"
+        // (justify=side) adds start/end caps so both lines start from a-b.
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 perp = (e.b - e.a).normalized().perp();
+        const Vec2 off = perp * (gap / 2.0);
+        p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
+        p.drawLine(vt.toScreen(e.a - off), vt.toScreen(e.b - off));
         if (e.meta.value("justify").toString() == QLatin1String("side")) {
-            const Vec2 off = perp * gap;
-            p.drawLine(vt.toScreen(e.a), vt.toScreen(e.b));
-            p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
-            // Caps so both lines touch the clicked line at its endpoints.
-            p.drawLine(vt.toScreen(e.a), vt.toScreen(e.a + off));
-            p.drawLine(vt.toScreen(e.b), vt.toScreen(e.b + off));
-        } else {
-            const Vec2 off = perp * (gap / 2.0);
-            p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
-            p.drawLine(vt.toScreen(e.a - off), vt.toScreen(e.b - off));
+            p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.a - off)); // start cap
+            p.drawLine(vt.toScreen(e.b + off), vt.toScreen(e.b - off)); // end cap
         }
         break;
     }
@@ -481,17 +476,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // through the bends — the two runs make equal, even turns (offsetting
                 // first and rounding each run with the same radius does not).
                 const double gap = e.meta.value("gap").toDouble(10.0);
-                // Line-start justify: the stored path is one edge, so the geometric
-                // center sits gap/2 to one side; otherwise the path IS the center.
-                const std::vector<Vec2> base =
-                    (e.meta.value("justify").toString() == QLatin1String("side"))
-                        ? offsetPolyline(e.points, gap / 2.0)
-                        : e.points;
+                // The clicked path is always the centerline; both runs are offset
+                // +/- gap/2 from it. "ls" (justify=side) just adds start/end caps so
+                // both runs start from the clicked reference line.
                 // Round the centerline at cr + gap/2 so BOTH runs fillet: the inner
                 // run gets radius cr (>0), the outer cr+gap — both rounded, constant
                 // gap (rounding at just cr collapses the inner knee when cr<=gap/2).
                 const std::vector<Vec2> center =
-                    (cr > 0.0) ? roundedPolyline(base, cr + gap / 2.0) : base;
+                    (cr > 0.0) ? roundedPolyline(e.points, cr + gap / 2.0) : e.points;
                 const std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
                 const std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
                 p.drawPolyline(toScreenPoly(run1, vt));
