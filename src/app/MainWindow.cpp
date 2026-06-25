@@ -1367,14 +1367,14 @@ void MainWindow::buildRibbon() {
         addGroup(lay, QStringLiteral("Draw"),
                  toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
                           ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
-                          ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Text,
-                          ToolId::MText, ToolId::Polygon}));
+                          ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
+                          ToolId::Hatch, ToolId::Wipeout}));
         addGroup(lay, QStringLiteral("Modify"),
                  toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                           ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
                           ToolId::Chamfer}));
-        addGroup(lay, QStringLiteral("Draw \xE2\x96\xB8"),
-                 toolRow({ToolId::Hatch, ToolId::Wipeout}));
+        addGroup(lay, QStringLiteral("Annotation"),
+                 toolRow({ToolId::Text, ToolId::MText, ToolId::Dimension}));
 
         // Properties group: Layer + Color dropdowns.
         auto* propsW = new QWidget(page);
