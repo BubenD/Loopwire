@@ -321,7 +321,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const QPointF dir = unit(tp - c);
         const QPointF on = c + dir * (e.radius * vt.scale());
         p.drawLine(c, tp);
-        drawArrowHead(p, on, QPointF(-dir.x(), -dir.y()), color); // arrow at the ring
+        drawArrowHead(p, on, dir, color); // arrow tip on the ring, pointing outward
         label(tp, QStringLiteral("R%1").arg(e.radius, 0, 'f', decimals));
         return;
     }
@@ -332,8 +332,8 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const double r = e.radius * vt.scale();
         const QPointF a1 = c - dir * r, a2 = c + dir * r;
         p.drawLine(a1, a2);
-        drawArrowHead(p, a1, dir, color);
-        drawArrowHead(p, a2, QPointF(-dir.x(), -dir.y()), color);
+        drawArrowHead(p, a1, QPointF(-dir.x(), -dir.y()), color); // tips on the ring, outward
+        drawArrowHead(p, a2, dir, color);
         label(tp, QString::fromUtf8("\xC3\x98%1").arg(e.radius * 2.0, 0, 'f', decimals));
         return;
     }
@@ -384,16 +384,27 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     }
     const QPointF s1 = vt.toScreen(p1), s2 = vt.toScreen(p2);
     const QPointF e1 = vt.toScreen(d1), e2 = vt.toScreen(d2);
-    p.drawLine(s1, e1); // extension lines
-    p.drawLine(s2, e2);
+    // AutoCAD-style extension lines: a small gap from the measured point, and a
+    // short overshoot past the dimension line.
+    const double exGap = 2.0, exBeyond = 3.0; // screen px
+    const QPointF x1 = unit(e1 - s1), x2 = unit(e2 - s2);
+    p.drawLine(s1 + x1 * exGap, e1 + x1 * exBeyond);
+    p.drawLine(s2 + x2 * exGap, e2 + x2 * exBeyond);
     p.drawLine(e1, e2); // dimension line
+    // Arrowheads point OUTWARD, tips touching the extension lines.
     const QPointF du = unit(e2 - e1);
-    drawArrowHead(p, e1, du, color);
-    drawArrowHead(p, e2, QPointF(-du.x(), -du.y()), color);
+    drawArrowHead(p, e1, QPointF(-du.x(), -du.y()), color);
+    drawArrowHead(p, e2, du, color);
+    // Text centred on the dimension line, nudged to the outer side (away from the
+    // measured geometry) so it sits clear of the line.
+    const QPointF dimMid((e1.x() + e2.x()) / 2.0, (e1.y() + e2.y()) / 2.0);
+    const QPointF measMid((s1.x() + s2.x()) / 2.0, (s1.y() + s2.y()) / 2.0);
+    const QPointF nOut = unit(dimMid - measMid);
+    const QPointF txtAt = dimMid + nOut * 9.0;
     const QString txt = (ty == QLatin1String("arclength"))
                             ? QString::fromUtf8("\xE2\x8C\x92%1").arg(measure, 0, 'f', decimals)
                             : QStringLiteral("%1").arg(measure, 0, 'f', decimals);
-    label(QPointF((e1.x() + e2.x()) / 2.0, (e1.y() + e2.y()) / 2.0), txt);
+    drawWorldText(p, txtAt, txt, 3.0, vt.scale(), color, Qt::AlignHCenter);
 }
 
 } // namespace
