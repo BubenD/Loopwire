@@ -66,12 +66,58 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
         out.push_back(e.b - off);
         break;
     }
+    case EntityType::Circle:
+        // The 4 quadrant joints (top/bottom/left/right), like AutoCAD QUAdrant snap.
+        out.push_back({e.center.x + e.radius, e.center.y});
+        out.push_back({e.center.x - e.radius, e.center.y});
+        out.push_back({e.center.x, e.center.y + e.radius});
+        out.push_back({e.center.x, e.center.y - e.radius});
+        break;
+    case EntityType::Arc: {
+        // Arc endpoints + the quadrant points that fall within the sweep.
+        auto on = [&](double a) {
+            return Vec2{e.center.x + e.radius * std::cos(a), e.center.y + e.radius * std::sin(a)};
+        };
+        out.push_back(on(e.startAngle));
+        out.push_back(on(e.endAngle));
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep < 0.0) sweep += 2.0 * M_PI;
+        for (int k = 0; k < 4; ++k) {
+            const double q = k * M_PI / 2.0;
+            double rel = q - e.startAngle;
+            while (rel < 0.0) rel += 2.0 * M_PI;
+            if (rel <= sweep) out.push_back(on(q));
+        }
+        break;
+    }
+    case EntityType::Ellipse: {
+        // The 4 axis endpoints (rotated with the ellipse).
+        const double c = std::cos(e.rotation), s = std::sin(e.rotation);
+        auto axis = [&](double ax, double ay) {
+            return Vec2{e.center.x + ax * c - ay * s, e.center.y + ax * s + ay * c};
+        };
+        out.push_back(axis(e.radius, 0));
+        out.push_back(axis(-e.radius, 0));
+        out.push_back(axis(0, e.radiusY));
+        out.push_back(axis(0, -e.radiusY));
+        break;
+    }
+    case EntityType::Hatch:
+        // A circle-boundary hatch snaps to its 4 quadrant joints too.
+        if (e.meta.value("shape").toString() == QLatin1String("circle")) {
+            out.push_back({e.center.x + e.radius, e.center.y});
+            out.push_back({e.center.x - e.radius, e.center.y});
+            out.push_back({e.center.x, e.center.y + e.radius});
+            out.push_back({e.center.x, e.center.y - e.radius});
+            break;
+        }
+        for (const auto& p : e.points) out.push_back(p);
+        break;
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
     case EntityType::Wipeout:
         for (const auto& p : e.points) out.push_back(p);
         break;

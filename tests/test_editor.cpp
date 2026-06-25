@@ -1435,6 +1435,26 @@ int run_editor_tests() {
               "hatch-circle: dragging a radius joint enlarges the circle uniformly");
     }
 
+    // --- Object snap finds a circle's quadrant joints (not just the ring).
+    {
+        Document d; d.entities().clear();
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 50;
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d);
+        auto& s = ed.snapSettings();
+        s.objectSnap = true; s.snapEndpoint = true; s.snapMidpoint = false;
+        s.gridSnap = false; s.ortho = false; s.polar = false;
+        ed.setTool(ToolId::Line);
+        ed.onPointerMove({48, 2}); // near the +x quadrant joint (50,0)
+        check(ed.currentSnap().snapped && near(ed.currentSnap().point.x, 50.0) &&
+                  near(ed.currentSnap().point.y, 0.0),
+              "circle-snap: snaps to the +x quadrant joint");
+        ed.onPointerMove({2, -48}); // near the -y quadrant joint (0,-50)
+        check(ed.currentSnap().snapped && near(ed.currentSnap().point.x, 0.0) &&
+                  near(ed.currentSnap().point.y, -50.0),
+              "circle-snap: snaps to the -y quadrant joint");
+    }
+
     // --- While in Hatch mode you can still select other objects (click + zone).
     {
         Document d; d.entities().clear();

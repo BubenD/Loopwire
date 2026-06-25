@@ -1313,7 +1313,7 @@ void MainWindow::buildRibbon() {
 
     ribbon_ = new QTabWidget(this);
     ribbon_->setDocumentMode(true);
-    ribbon_->setFixedHeight(132); // taller: larger icons + more room for fields/labels
+    ribbon_->setFixedHeight(150); // taller: larger icons + room for the 4-row hatch fields
     // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
     // Use background-color (not the `background` shorthand) so it reliably wins
     // over the application stylesheet's QWidget{background-color:...} rule.
@@ -1683,6 +1683,41 @@ void MainWindow::buildHatchRibbonTab() {
         auto* g = new QGridLayout(w);
         g->setContentsMargins(0, 0, 0, 0);
         g->setSpacing(2);
+        // Wrap a spin box with explicit, clearly-marked + / - stepper buttons.
+        const QString stepQss = QStringLiteral(
+            "QToolButton{background:#6a6f78;color:#f4f6f9;border:1px solid #868c96;"
+            "border-radius:2px;font:bold 11px;padding:0;margin:0;}"
+            "QToolButton:hover{background:#7c828c;}"
+            "QToolButton:pressed{background:#3d8bfd;}");
+        auto wrapSpin = [&](QAbstractSpinBox* spin) -> QWidget* {
+            spin->setButtonSymbols(QAbstractSpinBox::NoButtons); // we draw +/- ourselves
+            auto* box = new QWidget(w);
+            auto* row = new QHBoxLayout(box);
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(2);
+            auto* stack = new QVBoxLayout();
+            stack->setContentsMargins(0, 0, 0, 0);
+            stack->setSpacing(1);
+            auto* plus = new QToolButton(box);
+            plus->setText(QStringLiteral("+"));
+            plus->setAutoRepeat(true);
+            plus->setFixedSize(20, 12);
+            plus->setStyleSheet(stepQss);
+            plus->setFocusPolicy(Qt::NoFocus);
+            auto* minus = new QToolButton(box);
+            minus->setText(QString::fromUtf8("\xE2\x88\x92")); // "−"
+            minus->setAutoRepeat(true);
+            minus->setFixedSize(20, 12);
+            minus->setStyleSheet(stepQss);
+            minus->setFocusPolicy(Qt::NoFocus);
+            connect(plus, &QToolButton::clicked, this, [spin] { spin->stepUp(); });
+            connect(minus, &QToolButton::clicked, this, [spin] { spin->stepDown(); });
+            stack->addWidget(plus);
+            stack->addWidget(minus);
+            row->addWidget(spin, 1);
+            row->addLayout(stack);
+            return box;
+        };
         hatchAngleSpin_ = new QDoubleSpinBox(w);
         hatchAngleSpin_->setRange(0, 180);
         hatchAngleSpin_->setSingleStep(5);
@@ -1705,7 +1740,8 @@ void MainWindow::buildHatchRibbonTab() {
                 [this](int v) { applyHatchControl(QStringLiteral("transparency"), v); });
         // Color: ByLayer / ByBlock + standard colors, each with a swatch example.
         hatchColorCombo_ = new QComboBox(w);
-        hatchColorCombo_->setMinimumWidth(110);
+        hatchColorCombo_->setMinimumWidth(140); // show the swatch + full label
+        hatchColorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
         hatchColorCombo_->addItem(makeColorSwatchIcon(QColor(), true), QStringLiteral("ByLayer"),
                                   QString());
         hatchColorCombo_->addItem(makeColorSwatchIcon(QColor(), true), QStringLiteral("ByBlock"),
@@ -1734,11 +1770,11 @@ void MainWindow::buildHatchRibbonTab() {
             return l;
         };
         g->addWidget(propLabel(QStringLiteral("Angle")), 0, 0);
-        g->addWidget(hatchAngleSpin_, 0, 1);
+        g->addWidget(wrapSpin(hatchAngleSpin_), 0, 1);
         g->addWidget(propLabel(QStringLiteral("Scale")), 1, 0);
-        g->addWidget(hatchScaleSpin_, 1, 1);
+        g->addWidget(wrapSpin(hatchScaleSpin_), 1, 1);
         g->addWidget(propLabel(QStringLiteral("Transp.")), 2, 0);
-        g->addWidget(hatchTranspSpin_, 2, 1);
+        g->addWidget(wrapSpin(hatchTranspSpin_), 2, 1);
         g->addWidget(propLabel(QStringLiteral("Color")), 3, 0);
         g->addWidget(hatchColorCombo_, 3, 1);
         addGroup(QStringLiteral("Properties"), w);
@@ -1765,6 +1801,10 @@ void MainWindow::buildHatchRibbonTab() {
             "(circle = 4). Applies to newly created hatches."));
         connect(hatchJointsBtn_, &QToolButton::toggled, this,
                 [this](bool on) { editor_->hatchStyle().manyJoints = on; });
+        // Both option buttons share one size so they line up evenly.
+        const QSize optSize(92, 80);
+        hatchAssocBtn_->setFixedSize(optSize);
+        hatchJointsBtn_->setFixedSize(optSize);
         g->addWidget(hatchAssocBtn_, 0, 0);
         g->addWidget(hatchJointsBtn_, 0, 1);
         addGroup(QStringLiteral("Options"), w);
