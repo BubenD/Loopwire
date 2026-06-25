@@ -1233,10 +1233,12 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::DoubleLine:
     case ToolId::Rect:
     case ToolId::Polygon:
-    case ToolId::Dimension:
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
+        break;
+    case ToolId::Dimension:
+        handleDimensionPress(p);
         break;
     case ToolId::Circle:
         // Tangent modes pick objects to touch instead of placing points.
@@ -1308,6 +1310,74 @@ void Editor::handleDrawPress(const Vec2& p) {
     // The next step starts on a fresh set of reference fields.
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
+    emit changed();
+}
+
+namespace {
+const char* dimTypeString(Editor::DimMode m) {
+    switch (m) {
+    case Editor::DimMode::Linear: return "linear";
+    case Editor::DimMode::Aligned: return "aligned";
+    case Editor::DimMode::Angular: return "angular";
+    case Editor::DimMode::ArcLength: return "arclength";
+    case Editor::DimMode::Radius: return "radius";
+    case Editor::DimMode::Diameter: return "diameter";
+    case Editor::DimMode::Ordinate: return "ordinate";
+    case Editor::DimMode::Jogged: return "jogged";
+    }
+    return "linear";
+}
+} // namespace
+
+void Editor::handleDimensionPress(const Vec2& p) {
+    drafting_ = true;
+    switch (dimMode_) {
+    case DimMode::Linear:
+    case DimMode::Aligned:
+        draftPts_.push_back(p);
+        if (draftPts_.size() == 3) finishDraw();
+        else
+            emit message(draftPts_.size() == 1
+                             ? QStringLiteral("Dimension: pick the second point")
+                             : QStringLiteral("Dimension: pick the dimension-line position"));
+        break;
+    case DimMode::Angular:
+        draftPts_.push_back(p);
+        if (draftPts_.size() == 3) finishDraw();
+        else
+            emit message(QStringLiteral("Angular: pick the vertex, then the two endpoints"));
+        break;
+    case DimMode::Ordinate:
+        draftPts_.push_back(p);
+        if (draftPts_.size() == 2) finishDraw();
+        else emit message(QStringLiteral("Ordinate: pick the leader endpoint"));
+        break;
+    case DimMode::Radius:
+    case DimMode::Diameter:
+    case DimMode::ArcLength:
+    case DimMode::Jogged:
+        if (!dimHasRef_) {
+            if (auto hit = hitTest(p)) {
+                if (Entity* e = entityById(*hit);
+                    e && (e->type == EntityType::Circle || e->type == EntityType::Arc)) {
+                    dimRefCenter_ = e->center;
+                    dimRefRadius_ = e->radius;
+                    dimRefStart_ = e->startAngle;
+                    dimRefEnd_ = e->endAngle;
+                    dimHasRef_ = true;
+                    draftPts_ = {p};
+                    emit message(QStringLiteral("Pick the dimension text position"));
+                    break;
+                }
+            }
+            drafting_ = false;
+            emit message(QStringLiteral("Select a circle or arc to dimension"));
+        } else {
+            draftPts_.push_back(p);
+            finishDraw();
+        }
+        break;
+    }
     emit changed();
 }
 
@@ -1703,11 +1773,38 @@ void Editor::finishDraw() {
         }
         break;
     case ToolId::Dimension:
-        if (draftPts_.size() < 2) return;
         e.type = EntityType::Dimension;
-        e.a = draftPts_[0];
-        e.b = draftPts_[1];
-        e.points = {draftPts_[0], draftPts_[1]};
+        e.meta.insert("dimType", QString::fromLatin1(dimTypeString(dimMode_)));
+        switch (dimMode_) {
+        case DimMode::Linear:
+        case DimMode::Aligned:
+            if (draftPts_.size() < 3) { cancelDraw(); return; }
+            e.a = draftPts_[0];
+            e.b = draftPts_[1];
+            e.points = {draftPts_[0], draftPts_[1], draftPts_[2]};
+            break;
+        case DimMode::Angular:
+            if (draftPts_.size() < 3) { cancelDraw(); return; }
+            e.points = {draftPts_[0], draftPts_[1], draftPts_[2]};
+            break;
+        case DimMode::Ordinate:
+            if (draftPts_.size() < 2) { cancelDraw(); return; }
+            e.a = draftPts_[0];
+            e.b = draftPts_[1];
+            break;
+        case DimMode::Radius:
+        case DimMode::Diameter:
+        case DimMode::ArcLength:
+        case DimMode::Jogged:
+            if (!dimHasRef_ || draftPts_.empty()) { cancelDraw(); return; }
+            e.center = dimRefCenter_;
+            e.radius = dimRefRadius_;
+            e.startAngle = dimRefStart_;
+            e.endAngle = dimRefEnd_;
+            e.b = draftPts_.back(); // text / leader position
+            e.points = {draftPts_.back()};
+            break;
+        }
         break;
     case ToolId::Rect: {
         if (draftPts_.size() < 2) return;
@@ -1850,6 +1947,7 @@ void Editor::finishDraw() {
 
 void Editor::cancelDraw() {
     lastHatchId_.clear(); // end the hatch live-edit session
+    dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
     draftPts_.clear();
     drafting_ = false;
     rectAwaitY_ = false;
@@ -1915,7 +2013,6 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::DoublePolyline:
     case ToolId::Spline:
     case ToolId::Wire:
-    case ToolId::Dimension:
         // A segment from the last point: length + angle.
         if (drafting_ && !draftPts_.empty())
             return {QStringLiteral("Length"), QStringLiteral("Angle")};
@@ -1988,7 +2085,24 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("POLYGON (%1 sides): type a count, then pick the centre and a vertex")
             .arg(polygonSides_);
     case ToolId::Dimension:
-        return QStringLiteral("DIMENSION: pick two points");
+        switch (dimMode_) {
+        case DimMode::Linear:
+            return QStringLiteral("LINEAR DIM: pick two points, then the dimension-line height");
+        case DimMode::Aligned:
+            return QStringLiteral("ALIGNED DIM: pick two points, then the offset");
+        case DimMode::Angular:
+            return QStringLiteral("ANGULAR DIM: pick the vertex, then the two endpoints");
+        case DimMode::Ordinate:
+            return QStringLiteral("ORDINATE: pick the feature point, then the leader end");
+        case DimMode::Radius:
+        case DimMode::Jogged:
+            return QStringLiteral("RADIUS DIM: pick a circle/arc, then place the text");
+        case DimMode::Diameter:
+            return QStringLiteral("DIAMETER DIM: pick a circle/arc, then place the text");
+        case DimMode::ArcLength:
+            return QStringLiteral("ARC LENGTH: pick an arc, then place the text");
+        }
+        return QStringLiteral("DIMENSION");
     case ToolId::Text:
         return QStringLiteral("TEXT: pick a point, then type the text");
     case ToolId::Hatch:
@@ -2054,8 +2168,7 @@ bool Editor::commitDrawFields() {
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
-    case ToolId::Wire:
-    case ToolId::Dimension: {
+    case ToolId::Wire: {
         const Vec2 base = draftPts_.back();
         const Vec2 d = cursor_ - base;
         const double len = drawFieldVals_[0].value_or(d.length());
@@ -3287,6 +3400,55 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawPolygon(poly); // auto-closes the outline
                 p.restore();
             }
+        } else if (tool_ == ToolId::Dimension) {
+            // Live dimension preview that follows the cursor "all the way" — the
+            // dimension-line height (linear/aligned), the placed text (radius/dia),
+            // the second ray (angular) or the leader (ordinate).
+            Entity temp;
+            temp.type = EntityType::Dimension;
+            temp.meta.insert("dimType", QString::fromLatin1(dimTypeString(dimMode_)));
+            bool ok = false;
+            switch (dimMode_) {
+            case DimMode::Linear:
+            case DimMode::Aligned:
+                if (draftPts_.size() >= 2) {
+                    temp.a = draftPts_[0];
+                    temp.b = draftPts_[1];
+                    temp.points = {draftPts_[0], draftPts_[1], cursor_};
+                    ok = true;
+                } else {
+                    p.drawLine(vt.toScreen(draftPts_[0]), vt.toScreen(cursor_));
+                }
+                break;
+            case DimMode::Angular:
+                if (draftPts_.size() >= 2) {
+                    temp.points = {draftPts_[0], draftPts_[1], cursor_};
+                    ok = true;
+                } else {
+                    p.drawLine(vt.toScreen(draftPts_[0]), vt.toScreen(cursor_));
+                }
+                break;
+            case DimMode::Ordinate:
+                temp.a = draftPts_[0];
+                temp.b = cursor_;
+                ok = true;
+                break;
+            case DimMode::Radius:
+            case DimMode::Diameter:
+            case DimMode::ArcLength:
+            case DimMode::Jogged:
+                if (dimHasRef_) {
+                    temp.center = dimRefCenter_;
+                    temp.radius = dimRefRadius_;
+                    temp.startAngle = dimRefStart_;
+                    temp.endAngle = dimRefEnd_;
+                    temp.b = cursor_;
+                    temp.points = {cursor_};
+                    ok = true;
+                }
+                break;
+            }
+            if (ok) EntityRenderer::draw(p, temp, *doc_, vt, QColor("#ffffff"));
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
             if (dpolySideJustify_) { // clicked path = one edge, other run +gap
@@ -3529,7 +3691,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         // Live length / angle readout of the current segment (toggle: Angles).
         if (showAngles_ && tool_ != ToolId::Rect && tool_ != ToolId::Circle &&
-            tool_ != ToolId::Ellipse && tool_ != ToolId::Arc) {
+            tool_ != ToolId::Ellipse && tool_ != ToolId::Arc && tool_ != ToolId::Dimension) {
             const Vec2 anchor = draftPts_.back();
             const Vec2 v = cursor_ - anchor;
             const double len = v.length();

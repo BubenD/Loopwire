@@ -1232,6 +1232,39 @@ int run_editor_tests() {
         // (no assertion on undo state; just exercising it)
     }
 
+    // --- Linear dimension: two points + the dimension-line height (3 clicks).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setDimMode(Editor::DimMode::Linear);
+        ed.setTool(ToolId::Dimension);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().empty(), "dim-linear: not placed until the height click");
+        ed.onPointerPress({40, 15}, Qt::LeftButton, Qt::NoModifier); // dimension-line height
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Dimension &&
+                  d.entities()[0].meta.value("dimType").toString() == QLatin1String("linear") &&
+                  d.entities()[0].points.size() == 3,
+              "dim-linear: created with the height offset (3 points)");
+    }
+
+    // --- Radius dimension: pick a circle, then place the text (2 clicks).
+    {
+        Document d; d.entities().clear();
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 30;
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+        ed.setDimMode(Editor::DimMode::Radius);
+        ed.setTool(ToolId::Dimension);
+        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier); // on the ring -> picks circle
+        check(d.entities().size() == 1, "dim-radius: picking the circle doesn't create yet");
+        ed.onPointerPress({45, 10}, Qt::LeftButton, Qt::NoModifier); // place text
+        check(d.entities().size() == 2 && d.entities().back().type == EntityType::Dimension &&
+                  d.entities().back().meta.value("dimType").toString() == QLatin1String("radius") &&
+                  near(d.entities().back().radius, 30.0),
+              "dim-radius: created from the picked circle");
+    }
+
     // --- Repeat last tool (Space / Enter when idle).
     {
         Document d; d.entities().clear();

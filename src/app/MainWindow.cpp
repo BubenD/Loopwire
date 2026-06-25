@@ -437,6 +437,70 @@ QIcon makeSplineMethodIcon(int mode) {
     return QIcon(pm);
 }
 
+// Icon per dimension mode (Linear/Aligned/Angular/ArcLength/Radius/Diameter/
+// Ordinate/Jogged), matching Editor::DimMode order.
+QIcon makeDimMethodIcon(int mode) {
+    QPixmap pm = geoCanvas();
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.scale(2, 2);
+    QPen pen(kGeoBlue);
+    pen.setWidthF(1.4);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    switch (mode) {
+    case 0: // Linear: extension lines + horizontal dimension line
+        p.drawLine(4, 19, 4, 9);
+        p.drawLine(20, 19, 20, 9);
+        p.drawLine(4, 10, 20, 10);
+        break;
+    case 1: // Aligned: diagonal dimension line
+        p.drawLine(4, 20, 8, 16);
+        p.drawLine(16, 8, 20, 4);
+        p.drawLine(6, 18, 18, 6);
+        break;
+    case 2: { // Angular: two rays + arc
+        p.drawLine(12, 20, 4, 6);
+        p.drawLine(12, 20, 20, 6);
+        QPainterPath pa;
+        pa.moveTo(8, 14);
+        pa.arcTo(4, 12, 16, 16, 130, -80);
+        p.drawPath(pa);
+        break;
+    }
+    case 3: { // Arc Length: arc with end ticks
+        QPainterPath pa;
+        pa.moveTo(5, 18);
+        pa.arcTo(5, 5, 16, 16, 200, -140);
+        p.drawPath(pa);
+        break;
+    }
+    case 4: // Radius: circle + radius line
+        p.drawEllipse(QPointF(12, 12), 8, 8);
+        p.drawLine(12, 12, 20, 12);
+        break;
+    case 5: // Diameter: circle + line across
+        p.drawEllipse(QPointF(12, 12), 8, 8);
+        p.drawLine(4, 12, 20, 12);
+        break;
+    case 6: // Ordinate: feature dot + leader
+        p.drawLine(12, 19, 12, 4);
+        geoDot(p, QPointF(12, 19));
+        break;
+    case 7: { // Jogged: circle + jagged radius
+        p.drawEllipse(QPointF(12, 12), 7, 7);
+        QPolygonF z;
+        z << QPointF(12, 12) << QPointF(15, 10) << QPointF(16, 14) << QPointF(21, 12);
+        p.drawPolyline(z);
+        break;
+    }
+    default:
+        break;
+    }
+    p.end();
+    return QIcon(pm);
+}
+
 // The Hatch pattern catalogue (display name + meta key), shared by the ribbon
 // swatch row and the expanded pattern picker.
 QList<QPair<QString, QString>> hatchPatternList() {
@@ -1295,6 +1359,29 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
             add(QStringLiteral("Spline Fit"), Editor::SplineMode::Fit);
             add(QStringLiteral("Spline CV (Control Vertices)"), Editor::SplineMode::CV);
             act->setIcon(makeSplineMethodIcon(0)); // default = Fit
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Dimension) {
+            // AutoCAD-style dimension flyout.
+            auto* menu = new QMenu(b);
+            auto add = [&](const QString& label, Editor::DimMode m) {
+                menu->addAction(makeDimMethodIcon(static_cast<int>(m)), label, this, [this, act, m] {
+                    editor_->setDimMode(m);
+                    editor_->setTool(ToolId::Dimension);
+                    act->setIcon(makeDimMethodIcon(static_cast<int>(m)));
+                });
+            };
+            add(QStringLiteral("Linear"), Editor::DimMode::Linear);
+            add(QStringLiteral("Aligned"), Editor::DimMode::Aligned);
+            add(QStringLiteral("Angular"), Editor::DimMode::Angular);
+            menu->addSeparator();
+            add(QStringLiteral("Arc Length"), Editor::DimMode::ArcLength);
+            add(QStringLiteral("Radius"), Editor::DimMode::Radius);
+            add(QStringLiteral("Diameter"), Editor::DimMode::Diameter);
+            menu->addSeparator();
+            add(QStringLiteral("Ordinate"), Editor::DimMode::Ordinate);
+            add(QStringLiteral("Jogged"), Editor::DimMode::Jogged);
+            act->setIcon(makeDimMethodIcon(0)); // default = Linear
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
         }

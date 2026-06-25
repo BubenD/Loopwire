@@ -289,6 +289,113 @@ void appendArc(QPainterPath& path, const Vec2& center, double radius,
     }
 }
 
+// A small filled arrowhead at screen point `tip`, pointing along `dir` (unit).
+void drawArrowHead(QPainter& p, const QPointF& tip, const QPointF& dir, const QColor& c) {
+    const double len = 9.0, wide = 3.2;
+    const QPointF n(-dir.y(), dir.x());
+    const QPointF base = tip - dir * len;
+    QPolygonF tri;
+    tri << tip << (base + n * wide) << (base - n * wide);
+    p.save();
+    p.setPen(Qt::NoPen);
+    p.setBrush(c);
+    p.drawPolygon(tri);
+    p.restore();
+}
+
+// Draw any dimension entity (linear/aligned/radius/diameter/angular/ordinate/...).
+void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
+                         const QColor& color, int decimals) {
+    const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+    auto unit = [](QPointF v) {
+        const double L = std::hypot(v.x(), v.y());
+        return L > 1e-9 ? QPointF(v.x() / L, v.y() / L) : QPointF(1, 0);
+    };
+    auto label = [&](const QPointF& at, const QString& s) {
+        drawWorldText(p, at + QPointF(0, -4), s, 3.0, vt.scale(), color, Qt::AlignHCenter);
+    };
+
+    if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
+        const QPointF c = vt.toScreen(e.center);
+        const QPointF tp = vt.toScreen(e.b);
+        const QPointF dir = unit(tp - c);
+        const QPointF on = c + dir * (e.radius * vt.scale());
+        p.drawLine(c, tp);
+        drawArrowHead(p, on, QPointF(-dir.x(), -dir.y()), color); // arrow at the ring
+        label(tp, QStringLiteral("R%1").arg(e.radius, 0, 'f', decimals));
+        return;
+    }
+    if (ty == QLatin1String("diameter")) {
+        const QPointF c = vt.toScreen(e.center);
+        const QPointF tp = vt.toScreen(e.b);
+        const QPointF dir = unit(tp - c);
+        const double r = e.radius * vt.scale();
+        const QPointF a1 = c - dir * r, a2 = c + dir * r;
+        p.drawLine(a1, a2);
+        drawArrowHead(p, a1, dir, color);
+        drawArrowHead(p, a2, QPointF(-dir.x(), -dir.y()), color);
+        label(tp, QString::fromUtf8("\xC3\x98%1").arg(e.radius * 2.0, 0, 'f', decimals));
+        return;
+    }
+    if (ty == QLatin1String("angular") && e.points.size() >= 3) {
+        const Vec2 v = e.points[0], A = e.points[1], B = e.points[2];
+        const double a0 = std::atan2(A.y - v.y, A.x - v.x);
+        const double a1 = std::atan2(B.y - v.y, B.x - v.x);
+        const double rr = std::min(distance(v, A), distance(v, B)) * 0.6;
+        // faint rays
+        p.drawLine(vt.toScreen(v), vt.toScreen(A));
+        p.drawLine(vt.toScreen(v), vt.toScreen(B));
+        QPainterPath arc;
+        appendArc(arc, v, rr, a0, a1, vt, true);
+        p.drawPath(arc);
+        double deg = (a1 - a0) * 180.0 / M_PI;
+        while (deg < 0) deg += 360.0;
+        while (deg > 360) deg -= 360.0;
+        const double am = a0 + (a1 - a0) * 0.5;
+        label(vt.toScreen(pointOnCircle(v, rr, am)),
+              QStringLiteral("%1\xC2\xB0").arg(deg, 0, 'f', 1));
+        return;
+    }
+    if (ty == QLatin1String("ordinate")) {
+        const QPointF f = vt.toScreen(e.a), le = vt.toScreen(e.b);
+        p.drawLine(f, le);
+        const bool xOrd = std::abs(e.b.x - e.a.x) >= std::abs(e.b.y - e.a.y);
+        label(le, QStringLiteral("%1").arg(xOrd ? e.a.x : e.a.y, 0, 'f', decimals));
+        return;
+    }
+
+    // ---- linear / aligned / arclength: extension lines + dim line + arrows ----
+    const Vec2 p1 = e.a, p2 = e.b;
+    Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
+    Vec2 d1, d2;
+    double measure = 0.0;
+    if (ty == QLatin1String("linear")) {
+        const Vec2 mid = lerp(p1, p2, 0.5);
+        const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+        if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; measure = std::abs(p2.x - p1.x); }
+        else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; measure = std::abs(p2.y - p1.y); }
+    } else { // aligned (and arclength as a chord)
+        const Vec2 dir = (p2 - p1).normalized();
+        const Vec2 n = dir.perp();
+        const double t = dot(off - p1, n);
+        d1 = p1 + n * t;
+        d2 = p2 + n * t;
+        measure = distance(p1, p2);
+    }
+    const QPointF s1 = vt.toScreen(p1), s2 = vt.toScreen(p2);
+    const QPointF e1 = vt.toScreen(d1), e2 = vt.toScreen(d2);
+    p.drawLine(s1, e1); // extension lines
+    p.drawLine(s2, e2);
+    p.drawLine(e1, e2); // dimension line
+    const QPointF du = unit(e2 - e1);
+    drawArrowHead(p, e1, du, color);
+    drawArrowHead(p, e2, QPointF(-du.x(), -du.y()), color);
+    const QString txt = (ty == QLatin1String("arclength"))
+                            ? QString::fromUtf8("\xE2\x8C\x92%1").arg(measure, 0, 'f', decimals)
+                            : QStringLiteral("%1").arg(measure, 0, 'f', decimals);
+    label(QPointF((e1.x() + e2.x()) / 2.0, (e1.y() + e2.y()) / 2.0), txt);
+}
+
 } // namespace
 
 void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
@@ -548,15 +655,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
-    case EntityType::Dimension: {
-        const QPointF a = vt.toScreen(e.a), b = vt.toScreen(e.b);
-        p.drawLine(a, b);
-        // Small tick marks and a length label.
-        const QString label = QStringLiteral("%1").arg(distance(e.a, e.b), 0, 'f', g_dimDecimals);
-        drawWorldText(p, QPointF((a.x() + b.x()) / 2.0, (a.y() + b.y()) / 2.0 - 4),
-                      label, 3.0, vt.scale(), color, Qt::AlignHCenter);
+    case EntityType::Dimension:
+        drawDimensionEntity(p, e, vt, color, g_dimDecimals);
         break;
-    }
 
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);

@@ -178,6 +178,11 @@ public:
     // Spline construction: Fit passes through the points; CV (control vertices)
     // is shaped by them (a B-spline).
     enum class SplineMode { Fit, CV };
+    // Dimension type (AutoCAD-style flyout).
+    enum class DimMode { Linear, Aligned, Angular, ArcLength, Radius, Diameter, Ordinate, Jogged };
+    void setDimMode(DimMode m) { dimMode_ = m; }
+    DimMode dimMode() const { return dimMode_; }
+
     void setCircleMode(CircleMode m) { circleMode_ = m; }
     void setArcMode(ArcMode m) { arcMode_ = m; }
     void setEllipseMode(EllipseMode m) { ellipseMode_ = m; }
@@ -289,6 +294,7 @@ private:
     }
     void handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill
+    void handleDimensionPress(const Vec2& p); // multi-mode dimension placement
 
     void handleDrawPress(const Vec2& p);
     void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects
@@ -393,6 +399,13 @@ private:
     bool dpolySideJustify_ = false;
     bool showAngles_ = true; // show the live length/angle readout while drawing
     QString currentColor_;   // color for new entities (empty => ByLayer)
+    DimMode dimMode_ = DimMode::Linear;
+    // For radius/diameter/arc-length/jogged: the circle/arc being measured, captured
+    // on the first pick so the second click only places the text/dimension line.
+    bool dimHasRef_ = false;
+    Vec2 dimRefCenter_;
+    double dimRefRadius_ = 0.0;
+    double dimRefStart_ = 0.0, dimRefEnd_ = 0.0;
     CircleMode circleMode_ = CircleMode::CenterRadius;
     ArcMode arcMode_ = ArcMode::ThreePoint;
     EllipseMode ellipseMode_ = EllipseMode::Center;
