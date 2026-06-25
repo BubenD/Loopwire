@@ -1394,7 +1394,7 @@ int run_editor_tests() {
     // --- "Multiple joints" toggle: select-object on a circle yields a dense (64)
     //     or coarse (4) boundary.
     {
-        auto fillCircle = [](bool many) {
+        auto fillCircle = [](bool many) -> Entity {
             Document d; d.entities().clear();
             Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 50;
             d.entities().push_back(c);
@@ -1403,10 +1403,59 @@ int run_editor_tests() {
             ed.hatchStyle().manyJoints = many;
             ed.setTool(ToolId::Hatch);
             ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // on the ring
-            return static_cast<int>(d.entities().back().points.size());
+            return d.entities().back();
         };
-        check(fillCircle(false) == 4, "hatch-joints: off -> circle boundary has 4 joints");
-        check(fillCircle(true) == 64, "hatch-joints: on -> circle boundary is dense");
+        const Entity few = fillCircle(false);
+        check(few.meta.value("shape").toString() == QLatin1String("circle") &&
+                  near(few.radius, 50.0),
+              "hatch-joints: off -> circle boundary stays a true circle (4 resize joints)");
+        const Entity many = fillCircle(true);
+        check(many.points.size() == 64,
+              "hatch-joints: on -> circle boundary is a dense polygon");
+    }
+
+    // --- A few-joints circle hatch fills the circle and resizes via a radius grip.
+    {
+        Document d; d.entities().clear();
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 50;
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.hatchStyle().boundary = Editor::HatchBoundary::SelectObject;
+        ed.hatchStyle().manyJoints = false;
+        ed.hatchStyle().associative = false; // so the 4 radius grips are shown
+        ed.setTool(ToolId::Hatch);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+        const QString id = d.entities().back().id;
+        ed.setTool(ToolId::Select);
+        ed.selectById(id);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // +x radius grip
+        ed.onPointerMove({80, 0});
+        ed.onPointerRelease({80, 0}, Qt::LeftButton);
+        check(near(d.entities().back().radius, 80.0),
+              "hatch-circle: dragging a radius joint enlarges the circle uniformly");
+    }
+
+    // --- While in Hatch mode you can still select other objects (click + zone).
+    {
+        Document d; d.entities().clear();
+        Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {20, 0};
+        d.entities().push_back(l);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+        ed.hatchStyle().boundary = Editor::HatchBoundary::SelectObject;
+        ed.setTool(ToolId::Hatch);
+        // Clicking a non-closed object (a line) selects it instead of hatching.
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({10, 0}, Qt::LeftButton);
+        check(ed.selection().size() == 1 && ed.selection().front() == "l",
+              "hatch-select: clicking a line in hatch mode selects it");
+        check(d.entities().size() == 1, "hatch-select: no hatch was created from a line");
+        // A crossing zone in hatch mode selects too.
+        ed.clearSelection();
+        ed.onPointerPress({40, 20}, Qt::LeftButton, Qt::NoModifier); // empty -> region
+        ed.onPointerRelease({40, 20}, Qt::LeftButton);               // -> RectPending
+        ed.onPointerMove({-10, -10});
+        ed.onPointerPress({-10, -10}, Qt::LeftButton, Qt::NoModifier); // commit (crossing)
+        check(ed.selection().size() == 1, "hatch-select: select-zone works in hatch mode");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

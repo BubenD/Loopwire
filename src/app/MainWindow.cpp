@@ -41,6 +41,7 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QListWidget>
+#include <QScrollArea>
 #include <QListWidgetItem>
 #include <QMenu>
 #include <QMenuBar>
@@ -1626,18 +1627,17 @@ void MainWindow::buildHatchRibbonTab() {
         addGroup(QStringLiteral("Boundaries"), w);
     }
 
-    // ---- Pattern swatches (exclusive) ----
+    // ---- Pattern swatches (exclusive) — all patterns, horizontally scrollable ----
     {
-        auto* w = new QWidget(hatchTab_);
+        auto* w = new QWidget(hatchTab_); // inner widget that scrolls
         auto* g = new QGridLayout(w);
         g->setContentsMargins(0, 0, 0, 0);
         g->setSpacing(1);
         hatchPatternGroup_ = new QButtonGroup(this);
         hatchPatternGroup_->setExclusive(true);
         const QList<QPair<QString, QString>> pats = hatchPatternList();
-        const int perRow = 6; // two rows of large swatches; the rest live in the picker
-        const int inlineCount = std::min(static_cast<int>(pats.size()), perRow * 2);
-        for (int i = 0; i < inlineCount; ++i) {
+        const int perRow = (pats.size() + 1) / 2; // lay all patterns out in two rows
+        for (int i = 0; i < pats.size(); ++i) {
             const QString key = pats[i].second;
             auto* b = bigButton(w, makeHatchSwatch(key, 60, 38), QString()); // swatch only
             b->setToolButtonStyle(Qt::ToolButtonIconOnly); // big swatch, name in tooltip
@@ -1650,17 +1650,31 @@ void MainWindow::buildHatchRibbonTab() {
             connect(b, &QToolButton::clicked, this, [this, key] { choosePattern(key); });
             g->addWidget(b, i / perRow, i % perRow);
         }
-        // A taller "expand" button opens the full pattern picker (large swatches +
-        // a side list of names).
-        auto* more = new QToolButton(w);
+        // Scroll the swatch grid horizontally so every pattern is reachable inline.
+        auto* scroll = new QScrollArea(hatchTab_);
+        scroll->setWidget(w);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setMaximumWidth(440);
+        scroll->setStyleSheet(QStringLiteral("QScrollArea{background:transparent;}"));
+
+        // Right of the gallery: a taller "expand" button opens the full picker.
+        auto* holder = new QWidget(hatchTab_);
+        auto* hl = new QHBoxLayout(holder);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(2);
+        hl->addWidget(scroll, 1);
+        auto* more = new QToolButton(holder);
         more->setText(QString::fromUtf8("\xE2\x8B\xAE")); // vertical ellipsis
         more->setToolTip(QStringLiteral("More patterns…"));
         more->setAutoRaise(true);
         more->setFocusPolicy(Qt::NoFocus);
         more->setMinimumHeight(76);
         connect(more, &QToolButton::clicked, this, [this] { showHatchPatternDialog(); });
-        g->addWidget(more, 0, perRow, 2, 1); // span both rows on the right
-        addGroup(QStringLiteral("Pattern"), w);
+        hl->addWidget(more);
+        addGroup(QStringLiteral("Pattern"), holder);
     }
 
     // ---- Properties: Angle / Scale / Transparency ----
@@ -1714,13 +1728,18 @@ void MainWindow::buildHatchRibbonTab() {
                     applyHatchControl(QStringLiteral("color"), hatchColorCombo_->itemData(idx).toString());
                 });
 
-        g->addWidget(new QLabel(QStringLiteral("Angle"), w), 0, 0);
+        auto propLabel = [&](const QString& t) {
+            auto* l = new QLabel(t, w);
+            l->setStyleSheet(QStringLiteral("color:#e6e9ef; background:transparent;"));
+            return l;
+        };
+        g->addWidget(propLabel(QStringLiteral("Angle")), 0, 0);
         g->addWidget(hatchAngleSpin_, 0, 1);
-        g->addWidget(new QLabel(QStringLiteral("Scale"), w), 1, 0);
+        g->addWidget(propLabel(QStringLiteral("Scale")), 1, 0);
         g->addWidget(hatchScaleSpin_, 1, 1);
-        g->addWidget(new QLabel(QStringLiteral("Transp."), w), 2, 0);
+        g->addWidget(propLabel(QStringLiteral("Transp.")), 2, 0);
         g->addWidget(hatchTranspSpin_, 2, 1);
-        g->addWidget(new QLabel(QStringLiteral("Color"), w), 3, 0);
+        g->addWidget(propLabel(QStringLiteral("Color")), 3, 0);
         g->addWidget(hatchColorCombo_, 3, 1);
         addGroup(QStringLiteral("Properties"), w);
     }
@@ -1758,7 +1777,15 @@ void MainWindow::buildHatchRibbonTab() {
         g->setContentsMargins(0, 0, 0, 0);
         g->setSpacing(1);
         auto* close = bigButton(w, makeToolIcon(ToolId::NotConnected), QStringLiteral("Close Hatch\nCreation"));
-        connect(close, &QToolButton::clicked, this, [this] { editor_->setTool(ToolId::Select); });
+        connect(close, &QToolButton::clicked, this, [this] {
+            // Finish the hatch command: leave the tool, drop the live-edit target,
+            // close the contextual tab and return to the canvas.
+            editor_->clearSelection();
+            editor_->setTool(ToolId::Select); // -> toolChanged -> updateHatchContext hides the tab
+            hatchEditId_.clear();
+            showHatchRibbon(false);
+            canvas_->setFocus();
+        });
         g->addWidget(close, 0, 0);
         addGroup(QStringLiteral("Close"), w);
     }

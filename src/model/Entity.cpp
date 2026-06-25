@@ -57,12 +57,20 @@ Bounds Entity::bounds() const {
         bnds.expand(a);
         bnds.expand(b);
         break;
+    case EntityType::Hatch:
+        // A circle-boundary hatch carries center/radius rather than points.
+        if (meta.value("shape").toString() == QLatin1String("circle")) {
+            bnds.expand({center.x - radius, center.y - radius});
+            bnds.expand({center.x + radius, center.y + radius});
+            break;
+        }
+        for (const auto& p : points) bnds.expand(p);
+        break;
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
     case EntityType::Wipeout:
         for (const auto& p : points) bnds.expand(p);
         break;
@@ -209,6 +217,13 @@ QJsonObject Entity::toJson() const {
         obj["position"] = pointToJson(a);
         break;
     default: { // polyline / spline / wire / rect / polygon / hatch / wipeout
+        // A circle-boundary hatch stores its geometry as center/radius (fromJson
+        // already reads these back).
+        if (type == EntityType::Hatch && meta.value("shape").toString() == QLatin1String("circle")) {
+            obj["center"] = pointToJson(center);
+            obj["radius"] = radius;
+            break;
+        }
         QJsonArray arr;
         for (const auto& p : points) arr.append(pointToJson(p));
         obj["points"] = arr;

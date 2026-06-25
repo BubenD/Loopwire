@@ -95,8 +95,8 @@ void drawParallelLines(QPainter& p, const QRectF& bb, double ang, double gap) {
     }
 }
 
-// Fill a closed boundary (screen-space polygon) with a hatch pattern.
-void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor& base,
+// Fill a closed boundary (screen-space path) with a hatch pattern.
+void drawHatch(QPainter& p, const QPainterPath& path, const Entity& e, const QColor& base,
                const ViewTransform& vt) {
     const QString pat = e.meta.value("pattern").toString(QStringLiteral("ansi31")).toLower();
     const double userAngle = e.meta.value("hatchAngle").toDouble(0.0) * M_PI / 180.0;
@@ -105,10 +105,6 @@ void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor
 
     QColor c = base;
     c.setAlpha(static_cast<int>(255 * (1.0 - transp / 100.0)));
-
-    QPainterPath path;
-    path.addPolygon(poly);
-    path.closeSubpath();
 
     p.save();
     if (pat == QLatin1String("solid")) {
@@ -126,7 +122,7 @@ void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor
     p.setPen(hp);
     p.setBrush(Qt::NoBrush);
 
-    const QRectF bb = poly.boundingRect();
+    const QRectF bb = path.boundingRect();
     const double gap = std::max(3.0, 6.0 * scale * vt.scale()); // world ~6 units * scale
 
     // Rotate the whole tiled pattern about the boundary centre by the user Angle.
@@ -396,13 +392,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Hatch: {
-        if (e.points.size() < 3) break;
-        const QPolygonF poly = toScreenPoly(e.points, vt);
-        drawHatch(p, poly, e, color, vt);
+        QPainterPath path;
+        if (e.meta.value("shape").toString() == QLatin1String("circle")) {
+            const QPointF cc = vt.toScreen(e.center);
+            const double r = e.radius * vt.scale();
+            path.addEllipse(cc, r, r);
+        } else {
+            if (e.points.size() < 3) break;
+            path.addPolygon(toScreenPoly(e.points, vt));
+            path.closeSubpath();
+        }
+        drawHatch(p, path, e, color, vt);
         // A faint boundary so an empty/low-density hatch is still selectable.
         if (overrideColor.isValid()) {
             p.setBrush(Qt::NoBrush);
-            p.drawPolygon(poly);
+            p.drawPath(path);
         }
         break;
     }

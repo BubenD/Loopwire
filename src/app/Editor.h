@@ -267,12 +267,27 @@ private:
     std::vector<Entity*> selectedEntities();
     Entity* entityById(const QString& id);
 
-    // Hatch "Pick Points": the smallest closed boundary (existing closed entity)
-    // that encloses `seed`, sampled to a polygon — empty if none surrounds it.
-    std::vector<Vec2> pickEnclosingBoundary(const Vec2& seed) const;
-    // Create a Hatch/Wipeout from a boundary polygon and stay in the tool so more
-    // regions can be filled (Esc / Close exits).
+    // Hatch "Pick Points": the smallest closed entity that encloses `seed`, or
+    // nullptr if none surrounds it.
+    const Entity* enclosingEntity(const Vec2& seed) const;
+    // Create a Hatch/Wipeout from a source boundary entity (circle shapes stay a
+    // true circle when "multiple joints" is off; everything else is a polygon).
+    void commitHatchFromSource(const Entity& src);
+    // Create a Hatch/Wipeout from a boundary polygon; stays in the tool.
     void commitHatchBoundary(const std::vector<Vec2>& pts);
+    // Create a circle-boundary Hatch (fills the circle; 4 joints resize it).
+    void commitHatchCircle(const Vec2& center, double radius);
+    // Finish a hatch/wipeout entity: stamp color + pattern meta, add it, set it as
+    // the live-edit target, and notify. (geometry already filled by the caller)
+    void addHatchEntity(Entity e);
+
+    // Tools where click/window selection of objects is allowed (Select, plus the
+    // Hatch/Wipeout tools so you can still select while hatching).
+    bool selectionTool() const {
+        return tool_ == ToolId::Select || tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout;
+    }
+    void handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods);
+    bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill
 
     void handleDrawPress(const Vec2& p);
     void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects

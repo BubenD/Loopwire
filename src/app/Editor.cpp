@@ -127,8 +127,14 @@ std::vector<Grip> gripsOf(const Entity& e) {
             const Bounds b = e.bounds();
             g.push_back({b.valid ? b.center() : (e.points.empty() ? Vec2{0, 0} : e.points[0]),
                          GripRole::Move, 0});
+        } else if (e.meta.value("shape").toString() == QLatin1String("circle")) {
+            // Circle-boundary hatch: 4 radius joints that resize the circle.
+            g.push_back({{e.center.x + e.radius, e.center.y}, GripRole::Radius, 0});
+            g.push_back({{e.center.x - e.radius, e.center.y}, GripRole::Radius, 0});
+            g.push_back({{e.center.x, e.center.y + e.radius}, GripRole::Radius, 0});
+            g.push_back({{e.center.x, e.center.y - e.radius}, GripRole::Radius, 0});
         } else {
-            // Non-associative: full boundary vertex grips for reshaping.
+            // Non-associative polygon: full boundary vertex grips for reshaping.
             for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
                 g.push_back({e.points[i], GripRole::Vertex, i});
         }
@@ -302,6 +308,12 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         break;
     case EntityType::Hatch:
     case EntityType::Wipeout: {
+        if (e.type == EntityType::Hatch &&
+            e.meta.value("shape").toString() == QLatin1String("circle")) {
+            const double dc = distance(e.center, p);
+            best = dc <= e.radius ? 0.0 : dc - e.radius; // pickable anywhere inside
+            break;
+        }
         for (size_t i = 0; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
         // A filled region is also pickable anywhere inside it (ray-cast test).
@@ -399,6 +411,94 @@ std::vector<Entity*> Editor::selectedEntities() {
 
 // ---- Pointer handling ------------------------------------------------------
 
+namespace {
+// Defined later in this file; forward-declared for tryHatchAt below.
+std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints);
+} // namespace
+
+void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods) {
+    const bool shift = mods & Qt::ShiftModifier;
+
+    // (a) A grabbed joint is following the cursor: this click places it.
+    if (editing_ && gripGrab_) {
+        applyEditDrag(p);
+        editing_ = false;
+        gripGrab_ = false;
+        editMoved_ = false;
+        editGhost_.clear(); // source ghost cleared now that it's placed
+        emit message(QStringLiteral("Joint placed"));
+        emit changed();
+        return;
+    }
+    // (b) Pending rectangle waiting for its opposite corner.
+    if (regionMode_ == RegionMode::RectPending) {
+        finishRegionSelect(shift);
+        regionMode_ = RegionMode::None;
+        emit changed();
+        return;
+    }
+    // (c) Click on a joint of a selected entity -> grab it (click to place).
+    if (!shift && beginGripGrab(raw)) return;
+
+    // (d) Click on an entity body -> accumulate selection (Shift removes), and arm
+    // a body move on drag.
+    if (auto hit = hitTest(p)) {
+        auto it = std::find(selected_.begin(), selected_.end(), *hit);
+        if (shift) {
+            if (it != selected_.end()) selected_.erase(it);
+            emit selectionChanged();
+            return; // deselected; no move
+        }
+        if (it == selected_.end()) { selected_.push_back(*hit); emit selectionChanged(); }
+        pressed_ = true;
+        editing_ = true;
+        editMode_ = 0; // body move on drag
+        gripGrab_ = false;
+        editEntityId_.clear();
+        editLast_ = p;
+        editMoved_ = false;
+        editGhost_.clear();
+        for (const auto& sid : selected_)
+            if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
+        return;
+    }
+    // (e) Empty space -> region selection (rectangle / hold-for-lasso).
+    pressed_ = true;
+    anchor_ = p;
+    pressMods_ = mods;
+    dragPath_ = {p};
+    regionMode_ = RegionMode::Deciding;
+    pressTimer_.restart();
+    dragTimer_->start();
+}
+
+bool Editor::tryHatchAt(const Vec2& p) {
+    if (hatchStyle_.boundary == HatchBoundary::SelectObject) {
+        if (auto hit = hitTest(p)) {
+            if (Entity* src = entityById(*hit)) {
+                // Only fill closed objects; otherwise let it fall through to select.
+                if (src->type == EntityType::Circle ||
+                    boundaryPointsOf(*src, hatchStyle_.manyJoints).size() >= 3) {
+                    commitHatchFromSource(*src);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    // Pick Points: one click inside an enclosed area fills that region.
+    if (const Entity* src = enclosingEntity(p)) {
+        commitHatchFromSource(*src);
+        return true;
+    }
+    // Nothing enclosing: end the live-edit of the previous hatch.
+    if (!lastHatchId_.isEmpty()) {
+        lastHatchId_.clear();
+        emit hatchTargetChanged();
+    }
+    return false;
+}
+
 void Editor::onPointerMove(const Vec2& raw) {
     if (!doc_) return;
     std::optional<Vec2> anchor;
@@ -422,7 +522,7 @@ void Editor::onPointerMove(const Vec2& raw) {
 
     // While the lasso is engaged (button held past the 0.2s threshold), record
     // the freeform path. The pending rectangle just tracks the live cursor.
-    if (tool_ == ToolId::Select && regionMode_ == RegionMode::Lasso && pressed_) {
+    if (selectionTool() && regionMode_ == RegionMode::Lasso && pressed_) {
         const double tol = worldTolerance();
         if (dragPath_.empty() || distance(dragPath_.back(), raw) > tol * 0.4)
             dragPath_.push_back(raw);
@@ -438,7 +538,7 @@ void Editor::onPointerMove(const Vec2& raw) {
 void Editor::onDragTick() {
     // Fires only while the button is held during the Deciding phase. If the
     // hold passes the threshold, promote the rectangle into a lasso.
-    if (!pressed_ || tool_ != ToolId::Select || regionMode_ != RegionMode::Deciding) {
+    if (!pressed_ || !selectionTool() || regionMode_ != RegionMode::Deciding) {
         dragTimer_->stop();
         return;
     }
@@ -504,66 +604,19 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
 
-    if (tool_ == ToolId::Select) {
-        const bool shift = mods & Qt::ShiftModifier;
-
-        // (a) A grabbed joint is following the cursor: this click places it.
-        if (editing_ && gripGrab_) {
-            applyEditDrag(p);
-            editing_ = false;
-            gripGrab_ = false;
-            editMoved_ = false;
-            editGhost_.clear(); // source ghost cleared now that it's placed
-            emit message(QStringLiteral("Joint placed"));
-            emit changed();
+    if (tool_ == ToolId::Select) { handleSelectPress(p, raw, mods); return; }
+    // In Hatch/Wipeout mode a click first tries to fill a region/object; if there's
+    // nothing to fill, fall through to normal selection (click or select-zone) so
+    // other objects can still be picked while hatching.
+    if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
+        // A pending selection (rectangle 2nd corner) or a grabbed joint must finish
+        // first — don't hatch instead of completing it.
+        if (regionMode_ == RegionMode::RectPending || (editing_ && gripGrab_)) {
+            handleSelectPress(p, raw, mods);
             return;
         }
-        // (b) Pending rectangle waiting for its opposite corner.
-        if (regionMode_ == RegionMode::RectPending) {
-            finishRegionSelect(shift);
-            regionMode_ = RegionMode::None;
-            emit changed();
-            return;
-        }
-        // (c) Click on a joint of a selected entity -> grab it (click to place).
-        // Shift is reserved for deselecting, so it never grabs a joint. Use the
-        // RAW click (not the snapped cursor) so the grip you clicked is the one
-        // grabbed — snapping can pull the cursor off the visible joint (e.g. a
-        // double line's parallel end) and otherwise cause the grab to miss.
-        if (!shift && beginGripGrab(raw)) return;
-
-        // (d) Click on an entity body -> accumulate selection (Shift removes),
-        // and arm a body move on drag.
-        if (auto hit = hitTest(p)) {
-            auto it = std::find(selected_.begin(), selected_.end(), *hit);
-            if (shift) {
-                if (it != selected_.end()) selected_.erase(it);
-                emit selectionChanged();
-                return; // deselected; no move
-            }
-            if (it == selected_.end()) { selected_.push_back(*hit); emit selectionChanged(); }
-            pressed_ = true;
-            editing_ = true;
-            editMode_ = 0; // body move on drag
-            gripGrab_ = false;
-            editEntityId_.clear();
-            editLast_ = p;
-            editMoved_ = false;
-            // Snapshot the originals so they stay visible (ghost) at the source
-            // position until the move is committed on release.
-            editGhost_.clear();
-            for (const auto& sid : selected_)
-                if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
-            return;
-        }
-        // (e) Empty space -> region selection (rectangle / hold-for-lasso).
-        pressed_ = true;
-        anchor_ = p;
-        pressMods_ = mods;
-        dragPath_ = {p};
-        regionMode_ = RegionMode::Deciding;
-        pressTimer_.restart();
-        dragTimer_->start();
+        if (tryHatchAt(p)) return;
+        handleSelectPress(p, raw, mods);
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
@@ -574,7 +627,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
-    if (!doc_ || button != Qt::LeftButton || tool_ != ToolId::Select) return;
+    if (!doc_ || button != Qt::LeftButton || !selectionTool()) return;
     // A grabbed joint stays attached to the cursor after release; it is placed
     // by the next click, not by releasing the button.
     if (gripGrab_) return;
@@ -638,12 +691,19 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         pts = {e.a + off, e.b + off, e.a - off, e.b - off};
         break;
     }
+    case EntityType::Hatch:
+        if (e.meta.value("shape").toString() == QLatin1String("circle")) {
+            pts = {{e.center.x + e.radius, e.center.y}, {e.center.x - e.radius, e.center.y},
+                   {e.center.x, e.center.y + e.radius}, {e.center.x, e.center.y - e.radius}};
+            break;
+        }
+        pts = e.points;
+        break;
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
     case EntityType::Wipeout:
         pts = e.points;
         break;
@@ -699,9 +759,22 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         for (size_t i = 1; i < curve.size(); ++i) segs.emplace_back(curve[i - 1], curve[i]);
         break;
     }
+    case EntityType::Hatch:
+        if (e.meta.value("shape").toString() == QLatin1String("circle")) {
+            const int n = 48;
+            Vec2 prev = pointOnCircle(e.center, e.radius, 0.0);
+            for (int i = 1; i <= n; ++i) {
+                const Vec2 cur = pointOnCircle(e.center, e.radius, 2.0 * M_PI * i / n);
+                segs.emplace_back(prev, cur);
+                prev = cur;
+            }
+            break;
+        }
+        for (size_t i = 0; i < e.points.size(); ++i)
+            segs.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
+        break;
     case EntityType::Rect:
     case EntityType::Polygon:
-    case EntityType::Hatch:
     case EntityType::Wipeout:
         for (size_t i = 0; i < e.points.size(); ++i)
             segs.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
@@ -1138,36 +1211,6 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints = true) {
 
 void Editor::handleDrawPress(const Vec2& p) {
     switch (tool_) {
-    case ToolId::Hatch:
-    case ToolId::Wipeout: {
-        if (hatchStyle_.boundary == HatchBoundary::SelectObject) {
-            // Click a closed object to fill it.
-            if (auto hit = hitTest(p)) {
-                if (Entity* src = entityById(*hit)) {
-                    std::vector<Vec2> bnd = boundaryPointsOf(*src, hatchStyle_.manyJoints);
-                    if (bnd.size() >= 3) { commitHatchBoundary(bnd); return; }
-                }
-            }
-            emit message(QStringLiteral(
-                "Select a closed object to fill (rectangle, polygon, circle, ellipse, polyline)"));
-            return;
-        }
-        // Pick Points (AutoCAD-style): one click inside an enclosed area fills the
-        // surrounding closed boundary automatically.
-        std::vector<Vec2> bnd = pickEnclosingBoundary(p);
-        if (bnd.size() >= 3) {
-            commitHatchBoundary(bnd);
-        } else {
-            // Clicking out in the open finalizes the last hatch: stop live-editing it.
-            if (!lastHatchId_.isEmpty()) {
-                lastHatchId_.clear();
-                emit hatchTargetChanged();
-            }
-            emit message(QStringLiteral(
-                "No closed boundary found around the pick point — click inside an enclosed region."));
-        }
-        return;
-    }
     case ToolId::Line: {
         // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
         // Each completed segment is committed as its own straight line, then the
@@ -1268,9 +1311,9 @@ void Editor::handleDrawPress(const Vec2& p) {
     emit changed();
 }
 
-std::vector<Vec2> Editor::pickEnclosingBoundary(const Vec2& seed) const {
-    if (!doc_) return {};
-    std::vector<Vec2> best;
+const Entity* Editor::enclosingEntity(const Vec2& seed) const {
+    if (!doc_) return nullptr;
+    const Entity* best = nullptr;
     double bestArea = std::numeric_limits<double>::max();
     for (const auto& e : doc_->entities()) {
         if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked))
@@ -1282,14 +1325,13 @@ std::vector<Vec2> Editor::pickEnclosingBoundary(const Vec2& seed) const {
         case EntityType::Polygon:
         case EntityType::Circle:
         case EntityType::Ellipse:
-            poly = boundaryPointsOf(e, hatchStyle_.manyJoints);
+            poly = boundaryPointsOf(e, true); // dense for an accurate enclosure test
             break;
         case EntityType::Polyline:
         case EntityType::Spline:
-            // A boundary only if the run is (nearly) closed.
             if (e.points.size() >= 3 &&
                 distance(e.points.front(), e.points.back()) < worldTolerance())
-                poly = boundaryPointsOf(e, hatchStyle_.manyJoints);
+                poly = boundaryPointsOf(e, true);
             break;
         default:
             break; // lines / double lines / hatch / wipeout / text are not boundaries
@@ -1303,20 +1345,28 @@ std::vector<Vec2> Editor::pickEnclosingBoundary(const Vec2& seed) const {
             area2 += a.x * b.y - b.x * a.y;
         }
         const double area = std::abs(area2) * 0.5;
-        if (area > 1e-9 && area < bestArea) { bestArea = area; best = poly; }
+        if (area > 1e-9 && area < bestArea) { bestArea = area; best = &e; }
     }
     return best;
 }
 
-void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
-    if (!doc_ || pts.size() < 3) return;
-    pushUndo();
-    Entity e;
-    e.id = uid();
+void Editor::commitHatchFromSource(const Entity& src) {
+    // A circle filled with "few joints" stays a true circle (4 resize grips);
+    // everything else becomes a polygon boundary.
+    if (tool_ == ToolId::Hatch && !hatchStyle_.manyJoints && src.type == EntityType::Circle &&
+        src.radius > 1e-6) {
+        commitHatchCircle(src.center, src.radius);
+        return;
+    }
+    std::vector<Vec2> bnd = boundaryPointsOf(src, hatchStyle_.manyJoints);
+    if (bnd.size() >= 3) commitHatchBoundary(bnd);
+}
+
+void Editor::addHatchEntity(Entity e) {
+    if (!doc_) return;
+    if (e.id.isEmpty()) e.id = uid();
     e.layer = doc_->activeLayer();
-    const EntityType ty = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
-    e.type = ty;
-    e.points = pts;
+    const EntityType ty = e.type;
     if (!hatchStyle_.color.isEmpty()) e.color = hatchStyle_.color; // else ByLayer
     if (ty == EntityType::Hatch) {
         e.meta.insert("pattern", hatchStyle_.pattern);
@@ -1326,6 +1376,7 @@ void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
         e.meta.insert("associative", hatchStyle_.associative);
     }
     const QString newId = e.id;
+    pushUndo();
     addEntity(std::move(e));
     if (ty == EntityType::Hatch) lastHatchId_ = newId; // live-edit target while creating
     emit message(ty == EntityType::Hatch ? QStringLiteral("Hatch created — adjust it in the Hatch tab.")
@@ -1333,6 +1384,24 @@ void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
     emit changed();
     emit hatchTargetChanged();
     // Stay in the tool so more regions can be filled (Esc / Close exits).
+}
+
+void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
+    if (!doc_ || pts.size() < 3) return;
+    Entity e;
+    e.type = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
+    e.points = pts;
+    addHatchEntity(std::move(e));
+}
+
+void Editor::commitHatchCircle(const Vec2& center, double radius) {
+    if (!doc_ || radius <= 1e-6) return;
+    Entity e;
+    e.type = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
+    e.center = center;
+    e.radius = radius;
+    e.meta.insert("shape", QStringLiteral("circle")); // fills a true circle; 4 resize joints
+    addHatchEntity(std::move(e));
 }
 
 namespace {
@@ -3354,20 +3423,28 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     }
 
     // Hatch/Wipeout "Pick Points": preview the enclosed boundary under the cursor
-    // so it's clear which region a click would fill.
+    // so it's clear which region a click would fill (a circle stays a circle when
+    // "multiple joints" is off).
     if ((tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) &&
         hatchStyle_.boundary == HatchBoundary::PickPoints) {
-        const auto bnd = pickEnclosingBoundary(cursor_);
-        if (bnd.size() >= 3) {
-            QPolygonF poly;
-            for (const auto& v : bnd) poly << vt.toScreen(v);
+        if (const Entity* src = enclosingEntity(cursor_)) {
             p.save();
             QPen hp(QColor("#2bd0ff"));
             hp.setCosmetic(true);
             hp.setWidthF(1.6);
             p.setPen(hp);
             p.setBrush(QColor(80, 160, 255, 60));
-            p.drawPolygon(poly);
+            if (tool_ == ToolId::Hatch && !hatchStyle_.manyJoints &&
+                src->type == EntityType::Circle) {
+                const QPointF c = vt.toScreen(src->center);
+                const double r = src->radius * vt.scale();
+                p.drawEllipse(c, r, r);
+            } else {
+                QPolygonF poly;
+                for (const auto& v : boundaryPointsOf(*src, hatchStyle_.manyJoints))
+                    poly << vt.toScreen(v);
+                if (poly.size() >= 3) p.drawPolygon(poly);
+            }
             p.restore();
         }
     }
