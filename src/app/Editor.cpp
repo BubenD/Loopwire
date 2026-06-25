@@ -3402,7 +3402,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
             // For an elliptical arc, once the start angle is placed (4th point) the
             // preview opens into an arc sweeping to the cursor.
-            if (auto el = buildEllipseEntity(ellipseMode_, pts)) {
+            auto el = buildEllipseEntity(ellipseMode_, pts);
+            if (el) {
                 if (ellipseMode_ == EllipseMode::EllipticalArc && draftPts_.size() >= 4) {
                     el->startAngle = ellipseParamAngle(el->center, el->radius, el->radiusY,
                                                        el->rotation, draftPts_[3]);
@@ -3415,6 +3416,45 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 QPolygonF poly;
                 for (const auto& v : pts) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
+            }
+            // Indication line + value readout, like the arc tool: the axis being
+            // defined (step 1), the other half-axis distance (step 2), or the
+            // sweep angle (elliptical-arc steps).
+            Vec2 from{0, 0};
+            QString lbl;
+            bool show = false;
+            if (draftPts_.size() == 1) { // first axis: length + angle
+                from = draftPts_[0];
+                const Vec2 d = cursor_ - from;
+                const double L = d.length();
+                double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
+                if (deg < 0) deg += 360.0;
+                lbl = QStringLiteral("%1   %2\xC2\xB0").arg(L, 0, 'f', 2).arg(deg, 0, 'f', 1);
+                show = L > 1e-9;
+            } else if (draftPts_.size() == 2 && el) { // other half-axis distance
+                from = el->center;
+                lbl = QStringLiteral("B %1").arg(el->radiusY, 0, 'f', 2);
+                show = true;
+            } else if (el && draftPts_.size() >= 3) { // elliptical-arc sweep angle
+                from = el->center;
+                const Vec2 d = cursor_ - from;
+                double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
+                if (deg < 0) deg += 360.0;
+                lbl = QStringLiteral("%1\xC2\xB0").arg(deg, 0, 'f', 1);
+                show = true;
+            }
+            if (show) {
+                const QPointF fs = vt.toScreen(from);
+                const QPointF qs = vt.toScreen(cursor_);
+                QPen gp(QColor("#19ff7e"));
+                gp.setCosmetic(true);
+                gp.setWidthF(1.4);
+                p.setPen(gp);
+                p.setBrush(QColor("#19ff7e"));
+                p.drawEllipse(fs, 2.6, 2.6); // mark the centre / axis start
+                p.setBrush(Qt::NoBrush);
+                p.drawLine(fs, qs);
+                drawDraftValueBox(p, qs, lbl, QColor("#ffd166"));
             }
         } else if (tool_ == ToolId::Spline) {
             // Control polygon (the "vertices lines"): dashed frame through the
