@@ -3430,16 +3430,18 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             QString lbl;
             bool show = false;
             if (draftPts_.size() == 1) { // first axis: length + angle
+                // Center mode: draftPts_[0] IS the centre, so the line runs from the
+                // centre toward the radius (Axis,End: from the first axis endpoint).
                 from = draftPts_[0];
                 const Vec2 d = cursor_ - from;
                 const double L = d.length();
                 double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
                 if (deg < 0) deg += 360.0;
-                lbl = QStringLiteral("%1   %2\xC2\xB0").arg(L, 0, 'f', 2).arg(deg, 0, 'f', 1);
+                lbl = QStringLiteral("Length %1   Angle %2\xC2\xB0").arg(L, 0, 'f', 2).arg(deg, 0, 'f', 1);
                 show = L > 1e-9;
-            } else if (draftPts_.size() == 2 && el) { // other half-axis distance
+            } else if (draftPts_.size() == 2 && el) { // other half-axis: the typed "Distance"
                 from = el->center;
-                lbl = QStringLiteral("B %1").arg(el->radiusY, 0, 'f', 2);
+                lbl = QStringLiteral("Distance %1").arg(el->radiusY, 0, 'f', 2);
                 show = true;
             } else if (el && draftPts_.size() >= 3) { // elliptical-arc sweep angle
                 from = el->center;
