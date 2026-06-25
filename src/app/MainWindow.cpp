@@ -447,12 +447,16 @@ QList<QPair<QString, QString>> hatchPatternList() {
         {QStringLiteral("Grid"), QStringLiteral("grid")},
         {QStringLiteral("Cross"), QStringLiteral("cross")},
         {QStringLiteral("Dots"), QStringLiteral("dots")},
-        {QStringLiteral("Angle"), QStringLiteral("angle")},
         {QStringLiteral("Brick"), QStringLiteral("brick")},
-        {QStringLiteral("Herringbone"), QStringLiteral("herringbone")},
         {QStringLiteral("Honeycomb"), QStringLiteral("honeycomb")},
-        {QStringLiteral("Checker"), QStringLiteral("checker")},
         {QStringLiteral("Braid"), QStringLiteral("braid")},
+        {QStringLiteral("Cable 3D"), QStringLiteral("cable")},
+        {QStringLiteral("Weave"), QStringLiteral("weave")},
+        // ---- the rest appear in the expanded picker ----
+        {QStringLiteral("Angle"), QStringLiteral("angle")},
+        {QStringLiteral("Checker"), QStringLiteral("checker")},
+        {QStringLiteral("Herringbone"), QStringLiteral("herringbone")},
+        {QStringLiteral("Scales"), QStringLiteral("scales")},
         {QStringLiteral("Zigzag"), QStringLiteral("zigzag")},
     };
 }
@@ -471,7 +475,9 @@ QIcon makeHatchSwatch(const QString& key, int W = 52, int H = 34) {
     e.layer = QStringLiteral("0");
     e.points = {{2, 2}, {W - 2.0, 2}, {W - 2.0, H - 2.0}, {2, H - 2.0}};
     e.meta.insert(QStringLiteral("pattern"), key);
-    e.meta.insert(QStringLiteral("hatchScale"), 0.5);
+    // Scale the pattern to the swatch so it shows a few clear repeats (not a fine
+    // grid) regardless of icon size.
+    e.meta.insert(QStringLiteral("hatchScale"), H / 22.0);
     // Identity transform, but flip Y back into the icon (toScreen negates Y).
     Edraw_Desktop::ViewTransform vt;
     vt.view.scale = 1.0;
@@ -1323,9 +1329,17 @@ void MainWindow::buildRibbon() {
         "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
         "QToolButton:pressed{background-color:#22384f;}"
         "QFrame{color:#2a2c31;}"
-        "QComboBox{background-color:#45484f;color:#e0e2e6;border:1px solid #585c64;border-radius:2px;padding:1px 4px;}"
-        "QComboBox:hover{border-color:#3d8bfd;}"
-        "QComboBox QAbstractItemView{background-color:#3a3d43;color:#e0e2e6;selection-background-color:#294e74;selection-color:#ffffff;}"));
+        // Combos + spin fields: lighter field, bright text, clear border so they
+        // read against the charcoal ribbon in dark mode.
+        "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
+        "QComboBox:hover{border-color:#5aa0ff;}"
+        "QComboBox::drop-down{border:none;width:16px;}"
+        "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
+        "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
+        "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:14px;background-color:#6a6f78;}"
+        "QAbstractSpinBox::up-arrow{image:none;width:7px;height:7px;border-left:3px solid transparent;border-right:3px solid transparent;border-bottom:5px solid #e8eaed;}"
+        "QAbstractSpinBox::down-arrow{image:none;width:7px;height:7px;border-left:3px solid transparent;border-right:3px solid transparent;border-top:5px solid #e8eaed;}"));
 
     // A ribbon tab page holds horizontal groups separated by vertical rules.
     auto makeTabPage = [&]() {

@@ -5,6 +5,7 @@
 
 #include <QFont>
 #include <QJsonArray>
+#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -216,6 +217,50 @@ void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor
                 up = !up;
             }
             p.drawPolyline(zz);
+        }
+    } else if (pat == QLatin1String("cable")) {
+        // 3D cable emulation: shaded rounded tubes (dark edges, bright centre).
+        const double h = std::max(4.0, gap * 1.7); // tube diameter
+        for (double y = tb.top(); y < tb.bottom(); y += h) {
+            QLinearGradient grad(0, y, 0, y + h);
+            grad.setColorAt(0.0, c.darker(200));
+            grad.setColorAt(0.42, c.lighter(165));
+            grad.setColorAt(0.58, c.lighter(165));
+            grad.setColorAt(1.0, c.darker(200));
+            p.fillRect(QRectF(tb.left(), y, tb.width(), h), grad);
+        }
+        QPen sep(c.darker(260));
+        sep.setCosmetic(true);
+        p.setPen(sep);
+        for (double y = tb.top(); y <= tb.bottom(); y += h)
+            p.drawLine(QPointF(tb.left(), y), QPointF(tb.right(), y));
+    } else if (pat == QLatin1String("weave")) {
+        // Basket weave: alternating cells of horizontal / vertical strokes.
+        const double cs = std::max(5.0, gap * 1.6);
+        int r = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += cs, ++r) {
+            int col = 0;
+            for (double x = tb.left(); x < tb.right(); x += cs, ++col) {
+                const bool horiz = ((r + col) & 1) == 0;
+                for (int k = 1; k <= 3; ++k) {
+                    if (horiz) {
+                        const double t = y + cs * k / 4.0;
+                        p.drawLine(QPointF(x + 1, t), QPointF(x + cs - 1, t));
+                    } else {
+                        const double u = x + cs * k / 4.0;
+                        p.drawLine(QPointF(u, y + 1), QPointF(u, y + cs - 1));
+                    }
+                }
+            }
+        }
+    } else if (pat == QLatin1String("scales")) {
+        // Fish scales: rows of overlapping lower-semicircle arcs.
+        const double rr = std::max(4.0, gap * 1.2);
+        int row = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += rr, ++row) {
+            const double x0 = tb.left() + ((row & 1) ? rr : 0.0);
+            for (double x = x0 - rr; x < tb.right() + rr; x += 2 * rr)
+                p.drawArc(QRectF(x - rr, y - rr, 2 * rr, 2 * rr), 0, -180 * 16);
         }
     } else {
         // Straight line families (lines / grid / cross / ansi31 / ansi32 / angle).
