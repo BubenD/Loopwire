@@ -146,6 +146,9 @@ public:
     void commitRightDrag(bool copy);        // copy=false -> move the originals
     void cancelRightDrag();
     bool isRightDragging() const { return rightDrag_; }
+    // Toggle a mirror of the dragged set about the catch location (X axis = a
+    // horizontal mirror line, Y axis = vertical). Text mirrors position only.
+    void rightDragMirror(bool xAxis);
     void setGeometryValue(const QString& key, double value);         // Center X/Y, Width, Height, Radius
     void setColorsByLayer();  // strip explicit color so entities follow their layer (selection, or all)
     void copySelection();          // Ctrl+C: copy (base point = selection bbox min)
@@ -378,9 +381,12 @@ private:
 
     // Right-button drag state (move/copy via a drop menu).
     bool rightDrag_ = false;
+    bool rdMirrorX_ = false; // mirror the dragged set across the X axis (horizontal line)
+    bool rdMirrorY_ = false; // ... across the Y axis (vertical line) — about the catch point
     Vec2 rightDragStart_;
     Vec2 rightDragCur_;
-    std::vector<Entity> rightDragGhost_; // originals snapshot, drawn translated as a preview
+    std::vector<Entity> rightDragGhost_; // originals snapshot, drawn transformed as a preview
+    Entity rightDragResult(const Entity& src) const; // mirror(s) about start + translate to cursor
 
     // Modify command state: collected reference points.
     std::vector<Vec2> modifyPts_;

@@ -1429,6 +1429,41 @@ int run_editor_tests() {
             check(near(d.entities()[1].a.y, 20.0) && near(d.entities()[1].b.y, 20.0),
                   "rdrag: Copy is translated by the delta");
         }
+        // Mirror during a right-drag: X axis (horizontal line through the catch
+        // point) flips Y; reference is the catch location.
+        {
+            Document d; d.entities().clear();
+            Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 10}; l.b = {20, 30};
+            d.entities().push_back(l);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            ed.selectAll();
+            ed.beginRightDrag({0, 0});       // catch at the origin
+            ed.rightDragMirror(true);        // mirror across the X axis (flip Y about y=0)
+            ed.updateRightDrag({0, 0});      // no translation
+            ed.commitRightDrag(false);
+            check(near(d.entities()[0].a.y, -10.0) && near(d.entities()[0].b.y, -30.0) &&
+                      near(d.entities()[0].a.x, 0.0) && near(d.entities()[0].b.x, 20.0),
+                  "rdrag-mirror: X flips Y about the catch point");
+        }
+        // Mirror text moves only its position, not its glyph orientation.
+        {
+            Document d; d.entities().clear();
+            Entity t; t.id = "t"; t.type = EntityType::Text; t.a = {10, 5};
+            t.meta.insert("text", QStringLiteral("Hi"));
+            t.rotation = 0.0;
+            d.entities().push_back(t);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            ed.selectAll();
+            ed.beginRightDrag({0, 0});
+            ed.rightDragMirror(false); // Y axis -> flip X about x=0
+            ed.updateRightDrag({0, 0});
+            ed.commitRightDrag(false);
+            check(near(d.entities()[0].a.x, -10.0) && near(d.entities()[0].a.y, 5.0) &&
+                      near(d.entities()[0].rotation, 0.0),
+                  "rdrag-mirror: text reflects position only (rotation unchanged)");
+        }
         // With nothing selected, the drag grabs the object under the start point.
         {
             Document d; d.entities().clear();

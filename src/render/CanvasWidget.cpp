@@ -528,6 +528,13 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     //   - when idle with the crosshair on the canvas: a letter starts a command
     //     (AutoCAD-style command entry at the cursor).
     if (editor_) {
+        // During a right-button drag, X / Y mirror the dragged set (about the catch
+        // point). Handle first so the letters don't open the command field.
+        if (editor_->isRightDragging() && (e->key() == Qt::Key_X || e->key() == Qt::Key_Y)) {
+            editor_->rightDragMirror(e->key() == Qt::Key_X);
+            e->accept();
+            return;
+        }
         // Tab switches the active dynamic-input reference field (Length<->Angle,
         // X radius<->Y radius, ...) even before the input box has been opened.
         if (e->key() == Qt::Key_Tab && editor_->drawInputFieldLabels().size() > 1) {

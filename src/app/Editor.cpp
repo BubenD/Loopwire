@@ -3110,6 +3110,8 @@ bool Editor::beginRightDrag(const Vec2& world) {
         if (Entity* e = entityById(id)) rightDragGhost_.push_back(*e);
     if (rightDragGhost_.empty()) return false;
     rightDrag_ = true;
+    rdMirrorX_ = false;
+    rdMirrorY_ = false;
     rightDragStart_ = world;
     rightDragCur_ = world;
     emit overlayChanged();
@@ -3122,22 +3124,54 @@ void Editor::updateRightDrag(const Vec2& world) {
     emit overlayChanged();
 }
 
+void Editor::rightDragMirror(bool xAxis) {
+    if (!rightDrag_) return;
+    if (xAxis) rdMirrorX_ = !rdMirrorX_;
+    else rdMirrorY_ = !rdMirrorY_;
+    emit message(xAxis ? QStringLiteral("Mirror across the X axis") : QStringLiteral("Mirror across the Y axis"));
+    emit overlayChanged();
+}
+
+// Apply the active mirror(s) about the catch location, then translate to the cursor.
+Entity Editor::rightDragResult(const Entity& src) const {
+    Entity e = src;
+    auto reflectAnchor = [&](const Vec2& u) { // text: reflect position only
+        const Vec2 v = e.a - rightDragStart_;
+        const double d = v.x * u.x + v.y * u.y;
+        const Vec2 proj{rightDragStart_.x + u.x * d, rightDragStart_.y + u.y * d};
+        e.a = {2.0 * proj.x - e.a.x, 2.0 * proj.y - e.a.y};
+    };
+    if (rdMirrorX_) { // X axis = horizontal mirror line through the catch point
+        if (e.type == EntityType::Text) reflectAnchor({1, 0});
+        else mirrorEntity(e, rightDragStart_, {rightDragStart_.x + 1.0, rightDragStart_.y});
+    }
+    if (rdMirrorY_) { // Y axis = vertical mirror line
+        if (e.type == EntityType::Text) reflectAnchor({0, 1});
+        else mirrorEntity(e, rightDragStart_, {rightDragStart_.x, rightDragStart_.y + 1.0});
+    }
+    translateEntity(e, rightDragCur_ - rightDragStart_);
+    return e;
+}
+
 void Editor::commitRightDrag(bool copy) {
     if (!rightDrag_ || !doc_) { cancelRightDrag(); return; }
-    const Vec2 delta = rightDragCur_ - rightDragStart_;
     pushUndo();
     if (copy) {
         std::vector<QString> newSel;
-        for (Entity src : rightDragGhost_) {
-            src.id = uid();
-            translateEntity(src, delta);
-            newSel.push_back(src.id);
-            doc_->entities().push_back(std::move(src));
+        for (const Entity& g : rightDragGhost_) {
+            Entity e = rightDragResult(g);
+            e.id = uid();
+            newSel.push_back(e.id);
+            doc_->entities().push_back(std::move(e));
         }
         selected_ = newSel; // select the copies
     } else {
-        for (const auto& id : selected_)
-            if (Entity* e = entityById(id)) translateEntity(*e, delta);
+        for (const Entity& g : rightDragGhost_)
+            if (Entity* ent = entityById(g.id)) {
+                const QString id = ent->id;
+                *ent = rightDragResult(g);
+                ent->id = id;
+            }
     }
     rightDrag_ = false;
     rightDragGhost_.clear();
@@ -3349,12 +3383,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
 
-    // Right-button drag: preview the selection translated to the current offset.
+    // Right-button drag: preview the selection mirrored (X/Y) about the catch point
+    // and translated to the current offset.
     if (rightDrag_) {
-        const Vec2 delta = rightDragCur_ - rightDragStart_;
         const QColor ghost(120, 200, 255, 160);
-        for (Entity e : rightDragGhost_) {
-            translateEntity(e, delta);
+        for (const Entity& g : rightDragGhost_) {
+            Entity e = rightDragResult(g);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }
     }

@@ -1111,11 +1111,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this](const QPoint& gp) { showCanvasMenu(gp); });
     // Right-button drag dropped: AutoCAD-style Move / Copy / Cancel menu.
     connect(canvas_, &CanvasWidget::rightDragDropped, this, [this](const QPoint& gp) {
+        // Keys: M = Move, C = Copy, A = Cancel (the underlined mnemonics); Esc also
+        // cancels. (Type the underlined letter while the menu is open.)
         QMenu menu(this);
-        QAction* mv = menu.addAction(QStringLiteral("Move Here"));
-        QAction* cp = menu.addAction(QStringLiteral("Copy Here"));
+        QAction* mv = menu.addAction(QStringLiteral("&Move Here"));
+        QAction* cp = menu.addAction(QStringLiteral("&Copy Here"));
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Cancel"));
+        menu.addAction(QStringLiteral("C&ancel"));
         QAction* chosen = menu.exec(gp);
         if (chosen == mv) editor_->commitRightDrag(false);
         else if (chosen == cp) editor_->commitRightDrag(true);
