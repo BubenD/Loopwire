@@ -39,7 +39,9 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPlainTextEdit>
@@ -434,10 +436,30 @@ QIcon makeSplineMethodIcon(int mode) {
     return QIcon(pm);
 }
 
-// A large pattern swatch for the Hatch tab, rendered with the SAME pattern code as
-// the canvas (EntityRenderer), so the icon always matches what gets drawn.
-QIcon makeHatchSwatch(const QString& key) {
-    const int W = 46, H = 30;
+// The Hatch pattern catalogue (display name + meta key), shared by the ribbon
+// swatch row and the expanded pattern picker.
+QList<QPair<QString, QString>> hatchPatternList() {
+    return {
+        {QStringLiteral("Solid"), QStringLiteral("solid")},
+        {QStringLiteral("ANSI31"), QStringLiteral("ansi31")},
+        {QStringLiteral("ANSI32"), QStringLiteral("ansi32")},
+        {QStringLiteral("Lines"), QStringLiteral("lines")},
+        {QStringLiteral("Grid"), QStringLiteral("grid")},
+        {QStringLiteral("Cross"), QStringLiteral("cross")},
+        {QStringLiteral("Dots"), QStringLiteral("dots")},
+        {QStringLiteral("Angle"), QStringLiteral("angle")},
+        {QStringLiteral("Brick"), QStringLiteral("brick")},
+        {QStringLiteral("Herringbone"), QStringLiteral("herringbone")},
+        {QStringLiteral("Honeycomb"), QStringLiteral("honeycomb")},
+        {QStringLiteral("Checker"), QStringLiteral("checker")},
+        {QStringLiteral("Braid"), QStringLiteral("braid")},
+        {QStringLiteral("Zigzag"), QStringLiteral("zigzag")},
+    };
+}
+
+// A pattern swatch for the Hatch tab, rendered with the SAME pattern code as the
+// canvas (EntityRenderer), so the icon always matches what gets drawn.
+QIcon makeHatchSwatch(const QString& key, int W = 52, int H = 34) {
     QPixmap pm(W, H);
     pm.fill(QColor("#2a2d33"));
     QPainter p(&pm);
@@ -1591,48 +1613,32 @@ void MainWindow::buildHatchRibbonTab() {
         g->setSpacing(1);
         hatchPatternGroup_ = new QButtonGroup(this);
         hatchPatternGroup_->setExclusive(true);
-        const QList<QPair<QString, QString>> pats = {
-            {QStringLiteral("Solid"), QStringLiteral("solid")},
-            {QStringLiteral("ANSI31"), QStringLiteral("ansi31")},
-            {QStringLiteral("ANSI32"), QStringLiteral("ansi32")},
-            {QStringLiteral("Lines"), QStringLiteral("lines")},
-            {QStringLiteral("Grid"), QStringLiteral("grid")},
-            {QStringLiteral("Cross"), QStringLiteral("cross")},
-            {QStringLiteral("Dots"), QStringLiteral("dots")},
-            {QStringLiteral("Angle"), QStringLiteral("angle")},
-            {QStringLiteral("Brick"), QStringLiteral("brick")},
-            {QStringLiteral("Herringbone"), QStringLiteral("herringbone")},
-            {QStringLiteral("Honeycomb"), QStringLiteral("honeycomb")},
-            {QStringLiteral("Checker"), QStringLiteral("checker")},
-            {QStringLiteral("Braid"), QStringLiteral("braid")},
-            {QStringLiteral("Zigzag"), QStringLiteral("zigzag")},
-        };
-        int i = 0;
-        const int perRow = 7; // two rows of large swatches
-        for (const auto& pp : pats) {
-            const QString key = pp.second;
-            auto* b = bigButton(w, makeHatchSwatch(key), QString()); // swatch only, no text
+        const QList<QPair<QString, QString>> pats = hatchPatternList();
+        const int perRow = 6; // two rows of large swatches; the rest live in the picker
+        const int inlineCount = std::min(static_cast<int>(pats.size()), perRow * 2);
+        for (int i = 0; i < inlineCount; ++i) {
+            const QString key = pats[i].second;
+            auto* b = bigButton(w, makeHatchSwatch(key, 60, 38), QString()); // swatch only
             b->setToolButtonStyle(Qt::ToolButtonIconOnly); // big swatch, name in tooltip
-            b->setToolTip(pp.first);
-            b->setIconSize(QSize(46, 30));                 // larger so the pattern reads clearly
+            b->setToolTip(pats[i].first);
+            b->setIconSize(QSize(60, 38));                 // larger so the pattern reads clearly
             b->setCheckable(true);
             b->setProperty("hatchKey", key);
             if (editor_->hatchStyle().pattern == key) b->setChecked(true);
             hatchPatternGroup_->addButton(b);
-            connect(b, &QToolButton::clicked, this, [this, key] {
-                // Editing a selected hatch: change its pattern in place (don't switch
-                // tools). Otherwise set the default and start the Hatch tool.
-                if (!hatchEditId_.isEmpty()) {
-                    applyHatchControl(QStringLiteral("pattern"), key);
-                } else {
-                    editor_->hatchStyle().pattern = key;
-                    if (editor_->tool() != ToolId::Hatch) editor_->setTool(ToolId::Hatch);
-                    canvas_->update();
-                }
-            });
+            connect(b, &QToolButton::clicked, this, [this, key] { choosePattern(key); });
             g->addWidget(b, i / perRow, i % perRow);
-            ++i;
         }
+        // A taller "expand" button opens the full pattern picker (large swatches +
+        // a side list of names).
+        auto* more = new QToolButton(w);
+        more->setText(QString::fromUtf8("\xE2\x8B\xAE")); // vertical ellipsis
+        more->setToolTip(QStringLiteral("More patterns…"));
+        more->setAutoRaise(true);
+        more->setFocusPolicy(Qt::NoFocus);
+        more->setMinimumHeight(76);
+        connect(more, &QToolButton::clicked, this, [this] { showHatchPatternDialog(); });
+        g->addWidget(more, 0, perRow, 2, 1); // span both rows on the right
         addGroup(QStringLiteral("Pattern"), w);
     }
 
@@ -1785,6 +1791,90 @@ void MainWindow::applyHatchControl(const QString& key, const QJsonValue& value) 
             editor_->setHatchMeta(hatchEditId_, key, value);
     }
     canvas_->update();
+}
+
+// Pick a pattern: change the hatch being edited in place, or set the new-hatch
+// default and start the Hatch tool. Keeps the ribbon swatches in sync.
+void MainWindow::choosePattern(const QString& key) {
+    if (!hatchEditId_.isEmpty()) {
+        applyHatchControl(QStringLiteral("pattern"), key);
+    } else {
+        editor_->hatchStyle().pattern = key;
+        if (editor_->tool() != ToolId::Hatch) editor_->setTool(ToolId::Hatch);
+        canvas_->update();
+    }
+    syncHatchRibbon(); // re-check the matching inline swatch
+}
+
+// Expanded pattern picker: a big swatch gallery plus a side list of pattern names
+// (a "fall menu") — both synced. Double-click or OK applies.
+void MainWindow::showHatchPatternDialog() {
+    const auto pats = hatchPatternList();
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Hatch Pattern"));
+    dlg.resize(560, 380);
+    auto* outer = new QVBoxLayout(&dlg);
+    auto* row = new QHBoxLayout();
+    outer->addLayout(row, 1);
+
+    // Side "fall menu" of pattern names.
+    auto* names = new QListWidget(&dlg);
+    names->setFixedWidth(150);
+    for (const auto& pp : pats) names->addItem(pp.first);
+
+    // Gallery of large swatches.
+    auto* gallery = new QListWidget(&dlg);
+    gallery->setViewMode(QListView::IconMode);
+    gallery->setIconSize(QSize(110, 70));
+    gallery->setGridSize(QSize(130, 104));
+    gallery->setResizeMode(QListView::Adjust);
+    gallery->setMovement(QListView::Static);
+    gallery->setSpacing(6);
+    gallery->setWordWrap(true);
+    for (const auto& pp : pats) {
+        auto* it = new QListWidgetItem(makeHatchSwatch(pp.second, 110, 70), pp.first, gallery);
+        it->setData(Qt::UserRole, pp.second);
+        it->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+    }
+    row->addWidget(names);
+    row->addWidget(gallery, 1);
+
+    // Pre-select the current pattern in both.
+    int cur = 0;
+    for (int i = 0; i < pats.size(); ++i)
+        if (pats[i].second == editor_->hatchStyle().pattern) { cur = i; break; }
+    if (!hatchEditId_.isEmpty() && doc_)
+        for (const auto& e : doc_->entities())
+            if (e.id == hatchEditId_)
+                for (int i = 0; i < pats.size(); ++i)
+                    if (pats[i].second == e.meta.value(QStringLiteral("pattern")).toString())
+                        cur = i;
+    names->setCurrentRow(cur);
+    gallery->setCurrentRow(cur);
+
+    // Keep the two views in lock-step.
+    bool guard = false;
+    connect(names, &QListWidget::currentRowChanged, &dlg, [&](int r) {
+        if (guard || r < 0) return;
+        guard = true; gallery->setCurrentRow(r); guard = false;
+    });
+    connect(gallery, &QListWidget::currentRowChanged, &dlg, [&](int r) {
+        if (guard || r < 0) return;
+        guard = true; names->setCurrentRow(r); guard = false;
+    });
+    // Double-click a swatch or a name applies and closes.
+    connect(gallery, &QListWidget::itemDoubleClicked, &dlg, [&](QListWidgetItem*) { dlg.accept(); });
+    connect(names, &QListWidget::itemDoubleClicked, &dlg, [&](QListWidgetItem*) { dlg.accept(); });
+
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    outer->addWidget(bb);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        const int r = gallery->currentRow();
+        if (r >= 0 && r < pats.size()) choosePattern(pats[r].second);
+    }
 }
 
 // Open/close the contextual tab and decide its edit target: the Hatch tool edits

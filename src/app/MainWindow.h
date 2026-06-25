@@ -57,6 +57,8 @@ private:
     void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
     void updateHatchContext();         // open/close + target the tab based on tool/selection
     void applyHatchControl(const QString& key, const QJsonValue& value); // -> selected hatch or default
+    void choosePattern(const QString& key); // pick a hatch pattern (edit target or new-hatch default)
+    void showHatchPatternDialog();          // expanded pattern picker (gallery + name list)
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
