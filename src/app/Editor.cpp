@@ -3423,27 +3423,31 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const auto& v : pts) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
-            // Indication line + value readout, like the arc tool: the axis being
-            // defined (step 1), the other half-axis distance (step 2), or the
-            // sweep angle (elliptical-arc steps).
+            // Indication line + value readout. The line runs from the centre toward
+            // the LARGEST radius (major axis) once both axes exist — not toward the
+            // crosshair; step 1 follows the axis being dragged.
             Vec2 from{0, 0};
+            Vec2 to = cursor_;
             QString lbl;
             bool show = false;
-            if (draftPts_.size() == 1) { // first axis: length + angle
-                // Center mode: draftPts_[0] IS the centre, so the line runs from the
-                // centre toward the radius (Axis,End: from the first axis endpoint).
-                from = draftPts_[0];
+            if (draftPts_.size() == 1) { // first axis: length + angle (toward the cursor)
+                from = draftPts_[0]; // Center mode: this IS the centre
                 const Vec2 d = cursor_ - from;
                 const double L = d.length();
                 double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
                 if (deg < 0) deg += 360.0;
                 lbl = QStringLiteral("Length %1   Angle %2\xC2\xB0").arg(L, 0, 'f', 2).arg(deg, 0, 'f', 1);
                 show = L > 1e-9;
-            } else if (draftPts_.size() == 2 && el) { // other half-axis: the typed "Distance"
+            } else if (draftPts_.size() == 2 && el) { // point along the MAJOR (largest) axis
                 from = el->center;
-                lbl = QStringLiteral("Distance %1").arg(el->radiusY, 0, 'f', 2);
-                show = true;
-            } else if (el && draftPts_.size() >= 3) { // elliptical-arc sweep angle
+                const double aHalf = el->radius, bHalf = el->radiusY;
+                const double majLen = std::max(aHalf, bHalf);
+                const double majAng = (aHalf >= bHalf) ? el->rotation : el->rotation + M_PI / 2.0;
+                to = {el->center.x + majLen * std::cos(majAng),
+                      el->center.y + majLen * std::sin(majAng)};
+                lbl = QStringLiteral("Radius %1").arg(majLen, 0, 'f', 2);
+                show = majLen > 1e-9;
+            } else if (el && draftPts_.size() >= 3) { // elliptical-arc sweep angle (toward cursor)
                 from = el->center;
                 const Vec2 d = cursor_ - from;
                 double deg = std::atan2(d.y, d.x) * 180.0 / M_PI;
@@ -3453,7 +3457,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
             if (show) {
                 const QPointF fs = vt.toScreen(from);
-                const QPointF qs = vt.toScreen(cursor_);
+                const QPointF qs = vt.toScreen(to);
                 QPen gp(QColor("#19ff7e"));
                 gp.setCosmetic(true);
                 gp.setWidthF(1.4);
