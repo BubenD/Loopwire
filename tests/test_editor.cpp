@@ -708,6 +708,11 @@ int run_editor_tests() {
         ed.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier);
         check(ed.acceptCommandInput(QStringLiteral("mi")), "arc-mirror: 'mi' consumed");
         check(ed.isArcMirrored(), "arc-mirror: toggled on");
+        // Ctrl while drafting also flips the arc.
+        check(ed.onKey(Qt::Key_Control, Qt::ControlModifier), "arc-mirror: Ctrl consumed while drafting");
+        check(!ed.isArcMirrored(), "arc-mirror: Ctrl toggled it back off");
+        ed.onKey(Qt::Key_Control, Qt::ControlModifier); // back on for the placement below
+        check(ed.isArcMirrored(), "arc-mirror: Ctrl re-toggled on");
         ed.onPointerPress({-10, 0}, Qt::LeftButton, Qt::NoModifier); // finishes
         const Entity& e = d.entities()[0];
         // Un-mirrored would be start=0,end=pi (upper). Mirrored swaps -> lower half.

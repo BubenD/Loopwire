@@ -3056,6 +3056,12 @@ void Editor::redo() {
 
 bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     const bool ctrl = mods & Qt::ControlModifier;
+    // Ctrl while drawing an arc flips it to the opposite (mirrored) sweep, AutoCAD-
+    // style. A bare Ctrl press arrives as Key_Control.
+    if (key == Qt::Key_Control && tool_ == ToolId::Arc && drafting_) {
+        toggleArcMirror();
+        return true;
+    }
     if (key == Qt::Key_Escape) {
         // Cancel any in-progress operation and clear the whole selection.
         // A grabbed joint that already moved is restored via undo.
