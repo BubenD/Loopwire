@@ -3438,15 +3438,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (deg < 0) deg += 360.0;
                 lbl = QStringLiteral("Length %1   Angle %2\xC2\xB0").arg(L, 0, 'f', 2).arg(deg, 0, 'f', 1);
                 show = L > 1e-9;
-            } else if (draftPts_.size() == 2 && el) { // point along the MAJOR (largest) axis
+            } else if (draftPts_.size() == 2 && el) { // along the axis being dragged (changeable radius)
                 from = el->center;
-                const double aHalf = el->radius, bHalf = el->radiusY;
-                const double majLen = std::max(aHalf, bHalf);
-                const double majAng = (aHalf >= bHalf) ? el->rotation : el->rotation + M_PI / 2.0;
-                to = {el->center.x + majLen * std::cos(majAng),
-                      el->center.y + majLen * std::sin(majAng)};
-                lbl = QStringLiteral("Radius %1").arg(majLen, 0, 'f', 2);
-                show = majLen > 1e-9;
+                // Perpendicular to the first axis = the half-axis the cursor sets;
+                // point to its on-axis endpoint on the cursor's side (not the cross).
+                const Vec2 n{-std::sin(el->rotation), std::cos(el->rotation)};
+                const double side = dot(cursor_ - el->center, n) >= 0 ? 1.0 : -1.0;
+                to = {el->center.x + n.x * el->radiusY * side,
+                      el->center.y + n.y * el->radiusY * side};
+                lbl = QStringLiteral("Radius %1").arg(el->radiusY, 0, 'f', 2);
+                show = el->radiusY > 1e-9;
             } else if (el && draftPts_.size() >= 3) { // elliptical-arc sweep angle (toward cursor)
                 from = el->center;
                 const Vec2 d = cursor_ - from;
