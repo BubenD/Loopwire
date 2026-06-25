@@ -1265,6 +1265,28 @@ int run_editor_tests() {
               "dim-radius: created from the picked circle");
     }
 
+    // --- Dimension selectable by touching its dimension line; text height editable.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setDimMode(Editor::DimMode::Linear);
+        ed.setTool(ToolId::Dimension);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({40, 20}, Qt::LeftButton, Qt::NoModifier); // dim line at y=20
+        const QString id = d.entities()[0].id;
+        check(near(d.entities()[0].meta.value("textHeight").toDouble(), 5.0),
+              "dim-props: default text height is 5");
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier); // on the dimension line
+        ed.onPointerRelease({20, 20}, Qt::LeftButton);
+        check(ed.selection().size() == 1 && ed.selection().front() == id,
+              "dim-select: clicking the dimension line selects it");
+        ed.setSelectionDimMeta(QStringLiteral("textHeight"), 8.0);
+        check(near(d.entities()[0].meta.value("textHeight").toDouble(), 8.0),
+              "dim-props: text height edits via setSelectionDimMeta");
+    }
+
     // --- Repeat last tool (Space / Enter when idle).
     {
         Document d; d.entities().clear();

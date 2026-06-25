@@ -284,9 +284,43 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     double best = std::numeric_limits<double>::max();
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::Dimension:
         best = segDist(e.a, e.b);
         break;
+    case EntityType::Dimension: {
+        // Select by touching the actual drawn geometry (the dimension line, the
+        // extension lines, the radius/diameter line, the angular arc, ...).
+        const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+        if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
+            best = segDist(e.center, e.b);
+        } else if (ty == QLatin1String("diameter")) {
+            const Vec2 dir = (e.b - e.center).normalized();
+            best = segDist(e.center - dir * e.radius, e.center + dir * e.radius);
+        } else if (ty == QLatin1String("angular") && e.points.size() >= 3) {
+            const Vec2 v = e.points[0];
+            const double rr = std::min(distance(v, e.points[1]), distance(v, e.points[2])) * 0.6;
+            best = std::min({std::abs(distance(v, p) - rr), segDist(v, e.points[1]),
+                             segDist(v, e.points[2])});
+        } else if (ty == QLatin1String("ordinate")) {
+            best = segDist(e.a, e.b);
+        } else { // linear / aligned / arclength
+            const Vec2 p1 = e.a, p2 = e.b;
+            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
+            Vec2 d1, d2;
+            if (ty == QLatin1String("linear")) {
+                const Vec2 mid = lerp(p1, p2, 0.5);
+                const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+                if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
+                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
+            } else {
+                const Vec2 n = (p2 - p1).normalized().perp();
+                const double t = dot(off - p1, n);
+                d1 = p1 + n * t;
+                d2 = p2 + n * t;
+            }
+            best = std::min({segDist(d1, d2), segDist(p1, d1), segDist(p2, d2)});
+        }
+        break;
+    }
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines select the double line — NOT the
         // centerline / gap between them (clicking the empty middle won't pick it).
@@ -1775,6 +1809,10 @@ void Editor::finishDraw() {
     case ToolId::Dimension:
         e.type = EntityType::Dimension;
         e.meta.insert("dimType", QString::fromLatin1(dimTypeString(dimMode_)));
+        // AutoCAD-style style defaults (editable in Properties).
+        e.meta.insert("textHeight", 5.0); // default text height
+        e.meta.insert("arrowSize", 3.3);
+        e.meta.insert("decimals", 2);
         switch (dimMode_) {
         case DimMode::Linear:
         case DimMode::Aligned:
@@ -2966,6 +3004,16 @@ void Editor::setSelectionHatchMeta(const QString& key, const QJsonValue& value) 
     pushUndo();
     for (Entity* e : sel)
         if (e->type == EntityType::Hatch) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionDimMeta(const QString& key, const QJsonValue& value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel)
+        if (e->type == EntityType::Dimension) e->meta[key] = value;
     doc_->setDirty(true);
     emit changed();
 }

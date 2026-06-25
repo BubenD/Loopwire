@@ -3786,6 +3786,38 @@ void MainWindow::refreshProperties() {
                    editor_->setSelectionTextMeta(QStringLiteral("boxHeight"), std::max(0.0, v));
                });
     }
+
+    // ---- Dimension properties (AutoCAD-style) ----
+    if (e && e->type == EntityType::Dimension) {
+        const int dec = e->meta.contains(QStringLiteral("decimals"))
+                            ? e->meta.value(QStringLiteral("decimals")).toInt()
+                            : 2;
+        addHeader(QStringLiteral("Lines & Arrows"));
+        addNum(QStringLiteral("Arrow size"), e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3),
+               [this](double v) {
+                   editor_->setSelectionDimMeta(QStringLiteral("arrowSize"), std::max(0.1, v));
+               });
+
+        addHeader(QStringLiteral("Text"));
+        addNum(QStringLiteral("Text height"), e->meta.value(QStringLiteral("textHeight")).toDouble(5.0),
+               [this](double v) {
+                   editor_->setSelectionDimMeta(QStringLiteral("textHeight"), std::max(0.1, v));
+               });
+
+        addHeader(QStringLiteral("Primary Units"));
+        addCombo(QStringLiteral("Precision"),
+                 {"0", "1", "2", "3", "4", "5", "6"}, QString::number(dec), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionDimMeta(QStringLiteral("decimals"), t.toInt());
+                 });
+        // Read-only measured value, like AutoCAD's "Measurement".
+        double measured = 0.0;
+        const QString ty = e->meta.value(QStringLiteral("dimType")).toString(QStringLiteral("linear"));
+        if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) measured = e->radius;
+        else if (ty == QLatin1String("diameter")) measured = e->radius * 2.0;
+        else measured = std::hypot(e->b.x - e->a.x, e->b.y - e->a.y);
+        addRow(QStringLiteral("Measurement"), QString::number(measured, 'f', dec));
+    }
     refreshing_ = false;
 }
 
