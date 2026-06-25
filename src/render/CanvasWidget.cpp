@@ -529,9 +529,10 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     //     (AutoCAD-style command entry at the cursor).
     if (editor_) {
         // During a right-button drag, X / Y mirror the dragged set (about the catch
-        // point). Handle first so the letters don't open the command field.
+        // point): X mirrors across the Y axis (flips X), Y mirrors across the X axis
+        // (flips Y). Handle first so the letters don't open the command field.
         if (editor_->isRightDragging() && (e->key() == Qt::Key_X || e->key() == Qt::Key_Y)) {
-            editor_->rightDragMirror(e->key() == Qt::Key_X);
+            editor_->rightDragMirror(e->key() == Qt::Key_Y); // Y key -> X-axis mirror
             e->accept();
             return;
         }
