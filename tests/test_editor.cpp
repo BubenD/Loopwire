@@ -248,7 +248,8 @@ int run_editor_tests() {
 
     // --- Direct manipulation: drag body to move, drag grip to edit a joint.
     {
-        // Move whole object by dragging its body.
+        // Dragging an object's BODY no longer moves it — moving needs the Move
+        // command (or a grip). A body drag just leaves the geometry unchanged.
         {
             Document d; d.entities().clear();
             Entity l; l.id = "ln"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {20, 0};
@@ -259,9 +260,8 @@ int run_editor_tests() {
             ed.onPointerPress({5, 0}, Qt::LeftButton, Qt::NoModifier); // body, not a grip
             ed.onPointerMove({5, 8});
             ed.onPointerRelease({5, 8}, Qt::LeftButton);
-            check(near(d.entities()[0].a.y, 8.0) && near(d.entities()[0].b.y, 8.0) &&
-                      near(d.entities()[0].b.x, 20.0),
-                  "edit: drag body moves whole object");
+            check(near(d.entities()[0].a.y, 0.0) && near(d.entities()[0].b.y, 0.0),
+                  "edit: dragging the body does NOT move the object");
         }
         // Move a joint by dragging an endpoint grip.
         {

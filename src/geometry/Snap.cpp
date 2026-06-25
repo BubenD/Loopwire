@@ -31,6 +31,19 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         break;
     }
     case EntityType::Polyline:
+        // A DOUBLE polyline snaps to its two VISIBLE runs (so you can measure from
+        // anywhere along the lines), not the centerline in the empty gap.
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const bool side = e.meta.value("justify").toString() == QLatin1String("side");
+            const std::vector<Vec2> base = side ? offsetPolyline(e.points, gap / 2.0) : e.points;
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const auto run = offsetPolyline(base, s);
+                for (size_t i = 1; i < run.size(); ++i) out.emplace_back(run[i - 1], run[i]);
+            }
+            break;
+        }
+        [[fallthrough]];
     case EntityType::Spline:
     case EntityType::Wire:
         for (size_t i = 1; i < e.points.size(); ++i)

@@ -84,11 +84,40 @@ std::vector<Grip> gripsOf(const Entity& e) {
     std::vector<Grip> g;
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::Dimension:
         g.push_back({e.a, GripRole::LineA, 0});
         g.push_back({lerp(e.a, e.b, 0.5), GripRole::LineMid, 0});
         g.push_back({e.b, GripRole::LineB, 0});
         break;
+    case EntityType::Dimension: {
+        // Linear/aligned: a grip at each measured point + at both dimension-line
+        // ends (which move the dimension-line offset). Index 2 = the offset point.
+        const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+        if ((ty == QLatin1String("linear") || ty == QLatin1String("aligned") ||
+             ty == QLatin1String("arclength")) &&
+            e.points.size() >= 3) {
+            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
+            Vec2 d1, d2;
+            if (ty == QLatin1String("linear")) {
+                const Vec2 mid = lerp(p1, p2, 0.5);
+                const bool h = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+                if (h) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
+                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
+            } else {
+                const Vec2 n = (p2 - p1).normalized().perp();
+                const double t = dot(off - p1, n);
+                d1 = p1 + n * t;
+                d2 = p2 + n * t;
+            }
+            g.push_back({p1, GripRole::Vertex, 0});
+            g.push_back({p2, GripRole::Vertex, 1});
+            g.push_back({d1, GripRole::Vertex, 2});
+            g.push_back({d2, GripRole::Vertex, 2});
+        } else {
+            g.push_back({e.a, GripRole::LineA, 0});
+            g.push_back({e.b, GripRole::LineB, 0});
+        }
+        break;
+    }
     case EntityType::DoubleLine: {
         // Joints on the two VISIBLE parallel lines only (no confusing centerline
         // joint between them). Each end grip carries its offset so dragging it
@@ -495,27 +524,17 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
     // (c) Click on a joint of a selected entity -> grab it (click to place).
     if (!shift && beginGripGrab(raw)) return;
 
-    // (d) Click on an entity body -> accumulate selection (Shift removes), and arm
-    // a body move on drag.
+    // (d) Click on an entity body -> select only (Shift removes). Dragging the body
+    // does NOT move the object — moving requires the Move command (or a grip).
     if (auto hit = hitTest(p)) {
         auto it = std::find(selected_.begin(), selected_.end(), *hit);
         if (shift) {
             if (it != selected_.end()) selected_.erase(it);
-            emit selectionChanged();
-            return; // deselected; no move
+        } else if (it == selected_.end()) {
+            selected_.push_back(*hit);
         }
-        if (it == selected_.end()) { selected_.push_back(*hit); emit selectionChanged(); }
-        pressed_ = true;
-        editing_ = true;
-        editMode_ = 0; // body move on drag
-        gripGrab_ = false;
-        editEntityId_.clear();
-        editLast_ = p;
-        editMoved_ = false;
-        editGhost_.clear();
-        for (const auto& sid : selected_)
-            if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
-        return;
+        emit selectionChanged();
+        return; // selection only; no body-move-on-drag
     }
     // (e) Empty space -> region selection (rectangle / hold-for-lasso).
     pressed_ = true;
@@ -1143,6 +1162,11 @@ void Editor::applyEditDrag(const Vec2& target) {
                                                      static_cast<int>(e->points.size()), index);
                 else
                     e->points[index] = target;
+            }
+            // A dimension keeps a/b in sync with its measured points.
+            if (e->type == EntityType::Dimension && e->points.size() >= 2) {
+                e->a = e->points[0];
+                e->b = e->points[1];
             }
             break;
         case GripRole::RectCorner:
