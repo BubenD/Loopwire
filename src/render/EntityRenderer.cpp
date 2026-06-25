@@ -450,6 +450,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             const Vec2 off = perp * gap;
             p.drawLine(vt.toScreen(e.a), vt.toScreen(e.b));
             p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
+            // Caps so both lines touch the clicked line at its endpoints.
+            p.drawLine(vt.toScreen(e.a), vt.toScreen(e.a + off));
+            p.drawLine(vt.toScreen(e.b), vt.toScreen(e.b + off));
         } else {
             const Vec2 off = perp * (gap / 2.0);
             p.drawLine(vt.toScreen(e.a + off), vt.toScreen(e.b + off));
@@ -489,8 +492,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // gap (rounding at just cr collapses the inner knee when cr<=gap/2).
                 const std::vector<Vec2> center =
                     (cr > 0.0) ? roundedPolyline(base, cr + gap / 2.0) : base;
-                p.drawPolyline(toScreenPoly(offsetPolyline(center, gap / 2.0), vt));
-                p.drawPolyline(toScreenPoly(offsetPolyline(center, -gap / 2.0), vt));
+                const std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
+                const std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
+                p.drawPolyline(toScreenPoly(run1, vt));
+                p.drawPolyline(toScreenPoly(run2, vt));
+                // Line-start (ls): cap the ends so BOTH runs touch the clicked path.
+                if (e.meta.value("justify").toString() == QLatin1String("side") &&
+                    run1.size() >= 1 && run2.size() >= 1) {
+                    p.drawLine(vt.toScreen(run1.front()), vt.toScreen(run2.front()));
+                    p.drawLine(vt.toScreen(run1.back()), vt.toScreen(run2.back()));
+                }
             } else if (!bulgeArr.isEmpty()) {
                 // Arc segments (PLINE arc mode): expand bulges into a curved run.
                 std::vector<double> bulges;

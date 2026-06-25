@@ -3558,6 +3558,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 const Vec2 off = perp * doubleLineGap_;
                 p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
                 p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
+                // Caps: both lines touch the clicked line at its ends.
+                p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[0] + off));
+                p.drawLine(vt.toScreen(pts[1]), vt.toScreen(pts[1] + off));
             } else {
                 const Vec2 off = perp * (doubleLineGap_ / 2.0);
                 p.drawLine(vt.toScreen(pts[0] + off), vt.toScreen(pts[1] + off));
@@ -3571,10 +3574,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             const std::vector<Vec2> base = dpolySideJustify_ ? offsetPolyline(pts, h) : pts;
             const std::vector<Vec2> center =
                 (cornerRadius_ > 0) ? roundedPolyline(base, cornerRadius_ + h) : base;
-            for (double s : {h, -h}) {
+            const std::vector<Vec2> r1 = offsetPolyline(center, h);
+            const std::vector<Vec2> r2 = offsetPolyline(center, -h);
+            for (const auto& run : {r1, r2}) {
                 QPolygonF poly;
-                for (const auto& v : offsetPolyline(center, s)) poly << vt.toScreen(v);
+                for (const auto& v : run) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
+            }
+            if (dpolySideJustify_ && !r1.empty() && !r2.empty()) { // caps at both ends
+                p.drawLine(vt.toScreen(r1.front()), vt.toScreen(r2.front()));
+                p.drawLine(vt.toScreen(r1.back()), vt.toScreen(r2.back()));
             }
         } else if (tool_ == ToolId::Circle) {
             QPointF cc;
