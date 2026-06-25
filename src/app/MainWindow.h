@@ -149,6 +149,7 @@ private:
     QDoubleSpinBox* hatchScaleSpin_ = nullptr;
     QSpinBox* hatchTranspSpin_ = nullptr;
     QToolButton* hatchAssocBtn_ = nullptr;
+    QComboBox* hatchColorCombo_ = nullptr;
     QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;
     QTableWidget* propsTable_ = nullptr;

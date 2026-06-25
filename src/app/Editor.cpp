@@ -1145,6 +1145,11 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (bnd.size() >= 3) {
             commitHatchBoundary(bnd);
         } else {
+            // Clicking out in the open finalizes the last hatch: stop live-editing it.
+            if (!lastHatchId_.isEmpty()) {
+                lastHatchId_.clear();
+                emit hatchTargetChanged();
+            }
             emit message(QStringLiteral(
                 "No closed boundary found around the pick point — click inside an enclosed region."));
         }
@@ -1294,10 +1299,12 @@ void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
     if (!doc_ || pts.size() < 3) return;
     pushUndo();
     Entity e;
+    e.id = uid();
     e.layer = doc_->activeLayer();
     const EntityType ty = (tool_ == ToolId::Hatch) ? EntityType::Hatch : EntityType::Wipeout;
     e.type = ty;
     e.points = pts;
+    if (!hatchStyle_.color.isEmpty()) e.color = hatchStyle_.color; // else ByLayer
     if (ty == EntityType::Hatch) {
         e.meta.insert("pattern", hatchStyle_.pattern);
         e.meta.insert("hatchAngle", hatchStyle_.angle);
@@ -1305,10 +1312,13 @@ void Editor::commitHatchBoundary(const std::vector<Vec2>& pts) {
         if (hatchStyle_.transparency > 0) e.meta.insert("transparency", hatchStyle_.transparency);
         e.meta.insert("associative", hatchStyle_.associative);
     }
+    const QString newId = e.id;
     addEntity(std::move(e));
-    emit message(ty == EntityType::Hatch ? QStringLiteral("Hatch created.")
+    if (ty == EntityType::Hatch) lastHatchId_ = newId; // live-edit target while creating
+    emit message(ty == EntityType::Hatch ? QStringLiteral("Hatch created — adjust it in the Hatch tab.")
                                          : QStringLiteral("Wipeout created."));
     emit changed();
+    emit hatchTargetChanged();
     // Stay in the tool so more regions can be filled (Esc / Close exits).
 }
 
@@ -1753,6 +1763,7 @@ void Editor::finishDraw() {
 }
 
 void Editor::cancelDraw() {
+    lastHatchId_.clear(); // end the hatch live-edit session
     draftPts_.clear();
     drafting_ = false;
     rectAwaitY_ = false;
@@ -2694,6 +2705,26 @@ void Editor::setSelectionHatchMeta(const QString& key, const QJsonValue& value) 
         if (e->type == EntityType::Hatch) e->meta[key] = value;
     doc_->setDirty(true);
     emit changed();
+}
+
+void Editor::setHatchMeta(const QString& id, const QString& key, const QJsonValue& value) {
+    if (!doc_) return;
+    if (Entity* e = entityById(id); e && e->type == EntityType::Hatch) {
+        pushUndo();
+        e->meta[key] = value;
+        doc_->setDirty(true);
+        emit changed();
+    }
+}
+
+void Editor::setEntityColor(const QString& id, const QString& hex) {
+    if (!doc_) return;
+    if (Entity* e = entityById(id)) {
+        pushUndo();
+        e->color = hex; // empty = ByLayer
+        doc_->setDirty(true);
+        emit changed();
+    }
 }
 
 bool Editor::beginRightDrag(const Vec2& world) {

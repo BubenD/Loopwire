@@ -434,43 +434,54 @@ QIcon makeSplineMethodIcon(int mode) {
     return QIcon(pm);
 }
 
-// A small pattern swatch for the Hatch pattern menu (mirrors the renderer).
+// A large pattern swatch for the Hatch tab, rendered with the SAME pattern code as
+// the canvas (EntityRenderer), so the icon always matches what gets drawn.
 QIcon makeHatchSwatch(const QString& key) {
-    QPixmap pm(28, 20);
+    const int W = 46, H = 30;
+    QPixmap pm(W, H);
+    pm.fill(QColor("#2a2d33"));
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    Edraw_Desktop::Document doc; // default layers; the override color drives the ink
+    Edraw_Desktop::Entity e;
+    e.type = Edraw_Desktop::EntityType::Hatch;
+    e.layer = QStringLiteral("0");
+    e.points = {{2, 2}, {W - 2.0, 2}, {W - 2.0, H - 2.0}, {2, H - 2.0}};
+    e.meta.insert(QStringLiteral("pattern"), key);
+    e.meta.insert(QStringLiteral("hatchScale"), 0.5);
+    // Identity transform, but flip Y back into the icon (toScreen negates Y).
+    Edraw_Desktop::ViewTransform vt;
+    vt.view.scale = 1.0;
+    vt.view.x = 0.0;
+    vt.view.y = H;
+    Edraw_Desktop::EntityRenderer::draw(p, e, doc, vt, QColor("#e3e7ee"));
+
+    QPen border(QColor("#7d8590"));
+    border.setWidthF(1.0);
+    p.setPen(border);
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(QRectF(0.5, 0.5, W - 1.0, H - 1.0));
+    p.end();
+    return QIcon(pm);
+}
+
+// A filled color square for the hatch color picker; ByLayer/ByBlock get a marker.
+QIcon makeColorSwatchIcon(const QColor& c, bool special) {
+    QPixmap pm(18, 18);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
-    const QRectF box(2, 2, 24, 16);
-    QPen border(QColor("#9aa3ad"));
-    border.setWidthF(1.0);
-    p.setPen(border);
-    p.drawRect(box);
-    p.setClipRect(box);
-    QPen ink(QColor("#d6dae1"));
-    ink.setWidthF(1.0);
-    p.setPen(ink);
-    auto diag = [&](double a) {
-        const double dx = std::cos(a), dy = std::sin(a), nx = -dy, ny = dx;
-        for (int i = -8; i <= 8; ++i) {
-            const double cx = 14 + nx * i * 3.2, cy = 10 + ny * i * 3.2;
-            p.drawLine(QPointF(cx - dx * 20, cy - dy * 20), QPointF(cx + dx * 20, cy + dy * 20));
-        }
-    };
-    if (key == QLatin1String("solid")) {
-        p.fillRect(box, QColor("#d6dae1"));
-    } else if (key == QLatin1String("lines")) {
-        diag(0);
-    } else if (key == QLatin1String("grid")) {
-        diag(0); diag(M_PI / 2);
-    } else if (key == QLatin1String("cross")) {
-        diag(M_PI / 4); diag(3 * M_PI / 4);
-    } else if (key == QLatin1String("dots")) {
-        p.setBrush(QColor("#d6dae1"));
-        p.setPen(Qt::NoPen);
-        for (int y = 4; y < 18; y += 4)
-            for (int x = 4; x < 26; x += 4) p.drawEllipse(QPointF(x, y), 1.0, 1.0);
-    } else { // ansi31 / ansi32 / angle -> 45-degree lines
-        diag(M_PI / 4);
+    if (special) {
+        p.setPen(QPen(QColor("#9aa3ad"), 1.0));
+        p.setBrush(QColor("#3a3d43"));
+        p.drawRect(QRectF(1.5, 1.5, 15, 15));
+        p.setPen(QPen(QColor("#c9ccd1"), 1.0));
+        p.drawLine(QPointF(3, 14), QPointF(15, 4)); // diagonal = "by ..."
+    } else {
+        p.setPen(QPen(QColor("#1a1c20"), 1.0));
+        p.setBrush(c);
+        p.drawRect(QRectF(1.5, 1.5, 15, 15));
     }
     p.end();
     return QIcon(pm);
@@ -1031,6 +1042,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshPanels();
         updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
     });
+    // A hatch was created (or the creation session ended): re-point the tab so the
+    // controls keep editing the just-placed hatch until you click out / Close.
+    connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
@@ -1165,7 +1179,7 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     v->addWidget(content, 1);
     auto* lbl = new QLabel(title, g);
     lbl->setAlignment(Qt::AlignHCenter);
-    lbl->setStyleSheet(QStringLiteral("color:#55524c; font-size:10px; background:transparent;"));
+    lbl->setStyleSheet(QStringLiteral("color:#aeb4bd; font-size:10px; background:transparent;"));
     v->addWidget(lbl);
     return g;
 }
@@ -1281,7 +1295,7 @@ void MainWindow::buildRibbon() {
         "QTabBar::tab{background-color:transparent;color:#c2c5ca;padding:5px 14px;border:none;}"
         "QTabBar::tab:hover{color:#ffffff;}"
         "QTabBar::tab:selected{color:#ffffff;background-color:#3a3d43;border-bottom:2px solid #3d8bfd;}"
-        "QLabel{background-color:transparent;color:#9da3ac;}"
+        "QLabel{background-color:transparent;color:#c8ccd2;}"
         "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
         "QToolButton:hover{background-color:#484c53;border-color:#5a5f68;}"
         "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
@@ -1578,20 +1592,29 @@ void MainWindow::buildHatchRibbonTab() {
         hatchPatternGroup_ = new QButtonGroup(this);
         hatchPatternGroup_->setExclusive(true);
         const QList<QPair<QString, QString>> pats = {
-            {QStringLiteral("SOLID"), QStringLiteral("solid")},
+            {QStringLiteral("Solid"), QStringLiteral("solid")},
             {QStringLiteral("ANSI31"), QStringLiteral("ansi31")},
             {QStringLiteral("ANSI32"), QStringLiteral("ansi32")},
-            {QStringLiteral("LINES"), QStringLiteral("lines")},
-            {QStringLiteral("GRID"), QStringLiteral("grid")},
-            {QStringLiteral("CROSS"), QStringLiteral("cross")},
-            {QStringLiteral("DOTS"), QStringLiteral("dots")},
-            {QStringLiteral("ANGLE"), QStringLiteral("angle")},
+            {QStringLiteral("Lines"), QStringLiteral("lines")},
+            {QStringLiteral("Grid"), QStringLiteral("grid")},
+            {QStringLiteral("Cross"), QStringLiteral("cross")},
+            {QStringLiteral("Dots"), QStringLiteral("dots")},
+            {QStringLiteral("Angle"), QStringLiteral("angle")},
+            {QStringLiteral("Brick"), QStringLiteral("brick")},
+            {QStringLiteral("Herringbone"), QStringLiteral("herringbone")},
+            {QStringLiteral("Honeycomb"), QStringLiteral("honeycomb")},
+            {QStringLiteral("Checker"), QStringLiteral("checker")},
+            {QStringLiteral("Braid"), QStringLiteral("braid")},
+            {QStringLiteral("Zigzag"), QStringLiteral("zigzag")},
         };
         int i = 0;
-        const int perRow = 4;
+        const int perRow = 7; // two rows of large swatches
         for (const auto& pp : pats) {
             const QString key = pp.second;
             auto* b = bigButton(w, makeHatchSwatch(key), pp.first);
+            b->setToolButtonStyle(Qt::ToolButtonIconOnly); // big swatch, name in tooltip
+            b->setToolTip(pp.first);
+            b->setIconSize(QSize(46, 30));                 // larger so the pattern reads clearly
             b->setCheckable(true);
             b->setProperty("hatchKey", key);
             if (editor_->hatchStyle().pattern == key) b->setChecked(true);
@@ -1639,12 +1662,39 @@ void MainWindow::buildHatchRibbonTab() {
         hatchTranspSpin_->setValue(editor_->hatchStyle().transparency);
         connect(hatchTranspSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
                 [this](int v) { applyHatchControl(QStringLiteral("transparency"), v); });
+        // Color: ByLayer / ByBlock + standard colors, each with a swatch example.
+        hatchColorCombo_ = new QComboBox(w);
+        hatchColorCombo_->setMinimumWidth(110);
+        hatchColorCombo_->addItem(makeColorSwatchIcon(QColor(), true), QStringLiteral("ByLayer"),
+                                  QString());
+        hatchColorCombo_->addItem(makeColorSwatchIcon(QColor(), true), QStringLiteral("ByBlock"),
+                                  QStringLiteral("byblock"));
+        const QList<QPair<QString, QString>> cols = {
+            {QStringLiteral("Red"), QStringLiteral("#ff0000")},
+            {QStringLiteral("Yellow"), QStringLiteral("#ffff00")},
+            {QStringLiteral("Green"), QStringLiteral("#00ff00")},
+            {QStringLiteral("Cyan"), QStringLiteral("#00ffff")},
+            {QStringLiteral("Blue"), QStringLiteral("#3d8bfd")},
+            {QStringLiteral("Magenta"), QStringLiteral("#ff00ff")},
+            {QStringLiteral("White"), QStringLiteral("#ffffff")},
+            {QStringLiteral("Gray"), QStringLiteral("#808080")},
+        };
+        for (const auto& c : cols)
+            hatchColorCombo_->addItem(makeColorSwatchIcon(QColor(c.second), false), c.first, c.second);
+        connect(hatchColorCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this](int idx) {
+                    if (idx < 0) return;
+                    applyHatchControl(QStringLiteral("color"), hatchColorCombo_->itemData(idx).toString());
+                });
+
         g->addWidget(new QLabel(QStringLiteral("Angle"), w), 0, 0);
         g->addWidget(hatchAngleSpin_, 0, 1);
         g->addWidget(new QLabel(QStringLiteral("Scale"), w), 1, 0);
         g->addWidget(hatchScaleSpin_, 1, 1);
         g->addWidget(new QLabel(QStringLiteral("Transp."), w), 2, 0);
         g->addWidget(hatchTranspSpin_, 2, 1);
+        g->addWidget(new QLabel(QStringLiteral("Color"), w), 3, 0);
+        g->addWidget(hatchColorCombo_, 3, 1);
         addGroup(QStringLiteral("Properties"), w);
     }
 
@@ -1687,6 +1737,7 @@ void MainWindow::syncHatchRibbon() {
     double scale = editor_->hatchStyle().scale;
     int transp = editor_->hatchStyle().transparency;
     bool assoc = editor_->hatchStyle().associative;
+    QString color = editor_->hatchStyle().color;
     if (!hatchEditId_.isEmpty() && doc_) {
         for (const auto& e : doc_->entities())
             if (e.id == hatchEditId_ && e.type == EntityType::Hatch) {
@@ -1695,6 +1746,7 @@ void MainWindow::syncHatchRibbon() {
                 scale = e.meta.value(QStringLiteral("hatchScale")).toDouble(scale);
                 transp = e.meta.value(QStringLiteral("transparency")).toInt(transp);
                 assoc = e.meta.value(QStringLiteral("associative")).toBool(assoc);
+                color = e.color;
                 break;
             }
     }
@@ -1708,20 +1760,29 @@ void MainWindow::syncHatchRibbon() {
     if (hatchScaleSpin_) { QSignalBlocker b(hatchScaleSpin_); hatchScaleSpin_->setValue(scale); }
     if (hatchTranspSpin_) { QSignalBlocker b(hatchTranspSpin_); hatchTranspSpin_->setValue(transp); }
     if (hatchAssocBtn_) { QSignalBlocker b(hatchAssocBtn_); hatchAssocBtn_->setChecked(assoc); }
+    if (hatchColorCombo_) {
+        QSignalBlocker b(hatchColorCombo_);
+        int idx = hatchColorCombo_->findData(color);
+        hatchColorCombo_->setCurrentIndex(idx >= 0 ? idx : 0); // default ByLayer
+    }
 }
 
-// Apply a control change to the selected hatch (edit mode) or to the new-hatch
-// defaults (creation mode), and repaint.
+// Apply a control change to the new-hatch defaults AND, if a hatch is being edited
+// (selected, or just created in the session), to that hatch in place; then repaint.
 void MainWindow::applyHatchControl(const QString& key, const QJsonValue& value) {
+    auto& hs = editor_->hatchStyle();
+    if (key == QLatin1String("pattern")) hs.pattern = value.toString();
+    else if (key == QLatin1String("hatchAngle")) hs.angle = value.toDouble();
+    else if (key == QLatin1String("hatchScale")) hs.scale = value.toDouble();
+    else if (key == QLatin1String("transparency")) hs.transparency = value.toInt();
+    else if (key == QLatin1String("associative")) hs.associative = value.toBool();
+    else if (key == QLatin1String("color")) hs.color = value.toString();
+
     if (!hatchEditId_.isEmpty()) {
-        editor_->setSelectionHatchMeta(key, value);
-    } else {
-        auto& hs = editor_->hatchStyle();
-        if (key == QLatin1String("pattern")) hs.pattern = value.toString();
-        else if (key == QLatin1String("hatchAngle")) hs.angle = value.toDouble();
-        else if (key == QLatin1String("hatchScale")) hs.scale = value.toDouble();
-        else if (key == QLatin1String("transparency")) hs.transparency = value.toInt();
-        else if (key == QLatin1String("associative")) hs.associative = value.toBool();
+        if (key == QLatin1String("color"))
+            editor_->setEntityColor(hatchEditId_, value.toString());
+        else
+            editor_->setHatchMeta(hatchEditId_, key, value);
     }
     canvas_->update();
 }
@@ -1737,7 +1798,9 @@ void MainWindow::updateHatchContext() {
             if (e.id == id && e.type == EntityType::Hatch) { selHatch = id; break; }
     }
     if (creating) {
-        hatchEditId_.clear();
+        // Live-edit the most recently created hatch in this session (if any), so
+        // pattern/angle/etc keep previewing on it until you click out or Close.
+        hatchEditId_ = editor_->lastHatchId();
         showHatchRibbon(true);
     } else if (!selHatch.isEmpty()) {
         hatchEditId_ = selHatch;

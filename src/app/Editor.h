@@ -129,6 +129,11 @@ public:
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
     void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
     void setSelectionHatchMeta(const QString& key, const QJsonValue& value); // hatch pattern/angle/...
+    void setHatchMeta(const QString& id, const QString& key, const QJsonValue& value); // by id
+    void setEntityColor(const QString& id, const QString& hex);  // explicit hex, empty = ByLayer
+    // Id of the most recently created hatch in the active Hatch session (for live
+    // edit while creating), or empty.
+    const QString& lastHatchId() const { return lastHatchId_; }
 
     // Right-button drag (AutoCAD-style): press-drag-release on a selection (or the
     // object under the cursor) moves a ghost; the drop offers Move / Copy / Cancel.
@@ -194,10 +199,11 @@ public:
     // closed object (SelectObject).
     enum class HatchBoundary { PickPoints, SelectObject };
     struct HatchStyle {
-        QString pattern = QStringLiteral("ansi31"); // solid/ansi31/ansi32/lines/grid/cross/dots/angle
+        QString pattern = QStringLiteral("ansi31"); // solid/ansi31/.../brick/braid/...
         double angle = 0.0;     // pattern rotation (degrees)
         double scale = 1.0;     // pattern spacing multiplier
         int transparency = 0;   // 0..95 (%)
+        QString color;          // explicit hex, or empty = ByLayer
         bool associative = true;
         HatchBoundary boundary = HatchBoundary::PickPoints;
     };
@@ -245,6 +251,9 @@ signals:
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.
     void dynamicPrompt(const QString& placeholder);
+    // The hatch live-edit target changed (a hatch was created, or the session
+    // ended) — the host re-points the contextual Hatch tab.
+    void hatchTargetChanged();
 
 private:
     double worldTolerance() const;
@@ -376,6 +385,7 @@ private:
     bool tanAwaitRadius_ = false;
     double tanRadius_ = 50.0;
     HatchStyle hatchStyle_;       // current Hatch/Wipeout options
+    QString lastHatchId_;         // most recent hatch created in this session (live edit)
     int polygonSides_ = 5;        // default side count (prompted on tool select)
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered

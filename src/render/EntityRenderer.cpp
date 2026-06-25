@@ -128,24 +128,107 @@ void drawHatch(QPainter& p, const QPolygonF& poly, const Entity& e, const QColor
     const QRectF bb = poly.boundingRect();
     const double gap = std::max(3.0, 6.0 * scale * vt.scale()); // world ~6 units * scale
 
+    // Rotate the whole tiled pattern about the boundary centre by the user Angle.
+    if (std::abs(userAngle) > 1e-9) {
+        p.translate(bb.center());
+        p.rotate(userAngle * 180.0 / M_PI);
+        p.translate(-bb.center());
+    }
+    // Tiled patterns need a box large enough to still cover the region once rotated.
+    const double diag = std::hypot(bb.width(), bb.height());
+    const QRectF tb(bb.center().x() - diag, bb.center().y() - diag, 2 * diag, 2 * diag);
+
     if (pat == QLatin1String("dots")) {
         p.setPen(Qt::NoPen);
         p.setBrush(c);
-        for (double y = bb.top(); y <= bb.bottom(); y += gap)
-            for (double x = bb.left(); x <= bb.right(); x += gap)
+        for (double y = tb.top(); y <= tb.bottom(); y += gap)
+            for (double x = tb.left(); x <= tb.right(); x += gap)
                 p.drawEllipse(QPointF(x, y), 1.2, 1.2);
+    } else if (pat == QLatin1String("brick")) {
+        const double bw = gap * 2.0, bh = gap;
+        for (double y = tb.top(); y <= tb.bottom(); y += bh)
+            p.drawLine(QPointF(tb.left(), y), QPointF(tb.right(), y));
+        int row = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += bh, ++row) {
+            const double x0 = tb.left() + ((row & 1) ? bw / 2.0 : 0.0);
+            for (double x = x0; x <= tb.right(); x += bw)
+                p.drawLine(QPointF(x, y), QPointF(x, y + bh));
+        }
+    } else if (pat == QLatin1String("checker")) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        const double cs = gap;
+        int r = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += cs, ++r) {
+            int col = 0;
+            for (double x = tb.left(); x < tb.right(); x += cs, ++col)
+                if (((r + col) & 1) == 0) p.drawRect(QRectF(x, y, cs, cs));
+        }
+    } else if (pat == QLatin1String("herringbone")) {
+        const double L = gap * 2.0;
+        int r = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += L, ++r) {
+            int col = 0;
+            for (double x = tb.left(); x < tb.right(); x += L, ++col) {
+                if (((r + col) & 1) == 0)
+                    p.drawLine(QPointF(x, y), QPointF(x + L, y + L));
+                else
+                    p.drawLine(QPointF(x, y + L), QPointF(x + L, y));
+            }
+        }
+    } else if (pat == QLatin1String("honeycomb")) {
+        const double rr = gap * 1.2;
+        const double hx = rr * std::sqrt(3.0), vy = rr * 1.5;
+        int row = 0;
+        for (double y = tb.top(); y < tb.bottom() + rr; y += vy, ++row) {
+            const double x0 = tb.left() + ((row & 1) ? hx / 2.0 : 0.0);
+            for (double x = x0 - hx; x < tb.right() + hx; x += hx) {
+                QPolygonF hexp;
+                for (int k = 0; k < 6; ++k) {
+                    const double a = M_PI / 180.0 * (60.0 * k + 30.0);
+                    hexp << QPointF(x + rr * std::cos(a), y + rr * std::sin(a));
+                }
+                p.drawPolygon(hexp);
+            }
+        }
+    } else if (pat == QLatin1String("braid")) {
+        // Woven rope: tilted ovals alternating lean, brick-offset per row.
+        const double cw = gap * 2.0, ch = gap * 1.4;
+        int row = 0;
+        for (double y = tb.top(); y < tb.bottom(); y += ch, ++row) {
+            int col = 0;
+            const double x0 = tb.left() + ((row & 1) ? cw / 2.0 : 0.0);
+            for (double x = x0; x < tb.right(); x += cw, ++col) {
+                p.save();
+                p.translate(x + cw / 2.0, y + ch / 2.0);
+                p.rotate(((row + col) & 1) ? 35.0 : -35.0);
+                p.drawEllipse(QPointF(0, 0), cw * 0.5, ch * 0.28);
+                p.restore();
+            }
+        }
+    } else if (pat == QLatin1String("zigzag")) {
+        const double w = gap, h = gap;
+        for (double y = tb.top(); y < tb.bottom(); y += h * 1.6) {
+            QPolygonF zz;
+            bool up = false;
+            for (double x = tb.left(); x <= tb.right() + w; x += w) {
+                zz << QPointF(x, up ? y : y + h);
+                up = !up;
+            }
+            p.drawPolyline(zz);
+        }
     } else {
-        // Base orientation per pattern, plus the user Angle.
-        std::vector<double> angles;        // degrees
+        // Straight line families (lines / grid / cross / ansi31 / ansi32 / angle).
+        std::vector<double> angles; // degrees, relative to the (already rotated) box
         double g = gap;
         if (pat == QLatin1String("lines")) angles = {0};
         else if (pat == QLatin1String("grid")) angles = {0, 90};
         else if (pat == QLatin1String("cross")) angles = {45, 135};
-        else if (pat == QLatin1String("ansi32")) { angles = {45}; g = gap * 0.5; }
-        else if (pat == QLatin1String("angle")) angles = {0}; // driven purely by user angle
-        else angles = {45};                // ansi31 (default)
+        else if (pat == QLatin1String("ansi32")) { angles = {45, 50}; g = gap * 0.6; }
+        else if (pat == QLatin1String("angle")) angles = {0};
+        else angles = {45}; // ansi31 (default)
         for (double aDeg : angles)
-            drawParallelLines(p, bb, aDeg * M_PI / 180.0 + userAngle, g);
+            drawParallelLines(p, tb, aDeg * M_PI / 180.0, g);
     }
     p.restore();
 }
