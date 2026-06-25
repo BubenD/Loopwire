@@ -116,10 +116,22 @@ std::vector<Grip> gripsOf(const Entity& e) {
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Polygon:
-    case EntityType::Hatch:
     case EntityType::Wipeout:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
+        break;
+    case EntityType::Hatch:
+        if (e.meta.value("associative").toBool(false)) {
+            // Associative hatch: a single grip at the centre (the boundary is tied
+            // to its parent objects, so the vertices aren't individually editable).
+            const Bounds b = e.bounds();
+            g.push_back({b.valid ? b.center() : (e.points.empty() ? Vec2{0, 0} : e.points[0]),
+                         GripRole::Move, 0});
+        } else {
+            // Non-associative: full boundary vertex grips for reshaping.
+            for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
+                g.push_back({e.points[i], GripRole::Vertex, i});
+        }
         break;
     case EntityType::Rect:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i) {

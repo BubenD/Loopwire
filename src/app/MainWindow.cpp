@@ -1611,7 +1611,7 @@ void MainWindow::buildHatchRibbonTab() {
         const int perRow = 7; // two rows of large swatches
         for (const auto& pp : pats) {
             const QString key = pp.second;
-            auto* b = bigButton(w, makeHatchSwatch(key), pp.first);
+            auto* b = bigButton(w, makeHatchSwatch(key), QString()); // swatch only, no text
             b->setToolButtonStyle(Qt::ToolButtonIconOnly); // big swatch, name in tooltip
             b->setToolTip(pp.first);
             b->setIconSize(QSize(46, 30));                 // larger so the pattern reads clearly

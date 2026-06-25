@@ -1348,6 +1348,49 @@ int run_editor_tests() {
               "hatch-edit: hatch angle updates");
     }
 
+    // --- Associative hatch has a single centre grip (moves whole hatch); a
+    //     non-associative hatch has boundary vertex grips (reshape).
+    {
+        // Associative: dragging the centre grip translates every point.
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Hatch;
+        h.points = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+        h.meta.insert("pattern", QStringLiteral("ansi31"));
+        h.meta.insert("associative", true);
+        d.entities().push_back(h);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+        ed.selectById("h");
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier); // centre grip
+        ed.onPointerMove({30, 30});
+        ed.onPointerRelease({30, 30}, Qt::LeftButton);
+        check(near(d.entities()[0].points[0].x, 10.0) && near(d.entities()[0].points[0].y, 10.0) &&
+                  near(d.entities()[0].points[2].x, 50.0),
+              "hatch-assoc: centre grip moves the whole associative hatch");
+        // Dragging from a boundary corner moves the WHOLE hatch (no per-corner grip):
+        // the rectangle stays congruent (width 40) rather than one corner stretching.
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // corner, now at (10,10)
+        ed.onPointerMove({0, 0});
+        ed.onPointerRelease({0, 0}, Qt::LeftButton);
+        check(near(d.entities()[0].points[1].x - d.entities()[0].points[0].x, 40.0),
+              "hatch-assoc: no per-corner grip (boundary stays congruent)");
+    }
+    {
+        // Non-associative: dragging a corner reshapes the boundary.
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Hatch;
+        h.points = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+        h.meta.insert("associative", false);
+        d.entities().push_back(h);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+        ed.selectById("h");
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // corner vertex grip
+        ed.onPointerMove({-5, -5});
+        ed.onPointerRelease({-5, -5}, Qt::LeftButton);
+        check(near(d.entities()[0].points[0].x, -5.0) && near(d.entities()[0].points[0].y, -5.0) &&
+                  near(d.entities()[0].points[1].x, 40.0),
+              "hatch-nonassoc: corner grip reshapes the boundary");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
