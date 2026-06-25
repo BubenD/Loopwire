@@ -121,6 +121,9 @@ public:
     // Current draw color applied to newly created entities (empty => ByLayer).
     void setCurrentColor(const QString& hex) { currentColor_ = hex; }
     const QString& currentColor() const { return currentColor_; }
+    // Default lineweight for newly created entities (0 => ByLayer).
+    void setCurrentWeight(double w) { currentWeight_ = w; }
+    double currentWeight() const { return currentWeight_; }
 
     // Apply a common property to all selected entities.
     void setSelectionLayer(const QString& layer);
@@ -400,6 +403,7 @@ private:
     bool dpolySideJustify_ = false;
     bool showAngles_ = true; // show the live length/angle readout while drawing
     QString currentColor_;   // color for new entities (empty => ByLayer)
+    double currentWeight_ = 0.0; // lineweight for new entities (0 => ByLayer)
     DimMode dimMode_ = DimMode::Linear;
     // For radius/diameter/arc-length/jogged: the circle/arc being measured, captured
     // on the first pick so the second click only places the text/dimension line.

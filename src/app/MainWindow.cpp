@@ -1480,10 +1480,23 @@ void MainWindow::buildRibbon() {
             l->setMinimumWidth(38);
             return l;
         };
+        // Lineweight dropdown (ByLayer + standard weights) for new entities / selection.
+        auto* lwCombo = new QComboBox(propsW);
+        lwCombo->setMinimumWidth(120);
+        lwCombo->addItems({"ByLayer", "0.00", "0.13", "0.25", "0.35", "0.50", "0.70",
+                           "1.00", "1.40", "2.00"});
         pg->addWidget(propLabel(QStringLiteral("Layer")), 0, 0);
         pg->addWidget(layerCombo_, 0, 1);
         pg->addWidget(propLabel(QStringLiteral("Color")), 1, 0);
         pg->addWidget(colorCombo_, 1, 1);
+        pg->addWidget(propLabel(QStringLiteral("Weight")), 2, 0);
+        pg->addWidget(lwCombo, 2, 1);
+        connect(lwCombo, &QComboBox::activated, this, [this, lwCombo](int) {
+            const QString t = lwCombo->currentText();
+            const double w = (t == QLatin1String("ByLayer")) ? 0.0 : t.toDouble();
+            editor_->setCurrentWeight(w);   // applies to newly drawn entities
+            editor_->setSelectionWeight(w); // and to any current selection
+        });
         connect(layerCombo_, &QComboBox::activated, this, [this](int) {
             const QString name = layerCombo_->currentText();
             doc_->setActiveLayer(name);
@@ -3796,6 +3809,10 @@ void MainWindow::refreshProperties() {
         addNum(QStringLiteral("Arrow size"), e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3),
                [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("arrowSize"), std::max(0.1, v));
+               });
+        addNum(QStringLiteral("Ext line offset"),
+               e->meta.value(QStringLiteral("extOffset")).toDouble(2.0), [this](double v) {
+                   editor_->setSelectionDimMeta(QStringLiteral("extOffset"), std::max(0.0, v));
                });
 
         addHeader(QStringLiteral("Text"));

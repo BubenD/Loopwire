@@ -1285,6 +1285,19 @@ int run_editor_tests() {
         ed.setSelectionDimMeta(QStringLiteral("textHeight"), 8.0);
         check(near(d.entities()[0].meta.value("textHeight").toDouble(), 8.0),
               "dim-props: text height edits via setSelectionDimMeta");
+
+        // A green crossing zone touching the dimension line selects it.
+        auto regionSelect = [&](Vec2 c1, Vec2 c2) {
+            ed.clearSelection();
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        };
+        regionSelect({50, 25}, {10, 15}); // crossing across the dim line at y=20
+        check(ed.selection().size() == 1, "dim-region: green zone touching the dim line selects");
+        regionSelect({60, 60}, {52, 52}); // far from every line
+        check(ed.selection().empty(), "dim-region: a zone touching no line does not select");
     }
 
     // --- Repeat last tool (Space / Enter when idle).

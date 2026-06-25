@@ -313,6 +313,14 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     const double arrowW = e.meta.value("arrowSize").toDouble(3.3);  // world units
     const int dec = e.meta.contains("decimals") ? e.meta.value("decimals").toInt() : decimals;
     const double arrowPx = std::clamp(arrowW * vt.scale(), 5.0, 40.0);
+    const double extOff = e.meta.value("extOffset").toDouble(2.0); // ext-line gap (world)
+    // Dimension lines are drawn thin (but clearly visible), independent of weight.
+    {
+        QPen dp(color);
+        dp.setCosmetic(true);
+        dp.setWidthF(1.2);
+        p.setPen(dp);
+    }
     auto unit = [](QPointF v) {
         const double L = std::hypot(v.x(), v.y());
         return L > 1e-9 ? QPointF(v.x() / L, v.y() / L) : QPointF(1, 0);
@@ -390,9 +398,10 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     }
     const QPointF s1 = vt.toScreen(p1), s2 = vt.toScreen(p2);
     const QPointF e1 = vt.toScreen(d1), e2 = vt.toScreen(d2);
-    // AutoCAD-style extension lines: a small gap from the measured point, and a
-    // short overshoot past the dimension line.
-    const double exGap = 2.0, exBeyond = 3.0; // screen px
+    // AutoCAD-style extension lines: a gap from the measured point (the editable
+    // "Ext line offset", world units) and a short overshoot past the dimension line.
+    const double exGap = std::max(0.0, extOff * vt.scale());
+    const double exBeyond = std::max(2.0, extOff * vt.scale() * 0.6);
     const QPointF x1 = unit(e1 - s1), x2 = unit(e2 - s2);
     p.drawLine(s1 + x1 * exGap, e1 + x1 * exBeyond);
     p.drawLine(s2 + x2 * exGap, e2 + x2 * exBeyond);

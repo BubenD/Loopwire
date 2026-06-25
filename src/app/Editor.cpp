@@ -269,6 +269,7 @@ void Editor::addEntity(Entity e) {
     // Adopt the current draw color (empty => ByLayer) unless the entity already
     // carries its own explicit color (e.g. wires).
     if (e.color.isEmpty()) e.color = currentColor_;
+    if (e.weight == 0.0) e.weight = currentWeight_; // 0 => ByLayer
     doc_->entities().push_back(std::move(e));
     doc_->setDirty(true);
 }
@@ -276,6 +277,56 @@ void Editor::addEntity(Entity e) {
 // ---- Hit testing ----------------------------------------------------------
 
 namespace {
+
+// World-space line segments that make up a dimension's drawn geometry, so hit-test
+// and region selection both react to the dimension line / extension lines / arc.
+std::vector<std::pair<Vec2, Vec2>> dimensionSegments(const Entity& e) {
+    std::vector<std::pair<Vec2, Vec2>> segs;
+    const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+    if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
+        segs.push_back({e.center, e.b});
+    } else if (ty == QLatin1String("diameter")) {
+        const Vec2 dir = (e.b - e.center).normalized();
+        segs.push_back({e.center - dir * e.radius, e.center + dir * e.radius});
+    } else if (ty == QLatin1String("angular") && e.points.size() >= 3) {
+        const Vec2 v = e.points[0];
+        segs.push_back({v, e.points[1]});
+        segs.push_back({v, e.points[2]});
+        const double rr = std::min(distance(v, e.points[1]), distance(v, e.points[2])) * 0.6;
+        const double a0 = std::atan2(e.points[1].y - v.y, e.points[1].x - v.x);
+        double a1 = std::atan2(e.points[2].y - v.y, e.points[2].x - v.x);
+        double sweep = a1 - a0;
+        while (sweep < 0) sweep += 2.0 * M_PI;
+        const int n = 12;
+        Vec2 prev = pointOnCircle(v, rr, a0);
+        for (int i = 1; i <= n; ++i) {
+            const Vec2 cur = pointOnCircle(v, rr, a0 + sweep * i / n);
+            segs.push_back({prev, cur});
+            prev = cur;
+        }
+    } else if (ty == QLatin1String("ordinate")) {
+        segs.push_back({e.a, e.b});
+    } else { // linear / aligned / arclength
+        const Vec2 p1 = e.a, p2 = e.b;
+        const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
+        Vec2 d1, d2;
+        if (ty == QLatin1String("linear")) {
+            const Vec2 mid = lerp(p1, p2, 0.5);
+            const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+            if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
+            else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
+        } else {
+            const Vec2 n = (p2 - p1).normalized().perp();
+            const double t = dot(off - p1, n);
+            d1 = p1 + n * t;
+            d2 = p2 + n * t;
+        }
+        segs.push_back({d1, d2}); // dimension line
+        segs.push_back({p1, d1}); // extension lines
+        segs.push_back({p2, d2});
+    }
+    return segs;
+}
 
 double distanceToEntity(const Entity& e, const Vec2& p) {
     auto segDist = [&](const Vec2& a, const Vec2& b) {
@@ -286,41 +337,11 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::Line:
         best = segDist(e.a, e.b);
         break;
-    case EntityType::Dimension: {
-        // Select by touching the actual drawn geometry (the dimension line, the
-        // extension lines, the radius/diameter line, the angular arc, ...).
-        const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
-        if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
-            best = segDist(e.center, e.b);
-        } else if (ty == QLatin1String("diameter")) {
-            const Vec2 dir = (e.b - e.center).normalized();
-            best = segDist(e.center - dir * e.radius, e.center + dir * e.radius);
-        } else if (ty == QLatin1String("angular") && e.points.size() >= 3) {
-            const Vec2 v = e.points[0];
-            const double rr = std::min(distance(v, e.points[1]), distance(v, e.points[2])) * 0.6;
-            best = std::min({std::abs(distance(v, p) - rr), segDist(v, e.points[1]),
-                             segDist(v, e.points[2])});
-        } else if (ty == QLatin1String("ordinate")) {
-            best = segDist(e.a, e.b);
-        } else { // linear / aligned / arclength
-            const Vec2 p1 = e.a, p2 = e.b;
-            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
-            Vec2 d1, d2;
-            if (ty == QLatin1String("linear")) {
-                const Vec2 mid = lerp(p1, p2, 0.5);
-                const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
-                if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
-                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
-            } else {
-                const Vec2 n = (p2 - p1).normalized().perp();
-                const double t = dot(off - p1, n);
-                d1 = p1 + n * t;
-                d2 = p2 + n * t;
-            }
-            best = std::min({segDist(d1, d2), segDist(p1, d1), segDist(p2, d2)});
-        }
+    case EntityType::Dimension:
+        // Select by touching the actual drawn geometry (dimension line, extension
+        // lines, radius/diameter line, angular arc, ...).
+        for (const auto& s : dimensionSegments(e)) best = std::min(best, segDist(s.first, s.second));
         break;
-    }
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines select the double line — NOT the
         // centerline / gap between them (clicking the empty middle won't pick it).
@@ -713,8 +734,13 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     std::vector<Vec2> pts;
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::Dimension:
         pts = {e.a, lerp(e.a, e.b, 0.5), e.b};
+        break;
+    case EntityType::Dimension:
+        // The endpoints of the drawn geometry, so a window/crossing reacts to the
+        // dimension/extension lines (not just the measured points).
+        for (const auto& s : dimensionSegments(e)) { pts.push_back(s.first); pts.push_back(s.second); }
+        if (pts.empty()) pts = {e.a, e.b};
         break;
     case EntityType::DoubleLine: {
         // Region selection tests the two VISIBLE parallel lines' ends only — NOT
@@ -769,8 +795,12 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     auto pts = entitySelectPoints(e);
     switch (e.type) {
     case EntityType::Line:
-    case EntityType::Dimension:
         segs.emplace_back(e.a, e.b);
+        break;
+    case EntityType::Dimension:
+        // The real drawn lines, so a green crossing zone touching ANY of them selects.
+        for (const auto& s : dimensionSegments(e)) segs.emplace_back(s.first, s.second);
+        if (segs.empty()) segs.emplace_back(e.a, e.b);
         break;
     case EntityType::DoubleLine: {
         // Crossing-region edges are the two VISIBLE lines (not the centerline),
@@ -1812,6 +1842,7 @@ void Editor::finishDraw() {
         // AutoCAD-style style defaults (editable in Properties).
         e.meta.insert("textHeight", 5.0); // default text height
         e.meta.insert("arrowSize", 3.3);
+        e.meta.insert("extOffset", 2.0);  // extension-line gap from the measured point
         e.meta.insert("decimals", 2);
         switch (dimMode_) {
         case DimMode::Linear:
