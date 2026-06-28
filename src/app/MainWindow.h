@@ -78,6 +78,9 @@ private:
     QAction* makeToolAction(const QString& text, ToolId id);
     QWidget* ribbonGroup(const QString& title, QWidget* content);
     QWidget* toolRow(const QList<ToolId>& tools);
+    // A 2-row icon grid of the Modify "Operations" actions (Array, Explode,
+    // Purge, Delete). Reused on both the Home and Modify tabs.
+    QWidget* operationsRow();
 
     void refreshPanels();
     void refreshLayers();
@@ -137,6 +140,8 @@ private:
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;
     QVector<QAction*> allToolActions_; // every tool button instance (for theme re-tint)
+    // Modify "Operations" icon buttons (key + button) for theme re-tinting.
+    QVector<QPair<QString, QToolButton*>> opButtons_;
 
     // Status-bar drafting toggles (re-tinted/re-styled on theme change).
     QVector<QToolButton*> statusToggleBtns_;

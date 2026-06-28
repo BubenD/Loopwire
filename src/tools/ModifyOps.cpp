@@ -100,8 +100,22 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     arc.layer = l1.layer;
     arc.center = C;
     arc.radius = radius;
-    arc.startAngle = std::atan2(T1.y - C.y, T1.x - C.x);
-    arc.endAngle = std::atan2(T2.y - C.y, T2.x - C.x);
+    double sa = std::atan2(T1.y - C.y, T1.x - C.x);
+    double ea = std::atan2(T2.y - C.y, T2.x - C.x);
+    // The renderer draws counter-clockwise from sa to ea with a positive sweep
+    // (it adds 2π if sweep <= 0). We need the SHORT arc (< π for a fillet).
+    // Normalize so that ea - sa is in (0, 2π), then pick the direction that
+    // gives the smaller sweep.
+    constexpr double kTwoPi = 2.0 * M_PI;
+    double sweep = ea - sa;
+    while (sweep <= 0.0) sweep += kTwoPi;
+    while (sweep > kTwoPi) sweep -= kTwoPi;
+    if (sweep > M_PI) {
+        // The short arc is the other way: swap start and end.
+        std::swap(sa, ea);
+    }
+    arc.startAngle = sa;
+    arc.endAngle = ea;
     res.connector = arc;
     res.ok = true;
     return res;

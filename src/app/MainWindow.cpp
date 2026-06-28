@@ -189,13 +189,61 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
         p.drawLine(4, 5, 20, 19);
         break;
     }
-    case ToolId::Move: p.drawLine(12, 4, 12, 20); p.drawLine(4, 12, 20, 12); p.drawLine(12, 4, 9, 7); p.drawLine(12, 4, 15, 7); p.drawLine(4, 12, 7, 9); p.drawLine(4, 12, 7, 15); break;
-    case ToolId::Rotate: { QPainterPath pa; pa.moveTo(18, 8); pa.arcTo(5, 5, 14, 14, 40, 280); p.drawPath(pa); p.drawLine(18, 8, 15, 7); p.drawLine(18, 8, 19, 11); break; }
-    case ToolId::Mirror: p.drawLine(12, 4, 12, 20); { QPolygonF a({{4, 8}, {9, 12}, {4, 16}}); QPolygonF b({{20, 8}, {15, 12}, {20, 16}}); p.drawPolygon(a); p.drawPolygon(b); } break;
-    case ToolId::Scale: p.drawRect(5, 11, 8, 8); { QPainterPath pa; } p.drawLine(11, 13, 19, 5); p.drawLine(19, 5, 14, 5); p.drawLine(19, 5, 19, 10); break;
-    case ToolId::Offset: p.drawRect(5, 8, 7, 10); p.drawRect(14, 6, 5, 14); break;
-    case ToolId::Trim: p.drawLine(4, 18, 20, 6); p.drawLine(11, 7, 17, 17); break;
-    case ToolId::Extend: p.drawLine(4, 16, 13, 9); p.drawLine(18, 5, 18, 19); p.drawLine(13, 9, 11, 8); p.drawLine(13, 9, 12, 11); break;
+    case ToolId::Move: {
+        // Four-headed move arrow (clear 4-way cross).
+        p.drawLine(12, 4, 12, 20); p.drawLine(4, 12, 20, 12);
+        p.drawLine(12, 4, 9, 7);   p.drawLine(12, 4, 15, 7);    // up
+        p.drawLine(12, 20, 9, 17); p.drawLine(12, 20, 15, 17);  // down
+        p.drawLine(4, 12, 7, 9);   p.drawLine(4, 12, 7, 15);    // left
+        p.drawLine(20, 12, 17, 9); p.drawLine(20, 12, 17, 15);  // right
+        break;
+    }
+    case ToolId::Rotate: {
+        // Near-full circular arrow.
+        QPainterPath pa; pa.arcMoveTo(5, 5, 14, 14, 70); pa.arcTo(5, 5, 14, 14, 70, 250);
+        p.drawPath(pa);
+        const QPointF tip(12 + 7 * std::cos(-70 * M_PI / 180), 12 + 7 * std::sin(-70 * M_PI / 180));
+        p.drawLine(tip, tip + QPointF(-4, -1)); p.drawLine(tip, tip + QPointF(0, -4));
+        break;
+    }
+    case ToolId::Mirror: {
+        // Dashed mirror axis with a solid shape and its reflection.
+        QPen dash = pen; dash.setStyle(Qt::DashLine); p.setPen(dash);
+        p.drawLine(12, 3, 12, 21);
+        p.setPen(pen);
+        QPolygonF a({{4, 7}, {10, 12}, {4, 17}}); QPolygonF b({{20, 7}, {14, 12}, {20, 17}});
+        p.drawPolygon(a); p.drawPolygon(b);
+        break;
+    }
+    case ToolId::Scale: {
+        // Small square growing into a larger one along a diagonal arrow.
+        p.drawRect(5, 14, 5, 5);
+        p.drawRect(5, 6, 13, 13);
+        p.drawLine(7, 17, 16, 8);
+        p.drawLine(16, 8, 12, 8); p.drawLine(16, 8, 16, 12); // arrowhead
+        break;
+    }
+    case ToolId::Offset: {
+        // Two parallel corner polylines (the offset of a shape).
+        QPolygonF a({{5, 6}, {5, 19}, {19, 19}}); p.drawPolyline(a);
+        QPolygonF b({{9, 6}, {9, 15}, {19, 15}}); p.drawPolyline(b);
+        break;
+    }
+    case ToolId::Trim: {
+        // Scissors: two handle rings and crossed blades.
+        p.drawEllipse(QPointF(6, 8), 2.6, 2.6);
+        p.drawEllipse(QPointF(6, 16), 2.6, 2.6);
+        p.drawLine(8.2, 9.4, 20, 16);
+        p.drawLine(8.2, 14.6, 20, 8);
+        break;
+    }
+    case ToolId::Extend: {
+        // Arrow extending to a boundary wall.
+        p.drawLine(19, 4, 19, 20);          // wall
+        p.drawLine(4, 12, 16, 12);          // shaft
+        p.drawLine(16, 12, 13, 9); p.drawLine(16, 12, 13, 15); // arrowhead
+        break;
+    }
     case ToolId::Fillet: { QPainterPath pa; pa.moveTo(5, 19); pa.lineTo(5, 12); pa.arcTo(5, 5, 14, 14, 180, -90); pa.lineTo(19, 5); p.drawPath(pa); break; }
     case ToolId::Chamfer: { QPolygonF a({{5, 19}, {5, 10}, {10, 5}, {19, 5}}); p.drawPolyline(a); break; }
     case ToolId::Wire: { pen.setWidthF(2.4); p.setPen(pen); p.drawLine(4, 17, 20, 7); break; }
@@ -203,6 +251,71 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
     case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
     case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+// Monochrome glyphs for the Modify "Operations" buttons (Array, Explode, Purge,
+// Delete, Fillet radius) — same flat line-art style as the tool icons so they sit
+// alongside them in the ribbon.
+QIcon makeOpIcon(const QString& op, const QColor& ink = QColor("#d6dae1")) {
+    QPixmap pm(24, 24);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.6);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    if (op == QLatin1String("array")) {
+        // 2 rows x 3 columns of small squares (rectangular array).
+        for (int r = 0; r < 2; ++r)
+            for (int c = 0; c < 3; ++c)
+                p.drawRect(4 + c * 6, 6 + r * 7, 4, 4);
+    } else if (op == QLatin1String("explode")) {
+        // Small central box with four diagonal arrows flying outward.
+        p.drawRect(10, 10, 4, 4);
+        auto arrow = [&](QPointF tip, QPointF a, QPointF b) {
+            p.drawLine(QPointF(12, 12), tip);
+            p.drawLine(tip, a);
+            p.drawLine(tip, b);
+        };
+        arrow({4, 4}, {4, 8}, {8, 4});
+        arrow({20, 4}, {16, 4}, {20, 8});
+        arrow({4, 20}, {4, 16}, {8, 20});
+        arrow({20, 20}, {16, 20}, {20, 16});
+    } else if (op == QLatin1String("purge")) {
+        // Broom sweeping away unused items.
+        p.drawLine(19, 4, 11, 12);          // handle
+        QPolygonF head({{8, 11}, {14, 11}, {16, 19}, {6, 19}});
+        p.drawPolyline(head);
+        p.drawLine(8, 14, 14, 14);          // bristle band
+        for (int x = 7; x <= 15; x += 2) p.drawLine(x, 15, x - 1, 19); // bristles
+    } else if (op == QLatin1String("delete")) {
+        // Trash can: lid + body + ribs.
+        p.drawLine(4, 7, 20, 7);            // lid line
+        p.drawRect(9, 4, 6, 3);             // handle
+        QPolygonF body({{6, 7}, {18, 7}, {17, 20}, {7, 20}});
+        p.drawPolygon(body);
+        p.drawLine(10, 10, 10, 17);
+        p.drawLine(12, 10, 12, 17);
+        p.drawLine(14, 10, 14, 17);
+    } else if (op == QLatin1String("filletr")) {
+        // Rounded corner with an "R" label.
+        QPainterPath pa;
+        pa.moveTo(5, 20);
+        pa.lineTo(5, 12);
+        pa.arcTo(5, 5, 14, 14, 180, -90);
+        pa.lineTo(20, 5);
+        p.drawPath(pa);
+        QFont f = p.font();
+        f.setPixelSize(9);
+        f.setBold(true);
+        p.setFont(f);
+        p.drawText(QRect(11, 11, 11, 11), Qt::AlignCenter, QStringLiteral("R"));
     }
     p.end();
     return QIcon(pm);
@@ -1396,6 +1509,41 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
     return w;
 }
 
+// A 2-row icon grid of the Modify "Operations" actions, built as icon buttons in
+// the same style as toolRow so they read consistently in the ribbon. Reused on
+// both the Home and Modify tabs. Buttons are tracked in opButtons_ for theme
+// re-tinting.
+QWidget* MainWindow::operationsRow() {
+    struct Op { const char* key; QString tip; std::function<void()> fn; };
+    const QList<Op> ops = {
+        {"array", QStringLiteral("Array"), [this] { arrayDialog(); }},
+        {"explode", QStringLiteral("Explode"), [this] { editor_->explodeSelected(); }},
+        {"purge", QStringLiteral("Purge"), [this] { editor_->purgeSelected(); }},
+        {"delete", QStringLiteral("Delete"), [this] { editor_->deleteSelected(); }},
+    };
+    auto* w = new QWidget(ribbon_);
+    auto* grid = new QGridLayout(w);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(1);
+    const int perRow = (ops.size() + 1) / 2;
+    int i = 0;
+    for (const Op& op : ops) {
+        auto* b = new QToolButton(w);
+        const QString key = QString::fromLatin1(op.key);
+        b->setIcon(makeOpIcon(key));
+        b->setIconSize(QSize(28, 28));
+        b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        b->setToolTip(op.tip);
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        connect(b, &QToolButton::clicked, this, op.fn);
+        grid->addWidget(b, i / perRow, i % perRow);
+        opButtons_.append({key, b});
+        ++i;
+    }
+    return w;
+}
+
 void MainWindow::buildRibbon() {
     toolGroup_ = new QActionGroup(this);
     toolGroup_->setExclusive(true);
@@ -1462,8 +1610,9 @@ void MainWindow::buildRibbon() {
                  toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                           ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
                           ToolId::Chamfer}));
+        addGroup(lay, QStringLiteral("Operations"), operationsRow());
         addGroup(lay, QStringLiteral("Annotation"),
-                 toolRow({ToolId::Text, ToolId::MText, ToolId::Dimension}));
+                 toolRow({ToolId::Text, ToolId::Dimension}));
 
         // Properties group: Layer + Color dropdowns.
         auto* propsW = new QWidget(page);
@@ -1545,23 +1694,7 @@ void MainWindow::buildRibbon() {
                           ToolId::Offset}));
         addGroup(lay, QStringLiteral("Edit"),
                  toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
-        auto* opsW = new QWidget(page);
-        auto* og = new QGridLayout(opsW);
-        og->setContentsMargins(0, 0, 0, 0);
-        og->setSpacing(2);
-        auto opBtn = [&](const QString& t, std::function<void()> fn, int r, int c) {
-            auto* b = new QToolButton(opsW);
-            b->setText(t);
-            b->setMinimumWidth(60);
-            connect(b, &QToolButton::clicked, this, fn);
-            og->addWidget(b, r, c);
-        };
-        opBtn(QStringLiteral("Array"), [this] { arrayDialog(); }, 0, 0);
-        opBtn(QStringLiteral("Explode"), [this] { editor_->explodeSelected(); }, 0, 1);
-        opBtn(QStringLiteral("Purge"), [this] { editor_->purgeSelected(); }, 0, 2);
-        opBtn(QStringLiteral("Delete"), [this] { editor_->deleteSelected(); }, 1, 0);
-        opBtn(QStringLiteral("Fillet R"), [this] { promptFilletRadius(); }, 1, 1);
-        lay->addWidget(ribbonGroup(QStringLiteral("Operations"), opsW));
+        addGroup(lay, QStringLiteral("Operations"), operationsRow());
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Modify"));
     }
@@ -1577,7 +1710,7 @@ void MainWindow::buildRibbon() {
     // ---- ANNOTATION ----
     {
         auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::NetLabel}));
+        addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Annotation"));
     }
@@ -2700,6 +2833,9 @@ void MainWindow::applyTheme(bool dark) {
     const QColor ink = dark ? QColor("#d6dae1") : QColor("#33373f");
     for (QAction* a : allToolActions_)
         a->setIcon(makeToolIcon(static_cast<ToolId>(a->data().toInt()), ink));
+    // Modify "Operations" icon buttons follow the same ink as the tool icons.
+    for (const auto& ob : opButtons_)
+        ob.second->setIcon(makeOpIcon(ob.first, ink));
 
     // Status-bar drafting toggles: re-tint the icons and re-style hover/checked so
     // they read on the (now theme-coloured) status bar.

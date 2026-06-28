@@ -144,6 +144,13 @@ int run_editor_tests() {
         check(r.ok, "fillet: ok");
         check(r.connector.type == EntityType::Arc && near(r.connector.radius, 10.0), "fillet: arc radius");
         check(near(r.connector.center.x, 10.0) && near(r.connector.center.y, 10.0), "fillet: arc center");
+        // The connector must be the SHORT arc (a fillet spans < π, never a circle).
+        {
+            double span = r.connector.endAngle - r.connector.startAngle;
+            while (span <= 0.0) span += 2.0 * M_PI;
+            check(span < M_PI + 1e-6 && near(span, M_PI / 2.0),
+                  "fillet: arc spans the short way (quarter circle), not a full circle");
+        }
         // Horizontal line trimmed so its near end is at the tangent point (10,0).
         check(near(h.a.x, 10.0) && near(h.a.y, 0.0), "fillet: h trimmed");
         check(near(v.a.x, 0.0) && near(v.a.y, 10.0), "fillet: v trimmed");
@@ -262,6 +269,25 @@ int run_editor_tests() {
             ed.onPointerRelease({5, 8}, Qt::LeftButton);
             check(near(d.entities()[0].a.y, 0.0) && near(d.entities()[0].b.y, 0.0),
                   "edit: dragging the body does NOT move the object");
+        }
+        // A double polyline exposes joints on its PHYSICAL runs: grabbing a run-end
+        // joint drags the matching centerline vertex (both runs follow).
+        {
+            Document d; d.entities().clear();
+            Entity dp; dp.id = "dp"; dp.type = EntityType::Polyline;
+            dp.points = {{0, 0}, {40, 0}};
+            dp.meta.insert("double", true);
+            dp.meta.insert("gap", 10.0);
+            d.entities().push_back(dp);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+            ed.setTool(ToolId::Select);
+            ed.selectById("dp");
+            // The far run-end joint sits at (40, +/-5); grab the +5 one and place it.
+            ed.onPointerPress({40, 5}, Qt::LeftButton, Qt::NoModifier); // grab run joint
+            ed.onPointerMove({60, 5});
+            ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier); // click to place
+            check(near(d.entities()[0].points[1].x, 60.0),
+                  "dpoly-grip: a physical-run end joint drags the centerline vertex");
         }
         // Move a joint by dragging an endpoint grip.
         {

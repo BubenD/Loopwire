@@ -135,13 +135,37 @@ std::vector<Grip> gripsOf(const Entity& e) {
         // keeping it centered. off={0,0} so it tracks the centerline directly.
         g.push_back({e.a, GripRole::LineA, 0});
         g.push_back({e.b, GripRole::LineB, 0});
-        // A single middle joint on the centerline length-center: moves the whole
-        // double line. None of these centerline joints are region-selection points,
-        // so a crossing box passing between the lines won't select via them.
+        // Middle joints: on the centerline AND on each visible physical line, so the
+        // double line can be grabbed at the middle of either run (moves the whole).
         g.push_back({mid, GripRole::LineMid, 0});
+        g.push_back({mid + off, GripRole::LineMid, 0});
+        g.push_back({mid + noff, GripRole::LineMid, 0});
         break;
     }
     case EntityType::Polyline:
+        // A DOUBLE polyline gets joints on its two PHYSICAL runs — a vertex joint at
+        // each end/bend (drags the matching centerline vertex via its offset) and a
+        // midpoint joint on each run segment (moves the whole double polyline).
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const std::vector<Vec2> run1 = offsetPolyline(e.points, gap / 2.0);
+            const std::vector<Vec2> run2 = offsetPolyline(e.points, -gap / 2.0);
+            bool mapped = false;
+            for (const auto* run : {&run1, &run2}) {
+                if (run->size() != e.points.size()) continue;
+                mapped = true;
+                for (int i = 0; i < static_cast<int>(run->size()); ++i)
+                    g.push_back({(*run)[i], GripRole::Vertex, i, (*run)[i] - e.points[i]});
+                for (size_t i = 1; i < run->size(); ++i)
+                    g.push_back({lerp((*run)[i - 1], (*run)[i], 0.5), GripRole::LineMid, 0});
+            }
+            if (mapped) break;
+            // Offsetting changed the vertex count (tight bends) — fall back to the
+            // centerline vertices.
+        }
+        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
+            g.push_back({e.points[i], GripRole::Vertex, i});
+        break;
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Polygon:
@@ -1161,7 +1185,10 @@ void Editor::applyEditDrag(const Vec2& target) {
                     e->points = regularPolygonPoints(polygonCenter(e->points), target,
                                                      static_cast<int>(e->points.size()), index);
                 else
-                    e->points[index] = target;
+                    // `off` is the grip's offset from the stored point (0 normally; for
+                    // a double polyline's physical-run joint it's the perpendicular
+                    // offset, so the centerline vertex follows under the cursor).
+                    e->points[index] = target - off;
             }
             // A dimension keeps a/b in sync with its measured points.
             if (e->type == EntityType::Dimension && e->points.size() >= 2) {
@@ -2250,6 +2277,14 @@ QString Editor::drawCommandHint() const {
             return QStringLiteral("ARC LENGTH: pick an arc, then place the text");
         }
         return QStringLiteral("DIMENSION");
+    case ToolId::Fillet:
+        return QStringLiteral("FILLET: [R] radius=%1  ·  pick two lines").arg(filletRadius_);
+    case ToolId::Chamfer:
+        return QStringLiteral("CHAMFER: pick two lines  ·  distance=%1").arg(chamferDist_);
+    case ToolId::Trim:
+        return QStringLiteral("TRIM: pick a line to trim at the nearest intersection");
+    case ToolId::Extend:
+        return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
         return QStringLiteral("TEXT: pick a point, then type the text");
     case ToolId::Hatch:
@@ -2273,6 +2308,7 @@ bool Editor::isDrawOptionChar(QChar ch) const {
     case ToolId::Spline:         return c == 'c' || c == 'u';
     case ToolId::DoubleLine:     return c == 'g' || c == 'l' || c == 's';
     case ToolId::Arc:            return c == 'm' || c == 'i'; // "mi" mirror
+    case ToolId::Fillet:          return c == 'r'; // [R] radius
     default:                     return false; // Line/Rect/Circle/Ellipse/...: no letter options
     }
 }
@@ -2510,14 +2546,19 @@ bool Editor::acceptCommandInput(const QString& text) {
         return true;
     }
 
-    // Awaiting a fillet radius after the user typed "f" (0 = sharp corners).
+    // Awaiting a fillet radius after the user typed "f" or "r" (0 = sharp corners).
     if (filletInputMode_) {
         bool ok = false;
         const double r = t.toDouble(&ok);
         if (ok && r >= 0) {
-            cornerRadius_ = r;
-            emit message(r > 0 ? QStringLiteral("Fillet radius = %1").arg(r)
-                               : QStringLiteral("Sharp corners"));
+            if (tool_ == ToolId::Fillet) {
+                filletRadius_ = r;
+                emit message(QStringLiteral("Fillet radius = %1 — pick two lines").arg(r));
+            } else {
+                cornerRadius_ = r;
+                emit message(r > 0 ? QStringLiteral("Fillet radius = %1").arg(r)
+                                   : QStringLiteral("Sharp corners"));
+            }
         } else {
             emit message(QStringLiteral("Enter a fillet radius (0 for sharp corners)"));
         }
@@ -2579,6 +2620,18 @@ bool Editor::acceptCommandInput(const QString& text) {
         // of running the "fillet" command and jumping into the Fillet tool.
         if (drafting_ || isDrawTool(tool_)) {
             emit message(QStringLiteral("Fillet applies to polylines"));
+            return true;
+        }
+    }
+
+    // "r" = radius option inside the Fillet tool. Enters fillet-radius input mode
+    // so the user can set the radius before picking lines.
+    if (t.compare(QStringLiteral("r"), Qt::CaseInsensitive) == 0) {
+        if (tool_ == ToolId::Fillet) {
+            filletInputMode_ = true;
+            emit message(QStringLiteral("Fillet radius <%1>: enter value and press Enter")
+                             .arg(filletRadius_));
+            emit dynamicPrompt(QStringLiteral("Fillet radius"));
             return true;
         }
     }
