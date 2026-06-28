@@ -52,6 +52,10 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
                                   int arcSegments = 10);
 
+// True if `radius` is small enough to fit (tangent setback within the segment
+// lengths) at every interior corner of the polyline. radius <= 0 always fits.
+bool filletRadiusFits(const std::vector<Vec2>& pts, double radius);
+
 // Point on a circle/arc at the given angle (radians).
 inline Vec2 pointOnCircle(const Vec2& center, double radius, double angle) {
     return {center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};

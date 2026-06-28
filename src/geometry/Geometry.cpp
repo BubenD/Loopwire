@@ -95,6 +95,22 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist) {
     return out;
 }
 
+bool filletRadiusFits(const std::vector<Vec2>& pts, double radius) {
+    const int n = static_cast<int>(pts.size());
+    if (n < 3 || radius <= 0.0) return true;
+    constexpr double kPi = 3.14159265358979323846;
+    for (int i = 1; i < n - 1; ++i) {
+        const Vec2 p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+        const double cosT = std::clamp(dot((p0 - p1).normalized(), (p2 - p1).normalized()), -1.0, 1.0);
+        const double theta = std::acos(cosT);
+        if (theta < 1e-3 || theta > kPi - 1e-3) continue; // straight/degenerate: nothing to round
+        const double t = radius / std::tan(theta / 2.0); // tangent setback from corner
+        const double maxT = 0.5 * std::min(distance(p0, p1), distance(p1, p2));
+        if (t > maxT + 1e-9) return false;                // too big to fit this corner
+    }
+    return true;
+}
+
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
                                   int arcSegments) {
     const int n = static_cast<int>(pts.size());

@@ -1914,6 +1914,7 @@ void Editor::finishDraw() {
     if (!doc_ || draftPts_.empty()) { cancelDraw(); return; }
     Entity e;
     e.layer = doc_->activeLayer();
+    bool filletTooBig = false; // set if a polyline fillet radius won't fit (warn after)
 
     switch (tool_) {
     case ToolId::Line:
@@ -2066,8 +2067,18 @@ void Editor::finishDraw() {
                 e.meta.insert("lsRefBy", lsRefB_.y);
             }
         }
-        if (e.type == EntityType::Polyline && cornerRadius_ > 0.0)
-            e.meta.insert("cornerRadius", cornerRadius_);
+        if (e.type == EntityType::Polyline && cornerRadius_ > 0.0) {
+            // Effective rounding radius on the centreline (double poly rounds the
+            // centreline at cornerRadius + half the gap). Reject if it won't fit any
+            // corner rather than silently clamping it.
+            const double eff =
+                cornerRadius_ +
+                (tool_ == ToolId::DoublePolyline ? doubleLineGap_ / 2.0 : 0.0);
+            if (filletRadiusFits(e.points, eff))
+                e.meta.insert("cornerRadius", cornerRadius_);
+            else
+                filletTooBig = true; // drawn with sharp corners; warn below
+        }
         if (e.type == EntityType::Spline && splineMode_ == SplineMode::CV)
             e.meta.insert("splineMode", QStringLiteral("cv")); // else Fit (default)
         // Arc segments: store bulges if any segment is curved.
@@ -2115,6 +2126,9 @@ void Editor::finishDraw() {
     drafting_ = false;
     emit changed();
     setTool(ToolId::Select); // finished: return to Select (Space repeats last tool)
+    if (filletTooBig) // emit after setTool so the warning isn't overwritten
+        emit message(QStringLiteral("Fillet radius %1 is too big for a corner — drawn with sharp corners")
+                         .arg(cornerRadius_));
 }
 
 void Editor::cancelDraw() {
@@ -2993,6 +3007,10 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         if (r.ok) {
             addEntity(std::move(r.connector));
             emit message(QStringLiteral("%1 applied").arg(toolLabel(tool_)));
+        } else if (r.tooBig) {
+            undo();
+            emit message(QStringLiteral("Fillet radius %1 is too big for these lines — not applied")
+                             .arg(filletRadius_));
         } else {
             undo();
             emit message(QStringLiteral("Lines do not form a valid corner."));

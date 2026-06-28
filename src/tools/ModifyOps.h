@@ -12,7 +12,8 @@ namespace Edraw_Desktop {
 // connector entity (arc for fillet, line for chamfer) is returned.
 struct CornerResult {
     bool ok = false;
-    Entity connector; // arc (fillet) or line (chamfer)
+    bool tooBig = false; // radius too large to fit on the picked lines (not applied)
+    Entity connector;    // arc (fillet) or line (chamfer)
 };
 
 // Round the corner between two line entities with the given radius. `near1`/

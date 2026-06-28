@@ -82,13 +82,12 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     const double theta = std::acos(cosT);
     if (theta < 1e-4 || std::abs(theta - M_PI) < 1e-4) return res; // collinear
 
-    // Tangent setback from the corner. Clamp so the tangent points stay on the kept
-    // portions of both lines — otherwise a too-large radius pushes them past the
-    // ends and the arc balloons into a near-full circle.
-    double d = radius / std::tan(theta / 2.0);
-    const double maxD = std::min(distance(P, n1), distance(P, n2)) * 0.999;
-    if (d > maxD) d = maxD;
-    const double r = d * std::tan(theta / 2.0); // effective radius after clamping
+    // Tangent setback from the corner. If the radius is too large to fit on either
+    // kept line, reject it (don't apply) so the caller can warn the user.
+    const double d = radius / std::tan(theta / 2.0);
+    const double maxD = std::min(distance(P, n1), distance(P, n2));
+    if (d > maxD) { res.tooBig = true; return res; }
+    const double r = radius;
     const Vec2 T1 = P + u1 * d;
     const Vec2 T2 = P + u2 * d;
 

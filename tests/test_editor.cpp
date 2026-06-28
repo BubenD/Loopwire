@@ -165,15 +165,21 @@ int run_editor_tests() {
         check(near(distance(r.connector.a, r.connector.b), std::sqrt(128.0)), "chamfer: span");
     }
 
-    // --- Fillet radius clamped to the lines so it never balloons into a circle.
+    // --- Fillet radius too big for the lines: rejected (not applied), flagged tooBig.
     {
         Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {5, 0};
         Entity v; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 5};
         CornerResult r = filletLines(h, v, 100.0, {5, 0}, {0, 5}); // radius >> segment length
-        double span = r.connector.endAngle - r.connector.startAngle;
-        while (span <= 0.0) span += 2.0 * M_PI;
-        check(r.ok && r.connector.radius < 6.0 && span < M_PI + 1e-6,
-              "fillet: oversize radius is clamped (no full circle)");
+        check(!r.ok && r.tooBig, "fillet: oversize radius is rejected (tooBig), not applied");
+        // The lines must be untouched when the radius doesn't fit.
+        check(near(h.b.x, 5.0) && near(v.b.y, 5.0), "fillet: lines untouched on reject");
+    }
+
+    // --- Polyline fillet fit check: small radius fits, oversize does not.
+    {
+        std::vector<Vec2> pts = {{0, 0}, {10, 0}, {10, 10}};
+        check(filletRadiusFits(pts, 3.0), "polyfillet: small radius fits");
+        check(!filletRadiusFits(pts, 20.0), "polyfillet: oversize radius does not fit");
     }
 
     // --- Rotate is two-click: base point, then the angle point (absolute angle).
