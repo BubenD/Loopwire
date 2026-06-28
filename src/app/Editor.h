@@ -307,6 +307,10 @@ private:
     void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects
     void buildTangentCircle();             // solve + place once enough objects are picked
     void handleModifyPress(const Vec2& p);
+    // The selection transformed by the in-progress modify (Move/Rotate/Mirror/
+    // Scale/Offset) using the collected points + the live cursor — drawn as a ghost
+    // preview until the command finishes.
+    std::vector<Entity> modifyPreview() const;
     void handlePickModifyPress(const Vec2& p);
     void handlePlacementPress(const Vec2& p);
     void finishRegionSelect(bool subtract); // shift = remove from selection

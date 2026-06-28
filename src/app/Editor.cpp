@@ -2867,6 +2867,68 @@ void Editor::handleModifyPress(const Vec2& p) {
     setTool(ToolId::Select);
 }
 
+std::vector<Entity> Editor::modifyPreview() const {
+    std::vector<Entity> ghosts;
+    if (!doc_ || modifyPts_.empty() || selected_.empty()) return ghosts;
+    for (const auto& e : doc_->entities())
+        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end())
+            ghosts.push_back(e);
+
+    const Vec2 cur = cursor_; // the live (snapped) cursor stands in for the last point
+    switch (tool_) {
+    case ToolId::Move: {
+        const Vec2 delta = cur - modifyPts_[0];
+        for (Entity& g : ghosts) translateEntity(g, delta);
+        break;
+    }
+    case ToolId::Rotate:
+        if (modifyPts_.size() >= 2) {
+            const Vec2 piv = modifyPts_[0];
+            const double a0 = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
+            const double a1 = std::atan2(cur.y - piv.y, cur.x - piv.x);
+            for (Entity& g : ghosts) rotateEntity(g, piv, a1 - a0);
+        } else {
+            ghosts.clear(); // need the reference direction first
+        }
+        break;
+    case ToolId::Mirror:
+        for (Entity& g : ghosts) mirrorEntity(g, modifyPts_[0], cur);
+        break;
+    case ToolId::Scale:
+        if (modifyPts_.size() >= 2) {
+            const Vec2 base = modifyPts_[0];
+            const double ref = distance(base, modifyPts_[1]);
+            const double f = ref > 1e-9 ? distance(base, cur) / ref : 1.0;
+            for (Entity& g : ghosts) scaleEntity(g, base, f);
+        } else {
+            ghosts.clear();
+        }
+        break;
+    case ToolId::Offset: {
+        const Vec2 side = cur;
+        std::vector<Entity> off;
+        for (const Entity& e : ghosts) {
+            Entity clone = e;
+            if (e.type == EntityType::Circle) {
+                const double d = distance(e.center, side) - e.radius;
+                clone.radius = std::max(1e-6, e.radius + d);
+                off.push_back(clone);
+            } else if (e.type == EntityType::Line || e.type == EntityType::DoubleLine) {
+                const auto c = closestPointOnSegment(side, e.a, e.b);
+                translateEntity(clone, side - c.point);
+                off.push_back(clone);
+            }
+        }
+        ghosts = off;
+        break;
+    }
+    default:
+        ghosts.clear();
+        break;
+    }
+    return ghosts;
+}
+
 // ---- Pick-modify tools (trim / extend / fillet / chamfer) ------------------
 
 void Editor::handlePickModifyPress(const Vec2& p) {
@@ -4020,6 +4082,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         for (const auto& v : modifyPts_) poly << vt.toScreen(v);
         poly << vt.toScreen(cursor_);
         p.drawPolyline(poly);
+
+        // Live ghost of the result (Move/Rotate/Mirror/Scale/Offset) until the
+        // command finishes, so the outcome is visible as the cursor moves.
+        const QColor ghost(120, 200, 255, 170);
+        for (const Entity& g : modifyPreview()) EntityRenderer::draw(p, g, *doc_, vt, ghost);
     }
 
     // Snap marker.
