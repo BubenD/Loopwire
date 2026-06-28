@@ -311,6 +311,9 @@ private:
     // Scale/Offset) using the collected points + the live cursor — drawn as a ghost
     // preview until the command finishes.
     std::vector<Entity> modifyPreview() const;
+    // Reference length for a 2-click scale: the selection's bounding-box diagonal,
+    // so dragging out to ~that distance is ~1x.
+    double selectionRefLength(const std::vector<Entity*>& sel) const;
     void handlePickModifyPress(const Vec2& p);
     void handlePlacementPress(const Vec2& p);
     void finishRegionSelect(bool subtract); // shift = remove from selection

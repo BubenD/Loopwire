@@ -165,6 +165,63 @@ int run_editor_tests() {
         check(near(distance(r.connector.a, r.connector.b), std::sqrt(128.0)), "chamfer: span");
     }
 
+    // --- Fillet radius clamped to the lines so it never balloons into a circle.
+    {
+        Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {5, 0};
+        Entity v; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 5};
+        CornerResult r = filletLines(h, v, 100.0, {5, 0}, {0, 5}); // radius >> segment length
+        double span = r.connector.endAngle - r.connector.startAngle;
+        while (span <= 0.0) span += 2.0 * M_PI;
+        check(r.ok && r.connector.radius < 6.0 && span < M_PI + 1e-6,
+              "fillet: oversize radius is clamped (no full circle)");
+    }
+
+    // --- Rotate is two-click: base point, then the angle point (absolute angle).
+    {
+        Document d; d.entities().clear();
+        Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+        d.entities().push_back(l);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("l");
+        ed.setTool(ToolId::Rotate);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);  // pivot
+        ed.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier); // angle = +90deg
+        check(near(d.entities()[0].b.x, 0.0) && near(d.entities()[0].b.y, 10.0),
+              "rotate: two-click rotates by the base->point angle");
+    }
+
+    // --- Scale is two-click about the base; factor = dist / bbox-diagonal.
+    {
+        Document d; d.entities().clear();
+        Entity l; l.id = "l"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {10, 0};
+        d.entities().push_back(l); // bbox diagonal = 10
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("l");
+        ed.setTool(ToolId::Scale);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);  // base
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier); // dist 20 / diag 10 = x2
+        check(near(d.entities()[0].b.x, 20.0), "scale: two-click factor = dist / bbox diagonal");
+    }
+
+    // --- Chamfer (Editor): click a point on each line -> straight cut between them.
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity v; v.id = "v"; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 100};
+        d.entities().push_back(h);
+        d.entities().push_back(v);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setTool(ToolId::Chamfer);
+        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier); // point on h
+        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier); // point on v -> commit
+        bool gotChamfer = false;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Line && near(distance(e.a, e.b), std::sqrt(1800.0), 1.0))
+                gotChamfer = true;
+        check(d.entities().size() == 3 && gotChamfer,
+              "chamfer: straight cut between the two picked points");
+    }
+
     // --- Trim a line at an intersection.
     {
         Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};

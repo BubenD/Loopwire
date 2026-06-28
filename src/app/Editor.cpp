@@ -2278,9 +2278,9 @@ QString Editor::drawCommandHint() const {
         }
         return QStringLiteral("DIMENSION");
     case ToolId::Fillet:
-        return QStringLiteral("FILLET: [R] radius=%1  ·  pick two lines").arg(filletRadius_);
+        return QStringLiteral("FILLET: [R] radius=%1  ·  pick two lines (rounds the corner)").arg(filletRadius_);
     case ToolId::Chamfer:
-        return QStringLiteral("CHAMFER: pick two lines  ·  distance=%1").arg(chamferDist_);
+        return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
         return QStringLiteral("TRIM: pick a line to trim at the nearest intersection");
     case ToolId::Extend:
@@ -2801,10 +2801,13 @@ void Editor::handleModifyPress(const Vec2& p) {
     }
     modifyPts_.push_back(p);
 
-    const size_t need = (tool_ == ToolId::Move || tool_ == ToolId::Offset) ? 2
-                        : (tool_ == ToolId::Mirror) ? 2
-                                                    : 3; // Rotate/Scale
-    if (modifyPts_.size() < need) {
+    // All modify tools are two-click: a reference point, then a finishing point.
+    if (modifyPts_.size() < 2) {
+        emit message(tool_ == ToolId::Rotate
+                         ? QStringLiteral("Rotate: pick the base point, then click to set the angle")
+                     : tool_ == ToolId::Scale
+                         ? QStringLiteral("Scale: pick the base point, then click to set the size")
+                         : QStringLiteral("%1: pick the destination").arg(toolLabel(tool_)));
         emit changed();
         return;
     }
@@ -2818,9 +2821,8 @@ void Editor::handleModifyPress(const Vec2& p) {
     }
     case ToolId::Rotate: {
         const Vec2 piv = modifyPts_[0];
-        const double a0 = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
-        const double a1 = std::atan2(modifyPts_[2].y - piv.y, modifyPts_[2].x - piv.x);
-        for (Entity* e : sel) rotateEntity(*e, piv, a1 - a0);
+        const double ang = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
+        for (Entity* e : sel) rotateEntity(*e, piv, ang);
         break;
     }
     case ToolId::Mirror: {
@@ -2829,10 +2831,9 @@ void Editor::handleModifyPress(const Vec2& p) {
     }
     case ToolId::Scale: {
         const Vec2 base = modifyPts_[0];
-        const double ref = distance(base, modifyPts_[1]);
-        const double cur = distance(base, modifyPts_[2]);
-        const double f = ref > 1e-9 ? cur / ref : 1.0;
-        for (Entity* e : sel) scaleEntity(*e, base, f);
+        const double ref = selectionRefLength(sel);
+        const double f = ref > 1e-9 ? distance(base, modifyPts_[1]) / ref : 1.0;
+        for (Entity* e : sel) scaleEntity(*e, base, std::max(1e-4, f));
         break;
     }
     case ToolId::Offset: {
@@ -2867,6 +2868,15 @@ void Editor::handleModifyPress(const Vec2& p) {
     setTool(ToolId::Select);
 }
 
+double Editor::selectionRefLength(const std::vector<Entity*>& sel) const {
+    Bounds b;
+    for (const Entity* e : sel) {
+        const Bounds eb = e->bounds();
+        if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+    }
+    return b.valid ? std::max(1e-6, distance(b.min, b.max)) : 1.0;
+}
+
 std::vector<Entity> Editor::modifyPreview() const {
     std::vector<Entity> ghosts;
     if (!doc_ || modifyPts_.empty() || selected_.empty()) return ghosts;
@@ -2881,29 +2891,28 @@ std::vector<Entity> Editor::modifyPreview() const {
         for (Entity& g : ghosts) translateEntity(g, delta);
         break;
     }
-    case ToolId::Rotate:
-        if (modifyPts_.size() >= 2) {
-            const Vec2 piv = modifyPts_[0];
-            const double a0 = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
-            const double a1 = std::atan2(cur.y - piv.y, cur.x - piv.x);
-            for (Entity& g : ghosts) rotateEntity(g, piv, a1 - a0);
-        } else {
-            ghosts.clear(); // need the reference direction first
-        }
+    case ToolId::Rotate: {
+        const Vec2 piv = modifyPts_[0];
+        const double ang = std::atan2(cur.y - piv.y, cur.x - piv.x);
+        for (Entity& g : ghosts) rotateEntity(g, piv, ang);
         break;
+    }
     case ToolId::Mirror:
         for (Entity& g : ghosts) mirrorEntity(g, modifyPts_[0], cur);
         break;
-    case ToolId::Scale:
-        if (modifyPts_.size() >= 2) {
-            const Vec2 base = modifyPts_[0];
-            const double ref = distance(base, modifyPts_[1]);
-            const double f = ref > 1e-9 ? distance(base, cur) / ref : 1.0;
-            for (Entity& g : ghosts) scaleEntity(g, base, f);
-        } else {
-            ghosts.clear();
+    case ToolId::Scale: {
+        const Vec2 base = modifyPts_[0];
+        // Same bbox-diagonal reference as the commit, computed from the ghosts.
+        Bounds b;
+        for (const Entity& g : ghosts) {
+            const Bounds eb = g.bounds();
+            if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
         }
+        const double ref = b.valid ? std::max(1e-6, distance(b.min, b.max)) : 1.0;
+        const double f = std::max(1e-4, distance(base, cur) / ref);
+        for (Entity& g : ghosts) scaleEntity(g, base, f);
         break;
+    }
     case ToolId::Offset: {
         const Vec2 side = cur;
         std::vector<Entity> off;
@@ -2965,9 +2974,22 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     Entity* l2 = entityById(pickIds_[1]);
     if (l1 && l2 && l1 != l2 && l1->type == EntityType::Line && l2->type == EntityType::Line) {
         pushUndo();
-        CornerResult r = (tool_ == ToolId::Fillet)
-                             ? filletLines(*l1, *l2, filletRadius_, pickPts_[0], pickPts_[1])
-                             : chamferLines(*l1, *l2, chamferDist_, chamferDist_, pickPts_[0], pickPts_[1]);
+        CornerResult r;
+        if (tool_ == ToolId::Fillet) {
+            r = filletLines(*l1, *l2, filletRadius_, pickPts_[0], pickPts_[1]);
+        } else {
+            // Chamfer cuts a straight line between the two PICKED points: the cut
+            // distance on each line is the picked point's distance from the corner.
+            // The kept side is the end farthest from the corner (the picked point may
+            // sit nearer the corner than the far end, so don't use it as the side).
+            if (auto P = lineLineIntersection(l1->a, l1->b, l2->a, l2->b)) {
+                const Vec2 c1 = closestPointOnSegment(pickPts_[0], l1->a, l1->b).point;
+                const Vec2 c2 = closestPointOnSegment(pickPts_[1], l2->a, l2->b).point;
+                const Vec2 keep1 = distance(l1->a, *P) >= distance(l1->b, *P) ? l1->a : l1->b;
+                const Vec2 keep2 = distance(l2->a, *P) >= distance(l2->b, *P) ? l2->a : l2->b;
+                r = chamferLines(*l1, *l2, distance(*P, c1), distance(*P, c2), keep1, keep2);
+            }
+        }
         if (r.ok) {
             addEntity(std::move(r.connector));
             emit message(QStringLiteral("%1 applied").arg(toolLabel(tool_)));
@@ -3567,6 +3589,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         std::optional<Vec2> ref;
         if (drafting_ && !draftPts_.empty()) ref = draftPts_.back();
         else if (editing_ && editMode_ == 1) ref = editAnchor_;
+        else if (!modifyPts_.empty()) ref = modifyPts_.back(); // during a modify command
         if (ref) {
             const QPointF as = vt.toScreen(*ref);
             const QPointF cs = vt.toScreen(cursor_);

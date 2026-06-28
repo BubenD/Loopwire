@@ -82,7 +82,13 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     const double theta = std::acos(cosT);
     if (theta < 1e-4 || std::abs(theta - M_PI) < 1e-4) return res; // collinear
 
-    const double d = radius / std::tan(theta / 2.0);
+    // Tangent setback from the corner. Clamp so the tangent points stay on the kept
+    // portions of both lines — otherwise a too-large radius pushes them past the
+    // ends and the arc balloons into a near-full circle.
+    double d = radius / std::tan(theta / 2.0);
+    const double maxD = std::min(distance(P, n1), distance(P, n2)) * 0.999;
+    if (d > maxD) d = maxD;
+    const double r = d * std::tan(theta / 2.0); // effective radius after clamping
     const Vec2 T1 = P + u1 * d;
     const Vec2 T2 = P + u2 * d;
 
@@ -92,14 +98,14 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
 
     // Arc connecting T1->T2.
     const Vec2 bis = (u1 + u2).normalized();
-    const double cdist = radius / std::sin(theta / 2.0);
+    const double cdist = r / std::sin(theta / 2.0);
     const Vec2 C = P + bis * cdist;
     Entity arc;
     arc.id = newId();
     arc.type = EntityType::Arc;
     arc.layer = l1.layer;
     arc.center = C;
-    arc.radius = radius;
+    arc.radius = r;
     double sa = std::atan2(T1.y - C.y, T1.x - C.x);
     double ea = std::atan2(T2.y - C.y, T2.x - C.x);
     // The renderer draws counter-clockwise from sa to ea with a positive sweep
