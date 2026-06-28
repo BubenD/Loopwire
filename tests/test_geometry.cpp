@@ -100,6 +100,27 @@ int run_geometry_tests() {
         check(curved.size() > 2, "expandBulge: a bulged segment is tessellated");
     }
 
+    // traceEnclosingLoop: find a closed region built from separate segments.
+    {
+        // A square made of FOUR separate line segments (not one closed entity).
+        std::vector<std::pair<Vec2, Vec2>> segs = {
+            {{0, 0}, {10, 0}}, {{10, 0}, {10, 10}}, {{10, 10}, {0, 10}}, {{0, 10}, {0, 0}}};
+        auto loop = traceEnclosingLoop(segs, {5, 5});
+        check(loop && loop->size() == 4, "trace: square from 4 separate lines -> 4-pt loop");
+        // A point OUTSIDE the square encloses nothing.
+        check(!traceEnclosingLoop(segs, {20, 5}), "trace: outside point -> no loop");
+
+        // Region bounded by overlapping/crossing lines (edges cross, not just meet):
+        // two long crossing lines plus a top and bottom make a small central cell.
+        std::vector<std::pair<Vec2, Vec2>> crs = {
+            {{0, 0}, {10, 0}},   // bottom
+            {{0, 8}, {10, 8}},   // top
+            {{2, -2}, {2, 10}},  // left vertical (overshoots)
+            {{8, -2}, {8, 10}}}; // right vertical (overshoots)
+        auto cell = traceEnclosingLoop(crs, {5, 4});
+        check(cell && cell->size() == 4, "trace: cell from overshooting crossing lines");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

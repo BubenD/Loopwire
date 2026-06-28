@@ -59,6 +59,14 @@ std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
                                            const std::vector<double>& radii,
                                            int arcSegments = 10);
 
+// Trace the smallest closed loop of edges that encloses `seed`, given a soup of
+// boundary segments (from any number of separate entities). The segments are split
+// at their mutual intersections, built into a planar graph, and the face containing
+// the seed is walked (ray-cast + left-hand rule). Returns the loop's vertices
+// (CCW, not repeating the first point) or nullopt if the seed isn't enclosed.
+std::optional<std::vector<Vec2>> traceEnclosingLoop(
+    const std::vector<std::pair<Vec2, Vec2>>& segments, const Vec2& seed);
+
 // True if `radius` is small enough to fit (tangent setback within the segment
 // lengths) at every interior corner of the polyline. radius <= 0 always fits.
 bool filletRadiusFits(const std::vector<Vec2>& pts, double radius);

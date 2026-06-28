@@ -286,6 +286,10 @@ private:
     // Hatch "Pick Points": the smallest closed entity that encloses `seed`, or
     // nullptr if none surrounds it.
     const Entity* enclosingEntity(const Vec2& seed) const;
+    // Hatch "Pick Points" fallback: the smallest closed loop of edges (formed by
+    // ANY combination of separate visible objects) that encloses `seed`. Returns
+    // the loop polygon, or nullopt if the seed isn't inside a closed region.
+    std::optional<std::vector<Vec2>> enclosingRegionLoop(const Vec2& seed) const;
     // Create a Hatch/Wipeout from a source boundary entity (circle shapes stay a
     // true circle when "multiple joints" is off; everything else is a polygon).
     void commitHatchFromSource(const Entity& src);
@@ -411,10 +415,6 @@ private:
     std::vector<Vec2> pickPts_;
     double filletRadius_ = 5.0;
     double chamferDist_ = 5.0;
-    // Trim cutting edges: the objects selected when the Trim tool was activated.
-    // Subsequent picks are trimmed up to their intersection with these references.
-    // Empty => fall back to trimming at the nearest intersection with any entity.
-    std::vector<QString> trimRefIds_;
 
     // Harness defaults.
     ConnectorSpec connectorSpec_ = defaultConnectorSpec(4);

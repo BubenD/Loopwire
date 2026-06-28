@@ -168,10 +168,20 @@ std::vector<Grip> gripsOf(const Entity& e) {
         break;
     case EntityType::Spline:
     case EntityType::Wire:
-    case EntityType::Polygon:
     case EntityType::Wipeout:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
+        break;
+    case EntityType::Polygon:
+        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
+            g.push_back({e.points[i], GripRole::Vertex, i});
+        // Centre joint: a move handle (and an object-snap point) at the centroid.
+        if (!e.points.empty()) {
+            Vec2 c{0, 0};
+            for (const auto& v : e.points) c = c + v;
+            c = c * (1.0 / static_cast<double>(e.points.size()));
+            g.push_back({c, GripRole::Center, 0});
+        }
         break;
     case EntityType::Hatch:
         if (e.meta.value("associative").toBool(false)) {
@@ -287,10 +297,6 @@ void Editor::setTool(ToolId t) {
         selected_.clear();
         emit selectionChanged();
     }
-    // Trim: the objects selected when the tool starts become the cutting edges.
-    // Later picks are trimmed up to their intersection with these references.
-    trimRefIds_.clear();
-    if (t == ToolId::Trim) trimRefIds_ = selected_;
     tool_ = t;
     if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
     emit toolChanged(t);
@@ -593,6 +599,12 @@ bool Editor::tryHatchAt(const Vec2& p) {
         commitHatchFromSource(*src);
         return true;
     }
+    // No single closed object surrounds the point — trace a closed loop formed by
+    // any combination of separate objects (AutoCAD-style boundary detection).
+    if (auto loop = enclosingRegionLoop(p)) {
+        commitHatchBoundary(*loop);
+        return true;
+    }
     // Nothing enclosing: end the live-edit of the previous hatch.
     if (!lastHatchId_.isEmpty()) {
         lastHatchId_.clear();
@@ -707,10 +719,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     }
 
     if (tool_ == ToolId::Select) { handleSelectPress(p, raw, mods); return; }
-    // In Hatch/Wipeout mode a click first tries to fill a region/object; if there's
+    // In Hatch mode a click first tries to fill a region/object; if there's
     // nothing to fill, fall through to normal selection (click or select-zone) so
-    // other objects can still be picked while hatching.
-    if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
+    // other objects can still be picked while hatching. (Wipeout is drawn as an
+    // explicit polygon — handled by handleDrawPress below, AutoCAD-style.)
+    if (tool_ == ToolId::Hatch) {
         // A pending selection (rectangle 2nd corner) or a grabbed joint must finish
         // first — don't hatch instead of completing it.
         if (regionMode_ == RegionMode::RectPending || (editing_ && gripGrab_)) {
@@ -1453,6 +1466,14 @@ void Editor::handleDrawPress(const Vec2& p) {
                          .arg(toolLabel(tool_)));
         break;
     }
+    case ToolId::Wipeout:
+        // AutoCAD WIPEOUT: pick polygon vertices; Enter / double-click / Close
+        // finishes the masking polygon.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(QStringLiteral("WIPEOUT: click the next point — [C]lose, [U]ndo, "
+                                    "Enter to finish"));
+        break;
     case ToolId::Text:
         draftPts_ = {p};
         emit textPromptRequested(QStringLiteral("Text:"));
@@ -1583,6 +1604,35 @@ const Entity* Editor::enclosingEntity(const Vec2& seed) const {
         if (area > 1e-9 && area < bestArea) { bestArea = area; best = &e; }
     }
     return best;
+}
+
+std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) const {
+    if (!doc_) return std::nullopt;
+    // Gather boundary segments from every visible line-like / closed object. The
+    // tracer splits them at crossings and walks the cell containing the seed, so a
+    // region bounded by SEVERAL separate objects still fills.
+    std::vector<std::pair<Vec2, Vec2>> segs;
+    auto addSeg = [&](const Vec2& a, const Vec2& b) {
+        if ((b - a).lengthSq() > 1e-12) segs.emplace_back(a, b);
+    };
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked)) continue;
+        switch (e.type) {
+        case EntityType::Hatch:
+        case EntityType::Wipeout:
+        case EntityType::Text:
+        case EntityType::Dimension:
+            break; // fills / annotations are not boundaries
+        default:
+            for (const auto& s : entitySelectSegments(e)) addSeg(s.first, s.second);
+            break;
+        }
+    }
+    auto loop = traceEnclosingLoop(segs, seed);
+    if (!loop || loop->size() < 3) return std::nullopt;
+    // Safety: the walked cell must actually contain the seed (rejects the outer face).
+    if (!pointInPolygon(*loop, seed)) return std::nullopt;
+    return loop;
 }
 
 void Editor::commitHatchFromSource(const Entity& src) {
@@ -2319,10 +2369,8 @@ QString Editor::drawCommandHint() const {
     case ToolId::Chamfer:
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
-        return trimRefIds_.empty()
-                   ? QStringLiteral("TRIM: select a reference object first, then pick lines to trim "
-                                    "up to it (else trims at the nearest intersection)")
-                   : QStringLiteral("TRIM: pick a line crossing the reference — it trims up to it");
+        return QStringLiteral("TRIM: click the part of a line to remove — it trims to the nearest "
+                              "crossing object on each side");
     case ToolId::Extend:
         return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
@@ -2680,7 +2728,8 @@ bool Editor::acceptCommandInput(const QString& text) {
     // (AutoCAD PLINE). "c" closes the run back to the start; "u" removes the last
     // point. Only active while a polyline/spline/wire draft is in progress.
     const bool plineFamily = tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline ||
-                             tool_ == ToolId::Spline || tool_ == ToolId::Wire;
+                             tool_ == ToolId::Spline || tool_ == ToolId::Wire ||
+                             tool_ == ToolId::Wipeout;
     if (plineFamily && drafting_) {
         if (t.compare(QStringLiteral("c"), Qt::CaseInsensitive) == 0 ||
             t.compare(QStringLiteral("close"), Qt::CaseInsensitive) == 0) {
@@ -2990,36 +3039,31 @@ void Editor::handlePickModifyPress(const Vec2& p) {
 
     if (tool_ == ToolId::Trim || tool_ == ToolId::Extend) {
         if (!hit) { emit message(QStringLiteral("Pick a line to modify.")); return; }
-        // Don't trim/extend the reference (cutting-edge) object itself.
-        if (tool_ == ToolId::Trim &&
-            std::find(trimRefIds_.begin(), trimRefIds_.end(), *hit) != trimRefIds_.end()) {
-            emit message(QStringLiteral("That's the reference object — pick a line that crosses it."));
-            return;
-        }
         Entity* line = entityById(*hit);
         if (!line || line->type != EntityType::Line) {
             emit message(QStringLiteral("%1 currently supports straight lines.").arg(toolLabel(tool_)));
             return;
         }
-        // Trim against the pre-selected reference object(s) when present; otherwise
-        // fall back to the nearest intersection with any entity.
-        std::vector<Entity> refs;
-        if (tool_ == ToolId::Trim && !trimRefIds_.empty()) {
-            for (const QString& id : trimRefIds_)
-                if (const Entity* r = entityById(id)) refs.push_back(*r);
-        }
-        const std::vector<Entity>& boundaries =
-            (tool_ == ToolId::Trim && !refs.empty()) ? refs : doc_->entities();
         pushUndo();
-        const bool ok = (tool_ == ToolId::Trim)
-                            ? trimLineAt(*line, p, boundaries)
-                            : extendLineTo(*line, p, doc_->entities());
-        if (!ok) {
-            undo();
-            emit message((tool_ == ToolId::Trim && !refs.empty())
-                             ? QStringLiteral("This line doesn't cross the reference object.")
-                             : QStringLiteral("No boundary found."));
-            return;
+        if (tool_ == ToolId::Trim) {
+            // AutoCAD "quick" trim: every other visible object is a cutting edge;
+            // clicking a piece removes it up to the nearest crossing on each side
+            // (splitting the line in two if the piece sits between two cuts).
+            std::optional<Entity> extra;
+            const bool ok = trimLineQuick(*line, p, doc_->entities(), extra);
+            if (!ok) {
+                undo();
+                emit message(QStringLiteral("Nothing to trim there — the line must cross another object."));
+                return;
+            }
+            if (extra) addEntity(std::move(*extra));
+            emit message(QStringLiteral("Trimmed"));
+        } else {
+            if (!extendLineTo(*line, p, doc_->entities())) {
+                undo();
+                emit message(QStringLiteral("No boundary found."));
+                return;
+            }
         }
         doc_->setDirty(true);
         emit changed();
@@ -3057,8 +3101,9 @@ void Editor::handlePickModifyPress(const Vec2& p) {
             }
         }
         if (r.ok) {
-            addEntity(std::move(r.connector));
-            emit message(QStringLiteral("%1 applied").arg(toolLabel(tool_)));
+            if (r.hasConnector) addEntity(std::move(r.connector));
+            emit message(r.hasConnector ? QStringLiteral("%1 applied").arg(toolLabel(tool_))
+                                        : QStringLiteral("Fillet (radius 0): corner joined"));
         } else if (r.tooBig) {
             undo();
             emit message(QStringLiteral("Fillet radius %1 is too big for these lines — not applied")
@@ -4154,27 +4199,38 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // Hatch/Wipeout "Pick Points": preview the enclosed boundary under the cursor
     // so it's clear which region a click would fill (a circle stays a circle when
     // "multiple joints" is off).
-    if ((tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) &&
-        hatchStyle_.boundary == HatchBoundary::PickPoints) {
+    if (tool_ == ToolId::Hatch && hatchStyle_.boundary == HatchBoundary::PickPoints) {
+        auto previewLoop = [&](const std::vector<Vec2>& pts) {
+            QPolygonF poly;
+            for (const auto& v : pts) poly << vt.toScreen(v);
+            if (poly.size() >= 3) {
+                p.save();
+                QPen hp(QColor("#2bd0ff"));
+                hp.setCosmetic(true);
+                hp.setWidthF(1.6);
+                p.setPen(hp);
+                p.setBrush(QColor(80, 160, 255, 60));
+                p.drawPolygon(poly);
+                p.restore();
+            }
+        };
         if (const Entity* src = enclosingEntity(cursor_)) {
-            p.save();
-            QPen hp(QColor("#2bd0ff"));
-            hp.setCosmetic(true);
-            hp.setWidthF(1.6);
-            p.setPen(hp);
-            p.setBrush(QColor(80, 160, 255, 60));
-            if (tool_ == ToolId::Hatch && !hatchStyle_.manyJoints &&
-                src->type == EntityType::Circle) {
+            if (!hatchStyle_.manyJoints && src->type == EntityType::Circle) {
+                p.save();
+                QPen hp(QColor("#2bd0ff"));
+                hp.setCosmetic(true);
+                hp.setWidthF(1.6);
+                p.setPen(hp);
+                p.setBrush(QColor(80, 160, 255, 60));
                 const QPointF c = vt.toScreen(src->center);
                 const double r = src->radius * vt.scale();
                 p.drawEllipse(c, r, r);
+                p.restore();
             } else {
-                QPolygonF poly;
-                for (const auto& v : boundaryPointsOf(*src, hatchStyle_.manyJoints))
-                    poly << vt.toScreen(v);
-                if (poly.size() >= 3) p.drawPolygon(poly);
+                previewLoop(boundaryPointsOf(*src, hatchStyle_.manyJoints));
             }
-            p.restore();
+        } else if (auto loop = enclosingRegionLoop(cursor_)) {
+            previewLoop(*loop); // region bounded by several separate objects
         }
     }
 

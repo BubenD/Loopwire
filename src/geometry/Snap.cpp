@@ -124,11 +124,19 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
         }
         for (const auto& p : e.points) out.push_back(p);
         break;
+    case EntityType::Polygon:
+        for (const auto& p : e.points) out.push_back(p);
+        // Centre joint of the polygon (snap to the middle).
+        if (!e.points.empty()) {
+            Vec2 c{0, 0};
+            for (const auto& p : e.points) c = c + p;
+            out.push_back(c * (1.0 / static_cast<double>(e.points.size())));
+        }
+        break;
     case EntityType::Polyline:
     case EntityType::Spline:
     case EntityType::Wire:
     case EntityType::Rect:
-    case EntityType::Polygon:
     case EntityType::Wipeout:
         for (const auto& p : e.points) out.push_back(p);
         break;

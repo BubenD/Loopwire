@@ -82,6 +82,16 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     const double theta = std::acos(cosT);
     if (theta < 1e-4 || std::abs(theta - M_PI) < 1e-4) return res; // collinear
 
+    // Radius 0 (AutoCAD): no arc — just trim/extend both lines so they meet at the
+    // corner P, keeping the picked sides.
+    if (radius <= 1e-9) {
+        setNear(l1, !a1, P);
+        setNear(l2, !a2, P);
+        res.hasConnector = false;
+        res.ok = true;
+        return res;
+    }
+
     // Tangent setback from the corner. If the radius is too large to fit on either
     // kept line, reject it (don't apply) so the caller can warn the user.
     const double d = radius / std::tan(theta / 2.0);
@@ -172,6 +182,108 @@ bool trimLineAt(Entity& line, const Vec2& pick, const std::vector<Entity>& other
     if (distance(pick, line.a) < distance(pick, line.b)) line.a = best;
     else line.b = best;
     return true;
+}
+
+namespace {
+// Parameters t in (0,1) along `line` (a..b) where cutting edges in `others` cross
+// it. Supports line/polyline/rect/polygon/hatch segments and circles/arcs.
+std::vector<double> intersectionParams(const Entity& line, const std::vector<Entity>& others) {
+    std::vector<double> ts;
+    const Vec2 a = line.a, b = line.b, d = b - a;
+    const double L2 = d.lengthSq();
+    if (L2 < 1e-12) return ts;
+    auto addPt = [&](const Vec2& x) {
+        const double t = dot(x - a, d) / L2;
+        if (t > 1e-6 && t < 1.0 - 1e-6) ts.push_back(t);
+    };
+    auto addSeg = [&](const Vec2& p1, const Vec2& p2) {
+        if (auto x = segmentSegmentIntersection(a, b, p1, p2)) addPt(*x);
+    };
+    auto addCircle = [&](const Vec2& c, double r, bool arc, double sa, double ea) {
+        for (const auto& x : lineCircleIntersection(a, d, c, r)) {
+            const double t = dot(x - a, d) / L2;
+            if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+            if (arc) {
+                double sweep = ea - sa;
+                while (sweep < 0) sweep += 2.0 * M_PI;
+                double rel = std::atan2(x.y - c.y, x.x - c.x) - sa;
+                while (rel < 0) rel += 2.0 * M_PI;
+                if (rel > sweep + 1e-9) continue; // outside the arc's sweep
+            }
+            ts.push_back(t);
+        }
+    };
+    for (const auto& e : others) {
+        if (&e == &line) continue;
+        switch (e.type) {
+        case EntityType::Line:
+            addSeg(e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            addSeg(e.a + off, e.b + off);
+            addSeg(e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Polyline:
+        case EntityType::Spline:
+        case EntityType::Wire:
+            for (size_t i = 1; i < e.points.size(); ++i) addSeg(e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Rect:
+        case EntityType::Polygon:
+        case EntityType::Hatch:
+        case EntityType::Wipeout:
+            for (size_t i = 0; i < e.points.size(); ++i)
+                addSeg(e.points[i], e.points[(i + 1) % e.points.size()]);
+            break;
+        case EntityType::Circle:
+            addCircle(e.center, e.radius, false, 0, 0);
+            break;
+        case EntityType::Arc:
+            addCircle(e.center, e.radius, true, e.startAngle, e.endAngle);
+            break;
+        default:
+            break;
+        }
+    }
+    return ts;
+}
+} // namespace
+
+bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
+                   std::optional<Entity>& extra) {
+    extra.reset();
+    if (line.type != EntityType::Line) return false;
+    auto ts = intersectionParams(line, others);
+    if (ts.empty()) return false;
+
+    const Vec2 a = line.a, b = line.b, d = b - a;
+    const double L2 = d.lengthSq();
+    const double tp = std::clamp(dot(pick - a, d) / L2, 0.0, 1.0);
+    auto P = [&](double t) { return a + d * t; };
+
+    // Nearest cut on each side of the pick.
+    double lo = -1e9, hi = 1e9;
+    bool hasLo = false, hasHi = false;
+    for (double t : ts) {
+        if (t <= tp && t > lo) { lo = t; hasLo = true; }
+        if (t >= tp && t < hi) { hi = t; hasHi = true; }
+    }
+    if (hasLo && hasHi && hi - lo > 1e-6) {
+        // Picked a middle piece bounded on both sides: split, removing it.
+        Entity rem = line;
+        rem.id = newId();
+        rem.a = P(hi);
+        rem.b = b;
+        line.b = P(lo);
+        extra = rem;
+        return true;
+    }
+    if (hasHi) { line.a = P(hi); return true; } // dangling start piece
+    if (hasLo) { line.b = P(lo); return true; } // dangling end piece
+    return false;
 }
 
 bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& others) {

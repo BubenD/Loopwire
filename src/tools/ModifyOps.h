@@ -12,8 +12,9 @@ namespace Edraw_Desktop {
 // connector entity (arc for fillet, line for chamfer) is returned.
 struct CornerResult {
     bool ok = false;
-    bool tooBig = false; // radius too large to fit on the picked lines (not applied)
-    Entity connector;    // arc (fillet) or line (chamfer)
+    bool tooBig = false;        // radius too large to fit on the picked lines (not applied)
+    bool hasConnector = true;   // false for a radius-0 fillet (lines just meet at the corner)
+    Entity connector;           // arc (fillet) or line (chamfer)
 };
 
 // Round the corner between two line entities with the given radius. `near1`/
@@ -29,6 +30,14 @@ CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
 // portion on the pick side. Returns true if modified.
 bool trimLineAt(Entity& line, const Vec2& pick,
                 const std::vector<Entity>& others);
+
+// AutoCAD "quick" trim: remove the piece of `line` the user clicked, bounded by
+// the nearest cutting intersection on each side of the pick (cutting edges =
+// `others`). If the picked piece sits between two cuts the line is split — `line`
+// keeps the first part and the second part is returned via `extra`. If the pick is
+// past the last cut, only that end is shortened. Returns true if anything changed.
+bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
+                   std::optional<Entity>& extra);
 
 // Extend a line's nearest end to the first boundary it would meet. Returns true
 // if modified.

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <map>
 
 namespace Edraw_Desktop {
 
@@ -92,6 +94,125 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist) {
         out.push_back(x.value_or(segB[i - 1])); // parallel -> just use the seam point
     }
     out.push_back(segB[n - 2]);
+    return out;
+}
+
+std::optional<std::vector<Vec2>> traceEnclosingLoop(
+    const std::vector<std::pair<Vec2, Vec2>>& segments, const Vec2& seed) {
+    constexpr double kPi = 3.14159265358979323846;
+
+    // 1. Split every segment at its intersections with the others, so crossings
+    //    become shared vertices (a planar arrangement).
+    struct Seg { Vec2 a, b; };
+    std::vector<Seg> segs;
+    const int rawN = static_cast<int>(segments.size());
+    std::vector<std::vector<double>> splits(rawN);
+    for (int i = 0; i < rawN; ++i) {
+        const Vec2 a = segments[i].first, b = segments[i].second;
+        const Vec2 d = b - a;
+        const double L2 = d.lengthSq();
+        if (L2 < 1e-12) continue;
+        for (int j = i + 1; j < rawN; ++j) {
+            const Vec2 a2 = segments[j].first, b2 = segments[j].second;
+            if (auto x = segmentSegmentIntersection(a, b, a2, b2)) {
+                splits[i].push_back(dot(*x - a, d) / L2);
+                const Vec2 d2 = b2 - a2;
+                const double L22 = d2.lengthSq();
+                if (L22 > 1e-12) splits[j].push_back(dot(*x - a2, d2) / L22);
+            }
+        }
+    }
+    for (int i = 0; i < rawN; ++i) {
+        const Vec2 a = segments[i].first, b = segments[i].second;
+        if ((b - a).lengthSq() < 1e-12) continue;
+        auto& sp = splits[i];
+        sp.push_back(0.0);
+        sp.push_back(1.0);
+        std::sort(sp.begin(), sp.end());
+        for (size_t k = 1; k < sp.size(); ++k) {
+            if (sp[k] - sp[k - 1] < 1e-6) continue;
+            const Vec2 p0 = a + (b - a) * sp[k - 1];
+            const Vec2 p1 = a + (b - a) * sp[k];
+            if ((p1 - p0).lengthSq() > 1e-12) segs.push_back({p0, p1});
+        }
+    }
+    if (segs.empty()) return std::nullopt;
+
+    // 2. Build the node set + adjacency (snap near-equal points to one node).
+    std::map<std::pair<long long, long long>, int> nodeIdx;
+    std::vector<Vec2> nodes;
+    auto getNode = [&](const Vec2& p) -> int {
+        const std::pair<long long, long long> k{std::llround(p.x / 1e-4),
+                                                std::llround(p.y / 1e-4)};
+        auto it = nodeIdx.find(k);
+        if (it != nodeIdx.end()) return it->second;
+        const int id = static_cast<int>(nodes.size());
+        nodeIdx.emplace(k, id);
+        nodes.push_back(p);
+        return id;
+    };
+    std::vector<std::pair<int, int>> edges;
+    for (const auto& s : segs) {
+        const int u = getNode(s.a), v = getNode(s.b);
+        if (u != v) edges.emplace_back(u, v);
+    }
+    std::vector<std::vector<int>> adj(nodes.size());
+    for (const auto& e : edges) {
+        auto& au = adj[e.first];
+        auto& av = adj[e.second];
+        if (std::find(au.begin(), au.end(), e.second) == au.end()) au.push_back(e.second);
+        if (std::find(av.begin(), av.end(), e.first) == av.end()) av.push_back(e.first);
+    }
+
+    // 3. Ray-cast +X from the seed; the nearest edge to the right bounds the cell.
+    const double Y = seed.y;
+    int hitU = -1, hitV = -1;
+    double bestX = std::numeric_limits<double>::max();
+    for (const auto& e : edges) {
+        const Vec2 p = nodes[e.first], q = nodes[e.second];
+        const bool straddle = (p.y <= Y && q.y > Y) || (q.y <= Y && p.y > Y);
+        if (!straddle) continue;
+        const double x = p.x + (Y - p.y) / (q.y - p.y) * (q.x - p.x);
+        if (x > seed.x + 1e-9 && x < bestX) { bestX = x; hitU = e.first; hitV = e.second; }
+    }
+    if (hitU < 0) return std::nullopt;
+
+    // Orient the start half-edge upward (+Y) so the seed (to its west) is on the
+    // left; the left-hand rule then walks the cell that contains the seed.
+    int start = hitU, end = hitV;
+    if (nodes[start].y > nodes[end].y) std::swap(start, end);
+
+    // 4. Walk the face: at each node, take the edge immediately clockwise from the
+    //    reverse of the incoming direction.
+    std::vector<int> loop = {start};
+    int cu = start, cv = end;
+    const int maxSteps = static_cast<int>(edges.size()) * 2 + 16;
+    bool closed = false;
+    for (int step = 0; step < maxSteps; ++step) {
+        loop.push_back(cv);
+        const double revAng =
+            std::atan2(nodes[cu].y - nodes[cv].y, nodes[cu].x - nodes[cv].x);
+        int next = -1;
+        double bestGap = std::numeric_limits<double>::max();
+        for (int nb : adj[cv]) {
+            const double ang =
+                std::atan2(nodes[nb].y - nodes[cv].y, nodes[nb].x - nodes[cv].x);
+            double gap = std::fmod(revAng - ang + 2.0 * kPi, 2.0 * kPi);
+            if (gap < 1e-9) gap = 2.0 * kPi; // the reverse edge: only if a dead end
+            if (gap < bestGap) { bestGap = gap; next = nb; }
+        }
+        if (next < 0) return std::nullopt;
+        if (cv == start && next == end) { closed = true; break; }
+        cu = cv;
+        cv = next;
+    }
+    if (!closed) return std::nullopt;
+    if (!loop.empty() && loop.front() == loop.back()) loop.pop_back();
+    if (loop.size() < 3) return std::nullopt;
+
+    std::vector<Vec2> out;
+    out.reserve(loop.size());
+    for (int id : loop) out.push_back(nodes[id]);
     return out;
 }
 

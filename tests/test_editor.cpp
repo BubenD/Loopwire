@@ -1,5 +1,6 @@
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
+#include "geometry/Snap.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
@@ -236,6 +237,65 @@ int run_editor_tests() {
         // Trim the right portion of h (pick near x=80).
         bool ok = trimLineAt(others[0], {80, 0}, others);
         check(ok && near(others[0].b.x, 40.0), "trim: shortened to intersection");
+    }
+
+    // --- Quick trim (AutoCAD): clicking a piece between two cutting edges splits
+    //     the line, removing the clicked middle and leaving the two outer pieces.
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity c1; c1.id = "c1"; c1.type = EntityType::Line; c1.a = {30, -10}; c1.b = {30, 10};
+        Entity c2; c2.id = "c2"; c2.type = EntityType::Line; c2.a = {70, -10}; c2.b = {70, 10};
+        d.entities().push_back(h);
+        d.entities().push_back(c1);
+        d.entities().push_back(c2);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // click the middle piece
+        // Two collinear line pieces remain ([0..30] and [70..100]); the cutters stay.
+        int lines = 0;
+        bool keptLeft = false, keptRight = false;
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Line) continue;
+            if (near(e.a.y, 0.0) && near(e.b.y, 0.0)) { // a horizontal piece of h
+                lines++;
+                if (near(std::min(e.a.x, e.b.x), 0.0) && near(std::max(e.a.x, e.b.x), 30.0)) keptLeft = true;
+                if (near(std::min(e.a.x, e.b.x), 70.0) && near(std::max(e.a.x, e.b.x), 100.0)) keptRight = true;
+            }
+        }
+        check(lines == 2 && keptLeft && keptRight,
+              "trim-quick: middle piece removed, two outer pieces remain");
+    }
+
+    // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
+    //     corner.
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity v; v.id = "v"; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 100};
+        d.entities().push_back(h);
+        d.entities().push_back(v);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(0.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({60, 0}, Qt::LeftButton, Qt::NoModifier);  // pick h (keep far end)
+        ed.onPointerPress({0, 60}, Qt::LeftButton, Qt::NoModifier);  // pick v -> apply
+        bool anyArc = false;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Arc) anyArc = true;
+        check(d.entities().size() == 2 && !anyArc,
+              "fillet-r0: no arc added (sharp corner join)");
+    }
+
+    // --- Polygon centre object-snap joint.
+    {
+        Document d; d.entities().clear();
+        Entity poly; poly.id = "p"; poly.type = EntityType::Polygon;
+        poly.points = {{0, 0}, {10, 0}, {10, 10}, {0, 10}}; // centroid (5,5)
+        d.entities().push_back(poly);
+        SnapSettings s; s.objectSnap = true; s.gridSnap = false;
+        SnapResult r = resolveSnap(d, {5.4, 5.4}, std::nullopt, 2.0, s);
+        check(near(r.point.x, 5.0) && near(r.point.y, 5.0),
+              "polygon: object snap catches the centre joint");
     }
 
     // --- Trim against a pre-selected reference: pick the reference, then a crossing
@@ -1512,20 +1572,20 @@ int run_editor_tests() {
               "hatch-select: boundary taken from the closed object");
     }
 
-    // --- Wipeout: pick-points fills an enclosing shape; the filled region is
-    //     interior-pickable.
+    // --- Wipeout: AutoCAD-style polygon draw (click vertices, Enter to finish);
+    //     the filled region is interior-pickable.
     {
         Document d; d.entities().clear();
-        Entity r; r.id = "r"; r.type = EntityType::Rect;
-        r.points = {{0, 0}, {30, 0}, {30, 30}, {0, 30}};
-        d.entities().push_back(r);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
-        ed.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
         ed.setTool(ToolId::Wipeout);
-        ed.onPointerPress({15, 15}, Qt::LeftButton, Qt::NoModifier); // one click inside the rect
-        check(d.entities().size() == 2 && d.entities().back().type == EntityType::Wipeout &&
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier); // finish the masking polygon
+        check(d.entities().size() == 1 && d.entities().back().type == EntityType::Wipeout &&
                   d.entities().back().points.size() == 4,
-              "wipeout: pick-point fills the enclosing rect");
+              "wipeout: polygon draw creates a 4-point mask");
         ed.setTool(ToolId::Select);
         ed.onPointerPress({16, 16}, Qt::LeftButton, Qt::NoModifier); // inside the mask
         ed.onPointerRelease({16, 16}, Qt::LeftButton);
