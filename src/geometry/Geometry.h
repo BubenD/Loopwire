@@ -52,6 +52,13 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
                                   int arcSegments = 10);
 
+// Like roundedPolyline but with an independent radius per interior corner.
+// radii[i] is the fillet radius at vertex i (0 = sharp); entries [0] and the last
+// (the endpoints) are ignored. Each arc is tangent to both adjoining straight runs.
+std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
+                                           const std::vector<double>& radii,
+                                           int arcSegments = 10);
+
 // True if `radius` is small enough to fit (tangent setback within the segment
 // lengths) at every interior corner of the polyline. radius <= 0 always fits.
 bool filletRadiusFits(const std::vector<Vec2>& pts, double radius);

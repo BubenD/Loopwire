@@ -1408,6 +1408,9 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
         b->setIconSize(QSize(28, 28)); // larger ribbon buttons
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus); // keep keyboard focus on the canvas
+        // Show the tool's name on hover. Set it on the button too (not only the
+        // action) so the popup-menu variants below still get a tooltip.
+        b->setToolTip(toolLabel(id));
 
         // Circle / Arc / Ellipse get AutoCAD-style flyouts of construction methods,
         // each option shown with a (large) visual icon. Choosing an option also makes

@@ -287,6 +287,10 @@ void Editor::setTool(ToolId t) {
         selected_.clear();
         emit selectionChanged();
     }
+    // Trim: the objects selected when the tool starts become the cutting edges.
+    // Later picks are trimmed up to their intersection with these references.
+    trimRefIds_.clear();
+    if (t == ToolId::Trim) trimRefIds_ = selected_;
     tool_ = t;
     if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
     emit toolChanged(t);
@@ -1437,6 +1441,12 @@ void Editor::handleDrawPress(const Vec2& p) {
         }
         draftPts_.push_back(p);
         draftBulges_.push_back(bulge);
+        draftCornerRadii_.push_back(0.0); // this new vertex is an endpoint for now
+        // Placing this point completes the corner at the PREVIOUS vertex; stamp it
+        // with the current fillet radius so a fillet defined with "f" applies to
+        // the next joint (and every later one) but never to corners already drawn.
+        if (draftCornerRadii_.size() >= 3)
+            draftCornerRadii_[draftCornerRadii_.size() - 2] = cornerRadius_;
         drafting_ = true;
         emit message(QStringLiteral("%1: click next point — [A]rc/[L]ine, [C]lose, "
                                     "[U]ndo, Enter to finish")
@@ -2067,17 +2077,28 @@ void Editor::finishDraw() {
                 e.meta.insert("lsRefBy", lsRefB_.y);
             }
         }
-        if (e.type == EntityType::Polyline && cornerRadius_ > 0.0) {
-            // Effective rounding radius on the centreline (double poly rounds the
-            // centreline at cornerRadius + half the gap). Reject if it won't fit any
-            // corner rather than silently clamping it.
-            const double eff =
-                cornerRadius_ +
-                (tool_ == ToolId::DoublePolyline ? doubleLineGap_ / 2.0 : 0.0);
-            if (filletRadiusFits(e.points, eff))
-                e.meta.insert("cornerRadius", cornerRadius_);
-            else
-                filletTooBig = true; // drawn with sharp corners; warn below
+        if (e.type == EntityType::Polyline) {
+            // Per-corner fillet: each interior vertex carries the radius that was
+            // active when its corner was completed (0 = sharp). A radius too big for
+            // its corner is dropped to sharp (and flagged), never silently clamped.
+            // Double poly rounds the centreline at radius + half the gap.
+            std::vector<double> radii = draftCornerRadii_;
+            radii.resize(e.points.size(), 0.0);
+            const double extra =
+                (tool_ == ToolId::DoublePolyline) ? doubleLineGap_ / 2.0 : 0.0;
+            bool anyFillet = false;
+            for (size_t i = 1; i + 1 < e.points.size(); ++i) {
+                if (radii[i] <= 0.0) continue;
+                const std::vector<Vec2> corner = {e.points[i - 1], e.points[i], e.points[i + 1]};
+                if (filletRadiusFits(corner, radii[i] + extra))
+                    anyFillet = true;
+                else { radii[i] = 0.0; filletTooBig = true; }
+            }
+            if (anyFillet) {
+                QJsonArray arr;
+                for (double r : radii) arr.append(r);
+                e.meta.insert("cornerRadii", arr);
+            }
         }
         if (e.type == EntityType::Spline && splineMode_ == SplineMode::CV)
             e.meta.insert("splineMode", QStringLiteral("cv")); // else Fit (default)
@@ -2142,6 +2163,8 @@ void Editor::cancelDraw() {
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();
     draftBulges_.clear();
+    draftCornerRadii_.clear();
+    cornerRadius_ = 0.0; // a fresh (double) polyline starts with no fillet until defined
     polyArcMode_ = false;
     arcMirror_ = false;
     tanPickIds_.clear();
@@ -2296,7 +2319,10 @@ QString Editor::drawCommandHint() const {
     case ToolId::Chamfer:
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
-        return QStringLiteral("TRIM: pick a line to trim at the nearest intersection");
+        return trimRefIds_.empty()
+                   ? QStringLiteral("TRIM: select a reference object first, then pick lines to trim "
+                                    "up to it (else trims at the nearest intersection)")
+                   : QStringLiteral("TRIM: pick a line crossing the reference — it trims up to it");
     case ToolId::Extend:
         return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
@@ -2660,6 +2686,10 @@ bool Editor::acceptCommandInput(const QString& text) {
             t.compare(QStringLiteral("close"), Qt::CaseInsensitive) == 0) {
             if (draftPts_.size() >= 3) {
                 draftPts_.push_back(draftPts_.front()); // close back to the start
+                draftBulges_.push_back(0.0);
+                draftCornerRadii_.push_back(0.0);
+                if (draftCornerRadii_.size() >= 3) // closing completes the prior corner
+                    draftCornerRadii_[draftCornerRadii_.size() - 2] = cornerRadius_;
                 finishDraw();
             } else {
                 emit message(QStringLiteral("Need at least 3 points to close"));
@@ -2670,6 +2700,7 @@ bool Editor::acceptCommandInput(const QString& text) {
             t.compare(QStringLiteral("undo"), Qt::CaseInsensitive) == 0) {
             if (!draftPts_.empty()) draftPts_.pop_back();
             if (!draftBulges_.empty()) draftBulges_.pop_back();
+            if (!draftCornerRadii_.empty()) draftCornerRadii_.pop_back();
             if (draftPts_.empty()) {
                 cancelDraw();
                 emit message(QStringLiteral("Polyline cancelled"));
@@ -2959,16 +2990,37 @@ void Editor::handlePickModifyPress(const Vec2& p) {
 
     if (tool_ == ToolId::Trim || tool_ == ToolId::Extend) {
         if (!hit) { emit message(QStringLiteral("Pick a line to modify.")); return; }
+        // Don't trim/extend the reference (cutting-edge) object itself.
+        if (tool_ == ToolId::Trim &&
+            std::find(trimRefIds_.begin(), trimRefIds_.end(), *hit) != trimRefIds_.end()) {
+            emit message(QStringLiteral("That's the reference object — pick a line that crosses it."));
+            return;
+        }
         Entity* line = entityById(*hit);
         if (!line || line->type != EntityType::Line) {
             emit message(QStringLiteral("%1 currently supports straight lines.").arg(toolLabel(tool_)));
             return;
         }
+        // Trim against the pre-selected reference object(s) when present; otherwise
+        // fall back to the nearest intersection with any entity.
+        std::vector<Entity> refs;
+        if (tool_ == ToolId::Trim && !trimRefIds_.empty()) {
+            for (const QString& id : trimRefIds_)
+                if (const Entity* r = entityById(id)) refs.push_back(*r);
+        }
+        const std::vector<Entity>& boundaries =
+            (tool_ == ToolId::Trim && !refs.empty()) ? refs : doc_->entities();
         pushUndo();
         const bool ok = (tool_ == ToolId::Trim)
-                            ? trimLineAt(*line, p, doc_->entities())
+                            ? trimLineAt(*line, p, boundaries)
                             : extendLineTo(*line, p, doc_->entities());
-        if (!ok) { undo(); emit message(QStringLiteral("No boundary found.")); return; }
+        if (!ok) {
+            undo();
+            emit message((tool_ == ToolId::Trim && !refs.empty())
+                             ? QStringLiteral("This line doesn't cross the reference object.")
+                             : QStringLiteral("No boundary found."));
+            return;
+        }
         doc_->setDirty(true);
         emit changed();
         return;
@@ -3721,6 +3773,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         std::vector<Vec2> pts = draftPts_;
         pts.push_back(cursor_);
+        // Per-corner fillet radii for the live preview: placed corners keep their
+        // stored radius; the corner now forming under the cursor previews with the
+        // current (pending) radius. Parallels `pts`.
+        std::vector<double> previewRadii = draftCornerRadii_;
+        previewRadii.resize(draftPts_.size(), 0.0);
+        if (!draftPts_.empty()) previewRadii.back() = cornerRadius_;
+        previewRadii.push_back(0.0); // the cursor vertex is an endpoint
+        const bool previewAnyFillet =
+            std::any_of(previewRadii.begin(), previewRadii.end(), [](double r) { return r > 0.0; });
         // ls line-start: move a run's start onto the picked reference line.
         auto extendLsStart = [&](std::vector<Vec2>& run) {
             if (dpolyHasLsRef_ && run.size() >= 2)
@@ -3808,10 +3869,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
             p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
-            // Round the centerline at cr + gap/2 so both runs fillet, then offset.
+            // Round each filleted corner of the centerline at radius + gap/2 so both
+            // runs fillet, then offset.
             const double h = doubleLineGap_ / 2.0;
+            std::vector<double> centerRadii(previewRadii.size(), 0.0);
+            for (size_t i = 0; i < previewRadii.size(); ++i)
+                if (previewRadii[i] > 0) centerRadii[i] = previewRadii[i] + h;
             const std::vector<Vec2> center =
-                (cornerRadius_ > 0) ? roundedPolyline(pts, cornerRadius_ + h) : pts;
+                previewAnyFillet ? roundedPolylinePerCorner(pts, centerRadii) : pts;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
             std::vector<Vec2> r2 = offsetPolyline(center, -h);
             extendLsStart(r1); // ls: start both runs on the reference line
@@ -4029,8 +4094,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawPolyline(poly);
         } else {
             const std::vector<Vec2> show =
-                (tool_ == ToolId::Polyline && cornerRadius_ > 0)
-                    ? roundedPolyline(pts, cornerRadius_)
+                (tool_ == ToolId::Polyline && previewAnyFillet)
+                    ? roundedPolylinePerCorner(pts, previewRadii)
                     : pts;
             QPolygonF poly;
             for (const auto& v : show) poly << vt.toScreen(v);

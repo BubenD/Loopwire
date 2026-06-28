@@ -485,6 +485,19 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Polyline:
         if (e.points.size() >= 2) {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
+            // Per-corner fillet radii (newer drawings). Falls back to the uniform
+            // cornerRadius for older files. radii[i] = fillet radius at vertex i.
+            std::vector<double> radii(e.points.size(), cr);
+            bool anyFillet = cr > 0.0;
+            if (e.meta.contains("cornerRadii")) {
+                const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
+                radii.assign(e.points.size(), 0.0);
+                anyFillet = false;
+                for (int i = 0; i < rArr.size() && i < static_cast<int>(radii.size()); ++i) {
+                    radii[i] = rArr[i].toDouble();
+                    if (radii[i] > 0.0) anyFillet = true;
+                }
+            }
             const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) {
                 // Round the CENTERLINE first, THEN offset both sides. The offset of
@@ -495,11 +508,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // The clicked path is always the centerline; both runs are offset
                 // +/- gap/2 from it. "ls" (justify=side) just adds start/end caps so
                 // both runs start from the clicked reference line.
-                // Round the centerline at cr + gap/2 so BOTH runs fillet: the inner
-                // run gets radius cr (>0), the outer cr+gap — both rounded, constant
-                // gap (rounding at just cr collapses the inner knee when cr<=gap/2).
+                // Round each filleted corner of the centerline at radius + gap/2 so
+                // BOTH runs fillet: the inner run gets the requested radius, the outer
+                // radius+gap — both rounded with a constant gap through the bend.
+                std::vector<double> centerRadii(radii.size(), 0.0);
+                for (size_t i = 0; i < radii.size(); ++i)
+                    if (radii[i] > 0.0) centerRadii[i] = radii[i] + gap / 2.0;
                 const std::vector<Vec2> center =
-                    (cr > 0.0) ? roundedPolyline(e.points, cr + gap / 2.0) : e.points;
+                    anyFillet ? roundedPolylinePerCorner(e.points, centerRadii) : e.points;
                 std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
                 std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
                 // Line-start (ls): extend BOTH physical runs so they start on the
@@ -516,8 +532,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 std::vector<double> bulges;
                 for (const auto& v : bulgeArr) bulges.push_back(v.toDouble());
                 p.drawPolyline(toScreenPoly(expandBulgePolyline(e.points, bulges), vt));
-            } else if (e.type == EntityType::Polyline && cr > 0.0) {
-                p.drawPolyline(toScreenPoly(roundedPolyline(e.points, cr), vt));
+            } else if (e.type == EntityType::Polyline && anyFillet) {
+                p.drawPolyline(toScreenPoly(roundedPolylinePerCorner(e.points, radii), vt));
             } else {
                 p.drawPolyline(toScreenPoly(e.points, vt));
             }

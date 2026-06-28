@@ -165,6 +165,9 @@ public:
     void repeatLastTool();     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }
     void setChamferDistance(double d) { chamferDist_ = d; }
+    // Pending polyline fillet radius for the next corner(s) drawn (0 = sharp).
+    void setCornerRadius(double r) { cornerRadius_ = r; }
+    double cornerRadius() const { return cornerRadius_; }
     double filletRadius() const { return filletRadius_; }
     double chamferDistance() const { return chamferDist_; }
 
@@ -349,6 +352,11 @@ private:
     // (bulge of the segment ENDING at that index; [0] unused).
     bool polyArcMode_ = false;
     std::vector<double> draftBulges_;
+    // Per-corner fillet radius while drafting a (double) polyline. Parallels
+    // draftPts_; entry i is the radius of the corner at vertex i (0 = sharp). A
+    // fillet radius set with "f" applies to each corner completed from then on
+    // (the next joint and onward), never retroactively. [0] / last are endpoints.
+    std::vector<double> draftCornerRadii_;
     QString pendingTextPos_; // serialized point while awaiting text input
     // Dynamic-input reference fields for the active draw step (Tab cycles them).
     int drawFieldIndex_ = 0;
@@ -403,6 +411,10 @@ private:
     std::vector<Vec2> pickPts_;
     double filletRadius_ = 5.0;
     double chamferDist_ = 5.0;
+    // Trim cutting edges: the objects selected when the Trim tool was activated.
+    // Subsequent picks are trimmed up to their intersection with these references.
+    // Empty => fall back to trimming at the nearest intersection with any entity.
+    std::vector<QString> trimRefIds_;
 
     // Harness defaults.
     ConnectorSpec connectorSpec_ = defaultConnectorSpec(4);

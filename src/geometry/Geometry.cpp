@@ -111,29 +111,34 @@ bool filletRadiusFits(const std::vector<Vec2>& pts, double radius) {
     return true;
 }
 
-std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
-                                  int arcSegments) {
+std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
+                                           const std::vector<double>& radii,
+                                           int arcSegments) {
     const int n = static_cast<int>(pts.size());
-    if (n < 3 || radius <= 0.0) return pts;
+    if (n < 3) return pts;
     constexpr double kPi = 3.14159265358979323846;
 
     std::vector<Vec2> out;
     out.push_back(pts[0]);
     for (int i = 1; i < n - 1; ++i) {
+        const double radius = (i < static_cast<int>(radii.size())) ? radii[i] : 0.0;
         const Vec2 p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
         const Vec2 d1 = (p0 - p1).normalized(); // corner -> previous vertex
         const Vec2 d2 = (p2 - p1).normalized(); // corner -> next vertex
         const double cosT = std::clamp(dot(d1, d2), -1.0, 1.0);
         const double theta = std::acos(cosT);   // interior angle at the corner
-        if (theta < 1e-3 || theta > kPi - 1e-3) { out.push_back(p1); continue; }
+        if (radius <= 0.0 || theta < 1e-3 || theta > kPi - 1e-3) {
+            out.push_back(p1);
+            continue;
+        }
 
         double t = radius / std::tan(theta / 2.0); // tangent setback from corner
         const double maxT = 0.5 * std::min(distance(p0, p1), distance(p1, p2));
         t = std::min(t, maxT);
         const double r = t * std::tan(theta / 2.0); // radius after clamping
 
-        const Vec2 t1 = p1 + d1 * t;            // tangent point toward previous
-        const Vec2 t2 = p1 + d2 * t;            // tangent point toward next
+        const Vec2 t1 = p1 + d1 * t;            // tangent point toward previous (start joint)
+        const Vec2 t2 = p1 + d2 * t;            // tangent point toward next (end joint)
         const Vec2 bis = (d1 + d2).normalized();
         const Vec2 c = p1 + bis * (r / std::sin(theta / 2.0)); // arc centre
 
@@ -143,15 +148,21 @@ std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
         while (sweep <= -kPi) sweep += 2 * kPi;
         while (sweep > kPi) sweep -= 2 * kPi;
 
-        out.push_back(t1);
+        out.push_back(t1); // arc starts tangent to the straight run coming in
         for (int s = 1; s < arcSegments; ++s) {
             const double a = a1 + sweep * s / arcSegments;
             out.push_back({c.x + r * std::cos(a), c.y + r * std::sin(a)});
         }
-        out.push_back(t2);
+        out.push_back(t2); // arc ends tangent to the straight run going out
     }
     out.push_back(pts[n - 1]);
     return out;
+}
+
+std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
+                                  int arcSegments) {
+    if (radius <= 0.0) return pts;
+    return roundedPolylinePerCorner(pts, std::vector<double>(pts.size(), radius), arcSegments);
 }
 
 std::vector<Vec2> splinePoints(const std::vector<Vec2>& pts, int samplesPerSegment) {

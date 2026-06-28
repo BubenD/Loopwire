@@ -238,6 +238,58 @@ int run_editor_tests() {
         check(ok && near(others[0].b.x, 40.0), "trim: shortened to intersection");
     }
 
+    // --- Trim against a pre-selected reference: pick the reference, then a crossing
+    // line trims up to the reference (not to some other nearer intersection).
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {40, -10}; ref.b = {40, 10};
+        // A nearer crossing (x=20) that must be IGNORED because it isn't the reference.
+        Entity other; other.id = "o"; other.type = EntityType::Line; other.a = {20, -10}; other.b = {20, 10};
+        d.entities().push_back(h);
+        d.entities().push_back(ref);
+        d.entities().push_back(other);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");                 // the reference / cutting edge
+        ed.setTool(ToolId::Trim);             // captures "ref" as the cutting edge
+        ed.onPointerPress({80, 0}, Qt::LeftButton, Qt::NoModifier); // pick h on the far side
+        const Entity* hh = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "h") hh = &e;
+        check(hh && near(hh->b.x, 40.0), "trim: trims up to the reference, not a nearer crossing");
+    }
+
+    // --- New polyline starts with no fillet; a radius set mid-draw applies only to
+    // corners formed afterward (per-corner cornerRadii), never retroactively.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier); // corner@v1 forms next
+        ed.setCornerRadius(2.0);                                    // define fillet now
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // completes corner@v1 (r=2)
+        ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier); // completes corner@v2 (r=2)
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);                    // finish the polyline
+        check(d.entities().size() == 1, "polyfillet: one polyline created");
+        const QJsonArray rArr = d.entities()[0].meta.value("cornerRadii").toArray();
+        check(rArr.size() == 4, "polyfillet: per-corner radii stored for every vertex");
+        check(near(rArr[0].toDouble(), 0.0) && near(rArr[1].toDouble(), 2.0) &&
+                  near(rArr[2].toDouble(), 2.0) && near(rArr[3].toDouble(), 0.0),
+              "polyfillet: radius applies from the next joint onward, not retroactively");
+    }
+
+    // --- Per-corner rounding: only the corner with a radius gets an arc inserted.
+    {
+        std::vector<Vec2> pts = {{0, 0}, {10, 0}, {10, 10}, {20, 10}};
+        std::vector<double> radii = {0, 3, 0, 0}; // round only the corner at index 1
+        auto out = roundedPolylinePerCorner(pts, radii);
+        check(out.size() > pts.size(), "perCorner: filleted corner adds arc points");
+        // The sharp corner (index 2 = (10,10)) must remain a literal vertex.
+        bool keptSharp = false;
+        for (const auto& v : out) if (near(v.x, 10.0) && near(v.y, 10.0)) keptSharp = true;
+        check(keptSharp, "perCorner: un-filleted corner stays sharp");
+    }
+
     // --- Rectangular array count.
     {
         Entity c; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 1;
@@ -607,7 +659,8 @@ int run_editor_tests() {
         ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
         ed.onKey(Qt::Key_Return, Qt::NoModifier);
-        check(near(d.entities()[0].meta.value(QStringLiteral("cornerRadius")).toDouble(), 5.0),
+        // Per-corner storage: the interior corner (index 1) carries the radius.
+        check(near(d.entities()[0].meta.value(QStringLiteral("cornerRadii")).toArray()[1].toDouble(), 5.0),
               "pline-fillet: radius stored on the polyline");
 
         Document d2; d2.entities().clear();
@@ -620,7 +673,7 @@ int run_editor_tests() {
         ed2.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
         ed2.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier);
         ed2.onKey(Qt::Key_Return, Qt::NoModifier);
-        check(d2.entities()[0].meta.value(QStringLiteral("cornerRadius")).toDouble() == 0.0,
+        check(!d2.entities()[0].meta.contains(QStringLiteral("cornerRadii")),
               "pline-fillet: 'fc' returns to sharp corners");
     }
 
@@ -637,7 +690,7 @@ int run_editor_tests() {
         ed.onKey(Qt::Key_Return, Qt::NoModifier);
         const Entity& e = d.entities()[0];
         check(e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() &&
-                  near(e.meta.value(QStringLiteral("cornerRadius")).toDouble(), 6.0),
+                  near(e.meta.value(QStringLiteral("cornerRadii")).toArray()[1].toDouble(), 6.0),
               "mline-fillet: double polyline keeps the knee radius");
     }
 
@@ -656,7 +709,7 @@ int run_editor_tests() {
         ed.onKey(Qt::Key_Return, Qt::NoModifier);
         const Entity& e = d.entities()[0];
         check(e.type == EntityType::Polyline && e.points.size() == 4 &&
-                  near(e.meta.value(QStringLiteral("cornerRadius")).toDouble(), 8.0),
+                  near(e.meta.value(QStringLiteral("cornerRadii")).toArray()[1].toDouble(), 8.0),
               "pline-fillet-mid: radius set and the polyline continued (4 pts)");
     }
 
@@ -1179,7 +1232,7 @@ int run_editor_tests() {
             ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
             check(d.entities().size() == 1 &&
-                      near(d.entities()[0].meta.value("cornerRadius").toDouble(), 5.0),
+                      near(d.entities()[0].meta.value("cornerRadii").toArray()[1].toDouble(), 5.0),
                   "f: polyline keeps cornerRadius");
         }
         // roundedPolyline inserts arc points at the corner.
