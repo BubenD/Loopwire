@@ -740,16 +740,20 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
-    // TRIM (AutoCAD-style): press-drag a CUT LINE across objects. On release, every
-    // object the cut line crosses is trimmed — back to the pre-selected reference
-    // object(s) if any are selected, otherwise to its nearest crossing. The cut line
-    // is always drawn while dragging.
+    // TRIM (AutoCAD-style): the CUT LINE is defined by two clicks — a start point
+    // and an end point. The line is shown (highlighted) between the first click and
+    // the cursor. On the second click, every object the cut line crosses is trimmed:
+    // back to the pre-selected reference object(s) if any, else to its nearest
+    // crossing.
     if (tool_ == ToolId::Trim) {
-        trimFenceActive_ = true;
-        trimFenceStart_ = p;
-        emit message(trimRefIds_.empty()
-                         ? QStringLiteral("Drag a cut line across objects to trim them")
-                         : QStringLiteral("Drag a cut line across objects to trim them to the reference"));
+        if (!trimFenceActive_) {
+            trimFenceActive_ = true;
+            trimFenceStart_ = p;
+            emit message(QStringLiteral("Click the end point of the cut line"));
+        } else {
+            trimFenceActive_ = false;
+            applyTrimFence(trimFenceStart_, p);
+        }
         emit overlayChanged();
         return;
     }
@@ -761,18 +765,8 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
-    // Finish a trim cut line: a real drag trims every object the line crosses back
-    // to the reference.
-    if (trimFenceActive_) {
-        trimFenceActive_ = false;
-        if (distance(trimFenceStart_, cursor_) > worldTolerance() * 2.0)
-            applyTrimFence(trimFenceStart_, cursor_);
-        else
-            emit message(QStringLiteral(
-                "Drag a cut line across the objects to trim (Esc to pick a different reference)"));
-        emit overlayChanged();
-        return;
-    }
+    // Trim's cut line is two clicks (handled in onPointerPress), so the release does
+    // nothing for it.
     if (!selectionTool()) return;
     // A grabbed joint stays attached to the cursor after release; it is placed
     // by the next click, not by releasing the button.

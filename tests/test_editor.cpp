@@ -269,10 +269,11 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
         ed.selectById("ref");          // the cutting edge / reference
         ed.setTool(ToolId::Trim);      // captures "ref" as the reference
-        // Drag a vertical cut line at x=80 (right of the reference) across all three.
-        ed.onPointerPress({80, 5}, Qt::LeftButton, Qt::NoModifier);
+        // Cut line by two clicks: a vertical line at x=80 (right of the reference)
+        // across all three horizontals.
+        ed.onPointerPress({80, 5}, Qt::LeftButton, Qt::NoModifier);   // cut-line start
         ed.onPointerMove({80, 35});
-        ed.onPointerRelease({80, 35}, Qt::LeftButton);
+        ed.onPointerPress({80, 35}, Qt::LeftButton, Qt::NoModifier);  // cut-line end -> apply
         auto endX = [&](const QString& id) {
             const Entity* e = nullptr;
             for (const auto& en : d.entities()) if (en.id == id) e = &en;
@@ -284,6 +285,29 @@ int run_editor_tests() {
         const Entity* r = nullptr;
         for (const auto& en : d.entities()) if (en.id == "ref") r = &en;
         check(r && near(std::abs(r->b.y - r->a.y), 200.0), "trim-fence: reference is not trimmed");
+    }
+
+    // --- Trim to a DOUBLE LINE reference stops at the near PHYSICAL line, not the
+    //     centerline between the two lines.
+    {
+        Document d; d.entities().clear();
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        dl.a = {50, -100}; dl.b = {50, 100}; dl.meta.insert("gap", 20.0); // physical lines x=40 and x=60
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        d.entities().push_back(dl);
+        d.entities().push_back(h);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("dl");           // double line is the reference
+        ed.setTool(ToolId::Trim);
+        // Cut line crossing h on the right side (x=80).
+        ed.onPointerPress({80, -5}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({80, 5});
+        ed.onPointerPress({80, 5}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* hh = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "h") hh = &e;
+        // The right end is removed up to the NEAR physical line at x=60 (not 50).
+        check(hh && near(std::max(hh->a.x, hh->b.x), 60.0),
+              "trim-double: trims to the near physical line (x=60), not the centerline (x=50)");
     }
 
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the

@@ -40,10 +40,29 @@ std::vector<Vec2> lineIntersections(const Entity& line,
         if (&e == &line) continue;
         switch (e.type) {
         case EntityType::Line:
-        case EntityType::DoubleLine:
             addSeg(e.a, e.b);
             break;
+        case EntityType::DoubleLine: {
+            // Use the two VISIBLE physical lines, not the centerline, so a trim
+            // stops at the physical line (not in the gap between them).
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            addSeg(e.a + off, e.b + off);
+            addSeg(e.a - off, e.b - off);
+            break;
+        }
         case EntityType::Polyline:
+            // A DOUBLE polyline cuts on its two physical runs, not the centerline.
+            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, s);
+                    for (size_t i = 1; i < run.size(); ++i) addSeg(run[i - 1], run[i]);
+                }
+                break;
+            }
+            for (size_t i = 1; i < e.points.size(); ++i) addSeg(e.points[i - 1], e.points[i]);
+            break;
         case EntityType::Spline:
         case EntityType::Wire:
             for (size_t i = 1; i < e.points.size(); ++i) addSeg(e.points[i - 1], e.points[i]);
@@ -227,6 +246,15 @@ std::vector<double> intersectionParams(const Entity& line, const std::vector<Ent
             break;
         }
         case EntityType::Polyline:
+            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, s);
+                    for (size_t i = 1; i < run.size(); ++i) addSeg(run[i - 1], run[i]);
+                }
+                break;
+            }
+            [[fallthrough]];
         case EntityType::Spline:
         case EntityType::Wire:
             for (size_t i = 1; i < e.points.size(); ++i) addSeg(e.points[i - 1], e.points[i]);
@@ -311,12 +339,28 @@ bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& oth
     };
     for (const auto& e : others) {
         if (&e == &line) continue;
-        if (e.type == EntityType::Line || e.type == EntityType::DoubleLine) tryBoundary(e.a, e.b);
-        else if (e.type == EntityType::Rect || e.type == EntityType::Polygon)
+        if (e.type == EntityType::Line) {
+            tryBoundary(e.a, e.b);
+        } else if (e.type == EntityType::DoubleLine) {
+            // Extend to the physical line, not the centerline.
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            tryBoundary(e.a + off, e.b + off);
+            tryBoundary(e.a - off, e.b - off);
+        } else if (e.type == EntityType::Rect || e.type == EntityType::Polygon) {
             for (size_t i = 0; i < e.points.size(); ++i)
                 tryBoundary(e.points[i], e.points[(i + 1) % e.points.size()]);
-        else if (e.type == EntityType::Polyline)
-            for (size_t i = 1; i < e.points.size(); ++i) tryBoundary(e.points[i - 1], e.points[i]);
+        } else if (e.type == EntityType::Polyline) {
+            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, s);
+                    for (size_t i = 1; i < run.size(); ++i) tryBoundary(run[i - 1], run[i]);
+                }
+            } else {
+                for (size_t i = 1; i < e.points.size(); ++i) tryBoundary(e.points[i - 1], e.points[i]);
+            }
+        }
     }
     if (!found) return false;
     if (extendA) line.a = bestPt; else line.b = bestPt;
