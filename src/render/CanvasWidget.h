@@ -78,7 +78,9 @@ public:
     QColor gridMajorColor() const { return gridMajor_; }
 
     // Command words for the dynamic-input autocomplete (suggests/filters as you type).
-    void setCommandWords(const QStringList& words);
+    // Command autocomplete: `words` are the inserted completions (aliases/names),
+    // `labels` the matching preview text shown in the popup ("tr — Trim …").
+    void setCommandWords(const QStringList& words, const QStringList& labels);
 
 signals:
     void cursorWorldMoved(Vec2 world);

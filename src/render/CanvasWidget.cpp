@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSet>
+#include <QStandardItemModel>
 #include <QStringListModel>
 #include <QWheelEvent>
 #include <algorithm>
@@ -391,7 +392,7 @@ void CanvasWidget::childEvent(QChildEvent* e) {
     QWidget::childEvent(e);
 }
 
-void CanvasWidget::setCommandWords(const QStringList& words) {
+void CanvasWidget::setCommandWords(const QStringList& words, const QStringList& labels) {
     if (!completer_) {
         completer_ = new QCompleter(this);
         completer_->setCaseSensitivity(Qt::CaseInsensitive);
@@ -399,7 +400,15 @@ void CanvasWidget::setCommandWords(const QStringList& words) {
         completer_->setCompletionMode(QCompleter::PopupCompletion);
         if (dynInput_) dynInput_->setCompleter(completer_);
     }
-    completer_->setModel(new QStringListModel(words, completer_));
+    // The popup shows the label ("tr — Trim …"); accepting inserts the bare word.
+    auto* model = new QStandardItemModel(completer_);
+    for (int i = 0; i < words.size(); ++i) {
+        auto* it = new QStandardItem();
+        it->setData(i < labels.size() ? labels[i] : words[i], Qt::DisplayRole);
+        it->setData(words[i], Qt::EditRole); // completionRole (what gets inserted)
+        model->appendRow(it);
+    }
+    completer_->setModel(model);
 }
 
 void CanvasWidget::wheelEvent(QWheelEvent* e) {

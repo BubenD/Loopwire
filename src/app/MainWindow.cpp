@@ -21,6 +21,8 @@
 #include <QApplication>
 #include <QColorDialog>
 #include <QCompleter>
+#include <QSet>
+#include <QStandardItemModel>
 #include <QGroupBox>
 #include <QRadioButton>
 #include <QSlider>
@@ -1310,20 +1312,40 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     buildMenus();
     buildCommands();
 
-    // Command autocomplete: suggest/filter commands starting with the typed letters
-    // (in both the bottom command bar and the floating dynamic-input box).
+    // Command autocomplete: typing the first letters suggests every matching
+    // command/alias and previews what it does ("tr — Trim to a boundary"). Accepting
+    // a suggestion inserts the bare word. Shared by the bottom command bar and the
+    // floating dynamic-input box.
     {
-        QStringList words;
+        // One entry per name/alias, sorted by word; label = "word — description".
+        QList<QPair<QString, QString>> entries; // (word, label)
+        QSet<QString> seen;
         for (const auto& c : commands_)
-            for (const auto& n : c.names) words << n;
-        words.removeDuplicates();
-        words.sort(Qt::CaseInsensitive);
-        auto* comp = new QCompleter(words, this);
+            for (const auto& n : c.names)
+                if (!seen.contains(n)) {
+                    seen.insert(n);
+                    entries.append({n, n + QStringLiteral("  —  ") + c.desc});
+                }
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto& a, const auto& b) { return a.first.compare(b.first, Qt::CaseInsensitive) < 0; });
+
+        QStringList words, labels;
+        auto* model = new QStandardItemModel(this);
+        for (const auto& e : entries) {
+            words << e.first;
+            labels << e.second;
+            auto* it = new QStandardItem();
+            it->setData(e.second, Qt::DisplayRole); // preview text in the popup
+            it->setData(e.first, Qt::EditRole);     // inserted on accept
+            model->appendRow(it);
+        }
+        auto* comp = new QCompleter(model, this);
+        model->setParent(comp);
         comp->setCaseSensitivity(Qt::CaseInsensitive);
         comp->setFilterMode(Qt::MatchStartsWith);
         comp->setCompletionMode(QCompleter::PopupCompletion);
         if (commandEdit_) commandEdit_->setCompleter(comp);
-        canvas_->setCommandWords(words);
+        canvas_->setCommandWords(words, labels);
     }
 
     newDrawing(); // start with a single empty drawing (no demo, no last session)
@@ -4000,9 +4022,9 @@ void MainWindow::buildCommands() {
     commands_ = {
         // Draw
         {{"line", "l"}, "Draw", "Line", tool(ToolId::Line)},
-        {{"pline", "pl", "polyline"}, "Draw", "Polyline", tool(ToolId::Polyline)},
-        {{"dline", "dl", "ml"}, "Draw", "Double line", tool(ToolId::DoubleLine)},
-        {{"dpline", "dpl", "mline"}, "Draw", "Double polyline", tool(ToolId::DoublePolyline)},
+        {{"pline", "lp", "pl", "polyline"}, "Draw", "Polyline", tool(ToolId::Polyline)},
+        {{"dline", "d", "dl", "ml"}, "Draw", "Double line", tool(ToolId::DoubleLine)},
+        {{"dpline", "dp", "dpl", "mline"}, "Draw", "Double polyline", tool(ToolId::DoublePolyline)},
         {{"rectang", "rec", "rectangle", "rect"}, "Draw", "Rectangle", tool(ToolId::Rect)},
         {{"polygon", "pol"}, "Draw", "Polygon", tool(ToolId::Polygon)},
         {{"circle", "c"}, "Draw", "Circle", tool(ToolId::Circle)},
@@ -4026,8 +4048,8 @@ void MainWindow::buildCommands() {
         {{"offset", "o"}, "Modify", "Offset", tool(ToolId::Offset)},
         {{"trim", "tr"}, "Modify", "Trim to a boundary", tool(ToolId::Trim)},
         {{"extend", "ex"}, "Modify", "Extend to a boundary", tool(ToolId::Extend)},
-        {{"fillet", "f"}, "Modify", "Fillet two lines (set radius: r <value>)", tool(ToolId::Fillet)},
-        {{"chamfer", "cha"}, "Modify", "Chamfer two lines", tool(ToolId::Chamfer)},
+        {{"fillet", "fi", "f"}, "Modify", "Fillet two lines (set radius: r <value>)", tool(ToolId::Fillet)},
+        {{"chamfer", "ch", "cha"}, "Modify", "Chamfer two lines", tool(ToolId::Chamfer)},
         {{"array", "ar"}, "Modify", "Rectangular array", [this] { arrayDialog(); }},
         {{"explode", "x"}, "Modify", "Explode into segments", [this] { editor_->explodeSelected(); }},
         {{"purge", "pu"}, "Modify", "Separate into single primitives", [this] { editor_->purgeSelected(); }},
@@ -4036,6 +4058,7 @@ void MainWindow::buildCommands() {
         {{"select", "sel"}, "Edit", "Select tool", tool(ToolId::Select)},
         {{"selectall", "all"}, "Edit", "Select everything", [this] { editor_->selectAll(); }},
         {{"copy", "co", "cp"}, "Edit", "Copy selection to clipboard", [this] { editor_->copySelection(); }},
+        {{"cut", "cu"}, "Edit", "Cut selection to clipboard", [this] { editor_->cutSelection(); }},
         {{"paste", "pa"}, "Edit", "Paste from clipboard", [this] { editor_->paste(); }},
         {{"undo", "u"}, "Edit", "Undo", [this] { editor_->undo(); }},
         {{"redo"}, "Edit", "Redo", [this] { editor_->redo(); }},
