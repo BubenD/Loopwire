@@ -290,6 +290,15 @@ private:
     // ANY combination of separate visible objects) that encloses `seed`. Returns
     // the loop polygon, or nullopt if the seed isn't inside a closed region.
     std::optional<std::vector<Vec2>> enclosingRegionLoop(const Vec2& seed) const;
+    // The bounded region to hatch at `seed`: the SMALLER of the smallest enclosing
+    // closed object and the cell traced from all crossing objects (so a line cutting
+    // through a rectangle fills only the sub-cell, not the whole rectangle). Exactly
+    // one of {ent, loop} is set on success; both empty if nothing encloses the seed.
+    struct HatchRegion {
+        const Entity* ent = nullptr;            // a single closed object won
+        std::optional<std::vector<Vec2>> loop;  // a traced multi-object cell won
+    };
+    HatchRegion pickHatchRegion(const Vec2& seed) const;
     // Create a Hatch/Wipeout from a source boundary entity (circle shapes stay a
     // true circle when "multiple joints" is off; everything else is a polygon).
     void commitHatchFromSource(const Entity& src);

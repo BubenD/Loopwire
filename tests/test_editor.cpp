@@ -1347,9 +1347,8 @@ int run_editor_tests() {
         check(std::min(dTop, dBot) < 1e-3, "dl-grab: grabbed corner follows the cursor");
     }
 
-    // --- Double line: the centerline joint at an END moves the whole end to the
-    // cursor (both lines stay centered on it). beginGripGrab must pick the NEAREST
-    // grip, so the centerline end isn't shadowed by a nearby corner grip.
+    // --- Double line joints are ONLY on the two physical lines (no centerline joint
+    // between them). Grabbing a PHYSICAL-line midpoint moves the whole double line.
     {
         Document d; d.entities().clear();
         Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
@@ -1357,12 +1356,13 @@ int run_editor_tests() {
         d.entities().push_back(dl);
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.selectAll();
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // centerline end A
-        ed.onPointerMove({5, 10});
-        ed.onPointerPress({5, 10}, Qt::LeftButton, Qt::NoModifier);
+        // The top physical line's midpoint is (20, 5) (gap/2 = 5); grab and move it.
+        ed.onPointerPress({20, 5}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({20, 15});
+        ed.onPointerPress({20, 15}, Qt::LeftButton, Qt::NoModifier);
         const Entity& e = d.entities()[0];
-        check(near(e.a.x, 5.0) && near(e.a.y, 10.0), "dl-midend: centerline end A follows the cursor");
-        check(near(e.b.x, 40.0) && near(e.b.y, 0.0), "dl-midend: end B unchanged");
+        check(near(e.a.y, 10.0) && near(e.b.y, 10.0) && near(e.a.x, 0.0) && near(e.b.x, 40.0),
+              "dl-midjoint: physical-line midpoint moves the whole double line");
     }
 
     // --- Double line region selection: a crossing box BETWEEN the lines (not
@@ -1583,6 +1583,31 @@ int run_editor_tests() {
         check(h.type == EntityType::Hatch && h.points.size() == 4 &&
                   h.meta.value("pattern").toString() == QLatin1String("solid"),
               "hatch-select: boundary taken from the closed object");
+    }
+
+    // --- Hatch pick-points fills only the SUB-CELL when an object crosses a closed
+    //     shape (a line cutting a rectangle), not the whole rectangle.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "r"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}}; // area 10000
+        Entity cut; cut.id = "c"; cut.type = EntityType::Line; cut.a = {-10, 50}; cut.b = {110, 50};
+        d.entities().push_back(r);
+        d.entities().push_back(cut);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(2);
+        ed.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
+        ed.setTool(ToolId::Hatch);
+        ed.onPointerPress({50, 25}, Qt::LeftButton, Qt::NoModifier); // lower half
+        const Entity& h = d.entities().back();
+        double area = 0.0;
+        for (size_t i = 0, n = h.points.size(); i < n; ++i) {
+            const Vec2& a = h.points[i];
+            const Vec2& b = h.points[(i + 1) % n];
+            area += a.x * b.y - b.x * a.y;
+        }
+        area = std::abs(area) * 0.5;
+        check(h.type == EntityType::Hatch && near(area, 5000.0, 1.0),
+              "hatch-cell: fills only the half cut off by the crossing line, not the whole rect");
     }
 
     // --- Wipeout: AutoCAD-style polygon draw (click vertices, Enter to finish);

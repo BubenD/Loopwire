@@ -119,9 +119,9 @@ std::vector<Grip> gripsOf(const Entity& e) {
         break;
     }
     case EntityType::DoubleLine: {
-        // Joints on the two VISIBLE parallel lines only (no confusing centerline
-        // joint between them). Each end grip carries its offset so dragging it
-        // keeps that point under the cursor.
+        // Joints ONLY on the two VISIBLE parallel lines — never on the centerline
+        // between them. Each end grip carries its offset so dragging it keeps that
+        // physical point under the cursor; each physical mid moves the whole line.
         const Vec2 mid = lerp(e.a, e.b, 0.5);
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
@@ -130,14 +130,7 @@ std::vector<Grip> gripsOf(const Entity& e) {
         g.push_back({e.a + noff, GripRole::LineA, 0, noff});
         g.push_back({e.b + off, GripRole::LineB, 0, off});
         g.push_back({e.b + noff, GripRole::LineB, 0, noff});
-        // Middle joint at each END (on the centerline, between that end's two
-        // corners): grabbing it moves the whole end (both lines) to the cursor,
-        // keeping it centered. off={0,0} so it tracks the centerline directly.
-        g.push_back({e.a, GripRole::LineA, 0});
-        g.push_back({e.b, GripRole::LineB, 0});
-        // Middle joints: on the centerline AND on each visible physical line, so the
-        // double line can be grabbed at the middle of either run (moves the whole).
-        g.push_back({mid, GripRole::LineMid, 0});
+        // A midpoint joint on EACH physical line (moves the whole double line).
         g.push_back({mid + off, GripRole::LineMid, 0});
         g.push_back({mid + noff, GripRole::LineMid, 0});
         break;
@@ -600,15 +593,15 @@ bool Editor::tryHatchAt(const Vec2& p) {
         }
         return false;
     }
-    // Pick Points: one click inside an enclosed area fills that region.
-    if (const Entity* src = enclosingEntity(p)) {
-        commitHatchFromSource(*src);
+    // Pick Points: fill the SMALLEST bounded region around the click — the single
+    // enclosing object, or (when crossing objects subdivide it) the carved cell.
+    HatchRegion region = pickHatchRegion(p);
+    if (region.ent) {
+        commitHatchFromSource(*region.ent);
         return true;
     }
-    // No single closed object surrounds the point — trace a closed loop formed by
-    // any combination of separate objects (AutoCAD-style boundary detection).
-    if (auto loop = enclosingRegionLoop(p)) {
-        commitHatchBoundary(*loop);
+    if (region.loop) {
+        commitHatchBoundary(*region.loop);
         return true;
     }
     // Nothing enclosing: end the live-edit of the previous hatch.
@@ -628,7 +621,12 @@ void Editor::onPointerMove(const Vec2& raw) {
 
     std::vector<QString> ignore;
     if (editing_ && editMode_ == 1) ignore.push_back(editEntityId_); // don't snap to self
-    snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap_, ignore);
+    // Dimension point picks IGNORE polar/ortho tracking — the extension points must
+    // land exactly where the geometry is, not be pulled onto a polar angle. Object
+    // and grid snapping still apply so you can snap to real points.
+    SnapSettings snap = snap_;
+    if (tool_ == ToolId::Dimension) { snap.polar = false; snap.ortho = false; }
+    snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
     cursor_ = snapResult_.point;
 
     // Apply an in-progress direct edit: a body move (button held) or a grabbed
@@ -816,6 +814,16 @@ bool pointInPolygon(const std::vector<Vec2>& poly, const Vec2& p) {
             in = !in;
     }
     return in;
+}
+
+double polygonArea(const std::vector<Vec2>& poly) {
+    double a2 = 0.0;
+    for (size_t i = 0, n = poly.size(); i < n; ++i) {
+        const Vec2& a = poly[i];
+        const Vec2& b = poly[(i + 1) % n];
+        a2 += a.x * b.y - b.x * a.y;
+    }
+    return std::abs(a2) * 0.5;
 }
 
 // Representative points used to test whether an entity is inside a region.
@@ -1691,6 +1699,21 @@ std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) c
     // Safety: the walked cell must actually contain the seed (rejects the outer face).
     if (!pointInPolygon(*loop, seed)) return std::nullopt;
     return loop;
+}
+
+Editor::HatchRegion Editor::pickHatchRegion(const Vec2& seed) const {
+    HatchRegion r;
+    const Entity* ent = enclosingEntity(seed);
+    auto loop = enclosingRegionLoop(seed);
+    const double entArea =
+        ent ? polygonArea(boundaryPointsOf(*ent, true)) : std::numeric_limits<double>::max();
+    const double loopArea = loop ? polygonArea(*loop) : std::numeric_limits<double>::max();
+    // A traced cell that is meaningfully SMALLER than the enclosing object means
+    // other objects subdivide it (e.g. a line crossing a rectangle) — fill the cell.
+    if (loop && loopArea + 1e-6 < entArea) { r.loop = std::move(loop); return r; }
+    if (ent) { r.ent = ent; return r; }
+    if (loop) { r.loop = std::move(loop); return r; }
+    return r;
 }
 
 void Editor::commitHatchFromSource(const Entity& src) {
@@ -4310,23 +4333,24 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.restore();
             }
         };
-        if (const Entity* src = enclosingEntity(cursor_)) {
-            if (!hatchStyle_.manyJoints && src->type == EntityType::Circle) {
+        HatchRegion region = pickHatchRegion(cursor_);
+        if (region.ent) {
+            if (!hatchStyle_.manyJoints && region.ent->type == EntityType::Circle) {
                 p.save();
                 QPen hp(QColor("#2bd0ff"));
                 hp.setCosmetic(true);
                 hp.setWidthF(1.6);
                 p.setPen(hp);
                 p.setBrush(QColor(80, 160, 255, 60));
-                const QPointF c = vt.toScreen(src->center);
-                const double r = src->radius * vt.scale();
+                const QPointF c = vt.toScreen(region.ent->center);
+                const double r = region.ent->radius * vt.scale();
                 p.drawEllipse(c, r, r);
                 p.restore();
             } else {
-                previewLoop(boundaryPointsOf(*src, hatchStyle_.manyJoints));
+                previewLoop(boundaryPointsOf(*region.ent, hatchStyle_.manyJoints));
             }
-        } else if (auto loop = enclosingRegionLoop(cursor_)) {
-            previewLoop(*loop); // region bounded by several separate objects
+        } else if (region.loop) {
+            previewLoop(*region.loop); // region bounded by several separate objects
         }
     }
 
