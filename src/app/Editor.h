@@ -298,7 +298,10 @@ private:
         const Entity* ent = nullptr;            // a single closed object won
         std::optional<std::vector<Vec2>> loop;  // a traced multi-object cell won
     };
-    HatchRegion pickHatchRegion(const Vec2& seed) const;
+    // `allowTrace` runs the O(n^2) multi-object boundary tracer; pass false for the
+    // live cursor preview on big drawings to keep it responsive (the click still
+    // traces). The single-object path (enclosingEntity) is always cheap.
+    HatchRegion pickHatchRegion(const Vec2& seed, bool allowTrace = true) const;
     // Create a Hatch/Wipeout from a source boundary entity (circle shapes stay a
     // true circle when "multiple joints" is off; everything else is a polygon).
     void commitHatchFromSource(const Entity& src);

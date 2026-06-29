@@ -311,6 +311,17 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         if (doc_) {
             drawGrid(sp, vt);
             drawOriginMarker(sp, vt);
+            // Viewport culling: only entities whose bounds intersect the visible
+            // world rectangle (plus a margin for line widths / labels) are drawn, so
+            // pan/zoom/edit on a large drawing don't re-render off-screen geometry.
+            const Vec2 c0 = vt.toWorld(QPointF(0, 0));
+            const Vec2 c1 = vt.toWorld(QPointF(width(), height()));
+            double vMinX = std::min(c0.x, c1.x), vMaxX = std::max(c0.x, c1.x);
+            double vMinY = std::min(c0.y, c1.y), vMaxY = std::max(c0.y, c1.y);
+            const double mx = (vMaxX - vMinX) * 0.05 + 1.0;
+            const double my = (vMaxY - vMinY) * 0.05 + 1.0;
+            vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
+
             // Selected entities are drawn live in the overlay (so they can be
             // dragged without rebuilding the cache); skip them here.
             QSet<QString> selected;
@@ -320,14 +331,20 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
                 if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible)
                     continue;
                 if (selected.contains(e.id)) continue;
+                const Bounds b = e.bounds();
+                if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX ||
+                                b.max.y < vMinY || b.min.y > vMaxY))
+                    continue; // entirely off-screen
                 EntityRenderer::draw(sp, e, *doc_, vt);
             }
         }
         sceneDirty_ = false;
+        sceneOffset_ = QPointF(0, 0); // cache now matches the current view
     }
 
     QPainter p(this);
-    p.drawPixmap(0, 0, sceneCache_);
+    // During a pan the cache is blitted shifted (no per-tick rebuild); 0 otherwise.
+    p.drawPixmap(sceneOffset_, sceneCache_);
     if (doc_ && editor_) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
@@ -422,6 +439,7 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
     if (e->button() == Qt::MiddleButton) { // middle-drag pans
         panning_ = true;
         lastPanPos_ = e->pos();
+        sceneOffset_ = QPointF(0, 0); // cache matches the view at pan start
         setCursor(Qt::ClosedHandCursor);
         e->accept();
         return;
@@ -451,7 +469,10 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         lastPanPos_ = e->pos();
         doc_->view().x += delta.x();
         doc_->view().y += delta.y();
-        invalidateScene();
+        // Blit the cached scene shifted instead of re-rendering every tick; the cache
+        // is rebuilt once on release (newly exposed edges fill in then).
+        sceneOffset_ += QPointF(delta.x(), delta.y());
+        update();
         emit viewChanged();
     }
     const Vec2 world = transform().toWorld(e->position());
@@ -491,7 +512,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         panning_ = false;
         setCursor(inlineEditing_ ? Qt::ArrowCursor
                                  : Qt::BlankCursor); // resume the drawn crosshair after panning
-        update();
+        invalidateScene(); // rebuild once for the final view (fills exposed edges)
         e->accept();
         return;
     }

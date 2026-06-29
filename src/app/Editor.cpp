@@ -1716,10 +1716,11 @@ std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) c
     return loop;
 }
 
-Editor::HatchRegion Editor::pickHatchRegion(const Vec2& seed) const {
+Editor::HatchRegion Editor::pickHatchRegion(const Vec2& seed, bool allowTrace) const {
     HatchRegion r;
     const Entity* ent = enclosingEntity(seed);
-    auto loop = enclosingRegionLoop(seed);
+    std::optional<std::vector<Vec2>> loop =
+        allowTrace ? enclosingRegionLoop(seed) : std::optional<std::vector<Vec2>>{};
     const double entArea =
         ent ? polygonArea(boundaryPointsOf(*ent, true)) : std::numeric_limits<double>::max();
     const double loopArea = loop ? polygonArea(*loop) : std::numeric_limits<double>::max();
@@ -4345,7 +4346,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.restore();
             }
         };
-        HatchRegion region = pickHatchRegion(cursor_);
+        // Live preview: on big drawings skip the O(n^2) multi-object tracer so the
+        // cursor stays smooth (the click still traces and fills the cell).
+        const bool allowTrace = doc_->entities().size() <= 80;
+        HatchRegion region = pickHatchRegion(cursor_, allowTrace);
         if (region.ent) {
             if (!hatchStyle_.manyJoints && region.ent->type == EntityType::Circle) {
                 p.save();

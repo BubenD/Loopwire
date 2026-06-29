@@ -170,6 +170,9 @@ private:
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change
     bool sceneDirty_ = true;
+    // While panning we blit the cached scene shifted by this offset instead of
+    // rebuilding it every mouse tick; reset to 0 whenever the cache is rebuilt.
+    QPointF sceneOffset_;
 
     bool panning_ = false;
     QPoint lastPanPos_;
