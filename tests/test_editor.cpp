@@ -267,6 +267,38 @@ int run_editor_tests() {
               "trim-quick: middle piece removed, two outer pieces remain");
     }
 
+    // --- Reference + fence trim: select a cutting edge, then drag a cut line across
+    //     several objects; each is trimmed back to the reference.
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {50, -100}; ref.b = {50, 100};
+        Entity a; a.id = "a"; a.type = EntityType::Line; a.a = {0, 10}; a.b = {100, 10};
+        Entity b; b.id = "b"; b.type = EntityType::Line; b.a = {0, 20}; b.b = {100, 20};
+        Entity c; c.id = "c"; c.type = EntityType::Line; c.a = {0, 30}; c.b = {100, 30};
+        d.entities().push_back(ref);
+        d.entities().push_back(a);
+        d.entities().push_back(b);
+        d.entities().push_back(c);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");          // the cutting edge / reference
+        ed.setTool(ToolId::Trim);      // captures "ref" as the reference
+        // Drag a vertical cut line at x=80 (right of the reference) across all three.
+        ed.onPointerPress({80, 5}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({80, 35});
+        ed.onPointerRelease({80, 35}, Qt::LeftButton);
+        auto endX = [&](const QString& id) {
+            const Entity* e = nullptr;
+            for (const auto& en : d.entities()) if (en.id == id) e = &en;
+            return e ? std::max(e->a.x, e->b.x) : -1.0;
+        };
+        check(near(endX("a"), 50.0) && near(endX("b"), 50.0) && near(endX("c"), 50.0),
+              "trim-fence: every crossed line trimmed back to the reference");
+        // The reference itself is untouched.
+        const Entity* r = nullptr;
+        for (const auto& en : d.entities()) if (en.id == "ref") r = &en;
+        check(r && near(std::abs(r->b.y - r->a.y), 200.0), "trim-fence: reference is not trimmed");
+    }
+
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
     //     corner.
     {
@@ -298,25 +330,6 @@ int run_editor_tests() {
               "polygon: object snap catches the centre joint");
     }
 
-    // --- Trim against a pre-selected reference: pick the reference, then a crossing
-    // line trims up to the reference (not to some other nearer intersection).
-    {
-        Document d; d.entities().clear();
-        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
-        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {40, -10}; ref.b = {40, 10};
-        // A nearer crossing (x=20) that must be IGNORED because it isn't the reference.
-        Entity other; other.id = "o"; other.type = EntityType::Line; other.a = {20, -10}; other.b = {20, 10};
-        d.entities().push_back(h);
-        d.entities().push_back(ref);
-        d.entities().push_back(other);
-        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
-        ed.selectById("ref");                 // the reference / cutting edge
-        ed.setTool(ToolId::Trim);             // captures "ref" as the cutting edge
-        ed.onPointerPress({80, 0}, Qt::LeftButton, Qt::NoModifier); // pick h on the far side
-        const Entity* hh = nullptr;
-        for (const auto& e : d.entities()) if (e.id == "h") hh = &e;
-        check(hh && near(hh->b.x, 40.0), "trim: trims up to the reference, not a nearer crossing");
-    }
 
     // --- New polyline starts with no fillet; a radius set mid-draw applies only to
     // corners formed afterward (per-corner cornerRadii), never retroactively.

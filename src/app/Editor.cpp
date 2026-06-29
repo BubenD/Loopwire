@@ -297,6 +297,12 @@ void Editor::setTool(ToolId t) {
         selected_.clear();
         emit selectionChanged();
     }
+    // Trim: the objects selected when the tool starts become the cutting edge(s).
+    // The user then drags a fence/cut line; objects it crosses are trimmed back to
+    // the reference. With no selection, Trim falls back to click "quick trim".
+    trimRefIds_.clear();
+    trimFenceActive_ = false;
+    if (t == ToolId::Trim) trimRefIds_ = selected_;
     tool_ = t;
     if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
     emit toolChanged(t);
@@ -645,7 +651,8 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Rubber-band preview (line/rect/etc. while drawing), modify reference
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
-    if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_)
+    if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
+        trimFenceActive_)
         emit overlayChanged();
 }
 
@@ -735,6 +742,16 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
+    // Trim with a reference selected: this press begins a fence/cut line. A drag
+    // trims every object it crosses back to the reference; a click (no drag) falls
+    // back to quick trim on release.
+    if (tool_ == ToolId::Trim && !trimRefIds_.empty()) {
+        trimFenceActive_ = true;
+        trimFenceStart_ = p;
+        emit message(QStringLiteral("Drag the cut line across objects to trim — release to apply"));
+        emit overlayChanged();
+        return;
+    }
     if (isPickModifyTool(tool_)) { handlePickModifyPress(p); return; }
     if (isPlacementTool(tool_)) { handlePlacementPress(p); return; }
     handleModifyPress(p);
@@ -742,7 +759,19 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
-    if (!doc_ || button != Qt::LeftButton || !selectionTool()) return;
+    if (!doc_ || button != Qt::LeftButton) return;
+    // Finish a trim fence: a real drag trims every crossed object to the reference;
+    // a click (no drag) falls back to quick trim at that point.
+    if (trimFenceActive_) {
+        trimFenceActive_ = false;
+        if (distance(trimFenceStart_, cursor_) > worldTolerance() * 2.0)
+            applyTrimFence(trimFenceStart_, cursor_);
+        else
+            handlePickModifyPress(trimFenceStart_); // a tap = quick trim
+        emit overlayChanged();
+        return;
+    }
+    if (!selectionTool()) return;
     // A grabbed joint stays attached to the cursor after release; it is placed
     // by the next click, not by releasing the button.
     if (gripGrab_) return;
@@ -1623,6 +1652,35 @@ std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) c
         case EntityType::Text:
         case EntityType::Dimension:
             break; // fills / annotations are not boundaries
+        case EntityType::Polyline:
+            // A DOUBLE polyline bounds with its two VISIBLE physical runs, NOT the
+            // centerline — so the hatch stops at the inner line, not in the gap.
+            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                std::vector<double> radii(e.points.size(), 0.0);
+                bool anyFillet = false;
+                if (e.meta.contains("cornerRadii")) {
+                    const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
+                    for (int i = 0; i < rArr.size() && i < static_cast<int>(radii.size()); ++i) {
+                        radii[i] = rArr[i].toDouble();
+                        if (radii[i] > 0) anyFillet = true;
+                    }
+                } else if (double cr = e.meta.value("cornerRadius").toDouble(0.0); cr > 0) {
+                    std::fill(radii.begin(), radii.end(), cr);
+                    anyFillet = true;
+                }
+                std::vector<double> centerRadii(radii.size(), 0.0);
+                for (size_t i = 0; i < radii.size(); ++i)
+                    if (radii[i] > 0) centerRadii[i] = radii[i] + gap / 2.0;
+                const std::vector<Vec2> center =
+                    anyFillet ? roundedPolylinePerCorner(e.points, centerRadii) : e.points;
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(center, s);
+                    for (size_t i = 1; i < run.size(); ++i) addSeg(run[i - 1], run[i]);
+                }
+                break;
+            }
+            [[fallthrough]];
         default:
             for (const auto& s : entitySelectSegments(e)) addSeg(s.first, s.second);
             break;
@@ -2369,8 +2427,11 @@ QString Editor::drawCommandHint() const {
     case ToolId::Chamfer:
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
-        return QStringLiteral("TRIM: click the part of a line to remove — it trims to the nearest "
-                              "crossing object on each side");
+        return trimRefIds_.empty()
+                   ? QStringLiteral("TRIM: click a line to remove a piece (trims to the nearest "
+                                    "crossing) — or select a reference first, then drag a cut line")
+                   : QStringLiteral("TRIM: drag a cut line across objects — each is trimmed back to "
+                                    "the selected reference");
     case ToolId::Extend:
         return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
@@ -3033,6 +3094,41 @@ std::vector<Entity> Editor::modifyPreview() const {
 }
 
 // ---- Pick-modify tools (trim / extend / fillet / chamfer) ------------------
+
+void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
+    if (!doc_) return;
+    // The cutting edges are the pre-selected reference objects.
+    std::vector<Entity> refs;
+    for (const QString& id : trimRefIds_)
+        if (const Entity* r = entityById(id)) refs.push_back(*r);
+    if (refs.empty()) { emit message(QStringLiteral("Select a reference object to trim to.")); return; }
+
+    pushUndo();
+    // Snapshot the ids first (trimming may add split pieces / invalidate pointers).
+    std::vector<QString> ids;
+    for (const auto& e : doc_->entities()) ids.push_back(e.id);
+    int count = 0;
+    for (const QString& id : ids) {
+        if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end())
+            continue; // never trim the reference itself
+        Entity* line = entityById(id);
+        if (!line || line->type != EntityType::Line) continue;
+        // Only objects the cut line actually crosses are trimmed.
+        auto x = segmentSegmentIntersection(a, b, line->a, line->b);
+        if (!x) continue;
+        // Trim the line at its intersection with the reference, removing the part on
+        // the side the cut line crossed (between the cut line and the reference).
+        if (trimLineAt(*line, *x, refs)) ++count;
+    }
+    if (count == 0) {
+        undo();
+        emit message(QStringLiteral("The cut line crossed nothing that meets the reference."));
+        return;
+    }
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Trimmed %1 object(s) to the reference").arg(count));
+    emit changed();
+}
 
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
@@ -4232,6 +4328,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else if (auto loop = enclosingRegionLoop(cursor_)) {
             previewLoop(*loop); // region bounded by several separate objects
         }
+    }
+
+    // Trim fence / cut line (AutoCAD-style): a bright dashed line the user drags
+    // across objects to trim them back to the reference.
+    if (trimFenceActive_) {
+        p.save();
+        QPen fp(QColor("#19ff7e"));
+        fp.setCosmetic(true);
+        fp.setWidthF(1.6);
+        fp.setStyle(Qt::DashLine);
+        p.setPen(fp);
+        p.drawLine(vt.toScreen(trimFenceStart_), vt.toScreen(cursor_));
+        p.restore();
     }
 
     // Modify reference points.

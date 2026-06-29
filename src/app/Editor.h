@@ -307,6 +307,8 @@ private:
         return tool_ == ToolId::Select || tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout;
     }
     void handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods);
+    // Trim every line a fence/cut line crosses back to the reference cutting edge.
+    void applyTrimFence(const Vec2& a, const Vec2& b);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill
     void handleDimensionPress(const Vec2& p); // multi-mode dimension placement
 
@@ -415,6 +417,12 @@ private:
     std::vector<Vec2> pickPts_;
     double filletRadius_ = 5.0;
     double chamferDist_ = 5.0;
+    // Trim with a reference cutting edge + a drawn fence (AutoCAD fence trim): the
+    // objects selected when Trim starts are the cutting edges; the user then drags a
+    // cut line and every object it crosses is trimmed back to the reference.
+    std::vector<QString> trimRefIds_;
+    bool trimFenceActive_ = false;
+    Vec2 trimFenceStart_;
 
     // Harness defaults.
     ConnectorSpec connectorSpec_ = defaultConnectorSpec(4);
