@@ -239,32 +239,19 @@ int run_editor_tests() {
         check(ok && near(others[0].b.x, 40.0), "trim: shortened to intersection");
     }
 
-    // --- Quick trim (AutoCAD): clicking a piece between two cutting edges splits
-    //     the line, removing the clicked middle and leaving the two outer pieces.
+    // --- trimLineQuick: a piece between two cutting edges splits the line, removing
+    //     the clicked middle and leaving the two outer pieces.
     {
-        Document d; d.entities().clear();
-        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
-        Entity c1; c1.id = "c1"; c1.type = EntityType::Line; c1.a = {30, -10}; c1.b = {30, 10};
-        Entity c2; c2.id = "c2"; c2.type = EntityType::Line; c2.a = {70, -10}; c2.b = {70, 10};
-        d.entities().push_back(h);
-        d.entities().push_back(c1);
-        d.entities().push_back(c2);
-        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
-        ed.setTool(ToolId::Trim);
-        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // click the middle piece
-        // Two collinear line pieces remain ([0..30] and [70..100]); the cutters stay.
-        int lines = 0;
-        bool keptLeft = false, keptRight = false;
-        for (const auto& e : d.entities()) {
-            if (e.type != EntityType::Line) continue;
-            if (near(e.a.y, 0.0) && near(e.b.y, 0.0)) { // a horizontal piece of h
-                lines++;
-                if (near(std::min(e.a.x, e.b.x), 0.0) && near(std::max(e.a.x, e.b.x), 30.0)) keptLeft = true;
-                if (near(std::min(e.a.x, e.b.x), 70.0) && near(std::max(e.a.x, e.b.x), 100.0)) keptRight = true;
-            }
-        }
-        check(lines == 2 && keptLeft && keptRight,
-              "trim-quick: middle piece removed, two outer pieces remain");
+        Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity c1; c1.type = EntityType::Line; c1.a = {30, -10}; c1.b = {30, 10};
+        Entity c2; c2.type = EntityType::Line; c2.a = {70, -10}; c2.b = {70, 10};
+        std::vector<Entity> others = {c1, c2};
+        std::optional<Entity> extra;
+        bool ok = trimLineQuick(h, {50, 0}, others, extra);
+        check(ok && extra, "trim-quick: middle piece split into two");
+        check(near(std::max(h.a.x, h.b.x), 30.0) && extra &&
+                  near(std::min(extra->a.x, extra->b.x), 70.0),
+              "trim-quick: outer pieces are [0..30] and [70..100]");
     }
 
     // --- Reference + fence trim: select a cutting edge, then drag a cut line across

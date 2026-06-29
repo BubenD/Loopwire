@@ -740,13 +740,27 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
-    // Trim with a reference selected: this press begins a fence/cut line. A drag
-    // trims every object it crosses back to the reference; a click (no drag) falls
-    // back to quick trim on release.
-    if (tool_ == ToolId::Trim && !trimRefIds_.empty()) {
+    // TRIM (AutoCAD-style): two phases. (1) With no reference yet, the first click
+    // picks the reference object (cutting edge) and highlights it. (2) Once a
+    // reference exists, press-drag a cut line; every object it crosses is trimmed
+    // back to the reference on release.
+    if (tool_ == ToolId::Trim) {
+        if (trimRefIds_.empty()) {
+            if (auto hit = hitTest(p)) {
+                trimRefIds_ = {*hit};
+                selected_ = {*hit}; // highlight the reference
+                emit selectionChanged();
+                emit message(QStringLiteral(
+                    "Reference set — drag a cut line across the objects to trim them to it"));
+                emit changed();
+            } else {
+                emit message(QStringLiteral("Pick the reference object to trim to"));
+            }
+            return;
+        }
         trimFenceActive_ = true;
         trimFenceStart_ = p;
-        emit message(QStringLiteral("Drag the cut line across objects to trim — release to apply"));
+        emit message(QStringLiteral("Drag the cut line across objects — release to trim to the reference"));
         emit overlayChanged();
         return;
     }
@@ -758,14 +772,15 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
-    // Finish a trim fence: a real drag trims every crossed object to the reference;
-    // a click (no drag) falls back to quick trim at that point.
+    // Finish a trim cut line: a real drag trims every object the line crosses back
+    // to the reference.
     if (trimFenceActive_) {
         trimFenceActive_ = false;
         if (distance(trimFenceStart_, cursor_) > worldTolerance() * 2.0)
             applyTrimFence(trimFenceStart_, cursor_);
         else
-            handlePickModifyPress(trimFenceStart_); // a tap = quick trim
+            emit message(QStringLiteral(
+                "Drag a cut line across the objects to trim (Esc to pick a different reference)"));
         emit overlayChanged();
         return;
     }
@@ -2451,10 +2466,9 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
         return trimRefIds_.empty()
-                   ? QStringLiteral("TRIM: click a line to remove a piece (trims to the nearest "
-                                    "crossing) — or select a reference first, then drag a cut line")
-                   : QStringLiteral("TRIM: drag a cut line across objects — each is trimmed back to "
-                                    "the selected reference");
+                   ? QStringLiteral("TRIM: click the REFERENCE object to trim to (the cutting edge)")
+                   : QStringLiteral("TRIM: drag a cut line across objects to trim them to the "
+                                    "reference — Esc to pick a different reference");
     case ToolId::Extend:
         return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
@@ -3156,33 +3170,20 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
 
-    if (tool_ == ToolId::Trim || tool_ == ToolId::Extend) {
-        if (!hit) { emit message(QStringLiteral("Pick a line to modify.")); return; }
+    // Trim is handled in onPointerPress/Release (reference + cut-line fence). Only
+    // Extend reaches here as a single-pick modify.
+    if (tool_ == ToolId::Extend) {
+        if (!hit) { emit message(QStringLiteral("Pick a line to extend.")); return; }
         Entity* line = entityById(*hit);
         if (!line || line->type != EntityType::Line) {
-            emit message(QStringLiteral("%1 currently supports straight lines.").arg(toolLabel(tool_)));
+            emit message(QStringLiteral("Extend currently supports straight lines."));
             return;
         }
         pushUndo();
-        if (tool_ == ToolId::Trim) {
-            // AutoCAD "quick" trim: every other visible object is a cutting edge;
-            // clicking a piece removes it up to the nearest crossing on each side
-            // (splitting the line in two if the piece sits between two cuts).
-            std::optional<Entity> extra;
-            const bool ok = trimLineQuick(*line, p, doc_->entities(), extra);
-            if (!ok) {
-                undo();
-                emit message(QStringLiteral("Nothing to trim there — the line must cross another object."));
-                return;
-            }
-            if (extra) addEntity(std::move(*extra));
-            emit message(QStringLiteral("Trimmed"));
-        } else {
-            if (!extendLineTo(*line, p, doc_->entities())) {
-                undo();
-                emit message(QStringLiteral("No boundary found."));
-                return;
-            }
+        if (!extendLineTo(*line, p, doc_->entities())) {
+            undo();
+            emit message(QStringLiteral("No boundary found."));
+            return;
         }
         doc_->setDirty(true);
         emit changed();
@@ -3735,6 +3736,17 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         return true;
     }
     if (key == Qt::Key_Escape) {
+        // Trim: first Esc cancels the cut line / clears the reference (so a new
+        // reference can be picked) but stays in the Trim tool; only Esc with no
+        // reference exits to Select.
+        if (tool_ == ToolId::Trim && (trimFenceActive_ || !trimRefIds_.empty())) {
+            trimFenceActive_ = false;
+            trimRefIds_.clear();
+            clearSelection();
+            emit message(QStringLiteral("Pick the reference object to trim to"));
+            emit changed();
+            return true;
+        }
         // Cancel any in-progress operation and clear the whole selection.
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
