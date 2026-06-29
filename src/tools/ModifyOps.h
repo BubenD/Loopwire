@@ -31,6 +31,13 @@ CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
 bool trimLineAt(Entity& line, const Vec2& pick,
                 const std::vector<Entity>& others);
 
+// Trim a circle or arc: remove the piece containing `pick` (a point on the
+// curve), bounded by where the cutting edges in `cutters` cross it. A circle needs
+// two cuts and becomes an arc; an arc may split — `extra` returns the second arc.
+// Returns true if `e` was modified.
+bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters,
+                  std::optional<Entity>& extra);
+
 // AutoCAD "quick" trim: remove the piece of `line` the user clicked, bounded by
 // the nearest cutting intersection on each side of the pick (cutting edges =
 // `others`). If the picked piece sits between two cuts the line is split — `line`

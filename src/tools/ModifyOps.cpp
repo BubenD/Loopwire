@@ -280,6 +280,154 @@ std::vector<double> intersectionParams(const Entity& line, const std::vector<Ent
 }
 } // namespace
 
+namespace {
+// True if point x (on circle C,R) lies within an arc's CCW sweep [sa, ea].
+bool angleOnArc(const Vec2& x, const Vec2& C, double sa, double ea) {
+    double sweep = ea - sa;
+    while (sweep < 0) sweep += 2.0 * M_PI;
+    double rel = std::atan2(x.y - C.y, x.x - C.x) - sa;
+    while (rel < 0) rel += 2.0 * M_PI;
+    return rel <= sweep + 1e-9;
+}
+
+// Angles (radians) where the cutting edges cross circle (C,R). For arc cutters /
+// the trimmed arc, callers filter by sweep separately.
+std::vector<double> circleCutAngles(const Vec2& C, double R, const Entity& self,
+                                    const std::vector<Entity>& cutters) {
+    std::vector<double> angs;
+    auto addPt = [&](const Vec2& x) { angs.push_back(std::atan2(x.y - C.y, x.x - C.x)); };
+    auto cutSeg = [&](const Vec2& a, const Vec2& b) {
+        const Vec2 d = b - a;
+        const double L2 = d.lengthSq();
+        if (L2 < 1e-12) return;
+        for (const auto& x : lineCircleIntersection(a, d, C, R)) {
+            const double t = dot(x - a, d) / L2;
+            if (t < -1e-9 || t > 1.0 + 1e-9) continue; // outside the cutter segment
+            addPt(x);
+        }
+    };
+    for (const auto& e : cutters) {
+        if (&e == &self || (!self.id.isEmpty() && e.id == self.id)) continue; // not self
+        switch (e.type) {
+        case EntityType::Line:
+            cutSeg(e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            cutSeg(e.a + off, e.b + off);
+            cutSeg(e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Polyline:
+            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, s);
+                    for (size_t i = 1; i < run.size(); ++i) cutSeg(run[i - 1], run[i]);
+                }
+                break;
+            }
+            for (size_t i = 1; i < e.points.size(); ++i) cutSeg(e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Spline:
+        case EntityType::Wire:
+            for (size_t i = 1; i < e.points.size(); ++i) cutSeg(e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Rect:
+        case EntityType::Polygon:
+            for (size_t i = 0; i < e.points.size(); ++i)
+                cutSeg(e.points[i], e.points[(i + 1) % e.points.size()]);
+            break;
+        case EntityType::Circle:
+            for (const auto& x : circleCircleIntersection(e.center, e.radius, C, R)) addPt(x);
+            break;
+        case EntityType::Arc:
+            for (const auto& x : circleCircleIntersection(e.center, e.radius, C, R))
+                if (angleOnArc(x, e.center, e.startAngle, e.endAngle)) addPt(x);
+            break;
+        default:
+            break;
+        }
+    }
+    return angs;
+}
+} // namespace
+
+bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters,
+                  std::optional<Entity>& extra) {
+    extra.reset();
+    if ((e.type != EntityType::Circle && e.type != EntityType::Arc) || e.radius < 1e-9)
+        return false;
+    const Vec2 C = e.center;
+    auto norm = [](double a) {
+        while (a < 0) a += 2.0 * M_PI;
+        while (a >= 2.0 * M_PI) a -= 2.0 * M_PI;
+        return a;
+    };
+    const double ap = norm(std::atan2(pick.y - C.y, pick.x - C.x));
+
+    if (e.type == EntityType::Circle) {
+        std::vector<double> cuts;
+        for (double a : circleCutAngles(C, e.radius, e, cutters)) cuts.push_back(norm(a));
+        std::sort(cuts.begin(), cuts.end());
+        cuts.erase(std::unique(cuts.begin(), cuts.end(),
+                               [](double x, double y) { return std::abs(x - y) < 1e-7; }),
+                   cuts.end());
+        if (cuts.size() < 2) return false; // need two cuts to bound an arc
+        // Find the gap (consecutive cut angles, cyclic) that contains the pick; that
+        // arc is removed, leaving an arc spanning the rest (from hi CCW to lo).
+        double lo = cuts.back(), hi = cuts.front();
+        for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+            if (ap >= cuts[i] && ap < cuts[i + 1]) { lo = cuts[i]; hi = cuts[i + 1]; break; }
+        }
+        e.type = EntityType::Arc;
+        e.startAngle = hi;
+        e.endAngle = lo; // CCW from hi to lo = the kept (complement) arc
+        return true;
+    }
+
+    // Arc: work in relative sweep parameter u in [0, sweep].
+    double sweep = e.endAngle - e.startAngle;
+    while (sweep <= 0) sweep += 2.0 * M_PI;
+    while (sweep > 2.0 * M_PI) sweep -= 2.0 * M_PI;
+    auto rel = [&](double a) {
+        double r = a - e.startAngle;
+        while (r < 0) r += 2.0 * M_PI;
+        while (r >= 2.0 * M_PI) r -= 2.0 * M_PI;
+        return r;
+    };
+    const double up = rel(ap);
+    if (up > sweep + 1e-9) return false; // pick isn't on the arc
+    std::vector<double> cuts;
+    for (double a : circleCutAngles(C, e.radius, e, cutters)) {
+        const double u = rel(a);
+        if (u > 1e-9 && u < sweep - 1e-9) cuts.push_back(u); // strictly inside the arc
+    }
+    if (cuts.empty()) return false;
+    std::sort(cuts.begin(), cuts.end());
+    double lo = -1.0, hi = sweep + 1.0;
+    bool hasLo = false, hasHi = false;
+    for (double u : cuts) {
+        if (u <= up && u > lo) { lo = u; hasLo = true; }
+        if (u >= up && u < hi) { hi = u; hasHi = true; }
+    }
+    const double s0 = e.startAngle;
+    if (hasLo && hasHi && hi - lo > 1e-7) {
+        // Split: keep [start, start+lo] and [start+hi, end].
+        Entity rem = e;
+        rem.id = newId();
+        rem.startAngle = s0 + hi;
+        rem.endAngle = s0 + sweep;
+        e.endAngle = s0 + lo;
+        extra = rem;
+        return true;
+    }
+    if (hasHi) { e.startAngle = s0 + hi; return true; } // remove the start-side piece
+    if (hasLo) { e.endAngle = s0 + lo; return true; }   // remove the end-side piece
+    return false;
+}
+
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
                    std::optional<Entity>& extra) {
     extra.reset();

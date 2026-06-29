@@ -310,6 +310,32 @@ int run_editor_tests() {
               "trim-double: trims to the near physical line (x=60), not the centerline (x=50)");
     }
 
+    // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
+    //     removed and the circle becomes an arc spanning the rest.
+    {
+        Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {0, 0}; circ.radius = 10;
+        Entity v; v.type = EntityType::Line; v.a = {0, -20}; v.b = {0, 20};   // cuts at 90 & 270 deg
+        Entity hl; hl.type = EntityType::Line; hl.a = {-20, 0}; hl.b = {20, 0}; // cuts at 0 & 180 deg
+        std::vector<Entity> cutters = {v, hl};
+        std::optional<Entity> extra;
+        bool ok = trimCircleAt(circ, {7.07, 7.07} /* ~45 deg */, cutters, extra);
+        check(ok && circ.type == EntityType::Arc && !extra, "trim-circle: circle becomes an arc");
+        check(near(circ.startAngle, M_PI / 2, 1e-3) && near(circ.endAngle, 0.0, 1e-3),
+              "trim-circle: the picked quadrant (45 deg) is removed");
+    }
+
+    // --- Trim an ARC: a cut inside the sweep removes the picked end piece.
+    {
+        Entity arc; arc.id = "a"; arc.type = EntityType::Arc; arc.center = {0, 0}; arc.radius = 10;
+        arc.startAngle = 0; arc.endAngle = M_PI; // upper semicircle
+        Entity v; v.type = EntityType::Line; v.a = {0, -20}; v.b = {0, 20}; // crosses arc at 90 deg
+        std::vector<Entity> cutters = {v};
+        std::optional<Entity> extra;
+        bool ok = trimCircleAt(arc, {7.07, 7.07} /* 45 deg, on the arc */, cutters, extra);
+        check(ok && !extra && near(arc.startAngle, M_PI / 2, 1e-3) && near(arc.endAngle, M_PI, 1e-3),
+              "trim-arc: the start-side piece up to the cut is removed");
+    }
+
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
     //     corner.
     {

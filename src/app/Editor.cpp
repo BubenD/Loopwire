@@ -3126,25 +3126,53 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         if (const Entity* r = entityById(id)) refs.push_back(*r);
     const bool useRef = !refs.empty();
 
+    // Cutting edges for the actual trim: the reference copies, or a snapshot of all
+    // entities (so adding split pieces below can't invalidate the cutter list).
+    const std::vector<Entity> allSnapshot = useRef ? std::vector<Entity>{} : doc_->entities();
+    const std::vector<Entity>& cutters = useRef ? refs : allSnapshot;
+
     pushUndo();
     // Snapshot the ids first so trimming doesn't disturb the iteration.
     std::vector<QString> ids;
     for (const auto& e : doc_->entities()) ids.push_back(e.id);
     int count = 0;
+    std::vector<Entity> additions; // split pieces, added after the loop
     for (const QString& id : ids) {
         if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end())
             continue; // never trim the reference itself
-        Entity* line = entityById(id);
-        if (!line || line->type != EntityType::Line) continue;
-        // Only objects the cut line actually crosses are trimmed.
-        auto x = segmentSegmentIntersection(a, b, line->a, line->b);
-        if (!x) continue;
-        // Remove the part on the cut-line side, up to the reference (or, with no
-        // reference, the nearest crossing with any other object).
-        const bool ok = useRef ? trimLineAt(*line, *x, refs)
-                               : trimLineAt(*line, *x, doc_->entities());
-        if (ok) ++count;
+        Entity* obj = entityById(id);
+        if (!obj) continue;
+        if (obj->type == EntityType::Line) {
+            // Only objects the cut line actually crosses are trimmed.
+            auto x = segmentSegmentIntersection(a, b, obj->a, obj->b);
+            if (!x) continue;
+            if (trimLineAt(*obj, *x, cutters)) ++count;
+        } else if (obj->type == EntityType::Circle || obj->type == EntityType::Arc) {
+            // The cut line must cross the curve; that crossing is the picked side.
+            const Vec2 d = b - a;
+            std::optional<Vec2> pick;
+            for (const auto& x : lineCircleIntersection(a, d, obj->center, obj->radius)) {
+                const double t = (d.lengthSq() > 1e-12) ? dot(x - a, d) / d.lengthSq() : -1.0;
+                if (t < -1e-9 || t > 1.0 + 1e-9) continue; // off the cut-line segment
+                if (obj->type == EntityType::Arc) {
+                    double sweep = obj->endAngle - obj->startAngle;
+                    while (sweep < 0) sweep += 2.0 * M_PI;
+                    double rel = std::atan2(x.y - obj->center.y, x.x - obj->center.x) - obj->startAngle;
+                    while (rel < 0) rel += 2.0 * M_PI;
+                    if (rel > sweep + 1e-9) continue; // not on the arc
+                }
+                pick = x;
+                break;
+            }
+            if (!pick) continue;
+            std::optional<Entity> extra;
+            if (trimCircleAt(*obj, *pick, cutters, extra)) {
+                ++count;
+                if (extra) additions.push_back(std::move(*extra));
+            }
+        }
     }
+    for (auto& add : additions) addEntity(std::move(add));
     if (count == 0) {
         undo();
         emit message(useRef
