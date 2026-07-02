@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSet>
+#include <QAbstractItemView>
 #include <QStandardItemModel>
 #include <QStringListModel>
 #include <QWheelEvent>
@@ -146,6 +147,19 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
             }
         } else if (e->type() == QEvent::FocusOut) {
             dynInput_->hide(); // dismiss if the user clicks away
+        }
+    }
+    // Enter while the command autocomplete popup is open submits the TYPED text in
+    // one keystroke (runs the nearest command) instead of only accepting the
+    // highlighted suggestion.
+    if (completer_ && obj == completer_->popup() && e->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(e);
+        if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+            const QString t = dynInput_ ? dynInput_->text() : QString();
+            completer_->popup()->hide();
+            hideDynInput();
+            if (!t.isEmpty()) emit commandSubmitted(t);
+            return true;
         }
     }
     return QWidget::eventFilter(obj, e);
@@ -399,6 +413,7 @@ void CanvasWidget::setCommandWords(const QStringList& words, const QStringList& 
         completer_->setFilterMode(Qt::MatchStartsWith);
         completer_->setCompletionMode(QCompleter::PopupCompletion);
         if (dynInput_) dynInput_->setCompleter(completer_);
+        completer_->popup()->installEventFilter(this); // Enter submits typed text
     }
     // The popup shows the label ("tr — Trim …"); accepting inserts the bare word.
     auto* model = new QStandardItemModel(completer_);

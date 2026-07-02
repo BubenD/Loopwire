@@ -1344,7 +1344,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         comp->setCaseSensitivity(Qt::CaseInsensitive);
         comp->setFilterMode(Qt::MatchStartsWith);
         comp->setCompletionMode(QCompleter::PopupCompletion);
-        if (commandEdit_) commandEdit_->setCompleter(comp);
+        if (commandEdit_) {
+            commandEdit_->setCompleter(comp);
+            comp->popup()->installEventFilter(this); // Enter submits typed text (nearest cmd)
+        }
         canvas_->setCommandWords(words, labels);
     }
 
@@ -3249,6 +3252,20 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
             return true;
         }
     }
+    // Enter while the command autocomplete popup is open submits the TYPED text
+    // (so it runs the nearest command in one keystroke) instead of just accepting
+    // the highlighted suggestion and waiting for a second Enter.
+    if (commandEdit_ && commandEdit_->completer() &&
+        obj == commandEdit_->completer()->popup() && e->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(e);
+        if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+            const QString t = commandEdit_->text().trimmed();
+            commandEdit_->completer()->popup()->hide();
+            commandEdit_->clear();
+            submitCommand(t);
+            return true;
+        }
+    }
     return QMainWindow::eventFilter(obj, e);
 }
 
@@ -4087,8 +4104,30 @@ void MainWindow::runCommand(const QString& text) {
         return;
     }
 
+    // Exact command/alias match runs directly.
     for (const auto& c : commands_) {
         if (c.names.contains(cmd)) { c.run(); return; }
+    }
+
+    // Otherwise take the NEAREST available command: the alphabetically-first
+    // name/alias that starts with what was typed (i.e. the entry highlighted at the
+    // top of the autocomplete list). So "tri" -> trim, "cir" -> circle, "mo" -> move.
+    const Command* best = nullptr;
+    QString bestWord, bestCanon;
+    for (const auto& c : commands_) {
+        for (const auto& n : c.names) {
+            if (!n.startsWith(cmd, Qt::CaseInsensitive)) continue;
+            if (bestWord.isEmpty() || n.compare(bestWord, Qt::CaseInsensitive) < 0) {
+                bestWord = n;
+                bestCanon = c.names.isEmpty() ? n : c.names.front();
+                best = &c;
+            }
+        }
+    }
+    if (best) {
+        statusBar()->showMessage(QStringLiteral("%1 → %2").arg(cmd, bestCanon));
+        best->run();
+        return;
     }
     statusBar()->showMessage(
         QStringLiteral("Unknown command: %1  (type 'help' for the list)").arg(cmd));
