@@ -287,6 +287,37 @@ int run_editor_tests() {
         check(r && near(std::abs(r->b.y - r->a.y), 200.0), "trim-fence: reference is not trimmed");
     }
 
+    // --- Trim removes only up to the NEXT joint (not to the line end), and the
+    //     reference stays selected for further cuts.
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {50, -100}; ref.b = {50, 100};
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity j; j.id = "j"; j.type = EntityType::Line; j.a = {70, -10}; j.b = {70, 10}; // a joint at x=70
+        d.entities().push_back(ref);
+        d.entities().push_back(h);
+        d.entities().push_back(j);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");
+        ed.setTool(ToolId::Trim);
+        // Cut line at x=60 (between the reference x=50 and the joint x=70).
+        ed.onPointerPress({60, -5}, Qt::LeftButton, Qt::NoModifier); // cut-line start
+        ed.onPointerMove({60, 5});
+        ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier);  // cut-line end -> apply
+        // h now has two pieces: [0..50] and [70..100]; the [50..70] middle is removed.
+        int pieces = 0; bool left = false, right = false;
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Line || !(near(e.a.y, 0.0) && near(e.b.y, 0.0))) continue;
+            ++pieces;
+            if (near(std::min(e.a.x, e.b.x), 0.0) && near(std::max(e.a.x, e.b.x), 50.0)) left = true;
+            if (near(std::min(e.a.x, e.b.x), 70.0) && near(std::max(e.a.x, e.b.x), 100.0)) right = true;
+        }
+        check(pieces == 2 && left && right, "trim-joint: removed from reference (50) up to the next joint (70)");
+        // The reference is still selected for further cuts (until Esc).
+        check(ed.selection().size() == 1 && ed.selection().front() == "ref",
+              "trim-joint: reference stays selected after trimming");
+    }
+
     // --- Trim to a DOUBLE LINE reference stops at the near PHYSICAL line, not the
     //     centerline between the two lines.
     {

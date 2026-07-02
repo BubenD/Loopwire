@@ -31,6 +31,10 @@ CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
 bool trimLineAt(Entity& line, const Vec2& pick,
                 const std::vector<Entity>& others);
 
+// True if entity `e` (line / circle / arc) intersects any entity in `others`
+// (double lines / polylines are tested on their physical lines).
+bool objectCrosses(const Entity& e, const std::vector<Entity>& others);
+
 // Trim a circle or arc: remove the piece containing `pick` (a point on the
 // curve), bounded by where the cutting edges in `cutters` cross it. A circle needs
 // two cuts and becomes an arc; an arc may split — `extra` returns the second arc.

@@ -740,19 +740,32 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
-    // TRIM (AutoCAD-style): the CUT LINE is defined by two clicks — a start point
-    // and an end point. The line is shown (highlighted) between the first click and
-    // the cursor. On the second click, every object the cut line crosses is trimmed:
-    // back to the pre-selected reference object(s) if any, else to its nearest
-    // crossing.
+    // TRIM (AutoCAD-style, persistent reference): first pick a REFERENCE object — it
+    // stays selected/highlighted for the whole command. Then draw CUT LINES (two
+    // clicks each) across objects; every object a cut line crosses is trimmed at its
+    // joints (removing the piece the cut line crosses, bounded by the nearest
+    // intersections). The reference persists across many cuts until Esc finishes.
     if (tool_ == ToolId::Trim) {
+        if (trimRefIds_.empty()) {
+            if (auto hit = hitTest(p)) {
+                trimRefIds_ = {*hit};
+                selected_ = {*hit}; // stays highlighted until Esc
+                emit selectionChanged();
+                emit message(QStringLiteral(
+                    "Reference set — draw cut lines across objects to trim; Esc to finish"));
+                emit changed();
+            } else {
+                emit message(QStringLiteral("Select the reference object to trim from"));
+            }
+            return;
+        }
         if (!trimFenceActive_) {
             trimFenceActive_ = true;
             trimFenceStart_ = p;
             emit message(QStringLiteral("Click the end point of the cut line"));
         } else {
             trimFenceActive_ = false;
-            applyTrimFence(trimFenceStart_, p);
+            applyTrimFence(trimFenceStart_, p); // reference stays selected afterwards
         }
         emit overlayChanged();
         return;
@@ -2450,10 +2463,9 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
         return trimRefIds_.empty()
-                   ? QStringLiteral("TRIM: drag a cut line across objects to trim them (tip: select a "
-                                    "reference object first to trim back to it)")
-                   : QStringLiteral("TRIM: drag a cut line across objects — each is trimmed back to "
-                                    "the selected reference");
+                   ? QStringLiteral("TRIM: click the REFERENCE object to trim from (it stays selected)")
+                   : QStringLiteral("TRIM: click two points to draw a cut line across objects — each is "
+                                    "trimmed to the next joint; Esc to finish");
     case ToolId::Extend:
         return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
     case ToolId::Text:
@@ -3119,18 +3131,16 @@ std::vector<Entity> Editor::modifyPreview() const {
 
 void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     if (!doc_) return;
-    // Cutting edges: the pre-selected reference object(s) if any; otherwise every
-    // other object (so the cut line trims each crossed line to its nearest crossing).
     std::vector<Entity> refs;
     for (const QString& id : trimRefIds_)
         if (const Entity* r = entityById(id)) refs.push_back(*r);
-    const bool useRef = !refs.empty();
+    if (refs.empty()) { emit message(QStringLiteral("Select the reference object first.")); return; }
 
-    // Cutting edges for the actual trim: the reference copies, or a snapshot of all
-    // entities (so adding split pieces below can't invalidate the cutter list).
-    const std::vector<Entity> allSnapshot = useRef ? std::vector<Entity>{} : doc_->entities();
-    const std::vector<Entity>& cutters = useRef ? refs : allSnapshot;
-
+    // "Until any joint": the trim boundaries are ALL intersections (the reference
+    // plus every other object), so a piece is removed only up to the nearest joint,
+    // not to the object's end. A snapshot keeps the cutter list stable while split
+    // pieces are added.
+    const std::vector<Entity> joints = doc_->entities();
     pushUndo();
     // Snapshot the ids first so trimming doesn't disturb the iteration.
     std::vector<QString> ids;
@@ -3143,10 +3153,14 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         Entity* obj = entityById(id);
         if (!obj) continue;
         if (obj->type == EntityType::Line) {
-            // Only objects the cut line actually crosses are trimmed.
+            // Only objects the cut line crosses AND that meet the reference are trimmed.
             auto x = segmentSegmentIntersection(a, b, obj->a, obj->b);
-            if (!x) continue;
-            if (trimLineAt(*obj, *x, cutters)) ++count;
+            if (!x || !objectCrosses(*obj, refs)) continue;
+            std::optional<Entity> extra;
+            if (trimLineQuick(*obj, *x, joints, extra)) {
+                ++count;
+                if (extra) additions.push_back(std::move(*extra));
+            }
         } else if (obj->type == EntityType::Circle || obj->type == EntityType::Arc) {
             // The cut line must cross the curve; that crossing is the picked side.
             const Vec2 d = b - a;
@@ -3164,9 +3178,9 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 pick = x;
                 break;
             }
-            if (!pick) continue;
+            if (!pick || !objectCrosses(*obj, refs)) continue;
             std::optional<Entity> extra;
-            if (trimCircleAt(*obj, *pick, cutters, extra)) {
+            if (trimCircleAt(*obj, *pick, joints, extra)) {
                 ++count;
                 if (extra) additions.push_back(std::move(*extra));
             }
@@ -3175,13 +3189,12 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     for (auto& add : additions) addEntity(std::move(add));
     if (count == 0) {
         undo();
-        emit message(useRef
-                         ? QStringLiteral("The cut line crossed nothing that meets the reference.")
-                         : QStringLiteral("The cut line crossed no trimmable line."));
+        emit message(QStringLiteral("The cut line crossed nothing that meets the reference."));
         return;
     }
     doc_->setDirty(true);
-    emit message(QStringLiteral("Trimmed %1 object(s)").arg(count));
+    // Keep the reference selected so more cut lines can be drawn; Esc finishes.
+    emit message(QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish").arg(count));
     emit changed();
 }
 
@@ -3754,18 +3767,9 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         return true;
     }
     if (key == Qt::Key_Escape) {
-        // Trim: first Esc cancels the cut line / clears the reference (so a new
-        // reference can be picked) but stays in the Trim tool; only Esc with no
-        // reference exits to Select.
-        if (tool_ == ToolId::Trim && (trimFenceActive_ || !trimRefIds_.empty())) {
-            trimFenceActive_ = false;
-            trimRefIds_.clear();
-            clearSelection();
-            emit message(QStringLiteral("Pick the reference object to trim to"));
-            emit changed();
-            return true;
-        }
         // Cancel any in-progress operation and clear the whole selection.
+        // (Trim finishes here too: setTool(Select) below clears the reference/cut
+        // line, so Esc ends the trim command.)
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
         cancelRightDrag();

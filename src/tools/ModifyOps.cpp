@@ -428,6 +428,21 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
     return false;
 }
 
+bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
+    if (e.type == EntityType::Line) return !intersectionParams(e, others).empty();
+    if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
+        for (double ang : circleCutAngles(e.center, e.radius, e, others)) {
+            if (e.type == EntityType::Circle) return true;
+            double sweep = e.endAngle - e.startAngle;
+            while (sweep < 0) sweep += 2.0 * M_PI;
+            double rel = ang - e.startAngle;
+            while (rel < 0) rel += 2.0 * M_PI;
+            if (rel <= sweep + 1e-9) return true;
+        }
+    }
+    return false;
+}
+
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
                    std::optional<Entity>& extra) {
     extra.reset();
