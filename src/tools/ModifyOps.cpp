@@ -504,27 +504,29 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
             gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
         }
     }
-    // Each side of the pick is bounded by the nearest cutter CROSSING; only if there
-    // is no crossing on that side does the nearest KNEE bound it. So a piece that
-    // crosses a circle twice (even with a knee between the crossings — e.g. a V whose
-    // corner is inside the circle) removes the whole inside span, leaving no line
-    // dangling through the ring; a single line crossing still stops at the nearest
-    // knee instead of running to the far end.
-    auto nearestBelow = [&](const std::vector<double>& v, double& out) {
+    // The removed span is bounded on each side of the pick by the NEAREST boundary,
+    // where a boundary is a cutter CROSSING or the polyline's own KNEE (interior
+    // vertex). So a trim STOPS at a knee inside the circle — the rest survives as a
+    // separate object (which may still cross the ring until it's trimmed too). A
+    // cutter crossing must exist (checked above) or nothing trims, so a bare knee
+    // never triggers a trim on its own.
+    std::vector<double> bounds = crossings;
+    bounds.insert(bounds.end(), knees.begin(), knees.end());
+    auto nearestBelow = [&](double& out) {
         bool found = false;
-        for (double g : v)
+        for (double g : bounds)
             if (g <= gp + 1e-9 && (!found || g > out)) { out = g; found = true; }
         return found;
     };
-    auto nearestAbove = [&](const std::vector<double>& v, double& out) {
+    auto nearestAbove = [&](double& out) {
         bool found = false;
-        for (double g : v)
+        for (double g : bounds)
             if (g >= gp - 1e-9 && (!found || g < out)) { out = g; found = true; }
         return found;
     };
     double lo = 0.0, hi = static_cast<double>(n - 1);
-    bool hasLo = nearestBelow(crossings, lo) || nearestBelow(knees, lo);
-    bool hasHi = nearestAbove(crossings, hi) || nearestAbove(knees, hi);
+    bool hasLo = nearestBelow(lo);
+    bool hasHi = nearestAbove(hi);
     auto ptAt = [&](double g) {
         int i = std::clamp(static_cast<int>(std::floor(g)), 0, n - 2);
         return pts[i] + (pts[i + 1] - pts[i]) * (g - i);
