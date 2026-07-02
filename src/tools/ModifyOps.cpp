@@ -487,11 +487,28 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
         e.type == EntityType::Wire) {
         for (size_t i = 1; i < e.points.size(); ++i) {
-            bool hit = false;
+            const Vec2 A = e.points[i - 1], B = e.points[i], D = B - A;
+            const double L2 = D.lengthSq();
             for (const auto& c : others) {
                 if (!e.id.isEmpty() && c.id == e.id) continue;
+                if (c.type == EntityType::Circle || c.type == EntityType::Arc) {
+                    for (const auto& x : lineCircleIntersection(A, D, c.center, c.radius)) {
+                        const double t = (L2 > 1e-12) ? dot(x - A, D) / L2 : -1.0;
+                        if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+                        if (c.type == EntityType::Arc) {
+                            double sweep = c.endAngle - c.startAngle;
+                            while (sweep < 0) sweep += 2.0 * M_PI;
+                            double rel = std::atan2(x.y - c.center.y, x.x - c.center.x) - c.startAngle;
+                            while (rel < 0) rel += 2.0 * M_PI;
+                            if (rel > sweep + 1e-9) continue;
+                        }
+                        return true;
+                    }
+                    continue;
+                }
+                bool hit = false;
                 forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
-                    if (segmentSegmentIntersection(e.points[i - 1], e.points[i], p1, p2)) hit = true;
+                    if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;
                 });
                 if (hit) return true;
             }
@@ -523,23 +540,43 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
     const int n = static_cast<int>(pts.size());
     if (n < 2) return result;
 
-    // Cut positions along the polyline as a global parameter (segment index + t).
+    // Cut positions along the polyline as a global parameter (segment index + t):
+    // where cutters cross it, PLUS the polyline's own interior vertices (knees), so
+    // a trim stops at the nearest knee and the rest survives as a separate object.
     std::vector<double> cuts;
+    bool crossed = false; // an actual cutter crossing (not just a knee)
     for (int i = 0; i < n - 1; ++i) {
         const Vec2 A = pts[i], B = pts[i + 1], D = B - A;
         const double L2 = D.lengthSq();
         if (L2 < 1e-12) continue;
         for (const auto& c : cutters) {
             if (!selfId.isEmpty() && c.id == selfId) continue;
-            forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
-                if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
-                    const double t = dot(*x - A, D) / L2;
-                    if (t > 1e-6 && t < 1.0 - 1e-6) cuts.push_back(i + t);
+            if (c.type == EntityType::Circle || c.type == EntityType::Arc) {
+                for (const auto& x : lineCircleIntersection(A, D, c.center, c.radius)) {
+                    const double t = dot(x - A, D) / L2;
+                    if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+                    if (c.type == EntityType::Arc) {
+                        double sweep = c.endAngle - c.startAngle;
+                        while (sweep < 0) sweep += 2.0 * M_PI;
+                        double rel = std::atan2(x.y - c.center.y, x.x - c.center.x) - c.startAngle;
+                        while (rel < 0) rel += 2.0 * M_PI;
+                        if (rel > sweep + 1e-9) continue;
+                    }
+                    cuts.push_back(i + t);
+                    crossed = true;
                 }
-            });
+            } else {
+                forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                    if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
+                        const double t = dot(*x - A, D) / L2;
+                        if (t > 1e-6 && t < 1.0 - 1e-6) { cuts.push_back(i + t); crossed = true; }
+                    }
+                });
+            }
         }
     }
-    if (cuts.empty()) return result;
+    if (!crossed) return result;            // nothing actually cut it
+    for (int i = 1; i < n - 1; ++i) cuts.push_back(static_cast<double>(i)); // knees
 
     // Where the pick sits along the polyline.
     double gp = 0.0, bestd = std::numeric_limits<double>::max();

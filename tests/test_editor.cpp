@@ -367,6 +367,29 @@ int run_editor_tests() {
               "trim-doubleobj: exact cut line (the reference) recorded at the trimmed end");
     }
 
+    // --- Polyline trim stops at the nearest knee and splits into two pieces.
+    {
+        std::vector<Vec2> pts = {{0, 0}, {100, 0}, {100, 100}}; // an L (knee at 100,0)
+        Entity ref; ref.id = "r"; ref.type = EntityType::Line; ref.a = {50, -10}; ref.b = {50, 10};
+        std::vector<Entity> cutters = {ref};
+        auto pieces = trimPolylinePieces(pts, {70, 0} /* on seg0, past the ref */, cutters, "");
+        check(pieces.size() == 2, "trim-poly-knee: splits into two independent pieces");
+        // Piece 1 = [0..ref(50)], piece 2 = [knee(100,0)..(100,100)] — not the whole tail removed.
+        check(near(pieces[0].back().x, 50.0) && near(pieces[1].front().x, 100.0) &&
+                  near(pieces[1].front().y, 0.0),
+              "trim-poly-knee: removed only ref..knee; the far side survives");
+    }
+
+    // --- Trim a polyline with a CIRCLE as the reference (cutting edge).
+    {
+        std::vector<Vec2> pts = {{0, 0}, {200, 0}};
+        Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {100, 0}; circ.radius = 20;
+        std::vector<Entity> cutters = {circ};
+        auto pieces = trimPolylinePieces(pts, {140, 0} /* past the circle */, cutters, "");
+        check(pieces.size() == 1 && near(pieces[0].back().x, 120.0),
+              "trim-poly-circle: trims to the circle crossing (x=120)");
+    }
+
     // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
     //     removed and the circle becomes an arc spanning the rest.
     {
