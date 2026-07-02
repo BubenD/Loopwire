@@ -89,38 +89,23 @@ void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     if (n < 2) return;
     if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
 }
-// Move a run's END vertex onto the circle (along its last segment), so a run
-// trimmed by a circle reference ends exactly on the ring.
+// Snap a run's endpoint radially onto the circle (nearest ring point). The
+// endpoint already sits at the trimmed centreline crossing offset ±gap/2, so this
+// lands it cleanly on the ring near where it crosses — robust for any crossing
+// angle (a line-intersection clip could grab the FAR crossing and drag the run
+// across the circle, which was leaving stray lines through it).
+void snapToCircle(Vec2& p, const Vec2& c, double r) {
+    const Vec2 d = p - c;
+    const double len = d.length();
+    if (len > 1e-9) p = c + d * (r / len);
+}
 void extendRunEndToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
-    const int n = static_cast<int>(run.size());
-    if (n < 2) return;
-    const auto xs = lineCircleIntersection(run[n - 2], run[n - 1] - run[n - 2], c, r);
-    double best = 1e300;
-    for (const auto& x : xs) {
-        const double d = distance(x, run[n - 1]);
-        if (d < best) { best = d; run[n - 1] = x; }
-    }
-    // The offset run may just miss the ring (shallow/tangent crossing): snap the
-    // end radially onto the circle so it never dangles inside/outside.
-    if (best > 1e299) {
-        const Vec2 d = run[n - 1] - c;
-        const double len = d.length();
-        if (len > 1e-9) run[n - 1] = c + d * (r / len);
-    }
+    if (run.size() < 2) return;
+    snapToCircle(run.back(), c, r);
 }
 void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
     if (run.size() < 2) return;
-    const auto xs = lineCircleIntersection(run[1], run[0] - run[1], c, r);
-    double best = 1e300;
-    for (const auto& x : xs) {
-        const double d = distance(x, run[0]);
-        if (d < best) { best = d; run[0] = x; }
-    }
-    if (best > 1e299) {
-        const Vec2 d = run[0] - c;
-        const double len = d.length();
-        if (len > 1e-9) run[0] = c + d * (r / len);
-    }
+    snapToCircle(run.front(), c, r);
 }
 // Clip a run's start/end onto the stored cut boundary (a line or a circle).
 void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bool atEnd) {
