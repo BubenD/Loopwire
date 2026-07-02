@@ -504,25 +504,28 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
             gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
         }
     }
-    // Nearest boundary on each side of the pick: a cutter CROSSING wins; only if
-    // there's no crossing on that side does the nearest knee bound it. This removes
-    // the whole inside-circle span (ignoring interior knees) yet a single crossing
-    // still stops at the nearest knee instead of the far end.
-    auto nearestBelow = [&](const std::vector<double>& v, double& out) {
+    // The removed span is bounded by the NEAREST boundary on each side of the pick,
+    // where a boundary is a cutter CROSSING or the polyline's own KNEE — so a trim
+    // stops at whichever comes first (e.g. a knee inside a circle), leaving the rest
+    // as a separate object. (A crossing must exist, checked above, so a bare knee
+    // never trims.)
+    std::vector<double> bounds = crossings;
+    bounds.insert(bounds.end(), knees.begin(), knees.end());
+    auto nearestBelow = [&](double& out) {
         bool found = false;
-        for (double g : v)
+        for (double g : bounds)
             if (g <= gp + 1e-9 && (!found || g > out)) { out = g; found = true; }
         return found;
     };
-    auto nearestAbove = [&](const std::vector<double>& v, double& out) {
+    auto nearestAbove = [&](double& out) {
         bool found = false;
-        for (double g : v)
+        for (double g : bounds)
             if (g >= gp - 1e-9 && (!found || g < out)) { out = g; found = true; }
         return found;
     };
     double lo = 0.0, hi = static_cast<double>(n - 1);
-    bool hasLo = nearestBelow(crossings, lo) || nearestBelow(knees, lo);
-    bool hasHi = nearestAbove(crossings, hi) || nearestAbove(knees, hi);
+    bool hasLo = nearestBelow(lo);
+    bool hasHi = nearestAbove(hi);
     auto ptAt = [&](double g) {
         int i = std::clamp(static_cast<int>(std::floor(g)), 0, n - 2);
         return pts[i] + (pts[i + 1] - pts[i]) * (g - i);
