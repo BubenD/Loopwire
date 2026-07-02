@@ -29,6 +29,87 @@ void setNear(Entity& line, bool nearIsA, const Vec2& v) {
     if (nearIsA) line.a = v; else line.b = v;
 }
 
+// Invoke f(p1,p2) for each straight boundary segment of a cutting-edge entity.
+// Every cutter type is reduced to segments here — double lines/polylines yield
+// their two VISIBLE physical lines; circles/arcs/ellipses are tessellated — so ALL
+// trim/intersection code can treat cutters uniformly (and stay consistent).
+template <class F>
+void forEachCutSegment(const Entity& e, F&& f) {
+    constexpr double kPi = 3.14159265358979323846;
+    auto onCircle = [&](double a) {
+        return Vec2{e.center.x + e.radius * std::cos(a), e.center.y + e.radius * std::sin(a)};
+    };
+    switch (e.type) {
+    case EntityType::Line:
+        f(e.a, e.b);
+        break;
+    case EntityType::DoubleLine: {
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        f(e.a + off, e.b + off);
+        f(e.a - off, e.b - off);
+        break;
+    }
+    case EntityType::Polyline:
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const auto run = offsetPolyline(e.points, s);
+                for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
+            }
+        } else {
+            for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
+        }
+        break;
+    case EntityType::Spline:
+    case EntityType::Wire:
+        for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
+        break;
+    case EntityType::Rect:
+    case EntityType::Polygon:
+        for (size_t i = 0; i < e.points.size(); ++i)
+            f(e.points[i], e.points[(i + 1) % e.points.size()]);
+        break;
+    case EntityType::Circle: {
+        const int N = 96;
+        Vec2 prev = onCircle(0.0);
+        for (int i = 1; i <= N; ++i) { Vec2 cur = onCircle(2.0 * kPi * i / N); f(prev, cur); prev = cur; }
+        break;
+    }
+    case EntityType::Arc: {
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep < 0) sweep += 2.0 * kPi;
+        const int N = std::max(8, static_cast<int>(std::ceil(sweep / (kPi / 48.0))));
+        Vec2 prev = onCircle(e.startAngle);
+        for (int i = 1; i <= N; ++i) {
+            Vec2 cur = onCircle(e.startAngle + sweep * i / N);
+            f(prev, cur);
+            prev = cur;
+        }
+        break;
+    }
+    case EntityType::Ellipse: {
+        const double cs = std::cos(e.rotation), sn = std::sin(e.rotation);
+        auto ept = [&](double t) {
+            const double lx = e.radius * std::cos(t), ly = e.radiusY * std::sin(t);
+            return Vec2{e.center.x + lx * cs - ly * sn, e.center.y + lx * sn + ly * cs};
+        };
+        double sa = 0.0, ea = 2.0 * kPi;
+        if (e.meta.value("ellipticalArc").toBool()) {
+            sa = e.startAngle;
+            ea = e.endAngle;
+            while (ea <= sa) ea += 2.0 * kPi;
+        }
+        const int N = 96;
+        Vec2 prev = ept(sa);
+        for (int i = 1; i <= N; ++i) { Vec2 cur = ept(sa + (ea - sa) * i / N); f(prev, cur); prev = cur; }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 // Gather all segment-segment intersection params of `line` with `others`.
 std::vector<Vec2> lineIntersections(const Entity& line,
                                     const std::vector<Entity>& others) {
@@ -205,150 +286,43 @@ bool trimLineAt(Entity& line, const Vec2& pick, const std::vector<Entity>& other
 
 namespace {
 // Parameters t in (0,1) along `line` (a..b) where cutting edges in `others` cross
-// it. Supports line/polyline/rect/polygon/hatch segments and circles/arcs.
+// it. All cutter types (incl. circles/arcs/ellipses) are reduced to segments.
 std::vector<double> intersectionParams(const Entity& line, const std::vector<Entity>& others) {
     std::vector<double> ts;
     const Vec2 a = line.a, b = line.b, d = b - a;
     const double L2 = d.lengthSq();
     if (L2 < 1e-12) return ts;
-    auto addPt = [&](const Vec2& x) {
-        const double t = dot(x - a, d) / L2;
-        if (t > 1e-6 && t < 1.0 - 1e-6) ts.push_back(t);
-    };
-    auto addSeg = [&](const Vec2& p1, const Vec2& p2) {
-        if (auto x = segmentSegmentIntersection(a, b, p1, p2)) addPt(*x);
-    };
-    auto addCircle = [&](const Vec2& c, double r, bool arc, double sa, double ea) {
-        for (const auto& x : lineCircleIntersection(a, d, c, r)) {
-            const double t = dot(x - a, d) / L2;
-            if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
-            if (arc) {
-                double sweep = ea - sa;
-                while (sweep < 0) sweep += 2.0 * M_PI;
-                double rel = std::atan2(x.y - c.y, x.x - c.x) - sa;
-                while (rel < 0) rel += 2.0 * M_PI;
-                if (rel > sweep + 1e-9) continue; // outside the arc's sweep
-            }
-            ts.push_back(t);
-        }
-    };
     for (const auto& e : others) {
         if (&e == &line) continue;
-        switch (e.type) {
-        case EntityType::Line:
-            addSeg(e.a, e.b);
-            break;
-        case EntityType::DoubleLine: {
-            const double gap = e.meta.value("gap").toDouble(10.0);
-            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-            addSeg(e.a + off, e.b + off);
-            addSeg(e.a - off, e.b - off);
-            break;
-        }
-        case EntityType::Polyline:
-            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
-                const double gap = e.meta.value("gap").toDouble(10.0);
-                for (double s : {gap / 2.0, -gap / 2.0}) {
-                    const auto run = offsetPolyline(e.points, s);
-                    for (size_t i = 1; i < run.size(); ++i) addSeg(run[i - 1], run[i]);
-                }
-                break;
+        forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+            if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
+                const double t = dot(*x - a, d) / L2;
+                if (t > 1e-6 && t < 1.0 - 1e-6) ts.push_back(t);
             }
-            [[fallthrough]];
-        case EntityType::Spline:
-        case EntityType::Wire:
-            for (size_t i = 1; i < e.points.size(); ++i) addSeg(e.points[i - 1], e.points[i]);
-            break;
-        case EntityType::Rect:
-        case EntityType::Polygon:
-        case EntityType::Hatch:
-        case EntityType::Wipeout:
-            for (size_t i = 0; i < e.points.size(); ++i)
-                addSeg(e.points[i], e.points[(i + 1) % e.points.size()]);
-            break;
-        case EntityType::Circle:
-            addCircle(e.center, e.radius, false, 0, 0);
-            break;
-        case EntityType::Arc:
-            addCircle(e.center, e.radius, true, e.startAngle, e.endAngle);
-            break;
-        default:
-            break;
-        }
+        });
     }
     return ts;
 }
 } // namespace
 
 namespace {
-// True if point x (on circle C,R) lies within an arc's CCW sweep [sa, ea].
-bool angleOnArc(const Vec2& x, const Vec2& C, double sa, double ea) {
-    double sweep = ea - sa;
-    while (sweep < 0) sweep += 2.0 * M_PI;
-    double rel = std::atan2(x.y - C.y, x.x - C.x) - sa;
-    while (rel < 0) rel += 2.0 * M_PI;
-    return rel <= sweep + 1e-9;
-}
-
-// Angles (radians) where the cutting edges cross circle (C,R). For arc cutters /
-// the trimmed arc, callers filter by sweep separately.
+// Angles (radians) where the cutting edges cross circle (C,R). Every cutter is
+// reduced to segments (forEachCutSegment), so this handles all cutter types.
 std::vector<double> circleCutAngles(const Vec2& C, double R, const Entity& self,
                                     const std::vector<Entity>& cutters) {
     std::vector<double> angs;
-    auto addPt = [&](const Vec2& x) { angs.push_back(std::atan2(x.y - C.y, x.x - C.x)); };
-    auto cutSeg = [&](const Vec2& a, const Vec2& b) {
-        const Vec2 d = b - a;
-        const double L2 = d.lengthSq();
-        if (L2 < 1e-12) return;
-        for (const auto& x : lineCircleIntersection(a, d, C, R)) {
-            const double t = dot(x - a, d) / L2;
-            if (t < -1e-9 || t > 1.0 + 1e-9) continue; // outside the cutter segment
-            addPt(x);
-        }
-    };
     for (const auto& e : cutters) {
         if (&e == &self || (!self.id.isEmpty() && e.id == self.id)) continue; // not self
-        switch (e.type) {
-        case EntityType::Line:
-            cutSeg(e.a, e.b);
-            break;
-        case EntityType::DoubleLine: {
-            const double gap = e.meta.value("gap").toDouble(10.0);
-            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-            cutSeg(e.a + off, e.b + off);
-            cutSeg(e.a - off, e.b - off);
-            break;
-        }
-        case EntityType::Polyline:
-            if (e.meta.value("double").toBool() && e.points.size() >= 2) {
-                const double gap = e.meta.value("gap").toDouble(10.0);
-                for (double s : {gap / 2.0, -gap / 2.0}) {
-                    const auto run = offsetPolyline(e.points, s);
-                    for (size_t i = 1; i < run.size(); ++i) cutSeg(run[i - 1], run[i]);
-                }
-                break;
+        forEachCutSegment(e, [&](const Vec2& a, const Vec2& b) {
+            const Vec2 d = b - a;
+            const double L2 = d.lengthSq();
+            if (L2 < 1e-12) return;
+            for (const auto& x : lineCircleIntersection(a, d, C, R)) {
+                const double t = dot(x - a, d) / L2;
+                if (t < -1e-9 || t > 1.0 + 1e-9) continue; // outside the cutter segment
+                angs.push_back(std::atan2(x.y - C.y, x.x - C.x));
             }
-            for (size_t i = 1; i < e.points.size(); ++i) cutSeg(e.points[i - 1], e.points[i]);
-            break;
-        case EntityType::Spline:
-        case EntityType::Wire:
-            for (size_t i = 1; i < e.points.size(); ++i) cutSeg(e.points[i - 1], e.points[i]);
-            break;
-        case EntityType::Rect:
-        case EntityType::Polygon:
-            for (size_t i = 0; i < e.points.size(); ++i)
-                cutSeg(e.points[i], e.points[(i + 1) % e.points.size()]);
-            break;
-        case EntityType::Circle:
-            for (const auto& x : circleCircleIntersection(e.center, e.radius, C, R)) addPt(x);
-            break;
-        case EntityType::Arc:
-            for (const auto& x : circleCircleIntersection(e.center, e.radius, C, R))
-                if (angleOnArc(x, e.center, e.startAngle, e.endAngle)) addPt(x);
-            break;
-        default:
-            break;
-        }
+        });
     }
     return angs;
 }
@@ -428,48 +402,6 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
     return false;
 }
 
-namespace {
-// Invoke f(p1,p2) for each straight boundary segment of a cutting-edge entity —
-// double lines/polylines yield their two VISIBLE physical lines.
-template <class F>
-void forEachCutSegment(const Entity& e, F&& f) {
-    switch (e.type) {
-    case EntityType::Line:
-        f(e.a, e.b);
-        break;
-    case EntityType::DoubleLine: {
-        const double gap = e.meta.value("gap").toDouble(10.0);
-        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-        f(e.a + off, e.b + off);
-        f(e.a - off, e.b - off);
-        break;
-    }
-    case EntityType::Polyline:
-        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
-            const double gap = e.meta.value("gap").toDouble(10.0);
-            for (double s : {gap / 2.0, -gap / 2.0}) {
-                const auto run = offsetPolyline(e.points, s);
-                for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
-            }
-        } else {
-            for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
-        }
-        break;
-    case EntityType::Spline:
-    case EntityType::Wire:
-        for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
-        break;
-    case EntityType::Rect:
-    case EntityType::Polygon:
-        for (size_t i = 0; i < e.points.size(); ++i)
-            f(e.points[i], e.points[(i + 1) % e.points.size()]);
-        break;
-    default:
-        break;
-    }
-}
-} // namespace
-
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     if (e.type == EntityType::Line || e.type == EntityType::DoubleLine)
         return !intersectionParams(e, others).empty(); // uses the centreline a,b
@@ -487,25 +419,9 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
         e.type == EntityType::Wire) {
         for (size_t i = 1; i < e.points.size(); ++i) {
-            const Vec2 A = e.points[i - 1], B = e.points[i], D = B - A;
-            const double L2 = D.lengthSq();
+            const Vec2 A = e.points[i - 1], B = e.points[i];
             for (const auto& c : others) {
                 if (!e.id.isEmpty() && c.id == e.id) continue;
-                if (c.type == EntityType::Circle || c.type == EntityType::Arc) {
-                    for (const auto& x : lineCircleIntersection(A, D, c.center, c.radius)) {
-                        const double t = (L2 > 1e-12) ? dot(x - A, D) / L2 : -1.0;
-                        if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
-                        if (c.type == EntityType::Arc) {
-                            double sweep = c.endAngle - c.startAngle;
-                            while (sweep < 0) sweep += 2.0 * M_PI;
-                            double rel = std::atan2(x.y - c.center.y, x.x - c.center.x) - c.startAngle;
-                            while (rel < 0) rel += 2.0 * M_PI;
-                            if (rel > sweep + 1e-9) continue;
-                        }
-                        return true;
-                    }
-                    continue;
-                }
                 bool hit = false;
                 forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
                     if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;
@@ -536,12 +452,14 @@ std::optional<std::pair<Vec2, double>> cutCircleThrough(const Vec2& p,
                                                         const std::vector<Entity>& cutters,
                                                         const QString& selfId) {
     std::optional<std::pair<Vec2, double>> best;
-    double bestErr = 1e-3;
+    double bestErr = std::numeric_limits<double>::max();
     for (const auto& c : cutters) {
         if (!selfId.isEmpty() && c.id == selfId) continue;
         if (c.type != EntityType::Circle && c.type != EntityType::Arc) continue;
         const double err = std::abs(distance(p, c.center) - c.radius);
-        if (err < bestErr) { bestErr = err; best = std::make_pair(c.center, c.radius); }
+        // The crossing sits on a tessellated chord, ~radius*5e-4 inside the true ring.
+        const double tol = 0.5 + c.radius * 0.01;
+        if (err < tol && err < bestErr) { bestErr = err; best = std::make_pair(c.center, c.radius); }
     }
     return best;
 }
@@ -564,27 +482,12 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
         if (L2 < 1e-12) continue;
         for (const auto& c : cutters) {
             if (!selfId.isEmpty() && c.id == selfId) continue;
-            if (c.type == EntityType::Circle || c.type == EntityType::Arc) {
-                for (const auto& x : lineCircleIntersection(A, D, c.center, c.radius)) {
-                    const double t = dot(x - A, D) / L2;
-                    if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
-                    if (c.type == EntityType::Arc) {
-                        double sweep = c.endAngle - c.startAngle;
-                        while (sweep < 0) sweep += 2.0 * M_PI;
-                        double rel = std::atan2(x.y - c.center.y, x.x - c.center.x) - c.startAngle;
-                        while (rel < 0) rel += 2.0 * M_PI;
-                        if (rel > sweep + 1e-9) continue;
-                    }
-                    crossings.push_back(i + t);
+            forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
+                    const double t = dot(*x - A, D) / L2;
+                    if (t > 1e-6 && t < 1.0 - 1e-6) crossings.push_back(i + t);
                 }
-            } else {
-                forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
-                    if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
-                        const double t = dot(*x - A, D) / L2;
-                        if (t > 1e-6 && t < 1.0 - 1e-6) crossings.push_back(i + t);
-                    }
-                });
-            }
+            });
         }
     }
     if (crossings.empty()) return result; // nothing actually cut it
