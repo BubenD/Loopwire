@@ -290,12 +290,12 @@ void Editor::setTool(ToolId t) {
         selected_.clear();
         emit selectionChanged();
     }
-    // Trim: the objects selected when the tool starts become the cutting edge(s).
-    // The user then drags a fence/cut line; objects it crosses are trimmed back to
-    // the reference. With no selection, Trim falls back to click "quick trim".
+    // Trim/Extend: the objects selected when the tool starts are the reference
+    // (cutting/boundary edges). The user then draws a fence line; objects it crosses
+    // are trimmed back to / extended to the reference. (Reused for both tools.)
     trimRefIds_.clear();
     trimFenceActive_ = false;
-    if (t == ToolId::Trim) trimRefIds_ = selected_;
+    if (t == ToolId::Trim || t == ToolId::Extend) trimRefIds_ = selected_;
     tool_ = t;
     if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
     emit toolChanged(t);
@@ -749,32 +749,36 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
-    // TRIM (AutoCAD-style, persistent reference): first pick a REFERENCE object — it
-    // stays selected/highlighted for the whole command. Then draw CUT LINES (two
-    // clicks each) across objects; every object a cut line crosses is trimmed at its
-    // joints (removing the piece the cut line crosses, bounded by the nearest
-    // intersections). The reference persists across many cuts until Esc finishes.
-    if (tool_ == ToolId::Trim) {
+    // TRIM / EXTEND (AutoCAD-style, persistent reference): first pick a REFERENCE
+    // object — it stays selected/highlighted for the whole command. Then draw a LINE
+    // (two clicks) across objects; every object the line crosses is trimmed to / (for
+    // Extend) extended to the reference. The reference persists until Esc finishes.
+    if (tool_ == ToolId::Trim || tool_ == ToolId::Extend) {
+        const bool ext = (tool_ == ToolId::Extend);
         if (trimRefIds_.empty()) {
             if (auto hit = hitTest(p)) {
                 trimRefIds_ = {*hit};
                 selected_ = {*hit}; // stays highlighted until Esc
                 emit selectionChanged();
-                emit message(QStringLiteral(
-                    "Reference set — draw cut lines across objects to trim; Esc to finish"));
+                emit message(ext ? QStringLiteral("Reference set — draw a line across objects to "
+                                                  "extend them to it; Esc to finish")
+                                 : QStringLiteral("Reference set — draw cut lines across objects to "
+                                                  "trim; Esc to finish"));
                 emit changed();
             } else {
-                emit message(QStringLiteral("Select the reference object to trim from"));
+                emit message(ext ? QStringLiteral("Select the boundary object to extend to")
+                                 : QStringLiteral("Select the reference object to trim from"));
             }
             return;
         }
         if (!trimFenceActive_) {
             trimFenceActive_ = true;
             trimFenceStart_ = p;
-            emit message(QStringLiteral("Click the end point of the cut line"));
+            emit message(QStringLiteral("Click the end point of the line"));
         } else {
             trimFenceActive_ = false;
-            applyTrimFence(trimFenceStart_, p); // reference stays selected afterwards
+            if (ext) applyExtendFence(trimFenceStart_, p);
+            else applyTrimFence(trimFenceStart_, p);
         }
         emit overlayChanged();
         return;
@@ -2485,7 +2489,10 @@ QString Editor::drawCommandHint() const {
                    : QStringLiteral("TRIM: click two points to draw a cut line across objects — each is "
                                     "trimmed to the next joint; Esc to finish");
     case ToolId::Extend:
-        return QStringLiteral("EXTEND: pick a line to extend to the nearest boundary");
+        return trimRefIds_.empty()
+                   ? QStringLiteral("EXTEND: click the boundary object to extend to (it stays selected)")
+                   : QStringLiteral("EXTEND: draw a line (two clicks) across objects to extend them to the "
+                                    "boundary; Esc to finish");
     case ToolId::Text:
         return QStringLiteral("TEXT: pick a point, then type the text");
     case ToolId::Hatch:
@@ -3295,29 +3302,40 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     emit changed();
 }
 
+void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
+    if (!doc_) return;
+    std::vector<Entity> refs;
+    for (const QString& id : trimRefIds_)
+        if (const Entity* r = entityById(id)) refs.push_back(*r);
+    if (refs.empty()) { emit message(QStringLiteral("Select the boundary object first.")); return; }
+
+    pushUndo();
+    int count = 0;
+    std::vector<QString> ids;
+    for (const auto& e : doc_->entities()) ids.push_back(e.id);
+    for (const QString& id : ids) {
+        if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end()) continue;
+        Entity* line = entityById(id);
+        if (!line || line->type != EntityType::Line) continue;
+        // The line the fence crosses is extended (its fence-side end) to the reference.
+        auto x = segmentSegmentIntersection(a, b, line->a, line->b);
+        if (!x) continue;
+        if (extendLineTo(*line, *x, refs)) ++count;
+    }
+    if (count == 0) {
+        undo();
+        emit message(QStringLiteral("Nothing the line crossed can reach the reference."));
+        return;
+    }
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Extended %1 object(s) — draw another line or Esc to finish").arg(count));
+    emit changed();
+}
+
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
 
-    // Trim is handled in onPointerPress/Release (reference + cut-line fence). Only
-    // Extend reaches here as a single-pick modify.
-    if (tool_ == ToolId::Extend) {
-        if (!hit) { emit message(QStringLiteral("Pick a line to extend.")); return; }
-        Entity* line = entityById(*hit);
-        if (!line || line->type != EntityType::Line) {
-            emit message(QStringLiteral("Extend currently supports straight lines."));
-            return;
-        }
-        pushUndo();
-        if (!extendLineTo(*line, p, doc_->entities())) {
-            undo();
-            emit message(QStringLiteral("No boundary found."));
-            return;
-        }
-        doc_->setDirty(true);
-        emit changed();
-        return;
-    }
-
+    // Trim and Extend are handled in onPointerPress (reference + fence line).
     // Fillet / Chamfer: pick two lines.
     if (!hit) { emit message(QStringLiteral("Pick the first line.")); return; }
     pickIds_.push_back(*hit);
@@ -4488,10 +4506,32 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
-    // Trim fence / cut line (AutoCAD-style): a bright dashed line the user drags
-    // across objects to trim them back to the reference.
+    // Trim/Extend fence line (AutoCAD-style): a bright dashed line the user drags
+    // across objects. For Extend, also preview each crossed line extended to the
+    // reference (ghost) so it's clear which ones can reach it.
     if (trimFenceActive_) {
         p.save();
+        if (tool_ == ToolId::Extend) {
+            std::vector<Entity> refs;
+            for (const auto& r : doc_->entities())
+                if (std::find(trimRefIds_.begin(), trimRefIds_.end(), r.id) != trimRefIds_.end())
+                    refs.push_back(r);
+            QPen gp(QColor(120, 200, 255, 200)); // ghost of the extended result
+            gp.setCosmetic(true);
+            gp.setWidthF(1.4);
+            for (const auto& e : doc_->entities()) {
+                if (e.type != EntityType::Line) continue;
+                if (std::find(trimRefIds_.begin(), trimRefIds_.end(), e.id) != trimRefIds_.end())
+                    continue;
+                if (!segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b)) continue;
+                Entity ghost = e;
+                if (extendLineTo(ghost, *segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b),
+                                 refs)) {
+                    p.setPen(gp);
+                    p.drawLine(vt.toScreen(ghost.a), vt.toScreen(ghost.b));
+                }
+            }
+        }
         QPen fp(QColor("#19ff7e"));
         fp.setCosmetic(true);
         fp.setWidthF(1.6);

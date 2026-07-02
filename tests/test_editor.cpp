@@ -492,6 +492,27 @@ int run_editor_tests() {
               "trim-arc: the start-side piece up to the cut is removed");
     }
 
+    // --- Extend with a reference + fence line: a line the fence crosses is extended
+    //     to reach the selected boundary.
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {100, -100}; ref.b = {100, 100};
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {50, 0}; // stops short of x=100
+        d.entities().push_back(ref);
+        d.entities().push_back(h);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");          // the boundary to extend to
+        ed.setTool(ToolId::Extend);
+        // Fence line across h near its right end (x=40).
+        ed.onPointerPress({40, -5}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({40, 5});
+        ed.onPointerPress({40, 5}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* hh = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "h") hh = &e;
+        check(hh && near(std::max(hh->a.x, hh->b.x), 100.0),
+              "extend-fence: the crossed line is extended to the reference (x=100)");
+    }
+
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
     //     corner.
     {
