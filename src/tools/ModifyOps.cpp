@@ -500,6 +500,21 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     return false;
 }
 
+std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
+                                                       const std::vector<Entity>& cutters,
+                                                       const QString& selfId) {
+    std::optional<std::pair<Vec2, Vec2>> best;
+    double bestd = 1e-4;
+    for (const auto& c : cutters) {
+        if (!selfId.isEmpty() && c.id == selfId) continue;
+        forEachCutSegment(c, [&](const Vec2& a, const Vec2& b) {
+            const auto cp = closestPointOnSegment(p, a, b);
+            if (cp.distance < bestd) { bestd = cp.distance; best = std::make_pair(a, b); }
+        });
+    }
+    return best;
+}
+
 std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
                                                   const Vec2& pick,
                                                   const std::vector<Entity>& cutters,

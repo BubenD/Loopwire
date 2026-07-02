@@ -45,6 +45,13 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
 // (double lines / polylines are tested on their physical lines).
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others);
 
+// The boundary segment of a cutting edge in `cutters` (physical lines for double
+// entities; `selfId` skipped) that passes through point `p`, or nullopt. Used to
+// record the exact cut line so a trimmed double line's physical runs end on it.
+std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
+                                                       const std::vector<Entity>& cutters,
+                                                       const QString& selfId);
+
 // Trim a circle or arc: remove the piece containing `pick` (a point on the
 // curve), bounded by where the cutting edges in `cutters` cross it. A circle needs
 // two cuts and becomes an arc; an arc may split — `extra` returns the second arc.

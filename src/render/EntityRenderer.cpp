@@ -82,6 +82,20 @@ void extendRunStartToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) 
     if (run.size() < 2) return;
     if (auto x = lineLineIntersection(run[0], run[1], a, b)) run[0] = *x;
 }
+// Move a run's END vertex onto the reference line (along its last segment), so a
+// trimmed double line's physical runs meet the cutting line exactly (diagonal cap).
+void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
+    const int n = static_cast<int>(run.size());
+    if (n < 2) return;
+    if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
+}
+// Read a stored cut line (meta key + "Ax/Ay/Bx/By"); returns false if not present.
+bool cutRefLine(const Entity& e, const QString& key, Vec2& a, Vec2& b) {
+    if (!e.meta.value(key).toBool()) return false;
+    a = {e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
+    b = {e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
+    return true;
+}
 
 QPolygonF toScreenPoly(const std::vector<Vec2>& pts, const ViewTransform& vt) {
     QPolygonF poly;
@@ -524,6 +538,18 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 if (lsReferenceLine(e, ra, rb)) {
                     extendRunStartToLine(run1, ra, rb);
                     extendRunStartToLine(run2, ra, rb);
+                }
+                // Trim cut lines: clip the physical runs so both meet the cutting
+                // line exactly (a diagonal cap), instead of a perpendicular cap that
+                // over/under-shoots the line.
+                Vec2 ca, cb;
+                if (cutRefLine(e, QStringLiteral("cutStart"), ca, cb)) {
+                    extendRunStartToLine(run1, ca, cb);
+                    extendRunStartToLine(run2, ca, cb);
+                }
+                if (cutRefLine(e, QStringLiteral("cutEnd"), ca, cb)) {
+                    extendRunEndToLine(run1, ca, cb);
+                    extendRunEndToLine(run2, ca, cb);
                 }
                 p.drawPolyline(toScreenPoly(run1, vt));
                 p.drawPolyline(toScreenPoly(run2, vt));

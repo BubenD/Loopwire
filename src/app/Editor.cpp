@@ -3158,6 +3158,28 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 if (auto x = segmentSegmentIntersection(a, b, cpts[i - 1], cpts[i])) return x;
             return std::nullopt;
         };
+        // Record the exact cut line at each end of a trimmed DOUBLE entity so the
+        // renderer clips both physical runs onto it (a diagonal cap flush with the
+        // cutting line) instead of a perpendicular cap that misses it.
+        auto storeCutMeta = [&](Entity& ent, const QString& selfId) {
+            const std::vector<Vec2> pts = (ent.type == EntityType::DoubleLine)
+                                              ? std::vector<Vec2>{ent.a, ent.b}
+                                              : ent.points;
+            if (pts.size() < 2) return;
+            auto setEnd = [&](const QString& key, const Vec2& pt) {
+                if (auto seg = cutSegmentThrough(pt, joints, selfId)) {
+                    ent.meta.insert(key, true);
+                    ent.meta.insert(key + "Ax", seg->first.x);
+                    ent.meta.insert(key + "Ay", seg->first.y);
+                    ent.meta.insert(key + "Bx", seg->second.x);
+                    ent.meta.insert(key + "By", seg->second.y);
+                } else {
+                    for (const char* s : {"", "Ax", "Ay", "Bx", "By"}) ent.meta.remove(key + s);
+                }
+            };
+            setEnd(QStringLiteral("cutStart"), pts.front());
+            setEnd(QStringLiteral("cutEnd"), pts.back());
+        };
         if (obj->type == EntityType::Line) {
             // Only objects the cut line crosses AND that meet the reference are trimmed.
             auto x = segmentSegmentIntersection(a, b, obj->a, obj->b);
@@ -3172,34 +3194,41 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             const std::vector<Vec2> cl = {obj->a, obj->b};
             auto pick = cutCrossOn(cl);
             if (!pick || !objectCrosses(*obj, refs)) continue;
-            auto pieces = trimPolylinePieces(cl, *pick, joints, obj->id);
+            const QString selfId = obj->id;
+            auto pieces = trimPolylinePieces(cl, *pick, joints, selfId);
             if (pieces.empty()) continue;
             obj->a = pieces[0].front();
             obj->b = pieces[0].back();
+            storeCutMeta(*obj, selfId);
             ++count;
             if (pieces.size() == 2) {
                 Entity rem = *obj;
                 rem.id.clear();
                 rem.a = pieces[1].front();
                 rem.b = pieces[1].back();
+                storeCutMeta(rem, selfId);
                 additions.push_back(std::move(rem));
             }
         } else if (obj->type == EntityType::Polyline) {
             // Trim the polyline centreline (double polylines: both runs follow).
             auto pick = cutCrossOn(obj->points);
             if (!pick || !objectCrosses(*obj, refs)) continue;
-            auto pieces = trimPolylinePieces(obj->points, *pick, joints, obj->id);
+            const QString selfId = obj->id;
+            const bool isDouble = obj->meta.value("double").toBool();
+            auto pieces = trimPolylinePieces(obj->points, *pick, joints, selfId);
             if (pieces.empty()) continue;
             // Per-corner fillet / bulge data no longer matches the new vertices.
             obj->meta.remove(QStringLiteral("cornerRadii"));
             obj->meta.remove(QStringLiteral("cornerRadius"));
             obj->meta.remove(QStringLiteral("bulges"));
             obj->points = pieces[0];
+            if (isDouble) storeCutMeta(*obj, selfId);
             ++count;
             if (pieces.size() == 2) {
                 Entity rem = *obj;
                 rem.id.clear();
                 rem.points = pieces[1];
+                if (isDouble) storeCutMeta(rem, selfId);
                 additions.push_back(std::move(rem));
             }
         } else if (obj->type == EntityType::Circle || obj->type == EntityType::Arc) {

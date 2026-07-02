@@ -361,6 +361,10 @@ int run_editor_tests() {
         for (const auto& e : d.entities()) if (e.id == "dl") dd = &e;
         check(dd && dd->type == EntityType::DoubleLine && near(std::max(dd->a.x, dd->b.x), 50.0),
               "trim-doubleobj: double line trimmed back to the reference (centerline to x=50)");
+        // The trimmed end records the exact cut line so both physical runs meet it.
+        check(dd && dd->meta.value("cutEnd").toBool() &&
+                  near(dd->meta.value("cutEndAx").toDouble(), 50.0),
+              "trim-doubleobj: exact cut line (the reference) recorded at the trimmed end");
     }
 
     // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
