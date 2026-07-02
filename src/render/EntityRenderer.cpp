@@ -89,28 +89,30 @@ void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     if (n < 2) return;
     if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
 }
-// Trim a run's endpoint to where the run itself crosses the circle — clipped along
-// the run's own last segment, picking the crossing NEAREST the current endpoint.
-// This trims EACH physical line at its own intersection with the ring, so the
-// two runs keep their constant perpendicular gap (a radial snap would converge
-// them). If the run's line misses the ring (rare tangent case), the endpoint is
-// left as-is (perpendicular cap), which still keeps the gap.
+// Trim a run's endpoint to where the run crosses the circle, choosing the crossing
+// nearest the KEPT-side neighbour vertex (i.e. where the run enters the ring coming
+// from the part that stays). Picking by the neighbour — not by the endpoint — cuts
+// BOTH physical runs at their true crossing and never extends a run across the ring
+// (which had left one of the two lines uncut). Each line is trimmed at its own
+// intersection, so the constant perpendicular gap is preserved.
 void extendRunEndToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
     const int n = static_cast<int>(run.size());
     if (n < 2) return;
-    const auto xs = lineCircleIntersection(run[n - 2], run[n - 1] - run[n - 2], c, r);
+    const Vec2 keep = run[n - 2];
+    const auto xs = lineCircleIntersection(keep, run[n - 1] - keep, c, r);
     double best = 1e299;
     for (const auto& x : xs) {
-        const double d = distance(x, run[n - 1]);
+        const double d = distance(x, keep);
         if (d < best) { best = d; run[n - 1] = x; }
     }
 }
 void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
     if (run.size() < 2) return;
-    const auto xs = lineCircleIntersection(run[1], run[0] - run[1], c, r);
+    const Vec2 keep = run[1];
+    const auto xs = lineCircleIntersection(keep, run[0] - keep, c, r);
     double best = 1e299;
     for (const auto& x : xs) {
-        const double d = distance(x, run[0]);
+        const double d = distance(x, keep);
         if (d < best) { best = d; run[0] = x; }
     }
 }
