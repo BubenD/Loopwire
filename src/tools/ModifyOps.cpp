@@ -504,28 +504,27 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
             gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
         }
     }
-    // The removed span is bounded by the NEAREST boundary on each side of the pick,
-    // where a boundary is a cutter CROSSING or the polyline's own KNEE — so a trim
-    // stops at whichever comes first (e.g. a knee inside a circle), leaving the rest
-    // as a separate object. (A crossing must exist, checked above, so a bare knee
-    // never trims.)
-    std::vector<double> bounds = crossings;
-    bounds.insert(bounds.end(), knees.begin(), knees.end());
-    auto nearestBelow = [&](double& out) {
+    // Each side of the pick is bounded by the nearest cutter CROSSING; only if there
+    // is no crossing on that side does the nearest KNEE bound it. So a piece that
+    // crosses a circle twice (even with a knee between the crossings — e.g. a V whose
+    // corner is inside the circle) removes the whole inside span, leaving no line
+    // dangling through the ring; a single line crossing still stops at the nearest
+    // knee instead of running to the far end.
+    auto nearestBelow = [&](const std::vector<double>& v, double& out) {
         bool found = false;
-        for (double g : bounds)
+        for (double g : v)
             if (g <= gp + 1e-9 && (!found || g > out)) { out = g; found = true; }
         return found;
     };
-    auto nearestAbove = [&](double& out) {
+    auto nearestAbove = [&](const std::vector<double>& v, double& out) {
         bool found = false;
-        for (double g : bounds)
+        for (double g : v)
             if (g >= gp - 1e-9 && (!found || g < out)) { out = g; found = true; }
         return found;
     };
     double lo = 0.0, hi = static_cast<double>(n - 1);
-    bool hasLo = nearestBelow(lo);
-    bool hasHi = nearestAbove(hi);
+    bool hasLo = nearestBelow(crossings, lo) || nearestBelow(knees, lo);
+    bool hasHi = nearestAbove(crossings, hi) || nearestAbove(knees, hi);
     auto ptAt = [&](double g) {
         int i = std::clamp(static_cast<int>(std::floor(g)), 0, n - 2);
         return pts[i] + (pts[i + 1] - pts[i]) * (g - i);

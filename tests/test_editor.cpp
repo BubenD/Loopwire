@@ -452,8 +452,9 @@ int run_editor_tests() {
               "trim-thru-circle: one segment crossing a circle twice splits at both crossings");
     }
 
-    // --- A knee INSIDE the circle bounds the trim: the removed span stops at the
-    //     knee (nearest boundary), and the rest survives as a separate object.
+    // --- A knee INSIDE the circle does NOT stop the trim: crossings win, so the
+    //     whole inside-circle span (spanning the knee) is removed and each piece ends
+    //     on the ring — no line left crossing the circle.
     {
         std::vector<Vec2> pts = {{0, 0}, {150, 0}, {150, 100}}; // knee at (150,0)
         Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {100, 0}; circ.radius = 60;
@@ -462,8 +463,8 @@ int run_editor_tests() {
         check(pieces.size() == 2 && near(pieces[0].back().x, 40.0),
               "trim-poly-circle-knee: first piece ends at the ring entry (x=40)");
         check(pieces.size() == 2 && near(pieces[1].front().x, 150.0) &&
-                  near(pieces[1].front().y, 0.0),
-              "trim-poly-circle-knee: trim stops at the knee (second piece starts at the knee)");
+                  near(pieces[1].front().y, 33.17, 0.5),
+              "trim-poly-circle-knee: second piece starts at the ring exit (inside span removed)");
     }
 
     // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
