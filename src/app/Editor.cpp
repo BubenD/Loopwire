@@ -3152,6 +3152,12 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             continue; // never trim the reference itself
         Entity* obj = entityById(id);
         if (!obj) continue;
+        // Where the cut line crosses a centreline (segment list) — the picked side.
+        auto cutCrossOn = [&](const std::vector<Vec2>& cpts) -> std::optional<Vec2> {
+            for (size_t i = 1; i < cpts.size(); ++i)
+                if (auto x = segmentSegmentIntersection(a, b, cpts[i - 1], cpts[i])) return x;
+            return std::nullopt;
+        };
         if (obj->type == EntityType::Line) {
             // Only objects the cut line crosses AND that meet the reference are trimmed.
             auto x = segmentSegmentIntersection(a, b, obj->a, obj->b);
@@ -3160,6 +3166,41 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             if (trimLineQuick(*obj, *x, joints, extra)) {
                 ++count;
                 if (extra) additions.push_back(std::move(*extra));
+            }
+        } else if (obj->type == EntityType::DoubleLine) {
+            // Trim the CENTERLINE; both physical lines follow. [a,b] is a 2-pt line.
+            const std::vector<Vec2> cl = {obj->a, obj->b};
+            auto pick = cutCrossOn(cl);
+            if (!pick || !objectCrosses(*obj, refs)) continue;
+            auto pieces = trimPolylinePieces(cl, *pick, joints, obj->id);
+            if (pieces.empty()) continue;
+            obj->a = pieces[0].front();
+            obj->b = pieces[0].back();
+            ++count;
+            if (pieces.size() == 2) {
+                Entity rem = *obj;
+                rem.id.clear();
+                rem.a = pieces[1].front();
+                rem.b = pieces[1].back();
+                additions.push_back(std::move(rem));
+            }
+        } else if (obj->type == EntityType::Polyline) {
+            // Trim the polyline centreline (double polylines: both runs follow).
+            auto pick = cutCrossOn(obj->points);
+            if (!pick || !objectCrosses(*obj, refs)) continue;
+            auto pieces = trimPolylinePieces(obj->points, *pick, joints, obj->id);
+            if (pieces.empty()) continue;
+            // Per-corner fillet / bulge data no longer matches the new vertices.
+            obj->meta.remove(QStringLiteral("cornerRadii"));
+            obj->meta.remove(QStringLiteral("cornerRadius"));
+            obj->meta.remove(QStringLiteral("bulges"));
+            obj->points = pieces[0];
+            ++count;
+            if (pieces.size() == 2) {
+                Entity rem = *obj;
+                rem.id.clear();
+                rem.points = pieces[1];
+                additions.push_back(std::move(rem));
             }
         } else if (obj->type == EntityType::Circle || obj->type == EntityType::Arc) {
             // The cut line must cross the curve; that crossing is the picked side.

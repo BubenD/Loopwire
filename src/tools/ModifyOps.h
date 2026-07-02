@@ -31,6 +31,16 @@ CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
 bool trimLineAt(Entity& line, const Vec2& pick,
                 const std::vector<Entity>& others);
 
+// Trim a polyline centreline (given by its vertices) at `pick`, bounded by where
+// `cutters` cross it (double lines/polylines use their physical lines; `selfId` is
+// skipped). Returns the kept vertex-list(s): empty (nothing removed), one
+// (shortened) or two (split). Used to trim polylines and double lines/polylines
+// (pass [a,b] for a double line).
+std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
+                                                  const Vec2& pick,
+                                                  const std::vector<Entity>& cutters,
+                                                  const QString& selfId);
+
 // True if entity `e` (line / circle / arc) intersects any entity in `others`
 // (double lines / polylines are tested on their physical lines).
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others);

@@ -341,6 +341,28 @@ int run_editor_tests() {
               "trim-double: trims to the near physical line (x=60), not the centerline (x=50)");
     }
 
+    // --- Trim a DOUBLE LINE object at a reference line (the centerline is trimmed;
+    //     both physical lines follow).
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {50, -100}; ref.b = {50, 100};
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        dl.a = {0, 0}; dl.b = {100, 0}; dl.meta.insert("gap", 10.0);
+        d.entities().push_back(ref);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");          // the single line is the reference
+        ed.setTool(ToolId::Trim);
+        // Cut line across the double line on the right side (x=80).
+        ed.onPointerPress({80, -8}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({80, 8});
+        ed.onPointerPress({80, 8}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dl") dd = &e;
+        check(dd && dd->type == EntityType::DoubleLine && near(std::max(dd->a.x, dd->b.x), 50.0),
+              "trim-doubleobj: double line trimmed back to the reference (centerline to x=50)");
+    }
+
     // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
     //     removed and the circle becomes an arc spanning the rest.
     {

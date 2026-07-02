@@ -428,8 +428,51 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
     return false;
 }
 
+namespace {
+// Invoke f(p1,p2) for each straight boundary segment of a cutting-edge entity —
+// double lines/polylines yield their two VISIBLE physical lines.
+template <class F>
+void forEachCutSegment(const Entity& e, F&& f) {
+    switch (e.type) {
+    case EntityType::Line:
+        f(e.a, e.b);
+        break;
+    case EntityType::DoubleLine: {
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        f(e.a + off, e.b + off);
+        f(e.a - off, e.b - off);
+        break;
+    }
+    case EntityType::Polyline:
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const auto run = offsetPolyline(e.points, s);
+                for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
+            }
+        } else {
+            for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
+        }
+        break;
+    case EntityType::Spline:
+    case EntityType::Wire:
+        for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
+        break;
+    case EntityType::Rect:
+    case EntityType::Polygon:
+        for (size_t i = 0; i < e.points.size(); ++i)
+            f(e.points[i], e.points[(i + 1) % e.points.size()]);
+        break;
+    default:
+        break;
+    }
+}
+} // namespace
+
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
-    if (e.type == EntityType::Line) return !intersectionParams(e, others).empty();
+    if (e.type == EntityType::Line || e.type == EntityType::DoubleLine)
+        return !intersectionParams(e, others).empty(); // uses the centreline a,b
     if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
         for (double ang : circleCutAngles(e.center, e.radius, e, others)) {
             if (e.type == EntityType::Circle) return true;
@@ -439,8 +482,94 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
             while (rel < 0) rel += 2.0 * M_PI;
             if (rel <= sweep + 1e-9) return true;
         }
+        return false;
+    }
+    if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
+        e.type == EntityType::Wire) {
+        for (size_t i = 1; i < e.points.size(); ++i) {
+            bool hit = false;
+            for (const auto& c : others) {
+                if (!e.id.isEmpty() && c.id == e.id) continue;
+                forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                    if (segmentSegmentIntersection(e.points[i - 1], e.points[i], p1, p2)) hit = true;
+                });
+                if (hit) return true;
+            }
+        }
     }
     return false;
+}
+
+std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
+                                                  const Vec2& pick,
+                                                  const std::vector<Entity>& cutters,
+                                                  const QString& selfId) {
+    std::vector<std::vector<Vec2>> result;
+    const int n = static_cast<int>(pts.size());
+    if (n < 2) return result;
+
+    // Cut positions along the polyline as a global parameter (segment index + t).
+    std::vector<double> cuts;
+    for (int i = 0; i < n - 1; ++i) {
+        const Vec2 A = pts[i], B = pts[i + 1], D = B - A;
+        const double L2 = D.lengthSq();
+        if (L2 < 1e-12) continue;
+        for (const auto& c : cutters) {
+            if (!selfId.isEmpty() && c.id == selfId) continue;
+            forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
+                    const double t = dot(*x - A, D) / L2;
+                    if (t > 1e-6 && t < 1.0 - 1e-6) cuts.push_back(i + t);
+                }
+            });
+        }
+    }
+    if (cuts.empty()) return result;
+
+    // Where the pick sits along the polyline.
+    double gp = 0.0, bestd = std::numeric_limits<double>::max();
+    for (int i = 0; i < n - 1; ++i) {
+        const auto c = closestPointOnSegment(pick, pts[i], pts[i + 1]);
+        if (c.distance < bestd) {
+            bestd = c.distance;
+            const double L = distance(pts[i], pts[i + 1]);
+            gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
+        }
+    }
+    std::sort(cuts.begin(), cuts.end());
+    double lo = -1.0, hi = std::numeric_limits<double>::max();
+    bool hasLo = false, hasHi = false;
+    for (double g : cuts) {
+        if (g <= gp + 1e-9 && g > lo) { lo = g; hasLo = true; }
+        if (g >= gp - 1e-9 && g < hi) { hi = g; hasHi = true; }
+    }
+    auto ptAt = [&](double g) {
+        int i = std::clamp(static_cast<int>(std::floor(g)), 0, n - 2);
+        return pts[i] + (pts[i + 1] - pts[i]) * (g - i);
+    };
+    auto sub = [&](double g0, double g1) {
+        std::vector<Vec2> out;
+        out.push_back(ptAt(g0));
+        for (int j = static_cast<int>(std::ceil(g0)); j <= static_cast<int>(std::floor(g1)); ++j)
+            if (j > g0 + 1e-9 && j < g1 - 1e-9) out.push_back(pts[j]);
+        out.push_back(ptAt(g1));
+        return out;
+    };
+    if (hasLo && hasHi && hi - lo > 1e-6) {
+        result.push_back(sub(0.0, lo));
+        result.push_back(sub(hi, static_cast<double>(n - 1)));
+    } else if (hasHi) {
+        result.push_back(sub(hi, static_cast<double>(n - 1)));
+    } else if (hasLo) {
+        result.push_back(sub(0.0, lo));
+    }
+    result.erase(std::remove_if(result.begin(), result.end(),
+                                [](const std::vector<Vec2>& p) {
+                                    return p.size() < 2 ||
+                                           (p.size() == 2 && distance(p[0], p[1]) < 1e-9);
+                                }),
+                 result.end());
+    return result;
 }
 
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
