@@ -254,6 +254,20 @@ int run_editor_tests() {
               "trim-quick: outer pieces are [0..30] and [70..100]");
     }
 
+    // --- Moving a trimmed double line carries its cut line along (no distortion).
+    {
+        Entity dl; dl.type = EntityType::DoubleLine; dl.a = {0, 0}; dl.b = {100, 0};
+        dl.meta.insert("gap", 10.0);
+        dl.meta.insert("cutEnd", true);
+        dl.meta.insert("cutEndKind", QStringLiteral("line"));
+        dl.meta.insert("cutEndAx", 50.0); dl.meta.insert("cutEndAy", -10.0);
+        dl.meta.insert("cutEndBx", 50.0); dl.meta.insert("cutEndBy", 10.0);
+        translateEntity(dl, {10, 20});
+        check(near(dl.a.x, 10.0) && near(dl.meta.value("cutEndAx").toDouble(), 60.0) &&
+                  near(dl.meta.value("cutEndAy").toDouble(), 10.0),
+              "move-doublecut: the trim cut line moves with the double line");
+    }
+
     // --- Reference + fence trim: select a cutting edge, then drag a cut line across
     //     several objects; each is trimmed back to the reference.
     {
