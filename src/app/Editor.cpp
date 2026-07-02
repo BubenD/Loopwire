@@ -3167,14 +3167,21 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                                               : ent.points;
             if (pts.size() < 2) return;
             auto setEnd = [&](const QString& key, const Vec2& pt) {
+                for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
+                    ent.meta.remove(key + s);
                 if (auto seg = cutSegmentThrough(pt, joints, selfId)) {
                     ent.meta.insert(key, true);
+                    ent.meta.insert(key + "Kind", QStringLiteral("line"));
                     ent.meta.insert(key + "Ax", seg->first.x);
                     ent.meta.insert(key + "Ay", seg->first.y);
                     ent.meta.insert(key + "Bx", seg->second.x);
                     ent.meta.insert(key + "By", seg->second.y);
-                } else {
-                    for (const char* s : {"", "Ax", "Ay", "Bx", "By"}) ent.meta.remove(key + s);
+                } else if (auto cc = cutCircleThrough(pt, joints, selfId)) {
+                    ent.meta.insert(key, true);
+                    ent.meta.insert(key + "Kind", QStringLiteral("circle"));
+                    ent.meta.insert(key + "Cx", cc->first.x);
+                    ent.meta.insert(key + "Cy", cc->first.y);
+                    ent.meta.insert(key + "R", cc->second);
                 }
             };
             setEnd(QStringLiteral("cutStart"), pts.front());

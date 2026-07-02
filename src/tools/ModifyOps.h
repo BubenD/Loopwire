@@ -52,6 +52,13 @@ std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
                                                        const std::vector<Entity>& cutters,
                                                        const QString& selfId);
 
+// The circle/arc cutting edge in `cutters` (skipping `selfId`) whose ring passes
+// through `p`, as {center, radius}, or nullopt. Used to record a curved cut so a
+// trimmed double line's physical runs end exactly on the circle.
+std::optional<std::pair<Vec2, double>> cutCircleThrough(const Vec2& p,
+                                                        const std::vector<Entity>& cutters,
+                                                        const QString& selfId);
+
 // Trim a circle or arc: remove the piece containing `pick` (a point on the
 // curve), bounded by where the cutting edges in `cutters` cross it. A circle needs
 // two cuts and becomes an arc; an arc may split — `extra` returns the second arc.

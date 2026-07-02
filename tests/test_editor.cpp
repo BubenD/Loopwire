@@ -380,6 +380,30 @@ int run_editor_tests() {
               "trim-poly-knee: removed only ref..knee; the far side survives");
     }
 
+    // --- Trim a DOUBLE LINE with a CIRCLE reference: it splits at the ring and each
+    //     new end records a CIRCLE cut so both physical runs clip to the arc.
+    {
+        Document d; d.entities().clear();
+        Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {100, 0}; circ.radius = 40;
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine;
+        dl.a = {0, 0}; dl.b = {200, 0}; dl.meta.insert("gap", 10.0); // crosses ring at x=60,140
+        d.entities().push_back(circ);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("c");
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({100, -8}, Qt::LeftButton, Qt::NoModifier); // cut inside the circle
+        ed.onPointerMove({100, 8});
+        ed.onPointerPress({100, 8}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dl") dd = &e;
+        check(dd && near(std::max(dd->a.x, dd->b.x), 60.0) &&
+                  dd->meta.value("cutEnd").toBool() &&
+                  dd->meta.value("cutEndKind").toString() == QLatin1String("circle") &&
+                  near(dd->meta.value("cutEndR").toDouble(), 40.0),
+              "trim-circle-ref: double line clips to the circle (records a circle cut)");
+    }
+
     // --- Trim a polyline with a CIRCLE as the reference (cutting edge).
     {
         std::vector<Vec2> pts = {{0, 0}, {200, 0}};

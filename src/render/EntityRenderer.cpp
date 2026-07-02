@@ -89,12 +89,41 @@ void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     if (n < 2) return;
     if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
 }
-// Read a stored cut line (meta key + "Ax/Ay/Bx/By"); returns false if not present.
-bool cutRefLine(const Entity& e, const QString& key, Vec2& a, Vec2& b) {
-    if (!e.meta.value(key).toBool()) return false;
-    a = {e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
-    b = {e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
-    return true;
+// Move a run's END vertex onto the circle (along its last segment), so a run
+// trimmed by a circle reference ends exactly on the ring.
+void extendRunEndToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
+    const int n = static_cast<int>(run.size());
+    if (n < 2) return;
+    const auto xs = lineCircleIntersection(run[n - 2], run[n - 1] - run[n - 2], c, r);
+    double best = 1e300;
+    for (const auto& x : xs) {
+        const double d = distance(x, run[n - 1]);
+        if (d < best) { best = d; run[n - 1] = x; }
+    }
+}
+void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
+    if (run.size() < 2) return;
+    const auto xs = lineCircleIntersection(run[1], run[0] - run[1], c, r);
+    double best = 1e300;
+    for (const auto& x : xs) {
+        const double d = distance(x, run[0]);
+        if (d < best) { best = d; run[0] = x; }
+    }
+}
+// Clip a run's start/end onto the stored cut boundary (a line or a circle).
+void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bool atEnd) {
+    if (!e.meta.value(key).toBool()) return;
+    if (e.meta.value(key + "Kind").toString() == QLatin1String("circle")) {
+        const Vec2 c{e.meta.value(key + "Cx").toDouble(), e.meta.value(key + "Cy").toDouble()};
+        const double r = e.meta.value(key + "R").toDouble();
+        if (atEnd) extendRunEndToCircle(run, c, r);
+        else extendRunStartToCircle(run, c, r);
+    } else {
+        const Vec2 a{e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
+        const Vec2 b{e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
+        if (atEnd) extendRunEndToLine(run, a, b);
+        else extendRunStartToLine(run, a, b);
+    }
 }
 
 QPolygonF toScreenPoly(const std::vector<Vec2>& pts, const ViewTransform& vt) {
@@ -539,18 +568,13 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     extendRunStartToLine(run1, ra, rb);
                     extendRunStartToLine(run2, ra, rb);
                 }
-                // Trim cut lines: clip the physical runs so both meet the cutting
-                // line exactly (a diagonal cap), instead of a perpendicular cap that
-                // over/under-shoots the line.
-                Vec2 ca, cb;
-                if (cutRefLine(e, QStringLiteral("cutStart"), ca, cb)) {
-                    extendRunStartToLine(run1, ca, cb);
-                    extendRunStartToLine(run2, ca, cb);
-                }
-                if (cutRefLine(e, QStringLiteral("cutEnd"), ca, cb)) {
-                    extendRunEndToLine(run1, ca, cb);
-                    extendRunEndToLine(run2, ca, cb);
-                }
+                // Trim cut boundaries: clip both physical runs so they meet the
+                // cutting edge (line OR circle) exactly, instead of a perpendicular
+                // cap that over/under-shoots it.
+                applyRunCut(run1, e, QStringLiteral("cutStart"), false);
+                applyRunCut(run2, e, QStringLiteral("cutStart"), false);
+                applyRunCut(run1, e, QStringLiteral("cutEnd"), true);
+                applyRunCut(run2, e, QStringLiteral("cutEnd"), true);
                 p.drawPolyline(toScreenPoly(run1, vt));
                 p.drawPolyline(toScreenPoly(run2, vt));
             } else if (!bulgeArr.isEmpty()) {

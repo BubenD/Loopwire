@@ -532,6 +532,20 @@ std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
     return best;
 }
 
+std::optional<std::pair<Vec2, double>> cutCircleThrough(const Vec2& p,
+                                                        const std::vector<Entity>& cutters,
+                                                        const QString& selfId) {
+    std::optional<std::pair<Vec2, double>> best;
+    double bestErr = 1e-3;
+    for (const auto& c : cutters) {
+        if (!selfId.isEmpty() && c.id == selfId) continue;
+        if (c.type != EntityType::Circle && c.type != EntityType::Arc) continue;
+        const double err = std::abs(distance(p, c.center) - c.radius);
+        if (err < bestErr) { bestErr = err; best = std::make_pair(c.center, c.radius); }
+    }
+    return best;
+}
+
 std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
                                                   const Vec2& pick,
                                                   const std::vector<Entity>& cutters,
