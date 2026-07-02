@@ -554,11 +554,10 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
     const int n = static_cast<int>(pts.size());
     if (n < 2) return result;
 
-    // Cut positions along the polyline as a global parameter (segment index + t):
-    // where cutters cross it, PLUS the polyline's own interior vertices (knees), so
-    // a trim stops at the nearest knee and the rest survives as a separate object.
-    std::vector<double> cuts;
-    bool crossed = false; // an actual cutter crossing (not just a knee)
+    // Boundaries along the polyline as a global parameter (segment index + t):
+    // CROSSINGS with cutters (preferred) and the polyline's own interior vertices
+    // (KNEES, used only as a fallback so a lone crossing doesn't trim to the end).
+    std::vector<double> crossings;
     for (int i = 0; i < n - 1; ++i) {
         const Vec2 A = pts[i], B = pts[i + 1], D = B - A;
         const double L2 = D.lengthSq();
@@ -576,21 +575,21 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
                         while (rel < 0) rel += 2.0 * M_PI;
                         if (rel > sweep + 1e-9) continue;
                     }
-                    cuts.push_back(i + t);
-                    crossed = true;
+                    crossings.push_back(i + t);
                 }
             } else {
                 forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
                     if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
                         const double t = dot(*x - A, D) / L2;
-                        if (t > 1e-6 && t < 1.0 - 1e-6) { cuts.push_back(i + t); crossed = true; }
+                        if (t > 1e-6 && t < 1.0 - 1e-6) crossings.push_back(i + t);
                     }
                 });
             }
         }
     }
-    if (!crossed) return result;            // nothing actually cut it
-    for (int i = 1; i < n - 1; ++i) cuts.push_back(static_cast<double>(i)); // knees
+    if (crossings.empty()) return result; // nothing actually cut it
+    std::vector<double> knees;
+    for (int i = 1; i < n - 1; ++i) knees.push_back(static_cast<double>(i));
 
     // Where the pick sits along the polyline.
     double gp = 0.0, bestd = std::numeric_limits<double>::max();
@@ -602,13 +601,25 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
             gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
         }
     }
-    std::sort(cuts.begin(), cuts.end());
-    double lo = -1.0, hi = std::numeric_limits<double>::max();
-    bool hasLo = false, hasHi = false;
-    for (double g : cuts) {
-        if (g <= gp + 1e-9 && g > lo) { lo = g; hasLo = true; }
-        if (g >= gp - 1e-9 && g < hi) { hi = g; hasHi = true; }
-    }
+    // Nearest boundary on each side of the pick: a cutter CROSSING wins; only if
+    // there's no crossing on that side does the nearest knee bound it. This removes
+    // the whole inside-circle span (ignoring interior knees) yet a single crossing
+    // still stops at the nearest knee instead of the far end.
+    auto nearestBelow = [&](const std::vector<double>& v, double& out) {
+        bool found = false;
+        for (double g : v)
+            if (g <= gp + 1e-9 && (!found || g > out)) { out = g; found = true; }
+        return found;
+    };
+    auto nearestAbove = [&](const std::vector<double>& v, double& out) {
+        bool found = false;
+        for (double g : v)
+            if (g >= gp - 1e-9 && (!found || g < out)) { out = g; found = true; }
+        return found;
+    };
+    double lo = 0.0, hi = static_cast<double>(n - 1);
+    bool hasLo = nearestBelow(crossings, lo) || nearestBelow(knees, lo);
+    bool hasHi = nearestAbove(crossings, hi) || nearestAbove(knees, hi);
     auto ptAt = [&](double g) {
         int i = std::clamp(static_cast<int>(std::floor(g)), 0, n - 2);
         return pts[i] + (pts[i + 1] - pts[i]) * (g - i);

@@ -626,6 +626,15 @@ void Editor::onPointerMove(const Vec2& raw) {
     // and grid snapping still apply so you can snap to real points.
     SnapSettings snap = snap_;
     if (tool_ == ToolId::Dimension) { snap.polar = false; snap.ortho = false; }
+    // Holding Ctrl temporarily suspends ALL snapping (object/grid/polar/ortho) so a
+    // point can be placed freely — e.g. picking a hatch location. Snap resumes when
+    // Ctrl is released.
+    if (QApplication::keyboardModifiers() & Qt::ControlModifier) {
+        snap.objectSnap = false;
+        snap.gridSnap = false;
+        snap.polar = false;
+        snap.ortho = false;
+    }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
     cursor_ = snapResult_.point;
 
