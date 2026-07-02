@@ -100,6 +100,13 @@ void extendRunEndToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
         const double d = distance(x, run[n - 1]);
         if (d < best) { best = d; run[n - 1] = x; }
     }
+    // The offset run may just miss the ring (shallow/tangent crossing): snap the
+    // end radially onto the circle so it never dangles inside/outside.
+    if (best > 1e299) {
+        const Vec2 d = run[n - 1] - c;
+        const double len = d.length();
+        if (len > 1e-9) run[n - 1] = c + d * (r / len);
+    }
 }
 void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
     if (run.size() < 2) return;
@@ -108,6 +115,11 @@ void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
     for (const auto& x : xs) {
         const double d = distance(x, run[0]);
         if (d < best) { best = d; run[0] = x; }
+    }
+    if (best > 1e299) {
+        const Vec2 d = run[0] - c;
+        const double len = d.length();
+        if (len > 1e-9) run[0] = c + d * (r / len);
     }
 }
 // Clip a run's start/end onto the stored cut boundary (a line or a circle).

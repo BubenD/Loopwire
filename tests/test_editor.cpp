@@ -426,6 +426,18 @@ int run_editor_tests() {
               "trim-poly-ellipse: split at the ellipse crossings (x=+/-100)");
     }
 
+    // --- A single polyline segment that passes THROUGH a circle (entry+exit on the
+    //     same segment) is split, removing the inside span.
+    {
+        std::vector<Vec2> pts = {{-200, 0}, {200, 0}};
+        Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {0, 0}; circ.radius = 50;
+        std::vector<Entity> cutters = {circ}; // one segment crosses the ring at x=-50 and x=50
+        auto pieces = trimPolylinePieces(pts, {0, 0} /* inside */, cutters, "");
+        check(pieces.size() == 2 && near(pieces[0].back().x, -50.0, 1.0) &&
+                  near(pieces[1].front().x, 50.0, 1.0),
+              "trim-thru-circle: one segment crossing a circle twice splits at both crossings");
+    }
+
     // --- A knee INSIDE the circle must not stop the trim: crossings win, so the
     //     whole inside-circle span is removed and each piece ends on the ring.
     {
