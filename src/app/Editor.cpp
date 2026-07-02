@@ -1332,9 +1332,18 @@ void Editor::applyEditDrag(const Vec2& target) {
         for (Entity* e : selectedEntities()) translateEntity(*e, delta);
     } else {
         // Move every grabbed joint (one, or all coincident shared joints).
+        // Reshaping a trimmed double line/polyline invalidates its trim caps (the
+        // stored cut line/circle no longer matches the moved end), so drop them —
+        // the joint then edits as a normal double-polyline vertex.
         for (const auto& eg : editGrips_)
-            if (Entity* e = entityById(eg.id))
+            if (Entity* e = entityById(eg.id)) {
+                for (const char* k :
+                     {"cutStart", "cutStartKind", "cutStartAx", "cutStartAy", "cutStartBx", "cutStartBy",
+                      "cutStartCx", "cutStartCy", "cutStartR", "cutEnd", "cutEndKind", "cutEndAx",
+                      "cutEndAy", "cutEndBx", "cutEndBy", "cutEndCx", "cutEndCy", "cutEndR"})
+                    e->meta.remove(QLatin1String(k));
                 applyOne(e, static_cast<GripRole>(eg.role), eg.index, eg.offset);
+            }
     }
     editLast_ = target;
     doc_->setDirty(true);
