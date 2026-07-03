@@ -191,6 +191,52 @@ int run_editor_tests() {
               "fillet-polygon: the shared corner (wrap-around) gets the fillet radius");
     }
 
+    // --- A DOUBLE polyline is pickable by clicking a PHYSICAL run, and its knee
+    //     fillets (fixes "can't select the double polyline lines").
+    {
+        Document d; d.entities().clear();
+        Entity dp; dp.id = "dp"; dp.type = EntityType::Polyline;
+        dp.points = {{0, 0}, {100, 0}, {100, 100}};
+        dp.meta.insert("double", true);
+        dp.meta.insert("gap", 10.0); // runs offset +/-5
+        d.entities().push_back(dp);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(5.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);   // on seg0's +run
+        ed.onPointerPress({105, 50}, Qt::LeftButton, Qt::NoModifier); // on seg1's +run -> knee
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dp") dd = &e;
+        check(dd && near(dd->meta.value("cornerRadii").toArray()[1].toDouble(), 5.0),
+              "fillet-dpoly: double polyline picked on a physical run, knee filleted");
+    }
+
+    // --- Fillet TWO connected DOUBLE LINES: they merge into one filleted double
+    //     polyline at the shared connection.
+    {
+        Document d; d.entities().clear();
+        Entity a; a.id = "a"; a.type = EntityType::DoubleLine; a.a = {0, 0}; a.b = {100, 0};
+        a.meta.insert("gap", 10.0); // runs y=+/-5
+        Entity b; b.id = "b"; b.type = EntityType::DoubleLine; b.a = {100, 0}; b.b = {100, 100};
+        b.meta.insert("gap", 10.0); // runs x=95/105; shares (100,0)
+        d.entities().push_back(a);
+        d.entities().push_back(b);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(5.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);   // pick line a (physical run)
+        ed.onPointerPress({105, 50}, Qt::LeftButton, Qt::NoModifier); // pick line b -> merge + fillet
+        int dpolys = 0, doubleLines = 0;
+        const Entity* merged = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::DoubleLine) ++doubleLines;
+            if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) { ++dpolys; merged = &e; }
+        }
+        check(doubleLines == 0 && dpolys == 1 && merged && merged->points.size() == 3 &&
+                  near(merged->meta.value("cornerRadii").toArray()[1].toDouble(), 5.0),
+              "fillet-2double: connected double lines merge into a filleted double polyline");
+    }
+
     // --- Fillet works clicking MID-line (not just near the far ends): the pick's
     //     SIDE of the corner is what matters, so a rounded knee is still produced.
     {

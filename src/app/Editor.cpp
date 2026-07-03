@@ -413,6 +413,17 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         break;
     }
     case EntityType::Polyline:
+        // A DOUBLE polyline is picked on its two VISIBLE physical runs (offset by
+        // ±gap/2), not the centerline in the empty gap.
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const auto run = offsetPolyline(e.points, s);
+                for (size_t i = 1; i < run.size(); ++i) best = std::min(best, segDist(run[i - 1], run[i]));
+            }
+            break;
+        }
+        [[fallthrough]];
     case EntityType::Spline:
     case EntityType::Wire:
         for (size_t i = 1; i < e.points.size(); ++i)
@@ -3416,6 +3427,60 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         } else {
             emit message(QStringLiteral("Pick two segments that share a corner."));
         }
+        pickIds_.clear();
+        pickPts_.clear();
+        emit changed();
+        return;
+    }
+
+    // Fillet TWO connected DOUBLE LINES: if they share a common endpoint, merge them
+    // into a single double polyline with a rounded knee at the connection (so both
+    // physical runs round with a constant gap).
+    if (tool_ == ToolId::Fillet && l1 && l2 && l1 != l2 &&
+        l1->type == EntityType::DoubleLine && l2->type == EntityType::DoubleLine) {
+        const Vec2 e1[2] = {l1->a, l1->b};
+        const Vec2 e2[2] = {l2->a, l2->b};
+        int bi = 0, bj = 0;
+        double bd = std::numeric_limits<double>::max();
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                const double dd = distance(e1[i], e2[j]);
+                if (dd < bd) { bd = dd; bi = i; bj = j; }
+            }
+        if (bd > worldTolerance() * 4.0) {
+            emit message(QStringLiteral("The two double lines must share a connected end."));
+            pickIds_.clear(); pickPts_.clear();
+            return;
+        }
+        const Vec2 shared = lerp(e1[bi], e2[bj], 0.5);
+        const Vec2 free1 = e1[1 - bi], free2 = e2[1 - bj];
+        const double gap = l1->meta.value("gap").toDouble(10.0);
+        const std::vector<Vec2> corner = {free1, shared, free2};
+        if (filletRadius_ > 0 && !filletRadiusFits(corner, filletRadius_ + gap / 2.0)) {
+            emit message(QStringLiteral("Fillet radius %1 is too big for that corner").arg(filletRadius_));
+            pickIds_.clear(); pickPts_.clear();
+            return;
+        }
+        pushUndo();
+        Entity merged;
+        merged.type = EntityType::Polyline;
+        merged.layer = l1->layer;
+        merged.color = l1->color;
+        merged.points = {free1, shared, free2};
+        merged.meta.insert(QStringLiteral("double"), true);
+        merged.meta.insert(QStringLiteral("gap"), gap);
+        QJsonArray arr;
+        arr.append(0.0);
+        arr.append(filletRadius_);
+        arr.append(0.0);
+        merged.meta.insert(QStringLiteral("cornerRadii"), arr);
+        const QString id1 = pickIds_[0], id2 = pickIds_[1];
+        auto& ents = doc_->entities();
+        ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                  [&](const Entity& e) { return e.id == id1 || e.id == id2; }),
+                   ents.end());
+        addEntity(std::move(merged));
+        emit message(QStringLiteral("Filleted the double-line corner (radius %1)").arg(filletRadius_));
         pickIds_.clear();
         pickPts_.clear();
         emit changed();
