@@ -232,11 +232,15 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
         break;
     }
     case ToolId::Trim: {
-        // Scissors: two handle rings and crossed blades.
-        p.drawEllipse(QPointF(6, 8), 2.6, 2.6);
-        p.drawEllipse(QPointF(6, 16), 2.6, 2.6);
-        p.drawLine(8.2, 9.4, 20, 16);
-        p.drawLine(8.2, 14.6, 20, 8);
+        // A line trimmed at a boundary: a vertical cutting edge, the kept part solid
+        // up to it, and the removed part beyond shown dashed (AutoCAD TRIM sense).
+        p.drawLine(14, 4, 14, 20);          // boundary / cutting edge
+        p.drawLine(3, 12, 14, 12);          // kept segment
+        QPen dash = pen;
+        dash.setStyle(Qt::DashLine);
+        p.setPen(dash);
+        p.drawLine(14, 12, 21, 12);         // trimmed-away segment
+        p.setPen(pen);
         break;
     }
     case ToolId::Extend: {
@@ -1592,29 +1596,33 @@ QWidget* MainWindow::clipboardRow() {
     lay->setSpacing(1);
     lay->setAlignment(Qt::AlignTop);
 
-    // Copy = the primary button; its fall-menu offers Cut (each with its own icon).
-    auto* copyBtn = new QToolButton(w);
-    copyBtn->setIcon(makeOpIcon(QStringLiteral("copy")));
-    copyBtn->setIconSize(QSize(28, 28));
-    copyBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    copyBtn->setText(QStringLiteral("Copy"));
-    copyBtn->setToolTip(QStringLiteral("Copy selection to clipboard"));
-    copyBtn->setAutoRaise(true);
-    copyBtn->setFocusPolicy(Qt::NoFocus);
-    copyBtn->setPopupMode(QToolButton::MenuButtonPopup); // click = copy; arrow = fall-menu
-    connect(copyBtn, &QToolButton::clicked, this, [this] { editor_->copySelection(); });
+    // A split button whose PRIMARY action is whichever was chosen last (Copy or Cut),
+    // AutoCAD-flyout style: clicking runs it; the fall-menu switches it. Choosing Cut
+    // from the menu makes the ribbon button become Cut (and vice-versa).
+    auto* btn = new QToolButton(w);
+    btn->setIconSize(QSize(28, 28));
+    btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setPopupMode(QToolButton::MenuButtonPopup); // click = current action; arrow = menu
 
-    auto* menu = new QMenu(copyBtn);
-    QAction* cutAct = menu->addAction(makeOpIcon(QStringLiteral("cut")),
-                                      QStringLiteral("Cut (to clipboard)"));
-    connect(cutAct, &QAction::triggered, this, [this] { editor_->cutSelection(); });
-    // Copy is also offered in the menu for discoverability alongside Cut.
-    QAction* copyAct = menu->addAction(makeOpIcon(QStringLiteral("copy")),
-                                       QStringLiteral("Copy (to clipboard)"));
+    auto* copyAct = new QAction(makeOpIcon(QStringLiteral("copy")), QStringLiteral("Copy"), this);
+    copyAct->setToolTip(QStringLiteral("Copy selection to clipboard"));
     connect(copyAct, &QAction::triggered, this, [this] { editor_->copySelection(); });
-    copyBtn->setMenu(menu);
+    auto* cutAct = new QAction(makeOpIcon(QStringLiteral("cut")), QStringLiteral("Cut"), this);
+    cutAct->setToolTip(QStringLiteral("Cut selection to clipboard"));
+    connect(cutAct, &QAction::triggered, this, [this] { editor_->cutSelection(); });
+    // Triggering either action (from the button OR the menu) also makes it primary.
+    connect(copyAct, &QAction::triggered, this, [btn, copyAct] { btn->setDefaultAction(copyAct); });
+    connect(cutAct, &QAction::triggered, this, [btn, cutAct] { btn->setDefaultAction(cutAct); });
 
-    lay->addWidget(copyBtn);
+    auto* menu = new QMenu(btn);
+    menu->addAction(copyAct);
+    menu->addAction(cutAct);
+    btn->setMenu(menu);
+    btn->setDefaultAction(copyAct); // starts as Copy
+
+    lay->addWidget(btn);
     lay->addStretch(1);
     return w;
 }
