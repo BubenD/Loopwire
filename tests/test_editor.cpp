@@ -343,6 +343,31 @@ int run_editor_tests() {
               "offset-rect: offsetting a rectangle outward grows it by the distance all round");
     }
 
+    // --- Table: rubber-band a grid, then edit a cell by its (row,col); the cell
+    //     lookup and write round-trip correctly.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTableSize(2, 3); // 2 rows x 3 cols
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({60, 20}, Qt::LeftButton, Qt::NoModifier); // 60 wide, 20 tall
+        const Entity* t = nullptr;
+        for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) t = &e;
+        check(t && t->type == EntityType::Rect && t->meta.value("rows").toInt() == 2 &&
+                  t->meta.value("cols").toInt() == 3 && t->meta.value("cells").toArray().size() == 6,
+              "table: creates a 2x3 grid of empty cells");
+        // Cell lookup: the top-right cell is row 0, col 2 -> index 2. Its centre is
+        // around x in [40,60], y in [10,20] (world y-up, top row).
+        Vec2 tl; double cw = 0, ch = 0;
+        const int idx = t ? ed.tableCellAt(*t, {50, 15}, tl, cw, ch) : -1;
+        check(idx == 2, "table: cell lookup maps a point to the right (row,col)");
+        if (t) ed.applyTableCellEdit(t->id, idx, QStringLiteral("hi"));
+        for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) t = &e;
+        check(t && t->meta.value("cells").toArray()[2].toString() == QLatin1String("hi"),
+              "table: editing a cell stores its text");
+    }
+
     // --- A dimension's moved text position (textPosX/Y meta) follows the dimension
     //     when it is moved, so the dashed leader stays attached.
     {

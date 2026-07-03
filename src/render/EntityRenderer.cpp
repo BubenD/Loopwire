@@ -681,6 +681,45 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     break;
                 }
             }
+            // Editable table: outer border + internal grid + per-cell text.
+            if (e.meta.value("table").toBool() && e.points.size() >= 4) {
+                const Bounds tb = boundsOf(e.points);
+                p.drawPolygon(toScreenPoly(e.points, vt));
+                const QJsonArray cf = e.meta.value("colFrac").toArray();
+                const QJsonArray rf = e.meta.value("rowFrac").toArray();
+                const int cols = cf.size();
+                double gx = tb.min.x;
+                for (int c = 0; c + 1 < cols; ++c) {
+                    gx += cf[c].toDouble() * tb.width();
+                    p.drawLine(vt.toScreen({gx, tb.min.y}), vt.toScreen({gx, tb.max.y}));
+                }
+                double gy = tb.max.y;
+                for (int r = 0; r + 1 < rf.size(); ++r) {
+                    gy -= rf[r].toDouble() * tb.height();
+                    p.drawLine(vt.toScreen({tb.min.x, gy}), vt.toScreen({tb.max.x, gy}));
+                }
+                const QJsonArray cells = e.meta.value("cells").toArray();
+                const double th = e.meta.value("textSize").toDouble(4.0);
+                const double pad = th * 0.35;
+                double cy = tb.max.y;
+                for (int r = 0; r < rf.size(); ++r) {
+                    const double h = rf[r].toDouble() * tb.height();
+                    double cx = tb.min.x;
+                    for (int c = 0; c < cols; ++c) {
+                        const double w = cf[c].toDouble() * tb.width();
+                        const int idx = r * cols + c;
+                        if (idx < cells.size()) {
+                            const QString s = cells[idx].toString();
+                            if (!s.isEmpty())
+                                drawWorldText(p, vt.toScreen({cx + pad, cy - pad - th}), s, th,
+                                              vt.scale(), color);
+                        }
+                        cx += w;
+                    }
+                    cy -= h;
+                }
+                break;
+            }
             p.drawPolygon(toScreenPoly(e.points, vt));
             // Note / Revision annotation boxes carry text inside the rectangle.
             const bool note = e.meta.value("note").toBool();

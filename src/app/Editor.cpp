@@ -1397,10 +1397,22 @@ void Editor::onDoubleClick(const Vec2& world) {
     // revision body).
     if (tool_ == ToolId::Select) {
         if (auto hit = hitTest(world))
-            if (Entity* e = entityById(*hit))
+            if (Entity* e = entityById(*hit)) {
+                // A table: edit the specific cell that was double-clicked.
+                if (e->meta.value("table").toBool()) {
+                    Vec2 tl; double cw = 0, ch = 0;
+                    const int idx = tableCellAt(*e, world, tl, cw, ch);
+                    if (idx >= 0) {
+                        const QJsonArray cells = e->meta.value("cells").toArray();
+                        const QString cur = idx < cells.size() ? cells[idx].toString() : QString();
+                        emit editTableCellRequested(e->id, idx, cur, tl);
+                    }
+                    return;
+                }
                 if (e->type == EntityType::Text || e->meta.value("balloon").toBool() ||
                     e->meta.value("note").toBool() || e->meta.value("revision").toBool())
                     emit editTextRequested(*hit);
+            }
     }
 }
 
@@ -1513,6 +1525,7 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polygon:
     case ToolId::Note:
     case ToolId::Revision:
+    case ToolId::Table:
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
@@ -2218,6 +2231,31 @@ void Editor::finishDraw() {
                 if (x.meta.value("revision").toBool()) ++idx;
             e.meta.insert("rev", QString(QChar('A' + std::min(idx, 25))));
         }
+        break;
+    }
+    case ToolId::Table: {
+        // An editable grid: a Rect carrying row/col counts, per-row/col FRACTIONS (so
+        // the grid resizes proportionally when the table is moved/scaled), and a
+        // row-major array of cell strings. Double-click a cell to edit it.
+        if (draftPts_.size() < 2) return;
+        const Vec2 a = draftPts_[0], b = draftPts_[1];
+        const double minX = std::min(a.x, b.x), maxX = std::max(a.x, b.x);
+        const double minY = std::min(a.y, b.y), maxY = std::max(a.y, b.y);
+        e.type = EntityType::Rect;
+        e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+        e.a = {minX, maxY};
+        const int rows = std::max(1, tableRows_), cols = std::max(1, tableCols_);
+        QJsonArray colFrac, rowFrac, cells;
+        for (int i = 0; i < cols; ++i) colFrac.append(1.0 / cols);
+        for (int i = 0; i < rows; ++i) rowFrac.append(1.0 / rows);
+        for (int i = 0; i < rows * cols; ++i) cells.append(QString());
+        e.meta.insert("table", true);
+        e.meta.insert("rows", rows);
+        e.meta.insert("cols", cols);
+        e.meta.insert("colFrac", colFrac);
+        e.meta.insert("rowFrac", rowFrac);
+        e.meta.insert("cells", cells);
+        e.meta.insert("textSize", 4.0);
         break;
     }
     case ToolId::Polygon: {
@@ -4016,6 +4054,51 @@ void Editor::purgeUnused() {
     emit changed();
 }
 
+int Editor::tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, double& cw,
+                        double& ch) const {
+    if (!e.meta.value("table").toBool()) return -1;
+    const Bounds b = boundsOf(e.points);
+    if (!b.valid || p.x < b.min.x || p.x > b.max.x || p.y < b.min.y || p.y > b.max.y) return -1;
+    const QJsonArray cf = e.meta.value("colFrac").toArray();
+    const QJsonArray rf = e.meta.value("rowFrac").toArray();
+    const int cols = cf.size(), rows = rf.size();
+    if (cols == 0 || rows == 0) return -1;
+    // Columns run left->right (x increasing).
+    int col = cols - 1;
+    double xL = b.min.x, wcol = cf[cols - 1].toDouble() * b.width();
+    { double x = b.min.x;
+      for (int c = 0; c < cols; ++c) {
+          const double w = cf[c].toDouble() * b.width();
+          if (p.x <= x + w + 1e-9) { col = c; xL = x; wcol = w; break; }
+          x += w;
+      } }
+    // Rows run top->down (y decreasing, since world y is up).
+    int row = rows - 1;
+    double yT = b.max.y, hrow = rf[rows - 1].toDouble() * b.height();
+    { double top = b.max.y;
+      for (int r = 0; r < rows; ++r) {
+          const double h = rf[r].toDouble() * b.height();
+          if (p.y >= top - h - 1e-9) { row = r; yT = top; hrow = h; break; }
+          top -= h;
+      } }
+    cellTopLeft = {xL, yT};
+    cw = wcol;
+    ch = hrow;
+    return row * cols + col;
+}
+
+void Editor::applyTableCellEdit(const QString& id, int cell, const QString& text) {
+    if (Entity* e = entityById(id); e && e->meta.value("table").toBool()) {
+        pushUndo();
+        QJsonArray cells = e->meta.value("cells").toArray();
+        while (cells.size() <= cell) cells.append(QString());
+        cells[cell] = text;
+        e->meta.insert(QStringLiteral("cells"), cells);
+        doc_->setDirty(true);
+        emit changed();
+    }
+}
+
 // ---- Harness placement -----------------------------------------------------
 
 void Editor::handlePlacementPress(const Vec2& p) {
@@ -4682,7 +4765,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (auto x = lineLineIntersection(run[0], run[1], lsRefA_, lsRefB_)) run[0] = *x;
         };
         if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
-             tool_ == ToolId::Revision) &&
+             tool_ == ToolId::Revision || tool_ == ToolId::Table) &&
             pts.size() >= 2) {
             // Rectangle (and the MTEXT container box) rubber-band.
             const Vec2 a = pts[0], b = pts[1];

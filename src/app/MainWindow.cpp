@@ -279,6 +279,13 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
         p.drawPolyline(tri); p.drawLine(8, 18, 12, 12);
         break;
     }
+    case ToolId::Table: {
+        // Grid of cells.
+        p.drawRect(4, 5, 16, 14);
+        p.drawLine(4, 10, 20, 10); p.drawLine(4, 15, 20, 15); // rows
+        p.drawLine(9, 5, 9, 19); p.drawLine(15, 5, 15, 19);   // cols
+        break;
+    }
     }
     p.end();
     return QIcon(pm);
@@ -1334,6 +1341,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         style.boxHeight = found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0);
         beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a);
     });
+    // Double-clicked a table cell: open the inline editor over that cell, writing back
+    // to the cell (not a text object) on commit.
+    connect(editor_, &Editor::editTableCellRequested, this,
+            [this](const QString& id, int cell, const QString& text, Vec2 at) {
+                Editor::TextStyle style;
+                style.size = 4.0;
+                beginInlineText(id, text, style, at);
+                inlineCell_ = cell; // mark this as a table-cell edit (after beginInlineText resets it)
+            });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
     // Keep the on-canvas text editor glued to its world position when panning/zooming.
     connect(canvas_, &CanvasWidget::viewChanged, this, [this] {
@@ -1835,8 +1851,34 @@ void MainWindow::buildRibbon() {
     {
         auto [page, lay] = makeTabPage();
         addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
-        addGroup(lay, QStringLiteral("Callouts"),
-                 toolRow({ToolId::Balloon, ToolId::Note, ToolId::Revision}));
+        {
+            // Callouts + a Table button that asks rows/cols before you drag the grid.
+            auto* calloutW = new QWidget(page);
+            auto* ch = new QHBoxLayout(calloutW);
+            ch->setContentsMargins(0, 0, 0, 0);
+            ch->setSpacing(2);
+            ch->addWidget(toolRow({ToolId::Balloon, ToolId::Note, ToolId::Revision}));
+            auto* tableBtn = new QToolButton(calloutW);
+            tableBtn->setIcon(makeToolIcon(ToolId::Table));
+            tableBtn->setIconSize(QSize(28, 28));
+            tableBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            tableBtn->setAutoRaise(true);
+            tableBtn->setFocusPolicy(Qt::NoFocus);
+            tableBtn->setToolTip(QStringLiteral("Table — set rows/columns, then drag its size"));
+            connect(tableBtn, &QToolButton::clicked, this, [this] {
+                bool ok = false;
+                const int rows = QInputDialog::getInt(this, QStringLiteral("Table"),
+                                                      QStringLiteral("Rows:"), 3, 1, 200, 1, &ok);
+                if (!ok) return;
+                const int cols = QInputDialog::getInt(this, QStringLiteral("Table"),
+                                                      QStringLiteral("Columns:"), 3, 1, 200, 1, &ok);
+                if (!ok) return;
+                editor_->setTableSize(rows, cols);
+                editor_->setTool(ToolId::Table);
+            });
+            ch->addWidget(tableBtn);
+            addGroup(lay, QStringLiteral("Callouts"), calloutW);
+        }
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Annotation"));
     }
@@ -3136,6 +3178,7 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
 void MainWindow::beginInlineText(const QString& id, const QString& text,
                                  const Editor::TextStyle& style, Vec2 topLeft) {
     inlineEditId_ = id;
+    inlineCell_ = -1; // plain text edit unless a table-cell edit sets it afterwards
     inlineStyle_ = style;
     inlineTopLeft_ = topLeft;
 
@@ -3354,11 +3397,13 @@ void MainWindow::commitInlineText(bool apply) {
     inlineBar_->hide();
     inlineRuler_->hide();
     if (apply) {
-        if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
+        if (inlineCell_ >= 0) editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
+        else if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
         else editor_->applyTextEdit(inlineEditId_, text, inlineStyle_);
-    } else if (inlineEditId_.isEmpty()) {
+    } else if (inlineEditId_.isEmpty() && inlineCell_ < 0) {
         editor_->commitText(QString(), inlineStyle_); // cancel: clears the pending point/tool
     }
+    inlineCell_ = -1;
     canvas_->setFocus();
 }
 
@@ -4182,6 +4227,7 @@ void MainWindow::buildCommands() {
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
         {{"note", "nt"}, "Annotation", "Note box", tool(ToolId::Note)},
         {{"revision", "rev"}, "Annotation", "Revision box", tool(ToolId::Revision)},
+        {{"table", "tb"}, "Annotation", "Editable table (3x3; drag its size)", tool(ToolId::Table)},
         // Harness
         {{"wire", "w"}, "Harness", "Wire", tool(ToolId::Wire)},
         {{"connector", "con"}, "Harness", "Connector", tool(ToolId::Connector)},

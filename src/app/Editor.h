@@ -118,6 +118,15 @@ public:
     // Edit actions.
     void selectAll();
     void selectById(const QString& id, bool additive = false);
+    // Table (#2): rows/cols for the NEXT table placed, and cell text editing.
+    void setTableSize(int rows, int cols) {
+        tableRows_ = std::max(1, rows);
+        tableCols_ = std::max(1, cols);
+    }
+    // Cell (row-major index) at world point `p` in table `e`; -1 if outside. Sets the
+    // cell's top-left world corner and its world width/height.
+    int tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, double& cw, double& ch) const;
+    void applyTableCellEdit(const QString& id, int cell, const QString& text);
     // Endpoints of edge `seg` of a polyline/rect/polygon AS DRAWN — clipped inward at
     // each end by any existing fillet/chamfer setback, so a highlighted "wall" matches
     // the visible (already-modified) outline instead of overshooting to a sharp vertex.
@@ -273,6 +282,8 @@ signals:
     void textPromptRequested(const QString& prompt);
     // Double-clicked an existing text object — the host opens the editor for it.
     void editTextRequested(const QString& id);
+    // Double-clicked a table cell — the host opens the inline editor for that cell.
+    void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at);
     // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.
@@ -501,6 +512,8 @@ private:
     HatchStyle hatchStyle_;       // current Hatch/Wipeout options
     QString lastHatchId_;         // most recent hatch created in this session (live edit)
     int polygonSides_ = 5;        // default side count (prompted on tool select)
+    int tableRows_ = 3;           // rows/cols for the next Table placed
+    int tableCols_ = 3;
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

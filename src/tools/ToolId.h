@@ -28,6 +28,7 @@ enum class ToolId {
     Balloon,   // numbered callout balloon
     Note,      // bordered note box with text
     Revision,  // titled revision box
+    Table,     // editable grid of cells
     // Harness
     Wire,
     Connector,
@@ -72,6 +73,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Wire:
     case ToolId::Note:      // rubber-band a rectangle, like Rect
     case ToolId::Revision:
+    case ToolId::Table:
         return true;
     default:
         return false;
@@ -105,6 +107,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Balloon: return QStringLiteral("Balloon");
     case ToolId::Note: return QStringLiteral("Note");
     case ToolId::Revision: return QStringLiteral("Revision");
+    case ToolId::Table: return QStringLiteral("Table");
     case ToolId::Wire: return QStringLiteral("Wire");
     case ToolId::Connector: return QStringLiteral("Connector");
     case ToolId::Splice: return QStringLiteral("Splice");
