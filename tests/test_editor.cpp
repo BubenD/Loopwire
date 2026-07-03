@@ -1883,7 +1883,7 @@ int run_editor_tests() {
         check(ed.selection().size() == 1, "dl-region: window enclosing both lines selects");
     }
 
-    // --- Purge separates an object into single primitives.
+    // --- Explode breaks a compound object into its drawn primitives.
     {
         // Double line -> two lines.
         {
@@ -1893,9 +1893,9 @@ int run_editor_tests() {
             d.entities().push_back(dl);
             Editor ed; ed.setDocument(&d); noSnap(ed);
             ed.selectAll();
-            ed.purgeSelected();
-            check(d.entities().size() == 2, "purge: double line -> 2 lines");
-            for (const auto& e : d.entities()) check(e.type == EntityType::Line, "purge: parts are lines");
+            ed.explodeSelected();
+            check(d.entities().size() == 2, "explode: double line -> 2 lines");
+            for (const auto& e : d.entities()) check(e.type == EntityType::Line, "explode: parts are lines");
         }
         // Connector -> body + pin lines (+ text).
         {
@@ -1907,13 +1907,39 @@ int run_editor_tests() {
             d.entities().push_back(c);
             Editor ed; ed.setDocument(&d); noSnap(ed);
             ed.selectAll();
-            ed.purgeSelected();
+            ed.explodeSelected();
             // 4 body lines + 3 pin lines = 7 lines, plus designator + 3 pin labels = texts.
             int lines = 0;
             for (const auto& e : d.entities()) if (e.type == EntityType::Line) ++lines;
-            check(lines >= 7, "purge: connector -> body + pin lines");
-            check(d.entities().size() > 7, "purge: connector keeps labels as text");
+            check(lines >= 7, "explode: connector -> body + pin lines");
+            check(d.entities().size() > 7, "explode: connector keeps labels as text");
         }
+    }
+
+    // --- Purge (AutoCAD sense): drop empty layers and stray/degenerate objects,
+    //     keeping layer 0, the active layer, and real geometry.
+    {
+        Document d; d.entities().clear();
+        d.layers() = Document::defaultLayers();
+        d.layers().push_back(Layer{"Empty", "#ffffff", true, false, 2.0}); // no entities -> purged
+        d.setActiveLayer("0");
+        Entity ok; ok.id = "ok"; ok.type = EntityType::Line; ok.a = {0, 0}; ok.b = {10, 0};
+        ok.layer = "0";
+        Entity zero; zero.id = "z"; zero.type = EntityType::Line; zero.a = {5, 5}; zero.b = {5, 5}; // stray
+        zero.layer = "0";
+        d.entities().push_back(ok);
+        d.entities().push_back(zero);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.purgeUnused();
+        bool emptyGone = true, zeroKept = false;
+        for (const auto& l : d.layers()) {
+            if (l.name == "Empty") emptyGone = false;
+            if (l.name == "0") zeroKept = true;
+        }
+        check(d.entities().size() == 1 && d.entities()[0].id == "ok",
+              "purge: removes the zero-length stray line, keeps real geometry");
+        check(emptyGone && zeroKept,
+              "purge: removes every unused layer but keeps layer 0 (and the active layer)");
     }
 
     // --- Ctrl+X cuts to the clipboard (removes originals); Ctrl+V re-places them.

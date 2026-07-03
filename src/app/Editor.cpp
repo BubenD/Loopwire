@@ -3903,35 +3903,72 @@ void Editor::explodeSelected() {
     emit changed();
 }
 
-void Editor::purgeSelected() {
-    auto sel = selectedEntities();
-    if (sel.empty()) { emit message(QStringLiteral("Select objects to purge.")); return; }
+void Editor::purgeUnused() {
+    if (!doc_) return;
     pushUndo();
-    std::vector<Entity> additions;
-    std::vector<QString> remove;
-    for (const Entity* e : sel) {
-        auto parts = purgeEntity(*e);
-        if (!parts.empty()) {
-            additions.insert(additions.end(), parts.begin(), parts.end());
-            remove.push_back(e->id);
-        }
-    }
-    if (additions.empty()) {
-        undo();
-        emit message(QStringLiteral("Selection is already made of single primitives"));
-        return;
-    }
     auto& ents = doc_->entities();
+
+    // 1. Remove stray/degenerate geometry that carries nothing: zero-length lines,
+    //    zero-radius circles/arcs/ellipses, empty text, and point-less runs.
+    const int before = static_cast<int>(ents.size());
     ents.erase(std::remove_if(ents.begin(), ents.end(),
-                              [&](const Entity& e) {
-                                  return std::find(remove.begin(), remove.end(), e.id) != remove.end();
+                              [](const Entity& e) {
+                                  switch (e.type) {
+                                  case EntityType::Line:
+                                  case EntityType::DoubleLine:
+                                      return distance(e.a, e.b) < 1e-9;
+                                  case EntityType::Circle:
+                                  case EntityType::Arc:
+                                  case EntityType::Ellipse:
+                                      return e.radius < 1e-9;
+                                  case EntityType::Text:
+                                      return e.meta.value(QStringLiteral("text"))
+                                          .toString()
+                                          .trimmed()
+                                          .isEmpty();
+                                  case EntityType::Polyline:
+                                  case EntityType::Spline:
+                                  case EntityType::Wire:
+                                  case EntityType::Rect:
+                                  case EntityType::Polygon:
+                                  case EntityType::Hatch:
+                                  case EntityType::Wipeout:
+                                      return e.points.size() < 2;
+                                  default:
+                                      return false;
+                                  }
                               }),
                ents.end());
-    for (auto& a : additions) ents.push_back(std::move(a));
+    const int removedEnts = before - static_cast<int>(ents.size());
+
+    // 2. Remove unused (empty) layers — never the active layer or the default "0"
+    //    (AutoCAD PURGE cannot remove layer 0 or the current layer either).
+    auto& layers = doc_->layers();
+    int removedLayers = 0;
+    layers.erase(std::remove_if(layers.begin(), layers.end(),
+                                [&](const Layer& l) {
+                                    if (l.name == doc_->activeLayer() ||
+                                        l.name == QLatin1String("0"))
+                                        return false;
+                                    const bool used = std::any_of(
+                                        ents.begin(), ents.end(),
+                                        [&](const Entity& e) { return e.layer == l.name; });
+                                    if (!used) { ++removedLayers; return true; }
+                                    return false;
+                                }),
+                 layers.end());
+
+    if (removedEnts == 0 && removedLayers == 0) {
+        undo();
+        emit message(QStringLiteral("Nothing to purge — no empty layers or stray objects"));
+        return;
+    }
     selected_.clear();
     doc_->setDirty(true);
     emit selectionChanged();
-    emit message(QStringLiteral("Purged into %1 primitives").arg(additions.size()));
+    emit message(QStringLiteral("Purged %1 empty layer(s) and %2 stray object(s)")
+                     .arg(removedLayers)
+                     .arg(removedEnts));
     emit changed();
 }
 

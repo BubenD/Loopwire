@@ -168,8 +168,8 @@ public:
 
     // Advanced modify (selection-based actions invoked from the UI).
     void arraySelected(int rows, int cols, double dx, double dy);
-    void explodeSelected();
-    void purgeSelected();      // separate objects into single primitives
+    void explodeSelected();    // break compound objects into their drawn primitives
+    void purgeUnused();        // AutoCAD PURGE: drop empty layers + stray/degenerate objects
     void repeatLastTool();
     ToolId lastTool() const { return lastTool_; }     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }

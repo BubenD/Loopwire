@@ -705,37 +705,12 @@ std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
     return out;
 }
 
+// Break a compound object into its drawn primitives (AutoCAD EXPLODE): double lines
+// become their two physical lines, double polylines both offset runs, fillets are
+// tessellated, connectors become body + pin stubs + labels, and simple polylines/
+// rects/polygons become straight segments. Types that are already primitive (line,
+// circle, arc, text, ...) return empty.
 std::vector<Entity> explodeEntity(const Entity& e) {
-    std::vector<Entity> out;
-    auto makeLine = [&](const Vec2& a, const Vec2& b) {
-        Entity l;
-        l.id = newId();
-        l.type = EntityType::Line;
-        l.layer = e.layer;
-        l.color = e.color;
-        l.weight = e.weight;
-        l.a = a;
-        l.b = b;
-        out.push_back(std::move(l));
-    };
-    switch (e.type) {
-    case EntityType::Polyline:
-    case EntityType::Spline:
-    case EntityType::Wire:
-        for (size_t i = 1; i < e.points.size(); ++i) makeLine(e.points[i - 1], e.points[i]);
-        break;
-    case EntityType::Rect:
-    case EntityType::Polygon:
-        for (size_t i = 0; i < e.points.size(); ++i)
-            makeLine(e.points[i], e.points[(i + 1) % e.points.size()]);
-        break;
-    default:
-        break;
-    }
-    return out;
-}
-
-std::vector<Entity> purgeEntity(const Entity& e) {
     std::vector<Entity> out;
     auto makeLine = [&](const Vec2& a, const Vec2& b) {
         Entity l;

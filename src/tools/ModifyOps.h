@@ -88,14 +88,10 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
 std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
                               double dx, double dy);
 
-// Explode a composite entity into its primitive parts (lines). Returns empty if
-// the entity is not explodable.
+// Explode a composite entity into its drawn primitives (AutoCAD EXPLODE): double
+// line -> two lines, double/filleted polyline -> line segments of each run,
+// connector -> body + pin lines + text, rect/polygon/polyline -> segments. Returns
+// empty for entities that are already primitive (line, circle, arc, text...).
 std::vector<Entity> explodeEntity(const Entity& e);
-
-// Purge: fully separate an object into single primitives — double line -> two
-// lines, double/filleted polyline -> line segments of each run, connector ->
-// body + pin lines + text, rect/polygon/polyline -> segments. Returns empty for
-// entities that are already primitive (line, circle, arc, text...).
-std::vector<Entity> purgeEntity(const Entity& e);
 
 } // namespace Edraw_Desktop

@@ -1563,7 +1563,8 @@ QWidget* MainWindow::operationsRow() {
     const QList<Op> ops = {
         {"array", QStringLiteral("Array"), [this] { arrayDialog(); }},
         {"explode", QStringLiteral("Explode"), [this] { editor_->explodeSelected(); }},
-        {"purge", QStringLiteral("Purge"), [this] { editor_->purgeSelected(); }},
+        {"purge", QStringLiteral("Purge (remove empty layers / stray objects)"),
+         [this] { editor_->purgeUnused(); }},
         {"delete", QStringLiteral("Delete"), [this] { editor_->deleteSelected(); }},
     };
     auto* w = new QWidget(ribbon_);
@@ -4156,8 +4157,8 @@ void MainWindow::buildCommands() {
         {{"fillet", "fi", "f"}, "Modify", "Fillet two lines (set radius: r <value>)", tool(ToolId::Fillet)},
         {{"chamfer", "ch", "cha"}, "Modify", "Chamfer two lines", tool(ToolId::Chamfer)},
         {{"array", "ar"}, "Modify", "Rectangular array", [this] { arrayDialog(); }},
-        {{"explode", "x"}, "Modify", "Explode into segments", [this] { editor_->explodeSelected(); }},
-        {{"purge", "pu"}, "Modify", "Separate into single primitives", [this] { editor_->purgeSelected(); }},
+        {{"explode", "x"}, "Modify", "Explode into primitives", [this] { editor_->explodeSelected(); }},
+        {{"purge", "pu"}, "Modify", "Purge unused layers / stray objects", [this] { editor_->purgeUnused(); }},
         {{"erase", "e", "delete", "del"}, "Modify", "Delete the selection", [this] { editor_->deleteSelected(); }},
         // Edit
         {{"select", "sel"}, "Edit", "Select tool", tool(ToolId::Select)},
