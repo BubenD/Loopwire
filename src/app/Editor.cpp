@@ -3362,6 +3362,46 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
     emit changed();
 }
 
+void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corner, double gap) {
+    const int n = static_cast<int>(e.points.size());
+    if (tool_ == ToolId::Chamfer) {
+        if (chamferDist_ > 0 && !chamferDistFits(corner, chamferDist_ + gap / 2.0)) {
+            emit message(
+                QStringLiteral("Chamfer distance %1 is too big for that corner").arg(chamferDist_));
+            return;
+        }
+        pushUndo();
+        QJsonArray arr = e.meta.value("cornerChamfers").toArray();
+        while (arr.size() < n) arr.append(0.0);
+        arr[knee] = chamferDist_;
+        e.meta.insert(QStringLiteral("cornerChamfers"), arr);
+        // A chamfer and a fillet on the same knee are mutually exclusive.
+        if (e.meta.contains("cornerRadii")) {
+            QJsonArray r = e.meta.value("cornerRadii").toArray();
+            if (knee < r.size()) { r[knee] = 0.0; e.meta.insert(QStringLiteral("cornerRadii"), r); }
+        }
+        doc_->setDirty(true);
+        emit message(QStringLiteral("Chamfer applied to the corner (distance %1)").arg(chamferDist_));
+    } else {
+        if (filletRadius_ > 0 && !filletRadiusFits(corner, filletRadius_ + gap / 2.0)) {
+            emit message(
+                QStringLiteral("Fillet radius %1 is too big for that corner").arg(filletRadius_));
+            return;
+        }
+        pushUndo();
+        QJsonArray arr = e.meta.value("cornerRadii").toArray();
+        while (arr.size() < n) arr.append(0.0);
+        arr[knee] = filletRadius_;
+        e.meta.insert(QStringLiteral("cornerRadii"), arr);
+        if (e.meta.contains("cornerChamfers")) {
+            QJsonArray c = e.meta.value("cornerChamfers").toArray();
+            if (knee < c.size()) { c[knee] = 0.0; e.meta.insert(QStringLiteral("cornerChamfers"), c); }
+        }
+        doc_->setDirty(true);
+        emit message(QStringLiteral("Fillet applied to the corner (radius %1)").arg(filletRadius_));
+    }
+}
+
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
 
@@ -3370,6 +3410,34 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     if (!hit) { emit message(QStringLiteral("Pick the first line.")); return; }
     pickIds_.push_back(*hit);
     pickPts_.push_back(p);
+
+    // DOUBLE POLYLINE: a SINGLE click edits the nearest knee (interior vertex)
+    // directly — apply/redefine its fillet radius or chamfer distance — so you don't
+    // pick both runs (and nothing is left marked orange waiting for a 2nd click).
+    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer)) {
+        if (Entity* dp = entityById(pickIds_.back());
+            dp && dp->type == EntityType::Polyline && dp->meta.value("double").toBool() &&
+            dp->points.size() >= 3) {
+            const int n = static_cast<int>(dp->points.size());
+            int knee = -1;
+            double bd = std::numeric_limits<double>::max();
+            for (int i = 1; i < n - 1; ++i) {
+                const double d = distance(p, dp->points[i]);
+                if (d < bd) { bd = d; knee = i; }
+            }
+            if (knee >= 0) {
+                const double gap = dp->meta.value("gap").toDouble(10.0);
+                const std::vector<Vec2> corner = {dp->points[knee - 1], dp->points[knee],
+                                                  dp->points[knee + 1]};
+                applyCornerModAt(*dp, knee, corner, gap);
+            }
+            pickIds_.clear();
+            pickPts_.clear();
+            emit changed();
+            return;
+        }
+    }
+
     if (pickIds_.size() < 2) {
         emit message(QStringLiteral("%1: pick the second line.").arg(toolLabel(tool_)));
         emit changed();
@@ -3384,7 +3452,7 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     // that vertex's per-corner radius. For a double polyline BOTH physical runs round
     // (renderer rounds the centreline at radius + gap/2), keeping the gap. Rect/
     // polygon are closed, so segments wrap and every vertex is filletable.
-    if (tool_ == ToolId::Fillet && l1 && l1 == l2 &&
+    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && l1 && l1 == l2 &&
         (l1->type == EntityType::Polyline || l1->type == EntityType::Rect ||
          l1->type == EntityType::Polygon) &&
         l1->points.size() >= 3) {
@@ -3413,17 +3481,7 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                 l1->meta.value("double").toBool() ? l1->meta.value("gap").toDouble(10.0) : 0.0;
             const std::vector<Vec2> corner = {l1->points[(knee - 1 + n) % n], l1->points[knee],
                                               l1->points[(knee + 1) % n]};
-            if (filletRadius_ > 0 && !filletRadiusFits(corner, filletRadius_ + gap / 2.0)) {
-                emit message(QStringLiteral("Fillet radius %1 is too big for that corner").arg(filletRadius_));
-            } else {
-                pushUndo();
-                QJsonArray arr = l1->meta.value("cornerRadii").toArray();
-                while (arr.size() < n) arr.append(0.0);
-                arr[knee] = filletRadius_;
-                l1->meta.insert(QStringLiteral("cornerRadii"), arr);
-                doc_->setDirty(true);
-                emit message(QStringLiteral("Fillet applied to the corner (radius %1)").arg(filletRadius_));
-            }
+            applyCornerModAt(*l1, knee, corner, gap);
         } else {
             emit message(QStringLiteral("Pick two segments that share a corner."));
         }
@@ -3436,7 +3494,7 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     // Fillet TWO connected DOUBLE LINES: if they share a common endpoint, merge them
     // into a single double polyline with a rounded knee at the connection (so both
     // physical runs round with a constant gap).
-    if (tool_ == ToolId::Fillet && l1 && l2 && l1 != l2 &&
+    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && l1 && l2 && l1 != l2 &&
         l1->type == EntityType::DoubleLine && l2->type == EntityType::DoubleLine) {
         const Vec2 e1[2] = {l1->a, l1->b};
         const Vec2 e2[2] = {l2->a, l2->b};
@@ -3456,8 +3514,15 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         const Vec2 free1 = e1[1 - bi], free2 = e2[1 - bj];
         const double gap = l1->meta.value("gap").toDouble(10.0);
         const std::vector<Vec2> corner = {free1, shared, free2};
-        if (filletRadius_ > 0 && !filletRadiusFits(corner, filletRadius_ + gap / 2.0)) {
-            emit message(QStringLiteral("Fillet radius %1 is too big for that corner").arg(filletRadius_));
+        const bool cham = tool_ == ToolId::Chamfer;
+        const double amt = cham ? chamferDist_ : filletRadius_;
+        const bool fits = cham ? chamferDistFits(corner, amt + gap / 2.0)
+                               : filletRadiusFits(corner, amt + gap / 2.0);
+        if (amt > 0 && !fits) {
+            emit message(QStringLiteral("%1 %2 is too big for that corner")
+                             .arg(cham ? QStringLiteral("Chamfer distance")
+                                       : QStringLiteral("Fillet radius"))
+                             .arg(amt));
             pickIds_.clear(); pickPts_.clear();
             return;
         }
@@ -3465,22 +3530,27 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         Entity merged;
         merged.type = EntityType::Polyline;
         merged.layer = l1->layer;
-        merged.color = l1->color;
+        merged.color = l1->color; // keep the picked lines' colour (never the pick mark)
+        merged.weight = l1->weight;
         merged.points = {free1, shared, free2};
         merged.meta.insert(QStringLiteral("double"), true);
         merged.meta.insert(QStringLiteral("gap"), gap);
         QJsonArray arr;
         arr.append(0.0);
-        arr.append(filletRadius_);
+        arr.append(amt);
         arr.append(0.0);
-        merged.meta.insert(QStringLiteral("cornerRadii"), arr);
+        merged.meta.insert(cham ? QStringLiteral("cornerChamfers") : QStringLiteral("cornerRadii"),
+                           arr);
         const QString id1 = pickIds_[0], id2 = pickIds_[1];
         auto& ents = doc_->entities();
         ents.erase(std::remove_if(ents.begin(), ents.end(),
                                   [&](const Entity& e) { return e.id == id1 || e.id == id2; }),
                    ents.end());
         addEntity(std::move(merged));
-        emit message(QStringLiteral("Filleted the double-line corner (radius %1)").arg(filletRadius_));
+        emit message(QStringLiteral("%1 the double-line corner (%2 %3)")
+                         .arg(cham ? QStringLiteral("Chamfered") : QStringLiteral("Filleted"),
+                              cham ? QStringLiteral("distance") : QStringLiteral("radius"))
+                         .arg(amt));
         pickIds_.clear();
         pickPts_.clear();
         emit changed();
@@ -3743,6 +3813,15 @@ void Editor::setColorsByLayer() {
 }
 
 void Editor::setSelectionMeta(const QString& key, const QString& value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionMetaNumber(const QString& key, double value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;
     pushUndo();

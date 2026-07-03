@@ -237,6 +237,71 @@ int run_editor_tests() {
               "fillet-2double: connected double lines merge into a filleted double polyline");
     }
 
+    // --- A SINGLE click on a double polyline edits the nearest knee directly (no
+    //     second pick), and re-clicking with a new radius redefines it.
+    {
+        Document d; d.entities().clear();
+        Entity dp; dp.id = "dp"; dp.type = EntityType::Polyline;
+        dp.points = {{0, 0}, {100, 0}, {100, 100}};
+        dp.meta.insert("double", true);
+        dp.meta.insert("gap", 10.0);
+        d.entities().push_back(dp);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(7.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier); // ONE click -> knee filleted
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dp") dd = &e;
+        const bool one = dd && near(dd->meta.value("cornerRadii").toArray()[1].toDouble(), 7.0);
+        ed.setFilletRadius(3.0);
+        ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier); // click again -> redefine
+        for (const auto& e : d.entities()) if (e.id == "dp") dd = &e;
+        check(one && dd && near(dd->meta.value("cornerRadii").toArray()[1].toDouble(), 3.0),
+              "fillet-dpoly-1click: single click on a double polyline edits/redefines the knee");
+    }
+
+    // --- Chamfer a CLOSED figure (rectangle): pick two adjacent edges -> that corner
+    //     gets a chamfer distance; renderer draws it via cornerChamfers.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "r"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}}; // CCW rect
+        d.entities().push_back(r);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setChamferDistance(10.0);
+        ed.setTool(ToolId::Chamfer);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);  // bottom edge (0)
+        ed.onPointerPress({100, 30}, Qt::LeftButton, Qt::NoModifier); // right edge (1) -> corner (100,0)
+        const Entity* rr = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "r") rr = &e;
+        const QJsonArray ch = rr ? rr->meta.value("cornerChamfers").toArray() : QJsonArray{};
+        check(rr && near(ch[1].toDouble(), 10.0),
+              "chamfer-rect: adjacent edges of a rectangle chamfer the shared corner");
+        // The rendered outline should gain a corner (straight cut) vs the 4-pt rect.
+        std::vector<double> radii(4, 0.0), chamfers(4, 0.0);
+        for (int i = 0; i < ch.size(); ++i) chamfers[i] = ch[i].toDouble();
+        const auto outline = filletChamferPolyline(rr->points, radii, chamfers, true);
+        check(outline.size() == rr->points.size() + 1,
+              "chamfer-rect: chamfered rectangle outline has one extra vertex");
+    }
+
+    // --- Chamfer a POLYGON corner likewise.
+    {
+        Document d; d.entities().clear();
+        Entity g; g.id = "g"; g.type = EntityType::Polygon;
+        g.points = {{0, 0}, {80, 0}, {80, 80}, {0, 80}};
+        d.entities().push_back(g);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setChamferDistance(12.0);
+        ed.setTool(ToolId::Chamfer);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({80, 40}, Qt::LeftButton, Qt::NoModifier); // corner (80,0) = vertex 1
+        const Entity* gg = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "g") gg = &e;
+        check(gg && near(gg->meta.value("cornerChamfers").toArray()[1].toDouble(), 12.0),
+              "chamfer-polygon: adjacent edges chamfer the shared polygon corner");
+    }
+
     // --- Fillet works clicking MID-line (not just near the far ends): the pick's
     //     SIDE of the corner is what matters, so a rounded knee is still produced.
     {

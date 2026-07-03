@@ -3859,6 +3859,15 @@ void MainWindow::refreshProperties() {
         if (e->type == EntityType::Circle || e->type == EntityType::Arc)
             addNum(QStringLiteral("Radius"), e->radius,
                    [this](double v) { editor_->setGeometryValue("Radius", v); });
+        // Double line / double polyline: the parallel spacing between the two runs.
+        const bool isDoubleLine = e->type == EntityType::DoubleLine;
+        const bool isDoublePoly =
+            e->type == EntityType::Polyline && e->meta.value(QStringLiteral("double")).toBool();
+        if (isDoubleLine || isDoublePoly)
+            addNum(QStringLiteral("Gap"), e->meta.value(QStringLiteral("gap")).toDouble(10.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("gap"), std::max(0.1, v));
+                   });
     } else {
         addRow(QStringLiteral("Center X"), QStringLiteral("0"));
         addRow(QStringLiteral("Center Y"), QStringLiteral("0"));

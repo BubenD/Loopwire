@@ -554,6 +554,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     if (radii[i] > 0.0) anyFillet = true;
                 }
             }
+            // Per-corner chamfer setbacks (mutually exclusive with a fillet per vertex).
+            std::vector<double> chamfers(e.points.size(), 0.0);
+            bool anyChamfer = false;
+            if (e.meta.contains("cornerChamfers")) {
+                const QJsonArray cArr = e.meta.value("cornerChamfers").toArray();
+                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfers.size()); ++i) {
+                    chamfers[i] = cArr[i].toDouble();
+                    if (chamfers[i] > 0.0) anyChamfer = true;
+                }
+            }
             const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) {
                 // Round the CENTERLINE first, THEN offset both sides. The offset of
@@ -570,8 +580,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 std::vector<double> centerRadii(radii.size(), 0.0);
                 for (size_t i = 0; i < radii.size(); ++i)
                     if (radii[i] > 0.0) centerRadii[i] = radii[i] + gap / 2.0;
+                // Chamfer the centerline too (offsetting a straight cut keeps the gap).
                 const std::vector<Vec2> center =
-                    anyFillet ? roundedPolylinePerCorner(e.points, centerRadii) : e.points;
+                    (anyFillet || anyChamfer)
+                        ? filletChamferPolyline(e.points, centerRadii, chamfers, false)
+                        : e.points;
                 std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
                 std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
                 // Line-start (ls): extend BOTH physical runs so they start on the
@@ -595,8 +608,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 std::vector<double> bulges;
                 for (const auto& v : bulgeArr) bulges.push_back(v.toDouble());
                 p.drawPolyline(toScreenPoly(expandBulgePolyline(e.points, bulges), vt));
-            } else if (e.type == EntityType::Polyline && anyFillet) {
-                p.drawPolyline(toScreenPoly(roundedPolylinePerCorner(e.points, radii), vt));
+            } else if (e.type == EntityType::Polyline && (anyFillet || anyChamfer)) {
+                p.drawPolyline(
+                    toScreenPoly(filletChamferPolyline(e.points, radii, chamfers, false), vt));
             } else {
                 p.drawPolyline(toScreenPoly(e.points, vt));
             }
@@ -620,17 +634,25 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Rect:
     case EntityType::Polygon:
         if (e.points.size() >= 2) {
-            // Per-corner fillets (set by the Fillet tool) round the closed outline.
-            if (e.meta.contains("cornerRadii")) {
-                const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
+            // Per-corner fillets / chamfers (set by the Fillet / Chamfer tool) shape
+            // the closed outline.
+            if (e.meta.contains("cornerRadii") || e.meta.contains("cornerChamfers")) {
                 std::vector<double> radii(e.points.size(), 0.0);
+                std::vector<double> chamfers(e.points.size(), 0.0);
                 bool any = false;
+                const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
                 for (int i = 0; i < rArr.size() && i < static_cast<int>(radii.size()); ++i) {
                     radii[i] = rArr[i].toDouble();
                     if (radii[i] > 0.0) any = true;
                 }
+                const QJsonArray cArr = e.meta.value("cornerChamfers").toArray();
+                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfers.size()); ++i) {
+                    chamfers[i] = cArr[i].toDouble();
+                    if (chamfers[i] > 0.0) any = true;
+                }
                 if (any) {
-                    p.drawPolygon(toScreenPoly(roundedPolygonPerCorner(e.points, radii), vt));
+                    p.drawPolygon(
+                        toScreenPoly(filletChamferPolyline(e.points, radii, chamfers, true), vt));
                     break;
                 }
             }

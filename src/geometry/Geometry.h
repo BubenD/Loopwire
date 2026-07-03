@@ -66,6 +66,27 @@ std::vector<Vec2> roundedPolygonPerCorner(const std::vector<Vec2>& pts,
                                           const std::vector<double>& radii,
                                           int arcSegments = 10);
 
+// Chamfer variants of the per-corner fillet functions: each corner with dists[i]>0
+// is replaced by a straight cut whose setback along BOTH neighbouring runs is
+// dists[i] (clamped to half the shorter run). Open (endpoints untouched) and closed
+// (every vertex, wrapping) forms mirror roundedPolyline*/roundedPolygonPerCorner.
+std::vector<Vec2> chamferedPolylinePerCorner(const std::vector<Vec2>& pts,
+                                             const std::vector<double>& dists);
+std::vector<Vec2> chamferedPolygonPerCorner(const std::vector<Vec2>& pts,
+                                            const std::vector<double>& dists);
+
+// True if `dist` fits (setback within half each run) at every interior corner.
+bool chamferDistFits(const std::vector<Vec2>& pts, double dist);
+
+// Apply per-corner fillet radii AND chamfer setbacks in a single pass over `pts`
+// (chamfer wins if both are set on a vertex). `closed` treats it as a wrapping loop
+// (rect/polygon); otherwise the endpoints are left untouched. This is the unified
+// path so a polyline/polygon can mix rounded and chamfered corners.
+std::vector<Vec2> filletChamferPolyline(const std::vector<Vec2>& pts,
+                                        const std::vector<double>& radii,
+                                        const std::vector<double>& chamfers, bool closed,
+                                        int arcSegments = 10);
+
 // Trace the smallest closed loop of edges that encloses `seed`, given a soup of
 // boundary segments (from any number of separate entities). The segments are split
 // at their mutual intersections, built into a planar graph, and the face containing

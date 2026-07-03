@@ -130,6 +130,7 @@ public:
     void setSelectionColor(const QString& hex); // empty => ByLayer
     void setSelectionWeight(double weight);      // 0 => ByLayer
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
+    void setSelectionMetaNumber(const QString& key, double value);   // gap, ...
     void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
     void setSelectionHatchMeta(const QString& key, const QJsonValue& value); // hatch pattern/angle/...
     void setSelectionDimMeta(const QString& key, const QJsonValue& value); // dimension props
@@ -341,6 +342,10 @@ private:
     // so dragging out to ~that distance is ~1x.
     double selectionRefLength(const std::vector<Entity*>& sel) const;
     void handlePickModifyPress(const Vec2& p);
+    // Apply the active corner modifier (Fillet radius or Chamfer distance) to vertex
+    // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
+    // (0 if single). Writes cornerRadii/cornerChamfers and clears the other on that knee.
+    void applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corner, double gap);
     void handlePlacementPress(const Vec2& p);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
