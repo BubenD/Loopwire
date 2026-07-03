@@ -481,7 +481,23 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     const QString txt = (ty == QLatin1String("arclength"))
                             ? QString::fromUtf8("\xE2\x8C\x92%1").arg(measure, 0, 'f', dec)
                             : QStringLiteral("%1").arg(measure, 0, 'f', dec);
-    drawWorldText(p, txtAt, txt, textH, vt.scale(), color, Qt::AlignHCenter);
+    // If the text was dragged off the dimension line, draw it there and connect it
+    // back to the line's midpoint with a dashed leader (AutoCAD-style).
+    if (e.meta.contains("textPosX")) {
+        const QPointF moved = vt.toScreen(
+            {e.meta.value("textPosX").toDouble(), e.meta.value("textPosY").toDouble()});
+        QPen dash(color);
+        dash.setCosmetic(true);
+        dash.setWidthF(1.0);
+        dash.setStyle(Qt::DashLine);
+        p.save();
+        p.setPen(dash);
+        p.drawLine(dimMid, moved);
+        p.restore();
+        drawWorldText(p, moved + QPointF(0, -2), txt, textH, vt.scale(), color, Qt::AlignHCenter);
+    } else {
+        drawWorldText(p, txtAt, txt, textH, vt.scale(), color, Qt::AlignHCenter);
+    }
 }
 
 } // namespace

@@ -343,6 +343,29 @@ int run_editor_tests() {
               "offset-rect: offsetting a rectangle outward grows it by the distance all round");
     }
 
+    // --- A dimension's moved text position (textPosX/Y meta) follows the dimension
+    //     when it is moved, so the dashed leader stays attached.
+    {
+        Document d; d.entities().clear();
+        Entity dim; dim.id = "dm"; dim.type = EntityType::Dimension;
+        dim.meta.insert("dimType", QStringLiteral("linear"));
+        dim.a = {0, 0}; dim.b = {100, 0};
+        dim.points = {{0, 0}, {100, 0}, {50, 20}};
+        dim.meta.insert("textPosX", 50.0);
+        dim.meta.insert("textPosY", 30.0);
+        d.entities().push_back(dim);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("dm");
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);  // base point
+        ed.onPointerPress({10, 5}, Qt::LeftButton, Qt::NoModifier); // -> delta (10,5)
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dm") dd = &e;
+        check(dd && near(dd->meta.value("textPosX").toDouble(), 60.0) &&
+                  near(dd->meta.value("textPosY").toDouble(), 35.0),
+              "dim-textmove: moved dimension text follows a Move (leader stays attached)");
+    }
+
     // --- Balloon: placements are auto-numbered circles carrying meta["balloon"].
     {
         Document d; d.entities().clear();

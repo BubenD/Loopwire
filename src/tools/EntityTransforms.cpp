@@ -44,6 +44,7 @@ void mapPoints(Entity& e, F fn) {
     };
     xf("lsRefAx", "lsRefAy");
     xf("lsRefBx", "lsRefBy");
+    xf("textPosX", "textPosY"); // moved dimension-text position follows the entity
     xf("cutStartAx", "cutStartAy");
     xf("cutStartBx", "cutStartBy");
     xf("cutEndAx", "cutEndAy");

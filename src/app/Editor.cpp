@@ -39,7 +39,8 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
-                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight };
+                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
+                      DimText };
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
 // the cursor: e.a = target - off.
@@ -112,6 +113,12 @@ std::vector<Grip> gripsOf(const Entity& e) {
             g.push_back({p2, GripRole::Vertex, 1});
             g.push_back({d1, GripRole::Vertex, 2});
             g.push_back({d2, GripRole::Vertex, 2});
+            // A grip on the dimension TEXT — drag it to reposition the measurement
+            // text; a dashed leader then connects it back to the dimension line.
+            Vec2 tpos = lerp(d1, d2, 0.5);
+            if (e.meta.contains("textPosX"))
+                tpos = {e.meta.value("textPosX").toDouble(), e.meta.value("textPosY").toDouble()};
+            g.push_back({tpos, GripRole::DimText, 0});
         } else {
             g.push_back({e.a, GripRole::LineA, 0});
             g.push_back({e.b, GripRole::LineB, 0});
@@ -1322,6 +1329,10 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Center: translateEntity(*e, delta); break;
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
         case GripRole::Move: translateEntity(*e, delta); break;
+        case GripRole::DimText: // reposition the dimension's measurement text
+            e->meta["textPosX"] = target.x;
+            e->meta["textPosY"] = target.y;
+            break;
         case GripRole::TextWidth: // drag the MTEXT container's right edge
             e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
             break;
