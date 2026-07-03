@@ -4525,6 +4525,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
+    // Fillet / Chamfer: MARK the lines picked so far (first line, then second) so
+    // it's clear which ones the operation will use.
+    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && !pickIds_.empty()) {
+        const QColor mark("#ffcf3f");
+        for (const QString& id : pickIds_)
+            for (const auto& e : doc_->entities())
+                if (e.id == id) { EntityRenderer::draw(p, e, *doc_, vt, mark); break; }
+    }
+
     // Trim/Extend fence line (AutoCAD-style): a bright dashed line the user drags
     // across objects. For Extend, also preview each crossed line extended to the
     // reference (ghost) so it's clear which ones can reach it.
