@@ -45,6 +45,7 @@ void mapPoints(Entity& e, F fn) {
     xf("lsRefAx", "lsRefAy");
     xf("lsRefBx", "lsRefBy");
     xf("textPosX", "textPosY"); // moved dimension-text position follows the entity
+    xf("leaderX", "leaderY");   // balloon leader arrow tip follows the entity
     xf("cutStartAx", "cutStartAy");
     xf("cutStartBx", "cutStartBy");
     xf("cutEndAx", "cutEndAy");
@@ -74,7 +75,7 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
     e.radiusY *= s;
     // Scale every length-valued meta so the shape scales uniformly: the double-line
     // gap, trim-cap radii, and the uniform corner radius.
-    for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius"})
+    for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius", "landing"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.

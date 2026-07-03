@@ -1530,6 +1530,15 @@ void Editor::handleDrawPress(const Vec2& p) {
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
         break;
+    case ToolId::Balloon:
+        // First click = the arrow tip (what it points at); second = balloon centre.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(draftPts_.size() < 2
+                         ? QStringLiteral("Balloon: click where the leader points")
+                         : QStringLiteral("Balloon: click the balloon location"));
+        if (draftPts_.size() == 2) finishDraw();
+        break;
     case ToolId::Dimension:
         handleDimensionPress(p);
         break;
@@ -2231,6 +2240,27 @@ void Editor::finishDraw() {
                 if (x.meta.value("revision").toBool()) ++idx;
             e.meta.insert("rev", QString(QChar('A' + std::min(idx, 25))));
         }
+        break;
+    }
+    case ToolId::Balloon: {
+        // A numbered callout with a leader: first point = arrow tip, second = centre.
+        // Stored as a Circle carrying meta["balloon"], the arrow tip (leaderX/Y) and an
+        // editable landing length. `a` == centre so the number is inline-editable.
+        if (draftPts_.size() < 2) return;
+        const Vec2 tip = draftPts_[0], c = draftPts_[1];
+        e.type = EntityType::Circle;
+        e.center = c;
+        e.a = c;
+        e.radius = 6.0;
+        int next = 0;
+        for (const auto& x : doc_->entities())
+            if (x.meta.value("balloon").toBool())
+                next = std::max(next, x.meta.value("text").toString().toInt());
+        e.meta.insert("balloon", true);
+        e.meta.insert("text", QString::number(next + 1));
+        e.meta.insert("leaderX", tip.x);
+        e.meta.insert("leaderY", tip.y);
+        e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
         break;
     }
     case ToolId::Table: {
@@ -4124,22 +4154,6 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("text", wireNet_.isEmpty() ? QStringLiteral("NET") : wireNet_);
         break;
-    case ToolId::Balloon: {
-        // A numbered callout balloon: a small circle with an auto-incrementing number.
-        // Stored as a Circle carrying meta["balloon"]; `a` == centre so the number can
-        // be re-edited inline (double-click) like a text object.
-        e.type = EntityType::Circle;
-        e.center = p;
-        e.a = p;
-        e.radius = 6.0;
-        int next = 0;
-        for (const auto& x : doc_->entities())
-            if (x.meta.value("balloon").toBool())
-                next = std::max(next, x.meta.value("text").toString().toInt());
-        e.meta.insert("balloon", true);
-        e.meta.insert("text", QString::number(next + 1));
-        break;
-    }
     default:
         return;
     }
@@ -4778,6 +4792,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& v : regularPolygonPoints(pts[0], pts[1], polygonSides_))
                 poly << vt.toScreen(v);
             p.drawPolygon(poly);
+        } else if (tool_ == ToolId::Balloon && pts.size() >= 2) {
+            // Preview the leader from the arrow tip to the cursor + the balloon circle.
+            p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
+            const QPointF cc = vt.toScreen(pts[1]);
+            const double rr = 6.0 * vt.scale();
+            p.drawEllipse(cc, rr, rr);
         } else if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
             // Closed boundary rubber-band with a faint fill preview.
             QPolygonF poly;

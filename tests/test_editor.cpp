@@ -391,21 +391,28 @@ int run_editor_tests() {
               "dim-textmove: moved dimension text follows a Move (leader stays attached)");
     }
 
-    // --- Balloon: placements are auto-numbered circles carrying meta["balloon"].
+    // --- Balloon: two clicks (arrow tip, then centre) make an auto-numbered circle
+    //     with a leader tip + editable landing length.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::Balloon);
-        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
-        ed.setTool(ToolId::Balloon); // returns to Select after placing, re-arm
-        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
-        int balloons = 0; QStringList nums;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // tip
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier); // centre -> balloon 1
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({60, 20}, Qt::LeftButton, Qt::NoModifier); // balloon 2
+        int balloons = 0; QStringList nums; const Entity* first = nullptr;
         for (const auto& e : d.entities())
             if (e.type == EntityType::Circle && e.meta.value("balloon").toBool()) {
                 ++balloons; nums << e.meta.value("text").toString();
+                if (!first) first = &e;
             }
         check(balloons == 2 && nums.contains("1") && nums.contains("2"),
-              "balloon: placements are auto-numbered circles");
+              "balloon: two-click placements are auto-numbered circles");
+        check(first && first->meta.contains("leaderX") &&
+                  first->meta.value("landing").toDouble() > 0.0,
+              "balloon: carries a leader arrow tip and an editable landing length");
     }
 
     // --- Note / Revision: rubber-band a rectangle that carries editable text; a

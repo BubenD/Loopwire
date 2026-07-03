@@ -4033,6 +4033,17 @@ void MainWindow::refreshProperties() {
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("gap"), std::max(0.1, v));
                    });
+        // Balloon callout: editable leader landing length + the number.
+        if (e->meta.value(QStringLiteral("balloon")).toBool()) {
+            addNum(QStringLiteral("Landing"), e->meta.value(QStringLiteral("landing")).toDouble(8.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("landing"), std::max(0.0, v));
+                   });
+            addCombo(QStringLiteral("Number"), {}, e->meta.value(QStringLiteral("text")).toString(),
+                     true, [this](const QString& t) {
+                         editor_->setSelectionMeta(QStringLiteral("text"), t);
+                     });
+        }
     } else {
         addRow(QStringLiteral("Center X"), QStringLiteral("0"));
         addRow(QStringLiteral("Center Y"), QStringLiteral("0"));

@@ -810,12 +810,33 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Circle: {
         const QPointF c = vt.toScreen(e.center);
         const double r = e.radius * vt.scale();
-        p.drawEllipse(c, r, r);
-        // Balloon callout: the number sits centred in the circle.
+        // Balloon callout: a leader with an arrow at the tip, a horizontal landing
+        // into the balloon, then the numbered circle.
         if (e.meta.value("balloon").toBool()) {
+            if (e.meta.contains("leaderX")) {
+                const Vec2 tip{e.meta.value("leaderX").toDouble(),
+                               e.meta.value("leaderY").toDouble()};
+                const double landing = e.meta.value("landing").toDouble(8.0);
+                const int sign = (tip.x <= e.center.x) ? -1 : 1; // landing runs toward the tip
+                const Vec2 edge{e.center.x + sign * e.radius, e.center.y};
+                const Vec2 outer{e.center.x + sign * (e.radius + landing), e.center.y};
+                const QPointF sEdge = vt.toScreen(edge), sOuter = vt.toScreen(outer);
+                const QPointF sTip = vt.toScreen(tip);
+                p.drawLine(sEdge, sOuter); // horizontal landing
+                p.drawLine(sOuter, sTip);  // leader line
+                QPointF d = sTip - sOuter;
+                const double L = std::hypot(d.x(), d.y());
+                if (L > 1e-6) {
+                    d /= L;
+                    drawArrowHead(p, sTip, d, color, std::clamp(3.3 * vt.scale(), 6.0, 26.0));
+                }
+            }
+            p.drawEllipse(c, r, r);
             const QString num = e.meta.value("text").toString();
             drawWorldText(p, QPointF(c.x(), c.y() + e.radius * vt.scale() * 0.5), num,
                           e.radius * 1.1, vt.scale(), color, Qt::AlignHCenter);
+        } else {
+            p.drawEllipse(c, r, r);
         }
         break;
     }
