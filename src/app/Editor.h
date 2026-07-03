@@ -323,6 +323,9 @@ private:
     void applyTrimFence(const Vec2& a, const Vec2& b);
     // Extend every line a fence line crosses to the reference boundary object.
     void applyExtendFence(const Vec2& a, const Vec2& b);
+    // Record the exact cut boundary (line or circle) at each end of a trimmed/
+    // extended DOUBLE entity so the renderer clips both physical runs flush to it.
+    void recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill
     void handleDimensionPress(const Vec2& p); // multi-mode dimension placement
 

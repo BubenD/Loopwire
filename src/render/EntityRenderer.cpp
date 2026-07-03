@@ -516,6 +516,13 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             extendRunStartToLine(run1, ra, rb);
             extendRunStartToLine(run2, ra, rb);
         }
+        // Trim caps: clip both physical lines onto the cut boundary (line or circle)
+        // so a trimmed double line ends flush with the reference, not a perpendicular
+        // cap that over/under-shoots it.
+        applyRunCut(run1, e, QStringLiteral("cutStart"), false);
+        applyRunCut(run2, e, QStringLiteral("cutStart"), false);
+        applyRunCut(run1, e, QStringLiteral("cutEnd"), true);
+        applyRunCut(run2, e, QStringLiteral("cutEnd"), true);
         p.drawLine(vt.toScreen(run1[0]), vt.toScreen(run1[1]));
         p.drawLine(vt.toScreen(run2[0]), vt.toScreen(run2[1]));
         break;

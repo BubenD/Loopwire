@@ -79,6 +79,11 @@ bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& ot
 bool extendLineTo(Entity& line, const Vec2& pick,
                   const std::vector<Entity>& others);
 
+// Extend a Line, DoubleLine (centreline), or Polyline (its end nearest `pick`) to
+// the first boundary in `others` it would reach (any boundary type; circles/arcs/
+// ellipses tessellated). Returns true if modified.
+bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& others);
+
 // Rectangular array: returns clones (excluding the original at row0/col0).
 std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
                               double dx, double dy);

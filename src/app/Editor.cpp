@@ -3183,36 +3183,8 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 if (auto x = segmentSegmentIntersection(a, b, cpts[i - 1], cpts[i])) return x;
             return std::nullopt;
         };
-        // Record the exact cut line at each end of a trimmed DOUBLE entity so the
-        // renderer clips both physical runs onto it (a diagonal cap flush with the
-        // cutting line) instead of a perpendicular cap that misses it.
         auto storeCutMeta = [&](Entity& ent, const QString& selfId) {
-            const std::vector<Vec2> pts = (ent.type == EntityType::DoubleLine)
-                                              ? std::vector<Vec2>{ent.a, ent.b}
-                                              : ent.points;
-            if (pts.size() < 2) return;
-            auto setEnd = [&](const QString& key, const Vec2& pt) {
-                for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
-                    ent.meta.remove(key + s);
-                // Prefer a CIRCLE cut (clip runs onto the true ring) when the cutter
-                // through this point is a circle/arc; otherwise a straight line cut.
-                if (auto cc = cutCircleThrough(pt, joints, selfId)) {
-                    ent.meta.insert(key, true);
-                    ent.meta.insert(key + "Kind", QStringLiteral("circle"));
-                    ent.meta.insert(key + "Cx", cc->first.x);
-                    ent.meta.insert(key + "Cy", cc->first.y);
-                    ent.meta.insert(key + "R", cc->second);
-                } else if (auto seg = cutSegmentThrough(pt, joints, selfId)) {
-                    ent.meta.insert(key, true);
-                    ent.meta.insert(key + "Kind", QStringLiteral("line"));
-                    ent.meta.insert(key + "Ax", seg->first.x);
-                    ent.meta.insert(key + "Ay", seg->first.y);
-                    ent.meta.insert(key + "Bx", seg->second.x);
-                    ent.meta.insert(key + "By", seg->second.y);
-                }
-            };
-            setEnd(QStringLiteral("cutStart"), pts.front());
-            setEnd(QStringLiteral("cutEnd"), pts.back());
+            recordCutMeta(ent, selfId, joints);
         };
         if (obj->type == EntityType::Line) {
             // Only objects the cut line crosses AND that meet the reference are trimmed.
@@ -3302,6 +3274,35 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     emit changed();
 }
 
+void Editor::recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints) {
+    // Only meaningful for a DOUBLE entity (its physical runs get clipped to the cut).
+    const std::vector<Vec2> pts =
+        (ent.type == EntityType::DoubleLine) ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
+    if (pts.size() < 2) return;
+    auto setEnd = [&](const QString& key, const Vec2& pt) {
+        for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
+            ent.meta.remove(key + s);
+        // Prefer a CIRCLE cut (clip runs onto the true ring) when the cutter through
+        // this point is a circle/arc; otherwise a straight line cut.
+        if (auto cc = cutCircleThrough(pt, joints, selfId)) {
+            ent.meta.insert(key, true);
+            ent.meta.insert(key + "Kind", QStringLiteral("circle"));
+            ent.meta.insert(key + "Cx", cc->first.x);
+            ent.meta.insert(key + "Cy", cc->first.y);
+            ent.meta.insert(key + "R", cc->second);
+        } else if (auto seg = cutSegmentThrough(pt, joints, selfId)) {
+            ent.meta.insert(key, true);
+            ent.meta.insert(key + "Kind", QStringLiteral("line"));
+            ent.meta.insert(key + "Ax", seg->first.x);
+            ent.meta.insert(key + "Ay", seg->first.y);
+            ent.meta.insert(key + "Bx", seg->second.x);
+            ent.meta.insert(key + "By", seg->second.y);
+        }
+    };
+    setEnd(QStringLiteral("cutStart"), pts.front());
+    setEnd(QStringLiteral("cutEnd"), pts.back());
+}
+
 void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
     if (!doc_) return;
     std::vector<Entity> refs;
@@ -3309,18 +3310,33 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
         if (const Entity* r = entityById(id)) refs.push_back(*r);
     if (refs.empty()) { emit message(QStringLiteral("Select the boundary object first.")); return; }
 
+    const std::vector<Entity> joints = doc_->entities();
     pushUndo();
     int count = 0;
     std::vector<QString> ids;
     for (const auto& e : doc_->entities()) ids.push_back(e.id);
     for (const QString& id : ids) {
         if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end()) continue;
-        Entity* line = entityById(id);
-        if (!line || line->type != EntityType::Line) continue;
-        // The line the fence crosses is extended (its fence-side end) to the reference.
-        auto x = segmentSegmentIntersection(a, b, line->a, line->b);
+        Entity* obj = entityById(id);
+        if (!obj) continue;
+        const bool line = obj->type == EntityType::Line;
+        const bool dbl = obj->type == EntityType::DoubleLine;
+        const bool poly = obj->type == EntityType::Polyline;
+        if (!line && !dbl && !poly) continue;
+        // The fence must cross the object's centreline.
+        std::optional<Vec2> x;
+        if (poly) {
+            for (size_t i = 1; i < obj->points.size() && !x; ++i)
+                x = segmentSegmentIntersection(a, b, obj->points[i - 1], obj->points[i]);
+        } else {
+            x = segmentSegmentIntersection(a, b, obj->a, obj->b);
+        }
         if (!x) continue;
-        if (extendLineTo(*line, *x, refs)) ++count;
+        if (extendEntityTo(*obj, *x, refs)) {
+            ++count;
+            if (dbl || (poly && obj->meta.value("double").toBool()))
+                recordCutMeta(*obj, obj->id, joints); // clip physical runs to the reference
+        }
     }
     if (count == 0) {
         undo();
@@ -4519,17 +4535,24 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             QPen gp(QColor(120, 200, 255, 200)); // ghost of the extended result
             gp.setCosmetic(true);
             gp.setWidthF(1.4);
+            p.setPen(gp);
             for (const auto& e : doc_->entities()) {
-                if (e.type != EntityType::Line) continue;
+                const bool ln = e.type == EntityType::Line;
+                const bool dl = e.type == EntityType::DoubleLine;
+                const bool pl = e.type == EntityType::Polyline;
+                if (!ln && !dl && !pl) continue;
                 if (std::find(trimRefIds_.begin(), trimRefIds_.end(), e.id) != trimRefIds_.end())
                     continue;
-                if (!segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b)) continue;
-                Entity ghost = e;
-                if (extendLineTo(ghost, *segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b),
-                                 refs)) {
-                    p.setPen(gp);
-                    p.drawLine(vt.toScreen(ghost.a), vt.toScreen(ghost.b));
+                std::optional<Vec2> x;
+                if (pl) {
+                    for (size_t i = 1; i < e.points.size() && !x; ++i)
+                        x = segmentSegmentIntersection(trimFenceStart_, cursor_, e.points[i - 1], e.points[i]);
+                } else {
+                    x = segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b);
                 }
+                if (!x) continue;
+                Entity ghost = e;
+                if (extendEntityTo(ghost, *x, refs)) EntityRenderer::draw(p, ghost, *doc_, vt, gp.color());
             }
         }
         QPen fp(QColor("#19ff7e"));

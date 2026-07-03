@@ -623,6 +623,58 @@ bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& oth
     return true;
 }
 
+namespace {
+// First boundary point reached by the ray from `fixed` through `moving` (beyond
+// `moving`). All boundary types are reduced to segments (curves tessellated).
+std::optional<Vec2> rayToBoundary(const Vec2& fixed, const Vec2& moving,
+                                  const std::vector<Entity>& others, const QString& selfId) {
+    const Vec2 dir = (moving - fixed).normalized();
+    if (dir.lengthSq() < 1e-12) return std::nullopt;
+    double bestT = std::numeric_limits<double>::max();
+    Vec2 bestPt;
+    bool found = false;
+    auto tryBoundary = [&](const Vec2& p1, const Vec2& p2) {
+        auto x = lineLineIntersection(fixed, moving, p1, p2);
+        if (!x) return;
+        const double t = dot(*x - moving, dir);
+        if (t <= 1e-9) return; // must be beyond `moving`
+        const auto c = closestPointOnSegment(*x, p1, p2);
+        if (c.distance > 1e-6) return; // not on the boundary segment
+        if (t < bestT) { bestT = t; bestPt = *x; found = true; }
+    };
+    for (const auto& e : others) {
+        if (!selfId.isEmpty() && e.id == selfId) continue;
+        forEachCutSegment(e, tryBoundary);
+    }
+    return found ? std::optional<Vec2>(bestPt) : std::nullopt;
+}
+} // namespace
+
+bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& others) {
+    if (e.type == EntityType::Line || e.type == EntityType::DoubleLine) {
+        const bool extendA = distance(pick, e.a) < distance(pick, e.b);
+        const Vec2 fixed = extendA ? e.b : e.a;
+        const Vec2 moving = extendA ? e.a : e.b;
+        auto r = rayToBoundary(fixed, moving, others, e.id);
+        if (!r) return false;
+        if (extendA) e.a = *r; else e.b = *r;
+        return true;
+    }
+    if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
+        e.type == EntityType::Wire) {
+        const int n = static_cast<int>(e.points.size());
+        if (n < 2) return false;
+        const bool front = distance(pick, e.points.front()) < distance(pick, e.points.back());
+        const Vec2 moving = front ? e.points.front() : e.points.back();
+        const Vec2 fixed = front ? e.points[1] : e.points[n - 2];
+        auto r = rayToBoundary(fixed, moving, others, e.id);
+        if (!r) return false;
+        if (front) e.points.front() = *r; else e.points.back() = *r;
+        return true;
+    }
+    return false;
+}
+
 std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
                               double dx, double dy) {
     std::vector<Entity> out;
