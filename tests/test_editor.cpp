@@ -302,6 +302,46 @@ int run_editor_tests() {
               "chamfer-polygon-points: polygon corner chamfered between the clicked points");
     }
 
+    // --- Scale by a TYPED factor (no size click): 2 doubles about the selection
+    //     centre; the shape's bbox diagonal grows 2x.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "sc"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}};
+        d.entities().push_back(r);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("sc");
+        ed.setTool(ToolId::Scale);
+        const bool consumed = ed.acceptCommandInput("2"); // typed scale factor
+        const Entity* rr = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "sc") rr = &e;
+        const Bounds b = rr ? rr->bounds() : Bounds{};
+        check(consumed && rr && near(b.width(), 80.0) && near(b.height(), 40.0),
+              "scale-typed: typing a scale factor scales the selection about its centre");
+    }
+
+    // --- visibleWall clips a marked wall past an existing chamfer (no stale sharp
+    //     stub): a chamfered rect corner shortens the two adjoining walls.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "vw"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+        QJsonArray in, out;
+        in.append(0.0); in.append(20.0); in.append(0.0); in.append(0.0);   // vertex 1 chamfer in
+        out.append(0.0); out.append(30.0); out.append(0.0); out.append(0.0); // vertex 1 chamfer out
+        r.meta.insert("cornerChamfers", in);
+        r.meta.insert("cornerChamfers2", out);
+        d.entities().push_back(r);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        // Edge 0 (bottom, verts 0->1): end near vertex 1 is clipped by 20 (in) -> ends at (80,0).
+        const auto w0 = ed.visibleWall(d.entities()[0], 0);
+        // Edge 1 (right, verts 1->2): start near vertex 1 clipped by 30 (out) -> starts at (100,30).
+        const auto w1 = ed.visibleWall(d.entities()[0], 1);
+        check(near(w0.second.x, 80.0) && near(w0.second.y, 0.0) &&
+                  near(w1.first.x, 100.0) && near(w1.first.y, 30.0),
+              "visiblewall: marked wall is clipped to the chamfered corner, not the sharp vertex");
+    }
+
     // --- Fillet works clicking MID-line (not just near the far ends): the pick's
     //     SIDE of the corner is what matters, so a rounded knee is still produced.
     {

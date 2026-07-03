@@ -2678,6 +2678,39 @@ bool Editor::acceptCommandInput(const QString& text) {
         return true;
     }
 
+    // Scale: type a scale factor instead of picking a size. 2 = double, 0.5 = half.
+    // The base point is the one already picked, else the selection's bounding centre.
+    if (tool_ == ToolId::Scale && !t.contains(',')) {
+        bool ok = false;
+        const double f = t.toDouble(&ok);
+        if (ok && f > 0) {
+            auto sel = selectedEntities();
+            if (!sel.empty()) {
+                Vec2 base;
+                if (!modifyPts_.empty()) {
+                    base = modifyPts_[0];
+                } else {
+                    Bounds b;
+                    for (const Entity* e : sel) {
+                        const Bounds eb = e->bounds();
+                        if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+                    }
+                    base = b.valid ? b.center() : Vec2{0, 0};
+                }
+                pushUndo();
+                for (Entity* e : sel) scaleEntity(*e, base, std::max(1e-4, f));
+                modifyPts_.clear();
+                doc_->setDirty(true);
+                emit changed();
+                emit message(QStringLiteral("Scaled by %1").arg(f));
+                setTool(ToolId::Select);
+            }
+        } else {
+            emit message(QStringLiteral("Enter a positive scale factor (e.g. 2 or 0.5)"));
+        }
+        return true;
+    }
+
     // Polygon: a whole number typed before the centre is placed sets the side count.
     if (tool_ == ToolId::Polygon && draftPts_.empty() && !t.contains(',')) {
         bool ok = false;
@@ -3034,7 +3067,8 @@ void Editor::handleModifyPress(const Vec2& p) {
         emit message(tool_ == ToolId::Rotate
                          ? QStringLiteral("Rotate: pick the base point, then click to set the angle")
                      : tool_ == ToolId::Scale
-                         ? QStringLiteral("Scale: pick the base point, then click to set the size")
+                         ? QStringLiteral("Scale: pick the base point then click the size, or type "
+                                          "a scale factor (e.g. 2, 0.5)")
                          : QStringLiteral("%1: pick the destination").arg(toolLabel(tool_)));
         emit changed();
         return;
@@ -3400,6 +3434,45 @@ void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corn
         doc_->setDirty(true);
         emit message(QStringLiteral("Fillet applied to the corner (radius %1)").arg(filletRadius_));
     }
+}
+
+std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {
+    const int n = static_cast<int>(e.points.size());
+    if (n < 2) return {e.points.empty() ? Vec2{} : e.points[0], e.points.empty() ? Vec2{} : e.points[0]};
+    const bool closed = e.type == EntityType::Rect || e.type == EntityType::Polygon;
+    Vec2 a = e.points[seg], b = e.points[(seg + 1) % n];
+    const Vec2 ab = (b - a).normalized();
+    const QJsonArray radii = e.meta.value("cornerRadii").toArray();
+    const QJsonArray chIn = e.meta.value("cornerChamfers").toArray();
+    const QJsonArray chOut = e.meta.value("cornerChamfers2").toArray();
+    // How far the drawn edge starts away from vertex v; `outEdge` = this edge leaves v
+    // (uses the chamfer "out" setback), otherwise it arrives at v (chamfer "in").
+    auto setbackAt = [&](int v, bool outEdge) -> double {
+        if (!closed && (v == 0 || v == n - 1)) return 0.0; // open ends: no corner
+        const auto val = [&](const QJsonArray& arr) {
+            return v < arr.size() ? arr[v].toDouble() : 0.0;
+        };
+        const double cOut = val(chOut.isEmpty() ? chIn : chOut);
+        const double cIn = val(chIn);
+        const double cham = outEdge ? cOut : cIn;
+        if (cham > 0.0) return cham;
+        const double r = val(radii);
+        if (r > 0.0) {
+            const Vec2 p0 = e.points[(v - 1 + n) % n], p1 = e.points[v], p2 = e.points[(v + 1) % n];
+            const double cosT = std::clamp(dot((p0 - p1).normalized(), (p2 - p1).normalized()), -1.0, 1.0);
+            const double theta = std::acos(cosT);
+            if (theta > 1e-3 && theta < 3.14159265 - 1e-3) {
+                double tset = r / std::tan(theta / 2.0);
+                tset = std::min(tset, 0.5 * std::min(distance(p0, p1), distance(p1, p2)));
+                return tset;
+            }
+        }
+        return 0.0;
+    };
+    const double edgeLen = distance(a, b);
+    const double sA = std::min(setbackAt(seg, true), edgeLen);
+    const double sB = std::min(setbackAt((seg + 1) % n, false), edgeLen);
+    return {a + ab * sA, b - ab * sB};
 }
 
 void Editor::handlePickModifyPress(const Vec2& p) {
@@ -4791,7 +4864,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                         closestPointOnSegment(pk, e->points[i], e->points[(i + 1) % n]).distance;
                     if (d < bd) { bd = d; seg = i; }
                 }
-                const Vec2 a = e->points[seg], b = e->points[(seg + 1) % n];
+                // Clip the marked wall to the DRAWN outline (past fillets/chamfers) so a
+                // re-edit never shows the old sharp-corner stub of a modified corner.
+                const auto [a, b] = visibleWall(*e, seg);
                 if (e->meta.value("double").toBool()) { // mark both physical runs of the wall
                     const Vec2 off = (b - a).normalized().perp() * (e->meta.value("gap").toDouble(10.0) / 2.0);
                     p.drawLine(vt.toScreen(a + off), vt.toScreen(b + off));

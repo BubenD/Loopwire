@@ -115,6 +115,10 @@ public:
     // Edit actions.
     void selectAll();
     void selectById(const QString& id, bool additive = false);
+    // Endpoints of edge `seg` of a polyline/rect/polygon AS DRAWN — clipped inward at
+    // each end by any existing fillet/chamfer setback, so a highlighted "wall" matches
+    // the visible (already-modified) outline instead of overshooting to a sharp vertex.
+    std::pair<Vec2, Vec2> visibleWall(const Entity& e, int seg) const;
     void clearSelection();
     void deleteSelected();
 
