@@ -813,22 +813,37 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Balloon callout: a leader with an arrow at the tip, a horizontal landing
         // into the balloon, then the numbered circle.
         if (e.meta.value("balloon").toBool()) {
-            if (e.meta.contains("leaderX")) {
-                const Vec2 tip{e.meta.value("leaderX").toDouble(),
-                               e.meta.value("leaderY").toDouble()};
+            // Collect every leader tip (array form, or the legacy single leaderX/Y).
+            std::vector<Vec2> tips;
+            if (e.meta.contains("leaders")) {
+                for (const auto v : e.meta.value("leaders").toArray()) {
+                    const QJsonArray a = v.toArray();
+                    if (a.size() >= 2) tips.push_back({a[0].toDouble(), a[1].toDouble()});
+                }
+            } else if (e.meta.contains("leaderX")) {
+                tips.push_back({e.meta.value("leaderX").toDouble(),
+                                e.meta.value("leaderY").toDouble()});
+            }
+            if (!tips.empty()) {
                 const double landing = e.meta.value("landing").toDouble(8.0);
-                const int sign = (tip.x <= e.center.x) ? -1 : 1; // landing runs toward the tip
+                // The shared landing runs toward the side most tips are on.
+                double avgX = 0;
+                for (const auto& t : tips) avgX += t.x;
+                avgX /= tips.size();
+                const int sign = (avgX <= e.center.x) ? -1 : 1;
                 const Vec2 edge{e.center.x + sign * e.radius, e.center.y};
                 const Vec2 outer{e.center.x + sign * (e.radius + landing), e.center.y};
                 const QPointF sEdge = vt.toScreen(edge), sOuter = vt.toScreen(outer);
-                const QPointF sTip = vt.toScreen(tip);
-                p.drawLine(sEdge, sOuter); // horizontal landing
-                p.drawLine(sOuter, sTip);  // leader line
-                QPointF d = sTip - sOuter;
-                const double L = std::hypot(d.x(), d.y());
-                if (L > 1e-6) {
-                    d /= L;
-                    drawArrowHead(p, sTip, d, color, std::clamp(3.3 * vt.scale(), 6.0, 26.0));
+                p.drawLine(sEdge, sOuter); // one horizontal landing for the balloon
+                for (const Vec2& tip : tips) {
+                    const QPointF sTip = vt.toScreen(tip);
+                    p.drawLine(sOuter, sTip); // a leader line from the landing to each tip
+                    QPointF d = sTip - sOuter;
+                    const double L = std::hypot(d.x(), d.y());
+                    if (L > 1e-6) {
+                        d /= L;
+                        drawArrowHead(p, sTip, d, color, std::clamp(3.3 * vt.scale(), 6.0, 26.0));
+                    }
                 }
             }
             p.drawEllipse(c, r, r);

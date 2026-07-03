@@ -179,6 +179,11 @@ public:
     void arraySelected(int rows, int cols, double dx, double dy);
     void explodeSelected();    // break compound objects into their drawn primitives
     void purgeUnused();        // AutoCAD PURGE: drop empty layers + stray/degenerate objects
+    // Balloon multileader ops (act on the selected balloons).
+    void addLeaderToSelection();     // add a leader to the selected balloon
+    void removeLeaderFromSelection();// remove the last leader of the selected balloon
+    void alignBalloons();            // line the selected balloons up, evenly spaced
+    void collectBalloons();          // pack the selected balloons into a touching row
     void repeatLastTool();
     ToolId lastTool() const { return lastTool_; }     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }

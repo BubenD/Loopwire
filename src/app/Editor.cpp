@@ -40,7 +40,35 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
-                      DimText };
+                      DimText, LeaderTip };
+
+// A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
+// (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
+inline std::vector<Vec2> balloonLeaders(const Entity& e) {
+    std::vector<Vec2> out;
+    if (e.meta.contains(QStringLiteral("leaders"))) {
+        for (const auto v : e.meta.value(QStringLiteral("leaders")).toArray()) {
+            const QJsonArray a = v.toArray();
+            if (a.size() >= 2) out.push_back({a[0].toDouble(), a[1].toDouble()});
+        }
+    } else if (e.meta.contains(QStringLiteral("leaderX"))) {
+        out.push_back({e.meta.value(QStringLiteral("leaderX")).toDouble(),
+                       e.meta.value(QStringLiteral("leaderY")).toDouble()});
+    }
+    return out;
+}
+inline void setBalloonLeaders(Entity& e, const std::vector<Vec2>& tips) {
+    QJsonArray arr;
+    for (const auto& t : tips) {
+        QJsonArray p;
+        p.append(t.x);
+        p.append(t.y);
+        arr.append(p);
+    }
+    e.meta.insert(QStringLiteral("leaders"), arr);
+    e.meta.remove(QStringLiteral("leaderX")); // migrated to the array form
+    e.meta.remove(QStringLiteral("leaderY"));
+}
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
 // the cursor: e.a = target - off.
@@ -216,6 +244,16 @@ std::vector<Grip> gripsOf(const Entity& e) {
         g.push_back({{e.center.x - e.radius, e.center.y}, GripRole::Radius, 0});
         g.push_back({{e.center.x, e.center.y + e.radius}, GripRole::Radius, 0});
         g.push_back({{e.center.x, e.center.y - e.radius}, GripRole::Radius, 0});
+        // Balloon: a grip on each leader arrow tip (drag to reposition; it stays
+        // attached to the balloon). Radius grips are dropped for balloons — the
+        // circle is a fixed callout size, so only its centre + leader tips move.
+        if (e.meta.value("balloon").toBool()) {
+            g.clear();
+            g.push_back({e.center, GripRole::Center, 0});
+            const auto tips = balloonLeaders(e);
+            for (int i = 0; i < static_cast<int>(tips.size()); ++i)
+                g.push_back({tips[i], GripRole::LeaderTip, i});
+        }
         break;
     case EntityType::Arc: {
         // Center + the two endpoints + the midpoint of the arc.
@@ -562,6 +600,42 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints);
 
 void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods) {
     const bool shift = mods & Qt::ShiftModifier;
+    const bool ctrl = mods & Qt::ControlModifier;
+
+    // Ctrl+click balloon leaders (AutoCAD Add/Remove Leader gestures):
+    //  - near an existing arrow tip -> remove that leader (if the balloon has >1);
+    //  - otherwise on the balloon circle -> add a new leader (drag its arrow to place).
+    if (ctrl) {
+        const double tol = worldTolerance() * 2.0;
+        for (auto& e : doc_->entities()) {
+            if (!e.meta.value("balloon").toBool()) continue;
+            auto tips = balloonLeaders(e);
+            for (int i = 0; i < static_cast<int>(tips.size()); ++i)
+                if (distance(p, tips[i]) < tol && tips.size() > 1) {
+                    pushUndo();
+                    tips.erase(tips.begin() + i);
+                    setBalloonLeaders(e, tips);
+                    doc_->setDirty(true);
+                    emit changed();
+                    emit message(QStringLiteral("Leader removed"));
+                    return;
+                }
+        }
+        if (auto hit = hitTest(p))
+            if (Entity* e = entityById(*hit); e && e->meta.value("balloon").toBool()) {
+                pushUndo();
+                auto tips = balloonLeaders(*e);
+                tips.push_back({e->center.x + e->radius + 20.0, e->center.y + 8.0});
+                setBalloonLeaders(*e, tips);
+                selected_ = {*hit};
+                emit selectionChanged();
+                doc_->setDirty(true);
+                emit changed();
+                emit message(QStringLiteral(
+                    "Leader added — drag its arrow to position (Ctrl+click an arrow to remove)"));
+                return;
+            }
+    }
 
     // (a) A grabbed joint is following the cursor: this click places it.
     if (editing_ && gripGrab_) {
@@ -1333,6 +1407,14 @@ void Editor::applyEditDrag(const Vec2& target) {
             e->meta["textPosX"] = target.x;
             e->meta["textPosY"] = target.y;
             break;
+        case GripRole::LeaderTip: { // move one balloon leader's arrow tip
+            auto tips = balloonLeaders(*e);
+            if (index >= 0 && index < static_cast<int>(tips.size())) {
+                tips[index] = target;
+                setBalloonLeaders(*e, tips);
+            }
+            break;
+        }
         case GripRole::TextWidth: // drag the MTEXT container's right edge
             e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
             break;
@@ -2258,9 +2340,8 @@ void Editor::finishDraw() {
                 next = std::max(next, x.meta.value("text").toString().toInt());
         e.meta.insert("balloon", true);
         e.meta.insert("text", QString::number(next + 1));
-        e.meta.insert("leaderX", tip.x);
-        e.meta.insert("leaderY", tip.y);
         e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
+        setBalloonLeaders(e, {tip});   // one leader to start; Ctrl+click adds more
         break;
     }
     case ToolId::Table: {
@@ -4127,6 +4208,85 @@ void Editor::applyTableCellEdit(const QString& id, int cell, const QString& text
         doc_->setDirty(true);
         emit changed();
     }
+}
+
+void Editor::addLeaderToSelection() {
+    Entity* b = nullptr;
+    for (Entity* e : selectedEntities())
+        if (e->meta.value("balloon").toBool()) { b = e; break; }
+    if (!b) { emit message(QStringLiteral("Select a balloon, then Add Leader.")); return; }
+    pushUndo();
+    auto tips = balloonLeaders(*b);
+    tips.push_back({b->center.x + b->radius + 20.0, b->center.y + 8.0 * (tips.size() + 1)});
+    setBalloonLeaders(*b, tips);
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Leader added — drag its arrow to position"));
+}
+
+void Editor::removeLeaderFromSelection() {
+    Entity* b = nullptr;
+    for (Entity* e : selectedEntities())
+        if (e->meta.value("balloon").toBool()) { b = e; break; }
+    if (!b) { emit message(QStringLiteral("Select a balloon, then Remove Leader.")); return; }
+    auto tips = balloonLeaders(*b);
+    if (tips.size() <= 1) { emit message(QStringLiteral("A balloon keeps at least one leader.")); return; }
+    pushUndo();
+    tips.pop_back();
+    setBalloonLeaders(*b, tips);
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Leader removed"));
+}
+
+void Editor::alignBalloons() {
+    std::vector<Entity*> bs;
+    for (Entity* e : selectedEntities())
+        if (e->meta.value("balloon").toBool()) bs.push_back(e);
+    if (bs.size() < 2) { emit message(QStringLiteral("Select two or more balloons to align.")); return; }
+    // Line them up on one axis (whichever they're more spread along) at the average
+    // of the other coordinate, evenly spaced between the extremes, keeping order.
+    double minX = 1e18, maxX = -1e18, minY = 1e18, maxY = -1e18, sumX = 0, sumY = 0;
+    for (Entity* e : bs) {
+        minX = std::min(minX, e->center.x); maxX = std::max(maxX, e->center.x);
+        minY = std::min(minY, e->center.y); maxY = std::max(maxY, e->center.y);
+        sumX += e->center.x; sumY += e->center.y;
+    }
+    const bool horiz = (maxX - minX) >= (maxY - minY);
+    std::sort(bs.begin(), bs.end(), [&](const Entity* a, const Entity* b) {
+        return horiz ? a->center.x < b->center.x : a->center.y < b->center.y;
+    });
+    pushUndo();
+    const int n = static_cast<int>(bs.size());
+    for (int i = 0; i < n; ++i) {
+        Vec2 c;
+        if (horiz) c = {minX + (maxX - minX) * i / (n - 1), sumY / n};
+        else c = {sumX / n, minY + (maxY - minY) * i / (n - 1)};
+        translateEntity(*bs[i], c - bs[i]->center);
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Aligned %1 balloons").arg(n));
+}
+
+void Editor::collectBalloons() {
+    std::vector<Entity*> bs;
+    for (Entity* e : selectedEntities())
+        if (e->meta.value("balloon").toBool()) bs.push_back(e);
+    if (bs.size() < 2) { emit message(QStringLiteral("Select two or more balloons to collect.")); return; }
+    // Pack them into a touching horizontal row starting at the left-most balloon.
+    std::sort(bs.begin(), bs.end(),
+              [](const Entity* a, const Entity* b) { return a->center.x < b->center.x; });
+    pushUndo();
+    const Vec2 start = bs.front()->center;
+    double x = start.x;
+    for (Entity* e : bs) {
+        translateEntity(*e, Vec2{x, start.y} - e->center);
+        x += e->radius * 2.0; // adjacent, touching
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Collected %1 balloons into a row").arg(bs.size()));
 }
 
 // ---- Harness placement -----------------------------------------------------

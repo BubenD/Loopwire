@@ -410,9 +410,53 @@ int run_editor_tests() {
             }
         check(balloons == 2 && nums.contains("1") && nums.contains("2"),
               "balloon: two-click placements are auto-numbered circles");
-        check(first && first->meta.contains("leaderX") &&
+        check(first && first->meta.value("leaders").toArray().size() == 1 &&
                   first->meta.value("landing").toDouble() > 0.0,
               "balloon: carries a leader arrow tip and an editable landing length");
+    }
+
+    // --- Multileader: Add Leader appends a second arrow to a balloon; Remove Leader
+    //     drops one; a balloon keeps at least one.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* b = nullptr;
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b = &e;
+        ed.selectById(b->id);
+        ed.addLeaderToSelection();
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b = &e;
+        check(b && b->meta.value("leaders").toArray().size() == 2,
+              "multileader: Add Leader appends a second leader");
+        ed.removeLeaderFromSelection();
+        ed.removeLeaderFromSelection(); // second call must NOT drop the last one
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b = &e;
+        check(b && b->meta.value("leaders").toArray().size() == 1,
+              "multileader: Remove Leader keeps at least one leader");
+    }
+
+    // --- Align lines selected balloons up evenly on their major axis.
+    {
+        Document d; d.entities().clear();
+        auto mkBalloon = [&](const QString& id, Vec2 c) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QStringLiteral("1"));
+            QJsonArray leaders; QJsonArray t; t.append(c.x - 20); t.append(c.y); leaders.append(t);
+            e.meta.insert("leaders", leaders);
+            d.entities().push_back(e);
+        };
+        mkBalloon("a", {0, 0}); mkBalloon("b", {50, 8}); mkBalloon("c", {100, -5});
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("a"); ed.selectById("b", true); ed.selectById("c", true);
+        ed.alignBalloons();
+        double y0 = 0; bool sameY = true;
+        for (const auto& e : d.entities()) {
+            if (e.id == "a") y0 = e.center.y;
+            if (e.meta.value("balloon").toBool() && std::abs(e.center.y - y0) > 1e-6) sameY = false;
+        }
+        check(sameY, "align: balloons line up on a common axis");
     }
 
     // --- Note / Revision: rubber-band a rectangle that carries editable text; a

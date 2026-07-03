@@ -45,7 +45,21 @@ void mapPoints(Entity& e, F fn) {
     xf("lsRefAx", "lsRefAy");
     xf("lsRefBx", "lsRefBy");
     xf("textPosX", "textPosY"); // moved dimension-text position follows the entity
-    xf("leaderX", "leaderY");   // balloon leader arrow tip follows the entity
+    xf("leaderX", "leaderY");   // legacy single balloon leader tip follows the entity
+    // Every balloon leader arrow tip (array form) follows the entity too.
+    if (e.meta.contains(QLatin1String("leaders"))) {
+        QJsonArray arr = e.meta.value(QLatin1String("leaders")).toArray();
+        for (int i = 0; i < arr.size(); ++i) {
+            const QJsonArray a = arr[i].toArray();
+            if (a.size() < 2) continue;
+            const Vec2 q = fn({a[0].toDouble(), a[1].toDouble()});
+            QJsonArray np;
+            np.append(q.x);
+            np.append(q.y);
+            arr[i] = np;
+        }
+        e.meta.insert(QLatin1String("leaders"), arr);
+    }
     xf("cutStartAx", "cutStartAy");
     xf("cutStartBx", "cutStartBy");
     xf("cutEndAx", "cutEndAy");

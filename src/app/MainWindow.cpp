@@ -1857,7 +1857,38 @@ void MainWindow::buildRibbon() {
             auto* ch = new QHBoxLayout(calloutW);
             ch->setContentsMargins(0, 0, 0, 0);
             ch->setSpacing(2);
-            ch->addWidget(toolRow({ToolId::Balloon, ToolId::Note, ToolId::Revision}));
+            // Balloon = a split-button: click places a balloon; the fall-menu holds the
+            // multileader operations (Add/Remove Leader, Align, Collect).
+            auto* balloonBtn = new QToolButton(calloutW);
+            balloonBtn->setIcon(makeToolIcon(ToolId::Balloon));
+            balloonBtn->setIconSize(QSize(28, 28));
+            balloonBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            balloonBtn->setAutoRaise(true);
+            balloonBtn->setFocusPolicy(Qt::NoFocus);
+            balloonBtn->setToolTip(QStringLiteral("Balloon — click the arrow tip then the balloon"));
+            balloonBtn->setPopupMode(QToolButton::MenuButtonPopup);
+            connect(balloonBtn, &QToolButton::clicked, this,
+                    [this] { editor_->setTool(ToolId::Balloon); });
+            auto* lm = new QMenu(balloonBtn);
+            {
+                QAction* a = lm->addAction(makeToolIcon(ToolId::Balloon),
+                                           QStringLiteral("Leader (place balloon)"));
+                connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
+                lm->addSeparator();
+                a = lm->addAction(QStringLiteral("Add Leader"));
+                connect(a, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });
+                a = lm->addAction(QStringLiteral("Remove Leader"));
+                connect(a, &QAction::triggered, this,
+                        [this] { editor_->removeLeaderFromSelection(); });
+                lm->addSeparator();
+                a = lm->addAction(QStringLiteral("Align"));
+                connect(a, &QAction::triggered, this, [this] { editor_->alignBalloons(); });
+                a = lm->addAction(QStringLiteral("Collect"));
+                connect(a, &QAction::triggered, this, [this] { editor_->collectBalloons(); });
+            }
+            balloonBtn->setMenu(lm);
+            ch->addWidget(balloonBtn);
+            ch->addWidget(toolRow({ToolId::Note, ToolId::Revision}));
             auto* tableBtn = new QToolButton(calloutW);
             tableBtn->setIcon(makeToolIcon(ToolId::Table));
             tableBtn->setIconSize(QSize(28, 28));
