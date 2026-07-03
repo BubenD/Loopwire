@@ -24,6 +24,10 @@ enum class ToolId {
     Dimension,
     Hatch,
     Wipeout,
+    // Annotation
+    Balloon,   // numbered callout balloon
+    Note,      // bordered note box with text
+    Revision,  // titled revision box
     // Harness
     Wire,
     Connector,
@@ -66,6 +70,8 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Hatch:
     case ToolId::Wipeout:
     case ToolId::Wire:
+    case ToolId::Note:      // rubber-band a rectangle, like Rect
+    case ToolId::Revision:
         return true;
     default:
         return false;
@@ -75,7 +81,7 @@ inline bool isDrawTool(ToolId t) {
 // Single-click placement tools (connector / markers).
 inline bool isPlacementTool(ToolId t) {
     return t == ToolId::Connector || t == ToolId::Splice ||
-           t == ToolId::NotConnected || t == ToolId::NetLabel;
+           t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Balloon;
 }
 
 inline QString toolLabel(ToolId t) {
@@ -96,6 +102,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Dimension: return QStringLiteral("Dimension");
     case ToolId::Hatch: return QStringLiteral("Hatch");
     case ToolId::Wipeout: return QStringLiteral("Wipeout");
+    case ToolId::Balloon: return QStringLiteral("Balloon");
+    case ToolId::Note: return QStringLiteral("Note");
+    case ToolId::Revision: return QStringLiteral("Revision");
     case ToolId::Wire: return QStringLiteral("Wire");
     case ToolId::Connector: return QStringLiteral("Connector");
     case ToolId::Splice: return QStringLiteral("Splice");

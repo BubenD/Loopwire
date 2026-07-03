@@ -666,6 +666,51 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 }
             }
             p.drawPolygon(toScreenPoly(e.points, vt));
+            // Note / Revision annotation boxes carry text inside the rectangle.
+            const bool note = e.meta.value("note").toBool();
+            const bool rev = e.meta.value("revision").toBool();
+            if ((note || rev) && e.points.size() >= 4) {
+                const Bounds b = boundsOf(e.points);
+                const double th = e.meta.value("textSize").toDouble(4.0);
+                const QString body = e.meta.value("text").toString();
+                double topY = b.max.y; // world y-up: top edge
+                if (rev) {
+                    // Title strip along the top with the revision id.
+                    const double strip = std::min(th * 1.8, b.height() * 0.4);
+                    const double divY = b.max.y - strip;
+                    p.drawLine(vt.toScreen({b.min.x, divY}), vt.toScreen({b.max.x, divY}));
+                    drawWorldText(p, vt.toScreen({(b.min.x + b.max.x) / 2.0, b.max.y - strip * 0.72}),
+                                  QStringLiteral("REV %1").arg(e.meta.value("rev").toString()),
+                                  th, vt.scale(), color, Qt::AlignHCenter);
+                    topY = divY;
+                }
+                // Body text, wrapped to the box width, drawn top-down inside a small pad.
+                const double pad = th * 0.4;
+                QFont f = p.font();
+                f.setPixelSize(std::max(1, static_cast<int>(th * vt.scale())));
+                const QFontMetricsF fm(f);
+                const double maxWpx = std::max(1.0, (b.width() - 2 * pad) * vt.scale());
+                QStringList lines;
+                for (const QString& para : body.split(QLatin1Char('\n'))) {
+                    QString cur;
+                    for (const QString& word : para.split(QLatin1Char(' '))) {
+                        const QString trial = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
+                        if (fm.horizontalAdvance(trial) > maxWpx && !cur.isEmpty()) {
+                            lines << cur;
+                            cur = word;
+                        } else {
+                            cur = trial;
+                        }
+                    }
+                    lines << cur;
+                }
+                double y = topY - pad;
+                for (const QString& ln : lines) {
+                    y -= th; // advance one line (world y-up)
+                    if (y < b.min.y) break; // clip to the box
+                    drawWorldText(p, vt.toScreen({b.min.x + pad, y}), ln, th, vt.scale(), color);
+                }
+            }
         }
         break;
 
@@ -711,6 +756,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPointF c = vt.toScreen(e.center);
         const double r = e.radius * vt.scale();
         p.drawEllipse(c, r, r);
+        // Balloon callout: the number sits centred in the circle.
+        if (e.meta.value("balloon").toBool()) {
+            const QString num = e.meta.value("text").toString();
+            drawWorldText(p, QPointF(c.x(), c.y() + e.radius * vt.scale() * 0.5), num,
+                          e.radius * 1.1, vt.scale(), color, Qt::AlignHCenter);
+        }
         break;
     }
 

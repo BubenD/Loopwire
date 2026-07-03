@@ -1381,11 +1381,15 @@ void Editor::onDoubleClick(const Vec2& world) {
         finishDraw();
         return;
     }
-    // Double-click a text object (while idle) to re-open its editor.
+    // Double-click a text-bearing object (while idle) to re-open its editor: plain
+    // text, or an annotation that carries editable text (balloon number, note /
+    // revision body).
     if (tool_ == ToolId::Select) {
         if (auto hit = hitTest(world))
-            if (Entity* e = entityById(*hit); e && e->type == EntityType::Text)
-                emit editTextRequested(*hit);
+            if (Entity* e = entityById(*hit))
+                if (e->type == EntityType::Text || e->meta.value("balloon").toBool() ||
+                    e->meta.value("note").toBool() || e->meta.value("revision").toBool())
+                    emit editTextRequested(*hit);
     }
 }
 
@@ -1496,6 +1500,8 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::DoubleLine:
     case ToolId::Rect:
     case ToolId::Polygon:
+    case ToolId::Note:
+    case ToolId::Revision:
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
@@ -2174,6 +2180,33 @@ void Editor::finishDraw() {
         const Vec2 a = draftPts_[0], b = draftPts_[1];
         e.type = EntityType::Rect;
         e.points = {{a.x, a.y}, {b.x, a.y}, {b.x, b.y}, {a.x, b.y}};
+        break;
+    }
+    case ToolId::Note:
+    case ToolId::Revision: {
+        // A bordered annotation box (a Rect carrying its text). `a` = the top-left
+        // corner so the text can be edited inline (double-click). Revision boxes also
+        // get a title strip + a revision id.
+        if (draftPts_.size() < 2) return;
+        const Vec2 a = draftPts_[0], b = draftPts_[1];
+        const double minX = std::min(a.x, b.x), maxX = std::max(a.x, b.x);
+        const double minY = std::min(a.y, b.y), maxY = std::max(a.y, b.y);
+        e.type = EntityType::Rect;
+        e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+        e.a = {minX, maxY}; // top-left in world (y up)
+        e.meta.insert("textSize", 4.0);
+        if (tool_ == ToolId::Note) {
+            e.meta.insert("note", true);
+            e.meta.insert("text", QStringLiteral("Note"));
+        } else {
+            e.meta.insert("revision", true);
+            e.meta.insert("text", QStringLiteral("Revision description"));
+            // Next revision letter (A, B, C, ...) across existing revision boxes.
+            int idx = 0;
+            for (const auto& x : doc_->entities())
+                if (x.meta.value("revision").toBool()) ++idx;
+            e.meta.insert("rev", QString(QChar('A' + std::min(idx, 25))));
+        }
         break;
     }
     case ToolId::Polygon: {
@@ -3997,6 +4030,22 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("text", wireNet_.isEmpty() ? QStringLiteral("NET") : wireNet_);
         break;
+    case ToolId::Balloon: {
+        // A numbered callout balloon: a small circle with an auto-incrementing number.
+        // Stored as a Circle carrying meta["balloon"]; `a` == centre so the number can
+        // be re-edited inline (double-click) like a text object.
+        e.type = EntityType::Circle;
+        e.center = p;
+        e.a = p;
+        e.radius = 6.0;
+        int next = 0;
+        for (const auto& x : doc_->entities())
+            if (x.meta.value("balloon").toBool())
+                next = std::max(next, x.meta.value("text").toString().toInt());
+        e.meta.insert("balloon", true);
+        e.meta.insert("text", QString::number(next + 1));
+        break;
+    }
     default:
         return;
     }
@@ -4621,7 +4670,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (dpolyHasLsRef_ && run.size() >= 2)
                 if (auto x = lineLineIntersection(run[0], run[1], lsRefA_, lsRefB_)) run[0] = *x;
         };
-        if ((tool_ == ToolId::Rect || tool_ == ToolId::MText) && pts.size() >= 2) {
+        if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
+             tool_ == ToolId::Revision) &&
+            pts.size() >= 2) {
             // Rectangle (and the MTEXT container box) rubber-band.
             const Vec2 a = pts[0], b = pts[1];
             QPolygonF poly;

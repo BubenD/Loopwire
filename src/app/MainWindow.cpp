@@ -257,6 +257,28 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
     case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
     case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
+    case ToolId::Balloon: {
+        // Numbered callout: a circle with a leader stub and a "1" inside.
+        p.drawEllipse(QPointF(9, 9), 6, 6);
+        p.drawLine(13, 13, 20, 20); // leader
+        QFont f = p.font(); f.setPixelSize(8); f.setBold(true); p.setFont(f);
+        p.drawText(QRectF(3, 3, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
+        break;
+    }
+    case ToolId::Note: {
+        // Bordered note box with a few text lines.
+        p.drawRect(4, 5, 16, 14);
+        for (int i = 0; i < 3; ++i) p.drawLine(7, 9 + i * 3, 17, 9 + i * 3);
+        break;
+    }
+    case ToolId::Revision: {
+        // Titled box: a top strip + a small revision triangle.
+        p.drawRect(4, 5, 16, 14);
+        p.drawLine(4, 10, 20, 10); // title strip divider
+        QPolygonF tri({{12, 12}, {16, 18}, {8, 18}}); // rev triangle
+        p.drawPolyline(tri); p.drawLine(8, 18, 12, 12);
+        break;
+    }
     }
     p.end();
     return QIcon(pm);
@@ -1690,14 +1712,22 @@ void MainWindow::buildRibbon() {
                           ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                           ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
                           ToolId::Hatch, ToolId::Wipeout}));
-        addGroup(lay, QStringLiteral("Modify"),
-                 toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                          ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
-                          ToolId::Chamfer}));
+        {
+            // Modify group holds the modify tools AND the Copy/Cut clipboard button.
+            auto* modW = new QWidget(page);
+            auto* mh = new QHBoxLayout(modW);
+            mh->setContentsMargins(0, 0, 0, 0);
+            mh->setSpacing(2);
+            mh->addWidget(toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
+                                   ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
+                                   ToolId::Chamfer}));
+            mh->addWidget(clipboardRow());
+            addGroup(lay, QStringLiteral("Modify"), modW);
+        }
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
-        addGroup(lay, QStringLiteral("Clipboard"), clipboardRow());
         addGroup(lay, QStringLiteral("Annotation"),
-                 toolRow({ToolId::Text, ToolId::Dimension}));
+                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::Note,
+                          ToolId::Revision}));
 
         // Properties group: Layer + Color dropdowns.
         auto* propsW = new QWidget(page);
@@ -1777,10 +1807,18 @@ void MainWindow::buildRibbon() {
         addGroup(lay, QStringLiteral("Transform"),
                  toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                           ToolId::Offset}));
-        addGroup(lay, QStringLiteral("Edit"),
-                 toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
+        {
+            // Edit group: the pick-modify tools plus the Copy/Cut clipboard button.
+            auto* editW = new QWidget(page);
+            auto* eh = new QHBoxLayout(editW);
+            eh->setContentsMargins(0, 0, 0, 0);
+            eh->setSpacing(2);
+            eh->addWidget(
+                toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
+            eh->addWidget(clipboardRow());
+            addGroup(lay, QStringLiteral("Edit"), editW);
+        }
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
-        addGroup(lay, QStringLiteral("Clipboard"), clipboardRow());
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Modify"));
     }
@@ -1797,6 +1835,8 @@ void MainWindow::buildRibbon() {
     {
         auto [page, lay] = makeTabPage();
         addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
+        addGroup(lay, QStringLiteral("Callouts"),
+                 toolRow({ToolId::Balloon, ToolId::Note, ToolId::Revision}));
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Annotation"));
     }
@@ -4139,6 +4179,9 @@ void MainWindow::buildCommands() {
         {{"spline", "spl"}, "Draw", "Spline", tool(ToolId::Spline)},
         {{"text", "t", "dt"}, "Draw", "Single-line text", tool(ToolId::Text)},
         {{"dim", "dimlinear"}, "Draw", "Linear dimension", tool(ToolId::Dimension)},
+        {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
+        {{"note", "nt"}, "Annotation", "Note box", tool(ToolId::Note)},
+        {{"revision", "rev"}, "Annotation", "Revision box", tool(ToolId::Revision)},
         // Harness
         {{"wire", "w"}, "Harness", "Wire", tool(ToolId::Wire)},
         {{"connector", "con"}, "Harness", "Connector", tool(ToolId::Connector)},

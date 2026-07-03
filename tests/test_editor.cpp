@@ -343,6 +343,46 @@ int run_editor_tests() {
               "offset-rect: offsetting a rectangle outward grows it by the distance all round");
     }
 
+    // --- Balloon: placements are auto-numbered circles carrying meta["balloon"].
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.setTool(ToolId::Balloon); // returns to Select after placing, re-arm
+        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
+        int balloons = 0; QStringList nums;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Circle && e.meta.value("balloon").toBool()) {
+                ++balloons; nums << e.meta.value("text").toString();
+            }
+        check(balloons == 2 && nums.contains("1") && nums.contains("2"),
+              "balloon: placements are auto-numbered circles");
+    }
+
+    // --- Note / Revision: rubber-band a rectangle that carries editable text; a
+    //     revision box also gets an auto revision id.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Note);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed.setTool(ToolId::Revision);
+        ed.onPointerPress({0, 40}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 70}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* note = nullptr; const Entity* rev = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.meta.value("note").toBool()) note = &e;
+            if (e.meta.value("revision").toBool()) rev = &e;
+        }
+        check(note && note->type == EntityType::Rect && note->points.size() == 4 &&
+                  !note->meta.value("text").toString().isEmpty(),
+              "note: creates a rectangle carrying note text");
+        check(rev && rev->type == EntityType::Rect && rev->meta.value("rev").toString() == "A",
+              "revision: creates a titled revision box (rev A)");
+    }
+
     // --- Scale by a TYPED factor (no size click): 2 doubles about the selection
     //     centre; the shape's bbox diagonal grows 2x.
     {
