@@ -1,5 +1,6 @@
 #include "tools/EntityTransforms.h"
 
+#include <QJsonArray>
 #include <cmath>
 
 namespace Edraw_Desktop {
@@ -66,13 +67,22 @@ void rotateEntity(Entity& e, const Vec2& pivot, double angle) {
 }
 
 void scaleEntity(Entity& e, const Vec2& base, double factor) {
+    const double s = std::abs(factor);
     mapPoints(e, [&](const Vec2& p) { return scalePoint(p, base, factor); });
-    e.radius *= std::abs(factor);
-    e.radiusY *= std::abs(factor);
-    // Scale stored circle-cut radii too (trim caps on a double line).
-    for (const char* k : {"cutStartR", "cutEndR"})
+    e.radius *= s;
+    e.radiusY *= s;
+    // Scale every length-valued meta so the shape scales uniformly: the double-line
+    // gap, trim-cap radii, and the uniform corner radius.
+    for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius"})
         if (e.meta.contains(QLatin1String(k)))
-            e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * std::abs(factor));
+            e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
+    // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.
+    for (const char* k : {"cornerRadii", "cornerChamfers", "cornerChamfers2"}) {
+        if (!e.meta.contains(QLatin1String(k))) continue;
+        QJsonArray arr = e.meta.value(QLatin1String(k)).toArray();
+        for (int i = 0; i < arr.size(); ++i) arr[i] = arr[i].toDouble() * s;
+        e.meta.insert(QLatin1String(k), arr);
+    }
 }
 
 void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {

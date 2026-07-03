@@ -361,6 +361,24 @@ int run_editor_tests() {
               "scale-typed: typing a scale factor scales the selection about its centre");
     }
 
+    // --- Scaling a double line/polyline scales its GAP (and fillet/chamfer metas)
+    //     too, so it stays proportional.
+    {
+        Document d; d.entities().clear();
+        Entity dl; dl.id = "dg"; dl.type = EntityType::DoubleLine; dl.a = {0, 0}; dl.b = {100, 0};
+        dl.meta.insert("gap", 10.0);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById("dg");
+        ed.setTool(ToolId::Scale);
+        ed.acceptCommandInput("2"); // scale x2 about the selection centre
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dg") dd = &e;
+        check(dd && near(dd->meta.value("gap").toDouble(), 20.0) &&
+                  near(distance(dd->a, dd->b), 200.0),
+              "scale-gap: scaling a double line scales its gap with the geometry");
+    }
+
     // --- visibleWall clips a marked wall past an existing chamfer (no stale sharp
     //     stub): a chamfered rect corner shortens the two adjoining walls.
     {
