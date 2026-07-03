@@ -2480,7 +2480,8 @@ QString Editor::drawCommandHint() const {
         }
         return QStringLiteral("DIMENSION");
     case ToolId::Fillet:
-        return QStringLiteral("FILLET: [R] radius=%1  ·  pick two lines (rounds the corner)").arg(filletRadius_);
+        return QStringLiteral("FILLET: click the first line then the second (radius=%1) — type R any time "
+                              "to change the radius").arg(filletRadius_);
     case ToolId::Chamfer:
         return QStringLiteral("CHAMFER: click a point on each of two lines — cuts straight between them");
     case ToolId::Trim:
@@ -2761,7 +2762,9 @@ bool Editor::acceptCommandInput(const QString& text) {
         if (ok && r >= 0) {
             if (tool_ == ToolId::Fillet) {
                 filletRadius_ = r;
-                emit message(QStringLiteral("Fillet radius = %1 — pick two lines").arg(r));
+                emit message(pickIds_.empty()
+                                 ? QStringLiteral("Fillet radius = %1 — click the first line").arg(r)
+                                 : QStringLiteral("Fillet radius = %1 — click the second line").arg(r));
             } else {
                 cornerRadius_ = r;
                 emit message(r > 0 ? QStringLiteral("Fillet radius = %1").arg(r)

@@ -136,6 +136,25 @@ int run_editor_tests() {
         check(doc.entities().size() == 1, "delete: undo restores");
     }
 
+    // --- Fillet by clicking two lines, redefining the radius with "r" mid-command.
+    {
+        Document d; d.entities().clear();
+        Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity v; v.id = "v"; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 100};
+        d.entities().push_back(h);
+        d.entities().push_back(v);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({60, 0}, Qt::LeftButton, Qt::NoModifier); // click first line
+        check(ed.acceptCommandInput(QStringLiteral("r")), "fillet-r: 'r' enters radius mode mid-command");
+        check(ed.acceptCommandInput(QStringLiteral("8")), "fillet-r: radius value accepted");
+        ed.onPointerPress({0, 60}, Qt::LeftButton, Qt::NoModifier); // click second line -> apply
+        bool arc8 = false;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Arc && near(e.radius, 8.0)) arc8 = true;
+        check(arc8, "fillet-r: fillet applied with the redefined radius (8)");
+    }
+
     // --- Fillet a right-angle corner: tangent points at distance r from corner.
     {
         Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
