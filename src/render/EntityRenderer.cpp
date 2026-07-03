@@ -681,42 +681,65 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     break;
                 }
             }
-            // Editable table: outer border + internal grid + per-cell text.
+            // Editable table: outer border + grid + per-cell text, with an optional
+            // merged Title row and a bold Header row (AutoCAD Insert Table styles).
             if (e.meta.value("table").toBool() && e.points.size() >= 4) {
                 const Bounds tb = boundsOf(e.points);
-                p.drawPolygon(toScreenPoly(e.points, vt));
                 const QJsonArray cf = e.meta.value("colFrac").toArray();
                 const QJsonArray rf = e.meta.value("rowFrac").toArray();
-                const int cols = cf.size();
-                double gx = tb.min.x;
-                for (int c = 0; c + 1 < cols; ++c) {
-                    gx += cf[c].toDouble() * tb.width();
-                    p.drawLine(vt.toScreen({gx, tb.min.y}), vt.toScreen({gx, tb.max.y}));
-                }
-                double gy = tb.max.y;
-                for (int r = 0; r + 1 < rf.size(); ++r) {
-                    gy -= rf[r].toDouble() * tb.height();
-                    p.drawLine(vt.toScreen({tb.min.x, gy}), vt.toScreen({tb.max.x, gy}));
-                }
                 const QJsonArray cells = e.meta.value("cells").toArray();
+                const int cols = cf.size(), rows = rf.size();
+                const bool hasTitle = e.meta.value("titleRow").toBool();
+                const bool hasHeader = e.meta.value("headerRow").toBool();
                 const double th = e.meta.value("textSize").toDouble(4.0);
-                const double pad = th * 0.35;
-                double cy = tb.max.y;
-                for (int r = 0; r < rf.size(); ++r) {
-                    const double h = rf[r].toDouble() * tb.height();
-                    double cx = tb.min.x;
-                    for (int c = 0; c < cols; ++c) {
-                        const double w = cf[c].toDouble() * tb.width();
-                        const int idx = r * cols + c;
-                        if (idx < cells.size()) {
-                            const QString s = cells[idx].toString();
-                            if (!s.isEmpty())
-                                drawWorldText(p, vt.toScreen({cx + pad, cy - pad - th}), s, th,
-                                              vt.scale(), color);
+                p.drawPolygon(toScreenPoly(e.points, vt)); // outer border
+                // Column x-boundaries and row y-boundaries (top->down, world y-up).
+                std::vector<double> xb(cols + 1), yb(rows + 1);
+                xb[0] = tb.min.x;
+                for (int c = 0; c < cols; ++c) xb[c + 1] = xb[c] + cf[c].toDouble() * tb.width();
+                yb[0] = tb.max.y;
+                for (int r = 0; r < rows; ++r) yb[r + 1] = yb[r] - rf[r].toDouble() * tb.height();
+                for (int r = 1; r < rows; ++r)
+                    p.drawLine(vt.toScreen({tb.min.x, yb[r]}), vt.toScreen({tb.max.x, yb[r]}));
+                const int vTop = hasTitle ? 1 : 0; // verticals skip the merged title row
+                for (int c = 1; c < cols; ++c)
+                    p.drawLine(vt.toScreen({xb[c], yb[vTop]}), vt.toScreen({xb[c], yb[rows]}));
+                const int headerIdx = hasTitle ? 1 : 0;
+                const QFont normal = p.font();
+                for (int r = 0; r < rows; ++r) {
+                    const bool isTitle = hasTitle && r == 0;
+                    const bool isHeader = hasHeader && r == headerIdx && !isTitle;
+                    if (isTitle) { // one merged, centred, bold title across all columns
+                        const QString s = cells.isEmpty() ? QString() : cells[0].toString();
+                        if (!s.isEmpty()) {
+                            QFont f = normal; f.setBold(true);
+                            p.save(); p.setFont(f);
+                            drawWorldText(p,
+                                          vt.toScreen({(tb.min.x + tb.max.x) / 2.0,
+                                                       (yb[0] + yb[1]) / 2.0 - th * 0.35}),
+                                          s, th * 1.2, vt.scale(), color, Qt::AlignHCenter);
+                            p.restore();
                         }
-                        cx += w;
+                        continue;
                     }
-                    cy -= h;
+                    for (int c = 0; c < cols; ++c) {
+                        const int idx = r * cols + c;
+                        const QString s = idx < cells.size() ? cells[idx].toString() : QString();
+                        if (s.isEmpty()) continue;
+                        if (isHeader) { // bold, centred in the cell
+                            QFont f = normal; f.setBold(true);
+                            p.save(); p.setFont(f);
+                            drawWorldText(p,
+                                          vt.toScreen({(xb[c] + xb[c + 1]) / 2.0,
+                                                       (yb[r] + yb[r + 1]) / 2.0 - th * 0.35}),
+                                          s, th, vt.scale(), color, Qt::AlignHCenter);
+                            p.restore();
+                        } else { // data: top-left aligned with a small pad
+                            const double pad = th * 0.35;
+                            drawWorldText(p, vt.toScreen({xb[c] + pad, yb[r] - pad - th}), s, th,
+                                          vt.scale(), color);
+                        }
+                    }
                 }
                 break;
             }

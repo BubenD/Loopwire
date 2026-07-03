@@ -118,11 +118,17 @@ public:
     // Edit actions.
     void selectAll();
     void selectById(const QString& id, bool additive = false);
-    // Table (#2): rows/cols for the NEXT table placed, and cell text editing.
-    void setTableSize(int rows, int cols) {
-        tableRows_ = std::max(1, rows);
-        tableCols_ = std::max(1, cols);
-    }
+    // Table (#2): the spec for the NEXT table placed (AutoCAD Insert Table), and cell
+    // text editing. A table has an optional Title row (merged) + Header row + data rows.
+    struct TableSpec {
+        int cols = 5;
+        double colWidth = 40.0;
+        int dataRows = 1;
+        double rowHeight = 10.0;
+        bool title = true;
+        bool header = true;
+    };
+    void setTableSpec(const TableSpec& s) { tableSpec_ = s; }
     // Cell (row-major index) at world point `p` in table `e`; -1 if outside. Sets the
     // cell's top-left world corner and its world width/height.
     int tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, double& cw, double& ch) const;
@@ -517,8 +523,7 @@ private:
     HatchStyle hatchStyle_;       // current Hatch/Wipeout options
     QString lastHatchId_;         // most recent hatch created in this session (live edit)
     int polygonSides_ = 5;        // default side count (prompted on tool select)
-    int tableRows_ = 3;           // rows/cols for the next Table placed
-    int tableCols_ = 3;
+    TableSpec tableSpec_;         // spec for the next Table placed (Insert Table dialog)
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

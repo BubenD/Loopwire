@@ -343,28 +343,33 @@ int run_editor_tests() {
               "offset-rect: offsetting a rectangle outward grows it by the distance all round");
     }
 
-    // --- Table: rubber-band a grid, then edit a cell by its (row,col); the cell
-    //     lookup and write round-trip correctly.
+    // --- Insert Table: single-click placement from a spec (Title + Header + data
+    //     rows), then edit a data cell; cell lookup + write round-trip correctly.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
-        ed.setTableSize(2, 3); // 2 rows x 3 cols
+        Editor::TableSpec s;
+        s.cols = 3; s.colWidth = 20.0; s.dataRows = 1; s.rowHeight = 10.0;
+        s.title = true; s.header = true; // total rows = 1 + 1 + 1 = 3
+        ed.setTableSpec(s);
         ed.setTool(ToolId::Table);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerPress({60, 20}, Qt::LeftButton, Qt::NoModifier); // 60 wide, 20 tall
+        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier); // insertion point (top-left)
         const Entity* t = nullptr;
         for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) t = &e;
-        check(t && t->type == EntityType::Rect && t->meta.value("rows").toInt() == 2 &&
-                  t->meta.value("cols").toInt() == 3 && t->meta.value("cells").toArray().size() == 6,
-              "table: creates a 2x3 grid of empty cells");
-        // Cell lookup: the top-right cell is row 0, col 2 -> index 2. Its centre is
-        // around x in [40,60], y in [10,20] (world y-up, top row).
+        check(t && t->type == EntityType::Rect && t->meta.value("rows").toInt() == 3 &&
+                  t->meta.value("cols").toInt() == 3 && t->meta.value("titleRow").toBool() &&
+                  t->meta.value("headerRow").toBool() && t->meta.value("cells").toArray().size() == 9,
+              "table: Insert Table builds a Title+Header+data grid at the insertion point");
+        // Table spans x[0..60], y[0..30]; row 2 (bottom data row) is y[0..10].
         Vec2 tl; double cw = 0, ch = 0;
-        const int idx = t ? ed.tableCellAt(*t, {50, 15}, tl, cw, ch) : -1;
-        check(idx == 2, "table: cell lookup maps a point to the right (row,col)");
+        const int idx = t ? ed.tableCellAt(*t, {30, 5}, tl, cw, ch) : -1; // middle col, data row
+        check(idx == 7, "table: cell lookup maps a point to the right data cell");
+        // A click in the merged title band maps to the single title cell (index 0).
+        const int titleIdx = t ? ed.tableCellAt(*t, {50, 25}, tl, cw, ch) : -1;
+        check(titleIdx == 0, "table: the merged title row is one cell (index 0)");
         if (t) ed.applyTableCellEdit(t->id, idx, QStringLiteral("hi"));
         for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) t = &e;
-        check(t && t->meta.value("cells").toArray()[2].toString() == QLatin1String("hi"),
+        check(t && t->meta.value("cells").toArray()[7].toString() == QLatin1String("hi"),
               "table: editing a cell stores its text");
     }
 

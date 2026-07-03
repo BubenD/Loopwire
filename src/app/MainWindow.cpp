@@ -1628,6 +1628,51 @@ QWidget* MainWindow::operationsRow() {
     return w;
 }
 
+void MainWindow::insertTableCommand() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Insert Table"));
+    auto* form = new QFormLayout(&dlg);
+    auto* colsSp = new QSpinBox(&dlg);
+    colsSp->setRange(1, 200);
+    colsSp->setValue(5);
+    auto* colWSp = new QDoubleSpinBox(&dlg);
+    colWSp->setRange(1, 100000);
+    colWSp->setDecimals(2);
+    colWSp->setValue(40.0);
+    auto* rowsSp = new QSpinBox(&dlg);
+    rowsSp->setRange(1, 500);
+    rowsSp->setValue(1);
+    auto* rowHSp = new QDoubleSpinBox(&dlg);
+    rowHSp->setRange(1, 100000);
+    rowHSp->setDecimals(2);
+    rowHSp->setValue(10.0);
+    auto* titleCb = new QCheckBox(QStringLiteral("Title row"), &dlg);
+    titleCb->setChecked(true);
+    auto* headerCb = new QCheckBox(QStringLiteral("Header row"), &dlg);
+    headerCb->setChecked(true);
+    form->addRow(QStringLiteral("Columns:"), colsSp);
+    form->addRow(QStringLiteral("Column width:"), colWSp);
+    form->addRow(QStringLiteral("Data rows:"), rowsSp);
+    form->addRow(QStringLiteral("Row height:"), rowHSp);
+    form->addRow(titleCb);
+    form->addRow(headerCb);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    form->addRow(bb);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) return;
+    Editor::TableSpec s;
+    s.cols = colsSp->value();
+    s.colWidth = colWSp->value();
+    s.dataRows = rowsSp->value();
+    s.rowHeight = rowHSp->value();
+    s.title = titleCb->isChecked();
+    s.header = headerCb->isChecked();
+    editor_->setTableSpec(s);
+    editor_->setTool(ToolId::Table);
+    statusBar()->showMessage(QStringLiteral("Insert Table — click the insertion point"));
+}
+
 QWidget* MainWindow::clipboardRow() {
     auto* w = new QWidget(ribbon_);
     auto* lay = new QVBoxLayout(w);
@@ -1896,17 +1941,7 @@ void MainWindow::buildRibbon() {
             tableBtn->setAutoRaise(true);
             tableBtn->setFocusPolicy(Qt::NoFocus);
             tableBtn->setToolTip(QStringLiteral("Table — set rows/columns, then drag its size"));
-            connect(tableBtn, &QToolButton::clicked, this, [this] {
-                bool ok = false;
-                const int rows = QInputDialog::getInt(this, QStringLiteral("Table"),
-                                                      QStringLiteral("Rows:"), 3, 1, 200, 1, &ok);
-                if (!ok) return;
-                const int cols = QInputDialog::getInt(this, QStringLiteral("Table"),
-                                                      QStringLiteral("Columns:"), 3, 1, 200, 1, &ok);
-                if (!ok) return;
-                editor_->setTableSize(rows, cols);
-                editor_->setTool(ToolId::Table);
-            });
+            connect(tableBtn, &QToolButton::clicked, this, [this] { insertTableCommand(); });
             ch->addWidget(tableBtn);
             addGroup(lay, QStringLiteral("Callouts"), calloutW);
         }
@@ -4269,7 +4304,7 @@ void MainWindow::buildCommands() {
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
         {{"note", "nt"}, "Annotation", "Note box", tool(ToolId::Note)},
         {{"revision", "rev"}, "Annotation", "Revision box", tool(ToolId::Revision)},
-        {{"table", "tb"}, "Annotation", "Editable table (3x3; drag its size)", tool(ToolId::Table)},
+        {{"table", "tb"}, "Annotation", "Insert an editable table", [this] { insertTableCommand(); }},
         // Harness
         {{"wire", "w"}, "Harness", "Wire", tool(ToolId::Wire)},
         {{"connector", "con"}, "Harness", "Connector", tool(ToolId::Connector)},

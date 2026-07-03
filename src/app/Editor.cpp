@@ -1607,7 +1607,6 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polygon:
     case ToolId::Note:
     case ToolId::Revision:
-    case ToolId::Table:
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
@@ -2342,31 +2341,6 @@ void Editor::finishDraw() {
         e.meta.insert("text", QString::number(next + 1));
         e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
         setBalloonLeaders(e, {tip});   // one leader to start; Ctrl+click adds more
-        break;
-    }
-    case ToolId::Table: {
-        // An editable grid: a Rect carrying row/col counts, per-row/col FRACTIONS (so
-        // the grid resizes proportionally when the table is moved/scaled), and a
-        // row-major array of cell strings. Double-click a cell to edit it.
-        if (draftPts_.size() < 2) return;
-        const Vec2 a = draftPts_[0], b = draftPts_[1];
-        const double minX = std::min(a.x, b.x), maxX = std::max(a.x, b.x);
-        const double minY = std::min(a.y, b.y), maxY = std::max(a.y, b.y);
-        e.type = EntityType::Rect;
-        e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
-        e.a = {minX, maxY};
-        const int rows = std::max(1, tableRows_), cols = std::max(1, tableCols_);
-        QJsonArray colFrac, rowFrac, cells;
-        for (int i = 0; i < cols; ++i) colFrac.append(1.0 / cols);
-        for (int i = 0; i < rows; ++i) rowFrac.append(1.0 / rows);
-        for (int i = 0; i < rows * cols; ++i) cells.append(QString());
-        e.meta.insert("table", true);
-        e.meta.insert("rows", rows);
-        e.meta.insert("cols", cols);
-        e.meta.insert("colFrac", colFrac);
-        e.meta.insert("rowFrac", rowFrac);
-        e.meta.insert("cells", cells);
-        e.meta.insert("textSize", 4.0);
         break;
     }
     case ToolId::Polygon: {
@@ -4192,6 +4166,13 @@ int Editor::tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, doubl
           if (p.y >= top - h - 1e-9) { row = r; yT = top; hrow = h; break; }
           top -= h;
       } }
+    // The merged Title row (row 0 when present) is a single cell spanning all columns.
+    if (e.meta.value("titleRow").toBool() && row == 0) {
+        cellTopLeft = {b.min.x, b.max.y};
+        cw = b.width();
+        ch = hrow;
+        return 0;
+    }
     cellTopLeft = {xL, yT};
     cw = wcol;
     ch = hrow;
@@ -4314,6 +4295,34 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("text", wireNet_.isEmpty() ? QStringLiteral("NET") : wireNet_);
         break;
+    case ToolId::Table: {
+        // Insert Table at the picked insertion point (top-left). Built from the spec
+        // (Insert Table dialog): a Title row (merged), a Header row, then data rows.
+        // Stored as a Rect + per-row/col FRACTIONS so the grid scales with the rect.
+        const TableSpec& s = tableSpec_;
+        const int cols = std::max(1, s.cols);
+        const int dataRows = std::max(1, s.dataRows);
+        const int rows = (s.title ? 1 : 0) + (s.header ? 1 : 0) + dataRows;
+        const double W = cols * s.colWidth, H = rows * s.rowHeight;
+        const double minX = p.x, maxX = p.x + W, maxY = p.y, minY = p.y - H;
+        e.type = EntityType::Rect;
+        e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+        e.a = {minX, maxY};
+        QJsonArray colFrac, rowFrac, cells;
+        for (int i = 0; i < cols; ++i) colFrac.append(1.0 / cols);
+        for (int i = 0; i < rows; ++i) rowFrac.append(1.0 / rows);
+        for (int i = 0; i < rows * cols; ++i) cells.append(QString());
+        e.meta.insert("table", true);
+        e.meta.insert("rows", rows);
+        e.meta.insert("cols", cols);
+        e.meta.insert("colFrac", colFrac);
+        e.meta.insert("rowFrac", rowFrac);
+        e.meta.insert("cells", cells);
+        e.meta.insert("titleRow", s.title);
+        e.meta.insert("headerRow", s.header);
+        e.meta.insert("textSize", std::max(2.0, s.rowHeight * 0.5));
+        break;
+    }
     default:
         return;
     }
@@ -4939,7 +4948,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (auto x = lineLineIntersection(run[0], run[1], lsRefA_, lsRefB_)) run[0] = *x;
         };
         if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
-             tool_ == ToolId::Revision || tool_ == ToolId::Table) &&
+             tool_ == ToolId::Revision) &&
             pts.size() >= 2) {
             // Rectangle (and the MTEXT container box) rubber-band.
             const Vec2 a = pts[0], b = pts[1];

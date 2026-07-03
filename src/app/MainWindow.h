@@ -83,6 +83,8 @@ private:
     QWidget* operationsRow();
     // Clipboard group: a Copy button (copies the selection) whose fall-menu holds Cut.
     QWidget* clipboardRow();
+    // AutoCAD-style Insert Table dialog → sets the table spec + arms the Table tool.
+    void insertTableCommand();
 
     void refreshPanels();
     void refreshLayers();

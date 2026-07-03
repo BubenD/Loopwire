@@ -74,7 +74,6 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Balloon:   // two clicks: arrow tip, then balloon centre
     case ToolId::Note:      // rubber-band a rectangle, like Rect
     case ToolId::Revision:
-    case ToolId::Table:
         return true;
     default:
         return false;
@@ -84,7 +83,7 @@ inline bool isDrawTool(ToolId t) {
 // Single-click placement tools (connector / markers).
 inline bool isPlacementTool(ToolId t) {
     return t == ToolId::Connector || t == ToolId::Splice ||
-           t == ToolId::NotConnected || t == ToolId::NetLabel;
+           t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Table;
 }
 
 inline QString toolLabel(ToolId t) {
