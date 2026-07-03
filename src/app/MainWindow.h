@@ -81,6 +81,8 @@ private:
     // A 2-row icon grid of the Modify "Operations" actions (Array, Explode,
     // Purge, Delete). Reused on both the Home and Modify tabs.
     QWidget* operationsRow();
+    // Clipboard group: a Copy button (copies the selection) whose fall-menu holds Cut.
+    QWidget* clipboardRow();
 
     void refreshPanels();
     void refreshLayers();

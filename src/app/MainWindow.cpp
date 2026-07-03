@@ -318,6 +318,19 @@ QIcon makeOpIcon(const QString& op, const QColor& ink = QColor("#d6dae1")) {
         f.setBold(true);
         p.setFont(f);
         p.drawText(QRect(11, 11, 11, 11), Qt::AlignCenter, QStringLiteral("R"));
+    } else if (op == QLatin1String("copy")) {
+        // Two overlapping sheets (classic copy-to-clipboard glyph).
+        p.drawRect(8, 8, 11, 13);  // front sheet
+        p.drawRect(5, 4, 11, 13);  // back sheet (offset up-left)
+    } else if (op == QLatin1String("cut")) {
+        // Scissors: two blades (open V) with pivot and finger loops.
+        p.drawLine(6, 5, 15, 14);
+        p.drawLine(6, 19, 15, 10);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(5, 5.5), 2.2, 2.2);  // top loop
+        p.drawEllipse(QPointF(5, 18.5), 2.2, 2.2); // bottom loop
+        p.drawLine(15, 14, 20, 18);                // blade tips extending right
+        p.drawLine(15, 10, 20, 6);
     }
     p.end();
     return QIcon(pm);
@@ -1572,6 +1585,40 @@ QWidget* MainWindow::operationsRow() {
     return w;
 }
 
+QWidget* MainWindow::clipboardRow() {
+    auto* w = new QWidget(ribbon_);
+    auto* lay = new QVBoxLayout(w);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(1);
+    lay->setAlignment(Qt::AlignTop);
+
+    // Copy = the primary button; its fall-menu offers Cut (each with its own icon).
+    auto* copyBtn = new QToolButton(w);
+    copyBtn->setIcon(makeOpIcon(QStringLiteral("copy")));
+    copyBtn->setIconSize(QSize(28, 28));
+    copyBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    copyBtn->setText(QStringLiteral("Copy"));
+    copyBtn->setToolTip(QStringLiteral("Copy selection to clipboard"));
+    copyBtn->setAutoRaise(true);
+    copyBtn->setFocusPolicy(Qt::NoFocus);
+    copyBtn->setPopupMode(QToolButton::MenuButtonPopup); // click = copy; arrow = fall-menu
+    connect(copyBtn, &QToolButton::clicked, this, [this] { editor_->copySelection(); });
+
+    auto* menu = new QMenu(copyBtn);
+    QAction* cutAct = menu->addAction(makeOpIcon(QStringLiteral("cut")),
+                                      QStringLiteral("Cut (to clipboard)"));
+    connect(cutAct, &QAction::triggered, this, [this] { editor_->cutSelection(); });
+    // Copy is also offered in the menu for discoverability alongside Cut.
+    QAction* copyAct = menu->addAction(makeOpIcon(QStringLiteral("copy")),
+                                       QStringLiteral("Copy (to clipboard)"));
+    connect(copyAct, &QAction::triggered, this, [this] { editor_->copySelection(); });
+    copyBtn->setMenu(menu);
+
+    lay->addWidget(copyBtn);
+    lay->addStretch(1);
+    return w;
+}
+
 void MainWindow::buildRibbon() {
     toolGroup_ = new QActionGroup(this);
     toolGroup_->setExclusive(true);
@@ -1639,6 +1686,7 @@ void MainWindow::buildRibbon() {
                           ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
                           ToolId::Chamfer}));
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
+        addGroup(lay, QStringLiteral("Clipboard"), clipboardRow());
         addGroup(lay, QStringLiteral("Annotation"),
                  toolRow({ToolId::Text, ToolId::Dimension}));
 
@@ -1723,6 +1771,7 @@ void MainWindow::buildRibbon() {
         addGroup(lay, QStringLiteral("Edit"),
                  toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
+        addGroup(lay, QStringLiteral("Clipboard"), clipboardRow());
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Modify"));
     }

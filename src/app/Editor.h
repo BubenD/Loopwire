@@ -91,6 +91,9 @@ public:
     bool wantsTextInput() const {
         return drafting_ || isDrawTool(tool_) || gapInputMode_ || filletInputMode_;
     }
+    // Modify tools that accept a TYPED numeric value (e.g. Scale factor) even though
+    // they are not draw tools — lets a digit pop the flying input field at the cursor.
+    bool wantsValueInput() const { return tool_ == ToolId::Scale; }
 
     // Dynamic-input reference fields (AutoCAD-style). For the current draw step
     // these are the typed references — line/segment: Length + Angle; circle:

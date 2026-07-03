@@ -305,6 +305,11 @@ void Editor::setTool(ToolId t) {
     // field pops so the user types the count before picking the centre.
     if (t == ToolId::Polygon)
         emit dynamicPrompt(QStringLiteral("Number of sides <%1>").arg(polygonSides_));
+    // Scale: pop the flying field so a scale factor can be TYPED (about the selection
+    // centre) without touching the command bar — and it reappears every time Scale is
+    // entered, so it stays repeatable.
+    if (t == ToolId::Scale && !selected_.empty())
+        emit dynamicPrompt(QStringLiteral("Scale factor (or pick base point)"));
 }
 
 void Editor::repeatLastTool() {
@@ -3067,9 +3072,11 @@ void Editor::handleModifyPress(const Vec2& p) {
         emit message(tool_ == ToolId::Rotate
                          ? QStringLiteral("Rotate: pick the base point, then click to set the angle")
                      : tool_ == ToolId::Scale
-                         ? QStringLiteral("Scale: pick the base point then click the size, or type "
-                                          "a scale factor (e.g. 2, 0.5)")
+                         ? QStringLiteral("Scale: base point set — type a scale factor (e.g. 2, "
+                                          "0.5) or click to set the size")
                          : QStringLiteral("%1: pick the destination").arg(toolLabel(tool_)));
+        if (tool_ == ToolId::Scale) // pop the factor field at the picked base point
+            emit dynamicPrompt(QStringLiteral("Scale factor"));
         emit changed();
         return;
     }

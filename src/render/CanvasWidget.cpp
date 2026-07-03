@@ -601,6 +601,8 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             // entry); letters ONLY if they are a real option for this tool — so a
             // stray "f" during a Line is ignored instead of popping a command box.
             open = isValueChar || (isLetter && editor_->isDrawOptionChar(t[0]));
+        } else if (editor_->wantsValueInput() && isValueChar) {
+            open = true; // modify tool (e.g. Scale) awaiting a typed value/factor
         } else if (cursorInside_ && isLetter) {
             open = true; // idle: a letter starts a command at the cursor
         }
