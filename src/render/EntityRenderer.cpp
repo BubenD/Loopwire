@@ -555,13 +555,18 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 }
             }
             // Per-corner chamfer setbacks (mutually exclusive with a fillet per vertex).
-            std::vector<double> chamfers(e.points.size(), 0.0);
+            // cornerChamfers = setback toward the previous vertex ("in"), cornerChamfers2
+            // = toward the next ("out"); if the second is absent the chamfer is symmetric.
+            std::vector<double> chamfersIn(e.points.size(), 0.0);
+            std::vector<double> chamfersOut(e.points.size(), 0.0);
             bool anyChamfer = false;
             if (e.meta.contains("cornerChamfers")) {
                 const QJsonArray cArr = e.meta.value("cornerChamfers").toArray();
-                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfers.size()); ++i) {
-                    chamfers[i] = cArr[i].toDouble();
-                    if (chamfers[i] > 0.0) anyChamfer = true;
+                const QJsonArray cArr2 = e.meta.value("cornerChamfers2").toArray();
+                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfersIn.size()); ++i) {
+                    chamfersIn[i] = cArr[i].toDouble();
+                    chamfersOut[i] = (i < cArr2.size()) ? cArr2[i].toDouble() : chamfersIn[i];
+                    if (chamfersIn[i] > 0.0 && chamfersOut[i] > 0.0) anyChamfer = true;
                 }
             }
             const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
@@ -583,7 +588,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // Chamfer the centerline too (offsetting a straight cut keeps the gap).
                 const std::vector<Vec2> center =
                     (anyFillet || anyChamfer)
-                        ? filletChamferPolyline(e.points, centerRadii, chamfers, false)
+                        ? filletChamferPolyline(e.points, centerRadii, chamfersIn, chamfersOut,
+                                                false)
                         : e.points;
                 std::vector<Vec2> run1 = offsetPolyline(center, gap / 2.0);
                 std::vector<Vec2> run2 = offsetPolyline(center, -gap / 2.0);
@@ -609,8 +615,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 for (const auto& v : bulgeArr) bulges.push_back(v.toDouble());
                 p.drawPolyline(toScreenPoly(expandBulgePolyline(e.points, bulges), vt));
             } else if (e.type == EntityType::Polyline && (anyFillet || anyChamfer)) {
-                p.drawPolyline(
-                    toScreenPoly(filletChamferPolyline(e.points, radii, chamfers, false), vt));
+                p.drawPolyline(toScreenPoly(
+                    filletChamferPolyline(e.points, radii, chamfersIn, chamfersOut, false), vt));
             } else {
                 p.drawPolyline(toScreenPoly(e.points, vt));
             }
@@ -638,7 +644,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             // the closed outline.
             if (e.meta.contains("cornerRadii") || e.meta.contains("cornerChamfers")) {
                 std::vector<double> radii(e.points.size(), 0.0);
-                std::vector<double> chamfers(e.points.size(), 0.0);
+                std::vector<double> chamfersIn(e.points.size(), 0.0);
+                std::vector<double> chamfersOut(e.points.size(), 0.0);
                 bool any = false;
                 const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
                 for (int i = 0; i < rArr.size() && i < static_cast<int>(radii.size()); ++i) {
@@ -646,13 +653,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     if (radii[i] > 0.0) any = true;
                 }
                 const QJsonArray cArr = e.meta.value("cornerChamfers").toArray();
-                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfers.size()); ++i) {
-                    chamfers[i] = cArr[i].toDouble();
-                    if (chamfers[i] > 0.0) any = true;
+                const QJsonArray cArr2 = e.meta.value("cornerChamfers2").toArray();
+                for (int i = 0; i < cArr.size() && i < static_cast<int>(chamfersIn.size()); ++i) {
+                    chamfersIn[i] = cArr[i].toDouble();
+                    chamfersOut[i] = (i < cArr2.size()) ? cArr2[i].toDouble() : chamfersIn[i];
+                    if (chamfersIn[i] > 0.0 && chamfersOut[i] > 0.0) any = true;
                 }
                 if (any) {
-                    p.drawPolygon(
-                        toScreenPoly(filletChamferPolyline(e.points, radii, chamfers, true), vt));
+                    p.drawPolygon(toScreenPoly(
+                        filletChamferPolyline(e.points, radii, chamfersIn, chamfersOut, true), vt));
                     break;
                 }
             }

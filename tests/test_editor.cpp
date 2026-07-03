@@ -260,46 +260,46 @@ int run_editor_tests() {
               "fillet-dpoly-1click: single click on a double polyline edits/redefines the knee");
     }
 
-    // --- Chamfer a CLOSED figure (rectangle): pick two adjacent edges -> that corner
-    //     gets a chamfer distance; renderer draws it via cornerChamfers.
+    // --- Chamfer a CLOSED figure (rectangle) BY THE TWO CLICKED POINTS: the setback
+    //     on each wall is that click's distance from the shared corner (asymmetric).
     {
         Document d; d.entities().clear();
         Entity r; r.id = "r"; r.type = EntityType::Rect;
-        r.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}}; // CCW rect
+        r.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
         d.entities().push_back(r);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
-        ed.setChamferDistance(10.0);
         ed.setTool(ToolId::Chamfer);
-        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);  // bottom edge (0)
-        ed.onPointerPress({100, 30}, Qt::LeftButton, Qt::NoModifier); // right edge (1) -> corner (100,0)
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);   // bottom wall, 50 from corner
+        ed.onPointerPress({100, 30}, Qt::LeftButton, Qt::NoModifier); // right wall, 30 from corner (100,0)
         const Entity* rr = nullptr;
         for (const auto& e : d.entities()) if (e.id == "r") rr = &e;
-        const QJsonArray ch = rr ? rr->meta.value("cornerChamfers").toArray() : QJsonArray{};
-        check(rr && near(ch[1].toDouble(), 10.0),
-              "chamfer-rect: adjacent edges of a rectangle chamfer the shared corner");
-        // The rendered outline should gain a corner (straight cut) vs the 4-pt rect.
-        std::vector<double> radii(4, 0.0), chamfers(4, 0.0);
-        for (int i = 0; i < ch.size(); ++i) chamfers[i] = ch[i].toDouble();
-        const auto outline = filletChamferPolyline(rr->points, radii, chamfers, true);
+        const QJsonArray in = rr ? rr->meta.value("cornerChamfers").toArray() : QJsonArray{};
+        const QJsonArray out = rr ? rr->meta.value("cornerChamfers2").toArray() : QJsonArray{};
+        check(rr && near(in[1].toDouble(), 50.0) && near(out[1].toDouble(), 30.0),
+              "chamfer-rect-points: rectangle corner chamfers exactly between the clicked points");
+        std::vector<double> radii(4, 0.0), cin(4, 0.0), cout(4, 0.0);
+        for (int i = 0; i < in.size(); ++i) cin[i] = in[i].toDouble();
+        for (int i = 0; i < out.size(); ++i) cout[i] = out[i].toDouble();
+        const auto outline = filletChamferPolyline(rr->points, radii, cin, cout, true);
         check(outline.size() == rr->points.size() + 1,
-              "chamfer-rect: chamfered rectangle outline has one extra vertex");
+              "chamfer-rect-points: chamfered rectangle outline has one extra vertex");
     }
 
-    // --- Chamfer a POLYGON corner likewise.
+    // --- Chamfer a POLYGON corner likewise (symmetric clicks -> equal setbacks).
     {
         Document d; d.entities().clear();
         Entity g; g.id = "g"; g.type = EntityType::Polygon;
         g.points = {{0, 0}, {80, 0}, {80, 80}, {0, 80}};
         d.entities().push_back(g);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
-        ed.setChamferDistance(12.0);
         ed.setTool(ToolId::Chamfer);
         ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({80, 40}, Qt::LeftButton, Qt::NoModifier); // corner (80,0) = vertex 1
         const Entity* gg = nullptr;
         for (const auto& e : d.entities()) if (e.id == "g") gg = &e;
-        check(gg && near(gg->meta.value("cornerChamfers").toArray()[1].toDouble(), 12.0),
-              "chamfer-polygon: adjacent edges chamfer the shared polygon corner");
+        check(gg && near(gg->meta.value("cornerChamfers").toArray()[1].toDouble(), 40.0) &&
+                  near(gg->meta.value("cornerChamfers2").toArray()[1].toDouble(), 40.0),
+              "chamfer-polygon-points: polygon corner chamfered between the clicked points");
     }
 
     // --- Fillet works clicking MID-line (not just near the far ends): the pick's

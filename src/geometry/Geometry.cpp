@@ -328,10 +328,13 @@ std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
 }
 
 namespace {
-// Emit one corner p0->p1->p2 into `out`: a chamfer cut (chamfer>0), a tangent fillet
-// arc (radius>0), or a sharp vertex. Chamfer wins if both are set for the vertex.
+// Emit one corner p0->p1->p2 into `out`: a chamfer cut (both setbacks>0), a tangent
+// fillet arc (radius>0), or a sharp vertex. Chamfer wins if set. The chamfer cut runs
+// from a point chamferIn back along the incoming edge (toward p0) to a point
+// chamferOut along the outgoing edge (toward p2) — asymmetric distances allowed, so a
+// chamfer can pass "exactly between" two picked points.
 void emitCorner(std::vector<Vec2>& out, const Vec2& p0, const Vec2& p1, const Vec2& p2,
-                double radius, double chamfer, int arcSegments) {
+                double radius, double chamferIn, double chamferOut, int arcSegments) {
     constexpr double kPi = 3.14159265358979323846;
     const Vec2 d1 = (p0 - p1).normalized();
     const Vec2 d2 = (p2 - p1).normalized();
@@ -339,10 +342,11 @@ void emitCorner(std::vector<Vec2>& out, const Vec2& p0, const Vec2& p1, const Ve
     const double theta = std::acos(cosT);
     const double maxT = 0.5 * std::min(distance(p0, p1), distance(p1, p2));
     const bool bendable = theta > 1e-3 && theta < kPi - 1e-3;
-    if (chamfer > 0.0 && bendable) {
-        const double s = std::min(chamfer, maxT);
-        out.push_back(p1 + d1 * s);
-        out.push_back(p1 + d2 * s);
+    if (chamferIn > 0.0 && chamferOut > 0.0 && bendable) {
+        const double sIn = std::min(chamferIn, distance(p0, p1));
+        const double sOut = std::min(chamferOut, distance(p1, p2));
+        out.push_back(p1 + d1 * sIn);
+        out.push_back(p1 + d2 * sOut);
         return;
     }
     if (radius > 0.0 && bendable) {
@@ -372,7 +376,8 @@ void emitCorner(std::vector<Vec2>& out, const Vec2& p0, const Vec2& p1, const Ve
 
 std::vector<Vec2> filletChamferPolyline(const std::vector<Vec2>& pts,
                                         const std::vector<double>& radii,
-                                        const std::vector<double>& chamfers, bool closed,
+                                        const std::vector<double>& chamfersIn,
+                                        const std::vector<double>& chamfersOut, bool closed,
                                         int arcSegments) {
     const int n = static_cast<int>(pts.size());
     if (n < 3) return pts;
@@ -385,7 +390,7 @@ std::vector<Vec2> filletChamferPolyline(const std::vector<Vec2>& pts,
     const int end = closed ? n : n - 1;
     for (int i = begin; i < end; ++i)
         emitCorner(out, pts[(i - 1 + n) % n], pts[i], pts[(i + 1) % n], at(radii, i),
-                   at(chamfers, i), arcSegments);
+                   at(chamfersIn, i), at(chamfersOut, i), arcSegments);
     if (!closed) out.push_back(pts[n - 1]);
     return out;
 }

@@ -3411,10 +3411,11 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     pickIds_.push_back(*hit);
     pickPts_.push_back(p);
 
-    // DOUBLE POLYLINE: a SINGLE click edits the nearest knee (interior vertex)
-    // directly — apply/redefine its fillet radius or chamfer distance — so you don't
-    // pick both runs (and nothing is left marked orange waiting for a 2nd click).
-    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer)) {
+    // DOUBLE POLYLINE FILLET: a SINGLE click edits the nearest knee (interior vertex)
+    // directly — apply/redefine its radius — so you don't pick both runs (and nothing
+    // is left marked orange waiting for a 2nd click). Chamfer needs two points to cut
+    // "exactly between" them, so it uses the two-pick path below.
+    if (tool_ == ToolId::Fillet) {
         if (Entity* dp = entityById(pickIds_.back());
             dp && dp->type == EntityType::Polyline && dp->meta.value("double").toBool() &&
             dp->points.size() >= 3) {
@@ -3476,7 +3477,41 @@ void Editor::handlePickModifyPress(const Vec2& p) {
             else if (closed && ((s1 == 0 && s2 == n - 1) || (s1 == n - 1 && s2 == 0)))
                 knee = 0; // wrap-around corner (edge 0 and edge n-1 meet at vertex 0)
         }
-        if (knee >= 0) {
+        if (knee >= 0 && tool_ == ToolId::Chamfer) {
+            // Chamfer EXACTLY between the two clicked points: the setback on each edge
+            // is that edge's clicked point's distance from the shared corner (knee), so
+            // the cut passes through where the user clicked. Stored asymmetrically.
+            const int inEdge = (knee - 1 + n) % n; // edge ENDING at the knee
+            auto setback = [&](int seg, const Vec2& pk) {
+                const Vec2 cp =
+                    closestPointOnSegment(pk, l1->points[seg], l1->points[(seg + 1) % n]).point;
+                return distance(cp, l1->points[knee]);
+            };
+            double dIn, dOut;
+            if (s1 == inEdge) { dIn = setback(s1, pickPts_[0]); dOut = setback(s2, pickPts_[1]); }
+            else { dIn = setback(s2, pickPts_[1]); dOut = setback(s1, pickPts_[0]); }
+            const double inLen = distance(l1->points[inEdge], l1->points[knee]);
+            const double outLen = distance(l1->points[knee], l1->points[(knee + 1) % n]);
+            if (dIn < 1e-6 || dOut < 1e-6 || dIn > inLen + 1e-6 || dOut > outLen + 1e-6) {
+                emit message(QStringLiteral("Pick two points along the walls of one corner."));
+            } else {
+                pushUndo();
+                QJsonArray inArr = l1->meta.value("cornerChamfers").toArray();
+                QJsonArray outArr = l1->meta.value("cornerChamfers2").toArray();
+                while (inArr.size() < n) inArr.append(0.0);
+                while (outArr.size() < n) outArr.append(0.0);
+                inArr[knee] = dIn;
+                outArr[knee] = dOut;
+                l1->meta.insert(QStringLiteral("cornerChamfers"), inArr);
+                l1->meta.insert(QStringLiteral("cornerChamfers2"), outArr);
+                if (l1->meta.contains("cornerRadii")) { // fillet/chamfer exclusive per knee
+                    QJsonArray r = l1->meta.value("cornerRadii").toArray();
+                    if (knee < r.size()) { r[knee] = 0.0; l1->meta.insert(QStringLiteral("cornerRadii"), r); }
+                }
+                doc_->setDirty(true);
+                emit message(QStringLiteral("Chamfer applied between the picked points"));
+            }
+        } else if (knee >= 0) {
             const double gap =
                 l1->meta.value("double").toBool() ? l1->meta.value("gap").toDouble(10.0) : 0.0;
             const std::vector<Vec2> corner = {l1->points[(knee - 1 + n) % n], l1->points[knee],
@@ -4724,13 +4759,61 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
-    // Fillet / Chamfer: MARK the lines picked so far (first line, then second) so
-    // it's clear which ones the operation will use.
+    // Fillet / Chamfer: MARK the walls picked so far. For a polyline / rect / polygon
+    // only the picked WALL (the edge between the two nearest joints) is highlighted —
+    // not the whole shape — so it's clear which segment the corner op will use. Other
+    // primitives (single lines) are re-stroked whole.
     if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && !pickIds_.empty()) {
         const QColor mark("#ffcf3f");
-        for (const QString& id : pickIds_)
-            for (const auto& e : doc_->entities())
-                if (e.id == id) { EntityRenderer::draw(p, e, *doc_, vt, mark); break; }
+        QPen wp(mark);
+        wp.setCosmetic(true);
+        wp.setWidthF(2.2);
+        p.save();
+        p.setPen(wp);
+        p.setBrush(Qt::NoBrush);
+        for (size_t k = 0; k < pickIds_.size(); ++k) {
+            const Entity* e = nullptr;
+            for (const auto& ent : doc_->entities())
+                if (ent.id == pickIds_[k]) { e = &ent; break; }
+            if (!e) continue;
+            const bool polyish = e->type == EntityType::Polyline || e->type == EntityType::Rect ||
+                                 e->type == EntityType::Polygon;
+            if (polyish && e->points.size() >= 2) {
+                const Vec2 pk = k < pickPts_.size() ? pickPts_[k] : cursor_;
+                const int n = static_cast<int>(e->points.size());
+                const bool closed =
+                    e->type == EntityType::Rect || e->type == EntityType::Polygon;
+                const int edges = closed ? n : n - 1;
+                int seg = 0;
+                double bd = std::numeric_limits<double>::max();
+                for (int i = 0; i < edges; ++i) {
+                    const double d =
+                        closestPointOnSegment(pk, e->points[i], e->points[(i + 1) % n]).distance;
+                    if (d < bd) { bd = d; seg = i; }
+                }
+                const Vec2 a = e->points[seg], b = e->points[(seg + 1) % n];
+                if (e->meta.value("double").toBool()) { // mark both physical runs of the wall
+                    const Vec2 off = (b - a).normalized().perp() * (e->meta.value("gap").toDouble(10.0) / 2.0);
+                    p.drawLine(vt.toScreen(a + off), vt.toScreen(b + off));
+                    p.drawLine(vt.toScreen(a - off), vt.toScreen(b - off));
+                } else {
+                    p.drawLine(vt.toScreen(a), vt.toScreen(b));
+                }
+            } else {
+                EntityRenderer::draw(p, *e, *doc_, vt, mark);
+            }
+        }
+        // Chamfer preview: after the first pick, a dashed line from the first clicked
+        // point to the cursor previews the cut that will pass between the two points.
+        if (tool_ == ToolId::Chamfer && !pickPts_.empty() && pickIds_.size() < 2) {
+            QPen pv(QColor("#19ff7e"));
+            pv.setCosmetic(true);
+            pv.setWidthF(1.4);
+            pv.setStyle(Qt::DashLine);
+            p.setPen(pv);
+            p.drawLine(vt.toScreen(pickPts_.front()), vt.toScreen(cursor_));
+        }
+        p.restore();
     }
 
     // Trim/Extend fence line (AutoCAD-style): a bright dashed line the user drags
