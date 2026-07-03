@@ -97,6 +97,26 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist) {
     return out;
 }
 
+std::vector<Vec2> offsetClosedPolygon(const std::vector<Vec2>& pts, double dist) {
+    const int n = static_cast<int>(pts.size());
+    if (n < 3) return pts;
+    // Shift every edge parallel by `dist` (perp), then each new vertex is where the
+    // two shifted edges meeting there intersect (mitered, wrapping around the loop).
+    std::vector<Vec2> segA(n), segB(n);
+    for (int i = 0; i < n; ++i) {
+        const Vec2 off = (pts[(i + 1) % n] - pts[i]).normalized().perp() * dist;
+        segA[i] = pts[i] + off;
+        segB[i] = pts[(i + 1) % n] + off;
+    }
+    std::vector<Vec2> out(n);
+    for (int i = 0; i < n; ++i) {
+        const int p = (i - 1 + n) % n; // edge arriving at vertex i
+        const auto x = lineLineIntersection(segA[p], segB[p], segA[i], segB[i]);
+        out[i] = x.value_or(segA[i]);
+    }
+    return out;
+}
+
 std::optional<std::vector<Vec2>> traceEnclosingLoop(
     const std::vector<std::pair<Vec2, Vec2>>& segments, const Vec2& seed) {
     constexpr double kPi = 3.14159265358979323846;

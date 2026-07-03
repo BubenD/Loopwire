@@ -170,6 +170,7 @@ private:
     QLineEdit* commandEdit_ = nullptr;
     QLabel* coordLabel_ = nullptr;
     QLabel* cmdHintLabel_ = nullptr; // applicable commands for the active draw tool
+    QToolButton* repeatBtn_ = nullptr; // status-bar "repeat last command" button
 
     // On-canvas text editor overlay (children of the canvas).
     QPlainTextEdit* inlineEdit_ = nullptr;

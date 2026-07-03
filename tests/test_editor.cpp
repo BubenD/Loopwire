@@ -302,6 +302,47 @@ int run_editor_tests() {
               "chamfer-polygon-points: polygon corner chamfered between the clicked points");
     }
 
+    // --- OFFSET (AutoCAD-style): type a distance, pick a line, click a side -> an
+    //     offset copy is placed on the clicked side; the source stays put.
+    {
+        Document d; d.entities().clear();
+        Entity l; l.id = "ol"; l.type = EntityType::Line; l.a = {0, 0}; l.b = {100, 0};
+        d.entities().push_back(l);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setTool(ToolId::Offset);
+        const bool dist = ed.acceptCommandInput("10"); // type the offset distance
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);  // pick the line
+        ed.onPointerPress({50, 40}, Qt::LeftButton, Qt::NoModifier); // side = above -> +y
+        int lines = 0; const Entity* copy = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::Line) ++lines;
+            if (e.type == EntityType::Line && e.id != "ol") copy = &e;
+        }
+        check(dist && lines == 2 && copy && near(copy->a.y, 10.0) && near(copy->b.y, 10.0) &&
+                  near(copy->a.x, 0.0) && near(copy->b.x, 100.0),
+              "offset-line: typed distance + side click places an offset copy above the line");
+    }
+
+    // --- OFFSET a rectangle: clicking OUTSIDE grows it by the distance on every side.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "orr"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}};
+        d.entities().push_back(r);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setTool(ToolId::Offset);
+        ed.acceptCommandInput("5");
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);    // pick the rect edge
+        ed.onPointerPress({20, -30}, Qt::LeftButton, Qt::NoModifier);  // side = outside -> grow
+        const Entity* copy = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Rect && e.id != "orr") copy = &e;
+        // Grown rect spans (-5,-5)..(45,25): area 50x30.
+        const Bounds b = copy ? boundsOf(copy->points) : Bounds{};
+        check(copy && near(b.width(), 50.0) && near(b.height(), 30.0),
+              "offset-rect: offsetting a rectangle outward grows it by the distance all round");
+    }
+
     // --- Scale by a TYPED factor (no size click): 2 doubles about the selection
     //     centre; the shape's bbox diagonal grows 2x.
     {

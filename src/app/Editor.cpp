@@ -278,6 +278,10 @@ void Editor::setTool(ToolId t) {
     modifyPts_.clear();
     pickIds_.clear();
     pickPts_.clear();
+    offsetHasDist_ = false;
+    offsetDist_ = 0.0;
+    offsetDistPts_.clear();
+    offsetSourceId_.clear();
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -800,6 +804,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isPickModifyTool(tool_)) { handlePickModifyPress(p); return; }
+    if (tool_ == ToolId::Offset) { handleOffsetPress(p); return; }
     if (isPlacementTool(tool_)) { handlePlacementPress(p); return; }
     handleModifyPress(p);
 }
@@ -2683,6 +2688,22 @@ bool Editor::acceptCommandInput(const QString& text) {
         return true;
     }
 
+    // Offset: type the offset distance (before picking an object to offset).
+    if (tool_ == ToolId::Offset && !offsetHasDist_ && !t.contains(',')) {
+        bool ok = false;
+        const double dv = std::abs(t.toDouble(&ok));
+        if (ok && dv > 1e-9) {
+            offsetDist_ = dv;
+            offsetHasDist_ = true;
+            offsetDistPts_.clear();
+            emit message(QStringLiteral("Offset %1 — pick an object to offset").arg(dv));
+            emit overlayChanged();
+        } else {
+            emit message(QStringLiteral("Enter a positive offset distance"));
+        }
+        return true;
+    }
+
     // Scale: type a scale factor instead of picking a size. 2 = double, 0.5 = half.
     // The base point is the one already picked, else the selection's bounding centre.
     if (tool_ == ToolId::Scale && !t.contains(',')) {
@@ -3135,6 +3156,136 @@ void Editor::handleModifyPress(const Vec2& p) {
     emit changed();
     emit message(QStringLiteral("%1 done").arg(toolLabel(tool_)));
     setTool(ToolId::Select);
+}
+
+namespace {
+// Signed area (shoelace) of a closed polygon; sign = winding.
+double polygonSignedArea(const std::vector<Vec2>& p) {
+    double a = 0.0;
+    const int n = static_cast<int>(p.size());
+    for (int i = 0; i < n; ++i) a += cross(p[i], p[(i + 1) % n]);
+    return a * 0.5;
+}
+bool pointInPolygon(const Vec2& pt, const std::vector<Vec2>& poly) {
+    bool in = false;
+    const int n = static_cast<int>(poly.size());
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        const Vec2 a = poly[i], b = poly[j];
+        if (((a.y > pt.y) != (b.y > pt.y)) &&
+            (pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x))
+            in = !in;
+    }
+    return in;
+}
+// Offset `src` by `dist` toward the side of `side`. Returns nullopt for unsupported
+// types. The copy has no id (caller assigns one).
+std::optional<Entity> offsetEntityToward(const Entity& src, const Vec2& side, double dist) {
+    Entity c = src;
+    switch (src.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine: {
+        const Vec2 nrm = (src.b - src.a).normalized().perp();
+        const double s = dot(side - src.a, nrm) >= 0 ? 1.0 : -1.0;
+        c.a = src.a + nrm * (s * dist);
+        c.b = src.b + nrm * (s * dist);
+        return c;
+    }
+    case EntityType::Circle:
+    case EntityType::Arc: {
+        const double d = distance(src.center, side);
+        c.radius = d >= src.radius ? src.radius + dist : std::max(1e-6, src.radius - dist);
+        return c;
+    }
+    case EntityType::Ellipse: {
+        const double avg = 0.5 * (src.radius + src.radiusY);
+        const bool out = distance(src.center, side) >= avg;
+        c.radius = std::max(1e-6, src.radius + (out ? dist : -dist));
+        c.radiusY = std::max(1e-6, src.radiusY + (out ? dist : -dist));
+        return c;
+    }
+    case EntityType::Polyline:
+    case EntityType::Spline:
+    case EntityType::Wire: {
+        if (src.points.size() < 2) return std::nullopt;
+        // Pick the side from the segment nearest the cursor.
+        int seg = 0;
+        double bd = std::numeric_limits<double>::max();
+        for (size_t i = 0; i + 1 < src.points.size(); ++i) {
+            const double d = closestPointOnSegment(side, src.points[i], src.points[i + 1]).distance;
+            if (d < bd) { bd = d; seg = static_cast<int>(i); }
+        }
+        const Vec2 nrm = (src.points[seg + 1] - src.points[seg]).normalized().perp();
+        const double s = dot(side - src.points[seg], nrm) >= 0 ? 1.0 : -1.0;
+        c.points = offsetPolyline(src.points, s * dist);
+        return c;
+    }
+    case EntityType::Rect:
+    case EntityType::Polygon: {
+        if (src.points.size() < 3) return std::nullopt;
+        // Grow if the cursor is outside the shape, shrink if inside.
+        const bool inside = pointInPolygon(side, src.points);
+        const auto plus = offsetClosedPolygon(src.points, dist);
+        const auto minus = offsetClosedPolygon(src.points, -dist);
+        const double ap = std::abs(polygonSignedArea(plus));
+        const double am = std::abs(polygonSignedArea(minus));
+        c.points = inside ? (ap < am ? plus : minus) : (ap > am ? plus : minus);
+        return c;
+    }
+    default:
+        return std::nullopt;
+    }
+}
+} // namespace
+
+void Editor::handleOffsetPress(const Vec2& p) {
+    // Step 1: define the offset distance — two clicks (their separation) or a typed
+    // value (handled in acceptCommandInput).
+    if (!offsetHasDist_) {
+        offsetDistPts_.push_back(p);
+        if (offsetDistPts_.size() < 2) {
+            emit message(QStringLiteral(
+                "Offset distance: click the second point, or type a distance"));
+        } else {
+            offsetDist_ = distance(offsetDistPts_[0], offsetDistPts_[1]);
+            offsetDistPts_.clear();
+            if (offsetDist_ < 1e-9) {
+                emit message(QStringLiteral("Distance too small — click two points again"));
+            } else {
+                offsetHasDist_ = true;
+                emit message(QStringLiteral("Offset %1 — pick an object to offset")
+                                 .arg(offsetDist_));
+            }
+        }
+        emit overlayChanged();
+        return;
+    }
+    // Step 2: pick the object to offset.
+    if (offsetSourceId_.isEmpty()) {
+        if (auto hit = hitTest(p)) {
+            offsetSourceId_ = *hit;
+            emit message(QStringLiteral("Move the cursor to a side, then click to place the "
+                                        "offset (Esc to finish)"));
+        } else {
+            emit message(QStringLiteral("Nothing there — pick an object to offset"));
+        }
+        emit overlayChanged();
+        return;
+    }
+    // Step 3: the click's side decides where the offset copy goes; place it and stay
+    // in the tool for the next object (distance kept). Esc exits.
+    if (const Entity* src = entityById(offsetSourceId_)) {
+        if (auto copy = offsetEntityToward(*src, p, offsetDist_)) {
+            copy->id = uid();
+            copy->layer = src->layer;
+            pushUndo();
+            addEntity(std::move(*copy));
+            emit message(QStringLiteral("Offset placed — pick another object, or Esc to finish"));
+        } else {
+            emit message(QStringLiteral("This object type can't be offset"));
+        }
+    }
+    offsetSourceId_.clear();
+    emit changed();
 }
 
 double Editor::selectionRefLength(const std::vector<Entity*>& sel) const {
@@ -4955,6 +5106,26 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         // command finishes, so the outcome is visible as the cursor moves.
         const QColor ghost(120, 200, 255, 170);
         for (const Entity& g : modifyPreview()) EntityRenderer::draw(p, g, *doc_, vt, ghost);
+    }
+
+    // Offset tool preview: while defining the distance, rubber-band the two points;
+    // once an object is picked, ghost the offset copy on the cursor's side.
+    if (tool_ == ToolId::Offset) {
+        if (!offsetHasDist_ && offsetDistPts_.size() == 1) {
+            QPen pv(QColor("#19ff7e"));
+            pv.setCosmetic(true);
+            pv.setWidthF(1.4);
+            pv.setStyle(Qt::DashLine);
+            p.setPen(pv);
+            p.drawLine(vt.toScreen(offsetDistPts_[0]), vt.toScreen(cursor_));
+        } else if (offsetHasDist_ && !offsetSourceId_.isEmpty()) {
+            const Entity* src = nullptr;
+            for (const auto& e : doc_->entities())
+                if (e.id == offsetSourceId_) { src = &e; break; }
+            if (src)
+                if (auto g = offsetEntityToward(*src, cursor_, offsetDist_))
+                    EntityRenderer::draw(p, *g, *doc_, vt, QColor(120, 200, 255, 210));
+        }
     }
 
     // Snap marker.

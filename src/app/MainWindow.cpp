@@ -2366,6 +2366,28 @@ void MainWindow::showHatchRibbon(bool on) {
 }
 
 void MainWindow::buildStatusControls() {
+    // "Repeat last command" button: re-activates the last draw/modify function (the
+    // app returns to Select after each object; this button — like Space/Enter — starts
+    // the last tool again). Its label tracks whatever that tool is.
+    repeatBtn_ = new QToolButton(this);
+    repeatBtn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    repeatBtn_->setText(QStringLiteral("↻ Repeat"));
+    repeatBtn_->setToolTip(QStringLiteral("Repeat the last command (also Enter / Space)"));
+    repeatBtn_->setAutoRaise(true);
+    repeatBtn_->setFocusPolicy(Qt::NoFocus);
+    repeatBtn_->setStyleSheet(
+        QStringLiteral("QToolButton{padding:2px 8px;border:none;color:#c9ccd1;}"
+                       "QToolButton:hover{background:#243245;}"));
+    connect(repeatBtn_, &QToolButton::clicked, this, [this] { editor_->repeatLastTool(); });
+    connect(editor_, &Editor::toolChanged, this, [this](ToolId) {
+        const ToolId lt = editor_->lastTool();
+        repeatBtn_->setText(lt == ToolId::Select ? QStringLiteral("↻ Repeat")
+                                                 : QStringLiteral("↻ %1").arg(toolLabel(lt)));
+        repeatBtn_->setEnabled(lt != ToolId::Select);
+    });
+    repeatBtn_->setEnabled(false);
+    statusBar()->addPermanentWidget(repeatBtn_);
+
     const QString toggleQss =
         QStringLiteral("QToolButton{padding:2px;border:none;}"
                        "QToolButton:hover{background:#243245;}"

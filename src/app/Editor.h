@@ -93,7 +93,7 @@ public:
     }
     // Modify tools that accept a TYPED numeric value (e.g. Scale factor) even though
     // they are not draw tools — lets a digit pop the flying input field at the cursor.
-    bool wantsValueInput() const { return tool_ == ToolId::Scale; }
+    bool wantsValueInput() const { return tool_ == ToolId::Scale || tool_ == ToolId::Offset; }
 
     // Dynamic-input reference fields (AutoCAD-style). For the current draw step
     // these are the typed references — line/segment: Length + Angle; circle:
@@ -170,7 +170,8 @@ public:
     void arraySelected(int rows, int cols, double dx, double dy);
     void explodeSelected();
     void purgeSelected();      // separate objects into single primitives
-    void repeatLastTool();     // re-invoke the last used tool (Space / Enter when idle)
+    void repeatLastTool();
+    ToolId lastTool() const { return lastTool_; }     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }
     void setChamferDistance(double d) { chamferDist_ = d; }
     // Pending polyline fillet radius for the next corner(s) drawn (0 = sharp).
@@ -341,6 +342,9 @@ private:
     void handleTangentPick(const Vec2& p); // Circle Tan-Tan-Radius/Tan-Tan-Tan: pick objects
     void buildTangentCircle();             // solve + place once enough objects are picked
     void handleModifyPress(const Vec2& p);
+    // Offset tool (AutoCAD OFFSET): set a distance (two clicks or a typed value), then
+    // repeatedly pick an object and click the side to drop an offset copy. Esc exits.
+    void handleOffsetPress(const Vec2& p);
     // The selection transformed by the in-progress modify (Move/Rotate/Mirror/
     // Scale/Offset) using the collected points + the live cursor — drawn as a ghost
     // preview until the command finishes.
@@ -440,6 +444,12 @@ private:
 
     // Modify command state: collected reference points.
     std::vector<Vec2> modifyPts_;
+
+    // Offset tool state.
+    double offsetDist_ = 0.0;             // the offset distance once set
+    bool offsetHasDist_ = false;          // distance defined (by 2 clicks or typed)?
+    std::vector<Vec2> offsetDistPts_;     // the 2-click distance definition, transient
+    QString offsetSourceId_;              // object picked to offset (empty = awaiting pick)
 
     // Pick-modify state (trim/extend/fillet/chamfer).
     std::vector<QString> pickIds_;

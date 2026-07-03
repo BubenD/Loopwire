@@ -46,6 +46,10 @@ double shortAngleDelta(double current, double target);
 // mitering interior vertices. Used to draw double polylines.
 std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 
+// Offset a CLOSED polygon (rect/polygon) sideways by `dist` (sign picks in/out),
+// mitering every wrapped vertex. Companion to offsetPolyline (which is for open runs).
+std::vector<Vec2> offsetClosedPolygon(const std::vector<Vec2>& pts, double dist);
+
 // Replace each interior corner of a polyline with a tangent fillet arc of the
 // given radius (arc approximated by line segments). radius <= 0 returns the
 // points unchanged. The setback is clamped to neighbouring segment lengths.
