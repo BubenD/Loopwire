@@ -170,23 +170,36 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     if (!inter) return res;
     const Vec2 P = *inter;
 
-    Vec2 n1, f1, n2, f2; bool a1, a2;
-    nearFar(l1, near1, n1, f1, a1);
-    nearFar(l2, near2, n2, f2, a2);
-
-    // The pick marks the kept side; direction runs from the corner toward the
-    // picked (kept) endpoint. The corner-side endpoint is trimmed to the tangent.
-    const Vec2 u1 = (n1 - P).normalized();
-    const Vec2 u2 = (n2 - P).normalized();
-    double cosT = std::clamp(dot(u1, u2), -1.0, 1.0);
+    // For each line, the KEPT direction u runs from the corner P toward the SIDE the
+    // user clicked (not merely the nearest endpoint) — so clicking anywhere along a
+    // line, including mid-line or near the corner, keeps the far part. The endpoint
+    // on the other side is trimmed to the tangent point.
+    auto pickSide = [&](const Entity& l, const Vec2& pick, Vec2& u, double& maxAlong,
+                        bool& moveIsA) -> bool {
+        Vec2 dir = l.b - l.a;
+        if (dir.lengthSq() < 1e-18) return false;
+        dir = dir.normalized();
+        const Vec2 proj = closestPointOnSegment(pick, l.a, l.b).point;
+        u = (dot(proj - P, dir) >= 0.0) ? dir : Vec2{-dir.x, -dir.y};
+        const double da = dot(l.a - P, u), db = dot(l.b - P, u);
+        maxAlong = std::max(da, db); // distance from P to the kept (far) endpoint
+        moveIsA = da < db;           // trim the endpoint that's less far along u
+        return maxAlong > 1e-9;
+    };
+    Vec2 u1, u2;
+    double maxD1, maxD2;
+    bool move1IsA, move2IsA;
+    if (!pickSide(l1, near1, u1, maxD1, move1IsA)) return res;
+    if (!pickSide(l2, near2, u2, maxD2, move2IsA)) return res;
+    const double cosT = std::clamp(dot(u1, u2), -1.0, 1.0);
     const double theta = std::acos(cosT);
     if (theta < 1e-4 || std::abs(theta - M_PI) < 1e-4) return res; // collinear
 
     // Radius 0 (AutoCAD): no arc — just trim/extend both lines so they meet at the
     // corner P, keeping the picked sides.
     if (radius <= 1e-9) {
-        setNear(l1, !a1, P);
-        setNear(l2, !a2, P);
+        setNear(l1, move1IsA, P);
+        setNear(l2, move2IsA, P);
         res.hasConnector = false;
         res.ok = true;
         return res;
@@ -195,15 +208,15 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     // Tangent setback from the corner. If the radius is too large to fit on either
     // kept line, reject it (don't apply) so the caller can warn the user.
     const double d = radius / std::tan(theta / 2.0);
-    const double maxD = std::min(distance(P, n1), distance(P, n2));
+    const double maxD = std::min(maxD1, maxD2);
     if (d > maxD) { res.tooBig = true; return res; }
     const double r = radius;
     const Vec2 T1 = P + u1 * d;
     const Vec2 T2 = P + u2 * d;
 
-    // Move the corner-side (non-picked) endpoint to the tangent point.
-    setNear(l1, !a1, T1);
-    setNear(l2, !a2, T2);
+    // Trim the corner-side endpoint of each line to its tangent point.
+    setNear(l1, move1IsA, T1);
+    setNear(l2, move2IsA, T2);
 
     // Arc connecting T1->T2.
     const Vec2 bis = (u1 + u2).normalized();

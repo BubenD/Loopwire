@@ -155,6 +155,18 @@ int run_editor_tests() {
         check(arc8, "fillet-r: fillet applied with the redefined radius (8)");
     }
 
+    // --- Fillet works clicking MID-line (not just near the far ends): the pick's
+    //     SIDE of the corner is what matters, so a rounded knee is still produced.
+    {
+        Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
+        Entity v; v.type = EntityType::Line; v.a = {0, 0}; v.b = {0, 100};
+        CornerResult r = filletLines(h, v, 10.0, {50, 0}, {0, 50}); // mid-line picks
+        check(r.ok && r.hasConnector && r.connector.type == EntityType::Arc &&
+                  near(r.connector.radius, 10.0),
+              "fillet-mid: rounded knee produced when clicking mid-line");
+        check(near(h.a.x, 10.0) && near(v.a.y, 10.0), "fillet-mid: both lines trimmed to the tangent");
+    }
+
     // --- Fillet a right-angle corner: tangent points at distance r from corner.
     {
         Entity h; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
