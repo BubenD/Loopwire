@@ -3367,6 +3367,61 @@ void Editor::handlePickModifyPress(const Vec2& p) {
 
     Entity* l1 = entityById(pickIds_[0]);
     Entity* l2 = entityById(pickIds_[1]);
+
+    // Fillet a VERTEX of a multi-joint object: both picks land on the SAME polyline /
+    // rect / polygon — round the corner between the two picked segments by setting
+    // that vertex's per-corner radius. For a double polyline BOTH physical runs round
+    // (renderer rounds the centreline at radius + gap/2), keeping the gap. Rect/
+    // polygon are closed, so segments wrap and every vertex is filletable.
+    if (tool_ == ToolId::Fillet && l1 && l1 == l2 &&
+        (l1->type == EntityType::Polyline || l1->type == EntityType::Rect ||
+         l1->type == EntityType::Polygon) &&
+        l1->points.size() >= 3) {
+        const int n = static_cast<int>(l1->points.size());
+        const bool closed = (l1->type == EntityType::Rect || l1->type == EntityType::Polygon);
+        auto segOf = [&](const Vec2& pk) {
+            int best = -1;
+            double bd = std::numeric_limits<double>::max();
+            const int edges = closed ? n : n - 1;
+            for (int i = 0; i < edges; ++i) {
+                const double d =
+                    closestPointOnSegment(pk, l1->points[i], l1->points[(i + 1) % n]).distance;
+                if (d < bd) { bd = d; best = i; }
+            }
+            return best;
+        };
+        const int s1 = segOf(pickPts_[0]), s2 = segOf(pickPts_[1]);
+        int knee = -1;
+        if (s1 >= 0 && s2 >= 0) {
+            if (std::abs(s1 - s2) == 1) knee = std::max(s1, s2); // adjacent edges share the higher vertex
+            else if (closed && ((s1 == 0 && s2 == n - 1) || (s1 == n - 1 && s2 == 0)))
+                knee = 0; // wrap-around corner (edge 0 and edge n-1 meet at vertex 0)
+        }
+        if (knee >= 0) {
+            const double gap =
+                l1->meta.value("double").toBool() ? l1->meta.value("gap").toDouble(10.0) : 0.0;
+            const std::vector<Vec2> corner = {l1->points[(knee - 1 + n) % n], l1->points[knee],
+                                              l1->points[(knee + 1) % n]};
+            if (filletRadius_ > 0 && !filletRadiusFits(corner, filletRadius_ + gap / 2.0)) {
+                emit message(QStringLiteral("Fillet radius %1 is too big for that corner").arg(filletRadius_));
+            } else {
+                pushUndo();
+                QJsonArray arr = l1->meta.value("cornerRadii").toArray();
+                while (arr.size() < n) arr.append(0.0);
+                arr[knee] = filletRadius_;
+                l1->meta.insert(QStringLiteral("cornerRadii"), arr);
+                doc_->setDirty(true);
+                emit message(QStringLiteral("Fillet applied to the corner (radius %1)").arg(filletRadius_));
+            }
+        } else {
+            emit message(QStringLiteral("Pick two segments that share a corner."));
+        }
+        pickIds_.clear();
+        pickPts_.clear();
+        emit changed();
+        return;
+    }
+
     if (l1 && l2 && l1 != l2 && l1->type == EntityType::Line && l2->type == EntityType::Line) {
         pushUndo();
         CornerResult r;

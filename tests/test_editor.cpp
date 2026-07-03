@@ -155,6 +155,42 @@ int run_editor_tests() {
         check(arc8, "fillet-r: fillet applied with the redefined radius (8)");
     }
 
+    // --- Fillet a POLYLINE knee: pick the two segments that share it -> that vertex
+    //     gets a per-corner radius.
+    {
+        Document d; d.entities().clear();
+        Entity pl; pl.id = "p"; pl.type = EntityType::Polyline;
+        pl.points = {{0, 0}, {100, 0}, {100, 100}}; // knee at vertex 1
+        d.entities().push_back(pl);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(5.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);   // segment 0
+        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier); // segment 1 -> fillet knee
+        const Entity* pp = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "p") pp = &e;
+        check(pp && near(pp->meta.value("cornerRadii").toArray()[1].toDouble(), 5.0),
+              "fillet-knee: the shared vertex gets the fillet radius");
+    }
+
+    // --- Fillet a POLYGON corner (closed shape, wrap-around): pick the two edges
+    //     that share the corner.
+    {
+        Document d; d.entities().clear();
+        Entity pg; pg.id = "pg"; pg.type = EntityType::Polygon;
+        pg.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}}; // square; corner 0 = (0,0)
+        d.entities().push_back(pg);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.setFilletRadius(5.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // bottom edge (edge 0)
+        ed.onPointerPress({0, 50}, Qt::LeftButton, Qt::NoModifier); // left edge (edge 3) -> corner 0
+        const Entity* gg = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "pg") gg = &e;
+        check(gg && near(gg->meta.value("cornerRadii").toArray()[0].toDouble(), 5.0),
+              "fillet-polygon: the shared corner (wrap-around) gets the fillet radius");
+    }
+
     // --- Fillet works clicking MID-line (not just near the far ends): the pick's
     //     SIDE of the corner is what matters, so a rounded knee is still produced.
     {

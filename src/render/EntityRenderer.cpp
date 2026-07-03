@@ -619,8 +619,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Rect:
     case EntityType::Polygon:
-        if (e.points.size() >= 2)
+        if (e.points.size() >= 2) {
+            // Per-corner fillets (set by the Fillet tool) round the closed outline.
+            if (e.meta.contains("cornerRadii")) {
+                const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
+                std::vector<double> radii(e.points.size(), 0.0);
+                bool any = false;
+                for (int i = 0; i < rArr.size() && i < static_cast<int>(radii.size()); ++i) {
+                    radii[i] = rArr[i].toDouble();
+                    if (radii[i] > 0.0) any = true;
+                }
+                if (any) {
+                    p.drawPolygon(toScreenPoly(roundedPolygonPerCorner(e.points, radii), vt));
+                    break;
+                }
+            }
             p.drawPolygon(toScreenPoly(e.points, vt));
+        }
         break;
 
     case EntityType::Hatch: {

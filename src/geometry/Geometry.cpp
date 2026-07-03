@@ -280,6 +280,47 @@ std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
     return out;
 }
 
+std::vector<Vec2> roundedPolygonPerCorner(const std::vector<Vec2>& pts,
+                                          const std::vector<double>& radii,
+                                          int arcSegments) {
+    const int n = static_cast<int>(pts.size());
+    if (n < 3) return pts;
+    constexpr double kPi = 3.14159265358979323846;
+    std::vector<Vec2> out;
+    for (int i = 0; i < n; ++i) { // EVERY vertex is a corner (closed loop, wraps)
+        const double radius = (i < static_cast<int>(radii.size())) ? radii[i] : 0.0;
+        const Vec2 p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n];
+        const Vec2 d1 = (p0 - p1).normalized();
+        const Vec2 d2 = (p2 - p1).normalized();
+        const double cosT = std::clamp(dot(d1, d2), -1.0, 1.0);
+        const double theta = std::acos(cosT);
+        if (radius <= 0.0 || theta < 1e-3 || theta > kPi - 1e-3) {
+            out.push_back(p1);
+            continue;
+        }
+        double t = radius / std::tan(theta / 2.0);
+        const double maxT = 0.5 * std::min(distance(p0, p1), distance(p1, p2));
+        t = std::min(t, maxT);
+        const double r = t * std::tan(theta / 2.0);
+        const Vec2 t1 = p1 + d1 * t;
+        const Vec2 t2 = p1 + d2 * t;
+        const Vec2 bis = (d1 + d2).normalized();
+        const Vec2 c = p1 + bis * (r / std::sin(theta / 2.0));
+        double a1 = std::atan2(t1.y - c.y, t1.x - c.x);
+        const double a2 = std::atan2(t2.y - c.y, t2.x - c.x);
+        double sweep = a2 - a1;
+        while (sweep <= -kPi) sweep += 2 * kPi;
+        while (sweep > kPi) sweep -= 2 * kPi;
+        out.push_back(t1);
+        for (int s = 1; s < arcSegments; ++s) {
+            const double a = a1 + sweep * s / arcSegments;
+            out.push_back({c.x + r * std::cos(a), c.y + r * std::sin(a)});
+        }
+        out.push_back(t2);
+    }
+    return out;
+}
+
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
                                   int arcSegments) {
     if (radius <= 0.0) return pts;

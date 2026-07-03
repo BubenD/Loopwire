@@ -59,6 +59,13 @@ std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
                                            const std::vector<double>& radii,
                                            int arcSegments = 10);
 
+// Like roundedPolylinePerCorner but for a CLOSED polygon: EVERY vertex is a corner
+// (the loop wraps), so rects/polygons can have per-corner fillets. Returns the
+// rounded closed outline (not repeating the first point).
+std::vector<Vec2> roundedPolygonPerCorner(const std::vector<Vec2>& pts,
+                                          const std::vector<double>& radii,
+                                          int arcSegments = 10);
+
 // Trace the smallest closed loop of edges that encloses `seed`, given a soup of
 // boundary segments (from any number of separate entities). The segments are split
 // at their mutual intersections, built into a planar graph, and the face containing
