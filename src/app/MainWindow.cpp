@@ -1786,9 +1786,25 @@ void MainWindow::buildRibbon() {
             addGroup(lay, QStringLiteral("Modify"), modW);
         }
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
-        addGroup(lay, QStringLiteral("Annotation"),
-                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::Note,
-                          ToolId::Revision}));
+        {
+            // Annotation group: the annotation tools + a Table button (Insert Table).
+            auto* annoW = new QWidget(page);
+            auto* ah = new QHBoxLayout(annoW);
+            ah->setContentsMargins(0, 0, 0, 0);
+            ah->setSpacing(2);
+            ah->addWidget(toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon,
+                                   ToolId::Note, ToolId::Revision}));
+            auto* tb = new QToolButton(annoW);
+            tb->setIcon(makeToolIcon(ToolId::Table));
+            tb->setIconSize(QSize(28, 28));
+            tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            tb->setAutoRaise(true);
+            tb->setFocusPolicy(Qt::NoFocus);
+            tb->setToolTip(QStringLiteral("Insert Table"));
+            connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
+            ah->addWidget(tb);
+            addGroup(lay, QStringLiteral("Annotation"), annoW);
+        }
 
         // Properties group: Layer + Color dropdowns.
         auto* propsW = new QWidget(page);

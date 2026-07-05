@@ -487,6 +487,14 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::Polygon:
         for (size_t i = 0; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
+        // Tables / note / revision boxes are pickable anywhere INSIDE (so a cell or
+        // the box body can be clicked and double-clicked to edit, not only its border).
+        if (e.meta.value("table").toBool() || e.meta.value("note").toBool() ||
+            e.meta.value("revision").toBool()) {
+            const Bounds b = boundsOf(e.points);
+            if (b.valid && p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
+                best = 0.0;
+        }
         break;
     case EntityType::Hatch:
     case EntityType::Wipeout: {
@@ -515,6 +523,9 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::Circle:
     case EntityType::Arc:
         best = std::abs(distance(e.center, p) - e.radius);
+        // A balloon is a small filled callout — pickable anywhere within the disc
+        // (so a click / Ctrl+click lands on it, not only on the thin ring).
+        if (e.meta.value("balloon").toBool() && distance(e.center, p) <= e.radius) best = 0.0;
         break;
     case EntityType::Ellipse: {
         // Coarse: distance to the bounding ellipse via normalized radius.
@@ -623,16 +634,35 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         }
         if (auto hit = hitTest(p))
             if (Entity* e = entityById(*hit); e && e->meta.value("balloon").toBool()) {
+                // Add ONLY a circle, coupled (chained) to the clicked one: a new
+                // numbered balloon placed touching to its right. Coupled circles share
+                // a chain id and move together (see the Center grip).
                 pushUndo();
-                auto tips = balloonLeaders(*e);
-                tips.push_back({e->center.x + e->radius + 20.0, e->center.y + 8.0});
-                setBalloonLeaders(*e, tips);
-                selected_ = {*hit};
+                QString chain = e->meta.value("chain").toString();
+                if (chain.isEmpty()) { chain = uid(); e->meta.insert("chain", chain); }
+                const double r = e->radius;
+                Entity nb;
+                nb.id = uid();
+                nb.type = EntityType::Circle;
+                nb.layer = e->layer;
+                nb.color = e->color;
+                nb.radius = r;
+                nb.center = {e->center.x + r * 2.0, e->center.y}; // adjacent, touching
+                nb.a = nb.center;
+                int next = 0;
+                for (const auto& x : doc_->entities())
+                    if (x.meta.value("balloon").toBool())
+                        next = std::max(next, x.meta.value("text").toString().toInt());
+                nb.meta.insert("balloon", true);
+                nb.meta.insert("text", QString::number(next + 1));
+                nb.meta.insert("chain", chain); // coupled to the clicked circle (no leader)
+                const QString newId = nb.id;
+                addEntity(std::move(nb));
+                selected_ = {newId};
                 emit selectionChanged();
                 doc_->setDirty(true);
                 emit changed();
-                emit message(QStringLiteral(
-                    "Leader added — drag its arrow to position (Ctrl+click an arrow to remove)"));
+                emit message(QStringLiteral("Coupled balloon added (moves with its chain)"));
                 return;
             }
     }
@@ -1400,7 +1430,20 @@ void Editor::applyEditDrag(const Vec2& target) {
                 }
             }
             break;
-        case GripRole::Center: translateEntity(*e, delta); break;
+        case GripRole::Center:
+            if (e->meta.value("balloon").toBool()) {
+                // Move the balloon CIRCLE only — its leader arrows stay anchored where
+                // they point. Coupled circles (same chain) move along with it.
+                e->center = e->center + delta;
+                e->a = e->a + delta;
+                for (Entity* m : chainMatesOf(*e)) {
+                    m->center = m->center + delta;
+                    m->a = m->a + delta;
+                }
+            } else {
+                translateEntity(*e, delta);
+            }
+            break;
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
         case GripRole::Move: translateEntity(*e, delta); break;
         case GripRole::DimText: // reposition the dimension's measurement text
@@ -3761,6 +3804,16 @@ void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corn
     }
 }
 
+std::vector<Entity*> Editor::chainMatesOf(const Entity& e) {
+    std::vector<Entity*> out;
+    const QString chain = e.meta.value(QStringLiteral("chain")).toString();
+    if (chain.isEmpty() || !doc_) return out;
+    for (auto& x : doc_->entities())
+        if (x.id != e.id && x.meta.value(QStringLiteral("chain")).toString() == chain)
+            out.push_back(&x);
+    return out;
+}
+
 std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {
     const int n = static_cast<int>(e.points.size());
     if (n < 2) return {e.points.empty() ? Vec2{} : e.points[0], e.points.empty() ? Vec2{} : e.points[0]};
@@ -4919,6 +4972,39 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 continue;
             EntityRenderer::draw(p, e, *doc_, vt, hi); // re-stroke in highlight color
             drawGrips(p, e, vt);
+            // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
+            // along the top and row numbers (1,2,3…) down the left, as editing chrome.
+            if (e.type == EntityType::Rect && e.meta.value("table").toBool() &&
+                e.points.size() >= 4) {
+                const Bounds tb = boundsOf(e.points);
+                const QJsonArray colFrac = e.meta.value("colFrac").toArray();
+                const QJsonArray rowFrac = e.meta.value("rowFrac").toArray();
+                p.save();
+                QFont hf = p.font();
+                hf.setPixelSize(11);
+                hf.setBold(true);
+                p.setFont(hf);
+                p.setPen(QColor("#bfe6ff"));
+                // Column letters, centred above each column.
+                double x = tb.min.x;
+                for (int c = 0; c < colFrac.size(); ++c) {
+                    const double w = colFrac[c].toDouble() * tb.width();
+                    const QPointF at = vt.toScreen({x + w / 2.0, tb.max.y});
+                    const QString s(QChar('A' + std::min(c, 25)));
+                    const QFontMetricsF fm(hf);
+                    p.drawText(QPointF(at.x() - fm.horizontalAdvance(s) / 2.0, at.y() - 4), s);
+                    x += w;
+                }
+                // Row numbers, at the left of each row.
+                double y = tb.max.y;
+                for (int r = 0; r < rowFrac.size(); ++r) {
+                    const double h = rowFrac[r].toDouble() * tb.height();
+                    const QPointF at = vt.toScreen({tb.min.x, y - h / 2.0});
+                    p.drawText(QPointF(at.x() - 14, at.y() + 4), QString::number(r + 1));
+                    y -= h;
+                }
+                p.restore();
+            }
         }
     }
 

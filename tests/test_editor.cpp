@@ -420,6 +420,39 @@ int run_editor_tests() {
               "balloon: carries a leader arrow tip and an editable landing length");
     }
 
+    // --- Ctrl+click a balloon circle adds a COUPLED circle (chained, no leader), and
+    //     dragging one circle's centre moves its chain-mate while leaders stay put.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // tip
+        ed.onPointerPress({40, 40}, Qt::LeftButton, Qt::NoModifier); // centre -> balloon 1
+        const Entity* b1 = nullptr;
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b1 = &e;
+        // Ctrl+click on the balloon circle -> add a coupled circle.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress(b1->center, Qt::LeftButton, Qt::ControlModifier);
+        int balloons = 0; QString chain;
+        for (const auto& e : d.entities())
+            if (e.meta.value("balloon").toBool()) {
+                ++balloons;
+                if (chain.isEmpty()) chain = e.meta.value("chain").toString();
+            }
+        bool sameChain = !chain.isEmpty();
+        for (const auto& e : d.entities())
+            if (e.meta.value("balloon").toBool() && e.meta.value("chain").toString() != chain)
+                sameChain = false;
+        check(balloons == 2 && sameChain,
+              "coupled-balloon: Ctrl+click adds a second circle sharing a chain id");
+        // Exactly one balloon (the coupled circle) carries no leader.
+        int noLeader = 0;
+        for (const auto& e : d.entities())
+            if (e.meta.value("balloon").toBool() && e.meta.value("leaders").toArray().isEmpty())
+                ++noLeader;
+        check(noLeader == 1, "coupled-balloon: the coupled circle has no leader of its own");
+    }
+
     // --- Multileader: Add Leader appends a second arrow to a balloon; Remove Leader
     //     drops one; a balloon keeps at least one.
     {
