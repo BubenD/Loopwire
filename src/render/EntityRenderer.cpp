@@ -848,26 +848,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                 e.meta.value("leaderY").toDouble()});
             }
             if (!tips.empty()) {
-                const double landing = e.meta.value("landing").toDouble(8.0);
-                // The landing attaches at an angle around the circle (draggable). It
-                // defaults toward the average tip if no angle is stored.
-                double a;
-                if (e.meta.contains("landingAngle")) {
-                    a = e.meta.value("landingAngle").toDouble();
+                const double landing = std::max(0.0, e.meta.value("landing").toDouble(8.0));
+                // Horizontal landing shelf: attach on the side toward the tips, knee at
+                // the shelf end (landing==0 -> no shelf, leader leaves the circle edge).
+                int side;
+                if (e.meta.contains("landingSide")) {
+                    side = e.meta.value("landingSide").toDouble() >= 0 ? 1 : -1;
                 } else {
-                    double sx = 0, sy = 0;
-                    for (const auto& t : tips) { sx += t.x; sy += t.y; }
-                    a = std::atan2(sy / tips.size() - e.center.y, sx / tips.size() - e.center.x);
+                    double sx = 0;
+                    for (const auto& t : tips) sx += t.x;
+                    side = (sx / tips.size() >= e.center.x) ? 1 : -1;
                 }
-                const Vec2 dir{std::cos(a), std::sin(a)};
-                const Vec2 attach = e.center + dir * e.radius;
-                // The knee (elbow): a dragged position (meta kneeX/kneeY) or the default
-                // radial landing out of the circle.
-                Vec2 knee = e.center + dir * (e.radius + landing);
-                if (e.meta.contains("kneeX"))
-                    knee = {e.meta.value("kneeX").toDouble(), e.meta.value("kneeY").toDouble()};
+                const Vec2 attach{e.center.x + side * e.radius, e.center.y};
+                const Vec2 knee{e.center.x + side * (e.radius + landing), e.center.y};
                 const QPointF sAttach = vt.toScreen(attach), sKnee = vt.toScreen(knee);
-                p.drawLine(sAttach, sKnee); // landing (circle -> knee)
+                if (landing > 0) p.drawLine(sAttach, sKnee); // horizontal landing shelf
                 for (const Vec2& tip : tips) {
                     const QPointF sTip = vt.toScreen(tip);
                     p.drawLine(sKnee, sTip); // leader line from the knee to each tip

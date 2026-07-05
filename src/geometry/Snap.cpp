@@ -4,6 +4,7 @@
 #include "model/Document.h"
 #include "model/Entity.h"
 
+#include <QJsonArray>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -108,6 +109,32 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
         out.push_back({e.center.x - e.radius, e.center.y});
         out.push_back({e.center.x, e.center.y + e.radius});
         out.push_back({e.center.x, e.center.y - e.radius});
+        // A balloon's leader joints: the attach point, the landing knee, and each
+        // arrow tip, so object snap catches them.
+        if (e.meta.value("balloon").toBool()) {
+            std::vector<Vec2> tips;
+            for (const auto v : e.meta.value("leaders").toArray()) {
+                const QJsonArray a = v.toArray();
+                if (a.size() >= 2) tips.push_back({a[0].toDouble(), a[1].toDouble()});
+            }
+            if (e.meta.contains("leaderX"))
+                tips.push_back({e.meta.value("leaderX").toDouble(),
+                                e.meta.value("leaderY").toDouble()});
+            if (!tips.empty()) {
+                int side;
+                if (e.meta.contains("landingSide"))
+                    side = e.meta.value("landingSide").toDouble() >= 0 ? 1 : -1;
+                else {
+                    double sx = 0;
+                    for (const auto& t : tips) sx += t.x;
+                    side = (sx / tips.size() >= e.center.x) ? 1 : -1;
+                }
+                const double landing = std::max(0.0, e.meta.value("landing").toDouble(8.0));
+                out.push_back({e.center.x + side * e.radius, e.center.y}); // attach
+                if (landing > 0) out.push_back({e.center.x + side * (e.radius + landing), e.center.y});
+                for (const auto& t : tips) out.push_back(t); // arrow tips
+            }
+        }
         break;
     case EntityType::Arc: {
         // Arc endpoints + the quadrant points that fall within the sweep.

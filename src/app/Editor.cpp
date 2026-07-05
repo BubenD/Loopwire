@@ -69,39 +69,26 @@ inline void setBalloonLeaders(Entity& e, const std::vector<Vec2>& tips) {
     e.meta.remove(QStringLiteral("leaderX")); // migrated to the array form
     e.meta.remove(QStringLiteral("leaderY"));
 }
-// The angle (from the circle centre) at which the leader attaches to the balloon —
-// draggable "around the circle". Defaults toward the average leader tip.
-inline double balloonLandingAngle(const Entity& e) {
-    if (e.meta.contains(QStringLiteral("landingAngle")))
-        return e.meta.value(QStringLiteral("landingAngle")).toDouble();
+// Which horizontal side the leader leaves the balloon on: +1 (right) / -1 (left).
+// Defaults toward the average arrow tip.
+inline int balloonLandingSide(const Entity& e) {
+    if (e.meta.contains(QStringLiteral("landingSide")))
+        return e.meta.value(QStringLiteral("landingSide")).toDouble() >= 0 ? 1 : -1;
     const auto tips = balloonLeaders(e);
-    if (tips.empty()) return 0.0;
-    Vec2 avg{0, 0};
-    for (const auto& t : tips) avg = avg + t;
-    avg = avg * (1.0 / tips.size());
-    return std::atan2(avg.y - e.center.y, avg.x - e.center.x);
+    if (tips.empty()) return 1;
+    double sx = 0;
+    for (const auto& t : tips) sx += t.x;
+    return (sx / tips.size() >= e.center.x) ? 1 : -1;
 }
-// The leader "elbow": a short radial landing out from the attachment point; the
-// leader lines fan from here to each arrow tip.
-inline Vec2 balloonLandingElbow(const Entity& e) {
-    const double a = balloonLandingAngle(e);
-    const double landing = e.meta.value(QStringLiteral("landing")).toDouble(8.0);
-    return {e.center.x + std::cos(a) * (e.radius + landing),
-            e.center.y + std::sin(a) * (e.radius + landing)};
-}
-// The point where the leader ATTACHES to the circle (on the ring, at the landing
-// angle — a 90-degree/radial connection to the circle line by default).
+// The point where the leader ATTACHES to the circle (the horizontal side midpoint).
 inline Vec2 balloonAttach(const Entity& e) {
-    const double a = balloonLandingAngle(e);
-    return {e.center.x + std::cos(a) * e.radius, e.center.y + std::sin(a) * e.radius};
+    return {e.center.x + balloonLandingSide(e) * e.radius, e.center.y};
 }
-// The leader "knee" (elbow) where the landing bends toward the arrows. Draggable:
-// a stored meta kneeX/kneeY overrides the default radial elbow.
+// The leader "knee": the end of the HORIZONTAL landing shelf (length meta["landing"],
+// 0 = no landing so the knee coincides with the attach point).
 inline Vec2 balloonKnee(const Entity& e) {
-    if (e.meta.contains(QStringLiteral("kneeX")))
-        return {e.meta.value(QStringLiteral("kneeX")).toDouble(),
-                e.meta.value(QStringLiteral("kneeY")).toDouble()};
-    return balloonLandingElbow(e);
+    const double landing = std::max(0.0, e.meta.value(QStringLiteral("landing")).toDouble(8.0));
+    return {e.center.x + balloonLandingSide(e) * (e.radius + landing), e.center.y};
 }
 // `off` is the grip's offset from its centerline reference (non-zero only for the
 // double line's parallel-line joints) so dragging keeps the grabbed point under
@@ -288,10 +275,11 @@ std::vector<Grip> gripsOf(const Entity& e) {
             if (!tips.empty()) {
                 for (int i = 0; i < static_cast<int>(tips.size()); ++i)
                     g.push_back({tips[i], GripRole::LeaderTip, i}); // arrow tips
-                // Landing joint ON the circle (drag AROUND the ring, or onto another
-                // balloon to re-connect), and a KNEE joint at the elbow (drag freely).
+                // Landing joint ON the circle (flip side / re-connect), and a KNEE
+                // joint at the shelf end (drag to set the horizontal landing length).
                 g.push_back({balloonAttach(e), GripRole::LeaderLanding, 0});
-                g.push_back({balloonKnee(e), GripRole::LeaderKnee, 0});
+                if (e.meta.value("landing").toDouble(8.0) > 0)
+                    g.push_back({balloonKnee(e), GripRole::LeaderKnee, 0});
             }
         }
         break;
@@ -690,8 +678,8 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
     // (a) A grabbed joint is following the cursor: this click places it.
     if (editing_ && gripGrab_) {
         // The leader-landing joint: dropped inside ANOTHER balloon re-connects the
-        // whole leader to that circle; otherwise it moves the attachment AROUND the
-        // current circle (a joint connection you can slide around the ring).
+        // whole leader to that circle; otherwise it flips the landing to the side of
+        // the circle the joint was dragged toward.
         if (editRole_ == static_cast<int>(GripRole::LeaderLanding)) {
             Entity* src = entityById(editEntityId_);
             Entity* tgt = nullptr;
@@ -702,22 +690,16 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
                 pushUndo();
                 setBalloonLeaders(*tgt, balloonLeaders(*src)); // move the whole leader over
                 tgt->meta.insert("landing", src->meta.value("landing").toDouble(8.0));
-                tgt->meta.insert("landingAngle",
-                                 std::atan2(p.y - tgt->center.y, p.x - tgt->center.x));
-                tgt->meta.remove("kneeX"); // default radial knee on the new circle
-                tgt->meta.remove("kneeY");
+                tgt->meta.insert("landingSide", (p.x >= tgt->center.x) ? 1.0 : -1.0);
                 src->meta.remove("leaders");
-                src->meta.remove("landingAngle");
-                src->meta.remove("kneeX");
-                src->meta.remove("kneeY");
+                src->meta.remove("landingSide");
                 doc_->setDirty(true);
                 emit message(QStringLiteral("Leader re-connected to the other circle"));
             } else if (src) {
                 pushUndo();
-                src->meta.insert("landingAngle",
-                                 std::atan2(p.y - src->center.y, p.x - src->center.x));
+                src->meta.insert("landingSide", (p.x >= src->center.x) ? 1.0 : -1.0);
                 doc_->setDirty(true);
-                emit message(QStringLiteral("Leader attachment moved around the circle"));
+                emit message(QStringLiteral("Leader landing side changed"));
             }
             editing_ = false;
             gripGrab_ = false;
@@ -1172,6 +1154,16 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(prev, cur);
             prev = cur;
         }
+        // A balloon's leader lines count too — a crossing zone touching the arrow/
+        // leader selects the balloon (attach -> knee -> each tip).
+        if (e.meta.value("balloon").toBool()) {
+            const auto tips = balloonLeaders(e);
+            if (!tips.empty()) {
+                const Vec2 attach = balloonAttach(e), knee = balloonKnee(e);
+                segs.emplace_back(attach, knee);
+                for (const auto& tip : tips) segs.emplace_back(knee, tip);
+            }
+        }
         break;
     }
     case EntityType::Arc: {
@@ -1504,22 +1496,15 @@ void Editor::applyEditDrag(const Vec2& target) {
             if (e->meta.value("balloon").toBool()) {
                 auto mates = chainMatesOf(*e);
                 const bool isArrow = !balloonLeaders(*e).empty();
-                auto moveKnee = [&](Entity* m) {
-                    if (m->meta.contains("kneeX")) {
-                        m->meta["kneeX"] = m->meta.value("kneeX").toDouble() + delta.x;
-                        m->meta["kneeY"] = m->meta.value("kneeY").toDouble() + delta.y;
-                    }
-                };
                 if (isArrow || mates.empty()) {
                     // The arrow circle (or a lone balloon) moves the WHOLE batch; the
-                    // leader arrow TIPS stay anchored (only centres + knee move).
+                    // leader arrow TIPS stay anchored (only centres move — the landing/
+                    // knee is derived from the centre, so it follows automatically).
                     e->center = e->center + delta;
                     e->a = e->a + delta;
-                    moveKnee(e);
                     for (Entity* m : mates) {
                         m->center = m->center + delta;
                         m->a = m->a + delta;
-                        moveKnee(m);
                     }
                 } else {
                     // A non-arrow circle moves on its own, but stays TANGENT to its
@@ -1560,9 +1545,9 @@ void Editor::applyEditDrag(const Vec2& target) {
         }
         case GripRole::LeaderLanding: // handled on placement (around-circle / re-attach)
             break;
-        case GripRole::LeaderKnee: // drag the leader elbow freely
-            e->meta["kneeX"] = target.x;
-            e->meta["kneeY"] = target.y;
+        case GripRole::LeaderKnee: // drag the knee horizontally: sets landing length/side
+            e->meta["landingSide"] = (target.x >= e->center.x) ? 1.0 : -1.0;
+            e->meta["landing"] = std::max(0.0, std::abs(target.x - e->center.x) - e->radius);
             break;
         case GripRole::TextWidth: // drag the MTEXT container's right edge
             e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
@@ -2488,8 +2473,8 @@ void Editor::finishDraw() {
                 next = std::max(next, x.meta.value("text").toString().toInt());
         e.meta.insert("balloon", true);
         e.meta.insert("text", QString::number(next + 1));
-        e.meta.insert("landing", 8.0); // radial landing length (editable in Properties)
-        e.meta.insert("landingAngle", std::atan2(tip.y - c.y, tip.x - c.x)); // attach toward the tip
+        e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
+        e.meta.insert("landingSide", (tip.x >= c.x) ? 1.0 : -1.0); // exits toward the tip's side
         setBalloonLeaders(e, {tip});   // one leader to start; Add Leader adds more
         break;
     }
@@ -4386,9 +4371,8 @@ void Editor::addCoupledCircle(const QString& id) {
         minX = std::min(minX, m->center.x);
         maxX = std::max(maxX, m->center.x);
     }
-    // Leader pointing right -> grow the row left (opposite the arrow), and vice-versa.
-    const double leaderDirX = std::cos(balloonLandingAngle(*arrow));
-    const double newX = (leaderDirX >= 0) ? (minX - r * 2.0) : (maxX + r * 2.0);
+    // Leader exits to the right -> grow the row left (opposite the arrow), else right.
+    const double newX = (balloonLandingSide(*arrow) >= 0) ? (minX - r * 2.0) : (maxX + r * 2.0);
     Entity nb;
     nb.id = uid();
     nb.type = EntityType::Circle;
@@ -4442,7 +4426,7 @@ void Editor::removeLeaderFromSelection() {
     pushUndo();
     tips.pop_back();
     setBalloonLeaders(*b, tips);
-    if (tips.empty()) b->meta.remove("landingAngle");
+    if (tips.empty()) b->meta.remove("landingSide");
     doc_->setDirty(true);
     emit changed();
     emit message(QStringLiteral("Leader removed"));

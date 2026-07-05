@@ -521,24 +521,24 @@ int run_editor_tests() {
               "leader-reconnect: dropping the landing joint on another circle moves the leader");
     }
 
-    // --- The leader knee (elbow) can be dragged freely.
+    // --- Dragging the knee changes the HORIZONTAL landing length (stays horizontal).
     {
         Document d; d.entities().clear();
         Entity a; a.id = "A"; a.type = EntityType::Circle; a.center = {0, 0}; a.a = {0, 0};
         a.radius = 6; a.meta.insert("balloon", true); a.meta.insert("text", QStringLiteral("1"));
         a.meta.insert("landing", 8.0);
         QJsonArray leaders; QJsonArray t; t.append(40); t.append(0); leaders.append(t);
-        a.meta.insert("leaders", leaders); // tip at (40,0) -> angle 0, knee at (14,0)
+        a.meta.insert("leaders", leaders); // tip (40,0) -> side right, knee at (14,0)
         d.entities().push_back(a);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
         ed.selectById("A");
         ed.onPointerPress({14, 0}, Qt::LeftButton, Qt::NoModifier);  // grab the knee
-        ed.onPointerPress({25, 12}, Qt::LeftButton, Qt::NoModifier); // drop the knee
+        ed.onPointerPress({25, 12}, Qt::LeftButton, Qt::NoModifier); // drag it out (y ignored)
         const Entity* aa = nullptr;
         for (const auto& e : d.entities()) if (e.id == "A") aa = &e;
-        check(aa && near(aa->meta.value("kneeX").toDouble(), 25.0) &&
-                  near(aa->meta.value("kneeY").toDouble(), 12.0),
-              "leader-knee: the leader elbow drags to a free position");
+        // landing = |25 - 0| - radius(6) = 19.
+        check(aa && near(aa->meta.value("landing").toDouble(), 19.0),
+              "leader-knee: dragging the knee sets the horizontal landing length");
     }
 
     // --- A non-arrow batch circle stays TANGENT to a neighbour when moved.
