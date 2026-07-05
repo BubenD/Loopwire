@@ -1548,8 +1548,8 @@ void Editor::applyEditDrag(const Vec2& target) {
                         m->a = m->a + delta;
                     }
                 } else {
-                    // A non-arrow circle moves on its own, but stays TANGENT to its
-                    // nearest batch neighbour (it can orbit a circle, never detach).
+                    // A non-arrow circle follows the cursor but stays TANGENT to its
+                    // nearest neighbour, and may NOT overlap any other batch circle.
                     Vec2 nc = target;
                     Entity* nb = nullptr;
                     double bd = std::numeric_limits<double>::max();
@@ -1562,6 +1562,22 @@ void Editor::applyEditDrag(const Vec2& target) {
                         const double L = dir.length();
                         dir = L > 1e-9 ? dir * (1.0 / L) : Vec2{1, 0};
                         nc = nb->center + dir * (e->radius + nb->radius); // tangent
+                    }
+                    // Push out of any circle it still overlaps (no overlaps allowed).
+                    for (int iter = 0; iter < 8; ++iter) {
+                        bool pushed = false;
+                        for (Entity* m : mates) {
+                            const double minD = e->radius + m->radius;
+                            const double d = distance(nc, m->center);
+                            if (d < minD - 1e-6) {
+                                Vec2 dir = nc - m->center;
+                                const double L = dir.length();
+                                dir = L > 1e-9 ? dir * (1.0 / L) : Vec2{1, 0};
+                                nc = m->center + dir * minD;
+                                pushed = true;
+                            }
+                        }
+                        if (!pushed) break;
                     }
                     e->center = nc;
                     e->a = nc;
@@ -4851,6 +4867,16 @@ bool Editor::beginRightDrag(const Vec2& world) {
             return false;
         }
     }
+    // A balloon in a batch drags the WHOLE batch (all leaders move together).
+    std::vector<QString> batchAdd;
+    for (const QString& id : selected_)
+        if (Entity* e = entityById(id); e && e->meta.value("balloon").toBool())
+            for (Entity* m : chainMatesOf(*e))
+                if (std::find(selected_.begin(), selected_.end(), m->id) == selected_.end() &&
+                    std::find(batchAdd.begin(), batchAdd.end(), m->id) == batchAdd.end())
+                    batchAdd.push_back(m->id);
+    for (const auto& id : batchAdd) selected_.push_back(id);
+    if (!batchAdd.empty()) emit selectionChanged();
     rightDragGhost_.clear();
     for (const auto& id : selected_)
         if (Entity* e = entityById(id)) rightDragGhost_.push_back(*e);

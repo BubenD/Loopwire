@@ -541,6 +541,30 @@ int run_editor_tests() {
               "leader-knee: dragging the knee sets the horizontal landing length");
     }
 
+    // --- A moved batch circle may not overlap ANY other circle in the batch.
+    {
+        Document d; d.entities().clear();
+        auto mk = [&](const QString& id, Vec2 c, bool leader) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QStringLiteral("1"));
+            e.meta.insert("chain", QStringLiteral("cx"));
+            if (leader) { QJsonArray l; QJsonArray t; t.append(-40); t.append(0); l.append(t); e.meta.insert("leaders", l); }
+            d.entities().push_back(e);
+        };
+        mk("A", {0, 0}, true);    // arrow
+        mk("B", {12, 0}, false);
+        mk("C", {6, 10}, false);  // this one we move onto the others
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        ed.selectById("C");
+        ed.onPointerPress({6, 10}, Qt::LeftButton, Qt::NoModifier); // grab C
+        ed.onPointerPress({6, 0}, Qt::LeftButton, Qt::NoModifier);  // drop right between A and B
+        const Entity *A = nullptr, *B = nullptr, *C = nullptr;
+        for (const auto& e : d.entities()) { if (e.id=="A") A=&e; if (e.id=="B") B=&e; if (e.id=="C") C=&e; }
+        check(A && B && C && distance(A->center, C->center) >= 12.0 - 1e-3 &&
+                  distance(B->center, C->center) >= 12.0 - 1e-3,
+              "batch-nooverlap: a moved circle never overlaps another batch circle");
+    }
+
     // --- A non-arrow batch circle stays TANGENT to a neighbour when moved.
     {
         Document d; d.entities().clear();
