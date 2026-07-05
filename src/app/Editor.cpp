@@ -664,48 +664,7 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         }
         if (auto hit = hitTest(p))
             if (Entity* e = entityById(*hit); e && e->meta.value("balloon").toBool()) {
-                // Add a coupled circle to the batch, on the side OPPOSITE the leader
-                // (so the row grows away from the arrow, like AutoCAD (3)(2)(1)->arrow).
-                pushUndo();
-                QString chain = e->meta.value("chain").toString();
-                if (chain.isEmpty()) { chain = uid(); e->meta.insert("chain", chain); }
-                std::vector<Entity*> batch = chainMatesOf(*e);
-                batch.push_back(e);
-                Entity* arrow = nullptr; // the batch member that carries the leader
-                for (Entity* m : batch)
-                    if (!balloonLeaders(*m).empty()) { arrow = m; break; }
-                if (!arrow) arrow = e;
-                const double r = e->radius;
-                double minX = 1e18, maxX = -1e18;
-                for (Entity* m : batch) {
-                    minX = std::min(minX, m->center.x);
-                    maxX = std::max(maxX, m->center.x);
-                }
-                // Leader pointing right -> grow the row left, and vice-versa.
-                const double leaderDirX = std::cos(balloonLandingAngle(*arrow));
-                const double newX = (leaderDirX >= 0) ? (minX - r * 2.0) : (maxX + r * 2.0);
-                Entity nb;
-                nb.id = uid();
-                nb.type = EntityType::Circle;
-                nb.layer = e->layer;
-                nb.color = e->color;
-                nb.radius = r;
-                nb.center = {newX, arrow->center.y}; // same row as the arrow circle
-                nb.a = nb.center;
-                int next = 0;
-                for (const auto& x : doc_->entities())
-                    if (x.meta.value("balloon").toBool())
-                        next = std::max(next, x.meta.value("text").toString().toInt());
-                nb.meta.insert("balloon", true);
-                nb.meta.insert("text", QString::number(next + 1));
-                nb.meta.insert("chain", chain); // coupled — no leader of its own
-                const QString newId = nb.id;
-                addEntity(std::move(nb));
-                selected_ = {newId};
-                emit selectionChanged();
-                doc_->setDirty(true);
-                emit changed();
-                emit message(QStringLiteral("Coupled balloon added (batch moves together)"));
+                addCoupledCircle(*hit); // add a circle opposite the arrow
                 return;
             }
     }
@@ -4347,6 +4306,51 @@ void Editor::applyTableCellEdit(const QString& id, int cell, const QString& text
         doc_->setDirty(true);
         emit changed();
     }
+}
+
+void Editor::addCoupledCircle(const QString& id) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("balloon").toBool()) return;
+    pushUndo();
+    QString chain = e->meta.value("chain").toString();
+    if (chain.isEmpty()) { chain = uid(); e->meta.insert("chain", chain); }
+    std::vector<Entity*> batch = chainMatesOf(*e);
+    batch.push_back(e);
+    Entity* arrow = nullptr; // the batch member that carries the leader
+    for (Entity* m : batch)
+        if (!balloonLeaders(*m).empty()) { arrow = m; break; }
+    if (!arrow) arrow = e;
+    const double r = e->radius;
+    double minX = 1e18, maxX = -1e18;
+    for (Entity* m : batch) {
+        minX = std::min(minX, m->center.x);
+        maxX = std::max(maxX, m->center.x);
+    }
+    // Leader pointing right -> grow the row left (opposite the arrow), and vice-versa.
+    const double leaderDirX = std::cos(balloonLandingAngle(*arrow));
+    const double newX = (leaderDirX >= 0) ? (minX - r * 2.0) : (maxX + r * 2.0);
+    Entity nb;
+    nb.id = uid();
+    nb.type = EntityType::Circle;
+    nb.layer = e->layer;
+    nb.color = e->color;
+    nb.radius = r;
+    nb.center = {newX, arrow->center.y}; // same row as the arrow circle
+    nb.a = nb.center;
+    int next = 0;
+    for (const auto& x : doc_->entities())
+        if (x.meta.value("balloon").toBool())
+            next = std::max(next, x.meta.value("text").toString().toInt());
+    nb.meta.insert("balloon", true);
+    nb.meta.insert("text", QString::number(next + 1));
+    nb.meta.insert("chain", chain); // coupled — no leader of its own
+    const QString newId = nb.id;
+    addEntity(std::move(nb));
+    selected_ = {newId};
+    emit selectionChanged();
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Circle added opposite the leader (batch moves together)"));
 }
 
 void Editor::addLeaderToSelection() {

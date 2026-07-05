@@ -187,6 +187,9 @@ public:
     void arraySelected(int rows, int cols, double dx, double dy);
     void explodeSelected();    // break compound objects into their drawn primitives
     void purgeUnused();        // AutoCAD PURGE: drop empty layers + stray/degenerate objects
+    // Add a coupled numbered circle to balloon `id`'s batch, on the side OPPOSITE its
+    // arrow/leader (the row grows away from the arrow).
+    void addCoupledCircle(const QString& id);
     // Balloon multileader ops (act on the selected balloons).
     void addLeaderToSelection();     // add a leader to the selected balloon
     void removeLeaderFromSelection();// remove the last leader of the selected balloon

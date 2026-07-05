@@ -336,11 +336,44 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                         consider(*x, SnapKind::Intersection);
         }
 
-        // Nearest point on a segment (lowest priority among object snaps).
+        // Nearest point on an object (lowest priority among object snaps): the
+        // nearest point along a segment, OR on a circle/arc/ellipse ring.
         if (s.snapNearest && bestKind == SnapKind::None) {
             for (const auto& seg : allSegs) {
                 const auto c = closestPointOnSegment(raw, seg.first, seg.second);
                 if (c.distance < best) { best = c.distance; bestPt = c.point; bestKind = SnapKind::Nearest; }
+            }
+            for (const auto& e : doc.entities()) {
+                if (ignored(e.id)) continue;
+                if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
+                if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
+                    const double d = distance(raw, e.center);
+                    if (d < 1e-9) continue;
+                    double ang = std::atan2(raw.y - e.center.y, raw.x - e.center.x);
+                    if (e.type == EntityType::Arc) {
+                        // Clamp the angle to the arc's sweep (else its endpoints).
+                        double s0 = e.startAngle, sweep = e.endAngle - e.startAngle;
+                        while (sweep < 0) sweep += 2 * M_PI;
+                        double rel = ang - s0;
+                        while (rel < 0) rel += 2 * M_PI;
+                        if (rel > sweep) ang = (rel - sweep < 2 * M_PI - rel) ? e.endAngle : s0;
+                    }
+                    const Vec2 pt = pointOnCircle(e.center, e.radius, ang);
+                    const double dd = distance(raw, pt);
+                    if (dd < best) { best = dd; bestPt = pt; bestKind = SnapKind::Nearest; }
+                } else if (e.type == EntityType::Ellipse) {
+                    // Approximate: map the cursor into the ellipse's local frame, take
+                    // the parametric point in that direction, map back.
+                    const double c = std::cos(e.rotation), sr = std::sin(e.rotation);
+                    const Vec2 v = raw - e.center;
+                    const double lx = v.x * c + v.y * sr, ly = -v.x * sr + v.y * c;
+                    const double ry = e.radiusY > 0 ? e.radiusY : e.radius;
+                    const double t = std::atan2(ly / std::max(1e-9, ry), lx / std::max(1e-9, e.radius));
+                    const double px = e.radius * std::cos(t), py = ry * std::sin(t);
+                    const Vec2 pt{e.center.x + px * c - py * sr, e.center.y + px * sr + py * c};
+                    const double dd = distance(raw, pt);
+                    if (dd < best) { best = dd; bestPt = pt; bestKind = SnapKind::Nearest; }
+                }
             }
         }
 

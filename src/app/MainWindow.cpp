@@ -2691,13 +2691,25 @@ void MainWindow::buildStatusControls() {
                                   editor_->snapSettings().objectSnap,
                                   [this](bool v) { editor_->snapSettings().objectSnap = v; });
         auto* menu = new QMenu(this);
+        // Each snap type is a QCheckBox embedded in the menu (a QWidgetAction), so a
+        // click toggles it WITHOUT closing the menu — flip several quickly.
         auto addSnap = [&](const QString& label, const QString& kind, bool SnapSettings::*field) {
-            auto* act = menu->addAction(makeOsnapMarkerIcon(kind), label);
-            act->setCheckable(true);
-            act->setChecked(editor_->snapSettings().*field);
-            connect(act, &QAction::toggled, this, [this, field](bool on) {
-                editor_->snapSettings().*field = on;
-            });
+            auto* row = new QWidget(menu);
+            auto* h = new QHBoxLayout(row);
+            h->setContentsMargins(8, 3, 12, 3);
+            h->setSpacing(6);
+            auto* icon = new QLabel(row);
+            icon->setPixmap(makeOsnapMarkerIcon(kind).pixmap(16, 16));
+            auto* cb = new QCheckBox(label, row);
+            cb->setChecked(editor_->snapSettings().*field);
+            cb->setStyleSheet(QStringLiteral("QCheckBox{color:#c9ccd1;} QLabel{background:transparent;}"));
+            connect(cb, &QCheckBox::toggled, this,
+                    [this, field](bool on) { editor_->snapSettings().*field = on; });
+            h->addWidget(icon);
+            h->addWidget(cb, 1);
+            auto* wa = new QWidgetAction(menu);
+            wa->setDefaultWidget(row);
+            menu->addAction(wa);
         };
         addSnap(QStringLiteral("Endpoint"), QStringLiteral("endpoint"), &SnapSettings::snapEndpoint);
         addSnap(QStringLiteral("Midpoint"), QStringLiteral("midpoint"), &SnapSettings::snapMidpoint);
@@ -3531,10 +3543,12 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     const Vec2 world = canvas_->worldFromGlobal(globalPos);
     const QString balloonId = editor_->balloonAt(world);
     if (!balloonId.isEmpty()) {
-        editor_->selectById(balloonId); // select its batch (selectById -> batch via press logic)
+        editor_->selectById(balloonId);
         QMenu bmenu(this);
+        // "Add leader" adds another numbered circle to the batch, on the side opposite
+        // the arrow connection.
         QAction* addL = bmenu.addAction(QStringLiteral("Add leader"));
-        connect(addL, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });
+        connect(addL, &QAction::triggered, this, [this, balloonId] { editor_->addCoupledCircle(balloonId); });
         QAction* delL = bmenu.addAction(QStringLiteral("Delete leader"));
         connect(delL, &QAction::triggered, this, [this] { editor_->removeLeaderFromSelection(); });
         bmenu.addSeparator();

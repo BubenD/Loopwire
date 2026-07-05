@@ -448,6 +448,18 @@ int run_editor_tests() {
             check(q.snapped && q.kind == SnapKind::Quadrant && near(q.point.x, 110.0),
                   "snap-quadrant: snaps to a circle quadrant point");
         }
+        // Nearest snaps onto the circle RING (not only straight segments).
+        {
+            SnapSettings s; // nearest on by default; higher-priority snaps off nearby
+            s.snapEndpoint = false; s.snapCenter = false; s.snapQuadrant = false;
+            s.snapMidpoint = false; s.snapIntersection = false; s.snapGeometricCenter = false;
+            s.snapNode = false;
+            // Cursor just outside the circle ring (circle at (100,0) r10) near (112,0).
+            auto nr = resolveSnap(d, {112, 0}, std::nullopt, 5.0, s, {});
+            check(nr.snapped && nr.kind == SnapKind::Nearest && near(nr.point.x, 110.0) &&
+                      near(nr.point.y, 0.0),
+                  "snap-nearest-curve: Nearest snaps onto the circle ring");
+        }
         // Tangent from an anchor above the circle to the ring (~(90.3, 2.5)).
         {
             SnapSettings s; s.snapTangent = true; s.snapNearest = false; s.snapEndpoint = false;
