@@ -639,27 +639,63 @@ bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& oth
 namespace {
 // First boundary point reached by the ray from `fixed` through `moving` (beyond
 // `moving`). All boundary types are reduced to segments (curves tessellated).
-std::optional<Vec2> rayToBoundary(const Vec2& fixed, const Vec2& moving,
-                                  const std::vector<Entity>& others, const QString& selfId) {
+// The boundary a ray reached: the touch point, plus the target itself (a circle/arc
+// ring, or a straight edge) so the double-line runs can be capped flush to it.
+struct BoundaryHit {
+    Vec2 pt;
+    bool circle = false;
+    Vec2 center;
+    double radius = 0.0;
+    Vec2 a, b; // edge, when not a circle
+};
+
+std::optional<BoundaryHit> rayToBoundary(const Vec2& fixed, const Vec2& moving,
+                                         const std::vector<Entity>& others, const QString& selfId) {
     const Vec2 dir = (moving - fixed).normalized();
     if (dir.lengthSq() < 1e-12) return std::nullopt;
     double bestT = std::numeric_limits<double>::max();
-    Vec2 bestPt;
+    BoundaryHit best;
     bool found = false;
-    auto tryBoundary = [&](const Vec2& p1, const Vec2& p2) {
-        auto x = lineLineIntersection(fixed, moving, p1, p2);
-        if (!x) return;
-        const double t = dot(*x - moving, dir);
-        if (t <= 1e-9) return; // must be beyond `moving`
-        const auto c = closestPointOnSegment(*x, p1, p2);
-        if (c.distance > 1e-6) return; // not on the boundary segment
-        if (t < bestT) { bestT = t; bestPt = *x; found = true; }
-    };
     for (const auto& e : others) {
         if (!selfId.isEmpty() && e.id == selfId) continue;
-        forEachCutSegment(e, tryBoundary);
+        const bool round = (e.type == EntityType::Circle || e.type == EntityType::Arc);
+        forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+            auto x = lineLineIntersection(fixed, moving, p1, p2);
+            if (!x) return;
+            const double t = dot(*x - moving, dir);
+            if (t <= 1e-9) return; // must be beyond `moving`
+            const auto c = closestPointOnSegment(*x, p1, p2);
+            if (c.distance > 1e-6) return; // not on the boundary segment
+            if (t < bestT) {
+                bestT = t;
+                found = true;
+                best.pt = *x;
+                if (round) { best.circle = true; best.center = e.center; best.radius = e.radius; }
+                else { best.circle = false; best.a = p1; best.b = p2; }
+            }
+        });
     }
-    return found ? std::optional<Vec2>(bestPt) : std::nullopt;
+    return found ? std::optional<BoundaryHit>(best) : std::nullopt;
+}
+
+// Record the exact boundary a double entity was extended to, so the renderer caps its
+// two physical runs flush to it (a circle ring or a straight edge).
+void setExtendCap(Entity& e, const QString& key, const BoundaryHit& h) {
+    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
+        e.meta.remove(key + QString::fromLatin1(s));
+    e.meta.insert(key, true);
+    if (h.circle) {
+        e.meta.insert(key + "Kind", QStringLiteral("circle"));
+        e.meta.insert(key + "Cx", h.center.x);
+        e.meta.insert(key + "Cy", h.center.y);
+        e.meta.insert(key + "R", h.radius);
+    } else {
+        e.meta.insert(key + "Kind", QStringLiteral("line"));
+        e.meta.insert(key + "Ax", h.a.x);
+        e.meta.insert(key + "Ay", h.a.y);
+        e.meta.insert(key + "Bx", h.b.x);
+        e.meta.insert(key + "By", h.b.y);
+    }
 }
 } // namespace
 
@@ -670,7 +706,10 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
         const Vec2 moving = extendA ? e.a : e.b;
         auto r = rayToBoundary(fixed, moving, others, e.id);
         if (!r) return false;
-        if (extendA) e.a = *r; else e.b = *r;
+        if (extendA) e.a = r->pt; else e.b = r->pt;
+        // Cap the double line's physical runs flush to the boundary it reached.
+        if (e.type == EntityType::DoubleLine)
+            setExtendCap(e, extendA ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), *r);
         return true;
     }
     if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
@@ -682,7 +721,10 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
         const Vec2 fixed = front ? e.points[1] : e.points[n - 2];
         auto r = rayToBoundary(fixed, moving, others, e.id);
         if (!r) return false;
-        if (front) e.points.front() = *r; else e.points.back() = *r;
+        if (front) e.points.front() = r->pt; else e.points.back() = r->pt;
+        // A double polyline caps its physical runs flush to the boundary too.
+        if (e.meta.value("double").toBool())
+            setExtendCap(e, front ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), *r);
         return true;
     }
     return false;

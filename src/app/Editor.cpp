@@ -3907,7 +3907,6 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
         if (const Entity* r = entityById(id)) refs.push_back(*r);
     if (refs.empty()) { emit message(QStringLiteral("Select the boundary object first.")); return; }
 
-    const std::vector<Entity> joints = doc_->entities();
     pushUndo();
     int count = 0;
     std::vector<QString> ids;
@@ -3930,9 +3929,7 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
         }
         if (!x) continue;
         if (extendEntityTo(*obj, *x, refs)) {
-            ++count;
-            if (dbl || (poly && obj->meta.value("double").toBool()))
-                recordCutMeta(*obj, obj->id, joints); // clip physical runs to the reference
+            ++count; // extendEntityTo caps a double line/polyline's runs to the target
         }
     }
     if (count == 0) {

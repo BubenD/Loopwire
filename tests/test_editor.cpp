@@ -1297,6 +1297,27 @@ int run_editor_tests() {
               "extend-fence: the crossed line is extended to the reference (x=100)");
     }
 
+    // --- Extending a DOUBLE line to a boundary records a cut cap so its physical runs
+    //     end flush on the boundary (they must touch the target).
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {100, -100}; ref.b = {100, 100};
+        Entity dl; dl.id = "dl"; dl.type = EntityType::DoubleLine; dl.a = {0, 0}; dl.b = {50, 0};
+        dl.meta.insert("gap", 10.0);
+        d.entities().push_back(ref);
+        d.entities().push_back(dl);
+        std::vector<Entity> refs = {ref};
+        // Fence pick nearer b (right end) so b extends to x=100.
+        extendEntityTo(*[&]{ for (auto& e : d.entities()) if (e.id=="dl") return &e; return (Entity*)nullptr; }(),
+                       Vec2{50, 0}, refs);
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "dl") dd = &e;
+        check(dd && near(dd->b.x, 100.0) && dd->meta.value("cutEnd").toBool() &&
+                  dd->meta.value("cutEndKind").toString() == QLatin1String("line") &&
+                  near(dd->meta.value("cutEndAx").toDouble(), 100.0),
+              "extend-double: physical runs are capped flush to the extend target");
+    }
+
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
     //     corner.
     {
