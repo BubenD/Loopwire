@@ -40,7 +40,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
-                      DimText, LeaderTip };
+                      DimText, LeaderTip, LeaderLanding };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -251,8 +251,20 @@ std::vector<Grip> gripsOf(const Entity& e) {
             g.clear();
             g.push_back({e.center, GripRole::Center, 0});
             const auto tips = balloonLeaders(e);
-            for (int i = 0; i < static_cast<int>(tips.size()); ++i)
-                g.push_back({tips[i], GripRole::LeaderTip, i});
+            if (!tips.empty()) {
+                double avgX = 0;
+                for (const auto& t : tips) avgX += t.x;
+                avgX /= tips.size();
+                const int sign = (avgX <= e.center.x) ? -1 : 1;
+                const double landing = e.meta.value("landing").toDouble(8.0);
+                const Vec2 outer{e.center.x + sign * (e.radius + landing), e.center.y};
+                for (int i = 0; i < static_cast<int>(tips.size()); ++i) {
+                    g.push_back({tips[i], GripRole::LeaderTip, i}); // arrow tip
+                    // A landing joint near the circle end: drag it onto another balloon
+                    // to re-connect this leader to that circle.
+                    g.push_back({lerp(outer, tips[i], 0.28), GripRole::LeaderLanding, i});
+                }
+            }
         }
         break;
     case EntityType::Arc: {
@@ -669,6 +681,37 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
 
     // (a) A grabbed joint is following the cursor: this click places it.
     if (editing_ && gripGrab_) {
+        // A leader-landing joint dropped inside ANOTHER balloon re-connects this
+        // leader to that circle (unplug from one circle, plug into another).
+        if (editRole_ == static_cast<int>(GripRole::LeaderLanding)) {
+            Entity* src = entityById(editEntityId_);
+            Entity* tgt = nullptr;
+            for (auto& x : doc_->entities())
+                if (x.meta.value("balloon").toBool() && x.id != editEntityId_ &&
+                    distance(x.center, p) <= x.radius) { tgt = &x; break; }
+            if (src && tgt) {
+                pushUndo();
+                auto st = balloonLeaders(*src);
+                if (editIndex_ >= 0 && editIndex_ < static_cast<int>(st.size())) {
+                    const Vec2 tip = st[editIndex_];
+                    st.erase(st.begin() + editIndex_);
+                    setBalloonLeaders(*src, st);
+                    auto tt = balloonLeaders(*tgt);
+                    tt.push_back(tip);
+                    setBalloonLeaders(*tgt, tt);
+                    doc_->setDirty(true);
+                    emit message(QStringLiteral("Leader re-connected to the other circle"));
+                }
+            } else {
+                emit message(QStringLiteral("Drop the leader onto another balloon to re-connect it"));
+            }
+            editing_ = false;
+            gripGrab_ = false;
+            editMoved_ = false;
+            editGhost_.clear();
+            emit changed();
+            return;
+        }
         applyEditDrag(p);
         editing_ = false;
         gripGrab_ = false;
@@ -1348,6 +1391,9 @@ bool Editor::beginGripGrab(const Vec2& at) {
 }
 
 void Editor::applyEditDrag(const Vec2& target) {
+    // A leader-landing joint doesn't change geometry as it drags — it re-connects the
+    // leader to whichever circle it's dropped on, handled at placement time.
+    if (editMode_ == 1 && editRole_ == static_cast<int>(GripRole::LeaderLanding)) return;
     const Vec2 delta = target - editLast_;
     if (!editMoved_) {
         if (delta.lengthSq() < 1e-18) return; // ignore until the cursor truly moves
@@ -1432,14 +1478,11 @@ void Editor::applyEditDrag(const Vec2& target) {
             break;
         case GripRole::Center:
             if (e->meta.value("balloon").toBool()) {
-                // Move the balloon CIRCLE only — its leader arrows stay anchored where
-                // they point. Coupled circles (same chain) move along with it.
+                // Move THIS balloon circle only — its leader arrows stay anchored where
+                // they point, and coupled circles move independently (the leader belongs
+                // to the first circle and is unaffected by moving the others).
                 e->center = e->center + delta;
                 e->a = e->a + delta;
-                for (Entity* m : chainMatesOf(*e)) {
-                    m->center = m->center + delta;
-                    m->a = m->a + delta;
-                }
             } else {
                 translateEntity(*e, delta);
             }
@@ -1458,6 +1501,8 @@ void Editor::applyEditDrag(const Vec2& target) {
             }
             break;
         }
+        case GripRole::LeaderLanding: // handled on placement (re-attach to a circle)
+            break;
         case GripRole::TextWidth: // drag the MTEXT container's right edge
             e->meta["boxWidth"] = std::max(1.0, target.x - e->a.x);
             break;
@@ -3802,16 +3847,6 @@ void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corn
         doc_->setDirty(true);
         emit message(QStringLiteral("Fillet applied to the corner (radius %1)").arg(filletRadius_));
     }
-}
-
-std::vector<Entity*> Editor::chainMatesOf(const Entity& e) {
-    std::vector<Entity*> out;
-    const QString chain = e.meta.value(QStringLiteral("chain")).toString();
-    if (chain.isEmpty() || !doc_) return out;
-    for (auto& x : doc_->entities())
-        if (x.id != e.id && x.meta.value(QStringLiteral("chain")).toString() == chain)
-            out.push_back(&x);
-    return out;
 }
 
 std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {

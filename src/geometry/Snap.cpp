@@ -54,6 +54,31 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         for (size_t i = 0; i < e.points.size(); ++i)
             out.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
         break;
+    case EntityType::Dimension: {
+        // The drawn dimension line (+ extension lines) so midpoint/nearest snap works.
+        const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+        if ((ty == QLatin1String("linear") || ty == QLatin1String("aligned") ||
+             ty == QLatin1String("arclength")) &&
+            e.points.size() >= 3) {
+            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
+            Vec2 d1, d2;
+            if (ty == QLatin1String("linear")) {
+                const Vec2 mid = lerp(p1, p2, 0.5);
+                const bool h = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+                if (h) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
+                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
+            } else {
+                const Vec2 n = (p2 - p1).normalized().perp();
+                const double t = dot(off - p1, n);
+                d1 = p1 + n * t;
+                d2 = p2 + n * t;
+            }
+            out.emplace_back(d1, d2);   // dimension line
+            out.emplace_back(p1, d1);   // extension lines
+            out.emplace_back(p2, d2);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -146,6 +171,39 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::NotConnected:
         out.push_back(e.a);
         break;
+    case EntityType::Dimension: {
+        // Snap to a dimension's joints: the measured points, and the dimension-line
+        // ends (for radius/diameter, the centre + the leader tip).
+        const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+        if ((ty == QLatin1String("linear") || ty == QLatin1String("aligned") ||
+             ty == QLatin1String("arclength")) &&
+            e.points.size() >= 3) {
+            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
+            out.push_back(p1);
+            out.push_back(p2);
+            Vec2 d1, d2;
+            if (ty == QLatin1String("linear")) {
+                const Vec2 mid = lerp(p1, p2, 0.5);
+                const bool h = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
+                if (h) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
+                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
+            } else {
+                const Vec2 n = (p2 - p1).normalized().perp();
+                const double t = dot(off - p1, n);
+                d1 = p1 + n * t;
+                d2 = p2 + n * t;
+            }
+            out.push_back(d1);
+            out.push_back(d2);
+        } else {
+            out.push_back(e.a);
+            out.push_back(e.b);
+            if (ty == QLatin1String("radius") || ty == QLatin1String("diameter") ||
+                ty == QLatin1String("jogged"))
+                out.push_back(e.center);
+        }
+        break;
+    }
     default:
         break;
     }

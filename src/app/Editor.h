@@ -379,9 +379,6 @@ private:
     // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
     // (0 if single). Writes cornerRadii/cornerChamfers and clears the other on that knee.
     void applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corner, double gap);
-    // Balloons Ctrl+click-coupled into a chain (shared meta["chain"]) move together;
-    // returns the OTHER balloons sharing e's chain id (empty if e has no chain).
-    std::vector<Entity*> chainMatesOf(const Entity& e);
     void handlePlacementPress(const Vec2& p);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;

@@ -420,6 +420,57 @@ int run_editor_tests() {
               "balloon: carries a leader arrow tip and an editable landing length");
     }
 
+    // --- Object snap finds a dimension's joints (measured points + dim-line ends),
+    //     and ONLY when object snap is enabled (request 2 + 3).
+    {
+        Document d; d.entities().clear();
+        Entity dim; dim.id = "dm"; dim.type = EntityType::Dimension;
+        dim.meta.insert("dimType", QStringLiteral("linear"));
+        dim.a = {0, 0}; dim.b = {100, 0};
+        dim.points = {{0, 0}, {100, 0}, {50, 40}}; // offset up -> dim line at y=40
+        d.entities().push_back(dim);
+        SnapSettings s; // defaults: objectSnap on, endpoint on
+        // Near the measured point (0,0):
+        auto r1 = resolveSnap(d, {2, 1}, std::nullopt, 5.0, s, {});
+        check(r1.snapped && near(r1.point.x, 0.0) && near(r1.point.y, 0.0),
+              "dim-snap: snaps to a dimension measured point");
+        // Near the dimension-line end (100,40):
+        auto r2 = resolveSnap(d, {98, 41}, std::nullopt, 5.0, s, {});
+        check(r2.snapped && near(r2.point.x, 100.0) && near(r2.point.y, 40.0),
+              "dim-snap: snaps to a dimension line end");
+        // With object snap OFF, no object snapping happens (request 3).
+        s.objectSnap = false; s.gridSnap = false;
+        auto r3 = resolveSnap(d, {2, 1}, std::nullopt, 5.0, s, {});
+        check(!r3.snapped, "dim-snap: no object snap when object snap is off");
+    }
+
+    // --- A leader can be re-connected to another balloon by dropping its landing
+    //     joint on the other circle (request 5).
+    {
+        Document d; d.entities().clear();
+        auto mk = [&](const QString& id, Vec2 c, bool withLeader) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QStringLiteral("1"));
+            e.meta.insert("landing", 8.0);
+            QJsonArray leaders;
+            if (withLeader) { QJsonArray t; t.append(c.x - 40); t.append(c.y); leaders.append(t); }
+            e.meta.insert("leaders", leaders);
+            d.entities().push_back(e);
+        };
+        mk("A", {0, 0}, true);   // has the leader
+        mk("B", {40, 0}, false); // target circle
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+        ed.selectById("A");
+        // Grab A's landing joint (near A, on the leader side ~x=-14) and drop on B.
+        ed.onPointerPress({-21, 0}, Qt::LeftButton, Qt::NoModifier); // grab the landing grip
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);  // drop on B's centre
+        const Entity *A = nullptr, *B = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == "A") A = &e; if (e.id == "B") B = &e; }
+        check(A && B && A->meta.value("leaders").toArray().isEmpty() &&
+                  B->meta.value("leaders").toArray().size() == 1,
+              "leader-reconnect: dropping the landing joint on another circle moves the leader");
+    }
+
     // --- Ctrl+click a balloon circle adds a COUPLED circle (chained, no leader), and
     //     dragging one circle's centre moves its chain-mate while leaders stay put.
     {
