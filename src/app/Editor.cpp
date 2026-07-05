@@ -4482,6 +4482,40 @@ void Editor::collectBalloons() {
     emit message(QStringLiteral("Collected %1 balloons into a row").arg(bs.size()));
 }
 
+void Editor::orderBalloonRow(const QString& id) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("balloon").toBool()) return;
+    std::vector<Entity*> batch = chainMatesOf(*e);
+    batch.push_back(e);
+    if (batch.size() < 2) {
+        emit message(QStringLiteral("This balloon isn't part of a batch."));
+        return;
+    }
+    Entity* arrow = nullptr;
+    for (Entity* m : batch)
+        if (!balloonLeaders(*m).empty()) { arrow = m; break; }
+    if (!arrow) arrow = e;
+    // Numeric order, but keep the arrow circle at the leader end of the row.
+    std::sort(batch.begin(), batch.end(), [](const Entity* a, const Entity* b) {
+        return a->meta.value("text").toString().toInt() < b->meta.value("text").toString().toInt();
+    });
+    std::vector<Entity*> order;
+    order.push_back(arrow);
+    for (Entity* m : batch)
+        if (m != arrow) order.push_back(m);
+    pushUndo();
+    const int dir = -balloonLandingSide(*arrow); // row grows OPPOSITE the leader
+    const double y = arrow->center.y, x0 = arrow->center.x, r = arrow->radius;
+    for (size_t i = 0; i < order.size(); ++i) {
+        const Vec2 c{x0 + dir * 2.0 * r * static_cast<double>(i), y}; // touching row
+        order[i]->center = c;
+        order[i]->a = c;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Balloons ordered into a row (minimum area)"));
+}
+
 // ---- Harness placement -----------------------------------------------------
 
 void Editor::handlePlacementPress(const Vec2& p) {

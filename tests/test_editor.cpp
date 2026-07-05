@@ -617,6 +617,37 @@ int run_editor_tests() {
               "multileader: Remove Leader drops one leader");
     }
 
+    // --- Order a balloon batch into a single touching row (numeric order, arrow at
+    //     the leader end) — collapses a cluster to minimum area.
+    {
+        Document d; d.entities().clear();
+        auto mk = [&](const QString& id, int num, Vec2 c, bool leader) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QString::number(num));
+            e.meta.insert("chain", QStringLiteral("cx")); e.meta.insert("landing", 8.0);
+            if (leader) {
+                e.meta.insert("landingSide", -1.0); // leader exits LEFT -> row grows right
+                QJsonArray l; QJsonArray t; t.append(-40); t.append(0); l.append(t);
+                e.meta.insert("leaders", l);
+            }
+            d.entities().push_back(e);
+        };
+        mk("c1", 1, {0, 0}, true);    // arrow circle (leader end)
+        mk("c2", 2, {0, 12}, false);  // stacked above -> should move into the row
+        mk("c3", 3, {12, 0}, false);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.orderBalloonRow("c1");
+        const Entity *a = nullptr, *b = nullptr, *cc = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.id == "c1") a = &e; if (e.id == "c2") b = &e; if (e.id == "c3") cc = &e;
+        }
+        // Row grows right from c1 at x=0: c1=0, c2=12, c3=24, all at y=0.
+        check(a && b && cc && near(a->center.y, 0) && near(b->center.y, 0) && near(cc->center.y, 0),
+              "order-row: batch collapses to one horizontal row");
+        check(near(a->center.x, 0) && near(b->center.x, 12) && near(cc->center.x, 24),
+              "order-row: circles placed touching in numeric order from the arrow");
+    }
+
     // --- Align lines selected balloons up evenly on their major axis.
     {
         Document d; d.entities().clear();

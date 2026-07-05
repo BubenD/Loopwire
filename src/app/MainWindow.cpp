@@ -3551,6 +3551,8 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         connect(addL, &QAction::triggered, this, [this, balloonId] { editor_->addCoupledCircle(balloonId); });
         QAction* delL = bmenu.addAction(QStringLiteral("Delete leader"));
         connect(delL, &QAction::triggered, this, [this] { editor_->removeLeaderFromSelection(); });
+        QAction* order = bmenu.addAction(QStringLiteral("Order leaders in a row"));
+        connect(order, &QAction::triggered, this, [this, balloonId] { editor_->orderBalloonRow(balloonId); });
         bmenu.addSeparator();
         bmenu.addAction(QStringLiteral("Cancel"));
         bmenu.exec(globalPos);

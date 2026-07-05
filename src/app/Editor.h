@@ -195,6 +195,9 @@ public:
     void removeLeaderFromSelection();// remove the last leader of the selected balloon
     void alignBalloons();            // line the selected balloons up, evenly spaced
     void collectBalloons();          // pack the selected balloons into a touching row
+    // Reorder the batch containing balloon `id` into a single touching row (numeric
+    // order, arrow circle at the leader end) — minimum "catch" area.
+    void orderBalloonRow(const QString& id);
     void repeatLastTool();
     ToolId lastTool() const { return lastTool_; }     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }
