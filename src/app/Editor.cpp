@@ -4611,6 +4611,27 @@ void Editor::reorderBalloonMinimize(const QString& id) {
         }
         ++row;
     }
+    // Move the leader to the circle now closest to where it points (its arrow tip),
+    // so it connects from the corner of the cluster facing the harness.
+    const auto tips = balloonLeaders(*arrow);
+    if (!tips.empty()) {
+        Vec2 avg{0, 0};
+        for (const auto& t : tips) avg = avg + t;
+        avg = avg * (1.0 / tips.size());
+        Entity* best = arrow;
+        double bd = distance(arrow->center, avg);
+        for (Entity* m : order) {
+            const double d = distance(m->center, avg);
+            if (d < bd) { bd = d; best = m; }
+        }
+        if (best != arrow) {
+            setBalloonLeaders(*best, tips);
+            best->meta.insert("landing", arrow->meta.value("landing").toDouble(8.0));
+            arrow->meta.remove("leaders");
+            arrow->meta.remove("landingSide");
+            arrow->meta.remove("landingAngle");
+        }
+    }
     doc_->setDirty(true);
     emit changed();
     emit message(QStringLiteral("Balloons packed to minimum area"));

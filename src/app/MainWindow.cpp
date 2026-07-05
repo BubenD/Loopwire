@@ -3579,27 +3579,18 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     if (!editor_) return;
 
-    // Right-click on a balloon: a dedicated leader menu (Add / Delete leader / Cancel).
+    // A balloon under the cursor — or a selected balloon — enables the leader commands
+    // alongside the general ones (right-click on the canvas shows general + leader).
     const Vec2 world = canvas_->worldFromGlobal(globalPos);
-    const QString balloonId = editor_->balloonAt(world);
+    QString balloonId = editor_->balloonAt(world);
     if (!balloonId.isEmpty()) {
-        editor_->selectById(balloonId);
-        QMenu bmenu(this);
-        // "Add leader" adds another numbered circle to the batch, on the side opposite
-        // the arrow connection.
-        QAction* addL = bmenu.addAction(QStringLiteral("Add leader"));
-        connect(addL, &QAction::triggered, this, [this, balloonId] { editor_->addCoupledCircle(balloonId); });
-        QAction* delL = bmenu.addAction(QStringLiteral("Delete leader"));
-        connect(delL, &QAction::triggered, this, [this] { editor_->removeLeaderFromSelection(); });
-        QAction* order = bmenu.addAction(QStringLiteral("Order leaders in a row"));
-        connect(order, &QAction::triggered, this, [this, balloonId] { editor_->orderBalloonRow(balloonId); });
-        QAction* mini = bmenu.addAction(QStringLiteral("Reorder to minimize"));
-        connect(mini, &QAction::triggered, this,
-                [this, balloonId] { editor_->reorderBalloonMinimize(balloonId); });
-        bmenu.addSeparator();
-        bmenu.addAction(QStringLiteral("Cancel"));
-        bmenu.exec(globalPos);
-        return;
+        editor_->selectById(balloonId); // clicking a balloon selects it/its batch
+    } else if (doc_) {
+        for (const auto& id : editor_->selection()) {
+            for (const auto& e : doc_->entities())
+                if (e.id == id && e.meta.value("balloon").toBool()) { balloonId = id; break; }
+            if (!balloonId.isEmpty()) break;
+        }
     }
 
     QMenu menu(this);
@@ -3623,6 +3614,20 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         mirror->setCheckable(true);
         mirror->setChecked(editor_->isArcMirrored());
         connect(mirror, &QAction::triggered, this, [this] { editor_->toggleArcMirror(); });
+    }
+
+    // Leader (multileader) commands, when a balloon is under the cursor / selected.
+    if (!balloonId.isEmpty()) {
+        menu.addSeparator();
+        auto* lm = menu.addMenu(QStringLiteral("Leader"));
+        connect(lm->addAction(QStringLiteral("Add leader")), &QAction::triggered, this,
+                [this, balloonId] { editor_->addCoupledCircle(balloonId); });
+        connect(lm->addAction(QStringLiteral("Delete leader")), &QAction::triggered, this,
+                [this] { editor_->removeLeaderFromSelection(); });
+        connect(lm->addAction(QStringLiteral("Order leaders in a row")), &QAction::triggered, this,
+                [this, balloonId] { editor_->orderBalloonRow(balloonId); });
+        connect(lm->addAction(QStringLiteral("Reorder to minimize")), &QAction::triggered, this,
+                [this, balloonId] { editor_->reorderBalloonMinimize(balloonId); });
     }
 
     menu.addSeparator();
