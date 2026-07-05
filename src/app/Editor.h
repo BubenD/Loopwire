@@ -137,6 +137,8 @@ public:
     // each end by any existing fillet/chamfer setback, so a highlighted "wall" matches
     // the visible (already-modified) outline instead of overshooting to a sharp vertex.
     std::pair<Vec2, Vec2> visibleWall(const Entity& e, int seg) const;
+    // The id of the balloon (its circle or one of its leader lines) under `p`, else empty.
+    QString balloonAt(const Vec2& p) const;
     void clearSelection();
     void deleteSelected();
 
@@ -379,6 +381,9 @@ private:
     // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
     // (0 if single). Writes cornerRadii/cornerChamfers and clears the other on that knee.
     void applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corner, double gap);
+    // Balloons Ctrl+coupled into a batch share meta["chain"]; returns the OTHER
+    // balloons in e's batch (empty if e has no chain). The batch moves as one unit.
+    std::vector<Entity*> chainMatesOf(const Entity& e);
     void handlePlacementPress(const Vec2& p);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;

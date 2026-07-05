@@ -3518,6 +3518,23 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
 
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     if (!editor_) return;
+
+    // Right-click on a balloon: a dedicated leader menu (Add / Delete leader / Cancel).
+    const Vec2 world = canvas_->worldFromGlobal(globalPos);
+    const QString balloonId = editor_->balloonAt(world);
+    if (!balloonId.isEmpty()) {
+        editor_->selectById(balloonId); // select its batch (selectById -> batch via press logic)
+        QMenu bmenu(this);
+        QAction* addL = bmenu.addAction(QStringLiteral("Add leader"));
+        connect(addL, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });
+        QAction* delL = bmenu.addAction(QStringLiteral("Delete leader"));
+        connect(delL, &QAction::triggered, this, [this] { editor_->removeLeaderFromSelection(); });
+        bmenu.addSeparator();
+        bmenu.addAction(QStringLiteral("Cancel"));
+        bmenu.exec(globalPos);
+        return;
+    }
+
     QMenu menu(this);
     const bool hasSel = !editor_->selection().empty();
 

@@ -849,19 +849,25 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             if (!tips.empty()) {
                 const double landing = e.meta.value("landing").toDouble(8.0);
-                // The shared landing runs toward the side most tips are on.
-                double avgX = 0;
-                for (const auto& t : tips) avgX += t.x;
-                avgX /= tips.size();
-                const int sign = (avgX <= e.center.x) ? -1 : 1;
-                const Vec2 edge{e.center.x + sign * e.radius, e.center.y};
-                const Vec2 outer{e.center.x + sign * (e.radius + landing), e.center.y};
-                const QPointF sEdge = vt.toScreen(edge), sOuter = vt.toScreen(outer);
-                p.drawLine(sEdge, sOuter); // one horizontal landing for the balloon
+                // The landing attaches at an angle around the circle (draggable). It
+                // defaults toward the average tip if no angle is stored.
+                double a;
+                if (e.meta.contains("landingAngle")) {
+                    a = e.meta.value("landingAngle").toDouble();
+                } else {
+                    double sx = 0, sy = 0;
+                    for (const auto& t : tips) { sx += t.x; sy += t.y; }
+                    a = std::atan2(sy / tips.size() - e.center.y, sx / tips.size() - e.center.x);
+                }
+                const Vec2 dir{std::cos(a), std::sin(a)};
+                const Vec2 attach = e.center + dir * e.radius;
+                const Vec2 elbow = e.center + dir * (e.radius + landing);
+                const QPointF sAttach = vt.toScreen(attach), sElbow = vt.toScreen(elbow);
+                p.drawLine(sAttach, sElbow); // radial landing out of the circle
                 for (const Vec2& tip : tips) {
                     const QPointF sTip = vt.toScreen(tip);
-                    p.drawLine(sOuter, sTip); // a leader line from the landing to each tip
-                    QPointF d = sTip - sOuter;
+                    p.drawLine(sElbow, sTip); // leader line from the elbow to each tip
+                    QPointF d = sTip - sElbow;
                     const double L = std::hypot(d.x(), d.y());
                     if (L > 1e-6) {
                         d /= L;

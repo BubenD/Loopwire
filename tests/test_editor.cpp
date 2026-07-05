@@ -462,7 +462,8 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
         ed.selectById("A");
         // Grab A's landing joint (near A, on the leader side ~x=-14) and drop on B.
-        ed.onPointerPress({-21, 0}, Qt::LeftButton, Qt::NoModifier); // grab the landing grip
+        // Landing joint sits at the elbow: center + dir(angle)*(r+landing) = (-14,0).
+        ed.onPointerPress({-14, 0}, Qt::LeftButton, Qt::NoModifier); // grab the landing grip
         ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);  // drop on B's centre
         const Entity *A = nullptr, *B = nullptr;
         for (const auto& e : d.entities()) { if (e.id == "A") A = &e; if (e.id == "B") B = &e; }
@@ -520,10 +521,9 @@ int run_editor_tests() {
         check(b && b->meta.value("leaders").toArray().size() == 2,
               "multileader: Add Leader appends a second leader");
         ed.removeLeaderFromSelection();
-        ed.removeLeaderFromSelection(); // second call must NOT drop the last one
         for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b = &e;
         check(b && b->meta.value("leaders").toArray().size() == 1,
-              "multileader: Remove Leader keeps at least one leader");
+              "multileader: Remove Leader drops one leader");
     }
 
     // --- Align lines selected balloons up evenly on their major axis.

@@ -120,6 +120,11 @@ public:
         if (crosshairTop_) crosshairTop_->raise();
     }
 
+    // World point under a GLOBAL screen position (e.g. a context-menu request point).
+    Vec2 worldFromGlobal(const QPoint& globalPos) const {
+        return transform().toWorld(QPointF(mapFromGlobal(globalPos)));
+    }
+
 protected:
     void resizeEvent(QResizeEvent* e) override;  // keep the crosshair overlay sized
     void childEvent(QChildEvent* e) override;    // keep the crosshair overlay on top
