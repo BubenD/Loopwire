@@ -373,6 +373,21 @@ int run_editor_tests() {
               "table: editing a cell stores its text");
     }
 
+    // --- Committing an inline edit on a balloon saves its number (balloons aren't
+    //     Text objects, so applyTextEdit must still store their text).
+    {
+        Document d; d.entities().clear();
+        Entity b; b.id = "b"; b.type = EntityType::Circle; b.center = {0, 0}; b.a = {0, 0};
+        b.radius = 6; b.meta.insert("balloon", true); b.meta.insert("text", QStringLiteral("1"));
+        d.entities().push_back(b);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.applyTextEdit("b", QStringLiteral("42"), Editor::TextStyle{});
+        const Entity* bb = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "b") bb = &e;
+        check(bb && bb->meta.value("text").toString() == QLatin1String("42"),
+              "balloon-edit: committing the inline editor saves the balloon number");
+    }
+
     // --- A dimension's moved text position (textPosX/Y meta) follows the dimension
     //     when it is moved, so the dashed leader stays attached.
     {

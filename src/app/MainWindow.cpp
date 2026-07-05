@@ -1380,6 +1380,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         style.boxWidth = found->meta.value(QStringLiteral("boxWidth")).toDouble(0.0);
         style.boxHeight = found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0);
         beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a);
+        // A balloon number is a single value: plain Enter (or clicking away) commits it.
+        inlineSingleLine_ = found->meta.value(QStringLiteral("balloon")).toBool();
     });
     // Double-clicked a table cell: open the inline editor over that cell, writing back
     // to the cell (not a text object) on commit.
@@ -1389,6 +1391,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 style.size = 4.0;
                 beginInlineText(id, text, style, at);
                 inlineCell_ = cell; // mark this as a table-cell edit (after beginInlineText resets it)
+                inlineSingleLine_ = true; // Enter commits a table cell too
             });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
     // Keep the on-canvas text editor glued to its world position when panning/zooming.
@@ -3320,7 +3323,8 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
 void MainWindow::beginInlineText(const QString& id, const QString& text,
                                  const Editor::TextStyle& style, Vec2 topLeft) {
     inlineEditId_ = id;
-    inlineCell_ = -1; // plain text edit unless a table-cell edit sets it afterwards
+    inlineCell_ = -1;           // plain text edit unless a table-cell edit sets it afterwards
+    inlineSingleLine_ = false;  // multi-line unless a single-value edit sets it afterwards
     inlineStyle_ = style;
     inlineTopLeft_ = topLeft;
 
@@ -3554,7 +3558,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
         auto* ke = static_cast<QKeyEvent*>(e);
         if (ke->key() == Qt::Key_Escape) { commitInlineText(false); return true; }
         if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
-            (ke->modifiers() & Qt::ControlModifier)) {
+            ((ke->modifiers() & Qt::ControlModifier) || inlineSingleLine_)) {
+            // Ctrl+Enter always commits; plain Enter commits a single-value edit
+            // (balloon number / table cell).
             commitInlineText(true);
             return true;
         }

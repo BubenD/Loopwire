@@ -3417,7 +3417,19 @@ void Editor::commitText(const QString& text, const TextStyle& s) {
 
 void Editor::applyTextEdit(const QString& id, const QString& text, const TextStyle& s) {
     Entity* e = entityById(id);
-    if (!e || e->type != EntityType::Text) return;
+    if (!e) return;
+    // Annotations that merely carry a text value (balloon number, note / revision
+    // body) just store it — they aren't real Text objects.
+    if (e->type != EntityType::Text) {
+        if (e->meta.value("balloon").toBool() || e->meta.value("note").toBool() ||
+            e->meta.value("revision").toBool()) {
+            pushUndo();
+            e->meta.insert("text", text);
+            doc_->setDirty(true);
+            emit changed();
+        }
+        return;
+    }
     pushUndo();
     if (text.isEmpty()) {
         // Cleared -> delete the text object.
@@ -4596,13 +4608,16 @@ void Editor::reorderBalloonMinimize(const QString& id) {
     pushUndo();
     const int N = static_cast<int>(order.size());
     const double r = arrow->radius;
-    const int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(N))));
-    const double rowH = r * std::sqrt(3.0); // hex-packed row spacing
+    const double rowH = r * std::sqrt(3.0); // hex row spacing => adjacent rows tangent
     const Vec2 anchor = arrow->center;
+    // A downward-narrowing triangular hex pack (widest row on top): each lower row
+    // nestles in the POCKETS of the row above, so no two circles ever overlap.
+    const int base = std::max(1, static_cast<int>(std::ceil((std::sqrt(8.0 * N + 1) - 1) / 2.0)));
     int placed = 0, row = 0;
     while (placed < N) {
-        const int inRow = std::min(cols, N - placed);
-        const double x0 = anchor.x - (inRow - 1) * r; // centre the row
+        const int nominal = std::max(1, base - row);       // full width of this row
+        const int inRow = std::min(nominal, N - placed);
+        const double x0 = anchor.x - (nominal - 1) * r;    // pockets aligned to the full row
         for (int i = 0; i < inRow; ++i) {
             const Vec2 c{x0 + i * 2.0 * r, anchor.y - row * rowH};
             order[placed]->center = c;
