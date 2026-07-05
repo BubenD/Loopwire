@@ -2702,7 +2702,15 @@ void MainWindow::buildStatusControls() {
         addSnap(QStringLiteral("Endpoint"), QStringLiteral("endpoint"), &SnapSettings::snapEndpoint);
         addSnap(QStringLiteral("Midpoint"), QStringLiteral("midpoint"), &SnapSettings::snapMidpoint);
         addSnap(QStringLiteral("Center"), QStringLiteral("center"), &SnapSettings::snapCenter);
+        addSnap(QStringLiteral("Geometric Center"), QStringLiteral("center"),
+                &SnapSettings::snapGeometricCenter);
+        addSnap(QStringLiteral("Node"), QStringLiteral("endpoint"), &SnapSettings::snapNode);
+        addSnap(QStringLiteral("Quadrant"), QStringLiteral("center"), &SnapSettings::snapQuadrant);
         addSnap(QStringLiteral("Intersection"), QStringLiteral("intersection"), &SnapSettings::snapIntersection);
+        addSnap(QStringLiteral("Insertion"), QStringLiteral("endpoint"), &SnapSettings::snapInsertion);
+        addSnap(QStringLiteral("Perpendicular"), QStringLiteral("nearest"),
+                &SnapSettings::snapPerpendicular);
+        addSnap(QStringLiteral("Tangent"), QStringLiteral("center"), &SnapSettings::snapTangent);
         addSnap(QStringLiteral("Nearest"), QStringLiteral("nearest"), &SnapSettings::snapNearest);
         menu->addSeparator();
         connect(menu->addAction(QStringLiteral("Object Snap Settings...")), &QAction::triggered,
@@ -3761,12 +3769,24 @@ void MainWindow::showOptions() {
     auto* snEnd = new QCheckBox(QStringLiteral("Endpoint"), draft); snEnd->setChecked(s.snapEndpoint);
     auto* snMid = new QCheckBox(QStringLiteral("Midpoint"), draft); snMid->setChecked(s.snapMidpoint);
     auto* snCen = new QCheckBox(QStringLiteral("Center"), draft); snCen->setChecked(s.snapCenter);
+    auto* snGeo = new QCheckBox(QStringLiteral("Geometric Center"), draft); snGeo->setChecked(s.snapGeometricCenter);
+    auto* snNode = new QCheckBox(QStringLiteral("Node"), draft); snNode->setChecked(s.snapNode);
+    auto* snQuad = new QCheckBox(QStringLiteral("Quadrant"), draft); snQuad->setChecked(s.snapQuadrant);
     auto* snInt = new QCheckBox(QStringLiteral("Intersection"), draft); snInt->setChecked(s.snapIntersection);
+    auto* snIns = new QCheckBox(QStringLiteral("Insertion"), draft); snIns->setChecked(s.snapInsertion);
+    auto* snPerp = new QCheckBox(QStringLiteral("Perpendicular"), draft); snPerp->setChecked(s.snapPerpendicular);
+    auto* snTan = new QCheckBox(QStringLiteral("Tangent"), draft); snTan->setChecked(s.snapTangent);
     auto* snNear = new QCheckBox(QStringLiteral("Nearest"), draft); snNear->setChecked(s.snapNearest);
     gf->addRow(QStringLiteral("Snap types"), snEnd);
     gf->addRow(QString(), snMid);
     gf->addRow(QString(), snCen);
+    gf->addRow(QString(), snGeo);
+    gf->addRow(QString(), snNode);
+    gf->addRow(QString(), snQuad);
     gf->addRow(QString(), snInt);
+    gf->addRow(QString(), snIns);
+    gf->addRow(QString(), snPerp);
+    gf->addRow(QString(), snTan);
     gf->addRow(QString(), snNear);
     tabs->addTab(draft, QStringLiteral("Drafting"));
 
@@ -3808,7 +3828,13 @@ void MainWindow::showOptions() {
     s.snapEndpoint = snEnd->isChecked();
     s.snapMidpoint = snMid->isChecked();
     s.snapCenter = snCen->isChecked();
+    s.snapGeometricCenter = snGeo->isChecked();
+    s.snapNode = snNode->isChecked();
+    s.snapQuadrant = snQuad->isChecked();
     s.snapIntersection = snInt->isChecked();
+    s.snapInsertion = snIns->isChecked();
+    s.snapPerpendicular = snPerp->isChecked();
+    s.snapTangent = snTan->isChecked();
     s.snapNearest = snNear->isChecked();
     editor_->setShowAngles(angles->isChecked());
     EntityRenderer::setDimensionDecimals(dimDec->value());
@@ -4712,7 +4738,13 @@ void MainWindow::loadSettings() {
     sn.snapEndpoint = s.value(QStringLiteral("draft/snapEndpoint"), sn.snapEndpoint).toBool();
     sn.snapMidpoint = s.value(QStringLiteral("draft/snapMidpoint"), sn.snapMidpoint).toBool();
     sn.snapCenter = s.value(QStringLiteral("draft/snapCenter"), sn.snapCenter).toBool();
+    sn.snapGeometricCenter = s.value(QStringLiteral("draft/snapGeomCenter"), sn.snapGeometricCenter).toBool();
+    sn.snapNode = s.value(QStringLiteral("draft/snapNode"), sn.snapNode).toBool();
+    sn.snapQuadrant = s.value(QStringLiteral("draft/snapQuadrant"), sn.snapQuadrant).toBool();
     sn.snapIntersection = s.value(QStringLiteral("draft/snapIntersection"), sn.snapIntersection).toBool();
+    sn.snapInsertion = s.value(QStringLiteral("draft/snapInsertion"), sn.snapInsertion).toBool();
+    sn.snapPerpendicular = s.value(QStringLiteral("draft/snapPerpendicular"), sn.snapPerpendicular).toBool();
+    sn.snapTangent = s.value(QStringLiteral("draft/snapTangent"), sn.snapTangent).toBool();
     sn.snapNearest = s.value(QStringLiteral("draft/snapNearest"), sn.snapNearest).toBool();
     sn.gridSize = s.value(QStringLiteral("draft/gridSize"), sn.gridSize).toDouble();
     canvas_->setGridSize(sn.gridSize);
@@ -4732,7 +4764,13 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("draft/snapEndpoint"), sn.snapEndpoint);
     s.setValue(QStringLiteral("draft/snapMidpoint"), sn.snapMidpoint);
     s.setValue(QStringLiteral("draft/snapCenter"), sn.snapCenter);
+    s.setValue(QStringLiteral("draft/snapGeomCenter"), sn.snapGeometricCenter);
+    s.setValue(QStringLiteral("draft/snapNode"), sn.snapNode);
+    s.setValue(QStringLiteral("draft/snapQuadrant"), sn.snapQuadrant);
     s.setValue(QStringLiteral("draft/snapIntersection"), sn.snapIntersection);
+    s.setValue(QStringLiteral("draft/snapInsertion"), sn.snapInsertion);
+    s.setValue(QStringLiteral("draft/snapPerpendicular"), sn.snapPerpendicular);
+    s.setValue(QStringLiteral("draft/snapTangent"), sn.snapTangent);
     s.setValue(QStringLiteral("draft/snapNearest"), sn.snapNearest);
     s.setValue(QStringLiteral("draft/gridSize"), canvas_->gridSize());
     s.setValue(QStringLiteral("draft/gridVisible"), canvas_->gridVisible());

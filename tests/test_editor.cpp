@@ -420,6 +420,43 @@ int run_editor_tests() {
               "balloon: carries a leader arrow tip and an editable landing length");
     }
 
+    // --- New object-snap options apply and each honors its own toggle.
+    {
+        Document d; d.entities().clear();
+        Entity r; r.id = "r"; r.type = EntityType::Rect;
+        r.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}}; // centroid (20,10)
+        d.entities().push_back(r);
+        Entity c; c.id = "c"; c.type = EntityType::Circle; c.center = {100, 0}; c.radius = 10;
+        d.entities().push_back(c);
+        // Geometric centre of the rectangle.
+        {
+            SnapSettings s; s.snapGeometricCenter = true;
+            auto rr = resolveSnap(d, {21, 11}, std::nullopt, 5.0, s, {});
+            check(rr.snapped && rr.kind == SnapKind::GeometricCenter && near(rr.point.x, 20.0) &&
+                      near(rr.point.y, 10.0),
+                  "snap-geomcenter: snaps to a rectangle centroid");
+            s.snapGeometricCenter = false; s.snapNearest = false; s.snapEndpoint = false;
+            s.snapMidpoint = false; s.snapIntersection = false;
+            auto off = resolveSnap(d, {21, 11}, std::nullopt, 5.0, s, {});
+            check(!off.snapped, "snap-geomcenter: off when its toggle is off");
+        }
+        // Quadrant of the circle (right quadrant at (110,0)). Endpoint off so it
+        // doesn't shadow the coincident quadrant point.
+        {
+            SnapSettings s; s.snapQuadrant = true; s.snapNearest = false; s.snapEndpoint = false;
+            auto q = resolveSnap(d, {109, 1}, std::nullopt, 5.0, s, {});
+            check(q.snapped && q.kind == SnapKind::Quadrant && near(q.point.x, 110.0),
+                  "snap-quadrant: snaps to a circle quadrant point");
+        }
+        // Tangent from an anchor above the circle to the ring (~(90.3, 2.5)).
+        {
+            SnapSettings s; s.snapTangent = true; s.snapNearest = false; s.snapEndpoint = false;
+            auto t = resolveSnap(d, {90, 3}, {Vec2{100, 40}}, 5.0, s, {});
+            check(t.snapped && t.kind == SnapKind::Tangent,
+                  "snap-tangent: snaps to a tangent point from the anchor");
+        }
+    }
+
     // --- Object snap finds a dimension's joints (measured points + dim-line ends),
     //     and ONLY when object snap is enabled (request 2 + 3).
     {

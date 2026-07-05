@@ -16,7 +16,13 @@ enum class SnapKind {
     Endpoint,
     Midpoint,
     Center,
+    GeometricCenter,
+    Node,
+    Quadrant,
     Intersection,
+    Insertion,
+    Perpendicular,
+    Tangent,
     Nearest,
     Ortho,
     Polar,
@@ -39,7 +45,13 @@ struct SnapSettings {
     bool snapEndpoint = true;
     bool snapMidpoint = true;
     bool snapCenter = true;
+    bool snapGeometricCenter = false;
+    bool snapNode = true;
+    bool snapQuadrant = false;
     bool snapIntersection = true;
+    bool snapInsertion = false;
+    bool snapPerpendicular = false;
+    bool snapTangent = false;
     bool snapNearest = true;
     // Object-snap pixel tolerance is converted to world units by the caller.
 };

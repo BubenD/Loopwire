@@ -217,7 +217,13 @@ QString snapKindLabel(SnapKind k) {
     case SnapKind::Endpoint: return QStringLiteral("Endpoint");
     case SnapKind::Midpoint: return QStringLiteral("Midpoint");
     case SnapKind::Center: return QStringLiteral("Center");
+    case SnapKind::GeometricCenter: return QStringLiteral("Geometric Center");
+    case SnapKind::Node: return QStringLiteral("Node");
+    case SnapKind::Quadrant: return QStringLiteral("Quadrant");
     case SnapKind::Intersection: return QStringLiteral("Intersection");
+    case SnapKind::Insertion: return QStringLiteral("Insertion");
+    case SnapKind::Perpendicular: return QStringLiteral("Perpendicular");
+    case SnapKind::Tangent: return QStringLiteral("Tangent");
     case SnapKind::Nearest: return QStringLiteral("Nearest");
     case SnapKind::Ortho: return QStringLiteral("Ortho");
     case SnapKind::Polar: return QStringLiteral("Polar");
@@ -261,11 +267,62 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                  e.type == EntityType::Ellipse)) {
                 consider(e.center, SnapKind::Center);
             }
+            // Quadrant: the 4 cardinal points of a circle/arc/ellipse.
+            if (s.snapQuadrant &&
+                (e.type == EntityType::Circle || e.type == EntityType::Arc ||
+                 e.type == EntityType::Ellipse)) {
+                const double rx = e.radius, ry = (e.radiusY > 0 ? e.radiusY : e.radius);
+                consider({e.center.x + rx, e.center.y}, SnapKind::Quadrant);
+                consider({e.center.x - rx, e.center.y}, SnapKind::Quadrant);
+                consider({e.center.x, e.center.y + ry}, SnapKind::Quadrant);
+                consider({e.center.x, e.center.y - ry}, SnapKind::Quadrant);
+            }
+            // Geometric centre: centroid of a closed shape.
+            if (s.snapGeometricCenter &&
+                (e.type == EntityType::Rect || e.type == EntityType::Polygon ||
+                 e.type == EntityType::Hatch) &&
+                !e.points.empty()) {
+                Vec2 c{0, 0};
+                for (const auto& pt : e.points) c = c + pt;
+                consider(c * (1.0 / e.points.size()), SnapKind::GeometricCenter);
+            }
+            // Node: point-like objects (splices, markers, net labels, text anchors).
+            if (s.snapNode &&
+                (e.type == EntityType::Splice || e.type == EntityType::NotConnected ||
+                 e.type == EntityType::NetLabel || e.type == EntityType::Text)) {
+                consider(e.a, SnapKind::Node);
+            }
+            // Insertion: the insertion point of text / connectors / balloons.
+            if (s.snapInsertion &&
+                (e.type == EntityType::Text || e.type == EntityType::Connector ||
+                 e.meta.value("balloon").toBool())) {
+                consider(e.a, SnapKind::Insertion);
+            }
+            // Tangent: tangent points on a circle from the anchor (needs a from-point).
+            if (s.snapTangent && anchor && e.type == EntityType::Circle) {
+                const double d = distance(*anchor, e.center);
+                if (d > e.radius + 1e-6) {
+                    const double aBase = std::atan2(anchor->y - e.center.y, anchor->x - e.center.x);
+                    const double off = std::acos(e.radius / d);
+                    consider(pointOnCircle(e.center, e.radius, aBase + off), SnapKind::Tangent);
+                    consider(pointOnCircle(e.center, e.radius, aBase - off), SnapKind::Tangent);
+                }
+            }
             std::vector<std::pair<Vec2, Vec2>> segs;
             entitySegments(e, segs);
             if (s.snapMidpoint)
                 for (const auto& seg : segs)
                     consider(lerp(seg.first, seg.second, 0.5), SnapKind::Midpoint);
+            // Perpendicular: foot of the perpendicular from the anchor onto a segment.
+            if (s.snapPerpendicular && anchor)
+                for (const auto& seg : segs) {
+                    const Vec2 d = seg.second - seg.first;
+                    const double L2 = d.lengthSq();
+                    if (L2 < 1e-12) continue;
+                    double t = dot(*anchor - seg.first, d) / L2;
+                    t = std::clamp(t, 0.0, 1.0);
+                    consider(seg.first + d * t, SnapKind::Perpendicular);
+                }
             for (auto& seg : segs) allSegs.push_back(seg);
         }
 
