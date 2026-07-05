@@ -3553,6 +3553,9 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         connect(delL, &QAction::triggered, this, [this] { editor_->removeLeaderFromSelection(); });
         QAction* order = bmenu.addAction(QStringLiteral("Order leaders in a row"));
         connect(order, &QAction::triggered, this, [this, balloonId] { editor_->orderBalloonRow(balloonId); });
+        QAction* mini = bmenu.addAction(QStringLiteral("Reorder to minimize"));
+        connect(mini, &QAction::triggered, this,
+                [this, balloonId] { editor_->reorderBalloonMinimize(balloonId); });
         bmenu.addSeparator();
         bmenu.addAction(QStringLiteral("Cancel"));
         bmenu.exec(globalPos);
@@ -4174,10 +4177,32 @@ void MainWindow::refreshProperties() {
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("gap"), std::max(0.1, v));
                    });
-        // Balloon callout: editable leader landing length + the number.
+        // Balloon callout: arrowhead type/size, leader landing length + the number.
         if (e->meta.value(QStringLiteral("balloon")).toBool()) {
-            addNum(QStringLiteral("Landing"), e->meta.value(QStringLiteral("landing")).toDouble(8.0),
-                   [this](double v) {
+            // Arrowhead type (fall menu). Canonical values map to friendly labels.
+            static const QVector<QPair<QString, QString>> arrowTypes = {
+                {"Closed filled", "closed"}, {"Closed blank", "blank"}, {"Dot", "dot"},
+                {"Architectural tick", "tick"}, {"Oblique", "tick"}, {"Open", "open"},
+                {"None", "none"}};
+            const QString curAh = e->meta.value(QStringLiteral("arrowhead")).toString("closed");
+            QString curAhLabel = QStringLiteral("Closed filled");
+            for (const auto& a : arrowTypes) if (a.second == curAh) { curAhLabel = a.first; break; }
+            QStringList ahLabels;
+            for (const auto& a : arrowTypes) ahLabels << a.first;
+            addCombo(QStringLiteral("Arrowhead"), ahLabels, curAhLabel, false,
+                     [this](const QString& label) {
+                         for (const auto& a : arrowTypes)
+                             if (a.first == label) {
+                                 editor_->setSelectionMeta(QStringLiteral("arrowhead"), a.second);
+                                 return;
+                             }
+                     });
+            addNum(QStringLiteral("Arrowhead size"),
+                   e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), std::max(0.1, v));
+                   });
+            addNum(QStringLiteral("Landing distance"),
+                   e->meta.value(QStringLiteral("landing")).toDouble(8.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("landing"), std::max(0.0, v));
                    });
             addCombo(QStringLiteral("Number"), {}, e->meta.value(QStringLiteral("text")).toString(),

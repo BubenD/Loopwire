@@ -366,6 +366,48 @@ void drawArrowHead(QPainter& p, const QPointF& tip, const QPointF& dir, const QC
     p.restore();
 }
 
+// Draw a leader arrowhead of the given TYPE at `tip`, pointing along `dir` (unit).
+// Types mirror the AutoCAD arrowhead list (a practical subset is drawn distinctly;
+// the rest fall back to the closed-filled triangle).
+void drawLeaderArrow(QPainter& p, const QPointF& tip, const QPointF& dir, const QColor& c,
+                     const QString& type, double len) {
+    if (type == QLatin1String("none")) return;
+    const QPointF n(-dir.y(), dir.x());
+    if (type == QLatin1String("dot")) {
+        p.save(); p.setPen(Qt::NoPen); p.setBrush(c);
+        p.drawEllipse(tip, len * 0.32, len * 0.32);
+        p.restore();
+        return;
+    }
+    if (type == QLatin1String("tick")) { // architectural / oblique slash across the tip
+        p.save();
+        QPen pen(c); pen.setCosmetic(true); pen.setWidthF(1.8); p.setPen(pen);
+        p.drawLine(tip - dir * (len * 0.5) - n * (len * 0.5),
+                   tip + dir * (len * 0.5) + n * (len * 0.5));
+        p.restore();
+        return;
+    }
+    if (type == QLatin1String("open")) { // unfilled V
+        const QPointF base = tip - dir * len;
+        p.save();
+        QPen pen(c); pen.setCosmetic(true); pen.setWidthF(1.8); p.setPen(pen); p.setBrush(Qt::NoBrush);
+        p.drawLine(tip, base + n * (len * 0.4));
+        p.drawLine(tip, base - n * (len * 0.4));
+        p.restore();
+        return;
+    }
+    if (type == QLatin1String("blank")) { // closed-but-hollow triangle
+        const QPointF base = tip - dir * len;
+        QPolygonF tri; tri << tip << (base + n * len * 0.36) << (base - n * len * 0.36);
+        p.save();
+        QPen pen(c); pen.setCosmetic(true); pen.setWidthF(1.6); p.setPen(pen); p.setBrush(Qt::NoBrush);
+        p.drawPolygon(tri);
+        p.restore();
+        return;
+    }
+    drawArrowHead(p, tip, dir, c, len); // "closed" (closed filled) — the default
+}
+
 // Draw any dimension entity (linear/aligned/radius/diameter/angular/ordinate/...).
 void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
                          const QColor& color, int decimals) {
@@ -849,29 +891,43 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             if (!tips.empty()) {
                 const double landing = std::max(0.0, e.meta.value("landing").toDouble(8.0));
-                // Horizontal landing shelf: attach on the side toward the tips, knee at
-                // the shelf end (landing==0 -> no shelf, leader leaves the circle edge).
-                int side;
-                if (e.meta.contains("landingSide")) {
-                    side = e.meta.value("landingSide").toDouble() >= 0 ? 1 : -1;
+                Vec2 attach, knee;
+                if (landing > 0) {
+                    // Horizontal landing shelf on the side toward the tips.
+                    int side;
+                    if (e.meta.contains("landingSide")) {
+                        side = e.meta.value("landingSide").toDouble() >= 0 ? 1 : -1;
+                    } else {
+                        double sx = 0;
+                        for (const auto& t : tips) sx += t.x;
+                        side = (sx / tips.size() >= e.center.x) ? 1 : -1;
+                    }
+                    attach = {e.center.x + side * e.radius, e.center.y};
+                    knee = {e.center.x + side * (e.radius + landing), e.center.y};
+                    p.drawLine(vt.toScreen(attach), vt.toScreen(knee)); // shelf
                 } else {
-                    double sx = 0;
-                    for (const auto& t : tips) sx += t.x;
-                    side = (sx / tips.size() >= e.center.x) ? 1 : -1;
+                    // No shelf: the leader attaches at a free ANGLE around the ring.
+                    double a;
+                    if (e.meta.contains("landingAngle")) {
+                        a = e.meta.value("landingAngle").toDouble();
+                    } else {
+                        double sx = 0, sy = 0;
+                        for (const auto& t : tips) { sx += t.x; sy += t.y; }
+                        a = std::atan2(sy / tips.size() - e.center.y, sx / tips.size() - e.center.x);
+                    }
+                    attach = {e.center.x + std::cos(a) * e.radius, e.center.y + std::sin(a) * e.radius};
+                    knee = attach;
                 }
-                const Vec2 attach{e.center.x + side * e.radius, e.center.y};
-                const Vec2 knee{e.center.x + side * (e.radius + landing), e.center.y};
-                const QPointF sAttach = vt.toScreen(attach), sKnee = vt.toScreen(knee);
-                if (landing > 0) p.drawLine(sAttach, sKnee); // horizontal landing shelf
+                const QString ah = e.meta.value("arrowhead").toString(QStringLiteral("closed"));
+                const double alen = std::clamp(e.meta.value("arrowSize").toDouble(3.3) * vt.scale(),
+                                               6.0, 40.0);
+                const QPointF sKnee = vt.toScreen(knee);
                 for (const Vec2& tip : tips) {
                     const QPointF sTip = vt.toScreen(tip);
-                    p.drawLine(sKnee, sTip); // leader line from the knee to each tip
+                    p.drawLine(sKnee, sTip); // leader line from the knee/attach to each tip
                     QPointF d = sTip - sKnee;
                     const double L = std::hypot(d.x(), d.y());
-                    if (L > 1e-6) {
-                        d /= L;
-                        drawArrowHead(p, sTip, d, color, std::clamp(3.3 * vt.scale(), 6.0, 26.0));
-                    }
+                    if (L > 1e-6) { d /= L; drawLeaderArrow(p, sTip, d, color, ah, alen); }
                 }
             }
             p.drawEllipse(c, r, r);

@@ -198,6 +198,9 @@ public:
     // Reorder the batch containing balloon `id` into a single touching row (numeric
     // order, arrow circle at the leader end) — minimum "catch" area.
     void orderBalloonRow(const QString& id);
+    // Pack the batch containing `id` into a compact triangular cluster (hex rows) —
+    // the smallest bounding area (e.g. 2 on top, 1 tucked below).
+    void reorderBalloonMinimize(const QString& id);
     void repeatLastTool();
     ToolId lastTool() const { return lastTool_; }     // re-invoke the last used tool (Space / Enter when idle)
     void setFilletRadius(double r) { filletRadius_ = r; }

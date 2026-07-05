@@ -80,14 +80,30 @@ inline int balloonLandingSide(const Entity& e) {
     for (const auto& t : tips) sx += t.x;
     return (sx / tips.size() >= e.center.x) ? 1 : -1;
 }
-// The point where the leader ATTACHES to the circle (the horizontal side midpoint).
-inline Vec2 balloonAttach(const Entity& e) {
-    return {e.center.x + balloonLandingSide(e) * e.radius, e.center.y};
+// Free attachment angle (used only when landing==0). Defaults toward the avg tip.
+inline double balloonLandingAngle(const Entity& e) {
+    if (e.meta.contains(QStringLiteral("landingAngle")))
+        return e.meta.value(QStringLiteral("landingAngle")).toDouble();
+    const auto tips = balloonLeaders(e);
+    if (tips.empty()) return 0.0;
+    Vec2 avg{0, 0};
+    for (const auto& t : tips) avg = avg + t;
+    avg = avg * (1.0 / tips.size());
+    return std::atan2(avg.y - e.center.y, avg.x - e.center.x);
 }
-// The leader "knee": the end of the HORIZONTAL landing shelf (length meta["landing"],
-// 0 = no landing so the knee coincides with the attach point).
+// Where the leader ATTACHES to the circle: with a landing shelf it's the horizontal
+// side midpoint; with NO landing (0) it's a free point around the ring (landingAngle).
+inline Vec2 balloonAttach(const Entity& e) {
+    const double landing = std::max(0.0, e.meta.value(QStringLiteral("landing")).toDouble(8.0));
+    if (landing > 0) return {e.center.x + balloonLandingSide(e) * e.radius, e.center.y};
+    const double a = balloonLandingAngle(e);
+    return {e.center.x + std::cos(a) * e.radius, e.center.y + std::sin(a) * e.radius};
+}
+// The leader "knee": end of the horizontal landing shelf; coincides with the attach
+// point when there is no landing.
 inline Vec2 balloonKnee(const Entity& e) {
     const double landing = std::max(0.0, e.meta.value(QStringLiteral("landing")).toDouble(8.0));
+    if (landing <= 0) return balloonAttach(e);
     return {e.center.x + balloonLandingSide(e) * (e.radius + landing), e.center.y};
 }
 // `off` is the grip's offset from its centerline reference (non-zero only for the
@@ -687,19 +703,32 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
                 if (x.meta.value("balloon").toBool() && x.id != editEntityId_ &&
                     distance(x.center, p) <= x.radius) { tgt = &x; break; }
             if (src && tgt) {
+                // Jump the leader to the neighbour circle it was dropped on.
                 pushUndo();
+                const double landing = std::max(0.0, src->meta.value("landing").toDouble(8.0));
                 setBalloonLeaders(*tgt, balloonLeaders(*src)); // move the whole leader over
-                tgt->meta.insert("landing", src->meta.value("landing").toDouble(8.0));
-                tgt->meta.insert("landingSide", (p.x >= tgt->center.x) ? 1.0 : -1.0);
+                tgt->meta.insert("landing", landing);
+                if (landing > 0) tgt->meta.insert("landingSide", (p.x >= tgt->center.x) ? 1.0 : -1.0);
+                else tgt->meta.insert("landingAngle",
+                                      std::atan2(p.y - tgt->center.y, p.x - tgt->center.x));
                 src->meta.remove("leaders");
                 src->meta.remove("landingSide");
+                src->meta.remove("landingAngle");
                 doc_->setDirty(true);
                 emit message(QStringLiteral("Leader re-connected to the other circle"));
             } else if (src) {
                 pushUndo();
-                src->meta.insert("landingSide", (p.x >= src->center.x) ? 1.0 : -1.0);
+                const double landing = std::max(0.0, src->meta.value("landing").toDouble(8.0));
+                if (landing > 0) {
+                    src->meta.insert("landingSide", (p.x >= src->center.x) ? 1.0 : -1.0);
+                    emit message(QStringLiteral("Leader landing side changed"));
+                } else {
+                    // No landing: the connection moves freely AROUND the circle.
+                    src->meta.insert("landingAngle",
+                                     std::atan2(p.y - src->center.y, p.x - src->center.x));
+                    emit message(QStringLiteral("Leader attachment moved around the circle"));
+                }
                 doc_->setDirty(true);
-                emit message(QStringLiteral("Leader landing side changed"));
             }
             editing_ = false;
             gripGrab_ = false;
@@ -4514,6 +4543,49 @@ void Editor::orderBalloonRow(const QString& id) {
     doc_->setDirty(true);
     emit changed();
     emit message(QStringLiteral("Balloons ordered into a row (minimum area)"));
+}
+
+void Editor::reorderBalloonMinimize(const QString& id) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("balloon").toBool()) return;
+    std::vector<Entity*> batch = chainMatesOf(*e);
+    batch.push_back(e);
+    if (batch.size() < 2) {
+        emit message(QStringLiteral("This balloon isn't part of a batch."));
+        return;
+    }
+    Entity* arrow = nullptr;
+    for (Entity* m : batch)
+        if (!balloonLeaders(*m).empty()) { arrow = m; break; }
+    if (!arrow) arrow = e;
+    std::sort(batch.begin(), batch.end(), [](const Entity* a, const Entity* b) {
+        return a->meta.value("text").toString().toInt() < b->meta.value("text").toString().toInt();
+    });
+    std::vector<Entity*> order;
+    order.push_back(arrow); // arrow at the leader end of the top row
+    for (Entity* m : batch)
+        if (m != arrow) order.push_back(m);
+    pushUndo();
+    const int N = static_cast<int>(order.size());
+    const double r = arrow->radius;
+    const int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(N))));
+    const double rowH = r * std::sqrt(3.0); // hex-packed row spacing
+    const Vec2 anchor = arrow->center;
+    int placed = 0, row = 0;
+    while (placed < N) {
+        const int inRow = std::min(cols, N - placed);
+        const double x0 = anchor.x - (inRow - 1) * r; // centre the row
+        for (int i = 0; i < inRow; ++i) {
+            const Vec2 c{x0 + i * 2.0 * r, anchor.y - row * rowH};
+            order[placed]->center = c;
+            order[placed]->a = c;
+            ++placed;
+        }
+        ++row;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Balloons packed to minimum area"));
 }
 
 // ---- Harness placement -----------------------------------------------------
