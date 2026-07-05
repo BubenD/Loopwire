@@ -648,6 +648,29 @@ int run_editor_tests() {
               "order-row: circles placed touching in numeric order from the arrow");
     }
 
+    // --- A window/crossing zone over the batch selects ALL its circles, even if the
+    //     arrow circle's leader runs outside the zone.
+    {
+        Document d; d.entities().clear();
+        auto mk = [&](const QString& id, int num, Vec2 c, bool leader) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QString::number(num));
+            e.meta.insert("chain", QStringLiteral("cx")); e.meta.insert("landing", 8.0);
+            if (leader) { QJsonArray l; QJsonArray t; t.append(-200); t.append(-200); l.append(t); e.meta.insert("leaders", l); }
+            d.entities().push_back(e);
+        };
+        mk("c1", 1, {0, 0}, true);   // leader runs far out to (-200,-200)
+        mk("c2", 2, {14, 0}, false);
+        mk("c3", 3, {28, 0}, false);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        // Window from (-10,-10) to (40,10): encloses all 3 circles; the leader exits it.
+        ed.onPointerPress({-10, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({40, 10});
+        ed.onPointerRelease({40, 10}, Qt::LeftButton);
+        check(ed.selection().size() == 3,
+              "batch-window: a zone over the batch selects all its circles");
+    }
+
     // --- Reorder-to-minimize packs a 3-balloon batch into a triangle (2 top, 1 below).
     {
         Document d; d.entities().clear();

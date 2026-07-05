@@ -441,6 +441,46 @@ QIcon makeStatusIcon(const QString& which, const QColor& ink = QColor("#cfd8e6")
 
 // AutoCAD-style object-snap marker glyphs for the osnap fall-menu (soft magenta,
 // like the running-osnap markers AutoCAD draws on a dark canvas).
+// A small preview of a leader arrowhead (shaft + head) for the Arrowhead fall-menu.
+QIcon makeArrowheadIcon(const QString& type) {
+    QPixmap pm(56, 16);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QColor ink("#d6dae1");
+    QPen pen(ink);
+    pen.setWidthF(1.4);
+    pen.setCapStyle(Qt::RoundCap);
+    p.setPen(pen);
+    const QPointF tail(4, 8), tip(44, 8);
+    const double len = 10;
+    p.drawLine(tail, QPointF(tip.x() - (type == QLatin1String("dot") ? len * 0.3 : 0), 8)); // shaft
+    if (type == QLatin1String("none")) {
+        // shaft only
+    } else if (type == QLatin1String("dot")) {
+        p.setBrush(ink); p.setPen(Qt::NoPen);
+        p.drawEllipse(QPointF(tip.x() - len * 0.3, 8), len * 0.3, len * 0.3);
+    } else if (type == QLatin1String("tick")) {
+        p.drawLine(QPointF(tip.x() - len * 0.5, 8 + len * 0.5), QPointF(tip.x() + len * 0.5, 8 - len * 0.5));
+    } else if (type == QLatin1String("open")) {
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(tip, QPointF(tip.x() - len, 8 - len * 0.4));
+        p.drawLine(tip, QPointF(tip.x() - len, 8 + len * 0.4));
+    } else if (type == QLatin1String("blank")) {
+        p.setBrush(Qt::NoBrush);
+        QPolygonF tri;
+        tri << tip << QPointF(tip.x() - len, 8 - len * 0.36) << QPointF(tip.x() - len, 8 + len * 0.36);
+        p.drawPolygon(tri);
+    } else { // closed filled
+        p.setBrush(ink); p.setPen(Qt::NoPen);
+        QPolygonF tri;
+        tri << tip << QPointF(tip.x() - len, 8 - len * 0.36) << QPointF(tip.x() - len, 8 + len * 0.36);
+        p.drawPolygon(tri);
+    }
+    p.end();
+    return QIcon(pm);
+}
+
 QIcon makeOsnapMarkerIcon(const QString& kind) {
     QPixmap pm(18, 18);
     pm.fill(Qt::transparent);
@@ -4185,18 +4225,12 @@ void MainWindow::refreshProperties() {
                 {"Architectural tick", "tick"}, {"Oblique", "tick"}, {"Open", "open"},
                 {"None", "none"}};
             const QString curAh = e->meta.value(QStringLiteral("arrowhead")).toString("closed");
-            QString curAhLabel = QStringLiteral("Closed filled");
-            for (const auto& a : arrowTypes) if (a.second == curAh) { curAhLabel = a.first; break; }
-            QStringList ahLabels;
-            for (const auto& a : arrowTypes) ahLabels << a.first;
-            addCombo(QStringLiteral("Arrowhead"), ahLabels, curAhLabel, false,
-                     [this](const QString& label) {
-                         for (const auto& a : arrowTypes)
-                             if (a.first == label) {
-                                 editor_->setSelectionMeta(QStringLiteral("arrowhead"), a.second);
-                                 return;
-                             }
-                     });
+            QVector<ComboEntry> ahItems;
+            for (const auto& a : arrowTypes)
+                ahItems.push_back({a.first, makeArrowheadIcon(a.second), a.second});
+            addIconCombo(QStringLiteral("Arrowhead"), ahItems, curAh, [this](const QString& d) {
+                editor_->setSelectionMeta(QStringLiteral("arrowhead"), d);
+            });
             addNum(QStringLiteral("Arrowhead size"),
                    e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), std::max(0.1, v));

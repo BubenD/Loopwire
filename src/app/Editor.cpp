@@ -1317,6 +1317,18 @@ void Editor::finishRegionSelect(bool subtract) {
             selected_.push_back(e.id); // accumulate
         }
     }
+    // Selecting any balloon of a batch selects the WHOLE batch, so a zone over the
+    // circles catches them all even if the arrow circle's leader runs outside it.
+    if (!subtract) {
+        std::vector<QString> add;
+        for (const QString& id : selected_)
+            if (Entity* e = entityById(id); e && e->meta.value("balloon").toBool())
+                for (Entity* m : chainMatesOf(*e))
+                    if (std::find(selected_.begin(), selected_.end(), m->id) == selected_.end() &&
+                        std::find(add.begin(), add.end(), m->id) == add.end())
+                        add.push_back(m->id);
+        for (const auto& id : add) selected_.push_back(id);
+    }
     emit selectionChanged();
 }
 
