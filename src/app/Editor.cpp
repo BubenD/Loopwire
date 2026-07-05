@@ -754,7 +754,7 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         return;
     }
     // (c) Click on a joint of a selected entity -> grab it (click to place).
-    if (!shift && beginGripGrab(raw)) return;
+    if (beginGripGrab(raw, shift)) return;
 
     // (d) Click on an entity body -> select only (Shift removes). Dragging the body
     // does NOT move the object — moving requires the Move command (or a grip).
@@ -1359,7 +1359,7 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
     p.setBrush(Qt::NoBrush);
 }
 
-bool Editor::beginGripGrab(const Vec2& at) {
+bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     if (!doc_) return false;
     const double tol = worldTolerance();
     // A "point joint" is a movable endpoint/vertex/corner whose position is set
@@ -1383,6 +1383,13 @@ bool Editor::beginGripGrab(const Vec2& at) {
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
         }
     }
+    // A balloon's centre grip is grabbable even with Shift held (Shift = move just
+    // that circle). For any OTHER grip, Shift is reserved for selection — don't grab.
+    const bool balloonCenter = found && [&] {
+        Entity* e = entityById(bestId);
+        return e && e->meta.value("balloon").toBool() && bestGrip.role == GripRole::Center;
+    }();
+    if (found && shift && !balloonCenter) return false;
     if (found) {
         const QString& id = bestId;
         Entity* e = entityById(id);
@@ -1409,7 +1416,20 @@ bool Editor::beginGripGrab(const Vec2& at) {
             // a shared joint moves on all of them at once. Non-point joints
             // (center/radius/edge/mid) act on the single grabbed entity only.
             editGrips_.clear();
-            if (isPointJoint(gr.role)) {
+            const bool nonArrowBalloon = balloonCenter && balloonLeaders(*e).empty();
+            if (balloonCenter && !shift && nonArrowBalloon) {
+                // Moving a batch circle drags it AND every circle further from the
+                // arrow (the "tail") as a rigid group; Shift moves only this one.
+                Entity* arrow = nullptr;
+                for (Entity* m : chainMatesOf(*e))
+                    if (!balloonLeaders(*m).empty()) { arrow = m; break; }
+                const double dGrab = arrow ? distance(e->center, arrow->center) : 0.0;
+                editGrips_.push_back({id, static_cast<int>(GripRole::Move), 0, {}});
+                for (Entity* m : chainMatesOf(*e))
+                    if (m != arrow && distance(m->center, arrow ? arrow->center : e->center) >=
+                                          dGrab - 1e-6)
+                        editGrips_.push_back({m->id, static_cast<int>(GripRole::Move), 0, {}});
+            } else if (isPointJoint(gr.role)) {
                 const Vec2 jp = gr.pos;
                 for (const auto& sid : selected_) {
                     Entity* se = entityById(sid);

@@ -556,6 +556,50 @@ int run_editor_tests() {
               "leader-knee: dragging the knee sets the horizontal landing length");
     }
 
+    // --- Moving a batch circle drags it + all circles further from the arrow (the
+    //     tail); Shift moves only that one.
+    {
+        auto build = [](Document& d) {
+            d.entities().clear();
+            auto mk = [&](const QString& id, Vec2 c, bool leader) {
+                Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+                e.meta.insert("balloon", true); e.meta.insert("text", QStringLiteral("1"));
+                e.meta.insert("chain", QStringLiteral("cx"));
+                if (leader) { QJsonArray l; QJsonArray t; t.append(60); t.append(0); l.append(t); e.meta.insert("leaders", l); }
+                d.entities().push_back(e);
+            };
+            mk("A", {0, 0}, true);   // arrow (rightward leader)
+            mk("B", {12, 0}, false);
+            mk("C", {24, 0}, false);
+            mk("D", {36, 0}, false);
+        };
+        auto centerOf = [](Document& d, const QString& id) {
+            for (const auto& e : d.entities()) if (e.id == id) return e.center;
+            return Vec2{};
+        };
+        // No Shift: dragging C moves C and D (further from A), not A/B.
+        {
+            Document d; build(d);
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.selectById("A"); ed.selectById("B", true); ed.selectById("C", true); ed.selectById("D", true);
+            ed.onPointerPress({24, 0}, Qt::LeftButton, Qt::NoModifier);  // grab C
+            ed.onPointerPress({24, 20}, Qt::LeftButton, Qt::NoModifier); // move up
+            check(near(centerOf(d, "A").y, 0) && near(centerOf(d, "B").y, 0) &&
+                      near(centerOf(d, "C").y, 20) && near(centerOf(d, "D").y, 20),
+                  "batch-tail: moving a circle drags it + the circles beyond it");
+        }
+        // With Shift: dragging C moves only C.
+        {
+            Document d; build(d);
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.selectById("A"); ed.selectById("B", true); ed.selectById("C", true); ed.selectById("D", true);
+            ed.onPointerPress({24, 0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerPress({24, 20}, Qt::LeftButton, Qt::ShiftModifier);
+            check(near(centerOf(d, "D").y, 0),
+                  "batch-tail: Shift moves only the grabbed circle (D stays)");
+        }
+    }
+
     // --- A moved batch circle may not overlap ANY other circle in the batch.
     {
         Document d; d.entities().clear();
@@ -571,8 +615,9 @@ int run_editor_tests() {
         mk("C", {6, 10}, false);  // this one we move onto the others
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
         ed.selectById("C");
-        ed.onPointerPress({6, 10}, Qt::LeftButton, Qt::NoModifier); // grab C
-        ed.onPointerPress({6, 0}, Qt::LeftButton, Qt::NoModifier);  // drop right between A and B
+        // Shift = move only this circle (tangent + no-overlap constrained).
+        ed.onPointerPress({6, 10}, Qt::LeftButton, Qt::ShiftModifier); // grab C
+        ed.onPointerPress({6, 0}, Qt::LeftButton, Qt::ShiftModifier);  // drop between A and B
         const Entity *A = nullptr, *B = nullptr, *C = nullptr;
         for (const auto& e : d.entities()) { if (e.id=="A") A=&e; if (e.id=="B") B=&e; if (e.id=="C") C=&e; }
         check(A && B && C && distance(A->center, C->center) >= 12.0 - 1e-3 &&
@@ -594,8 +639,9 @@ int run_editor_tests() {
         mk("B", {12, 0}, false); // coupled, tangent (2r = 12)
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
         ed.selectById("B");
-        ed.onPointerPress({12, 0}, Qt::LeftButton, Qt::NoModifier);  // grab B's centre
-        ed.onPointerPress({12, 30}, Qt::LeftButton, Qt::NoModifier); // drag it upward
+        // Shift = move only B (stays tangent to its neighbour).
+        ed.onPointerPress({12, 0}, Qt::LeftButton, Qt::ShiftModifier);  // grab B's centre
+        ed.onPointerPress({12, 30}, Qt::LeftButton, Qt::ShiftModifier); // drag it upward
         const Entity *A = nullptr, *B = nullptr;
         for (const auto& e : d.entities()) { if (e.id == "A") A = &e; if (e.id == "B") B = &e; }
         check(A && B && near(distance(A->center, B->center), 12.0),

@@ -399,7 +399,7 @@ private:
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
 
     // Direct manipulation (Edraw-style): grab a joint (click-to-place) / apply edit.
-    bool beginGripGrab(const Vec2& at);
+    bool beginGripGrab(const Vec2& at, bool shift = false);
     void applyEditDrag(const Vec2& target);
 
     Document* doc_ = nullptr;
