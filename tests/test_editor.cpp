@@ -511,14 +511,56 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
         ed.selectById("A");
         // Grab A's landing joint (near A, on the leader side ~x=-14) and drop on B.
-        // Landing joint sits at the elbow: center + dir(angle)*(r+landing) = (-14,0).
-        ed.onPointerPress({-14, 0}, Qt::LeftButton, Qt::NoModifier); // grab the landing grip
-        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);  // drop on B's centre
+        // Landing joint now sits ON the ring at the attach point: center+dir(pi)*r = (-6,0).
+        ed.onPointerPress({-6, 0}, Qt::LeftButton, Qt::NoModifier); // grab the landing grip
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier); // drop on B's centre
         const Entity *A = nullptr, *B = nullptr;
         for (const auto& e : d.entities()) { if (e.id == "A") A = &e; if (e.id == "B") B = &e; }
         check(A && B && A->meta.value("leaders").toArray().isEmpty() &&
                   B->meta.value("leaders").toArray().size() == 1,
               "leader-reconnect: dropping the landing joint on another circle moves the leader");
+    }
+
+    // --- The leader knee (elbow) can be dragged freely.
+    {
+        Document d; d.entities().clear();
+        Entity a; a.id = "A"; a.type = EntityType::Circle; a.center = {0, 0}; a.a = {0, 0};
+        a.radius = 6; a.meta.insert("balloon", true); a.meta.insert("text", QStringLiteral("1"));
+        a.meta.insert("landing", 8.0);
+        QJsonArray leaders; QJsonArray t; t.append(40); t.append(0); leaders.append(t);
+        a.meta.insert("leaders", leaders); // tip at (40,0) -> angle 0, knee at (14,0)
+        d.entities().push_back(a);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        ed.selectById("A");
+        ed.onPointerPress({14, 0}, Qt::LeftButton, Qt::NoModifier);  // grab the knee
+        ed.onPointerPress({25, 12}, Qt::LeftButton, Qt::NoModifier); // drop the knee
+        const Entity* aa = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "A") aa = &e;
+        check(aa && near(aa->meta.value("kneeX").toDouble(), 25.0) &&
+                  near(aa->meta.value("kneeY").toDouble(), 12.0),
+              "leader-knee: the leader elbow drags to a free position");
+    }
+
+    // --- A non-arrow batch circle stays TANGENT to a neighbour when moved.
+    {
+        Document d; d.entities().clear();
+        auto mk = [&](const QString& id, Vec2 c, bool leader) {
+            Entity e; e.id = id; e.type = EntityType::Circle; e.center = c; e.a = c; e.radius = 6;
+            e.meta.insert("balloon", true); e.meta.insert("text", QStringLiteral("1"));
+            e.meta.insert("chain", QStringLiteral("cx"));
+            if (leader) { QJsonArray l; QJsonArray t; t.append(-40); t.append(0); l.append(t); e.meta.insert("leaders", l); }
+            d.entities().push_back(e);
+        };
+        mk("A", {0, 0}, true);   // arrow circle
+        mk("B", {12, 0}, false); // coupled, tangent (2r = 12)
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        ed.selectById("B");
+        ed.onPointerPress({12, 0}, Qt::LeftButton, Qt::NoModifier);  // grab B's centre
+        ed.onPointerPress({12, 30}, Qt::LeftButton, Qt::NoModifier); // drag it upward
+        const Entity *A = nullptr, *B = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == "A") A = &e; if (e.id == "B") B = &e; }
+        check(A && B && near(distance(A->center, B->center), 12.0),
+              "leader-tangent: a coupled circle stays tangent to its neighbour when moved");
     }
 
     // --- Ctrl+click a balloon circle adds a COUPLED circle (chained, no leader), and

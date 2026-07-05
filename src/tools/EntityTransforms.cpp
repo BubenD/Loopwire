@@ -46,6 +46,7 @@ void mapPoints(Entity& e, F fn) {
     xf("lsRefBx", "lsRefBy");
     xf("textPosX", "textPosY"); // moved dimension-text position follows the entity
     xf("leaderX", "leaderY");   // legacy single balloon leader tip follows the entity
+    xf("kneeX", "kneeY");       // balloon leader knee (elbow) follows the entity
     // Every balloon leader arrow tip (array form) follows the entity too.
     if (e.meta.contains(QLatin1String("leaders"))) {
         QJsonArray arr = e.meta.value(QLatin1String("leaders")).toArray();

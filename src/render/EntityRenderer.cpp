@@ -861,13 +861,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 }
                 const Vec2 dir{std::cos(a), std::sin(a)};
                 const Vec2 attach = e.center + dir * e.radius;
-                const Vec2 elbow = e.center + dir * (e.radius + landing);
-                const QPointF sAttach = vt.toScreen(attach), sElbow = vt.toScreen(elbow);
-                p.drawLine(sAttach, sElbow); // radial landing out of the circle
+                // The knee (elbow): a dragged position (meta kneeX/kneeY) or the default
+                // radial landing out of the circle.
+                Vec2 knee = e.center + dir * (e.radius + landing);
+                if (e.meta.contains("kneeX"))
+                    knee = {e.meta.value("kneeX").toDouble(), e.meta.value("kneeY").toDouble()};
+                const QPointF sAttach = vt.toScreen(attach), sKnee = vt.toScreen(knee);
+                p.drawLine(sAttach, sKnee); // landing (circle -> knee)
                 for (const Vec2& tip : tips) {
                     const QPointF sTip = vt.toScreen(tip);
-                    p.drawLine(sElbow, sTip); // leader line from the elbow to each tip
-                    QPointF d = sTip - sElbow;
+                    p.drawLine(sKnee, sTip); // leader line from the knee to each tip
+                    QPointF d = sTip - sKnee;
                     const double L = std::hypot(d.x(), d.y());
                     if (L > 1e-6) {
                         d /= L;
