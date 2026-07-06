@@ -66,6 +66,17 @@ void mapPoints(Entity& e, F fn) {
     xf("cutEndBx", "cutEndBy");
     xf("cutStartCx", "cutStartCy"); // circle-cut centre
     xf("cutEndCx", "cutEndCy");
+    // Extend cut-cap edge sets (flat [ax,ay,bx,by,...]) follow the entity too.
+    for (const char* k : {"cutStartPoly", "cutEndPoly"}) {
+        if (!e.meta.contains(QLatin1String(k))) continue;
+        QJsonArray arr = e.meta.value(QLatin1String(k)).toArray();
+        for (int i = 0; i + 1 < arr.size(); i += 2) {
+            const Vec2 q = fn({arr[i].toDouble(), arr[i + 1].toDouble()});
+            arr[i] = q.x;
+            arr[i + 1] = q.y;
+        }
+        e.meta.insert(QLatin1String(k), arr);
+    }
 }
 
 } // namespace

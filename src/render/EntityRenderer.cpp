@@ -116,14 +116,57 @@ void extendRunStartToCircle(std::vector<Vec2>& run, const Vec2& c, double r) {
         if (d < best) { best = d; run[0] = x; }
     }
 }
-// Clip a run's start/end onto the stored cut boundary (a line or a circle).
+// Clip a run's END onto whichever of the target EDGES its line crosses nearest the
+// endpoint — so each of a double line's two runs meets the edge it actually reaches
+// (a corner/vertex never leaves one run short).
+void extendRunEndToPoly(std::vector<Vec2>& run, const QJsonArray& poly) {
+    const int n = static_cast<int>(run.size());
+    if (n < 2) return;
+    const Vec2 from = run[n - 2], to = run[n - 1];
+    double best = 1e299;
+    Vec2 bestPt = to;
+    bool found = false;
+    for (int i = 0; i + 3 < poly.size(); i += 4) {
+        const Vec2 a{poly[i].toDouble(), poly[i + 1].toDouble()};
+        const Vec2 b{poly[i + 2].toDouble(), poly[i + 3].toDouble()};
+        auto x = lineLineIntersection(from, to, a, b);
+        if (!x) continue;
+        if (closestPointOnSegment(*x, a, b).distance > 1e-6) continue; // on the finite edge
+        const double d = distance(*x, to);
+        if (d < best) { best = d; bestPt = *x; found = true; }
+    }
+    if (found) run[n - 1] = bestPt;
+}
+void extendRunStartToPoly(std::vector<Vec2>& run, const QJsonArray& poly) {
+    if (run.size() < 2) return;
+    const Vec2 from = run[1], to = run[0];
+    double best = 1e299;
+    Vec2 bestPt = to;
+    bool found = false;
+    for (int i = 0; i + 3 < poly.size(); i += 4) {
+        const Vec2 a{poly[i].toDouble(), poly[i + 1].toDouble()};
+        const Vec2 b{poly[i + 2].toDouble(), poly[i + 3].toDouble()};
+        auto x = lineLineIntersection(from, to, a, b);
+        if (!x) continue;
+        if (closestPointOnSegment(*x, a, b).distance > 1e-6) continue;
+        const double d = distance(*x, to);
+        if (d < best) { best = d; bestPt = *x; found = true; }
+    }
+    if (found) run[0] = bestPt;
+}
+// Clip a run's start/end onto the stored cut boundary (a line, circle, or edge set).
 void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bool atEnd) {
     if (!e.meta.value(key).toBool()) return;
-    if (e.meta.value(key + "Kind").toString() == QLatin1String("circle")) {
+    const QString kind = e.meta.value(key + "Kind").toString();
+    if (kind == QLatin1String("circle")) {
         const Vec2 c{e.meta.value(key + "Cx").toDouble(), e.meta.value(key + "Cy").toDouble()};
         const double r = e.meta.value(key + "R").toDouble();
         if (atEnd) extendRunEndToCircle(run, c, r);
         else extendRunStartToCircle(run, c, r);
+    } else if (kind == QLatin1String("poly")) {
+        const QJsonArray poly = e.meta.value(key + "Poly").toArray();
+        if (atEnd) extendRunEndToPoly(run, poly);
+        else extendRunStartToPoly(run, poly);
     } else {
         const Vec2 a{e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
         const Vec2 b{e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};

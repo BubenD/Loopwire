@@ -4,6 +4,7 @@
 #include "harness/Harness.h"
 #include "tools/EntityTransforms.h"
 
+#include <QJsonArray>
 #include <QUuid>
 #include <algorithm>
 #include <cmath>
@@ -646,7 +647,7 @@ struct BoundaryHit {
     bool circle = false;
     Vec2 center;
     double radius = 0.0;
-    Vec2 a, b; // edge, when not a circle
+    std::vector<std::pair<Vec2, Vec2>> segs; // all edges of the target (when not a circle)
 };
 
 std::optional<BoundaryHit> rayToBoundary(const Vec2& fixed, const Vec2& moving,
@@ -658,30 +659,43 @@ std::optional<BoundaryHit> rayToBoundary(const Vec2& fixed, const Vec2& moving,
     bool found = false;
     for (const auto& e : others) {
         if (!selfId.isEmpty() && e.id == selfId) continue;
-        const bool round = (e.type == EntityType::Circle || e.type == EntityType::Arc);
+        // This entity's nearest valid crossing along the ray beyond `moving`.
+        double et = std::numeric_limits<double>::max();
+        Vec2 ept;
+        bool ehit = false;
         forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
             auto x = lineLineIntersection(fixed, moving, p1, p2);
             if (!x) return;
             const double t = dot(*x - moving, dir);
             if (t <= 1e-9) return; // must be beyond `moving`
-            const auto c = closestPointOnSegment(*x, p1, p2);
-            if (c.distance > 1e-6) return; // not on the boundary segment
-            if (t < bestT) {
-                bestT = t;
-                found = true;
-                best.pt = *x;
-                if (round) { best.circle = true; best.center = e.center; best.radius = e.radius; }
-                else { best.circle = false; best.a = p1; best.b = p2; }
-            }
+            if (closestPointOnSegment(*x, p1, p2).distance > 1e-6) return; // on the edge
+            if (t < et) { et = t; ept = *x; ehit = true; }
         });
+        if (ehit && et < bestT) {
+            bestT = et;
+            found = true;
+            best.pt = ept;
+            best.segs.clear();
+            if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
+                best.circle = true; best.center = e.center; best.radius = e.radius;
+            } else {
+                // Capture EVERY edge of the target so each physical run caps to the
+                // edge it actually crosses (no gap near a corner/vertex).
+                best.circle = false;
+                forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+                    best.segs.emplace_back(p1, p2);
+                });
+            }
+        }
     }
     return found ? std::optional<BoundaryHit>(best) : std::nullopt;
 }
 
 // Record the exact boundary a double entity was extended to, so the renderer caps its
-// two physical runs flush to it (a circle ring or a straight edge).
+// two physical runs flush to it — a circle ring, or the set of target edges (each run
+// is clipped to whichever edge it crosses, so a corner never leaves a gap).
 void setExtendCap(Entity& e, const QString& key, const BoundaryHit& h) {
-    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
+    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly"})
         e.meta.remove(key + QString::fromLatin1(s));
     e.meta.insert(key, true);
     if (h.circle) {
@@ -690,11 +704,13 @@ void setExtendCap(Entity& e, const QString& key, const BoundaryHit& h) {
         e.meta.insert(key + "Cy", h.center.y);
         e.meta.insert(key + "R", h.radius);
     } else {
-        e.meta.insert(key + "Kind", QStringLiteral("line"));
-        e.meta.insert(key + "Ax", h.a.x);
-        e.meta.insert(key + "Ay", h.a.y);
-        e.meta.insert(key + "Bx", h.b.x);
-        e.meta.insert(key + "By", h.b.y);
+        e.meta.insert(key + "Kind", QStringLiteral("poly"));
+        QJsonArray segs; // flat [ax,ay,bx,by, ...] per edge
+        for (const auto& s : h.segs) {
+            segs.append(s.first.x); segs.append(s.first.y);
+            segs.append(s.second.x); segs.append(s.second.y);
+        }
+        e.meta.insert(key + "Poly", segs);
     }
 }
 } // namespace

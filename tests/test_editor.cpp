@@ -1312,9 +1312,10 @@ int run_editor_tests() {
                        Vec2{50, 0}, refs);
         const Entity* dd = nullptr;
         for (const auto& e : d.entities()) if (e.id == "dl") dd = &e;
+        const QJsonArray cap = dd ? dd->meta.value("cutEndPoly").toArray() : QJsonArray{};
         check(dd && near(dd->b.x, 100.0) && dd->meta.value("cutEnd").toBool() &&
-                  dd->meta.value("cutEndKind").toString() == QLatin1String("line") &&
-                  near(dd->meta.value("cutEndAx").toDouble(), 100.0),
+                  dd->meta.value("cutEndKind").toString() == QLatin1String("poly") &&
+                  cap.size() >= 4 && near(cap[0].toDouble(), 100.0),
               "extend-double: physical runs are capped flush to the extend target");
     }
 

@@ -1668,8 +1668,9 @@ void Editor::applyEditDrag(const Vec2& target) {
             if (Entity* e = entityById(eg.id)) {
                 for (const char* k :
                      {"cutStart", "cutStartKind", "cutStartAx", "cutStartAy", "cutStartBx", "cutStartBy",
-                      "cutStartCx", "cutStartCy", "cutStartR", "cutEnd", "cutEndKind", "cutEndAx",
-                      "cutEndAy", "cutEndBx", "cutEndBy", "cutEndCx", "cutEndCy", "cutEndR"})
+                      "cutStartCx", "cutStartCy", "cutStartR", "cutStartPoly", "cutEnd", "cutEndKind",
+                      "cutEndAx", "cutEndAy", "cutEndBx", "cutEndBy", "cutEndCx", "cutEndCy", "cutEndR",
+                      "cutEndPoly"})
                     e->meta.remove(QLatin1String(k));
                 applyOne(e, static_cast<GripRole>(eg.role), eg.index, eg.offset);
             }
