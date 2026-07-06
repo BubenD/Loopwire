@@ -40,7 +40,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
-                      DimText, LeaderTip, LeaderLanding, LeaderKnee };
+                      DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -326,6 +326,25 @@ std::vector<Grip> gripsOf(const Entity& e) {
             // Wall midpoint grip for resizing one side.
             const Vec2 mid = lerp(e.points[i], e.points[(i + 1) % e.points.size()], 0.5);
             g.push_back({mid, GripRole::RectEdge, i});
+        }
+        // A table also gets grips on each INTERIOR grid line: drag a vertical line to
+        // resize the columns either side of it, a horizontal line to resize the rows.
+        if (e.meta.value("table").toBool() && e.points.size() == 4) {
+            Bounds tb; for (const auto& pt : e.points) tb.expand(pt);
+            const QJsonArray cf = e.meta.value("colFrac").toArray();
+            const QJsonArray rf = e.meta.value("rowFrac").toArray();
+            const double midY = (tb.min.y + tb.max.y) / 2.0;
+            const double midX = (tb.min.x + tb.max.x) / 2.0;
+            double x = tb.min.x;
+            for (int c = 0; c + 1 < cf.size(); ++c) { // interior column boundaries
+                x += cf[c].toDouble() * tb.width();
+                g.push_back({{x, midY}, GripRole::TableColEdge, c + 1});
+            }
+            double y = tb.max.y; // rows run top -> down (world y-up)
+            for (int r = 0; r + 1 < rf.size(); ++r) { // interior row boundaries
+                y -= rf[r].toDouble() * tb.height();
+                g.push_back({{midX, y}, GripRole::TableRowEdge, r + 1});
+            }
         }
         break;
     case EntityType::Circle:
@@ -1420,7 +1439,12 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
         p.setPen(QPen(QColor("#0d1117")));
-        p.setBrush(g.role == GripRole::Center ? QColor("#ffd166") : QColor("#ffffff"));
+        // Table grid-line handles are cyan (drag to resize a column/row).
+        const bool gridEdge =
+            g.role == GripRole::TableColEdge || g.role == GripRole::TableRowEdge;
+        p.setBrush(g.role == GripRole::Center ? QColor("#ffd166")
+                   : gridEdge               ? QColor("#2bd0ff")
+                                            : QColor("#ffffff"));
         p.drawRect(QRectF(s.x() - r, s.y() - r, 2 * r, 2 * r));
     }
     p.setBrush(Qt::NoBrush);
@@ -1721,6 +1745,47 @@ void Editor::applyEditDrag(const Vec2& target) {
             e->radiusY = std::max(1e-6, std::abs(dot(target - e->center, majorDir.perp())));
             break;
         }
+        case GripRole::TableColEdge: {
+            // Drag an interior vertical grid line: repartition the two columns it
+            // separates (index-1 and index) while their combined width is preserved.
+            if (e->points.size() != 4) break;
+            Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
+            QJsonArray cf = e->meta.value("colFrac").toArray();
+            const int c = index; // boundary between column c-1 and column c
+            if (c < 1 || c >= cf.size()) break;
+            const double W = tb.width();
+            if (W < 1e-9) break;
+            // Left/right edges of the merged pair, in world x.
+            double xL = tb.min.x;
+            for (int i = 0; i < c - 1; ++i) xL += cf[i].toDouble() * W;
+            const double pair = (cf[c - 1].toDouble() + cf[c].toDouble()) * W;
+            const double minW = W * 0.02; // keep each column at least 2% wide
+            const double x = std::clamp(target.x, xL + minW, xL + pair - minW);
+            cf[c - 1] = (x - xL) / W;
+            cf[c] = (xL + pair - x) / W;
+            e->meta["colFrac"] = cf;
+            break;
+        }
+        case GripRole::TableRowEdge: {
+            // Drag an interior horizontal grid line: repartition the two rows it
+            // separates (index-1 above, index below); rows run top -> down (y-up world).
+            if (e->points.size() != 4) break;
+            Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
+            QJsonArray rf = e->meta.value("rowFrac").toArray();
+            const int r = index; // boundary between row r-1 (above) and row r (below)
+            if (r < 1 || r >= rf.size()) break;
+            const double H = tb.height();
+            if (H < 1e-9) break;
+            double yTop = tb.max.y; // top edge of the merged pair
+            for (int i = 0; i < r - 1; ++i) yTop -= rf[i].toDouble() * H;
+            const double pair = (rf[r - 1].toDouble() + rf[r].toDouble()) * H;
+            const double minH = H * 0.02;
+            const double y = std::clamp(target.y, yTop - pair + minH, yTop - minH);
+            rf[r - 1] = (yTop - y) / H;
+            rf[r] = (y - (yTop - pair)) / H;
+            e->meta["rowFrac"] = rf;
+            break;
+        }
         }
     };
 
@@ -1766,7 +1831,7 @@ void Editor::onDoubleClick(const Vec2& world) {
                     if (idx >= 0) {
                         const QJsonArray cells = e->meta.value("cells").toArray();
                         const QString cur = idx < cells.size() ? cells[idx].toString() : QString();
-                        emit editTableCellRequested(e->id, idx, cur, tl);
+                        emit editTableCellRequested(e->id, idx, cur, tl, cw, ch);
                     }
                     return;
                 }

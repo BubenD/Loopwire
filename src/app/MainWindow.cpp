@@ -1397,12 +1397,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Double-clicked a table cell: open the inline editor over that cell, writing back
     // to the cell (not a text object) on commit.
     connect(editor_, &Editor::editTableCellRequested, this,
-            [this](const QString& id, int cell, const QString& text, Vec2 at) {
+            [this](const QString& id, int cell, const QString& text, Vec2 at, double cw, double ch) {
                 Editor::TextStyle style;
                 style.size = 4.0;
+                style.boxWidth = cw;  // size the editor to the cell so text stays inside it
+                style.boxHeight = ch;
                 beginInlineText(id, text, style, at);
                 inlineCell_ = cell; // mark this as a table-cell edit (after beginInlineText resets it)
                 inlineSingleLine_ = true; // Enter commits a table cell too
+                inlineRuler_->hide();     // a cell editor sits exactly on the cell, no width ruler
+                layoutInlineText();       // relayout now that it's flagged a cell
             });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
     // Keep the on-canvas text editor glued to its world position when panning/zooming.
@@ -3656,12 +3660,18 @@ void MainWindow::layoutInlineText() {
     if (!inlineEdit_ || !canvas_) return;
     const double scale = canvas_->viewScale();
     const QPointF tl = canvas_->mapToScreen(inlineTopLeft_);
-    int w = std::max(140, inlineStyle_.boxWidth > 0 ? static_cast<int>(inlineStyle_.boxWidth * scale)
-                                                     : 240);
-    int h = std::max(44, inlineStyle_.boxHeight > 0
-                             ? static_cast<int>(inlineStyle_.boxHeight * scale)
-                             : 64);
-    const int rulerH = 14;
+    // A table-cell edit fits snugly to the cell (small floors, no width ruler); a
+    // plain text edit uses comfortable default minimums.
+    const bool cell = inlineCell_ >= 0;
+    const int minW = cell ? 24 : 140;
+    const int minH = cell ? 14 : 44;
+    int w = std::max(minW, inlineStyle_.boxWidth > 0
+                               ? static_cast<int>(inlineStyle_.boxWidth * scale)
+                               : (cell ? minW : 240));
+    int h = std::max(minH, inlineStyle_.boxHeight > 0
+                               ? static_cast<int>(inlineStyle_.boxHeight * scale)
+                               : (cell ? minH : 64));
+    const int rulerH = cell ? 0 : 14;
     const int barH = std::max(28, inlineBar_->sizeHint().height());
     const int x = static_cast<int>(tl.x());
     const int y = static_cast<int>(tl.y());

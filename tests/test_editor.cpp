@@ -415,6 +415,45 @@ int run_editor_tests() {
         check(table()->meta.value("cols").toInt() == 3, "table cell: delete column shrinks the grid");
     }
 
+    // --- Resize a table column / row by dragging an interior grid-line grip.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3; s.colWidth = 20.0; s.dataRows = 2; s.rowHeight = 10.0;
+        s.title = false; s.header = false; // 3x2 grid, spans x[0..60], y[0..20]
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+        const QString tid = table()->id;
+        ed.setTool(ToolId::Select);
+        ed.selectById(tid);
+        // Grid lines: column boundaries at x=20,40 (mid-y=10); the single row boundary
+        // at y=10 (mid-x=30). Grab the horizontal line first and drag it up to y=15 —
+        // the top row shrinks to 1/4, the bottom row grows to 3/4.
+        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier); // grab row edge grip
+        ed.onPointerMove({30, 15});
+        ed.onPointerPress({30, 15}, Qt::LeftButton, Qt::NoModifier); // place it
+        const QJsonArray rf = table()->meta.value("rowFrac").toArray();
+        check(rf.size() == 2 && std::abs(rf[0].toDouble() - 0.25) < 1e-6 &&
+                  std::abs(rf[1].toDouble() - 0.75) < 1e-6,
+              "table resize: dragging a row grid line repartitions the two rows");
+        // Grab the first vertical line (x=20, mid-y=10) and drag it to x=25 — column 0
+        // grows and column 1 shrinks; their combined width (2/3) is preserved.
+        ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({25, 10});
+        ed.onPointerPress({25, 10}, Qt::LeftButton, Qt::NoModifier);
+        const QJsonArray cf = table()->meta.value("colFrac").toArray();
+        check(cf.size() == 3 && std::abs(cf[0].toDouble() - 25.0 / 60.0) < 1e-6 &&
+                  std::abs(cf[1].toDouble() - 15.0 / 60.0) < 1e-6 &&
+                  std::abs(cf[2].toDouble() - 20.0 / 60.0) < 1e-6,
+              "table resize: dragging a column grid line repartitions the two columns");
+    }
+
     // --- Committing an inline edit on a balloon saves its number (balloons aren't
     //     Text objects, so applyTextEdit must still store their text).
     {

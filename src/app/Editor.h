@@ -317,7 +317,8 @@ signals:
     // Double-clicked an existing text object — the host opens the editor for it.
     void editTextRequested(const QString& id);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
-    void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at);
+    void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at,
+                                double cellW, double cellH);
     // A table cell was selected/deselected — the host shows/hides the Table Cell tab.
     void cellSelectionChanged();
     // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
