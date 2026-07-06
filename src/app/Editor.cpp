@@ -146,6 +146,47 @@ void drawDraftValueBox(QPainter& p, const QPointF& at, const QString& label, con
     p.setBrush(Qt::NoBrush);
 }
 
+// The capped endpoint of a straight physical run — mirrors the renderer's run cut
+// (line / circle / poly), so a double line/polyline's endpoint GRIPS sit on the real
+// (capped) physical-line ends, not the raw centreline offset.
+Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd) {
+    if (!e.meta.value(key).toBool()) return thisEnd;
+    const QString kind = e.meta.value(key + "Kind").toString();
+    if (kind == QLatin1String("circle")) {
+        const Vec2 c{e.meta.value(key + "Cx").toDouble(), e.meta.value(key + "Cy").toDouble()};
+        const double r = e.meta.value(key + "R").toDouble();
+        const auto xs = lineCircleIntersection(otherEnd, thisEnd - otherEnd, c, r);
+        double best = 1e299;
+        Vec2 bp = thisEnd;
+        bool f = false;
+        for (const auto& x : xs) {
+            const double d = distance(x, otherEnd);
+            if (d < best) { best = d; bp = x; f = true; }
+        }
+        return f ? bp : thisEnd;
+    }
+    if (kind == QLatin1String("poly")) {
+        const QJsonArray poly = e.meta.value(key + "Poly").toArray();
+        double best = 1e299;
+        Vec2 bp = thisEnd;
+        bool f = false;
+        for (int i = 0; i + 3 < poly.size(); i += 4) {
+            const Vec2 a{poly[i].toDouble(), poly[i + 1].toDouble()};
+            const Vec2 b{poly[i + 2].toDouble(), poly[i + 3].toDouble()};
+            auto x = lineLineIntersection(otherEnd, thisEnd, a, b);
+            if (!x) continue;
+            if (closestPointOnSegment(*x, a, b).distance > 1e-6) continue;
+            const double d = distance(*x, thisEnd);
+            if (d < best) { best = d; bp = *x; f = true; }
+        }
+        return f ? bp : thisEnd;
+    }
+    const Vec2 a{e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
+    const Vec2 b{e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
+    auto x = lineLineIntersection(otherEnd, thisEnd, a, b);
+    return x ? *x : thisEnd;
+}
+
 std::vector<Grip> gripsOf(const Entity& e) {
     std::vector<Grip> g;
     switch (e.type) {
@@ -194,17 +235,22 @@ std::vector<Grip> gripsOf(const Entity& e) {
         // Joints ONLY on the two VISIBLE parallel lines — never on the centerline
         // between them. Each end grip carries its offset so dragging it keeps that
         // physical point under the cursor; each physical mid moves the whole line.
-        const Vec2 mid = lerp(e.a, e.b, 0.5);
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
         const Vec2 noff = off * -1.0;
-        g.push_back({e.a + off, GripRole::LineA, 0, off});
-        g.push_back({e.a + noff, GripRole::LineA, 0, noff});
-        g.push_back({e.b + off, GripRole::LineB, 0, off});
-        g.push_back({e.b + noff, GripRole::LineB, 0, noff});
+        // Endpoints sit on the ACTUAL physical-line ends (after trim/extend caps),
+        // so a joint follows the drawn line rather than floating at the raw offset.
+        const Vec2 s1 = cappedRunEnd(e, "cutStart", e.a + off, e.b + off);
+        const Vec2 en1 = cappedRunEnd(e, "cutEnd", e.b + off, e.a + off);
+        const Vec2 s2 = cappedRunEnd(e, "cutStart", e.a + noff, e.b + noff);
+        const Vec2 en2 = cappedRunEnd(e, "cutEnd", e.b + noff, e.a + noff);
+        g.push_back({s1, GripRole::LineA, 0, off});
+        g.push_back({s2, GripRole::LineA, 0, noff});
+        g.push_back({en1, GripRole::LineB, 0, off});
+        g.push_back({en2, GripRole::LineB, 0, noff});
         // A midpoint joint on EACH physical line (moves the whole double line).
-        g.push_back({mid + off, GripRole::LineMid, 0});
-        g.push_back({mid + noff, GripRole::LineMid, 0});
+        g.push_back({lerp(s1, en1, 0.5), GripRole::LineMid, 0});
+        g.push_back({lerp(s2, en2, 0.5), GripRole::LineMid, 0});
         break;
     }
     case EntityType::Polyline:
@@ -219,10 +265,17 @@ std::vector<Grip> gripsOf(const Entity& e) {
             for (const auto* run : {&run1, &run2}) {
                 if (run->size() != e.points.size()) continue;
                 mapped = true;
+                // Marker positions follow the ACTUAL run, with its ends capped to a
+                // trim/extend boundary (offsets from the centreline are kept for drag).
+                std::vector<Vec2> pos = *run;
+                if (pos.size() >= 2) {
+                    pos.front() = cappedRunEnd(e, "cutStart", pos.front(), (*run)[1]);
+                    pos.back() = cappedRunEnd(e, "cutEnd", pos.back(), (*run)[run->size() - 2]);
+                }
                 for (int i = 0; i < static_cast<int>(run->size()); ++i)
-                    g.push_back({(*run)[i], GripRole::Vertex, i, (*run)[i] - e.points[i]});
-                for (size_t i = 1; i < run->size(); ++i)
-                    g.push_back({lerp((*run)[i - 1], (*run)[i], 0.5), GripRole::LineMid, 0});
+                    g.push_back({pos[i], GripRole::Vertex, i, (*run)[i] - e.points[i]});
+                for (size_t i = 1; i < pos.size(); ++i)
+                    g.push_back({lerp(pos[i - 1], pos[i], 0.5), GripRole::LineMid, 0});
             }
             if (mapped) break;
             // Offsetting changed the vertex count (tight bends) — fall back to the
