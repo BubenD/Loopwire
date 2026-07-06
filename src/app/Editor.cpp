@@ -424,6 +424,7 @@ void Editor::setTool(ToolId t) {
     offsetDist_ = 0.0;
     offsetDistPts_.clear();
     offsetSourceId_.clear();
+    clearCellSelection();
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -717,6 +718,7 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints);
 void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods) {
     const bool shift = mods & Qt::ShiftModifier;
     const bool ctrl = mods & Qt::ControlModifier;
+    clearCellSelection(); // any click clears the table-cell selection unless it re-picks one
 
     // Ctrl+click balloon leaders (AutoCAD Add/Remove Leader gestures):
     //  - near an existing arrow tip -> remove that leader (if the balloon has >1);
@@ -812,6 +814,18 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
     // (d) Click on an entity body -> select only (Shift removes). Dragging the body
     // does NOT move the object — moving requires the Move command (or a grip).
     if (auto hit = hitTest(p)) {
+        // Clicking inside a TABLE selects just that CELL (not the whole table),
+        // enabling the row/column/alignment commands.
+        if (Entity* he = entityById(*hit); he && he->meta.value("table").toBool() && !shift) {
+            Vec2 tl; double cw = 0, ch = 0;
+            const int idx = tableCellAt(*he, p, tl, cw, ch);
+            if (idx >= 0) {
+                selected_ = {he->id};
+                setCellSelection(he->id, idx);
+                emit selectionChanged();
+                return;
+            }
+        }
         // Clicking any balloon in a batch (a circle or its leader/arrow) selects the
         // WHOLE batch, so it moves/edits as one unit.
         if (Entity* he = entityById(*hit); he && he->meta.value("balloon").toBool() &&
@@ -4501,6 +4515,207 @@ void Editor::applyTableCellEdit(const QString& id, int cell, const QString& text
     }
 }
 
+void Editor::setCellSelection(const QString& id, int cell) {
+    cellTableId_ = id;
+    cellIndex_ = cell;
+    emit cellSelectionChanged();
+}
+
+void Editor::clearCellSelection() {
+    if (cellTableId_.isEmpty() && cellIndex_ < 0) return;
+    cellTableId_.clear();
+    cellIndex_ = -1;
+    emit cellSelectionChanged();
+}
+
+namespace {
+// Rebuild a table's rect + row/col fractions from absolute row heights / col widths,
+// anchored at its top-left corner.
+void rebuildTable(Entity& e, const std::vector<double>& h, const std::vector<double>& w) {
+    const Bounds b = boundsOf(e.points);
+    double totalH = 0, totalW = 0;
+    for (double v : h) totalH += v;
+    for (double v : w) totalW += v;
+    const double minX = b.min.x, maxY = b.max.y;
+    const double maxX = minX + totalW, minY = maxY - totalH;
+    e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+    e.a = {minX, maxY};
+    QJsonArray rf, cf;
+    for (double v : h) rf.append(totalH > 0 ? v / totalH : 0.0);
+    for (double v : w) cf.append(totalW > 0 ? v / totalW : 0.0);
+    e.meta.insert("rowFrac", rf);
+    e.meta.insert("colFrac", cf);
+}
+} // namespace
+
+void Editor::tableInsertRow(bool below) {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int cols = e->meta.value("cols").toInt();
+    int rows = e->meta.value("rows").toInt();
+    if (cols <= 0 || rows <= 0) return;
+    const Bounds b = boundsOf(e->points);
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    std::vector<double> h(rows), w(cols);
+    for (int i = 0; i < rows; ++i) h[i] = (i < rf.size() ? rf[i].toDouble() : 1.0 / rows) * b.height();
+    for (int c = 0; c < cols; ++c) w[c] = (c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width();
+    const int r = cellIndex_ / cols;
+    const int at = std::clamp(below ? r + 1 : r, 0, rows);
+    pushUndo();
+    h.insert(h.begin() + at, h[std::clamp(r, 0, rows - 1)]); // new row matches the current row
+    const QJsonArray cells = e->meta.value("cells").toArray();
+    const QJsonArray align = e->meta.value("cellAlign").toArray();
+    QJsonArray ncells, nalign;
+    auto row = [&](int rr) {
+        for (int c = 0; c < cols; ++c) {
+            const int idx = rr * cols + c;
+            ncells.append(idx < cells.size() ? cells[idx] : QJsonValue(QString()));
+            nalign.append(idx < align.size() ? align[idx] : QJsonValue(QString()));
+        }
+    };
+    auto empty = [&] { for (int c = 0; c < cols; ++c) { ncells.append(QString()); nalign.append(QString()); } };
+    for (int rr = 0; rr < rows; ++rr) { if (rr == at) empty(); row(rr); }
+    if (at >= rows) empty();
+    e->meta.insert("rows", rows + 1);
+    e->meta.insert("cells", ncells);
+    e->meta.insert("cellAlign", nalign);
+    rebuildTable(*e, h, w);
+    if (at <= r) cellIndex_ += cols; // keep pointing at the same cell
+    doc_->setDirty(true);
+    emit cellSelectionChanged();
+    emit changed();
+    emit message(QStringLiteral("Row inserted"));
+}
+
+void Editor::tableDeleteRow() {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int cols = e->meta.value("cols").toInt();
+    int rows = e->meta.value("rows").toInt();
+    if (cols <= 0 || rows <= 1) { emit message(QStringLiteral("A table keeps at least one row.")); return; }
+    const Bounds b = boundsOf(e->points);
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    std::vector<double> h(rows), w(cols);
+    for (int i = 0; i < rows; ++i) h[i] = (i < rf.size() ? rf[i].toDouble() : 1.0 / rows) * b.height();
+    for (int c = 0; c < cols; ++c) w[c] = (c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width();
+    const int r = cellIndex_ / cols;
+    pushUndo();
+    h.erase(h.begin() + r);
+    const QJsonArray cells = e->meta.value("cells").toArray();
+    const QJsonArray align = e->meta.value("cellAlign").toArray();
+    QJsonArray ncells, nalign;
+    for (int rr = 0; rr < rows; ++rr) {
+        if (rr == r) continue;
+        for (int c = 0; c < cols; ++c) {
+            const int idx = rr * cols + c;
+            ncells.append(idx < cells.size() ? cells[idx] : QJsonValue(QString()));
+            nalign.append(idx < align.size() ? align[idx] : QJsonValue(QString()));
+        }
+    }
+    e->meta.insert("rows", rows - 1);
+    e->meta.insert("cells", ncells);
+    e->meta.insert("cellAlign", nalign);
+    rebuildTable(*e, h, w);
+    cellIndex_ = std::min(cellIndex_, (rows - 1) * cols - 1);
+    if (cellIndex_ < 0) clearCellSelection(); else emit cellSelectionChanged();
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Row deleted"));
+}
+
+void Editor::tableInsertColumn(bool right) {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int cols = e->meta.value("cols").toInt();
+    const int rows = e->meta.value("rows").toInt();
+    if (cols <= 0 || rows <= 0) return;
+    const Bounds b = boundsOf(e->points);
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    std::vector<double> h(rows), w(cols);
+    for (int i = 0; i < rows; ++i) h[i] = (i < rf.size() ? rf[i].toDouble() : 1.0 / rows) * b.height();
+    for (int c = 0; c < cols; ++c) w[c] = (c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width();
+    const int col = cellIndex_ % cols;
+    const int at = std::clamp(right ? col + 1 : col, 0, cols);
+    pushUndo();
+    w.insert(w.begin() + at, w[std::clamp(col, 0, cols - 1)]);
+    const QJsonArray cells = e->meta.value("cells").toArray();
+    const QJsonArray align = e->meta.value("cellAlign").toArray();
+    QJsonArray ncells, nalign;
+    for (int rr = 0; rr < rows; ++rr)
+        for (int c = 0; c <= cols; ++c) {
+            if (c == at) { ncells.append(QString()); nalign.append(QString()); }
+            if (c < cols) {
+                const int idx = rr * cols + c;
+                ncells.append(idx < cells.size() ? cells[idx] : QJsonValue(QString()));
+                nalign.append(idx < align.size() ? align[idx] : QJsonValue(QString()));
+            }
+        }
+    e->meta.insert("cols", cols + 1);
+    e->meta.insert("cells", ncells);
+    e->meta.insert("cellAlign", nalign);
+    rebuildTable(*e, h, w);
+    const int r = cellIndex_ / cols;
+    cellIndex_ = r * (cols + 1) + col + (at <= col ? 1 : 0);
+    doc_->setDirty(true);
+    emit cellSelectionChanged();
+    emit changed();
+    emit message(QStringLiteral("Column inserted"));
+}
+
+void Editor::tableDeleteColumn() {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int cols = e->meta.value("cols").toInt();
+    const int rows = e->meta.value("rows").toInt();
+    if (cols <= 1 || rows <= 0) { emit message(QStringLiteral("A table keeps at least one column.")); return; }
+    const Bounds b = boundsOf(e->points);
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    std::vector<double> h(rows), w(cols);
+    for (int i = 0; i < rows; ++i) h[i] = (i < rf.size() ? rf[i].toDouble() : 1.0 / rows) * b.height();
+    for (int c = 0; c < cols; ++c) w[c] = (c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width();
+    const int col = cellIndex_ % cols;
+    pushUndo();
+    w.erase(w.begin() + col);
+    const QJsonArray cells = e->meta.value("cells").toArray();
+    const QJsonArray align = e->meta.value("cellAlign").toArray();
+    QJsonArray ncells, nalign;
+    for (int rr = 0; rr < rows; ++rr)
+        for (int c = 0; c < cols; ++c) {
+            if (c == col) continue;
+            const int idx = rr * cols + c;
+            ncells.append(idx < cells.size() ? cells[idx] : QJsonValue(QString()));
+            nalign.append(idx < align.size() ? align[idx] : QJsonValue(QString()));
+        }
+    e->meta.insert("cols", cols - 1);
+    e->meta.insert("cells", ncells);
+    e->meta.insert("cellAlign", nalign);
+    rebuildTable(*e, h, w);
+    const int r = cellIndex_ / cols;
+    cellIndex_ = r * (cols - 1) + std::min(col, cols - 2);
+    doc_->setDirty(true);
+    emit cellSelectionChanged();
+    emit changed();
+    emit message(QStringLiteral("Column deleted"));
+}
+
+void Editor::setCellAlignment(const QString& align) {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int total = e->meta.value("rows").toInt() * e->meta.value("cols").toInt();
+    pushUndo();
+    QJsonArray a = e->meta.value("cellAlign").toArray();
+    while (a.size() < total) a.append(QString());
+    if (cellIndex_ < a.size()) a[cellIndex_] = align;
+    e->meta.insert("cellAlign", a);
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Cell alignment: %1").arg(align));
+}
+
 void Editor::addCoupledCircle(const QString& id) {
     Entity* e = entityById(id);
     if (!e || !e->meta.value("balloon").toBool()) return;
@@ -4857,6 +5072,7 @@ void Editor::selectById(const QString& id, bool additive) {
 
 void Editor::clearSelection() {
     selected_.clear();
+    clearCellSelection();
     emit selectionChanged();
     emit changed();
 }
@@ -5380,6 +5596,33 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ghost(150, 162, 178, 110);
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
+    // Selected table CELL: a filled highlight over just that cell.
+    if (!cellTableId_.isEmpty() && cellIndex_ >= 0) {
+        for (const auto& e : doc_->entities()) {
+            if (e.id != cellTableId_ || !e.meta.value("table").toBool()) continue;
+            const Bounds b = boundsOf(e.points);
+            const QJsonArray cf = e.meta.value("colFrac").toArray();
+            const QJsonArray rf = e.meta.value("rowFrac").toArray();
+            const int cols = cf.size();
+            if (cols <= 0) break;
+            const int col = cellIndex_ % cols, r = cellIndex_ / cols;
+            double x0 = b.min.x;
+            for (int c = 0; c < col && c < cf.size(); ++c) x0 += cf[c].toDouble() * b.width();
+            const double cw = (col < cf.size() ? cf[col].toDouble() : 0) * b.width();
+            double yTop = b.max.y;
+            for (int i = 0; i < r && i < rf.size(); ++i) yTop -= rf[i].toDouble() * b.height();
+            const double chh = (r < rf.size() ? rf[r].toDouble() : 0) * b.height();
+            QRectF rr(vt.toScreen({x0, yTop}), vt.toScreen({x0 + cw, yTop - chh}));
+            p.save();
+            QPen cp(QColor("#2bd0ff")); cp.setCosmetic(true); cp.setWidthF(1.8);
+            p.setPen(cp);
+            p.setBrush(QColor(43, 208, 255, 60));
+            p.drawRect(rr.normalized());
+            p.restore();
+            break;
+        }
     }
 
     // Selection marking: highlight each selected entity's geometry + draw grips.

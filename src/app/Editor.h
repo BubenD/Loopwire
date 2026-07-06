@@ -133,6 +133,18 @@ public:
     // cell's top-left world corner and its world width/height.
     int tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, double& cw, double& ch) const;
     void applyTableCellEdit(const QString& id, int cell, const QString& text);
+    // Table cell selection (AutoCAD-style): a single click inside a cell selects just
+    // that cell, enabling the row/column/alignment editing commands.
+    QString selectedCellTable() const { return cellTableId_; }
+    int selectedCellIndex() const { return cellIndex_; }
+    void setCellSelection(const QString& tableId, int cell);
+    void clearCellSelection();
+    // Cell editing ops (act on the selected cell / its row / its column).
+    void tableInsertRow(bool below);
+    void tableDeleteRow();
+    void tableInsertColumn(bool right);
+    void tableDeleteColumn();
+    void setCellAlignment(const QString& align); // "TL","TC",...,"BR"
     // Endpoints of edge `seg` of a polyline/rect/polygon AS DRAWN — clipped inward at
     // each end by any existing fillet/chamfer setback, so a highlighted "wall" matches
     // the visible (already-modified) outline instead of overshooting to a sharp vertex.
@@ -306,6 +318,8 @@ signals:
     void editTextRequested(const QString& id);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
     void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at);
+    // A table cell was selected/deselected — the host shows/hides the Table Cell tab.
+    void cellSelectionChanged();
     // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.
@@ -538,6 +552,8 @@ private:
     QString lastHatchId_;         // most recent hatch created in this session (live edit)
     int polygonSides_ = 5;        // default side count (prompted on tool select)
     TableSpec tableSpec_;         // spec for the next Table placed (Insert Table dialog)
+    QString cellTableId_;         // table whose cell is selected (empty = none)
+    int cellIndex_ = -1;          // selected cell (row-major), -1 = none
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

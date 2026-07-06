@@ -63,9 +63,10 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
     p.setFont(f);
     p.setPen(color);
     QPointF pos = at;
-    if (align & (Qt::AlignHCenter | Qt::AlignVCenter)) {
+    if (align & (Qt::AlignHCenter | Qt::AlignRight | Qt::AlignVCenter)) {
         const QFontMetricsF fm(f);
         if (align & Qt::AlignHCenter) pos.setX(at.x() - fm.horizontalAdvance(text) / 2.0);
+        else if (align & Qt::AlignRight) pos.setX(at.x() - fm.horizontalAdvance(text));
         // Centre the glyph body on `at.y` (baseline sits below the visual middle).
         if (align & Qt::AlignVCenter) pos.setY(at.y() + (fm.ascent() - fm.descent()) / 2.0);
     }
@@ -793,39 +794,45 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     p.drawLine(vt.toScreen({xb[c], yb[vTop]}), vt.toScreen({xb[c], yb[rows]}));
                 const int headerIdx = hasTitle ? 1 : 0;
                 const QFont normal = p.font();
+                const QJsonArray cellAlign = e.meta.value("cellAlign").toArray();
+                const double pad = th * 0.35;
+                // Place `s` in the cell [x0..x1]x[yTop..yBot] per a 2-char align code
+                // (T/M/B + L/C/R); default depends on the row type.
+                auto placeCell = [&](double x0, double x1, double yTop, double yBot,
+                                     const QString& s, const QString& codeIn, double h, bool bold) {
+                    if (s.isEmpty()) return;
+                    QString code = codeIn.isEmpty() ? QStringLiteral("TL") : codeIn;
+                    const QChar v = code[0], hc = code.size() > 1 ? code[1] : QChar('L');
+                    Qt::Alignment flags;
+                    double x;
+                    if (hc == 'C') { flags = Qt::AlignHCenter; x = (x0 + x1) / 2.0; }
+                    else if (hc == 'R') { flags = Qt::AlignRight; x = x1 - pad; }
+                    else { flags = Qt::AlignLeft; x = x0 + pad; }
+                    double y;
+                    if (v == 'M') { y = (yTop + yBot) / 2.0; flags |= Qt::AlignVCenter; }
+                    else if (v == 'B') { y = yBot + pad; }
+                    else { y = yTop - pad - h; }
+                    QFont f = normal; f.setBold(bold);
+                    p.save(); p.setFont(f);
+                    drawWorldText(p, vt.toScreen({x, y}), s, h, vt.scale(), color, flags);
+                    p.restore();
+                };
                 for (int r = 0; r < rows; ++r) {
                     const bool isTitle = hasTitle && r == 0;
                     const bool isHeader = hasHeader && r == headerIdx && !isTitle;
-                    if (isTitle) { // one merged, centred, bold title across all columns
-                        const QString s = cells.isEmpty() ? QString() : cells[0].toString();
-                        if (!s.isEmpty()) {
-                            QFont f = normal; f.setBold(true);
-                            p.save(); p.setFont(f);
-                            drawWorldText(p,
-                                          vt.toScreen({(tb.min.x + tb.max.x) / 2.0,
-                                                       (yb[0] + yb[1]) / 2.0 - th * 0.35}),
-                                          s, th * 1.2, vt.scale(), color, Qt::AlignHCenter);
-                            p.restore();
-                        }
+                    if (isTitle) { // one merged, bold title across all columns
+                        const QString code = !cellAlign.isEmpty() && !cellAlign[0].toString().isEmpty()
+                                                 ? cellAlign[0].toString() : QStringLiteral("MC");
+                        placeCell(tb.min.x, tb.max.x, yb[0], yb[1],
+                                  cells.isEmpty() ? QString() : cells[0].toString(), code, th * 1.2, true);
                         continue;
                     }
                     for (int c = 0; c < cols; ++c) {
                         const int idx = r * cols + c;
                         const QString s = idx < cells.size() ? cells[idx].toString() : QString();
-                        if (s.isEmpty()) continue;
-                        if (isHeader) { // bold, centred in the cell
-                            QFont f = normal; f.setBold(true);
-                            p.save(); p.setFont(f);
-                            drawWorldText(p,
-                                          vt.toScreen({(xb[c] + xb[c + 1]) / 2.0,
-                                                       (yb[r] + yb[r + 1]) / 2.0 - th * 0.35}),
-                                          s, th, vt.scale(), color, Qt::AlignHCenter);
-                            p.restore();
-                        } else { // data: top-left aligned with a small pad
-                            const double pad = th * 0.35;
-                            drawWorldText(p, vt.toScreen({xb[c] + pad, yb[r] - pad - th}), s, th,
-                                          vt.scale(), color);
-                        }
+                        QString code = idx < cellAlign.size() ? cellAlign[idx].toString() : QString();
+                        if (code.isEmpty()) code = isHeader ? QStringLiteral("MC") : QStringLiteral("TL");
+                        placeCell(xb[c], xb[c + 1], yb[r], yb[r + 1], s, code, th, isHeader);
                     }
                 }
                 break;

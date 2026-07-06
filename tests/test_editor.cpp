@@ -373,6 +373,48 @@ int run_editor_tests() {
               "table: editing a cell stores its text");
     }
 
+    // --- Table cell selection + contextual row/column/align operations.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3; s.colWidth = 20.0; s.dataRows = 2; s.rowHeight = 10.0;
+        s.title = false; s.header = false; // plain 2x3 grid
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+        const QString tid = table()->id;
+        // Clicking a cell in Select mode selects the cell only, not the whole table.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({30, 15}, Qt::LeftButton, Qt::NoModifier); // top-middle cell (idx 1)
+        check(ed.selectedCellTable() == tid && ed.selectedCellIndex() == 1,
+              "table cell: clicking a cell selects that cell (index 1)");
+        // Insert a row below the selected cell's row: rows 2 -> 3, cells 6 -> 9.
+        ed.tableInsertRow(true);
+        check(table()->meta.value("rows").toInt() == 3 &&
+                  table()->meta.value("cells").toArray().size() == 9,
+              "table cell: insert row grows the grid");
+        // Insert a column to the right: cols 3 -> 4, cells 9 -> 12.
+        ed.tableInsertColumn(true);
+        check(table()->meta.value("cols").toInt() == 4 &&
+                  table()->meta.value("cells").toArray().size() == 12,
+              "table cell: insert column grows the grid");
+        // Set alignment on the currently selected cell.
+        const int ai = ed.selectedCellIndex();
+        ed.setCellAlignment(QStringLiteral("MC"));
+        check(table()->meta.value("cellAlign").toArray()[ai].toString() == QLatin1String("MC"),
+              "table cell: alignment code is stored on the cell");
+        // Delete row / column shrink back.
+        ed.tableDeleteRow();
+        check(table()->meta.value("rows").toInt() == 2, "table cell: delete row shrinks the grid");
+        ed.tableDeleteColumn();
+        check(table()->meta.value("cols").toInt() == 3, "table cell: delete column shrinks the grid");
+    }
+
     // --- Committing an inline edit on a balloon saves its number (balloons aren't
     //     Text objects, so applyTextEdit must still store their text).
     {

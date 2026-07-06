@@ -59,6 +59,9 @@ private:
     void applyHatchControl(const QString& key, const QJsonValue& value); // -> selected hatch or default
     void choosePattern(const QString& key); // pick a hatch pattern (edit target or new-hatch default)
     void showHatchPatternDialog();          // expanded pattern picker (gallery + name list)
+    void buildTableCellRibbonTab();    // build the contextual "Table Cell" tab (hidden)
+    void showTableCellRibbon(bool on); // add/select or remove the contextual tab
+    void updateTableCellContext();     // open/close based on the table-cell selection
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -155,6 +158,7 @@ private:
     QTabWidget* ribbon_ = nullptr;
     // Contextual "Hatch Creation" ribbon tab (shown only while hatching).
     QWidget* hatchTab_ = nullptr;
+    QWidget* tableCellTab_ = nullptr;
     QButtonGroup* hatchPatternGroup_ = nullptr; // exclusive pattern swatch buttons
     QDoubleSpinBox* hatchAngleSpin_ = nullptr;
     QDoubleSpinBox* hatchScaleSpin_ = nullptr;

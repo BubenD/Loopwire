@@ -1350,6 +1350,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // A hatch was created (or the creation session ended): re-point the tab so the
     // controls keep editing the just-placed hatch until you click out / Close.
     connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
+    // Clicking a table cell opens the contextual "Table Cell" tab (row/col + align ops).
+    connect(editor_, &Editor::cellSelectionChanged, this, [this] { updateTableCellContext(); });
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help
@@ -2112,6 +2114,7 @@ void MainWindow::buildRibbon() {
     top->setFloatable(false);
     top->addWidget(ribbon_);
     buildHatchRibbonTab(); // built once, added to the ribbon only while hatching
+    buildTableCellRibbonTab(); // built once, added only while a table cell is selected
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
 }
@@ -2588,6 +2591,129 @@ void MainWindow::showHatchRibbon(bool on) {
         hatchTab_->show();
     } else if (idx >= 0) {
         ribbon_->removeTab(idx); // detaches but does not delete hatchTab_
+        ribbon_->setCurrentIndex(0); // back to Home
+    }
+}
+
+// The contextual "Table Cell" ribbon tab (AutoCAD-style): Rows | Columns | Cell
+// Styles | Close. Built once and parented to the ribbon, inserted as a visible tab
+// only while a single table cell is selected (showTableCellRibbon).
+void MainWindow::buildTableCellRibbonTab() {
+    tableCellTab_ = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(tableCellTab_);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+    auto addGroup = [&](const QString& title, QWidget* content) {
+        lay->addWidget(ribbonGroup(title, content));
+        auto* rule = new QFrame(tableCellTab_);
+        rule->setFrameShape(QFrame::VLine);
+        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        lay->addWidget(rule);
+    };
+    auto bigButton = [&](QWidget* parent, const QString& text) {
+        auto* b = new QToolButton(parent);
+        b->setText(text);
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setMinimumWidth(52);
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        return b;
+    };
+
+    // ---- Rows: Insert Above / Insert Below / Delete Row ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* above = bigButton(w, QStringLiteral("Insert\nAbove"));
+        auto* below = bigButton(w, QStringLiteral("Insert\nBelow"));
+        auto* del = bigButton(w, QStringLiteral("Delete\nRow"));
+        connect(above, &QToolButton::clicked, this, [this] { editor_->tableInsertRow(false); });
+        connect(below, &QToolButton::clicked, this, [this] { editor_->tableInsertRow(true); });
+        connect(del, &QToolButton::clicked, this, [this] { editor_->tableDeleteRow(); });
+        g->addWidget(above, 0, 0);
+        g->addWidget(below, 0, 1);
+        g->addWidget(del, 0, 2);
+        addGroup(QStringLiteral("Rows"), w);
+    }
+
+    // ---- Columns: Insert Left / Insert Right / Delete Column ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* left = bigButton(w, QStringLiteral("Insert\nLeft"));
+        auto* right = bigButton(w, QStringLiteral("Insert\nRight"));
+        auto* del = bigButton(w, QStringLiteral("Delete\nColumn"));
+        connect(left, &QToolButton::clicked, this, [this] { editor_->tableInsertColumn(false); });
+        connect(right, &QToolButton::clicked, this, [this] { editor_->tableInsertColumn(true); });
+        connect(del, &QToolButton::clicked, this, [this] { editor_->tableDeleteColumn(); });
+        g->addWidget(left, 0, 0);
+        g->addWidget(right, 0, 1);
+        g->addWidget(del, 0, 2);
+        addGroup(QStringLiteral("Columns"), w);
+    }
+
+    // ---- Cell Styles: 9-way alignment dropdown ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* align = bigButton(w, QStringLiteral("Cell\nAlignment"));
+        align->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(align);
+        const std::pair<const char*, const char*> items[] = {
+            {"Top Left", "TL"},    {"Top Center", "TC"},    {"Top Right", "TR"},
+            {"Middle Left", "ML"}, {"Middle Center", "MC"}, {"Middle Right", "MR"},
+            {"Bottom Left", "BL"}, {"Bottom Center", "BC"}, {"Bottom Right", "BR"}};
+        for (const auto& it : items) {
+            const QString code = QString::fromLatin1(it.second);
+            menu->addAction(QString::fromLatin1(it.first), this,
+                            [this, code] { editor_->setCellAlignment(code); });
+        }
+        align->setMenu(menu);
+        g->addWidget(align, 0, 0);
+        addGroup(QStringLiteral("Cell Styles"), w);
+    }
+
+    // ---- Close: dismiss the cell selection ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* close = bigButton(w, QStringLiteral("Close"));
+        connect(close, &QToolButton::clicked, this, [this] { editor_->clearSelection(); });
+        g->addWidget(close, 0, 0);
+        addGroup(QStringLiteral("Close"), w);
+    }
+
+    lay->addStretch(1);
+    tableCellTab_->hide();
+}
+
+void MainWindow::updateTableCellContext() {
+    showTableCellRibbon(!editor_->selectedCellTable().isEmpty() &&
+                        editor_->selectedCellIndex() >= 0);
+}
+
+void MainWindow::showTableCellRibbon(bool on) {
+    if (!tableCellTab_ || !ribbon_) return;
+    const int idx = ribbon_->indexOf(tableCellTab_);
+    if (on) {
+        if (idx < 0) {
+            const int at = ribbon_->addTab(tableCellTab_, QStringLiteral("Table Cell"));
+            ribbon_->setCurrentIndex(at);
+        } else {
+            ribbon_->setCurrentIndex(idx);
+        }
+        tableCellTab_->show();
+    } else if (idx >= 0) {
+        ribbon_->removeTab(idx); // detaches but does not delete tableCellTab_
         ribbon_->setCurrentIndex(0); // back to Home
     }
 }
