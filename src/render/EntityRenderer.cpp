@@ -62,12 +62,14 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
     f.setPixelSize(std::max(1, static_cast<int>(worldHeight * scale)));
     p.setFont(f);
     p.setPen(color);
-    if (align & Qt::AlignHCenter) {
+    QPointF pos = at;
+    if (align & (Qt::AlignHCenter | Qt::AlignVCenter)) {
         const QFontMetricsF fm(f);
-        p.drawText(QPointF(at.x() - fm.horizontalAdvance(text) / 2.0, at.y()), text);
-    } else {
-        p.drawText(at, text);
+        if (align & Qt::AlignHCenter) pos.setX(at.x() - fm.horizontalAdvance(text) / 2.0);
+        // Centre the glyph body on `at.y` (baseline sits below the visual middle).
+        if (align & Qt::AlignVCenter) pos.setY(at.y() + (fm.ascent() - fm.descent()) / 2.0);
     }
+    p.drawText(pos, text);
 }
 
 // "ls" line-start: read the stored reference line, if any.
@@ -975,8 +977,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             p.drawEllipse(c, r, r);
             const QString num = e.meta.value("text").toString();
-            drawWorldText(p, QPointF(c.x(), c.y() + e.radius * vt.scale() * 0.5), num,
-                          e.radius * 1.1, vt.scale(), color, Qt::AlignHCenter);
+            drawWorldText(p, c, num, e.radius * 1.1, vt.scale(), color,
+                          Qt::AlignHCenter | Qt::AlignVCenter);
         } else {
             p.drawEllipse(c, r, r);
         }
