@@ -265,6 +265,15 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
         p.drawText(QRectF(3, 3, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
         break;
     }
+    case ToolId::TextLeader: {
+        // A leader arrow up to a short landing, with text lines (no circle).
+        p.drawLine(4, 20, 12, 12);          // leader
+        p.drawLine(4, 20, 4, 16); p.drawLine(4, 20, 8, 20); // arrowhead
+        p.drawLine(12, 12, 20, 12);         // horizontal landing
+        p.drawLine(13, 8, 20, 8);           // text lines above the landing
+        p.drawLine(13, 5, 18, 5);
+        break;
+    }
     case ToolId::Note: {
         // Bordered note box with a few text lines.
         p.drawRect(4, 5, 16, 14);
@@ -1961,22 +1970,24 @@ void MainWindow::buildRibbon() {
             auto* ch = new QHBoxLayout(calloutW);
             ch->setContentsMargins(0, 0, 0, 0);
             ch->setSpacing(2);
-            // Balloon = a split-button: click places a balloon; the fall-menu holds the
-            // multileader operations (Add/Remove Leader, Align, Collect).
+            // Leader = a split-button: click places a TEXT leader (no circle); the
+            // fall-menu offers a Balloon leader plus the multileader operations.
             auto* balloonBtn = new QToolButton(calloutW);
-            balloonBtn->setIcon(makeToolIcon(ToolId::Balloon));
+            balloonBtn->setIcon(makeToolIcon(ToolId::TextLeader));
             balloonBtn->setIconSize(QSize(28, 28));
             balloonBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
             balloonBtn->setAutoRaise(true);
             balloonBtn->setFocusPolicy(Qt::NoFocus);
-            balloonBtn->setToolTip(QStringLiteral("Balloon — click the arrow tip then the balloon"));
+            balloonBtn->setToolTip(QStringLiteral("Leader (text) — click the tip then the label"));
             balloonBtn->setPopupMode(QToolButton::MenuButtonPopup);
             connect(balloonBtn, &QToolButton::clicked, this,
-                    [this] { editor_->setTool(ToolId::Balloon); });
+                    [this] { editor_->setTool(ToolId::TextLeader); });
             auto* lm = new QMenu(balloonBtn);
             {
-                QAction* a = lm->addAction(makeToolIcon(ToolId::Balloon),
-                                           QStringLiteral("Leader (place balloon)"));
+                QAction* a = lm->addAction(makeToolIcon(ToolId::TextLeader),
+                                           QStringLiteral("Leader (text only)"));
+                connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::TextLeader); });
+                a = lm->addAction(makeToolIcon(ToolId::Balloon), QStringLiteral("Balloon"));
                 connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
                 lm->addSeparator();
                 a = lm->addAction(QStringLiteral("Add Leader"));
@@ -4447,6 +4458,7 @@ void MainWindow::buildCommands() {
         {{"text", "t", "dt"}, "Draw", "Single-line text", tool(ToolId::Text)},
         {{"dim", "dimlinear"}, "Draw", "Linear dimension", tool(ToolId::Dimension)},
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
+        {{"leader", "ld", "mleader"}, "Annotation", "Text leader", tool(ToolId::TextLeader)},
         {{"note", "nt"}, "Annotation", "Note box", tool(ToolId::Note)},
         {{"revision", "rev"}, "Annotation", "Revision box", tool(ToolId::Revision)},
         {{"table", "tb"}, "Annotation", "Insert an editable table", [this] { insertTableCommand(); }},

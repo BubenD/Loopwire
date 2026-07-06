@@ -25,8 +25,9 @@ enum class ToolId {
     Hatch,
     Wipeout,
     // Annotation
-    Balloon,   // numbered callout balloon
-    Note,      // bordered note box with text
+    Balloon,    // numbered callout balloon
+    TextLeader, // leader with a plain text label (no circle)
+    Note,       // bordered note box with text
     Revision,  // titled revision box
     Table,     // editable grid of cells
     // Harness
@@ -71,7 +72,8 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Hatch:
     case ToolId::Wipeout:
     case ToolId::Wire:
-    case ToolId::Balloon:   // two clicks: arrow tip, then balloon centre
+    case ToolId::Balloon:    // two clicks: arrow tip, then balloon centre
+    case ToolId::TextLeader: // two clicks: arrow tip, then text location
     case ToolId::Note:      // rubber-band a rectangle, like Rect
     case ToolId::Revision:
         return true;
@@ -105,6 +107,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Hatch: return QStringLiteral("Hatch");
     case ToolId::Wipeout: return QStringLiteral("Wipeout");
     case ToolId::Balloon: return QStringLiteral("Balloon");
+    case ToolId::TextLeader: return QStringLiteral("Leader");
     case ToolId::Note: return QStringLiteral("Note");
     case ToolId::Revision: return QStringLiteral("Revision");
     case ToolId::Table: return QStringLiteral("Table");

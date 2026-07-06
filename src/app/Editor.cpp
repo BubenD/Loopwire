@@ -1877,12 +1877,13 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (draftPts_.size() == 2) finishDraw();
         break;
     case ToolId::Balloon:
-        // First click = the arrow tip (what it points at); second = balloon centre.
+    case ToolId::TextLeader:
+        // First click = the arrow tip (what it points at); second = the content spot.
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(draftPts_.size() < 2
-                         ? QStringLiteral("Balloon: click where the leader points")
-                         : QStringLiteral("Balloon: click the balloon location"));
+                         ? QStringLiteral("Leader: click where it points")
+                         : QStringLiteral("Leader: click the label location"));
         if (draftPts_.size() == 2) finishDraw();
         break;
     case ToolId::Dimension:
@@ -2588,22 +2589,29 @@ void Editor::finishDraw() {
         }
         break;
     }
-    case ToolId::Balloon: {
-        // A numbered callout with a leader: first point = arrow tip, second = centre.
-        // Stored as a Circle carrying meta["balloon"], the arrow tip (leaderX/Y) and an
-        // editable landing length. `a` == centre so the number is inline-editable.
+    case ToolId::Balloon:
+    case ToolId::TextLeader: {
+        // A leader callout: first point = arrow tip, second = the label location.
+        // Stored as a Circle carrying meta["balloon"] + the arrow tip + landing. A
+        // Balloon shows a numbered circle; a TextLeader shows plain text (no circle).
         if (draftPts_.size() < 2) return;
         const Vec2 tip = draftPts_[0], c = draftPts_[1];
+        const bool textOnly = (tool_ == ToolId::TextLeader);
         e.type = EntityType::Circle;
         e.center = c;
         e.a = c;
         e.radius = 6.0;
-        int next = 0;
-        for (const auto& x : doc_->entities())
-            if (x.meta.value("balloon").toBool())
-                next = std::max(next, x.meta.value("text").toString().toInt());
         e.meta.insert("balloon", true);
-        e.meta.insert("text", QString::number(next + 1));
+        if (textOnly) {
+            e.meta.insert("textLeader", true);
+            e.meta.insert("text", QStringLiteral("Text"));
+        } else {
+            int next = 0;
+            for (const auto& x : doc_->entities())
+                if (x.meta.value("balloon").toBool())
+                    next = std::max(next, x.meta.value("text").toString().toInt());
+            e.meta.insert("text", QString::number(next + 1));
+        }
         e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
         e.meta.insert("landingSide", (tip.x >= c.x) ? 1.0 : -1.0); // exits toward the tip's side
         setBalloonLeaders(e, {tip});   // one leader to start; Add Leader adds more
@@ -5457,12 +5465,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& v : regularPolygonPoints(pts[0], pts[1], polygonSides_))
                 poly << vt.toScreen(v);
             p.drawPolygon(poly);
-        } else if (tool_ == ToolId::Balloon && pts.size() >= 2) {
-            // Preview the leader from the arrow tip to the cursor + the balloon circle.
+        } else if ((tool_ == ToolId::Balloon || tool_ == ToolId::TextLeader) && pts.size() >= 2) {
+            // Preview the leader from the arrow tip to the cursor; a Balloon also shows
+            // its circle (a text leader shows just the leader).
             p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
-            const QPointF cc = vt.toScreen(pts[1]);
-            const double rr = 6.0 * vt.scale();
-            p.drawEllipse(cc, rr, rr);
+            if (tool_ == ToolId::Balloon) {
+                const QPointF cc = vt.toScreen(pts[1]);
+                const double rr = 6.0 * vt.scale();
+                p.drawEllipse(cc, rr, rr);
+            }
         } else if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
             // Closed boundary rubber-band with a faint fill preview.
             QPolygonF poly;

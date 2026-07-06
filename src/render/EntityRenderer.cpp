@@ -975,9 +975,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     if (L > 1e-6) { d /= L; drawLeaderArrow(p, sTip, d, color, ah, alen); }
                 }
             }
-            p.drawEllipse(c, r, r);
-            const QString num = e.meta.value("text").toString();
-            drawWorldText(p, c, num, e.radius * 1.1, vt.scale(), color,
+            const bool textLeader = e.meta.value("textLeader").toBool();
+            if (!textLeader) p.drawEllipse(c, r, r); // a text leader has no circle
+            const QString label = e.meta.value("text").toString();
+            drawWorldText(p, c, label, e.radius * (textLeader ? 1.4 : 1.1), vt.scale(), color,
                           Qt::AlignHCenter | Qt::AlignVCenter);
         } else {
             p.drawEllipse(c, r, r);

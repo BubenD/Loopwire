@@ -648,6 +648,21 @@ int run_editor_tests() {
               "leader-tangent: a coupled circle stays tangent to its neighbour when moved");
     }
 
+    // --- Text leader: two clicks make a leader with a text label and NO number/circle.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::TextLeader);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // tip
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier); // label location
+        const Entity* t = nullptr;
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) t = &e;
+        check(t && t->meta.value("textLeader").toBool() &&
+                  t->meta.value("leaders").toArray().size() == 1 &&
+                  !t->meta.value("text").toString().isEmpty(),
+              "text-leader: a leader with a text label (no numbered circle) is placed");
+    }
+
     // --- Ctrl+click a balloon circle adds a COUPLED circle (chained, no leader), and
     //     dragging one circle's centre moves its chain-mate while leaders stay put.
     {
