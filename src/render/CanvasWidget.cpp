@@ -583,7 +583,9 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
         }
         // Tab switches the active dynamic-input reference field (Length<->Angle,
         // X radius<->Y radius, ...) even before the input box has been opened.
-        if (e->key() == Qt::Key_Tab && editor_->drawInputFieldLabels().size() > 1) {
+        // (focusNextPrevChild is overridden so Tab reaches us instead of moving focus.)
+        if ((e->key() == Qt::Key_Tab || e->key() == Qt::Key_Backtab) &&
+            editor_->drawInputFieldLabels().size() > 1) {
             editor_->cycleDrawInputField();
             if (!dynInput_->isVisible()) showDynInput(QString());
             dynInput_->setPlaceholderText(editor_->currentDrawFieldLabel());
@@ -618,6 +620,14 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
         return;
     }
     QWidget::keyPressEvent(e);
+}
+
+bool CanvasWidget::focusNextPrevChild(bool next) {
+    // While drafting with more than one dynamic-input field (Length/Angle, radius/
+    // angle, ...), Tab/Backtab must cycle those fields — so refuse focus traversal and
+    // let the key fall through to keyPressEvent (Qt tries focus nav BEFORE keyPress).
+    if (editor_ && editor_->drawInputFieldLabels().size() > 1) return false;
+    return QWidget::focusNextPrevChild(next);
 }
 
 } // namespace Edraw_Desktop

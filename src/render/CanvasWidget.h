@@ -139,6 +139,9 @@ protected:
     void enterEvent(QEnterEvent* e) override; // show the drawn crosshair
     void leaveEvent(QEvent* e) override;      // hide it
     bool eventFilter(QObject* obj, QEvent* e) override; // dynamic-input field keys
+    // Keep Tab/Backtab for cycling the dynamic-input fields (Length<->Angle, ...)
+    // instead of letting Qt move keyboard focus off the canvas.
+    bool focusNextPrevChild(bool next) override;
 
     // Mark the cached static scene (grid + entities) stale so it is re-rendered
     // on the next paint. Cursor-move previews skip this for a lag-free overlay.

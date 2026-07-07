@@ -2001,6 +2001,10 @@ int run_editor_tests() {
         ed.lockDrawField(QStringLiteral("50"));
         ed.cycleDrawInputField(); // Tab -> Angle
         check(ed.currentDrawFieldLabel() == QStringLiteral("Angle"), "dynin: Tab switches to Angle");
+        ed.cycleDrawInputField(); // Tab again -> back to Length
+        check(ed.currentDrawFieldLabel() == QStringLiteral("Length"),
+              "dynin: a second Tab jumps back to Length");
+        ed.cycleDrawInputField(); // -> Angle again, ready to type the angle
         ed.lockDrawField(QStringLiteral("90"));
         check(ed.commitDrawFields(), "dynin: commit consumed");
         check(d.entities().size() == 1 && near(d.entities()[0].b.x, 0.0) &&
