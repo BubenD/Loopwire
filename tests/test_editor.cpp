@@ -466,7 +466,8 @@ int run_editor_tests() {
         check(table()->meta.value("cols").toInt() == 3, "table cell: delete column shrinks the grid");
     }
 
-    // --- Resize a table column / row by dragging an interior grid-line grip.
+    // --- Resize a table COLUMN by dragging its grid line: only the column left of the
+    //     line resizes; the others keep their width and shift, the table grows.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
@@ -480,29 +481,61 @@ int run_editor_tests() {
             for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) return &e;
             return nullptr;
         };
+        auto tableWidth = [&] {
+            double lo = table()->points[0].x, hi = lo;
+            for (const auto& p : table()->points) { lo = std::min(lo, p.x); hi = std::max(hi, p.x); }
+            return hi - lo;
+        };
         const QString tid = table()->id;
         ed.setTool(ToolId::Select);
         ed.selectById(tid);
-        // Grid lines: column boundaries at x=20,40 (mid-y=10); the single row boundary
-        // at y=10 (mid-x=30). Grab the horizontal line first and drag it up to y=15 —
-        // the top row shrinks to 1/4, the bottom row grows to 3/4.
-        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier); // grab row edge grip
-        ed.onPointerMove({30, 15});
-        ed.onPointerPress({30, 15}, Qt::LeftButton, Qt::NoModifier); // place it
-        const QJsonArray rf = table()->meta.value("rowFrac").toArray();
-        check(rf.size() == 2 && std::abs(rf[0].toDouble() - 0.25) < 1e-6 &&
-                  std::abs(rf[1].toDouble() - 0.75) < 1e-6,
-              "table resize: dragging a row grid line repartitions the two rows");
-        // Grab the first vertical line (x=20, mid-y=10) and drag it to x=25 — column 0
-        // grows and column 1 shrinks; their combined width (2/3) is preserved.
+        // Grid line between col 0 and col 1 at x=20 (mid-y=10). Drag it right to x=30:
+        // col 0 grows 20->30, cols 1 & 2 stay 20 wide, table widens 60->70.
         ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerMove({25, 10});
-        ed.onPointerPress({25, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({30, 10});
+        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
         const QJsonArray cf = table()->meta.value("colFrac").toArray();
-        check(cf.size() == 3 && std::abs(cf[0].toDouble() - 25.0 / 60.0) < 1e-6 &&
-                  std::abs(cf[1].toDouble() - 15.0 / 60.0) < 1e-6 &&
-                  std::abs(cf[2].toDouble() - 20.0 / 60.0) < 1e-6,
-              "table resize: dragging a column grid line repartitions the two columns");
+        const double W = tableWidth();
+        check(std::abs(W - 70.0) < 1e-6, "table resize: column drag widens the table (60->70)");
+        check(cf.size() == 3 && std::abs(cf[0].toDouble() * W - 30.0) < 1e-6 &&
+                  std::abs(cf[1].toDouble() * W - 20.0) < 1e-6 &&
+                  std::abs(cf[2].toDouble() * W - 20.0) < 1e-6,
+              "table resize: only the left column resizes; the others keep their width");
+    }
+
+    // --- Resize a table ROW by dragging its grid line: only the row above resizes; the
+    //     others keep their height and shift, the table grows.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3; s.colWidth = 20.0; s.dataRows = 2; s.rowHeight = 10.0;
+        s.title = false; s.header = false; // 3x2 grid, spans x[0..60], y[0..20]
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+        auto tableHeight = [&] {
+            double lo = table()->points[0].y, hi = lo;
+            for (const auto& p : table()->points) { lo = std::min(lo, p.y); hi = std::max(hi, p.y); }
+            return hi - lo;
+        };
+        ed.setTool(ToolId::Select);
+        ed.selectById(table()->id);
+        // Row line between row 0 and row 1 at y=10 (mid-x=30). Drag it down to y=5:
+        // row 0 grows 10->15, row 1 stays 10 tall, table grows 20->25.
+        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({30, 5});
+        ed.onPointerPress({30, 5}, Qt::LeftButton, Qt::NoModifier);
+        const QJsonArray rf = table()->meta.value("rowFrac").toArray();
+        const double H = tableHeight();
+        check(std::abs(H - 25.0) < 1e-6, "table resize: row drag grows the table (20->25)");
+        check(rf.size() == 2 && std::abs(rf[0].toDouble() * H - 15.0) < 1e-6 &&
+                  std::abs(rf[1].toDouble() * H - 10.0) < 1e-6,
+              "table resize: only the row above resizes; the other keeps its height");
     }
 
     // --- Committing an inline edit on a balloon saves its number (balloons aren't
@@ -638,6 +671,27 @@ int run_editor_tests() {
         s.objectSnap = false; s.gridSnap = false;
         auto r3 = resolveSnap(d, {2, 1}, std::nullopt, 5.0, s, {});
         check(!r3.snapped, "dim-snap: no object snap when object snap is off");
+    }
+
+    // --- Snap to a table's grid joints (cell corners) and cell-edge midpoints.
+    {
+        Document d; d.entities().clear();
+        Entity t; t.id = "tb"; t.type = EntityType::Rect;
+        t.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}}; // 2x2, x[0..40] y[0..20]
+        t.meta.insert("table", true);
+        t.meta.insert("rows", 2); t.meta.insert("cols", 2);
+        QJsonArray cf; cf.append(0.5); cf.append(0.5);
+        QJsonArray rf; rf.append(0.5); rf.append(0.5);
+        t.meta.insert("colFrac", cf); t.meta.insert("rowFrac", rf);
+        d.entities().push_back(t);
+        SnapSettings s; // endpoint on by default
+        auto r = resolveSnap(d, {21, 11}, std::nullopt, 5.0, s, {});
+        check(r.snapped && near(r.point.x, 20.0) && near(r.point.y, 10.0),
+              "table-snap: snaps to an interior grid joint");
+        SnapSettings m; m.snapEndpoint = false; m.snapNearest = false; m.snapMidpoint = true;
+        auto rm = resolveSnap(d, {10, 19}, std::nullopt, 5.0, m, {});
+        check(rm.snapped && near(rm.point.x, 10.0) && near(rm.point.y, 20.0),
+              "table-snap: snaps to a cell-edge midpoint");
     }
 
     // --- A leader can be re-connected to another balloon by dropping its landing

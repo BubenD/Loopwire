@@ -1747,29 +1747,35 @@ void Editor::applyEditDrag(const Vec2& target) {
             break;
         }
         case GripRole::TableColEdge: {
-            // Drag an interior vertical grid line: repartition the two columns it
-            // separates (index-1 and index) while their combined width is preserved.
+            // Drag an interior vertical grid line: only the column to its LEFT resizes;
+            // every other column keeps its width, so the columns to the right shift and
+            // the table's right edge moves with them (top-left stays anchored).
             if (e->points.size() != 4) break;
             Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
             QJsonArray cf = e->meta.value("colFrac").toArray();
-            const int c = index; // boundary between column c-1 and column c
+            const int c = index; // boundary between column c-1 (left) and column c (right)
             if (c < 1 || c >= cf.size()) break;
             const double W = tb.width();
             if (W < 1e-9) break;
-            // Left/right edges of the merged pair, in world x.
-            double xL = tb.min.x;
-            for (int i = 0; i < c - 1; ++i) xL += cf[i].toDouble() * W;
-            const double pair = (cf[c - 1].toDouble() + cf[c].toDouble()) * W;
-            const double minW = W * 0.02; // keep each column at least 2% wide
-            const double x = std::clamp(target.x, xL + minW, xL + pair - minW);
-            cf[c - 1] = (x - xL) / W;
-            cf[c] = (xL + pair - x) / W;
+            std::vector<double> w(cf.size());
+            double xB = tb.min.x; // current world x of boundary c
+            for (int i = 0; i < cf.size(); ++i) { w[i] = cf[i].toDouble() * W; if (i < c) xB += w[i]; }
+            const double minW = std::max(1e-4, W * 0.02);
+            const double newX = std::max(xB - (w[c - 1] - minW), target.x); // keep col c-1 >= minW
+            const double dx = newX - xB;
+            const double Wp = W + dx;
+            if (Wp < 1e-9) break;
+            w[c - 1] += dx;
+            const double maxX = tb.min.x + Wp;
+            e->points = {{tb.min.x, tb.min.y}, {maxX, tb.min.y}, {maxX, tb.max.y}, {tb.min.x, tb.max.y}};
+            for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / Wp;
             e->meta["colFrac"] = cf;
             break;
         }
         case GripRole::TableRowEdge: {
-            // Drag an interior horizontal grid line: repartition the two rows it
-            // separates (index-1 above, index below); rows run top -> down (y-up world).
+            // Drag an interior horizontal grid line: only the row ABOVE it resizes; every
+            // other row keeps its height, so the rows below shift and the table's bottom
+            // edge moves (top-left stays anchored). Rows run top -> down (world y-up).
             if (e->points.size() != 4) break;
             Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
             QJsonArray rf = e->meta.value("rowFrac").toArray();
@@ -1777,13 +1783,18 @@ void Editor::applyEditDrag(const Vec2& target) {
             if (r < 1 || r >= rf.size()) break;
             const double H = tb.height();
             if (H < 1e-9) break;
-            double yTop = tb.max.y; // top edge of the merged pair
-            for (int i = 0; i < r - 1; ++i) yTop -= rf[i].toDouble() * H;
-            const double pair = (rf[r - 1].toDouble() + rf[r].toDouble()) * H;
-            const double minH = H * 0.02;
-            const double y = std::clamp(target.y, yTop - pair + minH, yTop - minH);
-            rf[r - 1] = (yTop - y) / H;
-            rf[r] = (y - (yTop - pair)) / H;
+            std::vector<double> h(rf.size());
+            double yB = tb.max.y; // current world y of boundary r
+            for (int i = 0; i < rf.size(); ++i) { h[i] = rf[i].toDouble() * H; if (i < r) yB -= h[i]; }
+            const double minH = std::max(1e-4, H * 0.02);
+            const double newY = std::min(yB + (h[r - 1] - minH), target.y); // keep row r-1 >= minH
+            const double dy = yB - newY; // boundary moving down (y decreasing) grows row r-1
+            const double Hp = H + dy;
+            if (Hp < 1e-9) break;
+            h[r - 1] += dy;
+            const double minY = tb.max.y - Hp;
+            e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, tb.max.y}, {tb.min.x, tb.max.y}};
+            for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
             e->meta["rowFrac"] = rf;
             break;
         }

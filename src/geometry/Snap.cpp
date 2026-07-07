@@ -13,6 +13,30 @@ namespace Edraw_Desktop {
 
 namespace {
 
+// World coordinates of a table's grid lines: column boundaries xb[0..cols] (left ->
+// right) and row boundaries yb[0..rows] (top -> down, world y-up). False if `e` isn't
+// a table with fraction arrays.
+bool tableGridLines(const Entity& e, std::vector<double>& xb, std::vector<double>& yb) {
+    if (e.type != EntityType::Rect || !e.meta.value("table").toBool() || e.points.size() != 4)
+        return false;
+    const QJsonArray cf = e.meta.value("colFrac").toArray();
+    const QJsonArray rf = e.meta.value("rowFrac").toArray();
+    if (cf.isEmpty() || rf.isEmpty()) return false;
+    double minX = e.points[0].x, maxX = e.points[0].x;
+    double minY = e.points[0].y, maxY = e.points[0].y;
+    for (const auto& p : e.points) {
+        minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+        minY = std::min(minY, p.y); maxY = std::max(maxY, p.y);
+    }
+    const double w = maxX - minX, h = maxY - minY;
+    xb.clear(); yb.clear();
+    double x = minX; xb.push_back(x);
+    for (const auto& v : cf) { x += v.toDouble() * w; xb.push_back(x); }
+    double y = maxY; yb.push_back(y);
+    for (const auto& v : rf) { y -= v.toDouble() * h; yb.push_back(y); }
+    return true;
+}
+
 // Collect the segment list that represents an entity's linear skeleton, used
 // for midpoint/nearest/intersection snapping.
 void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
@@ -54,6 +78,16 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Wipeout:
         for (size_t i = 0; i < e.points.size(); ++i)
             out.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
+        // A table also snaps along its interior grid lines, broken per cell so each
+        // cell edge gets its own midpoint / nearest snap.
+        if (std::vector<double> xb, yb; tableGridLines(e, xb, yb)) {
+            for (size_t j = 0; j + 1 < yb.size(); ++j)      // horizontal cell edges
+                for (size_t i = 0; i + 1 < xb.size(); ++i)
+                    out.emplace_back(Vec2{xb[i], yb[j]}, Vec2{xb[i + 1], yb[j]});
+            for (size_t i = 0; i + 1 < xb.size(); ++i)      // vertical cell edges
+                for (size_t j = 0; j + 1 < yb.size(); ++j)
+                    out.emplace_back(Vec2{xb[i], yb[j]}, Vec2{xb[i], yb[j + 1]});
+        }
         break;
     case EntityType::Dimension: {
         // The drawn dimension line (+ extension lines) so midpoint/nearest snap works.
@@ -191,6 +225,11 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::Rect:
     case EntityType::Wipeout:
         for (const auto& p : e.points) out.push_back(p);
+        // A table snaps to every grid intersection (all cell corners), not just the
+        // four outer corners.
+        if (std::vector<double> xb, yb; tableGridLines(e, xb, yb))
+            for (double y : yb)
+                for (double x : xb) out.push_back({x, y});
         break;
     case EntityType::Text:
     case EntityType::Splice:
