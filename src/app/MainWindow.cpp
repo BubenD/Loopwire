@@ -1352,6 +1352,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
     // Clicking a table cell opens the contextual "Table Cell" tab (row/col + align ops).
     connect(editor_, &Editor::cellSelectionChanged, this, [this] { updateTableCellContext(); });
+    // Mirror line picked: offer Copy / Move / Cancel (AutoCAD "erase source? No/Yes").
+    connect(editor_, &Editor::mirrorChoiceRequested, this, [this] {
+        // Keys: C = Copy, M = Move, A = Cancel (underlined mnemonics); Esc cancels.
+        QMenu menu(this);
+        QAction* cp = menu.addAction(QStringLiteral("&Copy (keep original)"));
+        QAction* mv = menu.addAction(QStringLiteral("&Move (mirror in place)"));
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("C&ancel"));
+        QAction* chosen = menu.exec(QCursor::pos());
+        if (chosen == cp) editor_->commitMirror(true);
+        else if (chosen == mv) editor_->commitMirror(false);
+        else editor_->cancelMirror();
+    });
     connect(editor_, &Editor::toolChanged, this, [this](ToolId t) {
         if (QAction* a = toolActions_.value(static_cast<int>(t), nullptr)) a->setChecked(true);
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint()); // applicable-commands help

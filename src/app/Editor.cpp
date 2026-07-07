@@ -444,6 +444,7 @@ void Editor::setTool(ToolId t) {
     offsetDistPts_.clear();
     offsetSourceId_.clear();
     clearCellSelection();
+    mirrorPending_ = false;
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -3627,10 +3628,24 @@ void Editor::handleModifyPress(const Vec2& p) {
                      : tool_ == ToolId::Scale
                          ? QStringLiteral("Scale: base point set — type a scale factor (e.g. 2, "
                                           "0.5) or click to set the size")
+                     : tool_ == ToolId::Mirror
+                         ? QStringLiteral("Mirror: pick the second point of the mirror line")
                          : QStringLiteral("%1: pick the destination").arg(toolLabel(tool_)));
         if (tool_ == ToolId::Scale) // pop the factor field at the picked base point
             emit dynamicPrompt(QStringLiteral("Scale factor"));
         emit changed();
+        return;
+    }
+
+    // Mirror doesn't apply on the second click: it stores the mirror line and asks
+    // the host for Copy / Move / Cancel (commitMirror / cancelMirror finish it).
+    if (tool_ == ToolId::Mirror) {
+        mirrorA_ = modifyPts_[0];
+        mirrorB_ = modifyPts_[1];
+        mirrorPending_ = true;
+        modifyPts_.clear();
+        emit changed(); // drop the rubber-band preview line
+        emit mirrorChoiceRequested();
         return;
     }
 
@@ -3645,10 +3660,6 @@ void Editor::handleModifyPress(const Vec2& p) {
         const Vec2 piv = modifyPts_[0];
         const double ang = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
         for (Entity* e : sel) rotateEntity(*e, piv, ang);
-        break;
-    }
-    case ToolId::Mirror: {
-        for (Entity* e : sel) mirrorEntity(*e, modifyPts_[0], modifyPts_[1]);
         break;
     }
     case ToolId::Scale: {
@@ -5354,6 +5365,42 @@ void Editor::cancelRightDrag() {
     rightDrag_ = false;
     rightDragGhost_.clear();
     emit overlayChanged();
+}
+
+void Editor::commitMirror(bool copy) {
+    if (!mirrorPending_ || !doc_) { cancelMirror(); return; }
+    mirrorPending_ = false;
+    auto sel = selectedEntities();
+    if (sel.empty()) { setTool(ToolId::Select); return; }
+    pushUndo();
+    if (copy) {
+        // Keep the originals; add a mirrored copy of each and select the copies.
+        std::vector<QString> newSel;
+        for (Entity* e : sel) {
+            Entity c = *e;
+            c.id = uid();
+            mirrorEntity(c, mirrorA_, mirrorB_);
+            newSel.push_back(c.id);
+            doc_->entities().push_back(std::move(c));
+        }
+        selected_ = newSel;
+        emit selectionChanged();
+    } else {
+        for (Entity* e : sel) mirrorEntity(*e, mirrorA_, mirrorB_);
+    }
+    doc_->setDirty(true);
+    emit message(copy ? QStringLiteral("Mirrored (copy)") : QStringLiteral("Mirrored"));
+    emit changed();
+    setTool(ToolId::Select);
+}
+
+void Editor::cancelMirror() {
+    if (!mirrorPending_) return;
+    mirrorPending_ = false;
+    modifyPts_.clear();
+    emit message(QStringLiteral("Mirror cancelled"));
+    emit changed();
+    setTool(ToolId::Select);
 }
 
 void Editor::setGeometryValue(const QString& key, double v) {

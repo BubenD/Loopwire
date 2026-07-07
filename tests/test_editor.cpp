@@ -119,6 +119,57 @@ int run_editor_tests() {
         check(near(e.a.x, -2.0) && near(e.b.x, -5.0), "mirror: across Y");
     }
 
+    // --- Mirror tool: after picking the line it waits for a Copy/Move/Cancel choice.
+    {
+        Document doc; doc.entities().clear();
+        Editor ed; ed.setDocument(&doc); noSnap(ed);
+        ed.setTool(ToolId::Line);
+        ed.onPointerPress({2, 3}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({5, 7}, Qt::LeftButton, Qt::NoModifier);
+        ed.selectAll();
+        // Pick a vertical mirror line (x=0): the second click must NOT apply yet.
+        ed.setTool(ToolId::Mirror);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, 1}, Qt::LeftButton, Qt::NoModifier);
+        check(doc.entities().size() == 1 && near(doc.entities()[0].a.x, 2.0),
+              "mirror menu: second click defers — original untouched until a choice");
+        // Copy: original stays, a mirrored copy is added.
+        ed.commitMirror(true);
+        check(doc.entities().size() == 2, "mirror menu: Copy adds a mirrored duplicate");
+        const Entity& orig = doc.entities()[0];
+        const Entity& copy = doc.entities()[1];
+        check(near(orig.a.x, 2.0) && near(copy.a.x, -2.0) && near(copy.b.x, -5.0),
+              "mirror menu: Copy keeps the original and mirrors the copy");
+
+        // Move: mirror the selection in place (no new entity).
+        Document doc2; doc2.entities().clear();
+        Editor ed2; ed2.setDocument(&doc2); noSnap(ed2);
+        ed2.setTool(ToolId::Line);
+        ed2.onPointerPress({2, 3}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({5, 7}, Qt::LeftButton, Qt::NoModifier);
+        ed2.selectAll();
+        ed2.setTool(ToolId::Mirror);
+        ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({0, 1}, Qt::LeftButton, Qt::NoModifier);
+        ed2.commitMirror(false);
+        check(doc2.entities().size() == 1 && near(doc2.entities()[0].a.x, -2.0),
+              "mirror menu: Move mirrors in place (no duplicate)");
+
+        // Cancel: nothing changes.
+        Document doc3; doc3.entities().clear();
+        Editor ed3; ed3.setDocument(&doc3); noSnap(ed3);
+        ed3.setTool(ToolId::Line);
+        ed3.onPointerPress({2, 3}, Qt::LeftButton, Qt::NoModifier);
+        ed3.onPointerPress({5, 7}, Qt::LeftButton, Qt::NoModifier);
+        ed3.selectAll();
+        ed3.setTool(ToolId::Mirror);
+        ed3.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed3.onPointerPress({0, 1}, Qt::LeftButton, Qt::NoModifier);
+        ed3.cancelMirror();
+        check(doc3.entities().size() == 1 && near(doc3.entities()[0].a.x, 2.0),
+              "mirror menu: Cancel leaves everything unchanged");
+    }
+
     // --- Delete removes selection.
     {
         Document doc;

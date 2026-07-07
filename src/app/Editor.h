@@ -183,6 +183,9 @@ public:
     void commitRightDrag(bool copy);        // copy=false -> move the originals
     void cancelRightDrag();
     bool isRightDragging() const { return rightDrag_; }
+    // Mirror: after the mirror line is picked, the host offers Copy / Move / Cancel.
+    void commitMirror(bool copy);           // copy=false -> mirror the originals in place
+    void cancelMirror();
     // Toggle a mirror of the dragged set about the catch location (X axis = a
     // horizontal mirror line, Y axis = vertical). Text mirrors position only.
     void rightDragMirror(bool xAxis);
@@ -321,6 +324,9 @@ signals:
                                 double cellW, double cellH);
     // A table cell was selected/deselected — the host shows/hides the Table Cell tab.
     void cellSelectionChanged();
+    // The mirror line was picked — the host pops a Copy / Move / Cancel menu, then
+    // calls commitMirror(copy) or cancelMirror().
+    void mirrorChoiceRequested();
     // Ask the canvas to pop the flying input field at the cursor, pre-labelled,
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.
@@ -495,6 +501,10 @@ private:
 
     // Modify command state: collected reference points.
     std::vector<Vec2> modifyPts_;
+
+    // Mirror-decision state: the picked mirror line, pending a Copy/Move/Cancel choice.
+    bool mirrorPending_ = false;
+    Vec2 mirrorA_, mirrorB_;
 
     // Offset tool state.
     double offsetDist_ = 0.0;             // the offset distance once set
