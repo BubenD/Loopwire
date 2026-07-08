@@ -10,6 +10,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <functional>
 
 class QLineEdit;
 class QCompleter;
@@ -147,6 +148,12 @@ protected:
     // on the next paint. Cursor-move previews skip this for a lag-free overlay.
     void invalidateScene();
 
+public:
+    // Begin an interactive rubber-band capture of a rectangular world region (used by
+    // "Export PDF (window)"). The next left-drag defines the window; on release `onDone`
+    // is called with its two opposite world corners. Esc cancels (onDone not called).
+    void beginWindowCapture(std::function<void(Vec2, Vec2)> onDone);
+
 private:
     ViewTransform transform() const;
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
@@ -186,6 +193,13 @@ private:
 
     bool panning_ = false;
     QPoint lastPanPos_;
+    // Rubber-band window capture (Export PDF window). captureActive_ becomes true once
+    // the drag starts; the two corners are in canvas-local pixels.
+    bool capturing_ = false;
+    bool captureActive_ = false;
+    QPoint captureStart_;
+    QPoint captureCur_;
+    std::function<void(Vec2, Vec2)> captureCb_;
     // Right-button drag (move/copy via drop menu) vs plain right-click (menu).
     bool rightDown_ = false;
     bool rightDragging_ = false;

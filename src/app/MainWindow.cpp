@@ -32,6 +32,7 @@
 #include <QFontComboBox>
 #include <QFontDatabase>
 #include <QFrame>
+#include <QJsonArray>
 #include <QJsonValue>
 #include <QKeyEvent>
 #include <QSignalBlocker>
@@ -64,6 +65,12 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPdfWriter>
+#include <QPageSize>
+#include <QPageLayout>
+#include <QMarginsF>
+#include <QFile>
+#include <QTextStream>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -2122,6 +2129,21 @@ void MainWindow::buildRibbon() {
         fb(QStringLiteral("Save DWX"), [this] { saveDwxAs(); }, 1, 0);
         fb(QStringLiteral("Export DXF"), [this] { exportDxfAs(); }, 1, 1);
         addGroup(lay, QStringLiteral("File"), fileW);
+        // Print / export to PDF: whole drawing, or a dragged window.
+        auto* pdfW = new QWidget(page);
+        auto* pg = new QGridLayout(pdfW);
+        pg->setContentsMargins(0, 0, 0, 0);
+        pg->setSpacing(2);
+        auto pb = [&](const QString& t, std::function<void()> fn, int r, int c) {
+            auto* b = new QToolButton(pdfW);
+            b->setText(t);
+            b->setMinimumWidth(96);
+            connect(b, &QToolButton::clicked, this, fn);
+            pg->addWidget(b, r, c);
+        };
+        pb(QStringLiteral("PDF (drawing)"), [this] { exportPdf(false); }, 0, 0);
+        pb(QStringLiteral("PDF (window)"), [this] { exportPdf(true); }, 1, 0);
+        addGroup(lay, QStringLiteral("Print"), pdfW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Output"));
     }
@@ -2697,6 +2719,18 @@ void MainWindow::buildTableCellRibbonTab() {
         addGroup(QStringLiteral("Cell Styles"), w);
     }
 
+    // ---- Data: export the table to CSV ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* csv = bigButton(w, QStringLiteral("Export\nCSV"));
+        connect(csv, &QToolButton::clicked, this, [this] { exportTableCsv(); });
+        g->addWidget(csv, 0, 0);
+        addGroup(QStringLiteral("Data"), w);
+    }
+
     // ---- Close: dismiss the cell selection ----
     {
         auto* w = new QWidget(tableCellTab_);
@@ -3162,6 +3196,8 @@ void MainWindow::buildMenus() {
     fileMenu->addAction(QStringLiteral("&Open DWX/DXF..."), QKeySequence::Open, this, [this] { openDrawing(); });
     fileMenu->addAction(QStringLiteral("&Save DWX..."), QKeySequence::Save, this, [this] { saveDwxAs(); });
     fileMenu->addAction(QStringLiteral("&Export DXF..."), this, [this] { exportDxfAs(); });
+    fileMenu->addAction(QStringLiteral("Export &PDF..."), this, [this] { exportPdf(false); });
+    fileMenu->addAction(QStringLiteral("Export PDF (&window)..."), this, [this] { exportPdf(true); });
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("&Options..."), this, [this] { showOptions(); });
     fileMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
@@ -4648,6 +4684,9 @@ void MainWindow::buildCommands() {
         {{"open"}, "File", "Open a .dwx / .dxf", [this] { openDrawing(); }},
         {{"save", "qsave"}, "File", "Save DWX", [this] { saveDwxAs(); }},
         {{"export", "dxfout"}, "File", "Export DXF", [this] { exportDxfAs(); }},
+        {{"pdf", "pdfout", "print"}, "File", "Export the drawing to PDF", [this] { exportPdf(false); }},
+        {{"pdfwindow", "pdfw"}, "File", "Export a dragged window to PDF", [this] { exportPdf(true); }},
+        {{"csv", "csvout"}, "File", "Export the selected table to CSV", [this] { exportTableCsv(); }},
         // Help
         {{"help", "?"}, "Help", "Show this command list", [this] { showHelp(); }},
     };
@@ -5075,6 +5114,139 @@ void MainWindow::exportDxfAs() {
         QMessageBox::warning(this, QStringLiteral("Export failed"), err);
         return;
     }
+    statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
+}
+
+void MainWindow::exportPdf(bool windowSelect) {
+    if (!doc_) return;
+    if (windowSelect) {
+        statusBar()->showMessage(
+            QStringLiteral("Drag a window on the drawing to print to PDF (Esc to cancel)"));
+        canvas_->beginWindowCapture([this](Vec2 a, Vec2 b) { exportPdfRegion(a, b); });
+        return;
+    }
+    // Whole drawing: the bounds of every visible entity (plus a small margin).
+    Bounds ext;
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+        const Bounds b = e.bounds();
+        if (b.valid) { ext.expand(b.min); ext.expand(b.max); }
+    }
+    if (!ext.valid) {
+        QMessageBox::information(this, QStringLiteral("Export PDF"),
+                                 QStringLiteral("The drawing is empty — nothing to export."));
+        return;
+    }
+    const double mx = std::max(1.0, ext.width() * 0.05), my = std::max(1.0, ext.height() * 0.05);
+    exportPdfRegion({ext.min.x - mx, ext.min.y - my}, {ext.max.x + mx, ext.max.y + my});
+}
+
+void MainWindow::exportPdfRegion(const Vec2& a, const Vec2& b) {
+    if (!doc_) return;
+    const double wMinX = std::min(a.x, b.x), wMaxX = std::max(a.x, b.x);
+    const double wMinY = std::min(a.y, b.y), wMaxY = std::max(a.y, b.y);
+    const double worldW = wMaxX - wMinX, worldH = wMaxY - wMinY;
+    if (worldW < 1e-9 || worldH < 1e-9) return;
+
+    QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export PDF"), QString(),
+                                                QStringLiteral("PDF (*.pdf)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(".pdf", Qt::CaseInsensitive)) path += ".pdf";
+
+    QPdfWriter pdf(path);
+    pdf.setResolution(300);
+    // Landscape or portrait page to best fit the window's aspect ratio.
+    pdf.setPageSize(QPageSize(QPageSize::A4));
+    pdf.setPageOrientation(worldW >= worldH ? QPageLayout::Landscape
+                                            : QPageLayout::Portrait);
+    pdf.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout::Millimeter);
+
+    QPainter p(&pdf);
+    if (!p.isActive()) {
+        QMessageBox::warning(this, QStringLiteral("Export failed"),
+                             QStringLiteral("Could not open the PDF for writing."));
+        return;
+    }
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const int pw = p.viewport().width(), ph = p.viewport().height();
+
+    // Fit the world window into the page, preserving aspect ratio and centring it.
+    const double scale = std::min(pw / worldW, ph / worldH);
+    ViewTransform vt;
+    vt.view.scale = scale;
+    vt.view.x = pw / 2.0 - (wMinX + wMaxX) / 2.0 * scale;
+    vt.view.y = ph / 2.0 + (wMinY + wMaxY) / 2.0 * scale; // y is flipped (screen y-down)
+
+    // WYSIWYG: paint the drawing exactly as shown on the canvas (dark background), so
+    // white/ByLayer geometry stays visible and colours match the screen.
+    const QColor bg = EntityRenderer::backgroundColor();
+    p.fillRect(0, 0, pw, ph, bg);
+    p.setClipRect(0, 0, pw, ph);
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+        const Bounds eb = e.bounds();
+        if (eb.valid && (eb.max.x < wMinX || eb.min.x > wMaxX || eb.max.y < wMinY ||
+                         eb.min.y > wMaxY))
+            continue; // outside the print window
+        EntityRenderer::draw(p, e, *doc_, vt);
+    }
+    p.end();
+    statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
+}
+
+void MainWindow::exportTableCsv() {
+    if (!doc_) return;
+    // Target: the table of the selected cell, else a single selected table entity.
+    const Entity* table = nullptr;
+    if (!editor_->selectedCellTable().isEmpty()) {
+        for (const auto& e : doc_->entities())
+            if (e.id == editor_->selectedCellTable()) { table = &e; break; }
+    }
+    if (!table && editor_->selection().size() == 1) {
+        for (const auto& e : doc_->entities())
+            if (e.id == editor_->selection().front() && e.meta.value("table").toBool()) {
+                table = &e;
+                break;
+            }
+    }
+    if (!table) {
+        QMessageBox::information(
+            this, QStringLiteral("Export CSV"),
+            QStringLiteral("Select a table (or a table cell) first, then export to CSV."));
+        return;
+    }
+    const int rows = table->meta.value("rows").toInt();
+    const int cols = table->meta.value("cols").toInt();
+    if (rows <= 0 || cols <= 0) return;
+    const QJsonArray cells = table->meta.value("cells").toArray();
+
+    QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export table to CSV"),
+                                                QString(), QStringLiteral("CSV (*.csv)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(".csv", Qt::CaseInsensitive)) path += ".csv";
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("Export failed"),
+                             QStringLiteral("Could not open the file for writing."));
+        return;
+    }
+    // Escape a field per RFC 4180: wrap in quotes if it has a comma/quote/newline.
+    auto esc = [](QString v) {
+        if (v.contains('"')) v.replace('"', QStringLiteral("\"\""));
+        if (v.contains(',') || v.contains('"') || v.contains('\n') || v.contains('\r'))
+            return QStringLiteral("\"%1\"").arg(v);
+        return v;
+    };
+    QTextStream out(&f);
+    for (int r = 0; r < rows; ++r) {
+        QStringList row;
+        for (int c = 0; c < cols; ++c) {
+            const int idx = r * cols + c;
+            row << esc(idx < cells.size() ? cells[idx].toString() : QString());
+        }
+        out << row.join(',') << "\r\n";
+    }
+    f.close();
     statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
 }
 

@@ -118,6 +118,11 @@ private:
     void openDrawing();
     void saveDwxAs();
     void exportDxfAs();
+    // Export the drawing to PDF. windowSelect=true first lets the user drag a
+    // rectangular print window on the canvas; otherwise the full drawing extents.
+    void exportPdf(bool windowSelect);
+    void exportPdfRegion(const Vec2& a, const Vec2& b); // render a world rect to a PDF page
+    void exportTableCsv(); // export the selected table's cells to a .csv file
 
     // Rich text editor dialog (font / size / bold / italic / case; justification,
     // line spacing, bullets/numbering; multiline for MText). Returns false if

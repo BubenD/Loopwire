@@ -359,10 +359,21 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
 
     QPainter p(this);
     // During a pan the cache is blitted shifted (no per-tick rebuild); 0 otherwise.
+    // Fill the whole viewport with the canvas colour first so the strip exposed on the
+    // leading edge by the shift shows the drawing background, not the widget's grey.
+    if (!sceneOffset_.isNull()) p.fillRect(rect(), bgColor_);
     p.drawPixmap(sceneOffset_, sceneCache_);
     if (doc_ && editor_) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
+    }
+    // Print-window rubber band (Export PDF window): a dashed rectangle with a light fill.
+    if (capturing_ && captureActive_) {
+        const QRectF r = QRectF(QPointF(captureStart_), QPointF(captureCur_)).normalized();
+        p.setPen(QPen(QColor("#2bd0ff"), 1, Qt::DashLine));
+        p.setBrush(QColor(43, 208, 255, 32));
+        p.drawRect(r);
+        p.setBrush(Qt::NoBrush);
     }
     // The crosshair is painted by the always-on-top `crosshairTop_` overlay (so it
     // stays visible above the inline text editor), not here.
@@ -452,7 +463,25 @@ void CanvasWidget::contextMenuEvent(QContextMenuEvent* e) {
     e->accept();
 }
 
+void CanvasWidget::beginWindowCapture(std::function<void(Vec2, Vec2)> onDone) {
+    capturing_ = true;
+    captureActive_ = false;
+    captureCb_ = std::move(onDone);
+    setCursor(Qt::CrossCursor);
+    setFocus(Qt::OtherFocusReason);
+    update();
+}
+
 void CanvasWidget::mousePressEvent(QMouseEvent* e) {
+    // Rubber-band window capture (Export PDF window): the left press anchors the rect.
+    if (capturing_ && e->button() == Qt::LeftButton) {
+        captureActive_ = true;
+        captureStart_ = e->pos();
+        captureCur_ = e->pos();
+        update();
+        e->accept();
+        return;
+    }
     // A click on the bare canvas while the on-canvas text editor is open commits it
     // (clicks on the editor/toolbar children are handled by those widgets).
     if (inlineEditing_ && e->button() == Qt::LeftButton) {
@@ -488,6 +517,11 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
 
 void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     lastMousePos_ = e->pos();
+    if (capturing_) {
+        if (captureActive_) { captureCur_ = e->pos(); update(); }
+        e->accept();
+        return; // no drawing/selection while capturing a print window
+    }
     if (panning_ && doc_) {
         const QPoint delta = e->pos() - lastPanPos_;
         lastPanPos_ = e->pos();
@@ -532,6 +566,21 @@ void CanvasWidget::leaveEvent(QEvent* e) {
 }
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if (capturing_ && e->button() == Qt::LeftButton) {
+        const ViewTransform vt = transform();
+        const Vec2 a = vt.toWorld(QPointF(captureStart_));
+        const Vec2 b = vt.toWorld(QPointF(captureActive_ ? e->pos() : captureStart_));
+        auto cb = captureCb_;
+        capturing_ = false;
+        captureActive_ = false;
+        captureCb_ = nullptr;
+        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        update();
+        // Ignore a zero-area window (a click without a drag).
+        if (cb && std::abs(b.x - a.x) > 1e-6 && std::abs(b.y - a.y) > 1e-6) cb(a, b);
+        e->accept();
+        return;
+    }
     if (panning_ && e->button() == Qt::MiddleButton) {
         panning_ = false;
         setCursor(inlineEditing_ ? Qt::ArrowCursor
@@ -572,6 +621,16 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     //     (direct distance entry, "g" gap, "@dx,dy", commands, ...);
     //   - when idle with the crosshair on the canvas: a letter starts a command
     //     (AutoCAD-style command entry at the cursor).
+    // Esc aborts an in-progress print-window capture.
+    if (capturing_ && e->key() == Qt::Key_Escape) {
+        capturing_ = false;
+        captureActive_ = false;
+        captureCb_ = nullptr;
+        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        update();
+        e->accept();
+        return;
+    }
     if (editor_) {
         // During a right-button drag, X / Y mirror the dragged set (about the catch
         // point): X mirrors across the Y axis (flips X), Y mirrors across the X axis
