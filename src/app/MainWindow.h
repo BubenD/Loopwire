@@ -29,6 +29,7 @@ class QFontComboBox;
 class QDoubleSpinBox;
 class QSpinBox;
 class QButtonGroup;
+class QHBoxLayout;
 
 namespace Edraw_Desktop {
 
@@ -112,6 +113,9 @@ private:
     void promptChamferDistance();
 
     void showConnectorDialog();
+    // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
+    // Text / Actions), mirroring the Edraw web connector builder.
+    void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
 
     void newDrawing();

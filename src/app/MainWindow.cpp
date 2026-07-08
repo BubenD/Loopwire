@@ -2095,10 +2095,13 @@ void MainWindow::buildRibbon() {
         ribbon_->addTab(page, QStringLiteral("Harness build"));
     }
 
-    // ---- SCHEMATIC BUILD / PARAMETRIC (placeholders for now) ----
+    // ---- SCHEMATIC BUILD: the AutoCAD/Edraw "Connector build" ribbon ----
     {
         auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Symbols"), toolRow({ToolId::Connector, ToolId::Wire}));
+        addGroup(lay, QStringLiteral("Place"),
+                 toolRow({ToolId::Connector, ToolId::Wire, ToolId::NetLabel,
+                          ToolId::NotConnected}));
+        buildConnectorBuildTab(page, lay);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
@@ -4823,6 +4826,182 @@ void MainWindow::promptChamferDistance() {
 }
 
 // ---- Harness dialogs -------------------------------------------------------
+
+void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
+    const ConnectorSpec init = editor_->connectorSpec();
+    auto addGroup = [&](const QString& title, QWidget* content) {
+        lay->addWidget(ribbonGroup(title, content));
+    };
+    auto label = [&](QWidget* parent, const QString& t) {
+        auto* l = new QLabel(t, parent);
+        l->setStyleSheet(QStringLiteral("color:#c9ccd1;background:transparent;"));
+        return l;
+    };
+
+    // ---- Identity: Designator / Part number ----
+    auto* desEdit = new QLineEdit(init.designator, page);
+    desEdit->setMaximumWidth(90);
+    desEdit->setPlaceholderText(QStringLiteral("J1"));
+    auto* pnEdit = new QLineEdit(init.partNumber, page);
+    pnEdit->setMaximumWidth(90);
+    pnEdit->setPlaceholderText(QStringLiteral("P/N"));
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0); g->setSpacing(2);
+        g->addWidget(label(w, QStringLiteral("Des.")), 0, 0);
+        g->addWidget(desEdit, 0, 1);
+        g->addWidget(label(w, QStringLiteral("P/N")), 1, 0);
+        g->addWidget(pnEdit, 1, 1);
+        addGroup(QStringLiteral("Identity"), w);
+    }
+
+    // ---- Pins: Qty / Label style / Order / Pitch / Length ----
+    auto* qtySpin = new QSpinBox(page);
+    qtySpin->setRange(1, 128); qtySpin->setValue(init.pinCount); qtySpin->setMaximumWidth(60);
+    auto* lblCombo = new QComboBox(page);
+    lblCombo->addItem(QStringLiteral("Numbers"), QStringLiteral("numbers"));
+    lblCombo->addItem(QStringLiteral("Letters"), QStringLiteral("letters"));
+    lblCombo->setCurrentIndex(std::max(0, lblCombo->findData(init.annotation)));
+    auto* ordCombo = new QComboBox(page);
+    ordCombo->addItem(QStringLiteral("Top"), QStringLiteral("top"));
+    ordCombo->addItem(QStringLiteral("Bottom"), QStringLiteral("bottom"));
+    ordCombo->setCurrentIndex(std::max(0, ordCombo->findData(init.pinOrder)));
+    auto* pitchSpin = new QDoubleSpinBox(page);
+    pitchSpin->setRange(1, 500); pitchSpin->setValue(init.pitch); pitchSpin->setMaximumWidth(70);
+    auto* lenSpin = new QDoubleSpinBox(page);
+    lenSpin->setRange(1, 1000); lenSpin->setValue(init.pinLength); lenSpin->setMaximumWidth(70);
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0); g->setSpacing(2);
+        g->addWidget(label(w, QStringLiteral("Qty")), 0, 0);   g->addWidget(qtySpin, 0, 1);
+        g->addWidget(label(w, QStringLiteral("Lbl")), 0, 2);   g->addWidget(lblCombo, 0, 3);
+        g->addWidget(label(w, QStringLiteral("Ord")), 1, 2);   g->addWidget(ordCombo, 1, 3);
+        g->addWidget(label(w, QStringLiteral("Pitch")), 0, 4); g->addWidget(pitchSpin, 0, 5);
+        g->addWidget(label(w, QStringLiteral("Len")), 1, 4);   g->addWidget(lenSpin, 1, 5);
+        addGroup(QStringLiteral("Pins"), w);
+    }
+
+    // ---- Body: Rect mode / W / H / Associative ----
+    auto* rectCombo = new QComboBox(page);
+    rectCombo->addItem(QStringLiteral("Dynamic"), QStringLiteral("dynamic"));
+    rectCombo->addItem(QStringLiteral("Custom"), QStringLiteral("custom"));
+    rectCombo->setCurrentIndex(std::max(0, rectCombo->findData(init.rectMode)));
+    auto* wSpin = new QDoubleSpinBox(page);
+    wSpin->setRange(1, 2000); wSpin->setValue(init.rectWidth); wSpin->setMaximumWidth(70);
+    auto* hSpin = new QDoubleSpinBox(page);
+    hSpin->setRange(1, 5000); hSpin->setValue(init.rectHeight); hSpin->setMaximumWidth(70);
+    auto* assoc = new QCheckBox(QStringLiteral("Associative"), page);
+    assoc->setChecked(init.associative);
+    assoc->setStyleSheet(QStringLiteral("color:#c9ccd1;background:transparent;"));
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0); g->setSpacing(2);
+        g->addWidget(label(w, QStringLiteral("Rect")), 0, 0); g->addWidget(rectCombo, 0, 1);
+        g->addWidget(label(w, QStringLiteral("W")), 1, 0);    g->addWidget(wSpin, 1, 1);
+        g->addWidget(label(w, QStringLiteral("H")), 1, 2);    g->addWidget(hSpin, 1, 3);
+        g->addWidget(assoc, 0, 2, 1, 2);
+        addGroup(QStringLiteral("Body"), w);
+    }
+
+    // ---- Text: per-role font + size (pin / designator / part number) ----
+    auto* pinFont = new QFontComboBox(page); pinFont->setMaximumWidth(120);
+    pinFont->setCurrentFont(QFont(init.pinFont));
+    auto* pinSize = new QDoubleSpinBox(page); pinSize->setRange(1, 200);
+    pinSize->setValue(init.pinSize); pinSize->setMaximumWidth(56);
+    auto* desFont = new QFontComboBox(page); desFont->setMaximumWidth(120);
+    desFont->setCurrentFont(QFont(init.desFont));
+    auto* desSize = new QDoubleSpinBox(page); desSize->setRange(1, 200);
+    desSize->setValue(init.desSize); desSize->setMaximumWidth(56);
+    auto* pnFont = new QFontComboBox(page); pnFont->setMaximumWidth(120);
+    pnFont->setCurrentFont(QFont(init.pnFont));
+    auto* pnSize = new QDoubleSpinBox(page); pnSize->setRange(1, 200);
+    pnSize->setValue(init.pnSize); pnSize->setMaximumWidth(56);
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0); g->setSpacing(2);
+        g->addWidget(label(w, QStringLiteral("Pin")), 0, 0);  g->addWidget(pinFont, 0, 1); g->addWidget(pinSize, 0, 2);
+        g->addWidget(label(w, QStringLiteral("Des.")), 1, 0); g->addWidget(desFont, 1, 1); g->addWidget(desSize, 1, 2);
+        g->addWidget(label(w, QStringLiteral("P/N")), 2, 0);  g->addWidget(pnFont, 2, 1); g->addWidget(pnSize, 2, 2);
+        addGroup(QStringLiteral("Text"), w);
+    }
+
+    // Gather every widget into a spec and store it as the placement default; when a
+    // connector is selected, live-apply so edits show immediately.
+    auto apply = [=, this] {
+        ConnectorSpec s = editor_->connectorSpec();
+        s.designator = desEdit->text();
+        s.partNumber = pnEdit->text();
+        s.pinCount = qtySpin->value();
+        s.annotation = lblCombo->currentData().toString();
+        s.pinOrder = ordCombo->currentData().toString();
+        s.pitch = pitchSpin->value();
+        s.pinLength = lenSpin->value();
+        s.rectMode = rectCombo->currentData().toString();
+        s.rectWidth = wSpin->value();
+        s.rectHeight = hSpin->value();
+        s.associative = assoc->isChecked();
+        s.pinFont = pinFont->currentFont().family();
+        s.pinSize = pinSize->value();
+        s.desFont = desFont->currentFont().family();
+        s.desSize = desSize->value();
+        s.pnFont = pnFont->currentFont().family();
+        s.pnSize = pnSize->value();
+        s.textSize = std::max({s.pinSize, s.desSize, s.pnSize});
+        regenPinLabels(s);
+        const bool custom = s.rectMode == QLatin1String("custom");
+        wSpin->setEnabled(custom);
+        hSpin->setEnabled(custom);
+        // If a connector is selected, edit it in place; otherwise set the default.
+        if (!editor_->selectedConnectorId().isEmpty()) {
+            editor_->applyConnectorSpecToSelection(s);
+            canvas_->update();
+        } else {
+            editor_->connectorSpec() = s;
+        }
+    };
+    for (QLineEdit* le : {desEdit, pnEdit})
+        connect(le, &QLineEdit::textChanged, this, [apply] { apply(); });
+    connect(qtySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [apply] { apply(); });
+    for (QComboBox* cb : {lblCombo, ordCombo, rectCombo})
+        connect(cb, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [apply] { apply(); });
+    for (QDoubleSpinBox* sp : {pitchSpin, lenSpin, wSpin, hSpin, pinSize, desSize, pnSize})
+        connect(sp, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [apply] { apply(); });
+    for (QFontComboBox* fc : {pinFont, desFont, pnFont})
+        connect(fc, &QFontComboBox::currentFontChanged, this, [apply] { apply(); });
+    connect(assoc, &QCheckBox::toggled, this, [apply] { apply(); });
+
+    // ---- Actions: Auto scale / Place connector ----
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0); g->setSpacing(2);
+        auto* autoBtn = new QToolButton(w);
+        autoBtn->setText(QStringLiteral("Auto scale"));
+        autoBtn->setMinimumWidth(96);
+        autoBtn->setToolTip(QStringLiteral("Switch the body to Dynamic (auto-fit to the pins)"));
+        connect(autoBtn, &QToolButton::clicked, this,
+                [rectCombo] { rectCombo->setCurrentIndex(0); }); // -> Dynamic -> apply()
+        auto* placeBtn = new QToolButton(w);
+        placeBtn->setText(QStringLiteral("Place connector"));
+        placeBtn->setMinimumWidth(110);
+        placeBtn->setStyleSheet(QStringLiteral(
+            "QToolButton{background:#294e74;color:#eaf2ff;border:1px solid #3d8bfd;"
+            "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#31608f;}"));
+        connect(placeBtn, &QToolButton::clicked, this, [this, apply] {
+            apply();
+            editor_->setTool(ToolId::Connector);
+            statusBar()->showMessage(QStringLiteral("Click on the drawing to place the connector"));
+        });
+        g->addWidget(autoBtn, 0, 0);
+        g->addWidget(placeBtn, 1, 0);
+        addGroup(QStringLiteral("Actions"), w);
+    }
+    apply(); // sync W/H enabled state + store the initial spec
+}
 
 void MainWindow::showConnectorDialog() {
     ConnectorSpec spec = editor_->connectorSpec();

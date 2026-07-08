@@ -50,6 +50,43 @@ int run_harness_tests() {
               "connector: meta round-trip");
     }
 
+    // Pin label annotation (numbers/letters) + order (top/bottom).
+    {
+        ConnectorSpec s = defaultConnectorSpec(4);
+        check(s.pins.size() == 4 && s.pins[0] == "1" && s.pins[3] == "4",
+              "connector: default labels are numbers 1..N top-down");
+        s.annotation = "letters"; regenPinLabels(s);
+        check(s.pins[0] == "A" && s.pins[3] == "D", "connector: letters annotation A..D");
+        s.annotation = "numbers"; s.pinOrder = "bottom"; regenPinLabels(s);
+        check(s.pins[0] == "4" && s.pins[3] == "1", "connector: bottom order reverses numbering");
+    }
+
+    // Body mode: dynamic auto-fits (width 40); custom honours W/H.
+    {
+        ConnectorSpec s = defaultConnectorSpec(4);
+        s.rectMode = "dynamic"; s.rectWidth = 999; // width ignored in dynamic
+        ConnectorGeometry gd = connectorGeometry({0, 0}, s);
+        check(near(gd.effectiveWidth, 40.0), "connector: dynamic body is 40 wide");
+        s.rectMode = "custom"; s.rectWidth = 60; s.rectHeight = 120;
+        ConnectorGeometry gc = connectorGeometry({0, 0}, s);
+        check(near(gc.effectiveWidth, 60.0) && near(gc.effectiveHeight, 120.0),
+              "connector: custom body honours W/H");
+    }
+
+    // New build options survive the meta round-trip.
+    {
+        ConnectorSpec s = defaultConnectorSpec(5);
+        s.annotation = "letters"; s.pinOrder = "bottom"; s.rectMode = "custom";
+        s.associative = false; s.pinSize = 7; s.desSize = 12; s.pnSize = 9;
+        s.pinFont = "Arial";
+        QJsonObject meta; writeConnectorSpec(meta, s);
+        ConnectorSpec b = connectorSpecFromMeta(meta);
+        check(b.annotation == "letters" && b.pinOrder == "bottom" && b.rectMode == "custom" &&
+                  !b.associative && near(b.pinSize, 7) && near(b.desSize, 12) &&
+                  near(b.pnSize, 9) && b.pinFont == "Arial",
+              "connector: build options round-trip through meta");
+    }
+
     // Editor places connector + wire, BOM reflects them.
     {
         Document doc;

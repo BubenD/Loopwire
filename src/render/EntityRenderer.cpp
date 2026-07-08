@@ -1115,17 +1115,38 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Body.
         const QPointF lo = vt.toScreen(g.rectMin), hi = vt.toScreen(g.rectMax);
         p.drawRect(QRectF(lo, hi).normalized());
-        // Pins (fork + stub) and labels.
+        // Pins: a small ">" fork at the body edge, then the wire stub.
+        const double xDir = spec.mirrorX ? -1.0 : 1.0;
+        const double fork = std::min(8.0, g.effectiveWidth * 0.28);
+        const double forkY = std::min(spec.pitch * 0.36, spec.textSize * 0.85);
         for (int i = 0; i < spec.pinCount; ++i) {
-            p.drawLine(vt.toScreen(g.pinTip[i]), vt.toScreen(g.pinEnd[i]));
-            const QString lbl = i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
-            drawWorldText(p, vt.toScreen(g.pinLabelPos[i]) + QPointF(-6, 3), lbl,
-                          spec.textSize * 0.7, vt.scale(), color);
+            const Vec2 tip = g.pinTip[i];
+            const Vec2 root{tip.x - xDir * fork, tip.y};
+            p.drawLine(vt.toScreen({root.x, tip.y + forkY}), vt.toScreen(tip));
+            p.drawLine(vt.toScreen({root.x, tip.y - forkY}), vt.toScreen(tip));
+            p.drawLine(vt.toScreen(tip), vt.toScreen(g.pinEnd[i]));
         }
-        drawWorldText(p, vt.toScreen(g.designatorPos), spec.designator, spec.textSize,
-                      vt.scale(), color, Qt::AlignHCenter);
-        drawWorldText(p, vt.toScreen(g.partPos), spec.partNumber, spec.textSize * 0.8,
-                      vt.scale(), color);
+        // Pin labels (own font/size).
+        const QFont baseFont = p.font();
+        {
+            QFont f = baseFont; f.setFamily(spec.pinFont); p.setFont(f);
+            for (int i = 0; i < spec.pinCount; ++i) {
+                const QString lbl = i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
+                drawWorldText(p, vt.toScreen(g.pinLabelPos[i]), lbl, spec.pinSize * 0.7, vt.scale(),
+                              color, Qt::AlignHCenter | Qt::AlignVCenter);
+            }
+        }
+        {
+            QFont f = baseFont; f.setFamily(spec.desFont); p.setFont(f);
+            drawWorldText(p, vt.toScreen(g.designatorPos), spec.designator, spec.desSize, vt.scale(),
+                          color, Qt::AlignHCenter);
+        }
+        {
+            QFont f = baseFont; f.setFamily(spec.pnFont); p.setFont(f);
+            drawWorldText(p, vt.toScreen(g.partPos), spec.partNumber, spec.pnSize * 0.8, vt.scale(),
+                          color);
+        }
+        p.setFont(baseFont);
         p.setPen(pen);
         break;
     }

@@ -29,15 +29,32 @@ struct ConnectorSpec {
     double pitch = 15.0;      // spacing between pins (world units)
     double pinLength = 40.0;  // pin stub length
     double rectWidth = 40.0;
-    double rectHeight = 0.0;  // 0 => auto from pinCount * pitch
-    double textSize = 10.0;
+    double rectHeight = 84.0; // custom body height (dynamic mode auto-computes)
+    double textSize = 10.0;   // general size (== max of the per-text sizes)
     bool mirrorX = false;     // false: pins exit right; true: exit left
     QStringList pins;         // per-pin labels (size == pinCount)
+    // Web-parity build options (Schematic build "Connector build" ribbon):
+    QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"
+    QString pinOrder = QStringLiteral("top");       // "top" (1 at top) | "bottom"
+    QString rectMode = QStringLiteral("dynamic");   // "dynamic" (auto H, W=40) | "custom"
+    bool associative = true;                        // re-editable as a group
+    QString pinFont = QStringLiteral("Segoe UI");
+    QString desFont = QStringLiteral("Segoe UI");
+    QString pnFont = QStringLiteral("Segoe UI");
+    double pinSize = 10.0;
+    double desSize = 10.0;
+    double pnSize = 10.0;
 };
 
 ConnectorSpec defaultConnectorSpec(int pinCount = 4);
 ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta);
 void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec);
+
+// Auto pin label for pin `index` from the annotation ("numbers"/"letters") and order
+// ("top"/"bottom"): e.g. numbers top -> "1","2",…; letters -> "A","B",…
+QString connectorPinLabel(int index, const ConnectorSpec& spec);
+// Refill spec.pins with auto labels for the current annotation/order/pinCount.
+void regenPinLabels(ConnectorSpec& spec);
 
 // Computed geometry for rendering / hit-testing / bounds. `origin` is the body
 // top corner on the non-exit side (matches Edraw's connectorEntitiesAt origin).
@@ -50,6 +67,7 @@ struct ConnectorGeometry {
     Vec2 designatorPos;
     Vec2 partPos;
     double effectiveHeight = 0.0;
+    double effectiveWidth = 0.0;
 };
 
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec);
