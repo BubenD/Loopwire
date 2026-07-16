@@ -45,6 +45,11 @@ struct ConnectorSpec {
     double pinSize = 10.0;
     double desSize = 10.0;
     double pnSize = 10.0;
+    // Movable-text offsets (world units, relative to the connector). Dragged via grips;
+    // pin offset applies to every pin label, the others to their single text.
+    double pinTextDX = 0.0, pinTextDY = 0.0;
+    double desTextDX = 0.0, desTextDY = 0.0;
+    double pnTextDX = 0.0, pnTextDY = 0.0;
 };
 
 ConnectorSpec defaultConnectorSpec(int pinCount = 4);

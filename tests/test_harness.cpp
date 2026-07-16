@@ -73,6 +73,30 @@ int run_harness_tests() {
               "connector: mirrorY flips pin order vertically");
     }
 
+    // Movable text offsets shift the label positions (relative to the connector).
+    {
+        ConnectorSpec s = defaultConnectorSpec(2);
+        s.designator = "J9"; s.partNumber = "PN9";
+        ConnectorGeometry base = connectorGeometry({0, 0}, s);
+        s.desTextDX = 5; s.desTextDY = 3;
+        s.pnTextDX = -4; s.pnTextDY = 2;
+        s.pinTextDX = 1; s.pinTextDY = -1;
+        ConnectorGeometry off = connectorGeometry({0, 0}, s);
+        check(near(off.designatorPos.x, base.designatorPos.x + 5) &&
+                  near(off.designatorPos.y, base.designatorPos.y + 3),
+              "connector: designator text offset applied");
+        check(near(off.partPos.x, base.partPos.x - 4) && near(off.partPos.y, base.partPos.y + 2),
+              "connector: part-number text offset applied");
+        check(near(off.pinLabelPos[0].x, base.pinLabelPos[0].x + 1) &&
+                  near(off.pinLabelPos[0].y, base.pinLabelPos[0].y - 1),
+              "connector: pin-label text offset applied to every pin");
+        // Round-trips through meta.
+        QJsonObject meta; writeConnectorSpec(meta, s);
+        ConnectorSpec b = connectorSpecFromMeta(meta);
+        check(near(b.desTextDX, 5) && near(b.pnTextDY, 2) && near(b.pinTextDX, 1),
+              "connector: text offsets round-trip through meta");
+    }
+
     // Body mode: dynamic auto-fits (width 40); custom honours W/H.
     {
         ConnectorSpec s = defaultConnectorSpec(4);

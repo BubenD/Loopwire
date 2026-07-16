@@ -1327,6 +1327,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(canvas_, &CanvasWidget::contextMenuRequested, this,
             [this](const QPoint& gp) { showCanvasMenu(gp); });
     // Right-button drag dropped: AutoCAD-style Move / Copy / Cancel menu.
+    // Tab while placing a connector pauses placement and focuses the ribbon preferences.
+    connect(canvas_, &CanvasWidget::connectorEditRequested, this, [this] {
+        if (connectorTab_ && ribbon_ && ribbon_->indexOf(connectorTab_) >= 0) {
+            ribbon_->setCurrentWidget(connectorTab_);
+            if (auto* le = connectorTab_->findChild<QLineEdit*>()) le->setFocus(Qt::TabFocusReason);
+            statusBar()->showMessage(
+                QStringLiteral("Editing connector preferences — click the drawing to place"));
+        }
+    });
     connect(canvas_, &CanvasWidget::rightDragDropped, this, [this](const QPoint& gp) {
         // Keys: M = Move, C = Copy, A = Cancel (the underlined mnemonics); Esc also
         // cancels. (Type the underlined letter while the menu is open.)
@@ -4960,13 +4969,14 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         const bool custom = s.rectMode == QLatin1String("custom");
         wSpin->setEnabled(custom);
         hSpin->setEnabled(custom);
-        // If a connector is selected, edit it in place; otherwise set the default.
-        if (!editor_->selectedConnectorId().isEmpty()) {
+        // If a connector is selected, edit it in place; otherwise set the placement
+        // default. Either way repaint so a selected connector or the placement preview
+        // ghost reflects the change live.
+        if (!editor_->selectedConnectorId().isEmpty())
             editor_->applyConnectorSpecToSelection(s);
-            canvas_->update();
-        } else {
+        else
             editor_->connectorSpec() = s;
-        }
+        if (canvas_) canvas_->update(); // canvas_ may not exist yet at first sync
     };
     for (QLineEdit* le : {desEdit, pnEdit})
         connect(le, &QLineEdit::textChanged, this, [apply] { apply(); });

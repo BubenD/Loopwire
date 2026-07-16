@@ -96,6 +96,9 @@ signals:
     void inlineCommit();
     // The view changed (pan/zoom) — overlays anchored to world coords re-position.
     void viewChanged();
+    // Tab pressed while placing a connector: pause placement and let the host focus
+    // the Connector build ribbon so its preferences can be edited (preview stays live).
+    void connectorEditRequested();
 
 public:
     // True while the host's on-canvas text editor is active (so a canvas click

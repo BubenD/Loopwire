@@ -101,6 +101,12 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
     s.pinSize = meta.value("pinSize").toDouble(s.textSize);
     s.desSize = meta.value("desSize").toDouble(s.textSize);
     s.pnSize = meta.value("pnSize").toDouble(s.textSize);
+    s.pinTextDX = meta.value("pinTextDX").toDouble(0.0);
+    s.pinTextDY = meta.value("pinTextDY").toDouble(0.0);
+    s.desTextDX = meta.value("desTextDX").toDouble(0.0);
+    s.desTextDY = meta.value("desTextDY").toDouble(0.0);
+    s.pnTextDX = meta.value("pnTextDX").toDouble(0.0);
+    s.pnTextDY = meta.value("pnTextDY").toDouble(0.0);
     const QJsonArray pins = meta.value("pins").toArray();
     for (const auto& v : pins) s.pins << v.toString();
     while (s.pins.size() < s.pinCount) s.pins << connectorPinLabel(s.pins.size(), s);
@@ -129,6 +135,12 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     meta["pinSize"] = spec.pinSize;
     meta["desSize"] = spec.desSize;
     meta["pnSize"] = spec.pnSize;
+    meta["pinTextDX"] = spec.pinTextDX;
+    meta["pinTextDY"] = spec.pinTextDY;
+    meta["desTextDX"] = spec.desTextDX;
+    meta["desTextDY"] = spec.desTextDY;
+    meta["pnTextDX"] = spec.pnTextDX;
+    meta["pnTextDY"] = spec.pnTextDY;
     QJsonArray pins;
     for (const QString& p : spec.pins) pins.append(p);
     meta["pins"] = pins;
@@ -158,16 +170,17 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
     const double pinStartY = top - (h - spec.pitch * (spec.pinCount - 1)) / 2.0;
     const double pinTextX = spec.mirrorX ? left + w * 0.38 : left + w * 0.62;
 
+    const Vec2 pinOff{spec.pinTextDX, spec.pinTextDY};
     for (int i = 0; i < spec.pinCount; ++i) {
         // mirrorY flips the vertical order (reflect across the X axis); text stays upright.
         const int slot = spec.mirrorY ? (spec.pinCount - 1 - i) : i;
         const double y = pinStartY - slot * spec.pitch;
         g.pinTip.push_back({tipX, y});
         g.pinEnd.push_back({tipX + xDir * spec.pinLength, y});
-        g.pinLabelPos.push_back({pinTextX, y});
+        g.pinLabelPos.push_back({pinTextX + pinOff.x, y + pinOff.y}); // movable pin labels
     }
-    g.designatorPos = {left + w / 2.0, bottom - spec.textSize * 1.8};
-    g.partPos = {left, top + spec.textSize * 2.3};
+    g.designatorPos = {left + w / 2.0 + spec.desTextDX, bottom - spec.textSize * 1.8 + spec.desTextDY};
+    g.partPos = {left + spec.pnTextDX, top + spec.textSize * 2.3 + spec.pnTextDY};
     return g;
 }
 

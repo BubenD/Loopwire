@@ -40,7 +40,8 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
-                      DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge };
+                      DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
+                      ConnPinText, ConnDesText, ConnPnText, ConnAllText };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -405,7 +406,24 @@ std::vector<Grip> gripsOf(const Entity& e) {
         if (bh > 0.0) g.push_back({{e.a.x, e.a.y - bh}, GripRole::TextHeight, 0});
         break;
     }
-    default: // splice / netlabel / notconnected / connector
+    case EntityType::Connector: {
+        // Move grip at the origin, plus movable-text grips: each text role (pin labels
+        // as a block, designator, part number) drags separately; the "all" grip moves
+        // every label together. Offsets are stored relative to the connector.
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry cg = connectorGeometry(e.a, spec);
+        g.push_back({e.a, GripRole::Move, 0});
+        if (!spec.designator.isEmpty())
+            g.push_back({cg.designatorPos, GripRole::ConnDesText, 0});
+        if (!spec.partNumber.isEmpty())
+            g.push_back({cg.partPos, GripRole::ConnPnText, 0});
+        if (!cg.pinLabelPos.empty())
+            g.push_back({cg.pinLabelPos[cg.pinLabelPos.size() / 2], GripRole::ConnPinText, 0});
+        g.push_back({{(cg.rectMin.x + cg.rectMax.x) / 2.0, (cg.rectMin.y + cg.rectMax.y) / 2.0},
+                     GripRole::ConnAllText, 0});
+        break;
+    }
+    default: // splice / netlabel / notconnected
         g.push_back({e.a, GripRole::Move, 0});
         break;
     }
@@ -1824,6 +1842,22 @@ void Editor::applyEditDrag(const Vec2& target) {
             e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, tb.max.y}, {tb.min.x, tb.max.y}};
             for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
             e->meta["rowFrac"] = rf;
+            break;
+        }
+        case GripRole::ConnDesText:
+        case GripRole::ConnPnText:
+        case GripRole::ConnPinText:
+        case GripRole::ConnAllText: {
+            // Nudge a connector text offset (relative to the connector) by the drag.
+            auto bump = [&](const char* kx, const char* ky) {
+                e->meta[kx] = e->meta.value(kx).toDouble() + delta.x;
+                e->meta[ky] = e->meta.value(ky).toDouble() + delta.y;
+            };
+            if (role == GripRole::ConnDesText) bump("desTextDX", "desTextDY");
+            else if (role == GripRole::ConnPnText) bump("pnTextDX", "pnTextDY");
+            else if (role == GripRole::ConnPinText) bump("pinTextDX", "pinTextDY");
+            else { bump("desTextDX", "desTextDY"); bump("pnTextDX", "pnTextDY");
+                   bump("pinTextDX", "pinTextDY"); } // all text together
             break;
         }
         }
