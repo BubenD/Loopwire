@@ -444,6 +444,10 @@ private:
     // In-progress draw state.
     std::vector<Vec2> draftPts_;
     bool drafting_ = false;
+    // Shift held on the first / most-recent draft click of a double line/polyline:
+    // caps that run-end flush to a line it lands on (finishDraw applies the caps).
+    bool drawStartShift_ = false;
+    bool drawEndShift_ = false;
     bool gapInputMode_ = false;    // command line is awaiting a gap value ("g")
     bool filletInputMode_ = false; // command line is awaiting a fillet radius ("f")
     double cornerRadius_ = 0.0;    // current polyline fillet radius (0 = sharp corners)

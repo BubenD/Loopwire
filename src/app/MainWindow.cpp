@@ -4856,6 +4856,7 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         g->addWidget(desEdit, 0, 1);
         g->addWidget(label(w, QStringLiteral("P/N")), 1, 0);
         g->addWidget(pnEdit, 1, 1);
+        g->setColumnStretch(2, 1); // keep label + field left-adjacent (no gap)
         addGroup(QStringLiteral("Identity"), w);
     }
 
@@ -4978,20 +4979,10 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         connect(fc, &QFontComboBox::currentFontChanged, this, [apply] { apply(); });
     connect(assoc, &QCheckBox::toggled, this, [apply] { apply(); });
 
-    // Readable +/- spin buttons: text "+"/"−" (not the near-invisible dark arrows),
-    // widened so the glyph isn't clipped.
-    auto styleSpin = [](QAbstractSpinBox* sp) {
-        sp->setButtonSymbols(QAbstractSpinBox::PlusMinus);
-        sp->setStyleSheet(QStringLiteral(
-            "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:15px;"
-            "background:#50545b;border:1px solid #6a6e76;}"
-            "QAbstractSpinBox::up-button:hover,QAbstractSpinBox::down-button:hover{background:#5e636b;}"));
-    };
+    // Plain editable number fields — no +/- spin buttons (type the value directly).
     for (QAbstractSpinBox* sp : std::initializer_list<QAbstractSpinBox*>{
-             qtySpin, pitchSpin, lenSpin, wSpin, hSpin, pinSize, desSize, pnSize}) {
-        sp->setMaximumWidth(sp->maximumWidth() + 20); // room for the wider buttons
-        styleSpin(sp);
-    }
+             qtySpin, pitchSpin, lenSpin, wSpin, hSpin, pinSize, desSize, pnSize})
+        sp->setButtonSymbols(QAbstractSpinBox::NoButtons);
 
     // Reload every widget from the current context (the selected connector, else the
     // placement default) without triggering apply() — used when the tab opens.
@@ -5058,6 +5049,7 @@ void MainWindow::buildConnectorRibbonTab() {
     lay->setSpacing(0);
     lay->setAlignment(Qt::AlignLeft);
     buildConnectorBuildTab(connectorTab_, lay);
+    lay->addStretch(1); // absorb the extra width so groups pack left (no stretched gaps)
     connectorTab_->hide();
 }
 

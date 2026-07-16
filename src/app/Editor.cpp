@@ -1010,6 +1010,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     if (!doc_ || button != Qt::LeftButton) return;
     onPointerMove(raw);
     const Vec2 p = cursor_;
+    pressMods_ = mods; // available to every press path (draw/modify), not just selection
 
     // Clipboard base-point pick (after Ctrl+Shift+C / Ctrl+X): this click stores
     // the reference point the clipboard is relative to (then cuts if requested).
@@ -1990,6 +1991,11 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polygon:
     case ToolId::Note:
     case ToolId::Revision:
+        if (tool_ == ToolId::DoubleLine) {
+            // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
+            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
+            drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
+        }
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() == 2) finishDraw();
@@ -2046,6 +2052,11 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (polyArcMode_ && tool_ == ToolId::Polyline && draftPts_.size() >= 2) {
             const Vec2 prevDir = draftPts_.back() - draftPts_[draftPts_.size() - 2];
             bulge = tangentBulge(draftPts_.back(), p, prevDir);
+        }
+        if (tool_ == ToolId::DoublePolyline) {
+            // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
+            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
+            drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
         }
         draftPts_.push_back(p);
         draftBulges_.push_back(bulge);
@@ -2886,6 +2897,18 @@ void Editor::finishDraw() {
         return;
     }
 
+    // Shift-clicking a run-end onto a line while drawing a double line/polyline caps
+    // that end flush to the line (both physical runs meet it), like the edit gesture.
+    if (e.type == EntityType::DoubleLine ||
+        (e.type == EntityType::Polyline && e.meta.value("double").toBool())) {
+        const bool dbl = e.type == EntityType::DoubleLine;
+        const Vec2 startPt = dbl ? e.a : (e.points.empty() ? Vec2{0, 0} : e.points.front());
+        const Vec2 endPt = dbl ? e.b : (e.points.empty() ? Vec2{0, 0} : e.points.back());
+        if (drawStartShift_) capDoubleEndAt(e, QStringLiteral("cutStart"), startPt, doc_->entities());
+        if (drawEndShift_) capDoubleEndAt(e, QStringLiteral("cutEnd"), endPt, doc_->entities());
+    }
+    drawStartShift_ = drawEndShift_ = false;
+
     pushUndo();
     addEntity(std::move(e));
     draftPts_.clear();
@@ -2904,6 +2927,8 @@ void Editor::cancelDraw() {
     dpolyHasLsRef_ = false;
     draftPts_.clear();
     drafting_ = false;
+    drawStartShift_ = false;
+    drawEndShift_ = false;
     rectAwaitY_ = false;
     drawFieldIndex_ = 0;
     drawFieldVals_.clear();

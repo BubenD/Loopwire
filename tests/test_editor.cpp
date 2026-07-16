@@ -209,6 +209,23 @@ int run_editor_tests() {
               "double-connect: without shift the end moves but is not capped");
     }
 
+    // --- Drawing a double line: shift-click the end onto a line caps that run-end.
+    {
+        Document d; d.entities().clear();
+        Entity t; t.id = "T"; t.type = EntityType::Line; t.a = {100, -50}; t.b = {100, 50};
+        d.entities().push_back(t);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::DoubleLine);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);          // start (no cap)
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::ShiftModifier);     // end on T, shift -> cap
+        const Entity* dl = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::DoubleLine) dl = &e;
+        check(dl && !dl->meta.value("cutStart").toBool() && dl->meta.value("cutEnd").toBool() &&
+                  dl->meta.value("cutEndKind").toString() == QLatin1String("line"),
+              "double-draw: shift-click end onto a line caps that run-end only");
+    }
+
     // --- Delete removes selection.
     {
         Document doc;
