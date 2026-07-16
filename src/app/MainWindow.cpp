@@ -5048,7 +5048,12 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         connect(placeBtn, &QToolButton::clicked, this, [this, apply] {
             apply();
             editor_->setTool(ToolId::Connector);
-            statusBar()->showMessage(QStringLiteral("Click on the drawing to place the connector"));
+            // Move focus to the canvas so the ghost tracks and Tab/X/Y work immediately
+            // (setTool is a no-op if already in the Connector tool, so focus it here).
+            canvas_->setFocus(Qt::OtherFocusReason);
+            canvas_->update();
+            statusBar()->showMessage(QStringLiteral(
+                "Connector preview follows the cursor — X/Y flip, Tab to edit, click to place"));
         });
         g->addWidget(autoBtn, 0, 0);
         g->addWidget(placeBtn, 1, 0);

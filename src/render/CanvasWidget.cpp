@@ -555,6 +555,13 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
 void CanvasWidget::enterEvent(QEnterEvent* e) {
     cursorInside_ = true;
     lastMousePos_ = e->position().toPoint();
+    // While placing/drawing, take keyboard focus as the cursor enters the canvas so
+    // shortcuts (Tab to edit a connector, X/Y flip, typed values) are routed here even
+    // if focus was left on the ribbon. Entering never fires mid-edit (the mouse stays
+    // over the ribbon then), so this won't steal focus from a field being typed into.
+    if (editor_ && !inlineEditing_ && !hasFocus() &&
+        (isDrawTool(editor_->tool()) || isPlacementTool(editor_->tool())))
+        setFocus(Qt::MouseFocusReason);
     update();
     QWidget::enterEvent(e);
 }
