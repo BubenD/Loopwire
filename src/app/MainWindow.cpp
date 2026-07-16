@@ -1390,6 +1390,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         updateHatchContext();
         updateConnectorContext(); // the Connector tool opens the "Connector build" tab
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
+        canvas_->update();   // repaint now so the connector placement ghost appears at once
+        if (t == ToolId::Connector)
+            statusBar()->showMessage(QStringLiteral(
+                "Connector preview follows the cursor — X/Y flip, Tab to edit settings, "
+                "click to place"));
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
         // Begin on-canvas in-place editing at the pending insertion box.
