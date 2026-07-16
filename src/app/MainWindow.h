@@ -63,6 +63,9 @@ private:
     void buildTableCellRibbonTab();    // build the contextual "Table Cell" tab (hidden)
     void showTableCellRibbon(bool on); // add/select or remove the contextual tab
     void updateTableCellContext();     // open/close based on the table-cell selection
+    void buildConnectorRibbonTab();    // build the contextual "Connector build" tab (hidden)
+    void showConnectorRibbon(bool on); // add/select or remove the contextual tab
+    void updateConnectorContext();     // open/close: Connector tool active OR a connector selected
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -168,6 +171,9 @@ private:
     // Contextual "Hatch Creation" ribbon tab (shown only while hatching).
     QWidget* hatchTab_ = nullptr;
     QWidget* tableCellTab_ = nullptr;
+    QWidget* connectorTab_ = nullptr;
+    std::function<void()> syncConnectorRibbon_; // reload the connector tab from context
+    bool connectorSyncing_ = false;             // guard: skip apply() while syncing widgets
     QButtonGroup* hatchPatternGroup_ = nullptr; // exclusive pattern swatch buttons
     QDoubleSpinBox* hatchAngleSpin_ = nullptr;
     QDoubleSpinBox* hatchScaleSpin_ = nullptr;

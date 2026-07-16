@@ -1353,6 +1353,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(editor_, &Editor::selectionChanged, this, [this] {
         refreshPanels();
         updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
+        updateConnectorContext(); // selecting a connector opens the Connector build tab
     });
     // A hatch was created (or the creation session ended): re-point the tab so the
     // controls keep editing the just-placed hatch until you click out / Close.
@@ -1378,6 +1379,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         // AutoCAD-style contextual ribbon: the Hatch tool (or a selected hatch)
         // opens the "Hatch Creation" tab.
         updateHatchContext();
+        updateConnectorContext(); // the Connector tool opens the "Connector build" tab
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
@@ -2095,13 +2097,13 @@ void MainWindow::buildRibbon() {
         ribbon_->addTab(page, QStringLiteral("Harness build"));
     }
 
-    // ---- SCHEMATIC BUILD: the AutoCAD/Edraw "Connector build" ribbon ----
+    // ---- SCHEMATIC BUILD: placement tools; the "Connector build" groups live in a
+    //      contextual tab that opens only when a connector is being placed / edited. ----
     {
         auto [page, lay] = makeTabPage();
         addGroup(lay, QStringLiteral("Place"),
                  toolRow({ToolId::Connector, ToolId::Wire, ToolId::NetLabel,
                           ToolId::NotConnected}));
-        buildConnectorBuildTab(page, lay);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
@@ -2157,6 +2159,7 @@ void MainWindow::buildRibbon() {
     top->addWidget(ribbon_);
     buildHatchRibbonTab(); // built once, added to the ribbon only while hatching
     buildTableCellRibbonTab(); // built once, added only while a table cell is selected
+    buildConnectorRibbonTab(); // built once, added only while placing/editing a connector
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
 }
@@ -4932,6 +4935,7 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
     // Gather every widget into a spec and store it as the placement default; when a
     // connector is selected, live-apply so edits show immediately.
     auto apply = [=, this] {
+        if (connectorSyncing_) return; // ignore programmatic widget updates from sync
         ConnectorSpec s = editor_->connectorSpec();
         s.designator = desEdit->text();
         s.partNumber = pnEdit->text();
@@ -4974,6 +4978,50 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         connect(fc, &QFontComboBox::currentFontChanged, this, [apply] { apply(); });
     connect(assoc, &QCheckBox::toggled, this, [apply] { apply(); });
 
+    // Readable +/- spin buttons: text "+"/"−" (not the near-invisible dark arrows),
+    // widened so the glyph isn't clipped.
+    auto styleSpin = [](QAbstractSpinBox* sp) {
+        sp->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+        sp->setStyleSheet(QStringLiteral(
+            "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:15px;"
+            "background:#50545b;border:1px solid #6a6e76;}"
+            "QAbstractSpinBox::up-button:hover,QAbstractSpinBox::down-button:hover{background:#5e636b;}"));
+    };
+    for (QAbstractSpinBox* sp : std::initializer_list<QAbstractSpinBox*>{
+             qtySpin, pitchSpin, lenSpin, wSpin, hSpin, pinSize, desSize, pnSize}) {
+        sp->setMaximumWidth(sp->maximumWidth() + 20); // room for the wider buttons
+        styleSpin(sp);
+    }
+
+    // Reload every widget from the current context (the selected connector, else the
+    // placement default) without triggering apply() — used when the tab opens.
+    syncConnectorRibbon_ = [=, this] {
+        ConnectorSpec s = editor_->connectorSpec();
+        const QString selId = editor_->selectedConnectorId();
+        if (!selId.isEmpty() && doc_)
+            for (const auto& e : doc_->entities())
+                if (e.id == selId) { s = connectorSpecFromMeta(e.meta); break; }
+        connectorSyncing_ = true;
+        desEdit->setText(s.designator);
+        pnEdit->setText(s.partNumber);
+        qtySpin->setValue(s.pinCount);
+        lblCombo->setCurrentIndex(std::max(0, lblCombo->findData(s.annotation)));
+        ordCombo->setCurrentIndex(std::max(0, ordCombo->findData(s.pinOrder)));
+        pitchSpin->setValue(s.pitch);
+        lenSpin->setValue(s.pinLength);
+        rectCombo->setCurrentIndex(std::max(0, rectCombo->findData(s.rectMode)));
+        wSpin->setValue(s.rectWidth);
+        hSpin->setValue(s.rectHeight);
+        assoc->setChecked(s.associative);
+        pinFont->setCurrentFont(QFont(s.pinFont)); pinSize->setValue(s.pinSize);
+        desFont->setCurrentFont(QFont(s.desFont)); desSize->setValue(s.desSize);
+        pnFont->setCurrentFont(QFont(s.pnFont)); pnSize->setValue(s.pnSize);
+        const bool custom = s.rectMode == QLatin1String("custom");
+        wSpin->setEnabled(custom);
+        hSpin->setEnabled(custom);
+        connectorSyncing_ = false;
+    };
+
     // ---- Actions: Auto scale / Place connector ----
     {
         auto* w = new QWidget(page);
@@ -5001,6 +5049,46 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         addGroup(QStringLiteral("Actions"), w);
     }
     apply(); // sync W/H enabled state + store the initial spec
+}
+
+void MainWindow::buildConnectorRibbonTab() {
+    connectorTab_ = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(connectorTab_);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+    buildConnectorBuildTab(connectorTab_, lay);
+    connectorTab_->hide();
+}
+
+void MainWindow::showConnectorRibbon(bool on) {
+    if (!connectorTab_ || !ribbon_) return;
+    const int idx = ribbon_->indexOf(connectorTab_);
+    if (on) {
+        if (syncConnectorRibbon_) syncConnectorRibbon_(); // reflect the selected/default spec
+        if (idx < 0) {
+            const int at = ribbon_->addTab(connectorTab_, QStringLiteral("Connector build"));
+            ribbon_->setCurrentIndex(at);
+        } else {
+            ribbon_->setCurrentIndex(idx);
+        }
+        connectorTab_->show();
+    } else if (idx >= 0) {
+        ribbon_->removeTab(idx); // detaches but does not delete connectorTab_
+        ribbon_->setCurrentIndex(0);
+    }
+}
+
+void MainWindow::updateConnectorContext() {
+    // Show the connector build ribbon only while placing a connector (Connector tool)
+    // or while a single connector entity is selected ("pressed").
+    bool ctx = editor_->tool() == ToolId::Connector;
+    if (!ctx && doc_ && editor_->selection().size() == 1) {
+        const QString id = editor_->selection().front();
+        for (const auto& e : doc_->entities())
+            if (e.id == id && e.type == EntityType::Connector) { ctx = true; break; }
+    }
+    showConnectorRibbon(ctx);
 }
 
 void MainWindow::showConnectorDialog() {
