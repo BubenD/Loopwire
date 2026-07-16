@@ -389,6 +389,10 @@ private:
     // Record the exact cut boundary (line or circle) at each end of a trimmed/
     // extended DOUBLE entity so the renderer clips both physical runs flush to it.
     void recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints);
+    // Cap one end (key = "cutStart" / "cutEnd") of a double entity to whatever cutter
+    // (line/circle) passes through world point `at`, so its physical runs clip flush.
+    void capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
+                        const std::vector<Entity>& joints);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill
     void handleDimensionPress(const Vec2& p); // multi-mode dimension placement
 

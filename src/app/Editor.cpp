@@ -813,11 +813,38 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
             return;
         }
         applyEditDrag(p);
+        // Shift while placing a double line/polyline END onto another line: cap BOTH
+        // physical runs flush to that line (they miter to touch it) rather than ending
+        // square at the centreline. Cap the MOVED end to whatever cutter passes through
+        // the drop point `p` (which lands on the target line).
+        bool capped = false;
+        if (shift) {
+            if (Entity* ge = entityById(editEntityId_)) {
+                const bool dblLine = ge->type == EntityType::DoubleLine;
+                const bool dblPoly = ge->type == EntityType::Polyline &&
+                                     ge->meta.value("double").toBool();
+                QString key;
+                if (dblLine) {
+                    if (editRole_ == static_cast<int>(GripRole::LineA)) key = QStringLiteral("cutStart");
+                    else if (editRole_ == static_cast<int>(GripRole::LineB)) key = QStringLiteral("cutEnd");
+                } else if (dblPoly && editRole_ == static_cast<int>(GripRole::Vertex)) {
+                    const int n = static_cast<int>(ge->points.size());
+                    if (editIndex_ == 0) key = QStringLiteral("cutStart");
+                    else if (editIndex_ == n - 1) key = QStringLiteral("cutEnd");
+                }
+                if (!key.isEmpty()) {
+                    capDoubleEndAt(*ge, key, p, doc_->entities());
+                    capped = ge->meta.value(key).toBool();
+                }
+            }
+        }
         editing_ = false;
         gripGrab_ = false;
         editMoved_ = false;
         editGhost_.clear(); // source ghost cleared now that it's placed
-        emit message(QStringLiteral("Joint placed"));
+        emit message(capped
+                         ? QStringLiteral("Connected — both physical lines capped to the target")
+                         : QStringLiteral("Joint placed"));
         emit changed();
         return;
     }
@@ -4034,33 +4061,36 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     emit changed();
 }
 
+void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
+                            const std::vector<Entity>& joints) {
+    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly"})
+        ent.meta.remove(key + s);
+    // Prefer a CIRCLE cut (clip runs onto the true ring) when the cutter through this
+    // point is a circle/arc; otherwise a straight line cut.
+    if (auto cc = cutCircleThrough(at, joints, ent.id)) {
+        ent.meta.insert(key, true);
+        ent.meta.insert(key + "Kind", QStringLiteral("circle"));
+        ent.meta.insert(key + "Cx", cc->first.x);
+        ent.meta.insert(key + "Cy", cc->first.y);
+        ent.meta.insert(key + "R", cc->second);
+    } else if (auto seg = cutSegmentThrough(at, joints, ent.id)) {
+        ent.meta.insert(key, true);
+        ent.meta.insert(key + "Kind", QStringLiteral("line"));
+        ent.meta.insert(key + "Ax", seg->first.x);
+        ent.meta.insert(key + "Ay", seg->first.y);
+        ent.meta.insert(key + "Bx", seg->second.x);
+        ent.meta.insert(key + "By", seg->second.y);
+    }
+}
+
 void Editor::recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints) {
+    Q_UNUSED(selfId); // capDoubleEndAt excludes ent by id
     // Only meaningful for a DOUBLE entity (its physical runs get clipped to the cut).
     const std::vector<Vec2> pts =
         (ent.type == EntityType::DoubleLine) ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
     if (pts.size() < 2) return;
-    auto setEnd = [&](const QString& key, const Vec2& pt) {
-        for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R"})
-            ent.meta.remove(key + s);
-        // Prefer a CIRCLE cut (clip runs onto the true ring) when the cutter through
-        // this point is a circle/arc; otherwise a straight line cut.
-        if (auto cc = cutCircleThrough(pt, joints, selfId)) {
-            ent.meta.insert(key, true);
-            ent.meta.insert(key + "Kind", QStringLiteral("circle"));
-            ent.meta.insert(key + "Cx", cc->first.x);
-            ent.meta.insert(key + "Cy", cc->first.y);
-            ent.meta.insert(key + "R", cc->second);
-        } else if (auto seg = cutSegmentThrough(pt, joints, selfId)) {
-            ent.meta.insert(key, true);
-            ent.meta.insert(key + "Kind", QStringLiteral("line"));
-            ent.meta.insert(key + "Ax", seg->first.x);
-            ent.meta.insert(key + "Ay", seg->first.y);
-            ent.meta.insert(key + "Bx", seg->second.x);
-            ent.meta.insert(key + "By", seg->second.y);
-        }
-    };
-    setEnd(QStringLiteral("cutStart"), pts.front());
-    setEnd(QStringLiteral("cutEnd"), pts.back());
+    capDoubleEndAt(ent, QStringLiteral("cutStart"), pts.front(), joints);
+    capDoubleEndAt(ent, QStringLiteral("cutEnd"), pts.back(), joints);
 }
 
 void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {

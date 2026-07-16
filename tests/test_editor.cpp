@@ -170,6 +170,45 @@ int run_editor_tests() {
               "mirror menu: Cancel leaves everything unchanged");
     }
 
+    // --- Shift + drop a double line's end onto another line caps both runs to it.
+    {
+        Document d; d.entities().clear();
+        // Target: a vertical line at x=0 spanning the drop point.
+        Entity t; t.id = "T"; t.type = EntityType::Line; t.a = {0, -50}; t.b = {0, 50};
+        d.entities().push_back(t);
+        // Double line whose A end we'll drag to the target.
+        Entity dl; dl.id = "DL"; dl.type = EntityType::DoubleLine;
+        dl.a = {50, 0}; dl.b = {150, 0}; dl.meta.insert("gap", 10.0);
+        d.entities().push_back(dl);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Select);
+        ed.selectById("DL");
+        // Grab the A-end visible corner grip (a + perp*gap/2 = (50,5)), no shift.
+        ed.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);
+        // Place it on the target line WITH shift held -> cap both runs to the target.
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity* dd = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "DL") dd = &e;
+        check(dd && dd->meta.value("cutStart").toBool() &&
+                  dd->meta.value("cutStartKind").toString() == QLatin1String("line"),
+              "double-connect: shift-drop caps the moved end to the target line");
+
+        // Without shift, the same drop moves the end but adds no cap.
+        Document d2; d2.entities().clear();
+        Entity t2 = t; d2.entities().push_back(t2);
+        Entity dl2 = dl; dl2.meta = QJsonObject(); dl2.meta.insert("gap", 10.0);
+        d2.entities().push_back(dl2);
+        Editor ed2; ed2.setDocument(&d2); noSnap(ed2);
+        ed2.setTool(ToolId::Select);
+        ed2.selectById("DL");
+        ed2.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* dd2 = nullptr;
+        for (const auto& e : d2.entities()) if (e.id == "DL") dd2 = &e;
+        check(dd2 && !dd2->meta.value("cutStart").toBool(),
+              "double-connect: without shift the end moves but is not capped");
+    }
+
     // --- Delete removes selection.
     {
         Document doc;
