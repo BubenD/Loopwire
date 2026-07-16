@@ -835,13 +835,20 @@ std::vector<Entity> explodeEntity(const Entity& e) {
         const Vec2 bl = g.rectMin, tr = g.rectMax;
         const Vec2 br{tr.x, bl.y}, tl{bl.x, tr.y};
         makeLine(bl, br); makeLine(br, tr); makeLine(tr, tl); makeLine(tl, bl);
-        // Pin stubs + labels.
+        // Pin forks (the ">" at the body edge) + stubs + labels (match the renderer).
+        const double xDir = spec.mirrorX ? -1.0 : 1.0;
+        const double fork = std::min(8.0, g.effectiveWidth * 0.28);
+        const double forkY = std::min(spec.pitch * 0.36, spec.textSize * 0.85);
         for (int i = 0; i < spec.pinCount; ++i) {
-            makeLine(g.pinTip[i], g.pinEnd[i]);
-            if (i < spec.pins.size()) makeText(g.pinLabelPos[i], spec.pins[i], spec.textSize * 0.7);
+            const Vec2 tip = g.pinTip[i];
+            const double rootX = tip.x - xDir * fork;
+            makeLine({rootX, tip.y + forkY}, tip);
+            makeLine({rootX, tip.y - forkY}, tip);
+            makeLine(tip, g.pinEnd[i]);
+            if (i < spec.pins.size()) makeText(g.pinLabelPos[i], spec.pins[i], spec.pinSize * 0.7);
         }
-        makeText(g.designatorPos, spec.designator, spec.textSize);
-        makeText(g.partPos, spec.partNumber, spec.textSize * 0.8);
+        makeText(g.designatorPos, spec.designator, spec.desSize);
+        makeText(g.partPos, spec.partNumber, spec.pnSize * 0.8);
         break;
     }
     default:

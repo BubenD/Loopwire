@@ -5145,8 +5145,16 @@ void Editor::handlePlacementPress(const Vec2& p) {
         return;
     }
     pushUndo();
-    addEntity(std::move(e));
-    emit message(QStringLiteral("%1 placed").arg(toolLabel(tool_)));
+    // A non-associative connector is placed as loose primitives (lines + text), not a
+    // re-editable Connector object — "explode on drop".
+    if (tool_ == ToolId::Connector && !connectorSpec_.associative) {
+        auto parts = explodeEntity(e);
+        for (Entity& part : parts) addEntity(std::move(part));
+        emit message(QStringLiteral("Connector placed (exploded to primitives)"));
+    } else {
+        addEntity(std::move(e));
+        emit message(QStringLiteral("%1 placed").arg(toolLabel(tool_)));
+    }
     emit changed();
     setTool(ToolId::Select); // return to Select after placing (Space repeats)
 }
@@ -5166,6 +5174,14 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
     connectorSpec_ = spec;
     doc_->setDirty(true);
     emit changed();
+}
+
+void Editor::toggleConnectorMirror(bool xAxis) {
+    if (xAxis) connectorSpec_.mirrorX = !connectorSpec_.mirrorX;
+    else connectorSpec_.mirrorY = !connectorSpec_.mirrorY;
+    emit message(xAxis ? QStringLiteral("Connector mirrored across the Y axis (X to flip back)")
+                       : QStringLiteral("Connector mirrored across the X axis (Y to flip back)"));
+    emit overlayChanged();
 }
 
 std::vector<Editor::BomRow> Editor::buildBom() const {
@@ -5845,6 +5861,17 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.restore();
             }
         }
+    }
+
+    // Connector placement: ghost the connector at the cursor until it's placed.
+    // X flips it across the Y axis, Y across the X axis (toggleConnectorMirror).
+    if (tool_ == ToolId::Connector) {
+        Entity ghost;
+        ghost.type = EntityType::Connector;
+        ghost.a = cursor_;
+        ghost.layer = doc_->activeLayer();
+        writeConnectorSpec(ghost.meta, connectorSpec_);
+        EntityRenderer::draw(p, ghost, *doc_, vt, QColor(120, 200, 255, 170));
     }
 
     // In-progress draft preview (white, matching the line being drawn).

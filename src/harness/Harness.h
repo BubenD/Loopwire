@@ -31,7 +31,8 @@ struct ConnectorSpec {
     double rectWidth = 40.0;
     double rectHeight = 84.0; // custom body height (dynamic mode auto-computes)
     double textSize = 10.0;   // general size (== max of the per-text sizes)
-    bool mirrorX = false;     // false: pins exit right; true: exit left
+    bool mirrorX = false;     // false: pins exit right; true: exit left (mirror across Y)
+    bool mirrorY = false;     // true: pin order flipped top<->bottom (mirror across X)
     QStringList pins;         // per-pin labels (size == pinCount)
     // Web-parity build options (Schematic build "Connector build" ribbon):
     QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"

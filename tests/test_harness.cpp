@@ -61,6 +61,18 @@ int run_harness_tests() {
         check(s.pins[0] == "4" && s.pins[3] == "1", "connector: bottom order reverses numbering");
     }
 
+    // mirrorY flips the pin vertical order (reflect across the X axis).
+    {
+        ConnectorSpec s = defaultConnectorSpec(4);
+        s.pitch = 10;
+        ConnectorGeometry up = connectorGeometry({0, 0}, s);
+        s.mirrorY = true;
+        ConnectorGeometry dn = connectorGeometry({0, 0}, s);
+        // Pin 0 and pin 3 swap Y positions when mirrored.
+        check(near(dn.pinTip[0].y, up.pinTip[3].y) && near(dn.pinTip[3].y, up.pinTip[0].y),
+              "connector: mirrorY flips pin order vertically");
+    }
+
     // Body mode: dynamic auto-fits (width 40); custom honours W/H.
     {
         ConnectorSpec s = defaultConnectorSpec(4);
@@ -122,6 +134,25 @@ int run_harness_tests() {
             if (r.kind == "Wire" && r.ref == "CAN_H") wire = true;
         }
         check(conn && wire, "bom: connector + wire rows");
+    }
+
+    // Non-associative connector explodes to primitives on placement.
+    {
+        Document doc; doc.entities().clear();
+        Editor ed; ed.setDocument(&doc);
+        ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(3);
+        ed.connectorSpec().associative = false;
+        ed.setTool(ToolId::Connector);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        bool anyConnector = false, anyLine = false, anyText = false;
+        for (const auto& e : doc.entities()) {
+            if (e.type == EntityType::Connector) anyConnector = true;
+            if (e.type == EntityType::Line) anyLine = true;
+            if (e.type == EntityType::Text) anyText = true;
+        }
+        check(!anyConnector && anyLine && anyText && doc.entities().size() > 3,
+              "editor: non-associative connector placed as loose primitives");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

@@ -286,6 +286,9 @@ public:
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
     // Id of the single selected connector, or empty.
     QString selectedConnectorId() const;
+    // Flip the connector placement preview: xAxis=true mirrors across the Y axis
+    // (mirrorX), false mirrors across the X axis (mirrorY). Text stays upright.
+    void toggleConnectorMirror(bool xAxis);
 
     // Bill of materials row (connector or wire).
     struct BomRow {

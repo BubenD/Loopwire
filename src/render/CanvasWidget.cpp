@@ -640,6 +640,14 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // Placing a connector: X mirrors the preview across the Y axis, Y across the X
+        // axis (both flip the ghost; the placed connector keeps the flip).
+        if (editor_->tool() == ToolId::Connector &&
+            (e->key() == Qt::Key_X || e->key() == Qt::Key_Y)) {
+            editor_->toggleConnectorMirror(e->key() == Qt::Key_X);
+            e->accept();
+            return;
+        }
         // Tab switches the active dynamic-input reference field (Length<->Angle,
         // X radius<->Y radius, ...) even before the input box has been opened.
         // (focusNextPrevChild is overridden so Tab reaches us instead of moving focus.)

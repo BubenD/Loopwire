@@ -90,6 +90,7 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
     s.rectHeight = meta.value("rectHeight").toDouble(84.0);
     s.textSize = meta.value("textSize").toDouble(10.0);
     s.mirrorX = meta.value("mirrorX").toBool(false);
+    s.mirrorY = meta.value("mirrorY").toBool(false);
     s.annotation = meta.value("annotation").toString(QStringLiteral("numbers"));
     s.pinOrder = meta.value("pinOrder").toString(QStringLiteral("top"));
     s.rectMode = meta.value("rectMode").toString(QStringLiteral("dynamic"));
@@ -117,6 +118,7 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     meta["rectHeight"] = spec.rectHeight;
     meta["textSize"] = spec.textSize;
     meta["mirrorX"] = spec.mirrorX;
+    meta["mirrorY"] = spec.mirrorY;
     meta["annotation"] = spec.annotation;
     meta["pinOrder"] = spec.pinOrder;
     meta["rectMode"] = spec.rectMode;
@@ -157,7 +159,9 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
     const double pinTextX = spec.mirrorX ? left + w * 0.38 : left + w * 0.62;
 
     for (int i = 0; i < spec.pinCount; ++i) {
-        const double y = pinStartY - i * spec.pitch;
+        // mirrorY flips the vertical order (reflect across the X axis); text stays upright.
+        const int slot = spec.mirrorY ? (spec.pinCount - 1 - i) : i;
+        const double y = pinStartY - slot * spec.pitch;
         g.pinTip.push_back({tipX, y});
         g.pinEnd.push_back({tipX + xDir * spec.pinLength, y});
         g.pinLabelPos.push_back({pinTextX, y});
