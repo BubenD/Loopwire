@@ -194,6 +194,8 @@ private:
     QLabel* cmdHintLabel_ = nullptr; // applicable commands for the active draw tool
     QToolButton* repeatBtn_ = nullptr; // status-bar "repeat last command" button
     int inlineCell_ = -1;              // table cell being inline-edited (-1 = not a cell)
+    int inlineConnectorPin_ = -1;      // connector pin label being inline-edited (-1 = none)
+    QString inlineConnectorId_;        // the connector whose pin label is being edited
     bool inlineSingleLine_ = false;    // single-value edit (balloon number/cell): Enter commits
 
     // On-canvas text editor overlay (children of the canvas).

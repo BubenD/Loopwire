@@ -1445,6 +1445,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 inlineRuler_->hide();     // a cell editor sits exactly on the cell, no width ruler
                 layoutInlineText();       // relayout now that it's flagged a cell
             });
+    // Double-clicked a connector pin label: edit that pin's number/letter inline.
+    connect(editor_, &Editor::editConnectorPinRequested, this,
+            [this](const QString& id, int pin, const QString& text, Vec2 at, double size) {
+                Editor::TextStyle style;
+                style.size = std::max(2.0, size);
+                beginInlineText(QString(), text, style, at);
+                inlineConnectorId_ = id;
+                inlineConnectorPin_ = pin; // set after beginInlineText resets it
+                inlineSingleLine_ = true;  // Enter commits the pin label
+                inlineRuler_->hide();
+                layoutInlineText();
+            });
     connect(canvas_, &CanvasWidget::inlineCommit, this, [this] { commitInlineText(true); });
     // Keep the on-canvas text editor glued to its world position when panning/zooming.
     connect(canvas_, &CanvasWidget::viewChanged, this, [this] {
@@ -3535,6 +3547,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
                                  const Editor::TextStyle& style, Vec2 topLeft) {
     inlineEditId_ = id;
     inlineCell_ = -1;           // plain text edit unless a table-cell edit sets it afterwards
+    inlineConnectorPin_ = -1;   // ... or a connector pin-label edit sets it afterwards
+    inlineConnectorId_.clear();
     inlineSingleLine_ = false;  // multi-line unless a single-value edit sets it afterwards
     inlineStyle_ = style;
     inlineTopLeft_ = topLeft;
@@ -3760,13 +3774,17 @@ void MainWindow::commitInlineText(bool apply) {
     inlineBar_->hide();
     inlineRuler_->hide();
     if (apply) {
-        if (inlineCell_ >= 0) editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
+        if (inlineConnectorPin_ >= 0)
+            editor_->applyConnectorPinLabel(inlineConnectorId_, inlineConnectorPin_, text);
+        else if (inlineCell_ >= 0) editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
         else if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
         else editor_->applyTextEdit(inlineEditId_, text, inlineStyle_);
-    } else if (inlineEditId_.isEmpty() && inlineCell_ < 0) {
+    } else if (inlineEditId_.isEmpty() && inlineCell_ < 0 && inlineConnectorPin_ < 0) {
         editor_->commitText(QString(), inlineStyle_); // cancel: clears the pending point/tool
     }
     inlineCell_ = -1;
+    inlineConnectorPin_ = -1;
+    inlineConnectorId_.clear();
     canvas_->setFocus();
 }
 

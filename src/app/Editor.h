@@ -284,6 +284,8 @@ public:
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
+    // Set one pin's label on a connector (from the inline pin-label editor).
+    void applyConnectorPinLabel(const QString& id, int pin, const QString& text);
     // Id of the single selected connector, or empty.
     QString selectedConnectorId() const;
     // Flip the connector placement preview: xAxis=true mirrors across the Y axis
@@ -337,6 +339,9 @@ signals:
                                 double cellW, double cellH);
     // A table cell was selected/deselected — the host shows/hides the Table Cell tab.
     void cellSelectionChanged();
+    // Double-clicked a connector pin label — the host opens the inline editor for it.
+    void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
+                                   double size);
     // The mirror line was picked — the host pops a Copy / Move / Cancel menu, then
     // calls commitMirror(copy) or cancelMirror().
     void mirrorChoiceRequested();

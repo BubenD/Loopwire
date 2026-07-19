@@ -1139,12 +1139,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         {
             QFont f = baseFont; f.setFamily(spec.desFont); p.setFont(f);
             drawWorldText(p, vt.toScreen(g.designatorPos), spec.designator, spec.desSize, vt.scale(),
-                          color, Qt::AlignHCenter);
+                          color, Qt::AlignHCenter | Qt::AlignVCenter);
         }
         {
             QFont f = baseFont; f.setFamily(spec.pnFont); p.setFont(f);
             drawWorldText(p, vt.toScreen(g.partPos), spec.partNumber, spec.pnSize * 0.8, vt.scale(),
-                          color);
+                          color, Qt::AlignHCenter);
         }
         p.setFont(baseFont);
         p.setPen(pen);

@@ -407,20 +407,21 @@ std::vector<Grip> gripsOf(const Entity& e) {
         break;
     }
     case EntityType::Connector: {
-        // Move grip at the origin, plus movable-text grips: each text role (pin labels
-        // as a block, designator, part number) drags separately; the "all" grip moves
-        // every label together. Offsets are stored relative to the connector.
+        // Movement joints at the four rectangle corners (drag any to move the whole
+        // connector). Plus movable-text grips: each text role (pin-label block,
+        // designator, part number) drags separately. Offsets are relative to the body.
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry cg = connectorGeometry(e.a, spec);
-        g.push_back({e.a, GripRole::Move, 0});
+        g.push_back({cg.rectMin, GripRole::Move, 0});
+        g.push_back({{cg.rectMax.x, cg.rectMin.y}, GripRole::Move, 0});
+        g.push_back({cg.rectMax, GripRole::Move, 0});
+        g.push_back({{cg.rectMin.x, cg.rectMax.y}, GripRole::Move, 0});
         if (!spec.designator.isEmpty())
             g.push_back({cg.designatorPos, GripRole::ConnDesText, 0});
         if (!spec.partNumber.isEmpty())
             g.push_back({cg.partPos, GripRole::ConnPnText, 0});
         if (!cg.pinLabelPos.empty())
             g.push_back({cg.pinLabelPos[cg.pinLabelPos.size() / 2], GripRole::ConnPinText, 0});
-        g.push_back({{(cg.rectMin.x + cg.rectMax.x) / 2.0, (cg.rectMin.y + cg.rectMax.y) / 2.0},
-                     GripRole::ConnAllText, 0});
         break;
     }
     default: // splice / netlabel / notconnected
@@ -705,9 +706,11 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         const Vec2 c0{g.rectMin.x, g.rectMin.y}, c1{g.rectMax.x, g.rectMin.y},
             c2{g.rectMax.x, g.rectMax.y}, c3{g.rectMin.x, g.rectMax.y};
         best = std::min({segDist(c0, c1), segDist(c1, c2), segDist(c2, c3), segDist(c3, c0)});
-        // Inside the body also counts as a hit.
-        if (p.x >= g.rectMin.x && p.x <= g.rectMax.x && p.y >= g.rectMin.y && p.y <= g.rectMax.y)
-            best = 0.0;
+        // Pins are pickable too (stub tip -> end). The INTERIOR is intentionally NOT a
+        // hit: clicking the empty inside starts a region selection instead of picking
+        // the connector.
+        for (size_t i = 0; i < g.pinTip.size() && i < g.pinEnd.size(); ++i)
+            best = std::min(best, segDist(g.pinTip[i], g.pinEnd[i]));
         break;
     }
     default:
@@ -1928,6 +1931,25 @@ void Editor::onDoubleClick(const Vec2& world) {
     // text, or an annotation that carries editable text (balloon number, note /
     // revision body).
     if (tool_ == ToolId::Select) {
+        // A connector pin label: double-click it (even over the empty body, which is
+        // not otherwise pickable) to edit that pin's number/letter inline.
+        {
+            const double tol = worldTolerance() * 2.0;
+            for (const auto& e : doc_->entities()) {
+                if (e.type != EntityType::Connector) continue;
+                const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+                const ConnectorGeometry g = connectorGeometry(e.a, spec);
+                for (size_t i = 0; i < g.pinLabelPos.size(); ++i) {
+                    if (distance(world, g.pinLabelPos[i]) < tol) {
+                        const QString cur =
+                            static_cast<int>(i) < spec.pins.size() ? spec.pins[i] : QString();
+                        emit editConnectorPinRequested(e.id, static_cast<int>(i), cur,
+                                                       g.pinLabelPos[i], spec.pinSize * 0.7);
+                        return;
+                    }
+                }
+            }
+        }
         if (auto hit = hitTest(world))
             if (Entity* e = entityById(*hit)) {
                 // A table: edit the specific cell that was double-clicked.
@@ -5238,6 +5260,18 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
     pushUndo();
     if (Entity* e = entityById(id)) writeConnectorSpec(e->meta, spec);
     connectorSpec_ = spec;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& text) {
+    Entity* e = entityById(id);
+    if (!e || e->type != EntityType::Connector || pin < 0) return;
+    QJsonArray pins = e->meta.value("pins").toArray();
+    while (pins.size() <= pin) pins.append(QString());
+    pins[pin] = text;
+    pushUndo();
+    e->meta["pins"] = pins;
     doc_->setDirty(true);
     emit changed();
 }

@@ -179,8 +179,14 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
         g.pinEnd.push_back({tipX + xDir * spec.pinLength, y});
         g.pinLabelPos.push_back({pinTextX + pinOff.x, y + pinOff.y}); // movable pin labels
     }
-    g.designatorPos = {left + w / 2.0 + spec.desTextDX, bottom - spec.textSize * 1.8 + spec.desTextDY};
-    g.partPos = {left + spec.pnTextDX, top + spec.textSize * 2.3 + spec.pnTextDY};
+    // Designator: in front of the connector (the face opposite the pins), vertically
+    // centred and clear of the body. Part number: centred just above the top edge.
+    const double midY = (g.rectMin.y + g.rectMax.y) / 2.0;
+    const double frontX = spec.mirrorX ? g.rectMax.x + spec.desSize * 2.0
+                                       : g.rectMin.x - spec.desSize * 2.0;
+    g.designatorPos = {frontX + spec.desTextDX, midY + spec.desTextDY};
+    g.partPos = {(g.rectMin.x + g.rectMax.x) / 2.0 + spec.pnTextDX,
+                 top + spec.pnSize * 0.9 + spec.pnTextDY};
     return g;
 }
 

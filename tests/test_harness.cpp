@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 #include "model/Document.h"
 
+#include <QJsonArray>
 #include <cmath>
 #include <cstdio>
 
@@ -258,6 +259,46 @@ int run_harness_tests() {
         ed.onPointerPress({80, 40}, Qt::LeftButton, Qt::NoModifier);
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) anyConn = true;
         check(anyConn, "conn-freeze: a click after resuming places the connector");
+    }
+
+    // The connector's empty interior is not pickable; the border is.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        check(c, "conn-interior: connector placed");
+        const ConnectorGeometry g = connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        const QString id = c->id;
+        ed.setTool(ToolId::Select);
+        const Vec2 mid{(g.rectMin.x + g.rectMax.x) / 2.0, (g.rectMin.y + g.rectMax.y) / 2.0};
+        ed.onPointerPress(mid, Qt::LeftButton, Qt::NoModifier); // empty inside -> region, no pick
+        check(ed.selection().empty(),
+              "conn-interior: clicking the empty inside does not select the connector");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        const Vec2 topMid{(g.rectMin.x + g.rectMax.x) / 2.0, g.rectMax.y}; // on the top edge
+        ed.onPointerPress(topMid, Qt::LeftButton, Qt::NoModifier);
+        check(ed.selection().size() == 1 && ed.selection().front() == id,
+              "conn-interior: clicking the border selects the connector");
+    }
+
+    // Editing a pin label writes it back to the connector's meta.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(3);
+        ed.setTool(ToolId::Connector);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        QString id;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) id = e.id;
+        ed.applyConnectorPinLabel(id, 1, QStringLiteral("K9"));
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.id == id) c = &e;
+        check(c && c->meta.value("pins").toArray()[1].toString() == QLatin1String("K9"),
+              "conn-pin: applyConnectorPinLabel sets the pin's text");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
