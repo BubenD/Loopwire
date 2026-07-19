@@ -463,6 +463,7 @@ void Editor::setTool(ToolId t) {
     offsetSourceId_.clear();
     clearCellSelection();
     mirrorPending_ = false;
+    connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -5210,6 +5211,12 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
     emit changed();
 }
 
+void Editor::armConnectorPlacement() {
+    setTool(ToolId::Connector);   // resets connectorArmed_ to false...
+    connectorArmed_ = true;       // ...then arm so the preview ghost appears
+    emit overlayChanged();
+}
+
 void Editor::toggleConnectorMirror(bool xAxis) {
     if (xAxis) connectorSpec_.mirrorX = !connectorSpec_.mirrorX;
     else connectorSpec_.mirrorY = !connectorSpec_.mirrorY;
@@ -5897,9 +5904,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
-    // Connector placement: ghost the connector at the cursor until it's placed.
-    // X flips it across the Y axis, Y across the X axis (toggleConnectorMirror).
-    if (tool_ == ToolId::Connector) {
+    // Connector placement: ghost the connector at the cursor until it's placed — but
+    // only once armed (after "Place connector"), not merely when the tool is selected
+    // for editing settings. X flips across the Y axis, Y across the X axis.
+    if (tool_ == ToolId::Connector && connectorArmed_) {
         Entity ghost;
         ghost.type = EntityType::Connector;
         ghost.a = cursor_;

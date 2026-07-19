@@ -1,6 +1,7 @@
 #include "geometry/Snap.h"
 
 #include "geometry/Geometry.h"
+#include "harness/Harness.h" // connector geometry for pin/corner snap joints
 #include "model/Document.h"
 #include "model/Entity.h"
 
@@ -89,6 +90,21 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
                     out.emplace_back(Vec2{xb[i], yb[j]}, Vec2{xb[i], yb[j + 1]});
         }
         break;
+    case EntityType::Connector: {
+        // Body-rectangle edges + each pin stub, so nearest / midpoint snap works along
+        // the connector (the corner + pin-end joints come from entityEndpoints).
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        const Vec2 bl = g.rectMin, tr = g.rectMax;
+        const Vec2 br{tr.x, bl.y}, tl{bl.x, tr.y};
+        out.emplace_back(bl, br);
+        out.emplace_back(br, tr);
+        out.emplace_back(tr, tl);
+        out.emplace_back(tl, bl);
+        for (size_t i = 0; i < g.pinTip.size() && i < g.pinEnd.size(); ++i)
+            out.emplace_back(g.pinTip[i], g.pinEnd[i]);
+        break;
+    }
     case EntityType::Dimension: {
         // The drawn dimension line (+ extension lines) so midpoint/nearest snap works.
         const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
@@ -237,6 +253,19 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::NotConnected:
         out.push_back(e.a);
         break;
+    case EntityType::Connector: {
+        // Endpoint joints: the four body-rectangle corners and each pin's ends (the
+        // wire-connection tip and the body-edge tip).
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        out.push_back(g.rectMin);
+        out.push_back({g.rectMax.x, g.rectMin.y});
+        out.push_back(g.rectMax);
+        out.push_back({g.rectMin.x, g.rectMax.y});
+        for (const auto& pe : g.pinEnd) out.push_back(pe);
+        for (const auto& pt : g.pinTip) out.push_back(pt);
+        break;
+    }
     case EntityType::Dimension: {
         // Snap to a dimension's joints: the measured points, and the dimension-line
         // ends (for radius/diameter, the centre + the leader tip).

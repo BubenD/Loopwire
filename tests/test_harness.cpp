@@ -1,4 +1,5 @@
 #include "app/Editor.h"
+#include "geometry/Snap.h"
 #include "harness/Harness.h"
 #include "model/Document.h"
 
@@ -177,6 +178,29 @@ int run_harness_tests() {
         }
         check(!anyConnector && anyLine && anyText && doc.entities().size() > 3,
               "editor: non-associative connector placed as loose primitives");
+    }
+
+    // Object snap finds an associative connector's pin ends + rectangle corners.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; // deterministic placement
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector);
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        check(conn, "conn-snap: connector placed");
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        SnapSettings s; // objectSnap + endpoint on by default
+        const Vec2 pe = g.pinEnd[0];
+        auto rp = resolveSnap(d, {pe.x + 1, pe.y + 1}, std::nullopt, 5.0, s, {});
+        check(rp.snapped && near(rp.point.x, pe.x) && near(rp.point.y, pe.y),
+              "conn-snap: snaps to a pin end");
+        const Vec2 corner = g.rectMin; // left corner (pin-free side) — unambiguous
+        auto rc = resolveSnap(d, {corner.x - 1, corner.y - 1}, std::nullopt, 5.0, s, {});
+        check(rc.snapped && near(rc.point.x, corner.x) && near(rc.point.y, corner.y),
+              "conn-snap: snaps to a rectangle corner");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

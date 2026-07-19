@@ -289,6 +289,10 @@ public:
     // Flip the connector placement preview: xAxis=true mirrors across the Y axis
     // (mirrorX), false mirrors across the X axis (mirrorY). Text stays upright.
     void toggleConnectorMirror(bool xAxis);
+    // Arm connector placement: activate the Connector tool AND show the live preview.
+    // The preview appears only after this (pressing "Place connector"), not merely when
+    // the Connector tool is selected for editing settings.
+    void armConnectorPlacement();
 
     // Bill of materials row (connector or wire).
     struct BomRow {
@@ -516,6 +520,9 @@ private:
     // Mirror-decision state: the picked mirror line, pending a Copy/Move/Cancel choice.
     bool mirrorPending_ = false;
     Vec2 mirrorA_, mirrorB_;
+
+    // Connector placement is "armed" (preview shown) only after Place connector.
+    bool connectorArmed_ = false;
 
     // Offset tool state.
     double offsetDist_ = 0.0;             // the offset distance once set

@@ -1390,11 +1390,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         updateHatchContext();
         updateConnectorContext(); // the Connector tool opens the "Connector build" tab
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
-        canvas_->update();   // repaint now so the connector placement ghost appears at once
+        canvas_->update();   // repaint now (e.g. to clear a connector preview on tool change)
         if (t == ToolId::Connector)
             statusBar()->showMessage(QStringLiteral(
-                "Connector preview follows the cursor — X/Y flip, Tab to edit settings, "
-                "click to place"));
+                "Connector: edit the settings, then press Place connector to position it"));
     });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
         // Begin on-canvas in-place editing at the pending insertion box.
@@ -5047,9 +5046,8 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
             "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#31608f;}"));
         connect(placeBtn, &QToolButton::clicked, this, [this, apply] {
             apply();
-            editor_->setTool(ToolId::Connector);
-            // Move focus to the canvas so the ghost tracks and Tab/X/Y work immediately
-            // (setTool is a no-op if already in the Connector tool, so focus it here).
+            editor_->armConnectorPlacement(); // arm placement -> the preview appears now
+            // Move focus to the canvas so the ghost tracks and Tab/X/Y work immediately.
             canvas_->setFocus(Qt::OtherFocusReason);
             canvas_->update();
             statusBar()->showMessage(QStringLiteral(
