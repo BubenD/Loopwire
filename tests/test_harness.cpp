@@ -294,11 +294,13 @@ int run_harness_tests() {
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
         QString id;
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) id = e.id;
-        ed.applyConnectorPinLabel(id, 1, QStringLiteral("K9"));
+        ed.applyConnectorPinLabel(id, 1, QStringLiteral("K9"), QStringLiteral("Consolas"));
         const Entity* c = nullptr;
         for (const auto& e : d.entities()) if (e.id == id) c = &e;
         check(c && c->meta.value("pins").toArray()[1].toString() == QLatin1String("K9"),
               "conn-pin: applyConnectorPinLabel sets the pin's text");
+        check(c && c->meta.value("pinFont").toString() == QLatin1String("Consolas"),
+              "conn-pin: a chosen font from the library applies to the pin text");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

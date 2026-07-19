@@ -1447,9 +1447,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             });
     // Double-clicked a connector pin label: edit that pin's number/letter inline.
     connect(editor_, &Editor::editConnectorPinRequested, this,
-            [this](const QString& id, int pin, const QString& text, Vec2 at, double size) {
+            [this](const QString& id, int pin, const QString& text, Vec2 at, double size,
+                   const QString& font) {
                 Editor::TextStyle style;
                 style.size = std::max(2.0, size);
+                style.font = font; // start the font picker on the connector's pin font
                 beginInlineText(QString(), text, style, at);
                 inlineConnectorId_ = id;
                 inlineConnectorPin_ = pin; // set after beginInlineText resets it
@@ -3681,7 +3683,8 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
             f.setItalic(inlineStyle_.italic);
             f.setUnderline(inlineStyle_.underline);
             f.setStrikeOut(inlineStyle_.strike);
-            f.setPixelSize(std::max(10, static_cast<int>(inlineStyle_.size * canvas_->viewScale())));
+            // Keep the on-canvas edit text comfortably readable regardless of zoom.
+            f.setPixelSize(std::max(18, static_cast<int>(inlineStyle_.size * canvas_->viewScale())));
             inlineEdit_->setFont(f);
             inlineEdit_->setFocus();
         };
@@ -3725,7 +3728,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         f.setItalic(style.italic);
         f.setUnderline(style.underline);
         f.setStrikeOut(style.strike);
-        f.setPixelSize(std::max(10, static_cast<int>((style.size > 0 ? style.size : 5.0) *
+        f.setPixelSize(std::max(18, static_cast<int>((style.size > 0 ? style.size : 5.0) *
                                                      canvas_->viewScale())));
         inlineEdit_->setFont(f);
     }
@@ -3775,7 +3778,9 @@ void MainWindow::commitInlineText(bool apply) {
     inlineRuler_->hide();
     if (apply) {
         if (inlineConnectorPin_ >= 0)
-            editor_->applyConnectorPinLabel(inlineConnectorId_, inlineConnectorPin_, text);
+            editor_->applyConnectorPinLabel(inlineConnectorId_, inlineConnectorPin_, text,
+                                            inlineStyle_.font); // font library -> pin font
+
         else if (inlineCell_ >= 0) editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
         else if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
         else editor_->applyTextEdit(inlineEditId_, text, inlineStyle_);
@@ -5055,17 +5060,37 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         auto* autoBtn = new QToolButton(w);
         autoBtn->setText(QStringLiteral("Auto scale"));
         autoBtn->setMinimumWidth(96);
-        autoBtn->setToolTip(QStringLiteral("Switch the body to Dynamic (auto-fit to the pins)"));
-        connect(autoBtn, &QToolButton::clicked, this,
-                [rectCombo] { rectCombo->setCurrentIndex(0); }); // -> Dynamic -> apply()
+        autoBtn->setToolTip(QStringLiteral("Scale the connector so it fills ~10% of the drawing view"));
+        connect(autoBtn, &QToolButton::clicked, this, [this] {
+            // Uniformly scale the connector so its larger dimension is ~10% of the
+            // smaller viewport dimension (in the current zoom).
+            ConnectorSpec s = editor_->connectorSpec();
+            const ConnectorGeometry g = connectorGeometry({0, 0}, s);
+            const double curMax = std::max(g.effectiveWidth, g.effectiveHeight);
+            const double vs = canvas_->viewScale();
+            const double screenMin = std::min(canvas_->width(), canvas_->height());
+            if (curMax < 1e-6 || vs < 1e-9 || screenMin < 1.0) return;
+            const double f = (0.10 * screenMin / vs) / curMax;
+            for (double* d : {&s.pitch, &s.pinLength, &s.rectWidth, &s.rectHeight, &s.textSize,
+                              &s.pinSize, &s.desSize, &s.pnSize})
+                *d *= f;
+            if (!editor_->selectedConnectorId().isEmpty())
+                editor_->applyConnectorSpecToSelection(s);
+            else
+                editor_->connectorSpec() = s;
+            if (syncConnectorRibbon_) syncConnectorRibbon_();
+            canvas_->update();
+            statusBar()->showMessage(QStringLiteral("Connector scaled to ~10%% of the view"));
+        });
         auto* placeBtn = new QToolButton(w);
         connectorPlaceBtn_ = placeBtn;
         placeBtn->setText(QStringLiteral("Place connector"));
         placeBtn->setMinimumWidth(110);
         placeBtn->setCheckable(true); // shows a pressed state only while placement is armed
+        // Neutral when idle; the prominent blue appears only while placement is armed.
         placeBtn->setStyleSheet(QStringLiteral(
-            "QToolButton{background:#294e74;color:#eaf2ff;border:1px solid #3d8bfd;"
-            "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#31608f;}"
+            "QToolButton{background:#3a3d43;color:#eaf2ff;border:1px solid #565a61;"
+            "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#45484f;}"
             "QToolButton:checked{background:#1b64ff;border:1px solid #cfe3ff;}"));
         connect(placeBtn, &QToolButton::clicked, this, [this, apply] {
             apply();

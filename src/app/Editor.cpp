@@ -1943,8 +1943,16 @@ void Editor::onDoubleClick(const Vec2& world) {
                     if (distance(world, g.pinLabelPos[i]) < tol) {
                         const QString cur =
                             static_cast<int>(i) < spec.pins.size() ? spec.pins[i] : QString();
+                        // Clear the region-select the first click of the double-click
+                        // started over the (non-pickable) body, so no zone lingers.
+                        regionMode_ = RegionMode::None;
+                        pressed_ = false;
+                        dragPath_.clear();
+                        if (dragTimer_) dragTimer_->stop();
+                        emit changed();
                         emit editConnectorPinRequested(e.id, static_cast<int>(i), cur,
-                                                       g.pinLabelPos[i], spec.pinSize * 0.7);
+                                                       g.pinLabelPos[i], spec.pinSize * 0.7,
+                                                       spec.pinFont);
                         return;
                     }
                 }
@@ -5264,7 +5272,8 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
     emit changed();
 }
 
-void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& text) {
+void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& text,
+                                    const QString& font) {
     Entity* e = entityById(id);
     if (!e || e->type != EntityType::Connector || pin < 0) return;
     QJsonArray pins = e->meta.value("pins").toArray();
@@ -5272,6 +5281,7 @@ void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& t
     pins[pin] = text;
     pushUndo();
     e->meta["pins"] = pins;
+    if (!font.isEmpty()) e->meta["pinFont"] = font; // font library applies to the pin text
     doc_->setDirty(true);
     emit changed();
 }
