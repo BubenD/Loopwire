@@ -1389,6 +1389,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         // opens the "Hatch Creation" tab.
         updateHatchContext();
         updateConnectorContext(); // the Connector tool opens the "Connector build" tab
+        if (connectorPlaceBtn_) // "Place connector" is pressed only while placement is armed
+            connectorPlaceBtn_->setChecked(editor_->connectorArmed());
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
         canvas_->update();   // repaint now (e.g. to clear a connector preview on tool change)
         if (t == ToolId::Connector)
@@ -5039,14 +5041,18 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         connect(autoBtn, &QToolButton::clicked, this,
                 [rectCombo] { rectCombo->setCurrentIndex(0); }); // -> Dynamic -> apply()
         auto* placeBtn = new QToolButton(w);
+        connectorPlaceBtn_ = placeBtn;
         placeBtn->setText(QStringLiteral("Place connector"));
         placeBtn->setMinimumWidth(110);
+        placeBtn->setCheckable(true); // shows a pressed state only while placement is armed
         placeBtn->setStyleSheet(QStringLiteral(
             "QToolButton{background:#294e74;color:#eaf2ff;border:1px solid #3d8bfd;"
-            "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#31608f;}"));
+            "border-radius:3px;padding:4px 8px;}QToolButton:hover{background:#31608f;}"
+            "QToolButton:checked{background:#1b64ff;border:1px solid #cfe3ff;}"));
         connect(placeBtn, &QToolButton::clicked, this, [this, apply] {
             apply();
             editor_->armConnectorPlacement(); // arm placement -> the preview appears now
+            connectorPlaceBtn_->setChecked(true); // stay pressed while armed
             // Move focus to the canvas so the ghost tracks and Tab/X/Y work immediately.
             canvas_->setFocus(Qt::OtherFocusReason);
             canvas_->update();

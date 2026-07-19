@@ -180,6 +180,29 @@ int run_harness_tests() {
               "editor: non-associative connector placed as loose primitives");
     }
 
+    // A crossing window that merely touches the connector body selects it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(5);
+        ed.setTool(ToolId::Connector);
+        ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // resume from freeze? no -> places
+        // armConnectorPlacement doesn't freeze; the first click places at (0,0).
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        check(conn, "conn-select: connector placed");
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        // Crossing box (right->left) overlapping the lower-right of the body only.
+        const Vec2 mid{(g.rectMin.x + g.rectMax.x) / 2.0, (g.rectMin.y + g.rectMax.y) / 2.0};
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({g.rectMax.x + 5, mid.y}, Qt::LeftButton, Qt::NoModifier); // 1st corner (right)
+        ed.onPointerMove({mid.x, g.rectMin.y - 5});
+        ed.onPointerPress({mid.x, g.rectMin.y - 5}, Qt::LeftButton, Qt::NoModifier);  // 2nd corner (left) -> crossing
+        check(ed.selection().size() == 1 && ed.selection().front() == conn->id,
+              "conn-select: a crossing window touching the body selects the connector");
+    }
+
     // Object snap finds an associative connector's pin ends + rectangle corners.
     {
         Document d; d.entities().clear();

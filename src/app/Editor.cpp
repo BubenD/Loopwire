@@ -1254,6 +1254,16 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}};
         break;
     }
+    case EntityType::Connector: {
+        // The body-rectangle corners + each pin end/tip, so a window encloses the
+        // connector and a crossing that touches its body or pins selects it.
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        pts = {g.rectMin, {g.rectMax.x, g.rectMin.y}, g.rectMax, {g.rectMin.x, g.rectMax.y}};
+        for (const auto& pe : g.pinEnd) pts.push_back(pe);
+        for (const auto& pt : g.pinTip) pts.push_back(pt);
+        break;
+    }
     default: {
         const Bounds b = e.bounds();
         if (b.valid) pts = {b.min, b.max, b.center()};
@@ -1370,6 +1380,18 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         // text box selects it.
         for (size_t i = 0; i < pts.size(); ++i)
             segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
+        break;
+    }
+    case EntityType::Connector: {
+        // Body-rectangle edges + each pin stub, so a crossing zone touching the body
+        // or a pin selects the connector (and a window enclosing it does too).
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        const Vec2 bl = g.rectMin, tr = g.rectMax, br{tr.x, bl.y}, tl{bl.x, tr.y};
+        segs.emplace_back(bl, br); segs.emplace_back(br, tr);
+        segs.emplace_back(tr, tl); segs.emplace_back(tl, bl);
+        for (size_t i = 0; i < g.pinTip.size() && i < g.pinEnd.size(); ++i)
+            segs.emplace_back(g.pinTip[i], g.pinEnd[i]);
         break;
     }
     default:

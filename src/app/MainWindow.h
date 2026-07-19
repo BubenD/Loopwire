@@ -172,6 +172,7 @@ private:
     QWidget* hatchTab_ = nullptr;
     QWidget* tableCellTab_ = nullptr;
     QWidget* connectorTab_ = nullptr;
+    QToolButton* connectorPlaceBtn_ = nullptr;  // "Place connector" — checked while armed
     std::function<void()> syncConnectorRibbon_; // reload the connector tab from context
     bool connectorSyncing_ = false;             // guard: skip apply() while syncing widgets
     QButtonGroup* hatchPatternGroup_ = nullptr; // exclusive pattern swatch buttons
