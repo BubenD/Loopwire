@@ -464,6 +464,7 @@ void Editor::setTool(ToolId t) {
     clearCellSelection();
     mirrorPending_ = false;
     connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
+    connectorFrozen_ = false;
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -1128,6 +1129,14 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     }
     if (isPickModifyTool(tool_)) { handlePickModifyPress(p); return; }
     if (tool_ == ToolId::Offset) { handleOffsetPress(p); return; }
+    // A frozen connector preview (Tab pressed to edit): the next click re-attaches the
+    // ghost to the cursor instead of placing it.
+    if (tool_ == ToolId::Connector && connectorArmed_ && connectorFrozen_) {
+        connectorFrozen_ = false;
+        emit message(QStringLiteral("Preview follows the cursor again — click to place"));
+        emit overlayChanged();
+        return;
+    }
     if (isPlacementTool(tool_)) { handlePlacementPress(p); return; }
     handleModifyPress(p);
 }
@@ -5212,8 +5221,16 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
 }
 
 void Editor::armConnectorPlacement() {
-    setTool(ToolId::Connector);   // resets connectorArmed_ to false...
+    setTool(ToolId::Connector);   // resets connectorArmed_/connectorFrozen_ to false...
     connectorArmed_ = true;       // ...then arm so the preview ghost appears
+    emit overlayChanged();
+}
+
+void Editor::freezeConnectorPreview() {
+    if (tool_ != ToolId::Connector || !connectorArmed_ || connectorFrozen_) return;
+    connectorFrozen_ = true;
+    connectorFrozenPos_ = cursor_; // pin the ghost here while the settings are edited
+    emit message(QStringLiteral("Preview frozen — edit the settings; click the drawing to resume"));
     emit overlayChanged();
 }
 
@@ -5910,7 +5927,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (tool_ == ToolId::Connector && connectorArmed_) {
         Entity ghost;
         ghost.type = EntityType::Connector;
-        ghost.a = cursor_;
+        // Frozen (Tab): stay pinned; otherwise follow the cursor.
+        ghost.a = connectorFrozen_ ? connectorFrozenPos_ : cursor_;
         ghost.layer = doc_->activeLayer();
         writeConnectorSpec(ghost.meta, connectorSpec_);
         EntityRenderer::draw(p, ghost, *doc_, vt, QColor(120, 200, 255, 170));

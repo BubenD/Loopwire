@@ -295,6 +295,10 @@ public:
     void armConnectorPlacement();
     // True while the connector placement preview is showing (armed by the button above).
     bool connectorArmed() const { return connectorArmed_; }
+    // Freeze the placement preview at the current cursor (Tab, so settings can be edited
+    // without the ghost following the mouse). The next canvas click re-attaches it.
+    void freezeConnectorPreview();
+    bool connectorFrozen() const { return connectorFrozen_; }
 
     // Bill of materials row (connector or wire).
     struct BomRow {
@@ -525,6 +529,10 @@ private:
 
     // Connector placement is "armed" (preview shown) only after Place connector.
     bool connectorArmed_ = false;
+    // While frozen (Tab pressed to edit settings) the preview stays at connectorFrozenPos_
+    // instead of following the cursor; the next canvas click re-attaches it to the cursor.
+    bool connectorFrozen_ = false;
+    Vec2 connectorFrozenPos_;
 
     // Offset tool state.
     double offsetDist_ = 0.0;             // the offset distance once set

@@ -704,6 +704,7 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     // Tab while placing a connector: hand focus to the Connector build ribbon so its
     // preferences can be edited; the placement preview stays live.
     if (editor_ && next && editor_->tool() == ToolId::Connector) {
+        editor_->freezeConnectorPreview(); // pin the ghost in place while editing settings
         emit connectorEditRequested();
         return true;
     }

@@ -216,6 +216,27 @@ int run_harness_tests() {
         check(!ed.connectorArmed(), "conn-arm: leaving the tool clears the preview");
     }
 
+    // Tab freezes the armed preview; a canvas click re-attaches it (doesn't place).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(3);
+        ed.armConnectorPlacement();
+        ed.onPointerMove({50, 50}); // preview follows the cursor
+        ed.freezeConnectorPreview();
+        check(ed.connectorFrozen(), "conn-freeze: Tab freezes the preview");
+        // A click while frozen re-attaches to the cursor instead of placing.
+        ed.onPointerPress({80, 40}, Qt::LeftButton, Qt::NoModifier);
+        bool anyConn = false;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) anyConn = true;
+        check(!ed.connectorFrozen() && !anyConn && ed.connectorArmed(),
+              "conn-freeze: click resumes the preview (no connector placed yet)");
+        // The next click places it.
+        ed.onPointerPress({80, 40}, Qt::LeftButton, Qt::NoModifier);
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) anyConn = true;
+        check(anyConn, "conn-freeze: a click after resuming places the connector");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
