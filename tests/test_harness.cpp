@@ -203,6 +203,19 @@ int run_harness_tests() {
               "conn-snap: snaps to a rectangle corner");
     }
 
+    // The placement preview arms only after "Place connector", not when the tool is picked.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.setTool(ToolId::Connector);
+        check(!ed.connectorArmed(), "conn-arm: picking the Connector tool does NOT show the preview");
+        ed.armConnectorPlacement();
+        check(ed.connectorArmed() && ed.tool() == ToolId::Connector,
+              "conn-arm: Place connector arms the preview");
+        ed.setTool(ToolId::Select);
+        check(!ed.connectorArmed(), "conn-arm: leaving the tool clears the preview");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

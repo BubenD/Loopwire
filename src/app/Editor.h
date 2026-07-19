@@ -293,6 +293,8 @@ public:
     // The preview appears only after this (pressing "Place connector"), not merely when
     // the Connector tool is selected for editing settings.
     void armConnectorPlacement();
+    // True while the connector placement preview is showing (armed by the button above).
+    bool connectorArmed() const { return connectorArmed_; }
 
     // Bill of materials row (connector or wire).
     struct BomRow {
