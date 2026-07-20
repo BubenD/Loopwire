@@ -1640,11 +1640,34 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     return false;
 }
 
+void Editor::dragAttachedWires(const Entity& conn, const Vec2& delta,
+                               const std::vector<QString>& movingIds) {
+    // Ctrl while moving DETACHES: the connector moves alone, wires stay put.
+    if (QApplication::keyboardModifiers() & Qt::ControlModifier) return;
+    if (!doc_ || conn.type != EntityType::Connector) return;
+    const ConnectorGeometry g = connectorGeometry(conn.a, connectorSpecFromMeta(conn.meta));
+    for (auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.empty()) continue;
+        if (std::find(movingIds.begin(), movingIds.end(), w.id) != movingIds.end()) continue;
+        for (auto& pt : w.points)
+            for (const Vec2& pe : g.pinEnd)
+                if (distance(pt, pe) < 1e-6) {
+                    pt = pt + delta;
+                    break;
+                }
+    }
+}
+
 void Editor::applyEditDrag(const Vec2& target) {
     // A leader-landing joint doesn't change geometry as it drags — it re-connects the
     // leader to whichever circle it's dropped on, handled at placement time.
     if (editMode_ == 1 && editRole_ == static_cast<int>(GripRole::LeaderLanding)) return;
     const Vec2 delta = target - editLast_;
+    // Entities moving in this drag (a connector's attached wires follow it; a wire
+    // already moving itself must not be shifted twice).
+    std::vector<QString> movingIds;
+    if (editMode_ == 0) movingIds = selected_;
+    else for (const auto& eg : editGrips_) movingIds.push_back(eg.id);
     if (!editMoved_) {
         if (delta.lengthSq() < 1e-18) return; // ignore until the cursor truly moves
         pushUndo();
@@ -1780,7 +1803,11 @@ void Editor::applyEditDrag(const Vec2& target) {
             }
             break;
         case GripRole::Radius: e->radius = std::max(1e-6, distance(e->center, target)); break;
-        case GripRole::Move: translateEntity(*e, delta); break;
+        case GripRole::Move:
+            // Moving a connector drags the wires attached to its pin ends along.
+            if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
+            translateEntity(*e, delta);
+            break;
         case GripRole::DimText: // reposition the dimension's measurement text
             e->meta["textPosX"] = target.x;
             e->meta["textPosY"] = target.y;
@@ -1899,7 +1926,10 @@ void Editor::applyEditDrag(const Vec2& target) {
     };
 
     if (editMode_ == 0) {
-        for (Entity* e : selectedEntities()) translateEntity(*e, delta);
+        for (Entity* e : selectedEntities()) {
+            if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
+            translateEntity(*e, delta);
+        }
     } else {
         // Move every grabbed joint (one, or all coincident shared joints).
         // Reshaping a trimmed double line/polyline invalidates its trim caps (the
@@ -3812,7 +3842,12 @@ void Editor::handleModifyPress(const Vec2& p) {
     switch (tool_) {
     case ToolId::Move: {
         const Vec2 delta = modifyPts_[1] - modifyPts_[0];
-        for (Entity* e : sel) translateEntity(*e, delta);
+        std::vector<QString> movingIds;
+        for (Entity* e : sel) movingIds.push_back(e->id);
+        for (Entity* e : sel) {
+            if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
+            translateEntity(*e, delta);
+        }
         break;
     }
     case ToolId::Rotate: {

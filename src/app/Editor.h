@@ -447,6 +447,14 @@ private:
     // Direct manipulation (Edraw-style): grab a joint (click-to-place) / apply edit.
     bool beginGripGrab(const Vec2& at, bool shift = false);
     void applyEditDrag(const Vec2& target);
+    // Wires whose vertex sits exactly on one of `conn`'s pin ends are CONNECTED:
+    // when the connector moves by `delta`, those wire vertices follow so the wires
+    // stay attached (hold Ctrl while moving to detach). Called BEFORE the connector
+    // itself is translated (the pin ends are taken from its current geometry).
+    // `movingIds` are the entities already moving in the same operation (skipped,
+    // so a selected wire isn't shifted twice).
+    void dragAttachedWires(const Entity& conn, const Vec2& delta,
+                           const std::vector<QString>& movingIds);
 
     Document* doc_ = nullptr;
     ToolId tool_ = ToolId::Select;

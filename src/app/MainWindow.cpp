@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 
 #include "app/Editor.h"
+#include "app/FontLibrary.h"
 #include "harness/Harness.h"
 #include "io/Dwx.h"
 #include "io/Dxf.h"
@@ -3434,6 +3435,7 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
     // Font / size / style row.
     auto* row = new QHBoxLayout();
     auto* fontCombo = new QFontComboBox(&dlg);
+    FontLibrary::applyTo(fontCombo);
     if (!style.font.isEmpty()) fontCombo->setCurrentFont(QFont(style.font));
     auto* sizeSpin = new QDoubleSpinBox(&dlg);
     sizeSpin->setRange(0.1, 1000.0);
@@ -3583,6 +3585,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineFont_ = new QFontComboBox(inlineBar_);
         inlineFont_->setMaximumWidth(150);
         inlineFont_->setEditable(false); // a font picker, not a text field
+        FontLibrary::applyTo(inlineFont_);
         // Build a numeric field with its own visible, stacked +/- buttons ("+" on
         // top, "-" below). Used for both the text height and the line spacing.
         const QString stepQss = QStringLiteral(
@@ -4950,14 +4953,17 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
 
     // ---- Text: per-role font + size (pin / designator / part number) ----
     auto* pinFont = new QFontComboBox(page); pinFont->setMaximumWidth(120);
+    FontLibrary::applyTo(pinFont);
     pinFont->setCurrentFont(QFont(init.pinFont));
     auto* pinSize = new QDoubleSpinBox(page); pinSize->setRange(1, 200);
     pinSize->setValue(init.pinSize); pinSize->setMaximumWidth(56);
     auto* desFont = new QFontComboBox(page); desFont->setMaximumWidth(120);
+    FontLibrary::applyTo(desFont);
     desFont->setCurrentFont(QFont(init.desFont));
     auto* desSize = new QDoubleSpinBox(page); desSize->setRange(1, 200);
     desSize->setValue(init.desSize); desSize->setMaximumWidth(56);
     auto* pnFont = new QFontComboBox(page); pnFont->setMaximumWidth(120);
+    FontLibrary::applyTo(pnFont);
     pnFont->setCurrentFont(QFont(init.pnFont));
     auto* pnSize = new QDoubleSpinBox(page); pnSize->setRange(1, 200);
     pnSize->setValue(init.pnSize); pnSize->setMaximumWidth(56);
@@ -5062,22 +5068,34 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         autoBtn->setMinimumWidth(96);
         autoBtn->setToolTip(QStringLiteral("Scale the connector so it fills ~10% of the drawing view"));
         connect(autoBtn, &QToolButton::clicked, this, [this] {
+            if (!editor_->connectorArmed()) {
+                statusBar()->showMessage(QStringLiteral("Place the connector to start preview before auto scaling"));
+                return;
+            }
             // Uniformly scale the connector so its larger dimension is ~10% of the
             // smaller viewport dimension (in the current zoom).
             ConnectorSpec s = editor_->connectorSpec();
+            if (!s.associative) {
+                statusBar()->showMessage(QStringLiteral("Auto scale requires an associative connector"));
+                return;
+            }
             const ConnectorGeometry g = connectorGeometry({0, 0}, s);
             const double curMax = std::max(g.effectiveWidth, g.effectiveHeight);
             const double vs = canvas_->viewScale();
             const double screenMin = std::min(canvas_->width(), canvas_->height());
             if (curMax < 1e-6 || vs < 1e-9 || screenMin < 1.0) return;
             const double f = (0.10 * screenMin / vs) / curMax;
-            for (double* d : {&s.pitch, &s.pinLength, &s.rectWidth, &s.rectHeight, &s.textSize,
+            for (double* d : {&s.pitch, &s.pinLength, &s.textSize,
                               &s.pinSize, &s.desSize, &s.pnSize})
                 *d *= f;
-            if (!editor_->selectedConnectorId().isEmpty())
-                editor_->applyConnectorSpecToSelection(s);
-            else
-                editor_->connectorSpec() = s;
+            // Keep the SHAPE: bake the current effective body into custom W/H scaled
+            // by the same factor, so the whole geometry (body + pins + text) scales
+            // uniformly. (Dynamic mode would keep the body width fixed at 40 and
+            // re-derive the height, leaving the geometry visually unchanged.)
+            s.rectMode = QStringLiteral("custom");
+            s.rectWidth = g.effectiveWidth * f;
+            s.rectHeight = g.effectiveHeight * f;
+            editor_->connectorSpec() = s;
             if (syncConnectorRibbon_) syncConnectorRibbon_();
             canvas_->update();
             statusBar()->showMessage(QStringLiteral("Connector scaled to ~10%% of the view"));

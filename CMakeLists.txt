@@ -51,6 +51,8 @@ add_library(edraw_core STATIC
     src/render/CanvasWidget.cpp
     src/render/EntityRenderer.h
     src/render/EntityRenderer.cpp
+    src/app/FontLibrary.h
+    src/app/FontLibrary.cpp
     src/app/Editor.h
     src/app/Editor.cpp
     src/app/MainWindow.h
