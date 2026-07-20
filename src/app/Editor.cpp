@@ -1005,8 +1005,8 @@ void Editor::onPointerMove(const Vec2& raw) {
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
-        trimFenceActive_)
-        emit overlayChanged();
+        trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_))
+        emit overlayChanged(); // the armed connector ghost tracks the snapped cursor
 }
 
 void Editor::onDragTick() {
