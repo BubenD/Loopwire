@@ -113,6 +113,17 @@ int run_harness_tests() {
               "connector: custom body honours W/H");
     }
 
+    // Dynamic body enlarges to keep the pin text in proportion: wider body + pin
+    // spacing at least the pin text size.
+    {
+        ConnectorSpec s = defaultConnectorSpec(4);
+        s.rectMode = "dynamic"; s.pitch = 20; s.pinSize = 50; s.textSize = 50;
+        ConnectorGeometry g = connectorGeometry({0, 0}, s);
+        check(g.effectiveWidth > 100.0, "connector: dynamic body widens for large pin text");
+        const double sp = std::abs(g.pinTip[0].y - g.pinTip[1].y);
+        check(sp >= 50.0 - 1e-6, "connector: dynamic pin spacing grows to fit large text");
+    }
+
     // New build options survive the meta round-trip.
     {
         ConnectorSpec s = defaultConnectorSpec(5);

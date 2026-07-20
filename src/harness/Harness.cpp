@@ -148,12 +148,15 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
 
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec) {
     ConnectorGeometry g;
-    // Dynamic body: fixed 40-wide, height auto-fits the pins + text clearance.
-    // Custom body: the user's W / H (falling back to the auto height if unset).
+    // Dynamic body: auto-fits the pins + text. To keep the primitives in proportion as
+    // the pin-text size grows, the pin spacing is at least ~1.25x the pin text height
+    // and the body width grows with the text; custom body uses the user's W / H exactly.
     const bool dynamic = spec.rectMode != QLatin1String("custom");
-    const double autoH = std::max(spec.pitch * (spec.pinCount + 1),
-                                  spec.pitch * std::max(1, spec.pinCount - 1) + spec.textSize * 2.4);
-    const double w = dynamic ? 40.0 : std::max(1.0, spec.rectWidth);
+    const double pitch = dynamic ? std::max(spec.pitch, spec.pinSize) : spec.pitch;
+    const double autoH = std::max(pitch * (spec.pinCount + 1),
+                                  pitch * std::max(1, spec.pinCount - 1) + spec.textSize * 2.4);
+    const double dynW = std::max(40.0, spec.textSize * 2.6); // wide enough for big pin text
+    const double w = dynamic ? dynW : std::max(1.0, spec.rectWidth);
     const double h = dynamic ? autoH : (spec.rectHeight > 0.0 ? spec.rectHeight : autoH);
     g.effectiveHeight = h;
     g.effectiveWidth = w;
@@ -167,14 +170,14 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
 
     const double tipX = spec.mirrorX ? left : right;
     const double xDir = spec.mirrorX ? -1.0 : 1.0;
-    const double pinStartY = top - (h - spec.pitch * (spec.pinCount - 1)) / 2.0;
+    const double pinStartY = top - (h - pitch * (spec.pinCount - 1)) / 2.0;
     const double pinTextX = spec.mirrorX ? left + w * 0.38 : left + w * 0.62;
 
     const Vec2 pinOff{spec.pinTextDX, spec.pinTextDY};
     for (int i = 0; i < spec.pinCount; ++i) {
         // mirrorY flips the vertical order (reflect across the X axis); text stays upright.
         const int slot = spec.mirrorY ? (spec.pinCount - 1 - i) : i;
-        const double y = pinStartY - slot * spec.pitch;
+        const double y = pinStartY - slot * pitch;
         g.pinTip.push_back({tipX, y});
         g.pinEnd.push_back({tipX + xDir * spec.pinLength, y});
         g.pinLabelPos.push_back({pinTextX + pinOff.x, y + pinOff.y}); // movable pin labels

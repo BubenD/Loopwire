@@ -1853,11 +1853,14 @@ void MainWindow::buildRibbon() {
         // read against the charcoal ribbon in dark mode.
         "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
         "QComboBox:hover{border-color:#5aa0ff;}"
+        // A distinct, button-like drop-down box with a clear down-triangle.
         "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
-        "border-left:1px solid #7b818b;width:16px;}"
-        // A visible down-triangle for the dropdown button (font/label/etc. pickers).
-        "QComboBox::down-arrow{image:none;width:8px;height:8px;border-left:4px solid transparent;"
-        "border-right:4px solid transparent;border-top:6px solid #e8eaed;}"
+        "background-color:#6a6f78;border-left:1px solid #7b818b;border-top-right-radius:3px;"
+        "border-bottom-right-radius:3px;width:20px;}"
+        "QComboBox::drop-down:hover{background-color:#7c828c;}"
+        "QComboBox::down-arrow{image:none;width:0;height:0;margin-right:2px;"
+        "border-left:5px solid transparent;border-right:5px solid transparent;"
+        "border-top:7px solid #eef1f5;}"
         "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
         "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
         "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
