@@ -1853,8 +1853,10 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
             // candidate orderings and keep the one with the fewest segment intersections.
             const int k = static_cast<int>(group.size());
             const double toward = (group.front().otherPin.x >= group.front().refPin.x) ? 1.0 : -1.0;
-            const double laneGap = std::max(4.0, refSpec.pitch * 0.6);
-            const double baseStub = std::max(refSpec.pinLength, laneGap * 2.0);
+            // Horizontal gap between vertical lanes == the pin pitch (the vertical gap
+            // between the horizontal wires), so the routing spacing is uniform.
+            const double laneGap = std::max(4.0, refSpec.pitch);
+            const double baseStub = std::max(refSpec.pinLength, laneGap);
             // Build the H-V-H route for a given lane assignment (lanePos[g] = 0..k-1).
             auto buildRoutes = [&](const std::vector<int>& lanePos) {
                 std::vector<std::vector<Vec2>> routes(k);

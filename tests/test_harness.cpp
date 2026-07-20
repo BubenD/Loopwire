@@ -513,6 +513,26 @@ int run_harness_tests() {
               "scale-wire: the wire's open end is left where it was");
     }
 
+    // Editing a mirrored connector's pin count keeps it mirrored (ribbon seeds the spec
+    // from the selected connector, so mirrorX/mirrorY aren't reset to the default).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4); ed.connectorSpec().mirrorX = true;
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        QString cid; for (const auto& e : d.entities()) if (e.type == EntityType::Connector) cid = e.id;
+        ed.setTool(ToolId::Select); ed.selectById(cid);
+        const Entity* c0 = nullptr; for (const auto& e : d.entities()) if (e.id == cid) c0 = &e;
+        ConnectorSpec s = connectorSpecFromMeta(c0->meta); // seed from the selected connector
+        s.pinCount = 6; regenPinLabels(s);
+        ed.applyConnectorSpecToSelection(s);
+        const Entity* c1 = nullptr; for (const auto& e : d.entities()) if (e.id == cid) c1 = &e;
+        const ConnectorSpec s1 = connectorSpecFromMeta(c1->meta);
+        check(s1.mirrorX && s1.pinCount == 6,
+              "conn-editpins: adding pins keeps the connector mirrored (not flipped)");
+    }
+
     // Wire grips: an open straight wire has a middle joint that moves the whole wire.
     {
         Document d; d.entities().clear();

@@ -4982,7 +4982,14 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
     // connector is selected, live-apply so edits show immediately.
     auto apply = [=, this] {
         if (connectorSyncing_) return; // ignore programmatic widget updates from sync
+        // Seed from the SELECTED connector (if any) so fields the ribbon doesn't expose
+        // — mirrorX / mirrorY especially — are preserved when editing it (e.g. changing
+        // the pin count must not flip a mirrored connector back to the default).
         ConnectorSpec s = editor_->connectorSpec();
+        const QString selId = editor_->selectedConnectorId();
+        if (!selId.isEmpty() && doc_)
+            for (const auto& e : doc_->entities())
+                if (e.id == selId) { s = connectorSpecFromMeta(e.meta); break; }
         s.designator = desEdit->text();
         s.partNumber = pnEdit->text();
         s.pinCount = qtySpin->value();
