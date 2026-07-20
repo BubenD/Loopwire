@@ -5548,35 +5548,74 @@ void MainWindow::showValidation(bool revalidate) {
     int open = 0, fixed = 0;
     for (const auto& is : display) (presentKeys.contains(is.key) ? open : fixed)++;
 
-    if (validationDlg_) { validationDlg_->close(); validationDlg_ = nullptr; }
-    auto* dlg = new QDialog(this);
-    validationDlg_ = dlg;
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    connect(dlg, &QObject::destroyed, this, [this] { validationDlg_ = nullptr; });
-    dlg->setWindowTitle(QStringLiteral("Schematic validation"));
-    dlg->setModal(false);
-    dlg->resize(600, 400);
-    auto* lay = new QVBoxLayout(dlg);
+    // Build the window ONCE; Revalidate / Bypass / Rules just repopulate it in place
+    // (no second window pops up).
+    if (!validationDlg_) {
+        auto* dlg = new QDialog(this);
+        validationDlg_ = dlg;
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &QObject::destroyed, this, [this] {
+            validationDlg_ = nullptr;
+            validationTable_ = nullptr;
+            validationHeader_ = nullptr;
+        });
+        dlg->setWindowTitle(QStringLiteral("Schematic validation"));
+        dlg->setModal(false);
+        dlg->resize(600, 400);
+        auto* lay = new QVBoxLayout(dlg);
 
-    auto* header = new QLabel(
+        validationHeader_ = new QLabel(dlg);
+        validationHeader_->setWordWrap(true);
+        lay->addWidget(validationHeader_);
+
+        validationTable_ = new QTableWidget(dlg);
+        validationTable_->setColumnCount(2);
+        validationTable_->setHorizontalHeaderLabels({QStringLiteral("Discrepancy"), QString()});
+        validationTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        validationTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+        validationTable_->setColumnWidth(1, 92);
+        validationTable_->verticalHeader()->setVisible(false);
+        validationTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        validationTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        // Click a row → jump to + highlight the offending object (reads current rows).
+        connect(validationTable_, &QTableWidget::cellClicked, this, [this](int row, int) {
+            if (row >= 0 && row < static_cast<int>(validationRows_.size()))
+                locateIssue(validationRows_[row]);
+        });
+        lay->addWidget(validationTable_);
+
+        auto* btnRow = new QHBoxLayout();
+        auto* revalBtn = new QPushButton(QStringLiteral("Revalidate"), dlg);
+        revalBtn->setToolTip(
+            QStringLiteral("Re-run the check; issues you have fixed get a green tick"));
+        connect(revalBtn, &QPushButton::clicked, this, [this] { showValidation(true); });
+        btnRow->addWidget(revalBtn);
+        auto* rulesBtn = new QPushButton(QStringLiteral("Rules…"), dlg);
+        rulesBtn->setToolTip(QStringLiteral("Choose which design-rule checks are active"));
+        connect(rulesBtn, &QPushButton::clicked, this, [this] { showValidationRules(); });
+        btnRow->addWidget(rulesBtn);
+        auto* bypassBtn = new QPushButton(makeBypassIcon(), QStringLiteral("Bypass table"), dlg);
+        bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
+        connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypassTable(); });
+        btnRow->addWidget(bypassBtn);
+        btnRow->addStretch(1);
+        auto* closeBtn = new QPushButton(QStringLiteral("Close"), dlg);
+        connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
+        btnRow->addWidget(closeBtn);
+        lay->addLayout(btnRow);
+    }
+
+    // Repopulate the (existing) window's header + table in place.
+    validationHeader_->setText(
         display.empty()
             ? QStringLiteral("Schematic is valid — no active discrepancies.")
             : QStringLiteral("%1 open, %2 fixed — click a row to jump to it; Bypass to accept; "
                              "Revalidate to re-check.")
-                  .arg(open).arg(fixed),
-        dlg);
-    header->setWordWrap(true);
-    lay->addWidget(header);
-
-    auto* table = new QTableWidget(dlg);
-    table->setColumnCount(2);
-    table->setHorizontalHeaderLabels({QStringLiteral("Discrepancy"), QString()});
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
-    table->setColumnWidth(1, 92);
-    table->verticalHeader()->setVisible(false);
-    table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+                  .arg(open)
+                  .arg(fixed));
+    validationRows_ = display;
+    QTableWidget* table = validationTable_;
+    table->setRowCount(0); // clears old rows + their Bypass buttons
     table->setRowCount(static_cast<int>(display.size()));
     for (int r = 0; r < static_cast<int>(display.size()); ++r) {
         const bool isFixed = !presentKeys.contains(display[r].key);
@@ -5589,44 +5628,19 @@ void MainWindow::showValidation(bool revalidate) {
             item->setFont(f);
         }
         table->setItem(r, 0, item);
-        // A still-open issue gets a Bypass button; a fixed one needs no action.
-        if (!isFixed) {
+        if (!isFixed) { // a still-open issue gets a Bypass button
             auto* by = new QPushButton(QStringLiteral("Bypass"), table);
             const QString key = display[r].key;
             connect(by, &QPushButton::clicked, this, [this, key] {
                 editor_->bypassIssue(key);
-                showValidation(true); // keep the tracked set; just drop the bypassed row
+                showValidation(true); // in-place refresh; no new window
             });
             table->setCellWidget(r, 1, by);
         }
     }
-    // Click a row → jump to + highlight the offending object.
-    connect(table, &QTableWidget::cellClicked, this, [this, display](int row, int) {
-        if (row >= 0 && row < static_cast<int>(display.size())) locateIssue(display[row]);
-    });
-    lay->addWidget(table);
 
-    auto* btnRow = new QHBoxLayout();
-    auto* revalBtn = new QPushButton(QStringLiteral("Revalidate"), dlg);
-    revalBtn->setToolTip(QStringLiteral("Re-run the check; issues you have fixed get a green tick"));
-    connect(revalBtn, &QPushButton::clicked, this, [this] { showValidation(true); });
-    btnRow->addWidget(revalBtn);
-    auto* rulesBtn = new QPushButton(QStringLiteral("Rules…"), dlg);
-    rulesBtn->setToolTip(QStringLiteral("Choose which design-rule checks are active"));
-    connect(rulesBtn, &QPushButton::clicked, this, [this] { showValidationRules(); });
-    btnRow->addWidget(rulesBtn);
-    auto* bypassBtn = new QPushButton(makeBypassIcon(), QStringLiteral("Bypass table"), dlg);
-    bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
-    connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypassTable(); });
-    btnRow->addWidget(bypassBtn);
-    btnRow->addStretch(1);
-    auto* closeBtn = new QPushButton(QStringLiteral("Close"), dlg);
-    connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
-    btnRow->addWidget(closeBtn);
-    lay->addLayout(btnRow);
-
-    dlg->show();
-    dlg->raise();
+    validationDlg_->show();
+    validationDlg_->raise();
 }
 
 void MainWindow::showBypassTable() {

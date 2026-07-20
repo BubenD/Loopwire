@@ -176,6 +176,9 @@ private:
     QDialog* bypassDlg_ = nullptr;     // modeless "Bypassed discrepancies" window (if open)
     QDialog* rulesDlg_ = nullptr;      // modeless "Validation rules" chooser (if open)
     std::vector<ValidationIssue> validationSnapshot_; // issues tracked in the open window
+    QTableWidget* validationTable_ = nullptr;  // the open validation window's table (in-place refresh)
+    QLabel* validationHeader_ = nullptr;       // its header label
+    std::vector<ValidationIssue> validationRows_; // rows currently shown (for click → locate)
     bool crossSectionAwg_ = false;     // wire cross-section notation: false = mm², true = AWG
 
     QActionGroup* toolGroup_ = nullptr;
