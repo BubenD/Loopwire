@@ -113,6 +113,16 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
         for (int i = 0; i < arr.size(); ++i) arr[i] = arr[i].toDouble() * s;
         e.meta.insert(QLatin1String(k), arr);
     }
+    // A connector is parametric (anchor + size fields in meta): scale its dimensions so
+    // the whole body / pins / text resize. mapPoints already moved the anchor about the
+    // base, so the connector scales uniformly about the scale base point.
+    if (e.type == EntityType::Connector) {
+        for (const char* k : {"pitch", "pinLength", "rectWidth", "rectHeight", "textSize",
+                              "pinSize", "desSize", "pnSize", "pinTextDX", "pinTextDY",
+                              "desTextDX", "desTextDY", "pnTextDX", "pnTextDY"})
+            if (e.meta.contains(QLatin1String(k)))
+                e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
+    }
 }
 
 void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {

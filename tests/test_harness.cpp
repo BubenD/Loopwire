@@ -468,6 +468,21 @@ int run_harness_tests() {
         check(near(r.bay, -400.0), "align-routing: the connector stays put when re-routing at 90 deg");
     }
 
+    // Scaling a connector resizes its parametric geometry (not just its position).
+    {
+        Entity c; c.type = EntityType::Connector; c.a = {10, 0};
+        ConnectorSpec s = defaultConnectorSpec(4);
+        s.rectMode = "custom"; s.rectWidth = 40; s.rectHeight = 84;
+        writeConnectorSpec(c.meta, s);
+        scaleEntity(c, {0, 0}, 2.0);
+        const ConnectorSpec s2 = connectorSpecFromMeta(c.meta);
+        check(near(s2.pitch, s.pitch * 2) && near(s2.pinLength, s.pinLength * 2) &&
+                  near(s2.rectWidth, 80) && near(s2.rectHeight, 168),
+              "scale-conn: body/pitch/pin length scale with the factor");
+        check(near(s2.pinSize, s.pinSize * 2) && near(c.a.x, 20.0),
+              "scale-conn: text scales and the anchor scales about the base");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
