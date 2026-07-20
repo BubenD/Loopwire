@@ -1767,37 +1767,76 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
         return;
     }
     pushUndo();
-    // Process each connected connector once: translate it to axis-align the run, then
-    // straighten the connecting wires to a single straight (now axis-aligned) segment.
+    const ConnectorSpec refSpec = connectorSpecFromMeta(ref->meta);
+    int straightened = 0, routed = 0;
+    // Process each connected connector once. SMART DECISION: if the two connectors
+    // face each other, are wired 1:1 in order (every wire needs the SAME small vertical
+    // shift), and that shift is modest, MOVE the other connector so the wires become
+    // straight (0°). Otherwise leave BOTH connectors put and re-route each wire with
+    // right-angle (0°/90°) bends.
     std::vector<QString> done;
     for (const Link& seed : links) {
         if (std::find(done.begin(), done.end(), seed.otherId) != done.end()) continue;
         done.push_back(seed.otherId);
         std::vector<Link> group;
-        double sdx = 0, sdy = 0;
         for (const Link& l : links)
-            if (l.otherId == seed.otherId) {
-                group.push_back(l);
-                sdx += std::abs(l.otherPin.x - l.refPin.x);
-                sdy += std::abs(l.otherPin.y - l.refPin.y);
-            }
-        const bool horizontal = sdx >= sdy;          // run mostly horizontal -> align Y
-        const Vec2 delta = horizontal ? Vec2{0, group.front().refPin.y - group.front().otherPin.y}
-                                      : Vec2{group.front().refPin.x - group.front().otherPin.x, 0};
+            if (l.otherId == seed.otherId) group.push_back(l);
         Entity* oc = entityById(seed.otherId);
         if (!oc) continue;
-        dragAttachedWires(*oc, delta, {}); // carry all its wires along
-        translateEntity(*oc, delta);
-        // Straighten each connecting wire to a 2-point axis-aligned segment.
+        const ConnectorSpec ocSpec = connectorSpecFromMeta(oc->meta);
+        const ConnectorGeometry og = connectorGeometry(oc->a, ocSpec);
+        const double refCx = (rg.rectMin.x + rg.rectMax.x) / 2.0;
+        const double ocCx = (og.rectMin.x + og.rectMax.x) / 2.0;
+        const double rdir = refSpec.mirrorX ? -1.0 : 1.0; // ref pins exit +x when not mirrored
+        const double odir = ocSpec.mirrorX ? -1.0 : 1.0;
+        const bool facing = rdir * (ocCx - refCx) > 0 && odir * (refCx - ocCx) > 0;
+        // Every wire needs the same vertical shift to become straight?
+        const double dy0 = group.front().refPin.y - group.front().otherPin.y;
+        bool sameDy = true;
         for (const Link& l : group)
-            if (Entity* w = entityById(l.wireId)) {
-                const Vec2 movedOther = l.otherPin + delta;
-                w->points = l.refIsFirst ? std::vector<Vec2>{l.refPin, movedOther}
-                                         : std::vector<Vec2>{movedOther, l.refPin};
+            if (std::abs((l.refPin.y - l.otherPin.y) - dy0) > 1e-6) { sameDy = false; break; }
+        const double refH = rg.rectMax.y - rg.rectMin.y;
+        const bool straighten = facing && sameDy && std::abs(dy0) <= refH;
+
+        if (straighten) {
+            const Vec2 delta{0, dy0};
+            dragAttachedWires(*oc, delta, {}); // carry its wires along
+            translateEntity(*oc, delta);
+            for (const Link& l : group)
+                if (Entity* w = entityById(l.wireId)) {
+                    const Vec2 mo = l.otherPin + delta;
+                    w->points = l.refIsFirst ? std::vector<Vec2>{l.refPin, mo}
+                                             : std::vector<Vec2>{mo, l.refPin};
+                }
+            ++straightened;
+        } else {
+            // Orthogonal (Manhattan) re-route, connectors stay put. Each wire exits the
+            // ref pin horizontally to its own vertical lane, drops/rises, then runs into
+            // the other pin. Staggered lanes keep the vertical segments from overlapping.
+            std::sort(group.begin(), group.end(),
+                      [](const Link& a, const Link& b) { return a.refPin.y > b.refPin.y; });
+            const double toward = (group.front().otherPin.x >= group.front().refPin.x) ? 1.0 : -1.0;
+            const double laneGap = std::max(4.0, refSpec.pitch * 0.6);
+            const double baseStub = std::max(refSpec.pinLength, laneGap * 2.0);
+            for (int i = 0; i < static_cast<int>(group.size()); ++i) {
+                const Link& l = group[i];
+                const double laneX = l.refPin.x + toward * (baseStub + i * laneGap);
+                std::vector<Vec2> pts = {l.refPin,
+                                         {laneX, l.refPin.y},
+                                         {laneX, l.otherPin.y},
+                                         l.otherPin};
+                if (!l.refIsFirst) std::reverse(pts.begin(), pts.end());
+                if (Entity* w = entityById(l.wireId)) w->points = pts;
             }
+            ++routed;
+        }
     }
     doc_->setDirty(true);
-    emit message(QStringLiteral("Routing aligned to the reference connector"));
+    emit message(straightened && routed
+                     ? QStringLiteral("Routing aligned (%1 straightened, %2 re-routed at 90°)")
+                           .arg(straightened).arg(routed)
+                 : routed ? QStringLiteral("Wires re-routed at 90° (connectors kept in place)")
+                          : QStringLiteral("Routing straightened to the reference connector"));
     emit selectionChanged();
     emit changed();
 }

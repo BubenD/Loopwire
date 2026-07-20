@@ -425,15 +425,18 @@ int run_harness_tests() {
               "conn-snap-place: the ghost corner snaps onto another connector's corner");
     }
 
-    // Align routing: a connector wired to the reference shifts so the wire straightens.
-    {
+    // Align routing helper: place two facing connectors (A fixed, B mirrored so its
+    // pins face A) with B `dy` below, wire pin 0<->0, then align from A.
+    auto alignCase = [](double bx, double by) {
+        struct R { double wpts; double way0; double way1; double bay; bool built; };
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
-        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.connectorSpec() = defaultConnectorSpec(4); ed.connectorSpec().mirrorX = false;
         ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);       // reference A
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);           // A (pins right)
+        ed.connectorSpec().mirrorX = true;                                   // B faces A
         ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
-        ed.onPointerPress({300, -30}, Qt::LeftButton, Qt::NoModifier);   // B, 30 below
+        ed.onPointerPress({bx, by}, Qt::LeftButton, Qt::NoModifier);
         QString aid, bid;
         for (const auto& e : d.entities())
             if (e.type == EntityType::Connector) { if (aid.isEmpty()) aid = e.id; else bid = e.id; }
@@ -441,21 +444,28 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) { if (e.id == aid) ea = &e; if (e.id == bid) eb = &e; }
         const ConnectorGeometry ga = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta));
         const ConnectorGeometry gb = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta));
-        // Wire from A pin 0 end to B pin 0 end (angled, since B is 30 lower).
-        Entity w; w.id = "aw"; w.type = EntityType::Wire;
-        w.points = {ga.pinEnd[0], gb.pinEnd[0]};
+        Entity w; w.id = "aw"; w.type = EntityType::Wire; w.points = {ga.pinEnd[0], gb.pinEnd[0]};
         d.entities().push_back(w);
         ed.alignRoutingFrom(aid);
-        auto wire = [&]() -> const Entity* {
-            for (const auto& e : d.entities()) if (e.id == "aw") return &e;
-            return nullptr;
-        };
-        check(wire() && wire()->points.size() == 2 &&
-                  near(wire()->points[0].y, wire()->points[1].y),
-              "align-routing: the connecting wire is straightened to horizontal");
-        const Entity* eb2 = nullptr;
-        for (const auto& e : d.entities()) if (e.id == bid) eb2 = &e;
-        check(eb2 && near(eb2->a.y, 0.0), "align-routing: the wired connector shifts into line");
+        const Entity* ww = nullptr; const Entity* bb = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == "aw") ww = &e; if (e.id == bid) bb = &e; }
+        return R{ww ? double(ww->points.size()) : 0.0,
+                 ww && ww->points.size() ? ww->points.front().y : 0.0,
+                 ww && ww->points.size() ? ww->points.back().y : 0.0,
+                 bb ? bb->a.y : -999, ww && bb};
+    };
+    {
+        // Facing + small offset -> straighten: B shifts into line, wire is 2 pts horizontal.
+        auto r = alignCase(300, -30);
+        check(r.built && r.wpts == 2 && near(r.way0, r.way1),
+              "align-routing: small offset straightens the wire (0 deg)");
+        check(near(r.bay, 0.0), "align-routing: the connector shifts into line when straightening");
+    }
+    {
+        // Facing + large offset -> keep the connector, re-route the wire at 90 deg.
+        auto r = alignCase(400, -400);
+        check(r.built && r.wpts == 4, "align-routing: large offset re-routes the wire with 90 deg bends");
+        check(near(r.bay, -400.0), "align-routing: the connector stays put when re-routing at 90 deg");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
