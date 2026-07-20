@@ -37,6 +37,9 @@ public:
 
     // Zoom to fit all entities (matches Edraw fitView()).
     void fitView();
+    // Center the view on a world point (keeping the current zoom, but at least
+    // `minScale` if given) — used to jump to a validation discrepancy.
+    void centerOn(const Vec2& world, double minScale = 0.0);
 
     // World<->screen for overlays (e.g. the on-canvas text editor).
     QPointF mapToScreen(const Vec2& world) const { return transform().toScreen(world); }

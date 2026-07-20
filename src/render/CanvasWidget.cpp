@@ -236,6 +236,15 @@ void CanvasWidget::fitView() {
     invalidateScene();
 }
 
+void CanvasWidget::centerOn(const Vec2& world, double minScale) {
+    if (!doc_) return;
+    ViewState& view = doc_->view();
+    if (minScale > 0.0 && view.scale < minScale) view.scale = minScale;
+    view.x = size().width() / 2.0 - world.x * view.scale;
+    view.y = size().height() / 2.0 + world.y * view.scale;
+    invalidateScene();
+}
+
 void CanvasWidget::drawGrid(QPainter& p, const ViewTransform& vt) const {
     if (!gridVisible_ || gridSize_ <= 0.0) return;
 

@@ -30,6 +30,7 @@ class QDoubleSpinBox;
 class QSpinBox;
 class QButtonGroup;
 class QHBoxLayout;
+class QDialog;
 
 namespace Edraw_Desktop {
 
@@ -120,7 +121,10 @@ private:
     // Text / Actions), mirroring the Edraw web connector builder.
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
-    void showValidation(); // run the schematic design-rule check and report issues
+    void showValidation();   // run the schematic design-rule check; list active issues
+    void showBypassTable();  // list discrepancies the user has bypassed (accepted)
+    // Center + flash-highlight the object carrying a discrepancy (and select it).
+    void locateIssue(const ValidationIssue& issue);
 
     void newDrawing();
     void openDrawing();
@@ -156,6 +160,8 @@ private:
     QTabBar* docTabs_ = nullptr;
     Editor* editor_ = nullptr;
     CanvasWidget* canvas_ = nullptr;
+    QDialog* validationDlg_ = nullptr; // modeless "Schematic validation" window (if open)
+    QDialog* bypassDlg_ = nullptr;     // modeless "Bypassed discrepancies" window (if open)
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;

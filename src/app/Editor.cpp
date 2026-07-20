@@ -1764,8 +1764,8 @@ int Editor::assignEntityNumber() const {
     return mx + 1;
 }
 
-std::vector<QString> Editor::validateSchematic() const {
-    std::vector<QString> issues;
+std::vector<ValidationIssue> Editor::validateSchematic() const {
+    std::vector<ValidationIssue> issues;
     if (!doc_) return issues;
     const double tol = 1e-6;
     // Gather every wire endpoint, splice, and not-connected ("X") marker position.
@@ -1795,18 +1795,23 @@ std::vector<QString> Editor::validateSchematic() const {
         for (int i = 0; i < spec.pins.size(); ++i)
             for (int j = i + 1; j < spec.pins.size(); ++j)
                 if (!spec.pins[i].isEmpty() && spec.pins[i] == spec.pins[j]) {
+                    const Vec2 at = j < static_cast<int>(g.pinEnd.size()) ? g.pinEnd[j] : e.a;
                     issues.push_back(
-                        QStringLiteral("Connector %1: pins %2 and %3 share the label \"%4\"")
-                            .arg(name).arg(i + 1).arg(j + 1).arg(spec.pins[i]));
+                        {QStringLiteral("dup:%1:%2:%3").arg(e.id).arg(i).arg(j),
+                         QStringLiteral("Connector %1: pins %2 and %3 share the label \"%4\"")
+                             .arg(name).arg(i + 1).arg(j + 1).arg(spec.pins[i]),
+                         e.id, at});
                 }
         // (a) each pin connected to a wire or terminated by an X.
         for (int i = 0; i < spec.pinCount && i < static_cast<int>(g.pinEnd.size()); ++i) {
             const Vec2 pe = g.pinEnd[i];
             if (!nearAny(pe, wireEnds) && !nearAny(pe, ncMarks)) {
                 const QString lbl = i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
-                issues.push_back(QStringLiteral("Connector %1 pin %2 is not connected "
-                                                "(no wire and no X marker)")
-                                     .arg(name, lbl));
+                issues.push_back({QStringLiteral("nc:%1:%2").arg(e.id).arg(i),
+                                  QStringLiteral("Connector %1 pin %2 is not connected "
+                                                 "(no wire and no X marker)")
+                                      .arg(name, lbl),
+                                  e.id, pe});
             }
         }
     }
@@ -1822,11 +1827,28 @@ std::vector<QString> Editor::validateSchematic() const {
             const bool joined = nearAny(p, pinEnds) || nearAny(p, ncMarks) ||
                                 nearAny(p, splices) || shares > 1;
             if (!joined)
-                issues.push_back(QStringLiteral("Wire #%1 has an open (unconnected) end")
-                                     .arg(w.meta.value("entNum").toInt()));
+                issues.push_back({QStringLiteral("openwire:%1:%2").arg(w.id).arg(end),
+                                  QStringLiteral("Wire #%1 has an open (unconnected) end")
+                                      .arg(w.meta.value("entNum").toInt()),
+                                  w.id, p});
         }
     }
     return issues;
+}
+
+void Editor::flashHighlight(const Vec2& at) {
+    flashPt_ = at;
+    flashOn_ = true;
+    if (!flashTimer_) {
+        flashTimer_ = new QTimer(this);
+        flashTimer_->setSingleShot(true);
+        connect(flashTimer_, &QTimer::timeout, this, [this] {
+            flashOn_ = false;
+            emit changed();
+        });
+    }
+    flashTimer_->start(1400);
+    emit changed();
 }
 
 void Editor::beginAlignRouting() {
@@ -6239,6 +6261,21 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
+
+    // Locate-highlight: a bright ring flashed at a discrepancy the user clicked in the
+    // validation dialog, so the jumped-to object is easy to spot.
+    if (flashOn_) {
+        const QPointF c = vt.toScreen(flashPt_);
+        p.save();
+        QPen fp(QColor(255, 190, 40));
+        fp.setCosmetic(true);
+        fp.setWidthF(2.6);
+        p.setPen(fp);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(c, 15.0, 15.0);
+        p.drawEllipse(c, 26.0, 26.0);
+        p.restore();
+    }
 
     // Right-button drag: preview the selection mirrored (X/Y) about the catch point
     // and translated to the current offset.

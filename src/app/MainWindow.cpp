@@ -2219,6 +2219,29 @@ void MainWindow::buildRibbon() {
         }
         connect(valBtn, &QToolButton::clicked, this, [this] { showValidation(); });
         modG->addWidget(valBtn, 0, 1);
+        // Bypass table button: review discrepancies the user accepted (bypassed).
+        auto* bypassBtn = new QToolButton(modW);
+        bypassBtn->setText(QStringLiteral("Bypass table"));
+        bypassBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        bypassBtn->setIconSize(QSize(26, 26));
+        bypassBtn->setMinimumWidth(66);
+        bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#ffb038"));
+            pen.setWidthF(2.4);
+            ip.setPen(pen);
+            ip.setBrush(Qt::NoBrush);
+            ip.drawEllipse(QPointF(14, 14), 9.0, 9.0);
+            ip.drawLine(8, 8, 20, 20); // slash = "bypassed"
+            ip.end();
+            bypassBtn->setIcon(QIcon(pm));
+        }
+        connect(bypassBtn, &QToolButton::clicked, this, [this] { showBypassTable(); });
+        modG->addWidget(bypassBtn, 0, 2);
         addGroup(lay, QStringLiteral("Modify"), modW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
@@ -5415,21 +5438,160 @@ void MainWindow::showConnectorDialog() {
                                              : QStringLiteral("Connector updated"));
 }
 
+void MainWindow::locateIssue(const ValidationIssue& issue) {
+    if (!issue.entityId.isEmpty()) editor_->selectById(issue.entityId);
+    canvas_->centerOn(issue.at, 2.5); // jump the view to the object
+    editor_->flashHighlight(issue.at);
+    canvas_->setFocus(Qt::OtherFocusReason);
+}
+
+// A small red "no-entry"-style icon for the bypass table button/window.
+static QIcon makeBypassIcon() {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter ip(&pm);
+    ip.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#ffb038"));
+    pen.setWidthF(2.4);
+    ip.setPen(pen);
+    ip.setBrush(Qt::NoBrush);
+    ip.drawEllipse(QPointF(14, 14), 9.0, 9.0);
+    ip.drawLine(8, 8, 20, 20); // slash across = "bypassed"
+    ip.end();
+    return QIcon(pm);
+}
+
 void MainWindow::showValidation() {
-    const std::vector<QString> issues = editor_->validateSchematic();
-    QMessageBox box(this);
-    box.setWindowTitle(QStringLiteral("Schematic validation"));
-    if (issues.empty()) {
-        box.setIcon(QMessageBox::Information);
-        box.setText(QStringLiteral("Schematic is valid — no issues found."));
-    } else {
-        box.setIcon(QMessageBox::Warning);
-        box.setText(QStringLiteral("%1 issue(s) found:").arg(issues.size()));
-        QStringList lines;
-        for (const QString& s : issues) lines << QStringLiteral("•  ") + s;
-        box.setInformativeText(lines.join('\n'));
+    const std::vector<ValidationIssue> all = editor_->validateSchematic();
+    // Active issues = those the user has not bypassed.
+    std::vector<ValidationIssue> active;
+    for (const auto& is : all)
+        if (!editor_->bypassedIssues().contains(is.key)) active.push_back(is);
+
+    if (validationDlg_) { validationDlg_->close(); validationDlg_ = nullptr; }
+    auto* dlg = new QDialog(this);
+    validationDlg_ = dlg;
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] { validationDlg_ = nullptr; });
+    dlg->setWindowTitle(QStringLiteral("Schematic validation"));
+    dlg->setModal(false);
+    dlg->resize(600, 400);
+    auto* lay = new QVBoxLayout(dlg);
+
+    auto* header = new QLabel(
+        active.empty()
+            ? QStringLiteral("Schematic is valid — no active discrepancies.")
+            : QStringLiteral("%1 discrepancy(ies) found — click a row to jump to it; "
+                             "press Bypass to accept it.")
+                  .arg(active.size()),
+        dlg);
+    header->setWordWrap(true);
+    lay->addWidget(header);
+
+    auto* table = new QTableWidget(dlg);
+    table->setColumnCount(2);
+    table->setHorizontalHeaderLabels({QStringLiteral("Discrepancy"), QString()});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+    table->setColumnWidth(1, 92);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setRowCount(static_cast<int>(active.size()));
+    for (int r = 0; r < static_cast<int>(active.size()); ++r) {
+        table->setItem(r, 0, new QTableWidgetItem(active[r].message));
+        auto* by = new QPushButton(QStringLiteral("Bypass"), table);
+        const QString key = active[r].key;
+        connect(by, &QPushButton::clicked, this, [this, key] {
+            editor_->bypassIssue(key);
+            showValidation(); // rebuild the list without the bypassed item
+        });
+        table->setCellWidget(r, 1, by);
     }
-    box.exec();
+    // Click a row → jump to + highlight the offending object.
+    connect(table, &QTableWidget::cellClicked, this,
+            [this, active](int row, int) {
+                if (row >= 0 && row < static_cast<int>(active.size()))
+                    locateIssue(active[row]);
+            });
+    lay->addWidget(table);
+
+    auto* btnRow = new QHBoxLayout();
+    auto* bypassBtn = new QPushButton(makeBypassIcon(), QStringLiteral("Bypass table"), dlg);
+    bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
+    connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypassTable(); });
+    btnRow->addWidget(bypassBtn);
+    btnRow->addStretch(1);
+    auto* closeBtn = new QPushButton(QStringLiteral("Close"), dlg);
+    connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
+    btnRow->addWidget(closeBtn);
+    lay->addLayout(btnRow);
+
+    dlg->show();
+    dlg->raise();
+}
+
+void MainWindow::showBypassTable() {
+    const std::vector<ValidationIssue> all = editor_->validateSchematic();
+    // Bypassed AND still present in the drawing (a fixed one simply drops off the list).
+    std::vector<ValidationIssue> bypassed;
+    for (const auto& is : all)
+        if (editor_->bypassedIssues().contains(is.key)) bypassed.push_back(is);
+
+    if (bypassDlg_) { bypassDlg_->close(); bypassDlg_ = nullptr; }
+    auto* dlg = new QDialog(this);
+    bypassDlg_ = dlg;
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] { bypassDlg_ = nullptr; });
+    dlg->setWindowTitle(QStringLiteral("Bypassed discrepancies"));
+    dlg->setModal(false);
+    dlg->resize(600, 360);
+    auto* lay = new QVBoxLayout(dlg);
+
+    auto* header = new QLabel(
+        bypassed.empty()
+            ? QStringLiteral("No bypassed discrepancies.")
+            : QStringLiteral("%1 bypassed discrepancy(ies) — click a row to jump to it; "
+                             "press Restore to re-flag it.")
+                  .arg(bypassed.size()),
+        dlg);
+    header->setWordWrap(true);
+    lay->addWidget(header);
+
+    auto* table = new QTableWidget(dlg);
+    table->setColumnCount(2);
+    table->setHorizontalHeaderLabels({QStringLiteral("Bypassed discrepancy"), QString()});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+    table->setColumnWidth(1, 92);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setRowCount(static_cast<int>(bypassed.size()));
+    for (int r = 0; r < static_cast<int>(bypassed.size()); ++r) {
+        table->setItem(r, 0, new QTableWidgetItem(bypassed[r].message));
+        auto* rest = new QPushButton(QStringLiteral("Restore"), table);
+        const QString key = bypassed[r].key;
+        connect(rest, &QPushButton::clicked, this, [this, key] {
+            editor_->restoreIssue(key);
+            showBypassTable();          // drop it from this list
+            if (validationDlg_) showValidation(); // and re-flag it in the active list
+        });
+        table->setCellWidget(r, 1, rest);
+    }
+    connect(table, &QTableWidget::cellClicked, this,
+            [this, bypassed](int row, int) {
+                if (row >= 0 && row < static_cast<int>(bypassed.size()))
+                    locateIssue(bypassed[row]);
+            });
+    lay->addWidget(table);
+
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::close);
+    lay->addWidget(box);
+
+    dlg->show();
+    dlg->raise();
 }
 
 void MainWindow::showBomDialog() {

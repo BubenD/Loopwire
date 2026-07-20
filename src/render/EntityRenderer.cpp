@@ -1115,10 +1115,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Body.
         const QPointF lo = vt.toScreen(g.rectMin), hi = vt.toScreen(g.rectMax);
         p.drawRect(QRectF(lo, hi).normalized());
-        // Pins: a small ">" fork at the body edge, then the wire stub.
+        // Pins: a small ">" fork ("cup") at the body edge, then the wire stub. The cup
+        // keeps a FIXED default size — it does NOT grow with the pin pitch or when the
+        // connector / harness is scaled, so the contact symbol stays a constant glyph.
         const double xDir = spec.mirrorX ? -1.0 : 1.0;
-        const double fork = std::min(8.0, g.effectiveWidth * 0.28);
-        const double forkY = std::min(spec.pitch * 0.36, spec.textSize * 0.85);
+        constexpr double fork = 8.0;   // cup depth  (world units, default geometry)
+        constexpr double forkY = 5.4;  // cup half-height (world units, default geometry)
         for (int i = 0; i < spec.pinCount; ++i) {
             const Vec2 tip = g.pinTip[i];
             const Vec2 root{tip.x - xDir * fork, tip.y};

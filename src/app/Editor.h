@@ -11,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QJsonValue>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <algorithm>
 #include <optional>
@@ -20,6 +21,16 @@ class QPainter;
 class QTimer;
 
 namespace Edraw_Desktop {
+
+// One schematic design-rule discrepancy. `key` is a stable identity used to match
+// user "bypass" (accept) decisions across re-validations; `entityId` + `at` let the
+// UI jump to and highlight the offending object.
+struct ValidationIssue {
+    QString key;
+    QString message;
+    QString entityId;
+    Vec2 at{0.0, 0.0};
+};
 
 // The interaction brain: owns the active tool, snapping, selection, undo stack,
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
@@ -165,11 +176,22 @@ public:
     // A unique sequential number for a new connector/wire (stored in meta["entNum"]),
     // one greater than the largest already in the document.
     int assignEntityNumber() const;
-    // Schematic design-rule check: returns a list of problems (empty = valid):
+    // Schematic design-rule check: returns every problem found (empty = valid):
     //  - a connector pin not on a wire and not terminated by an X (not-connected) marker
     //  - duplicate pin labels within one connector
     //  - a wire with an open (dangling) end
-    std::vector<QString> validateSchematic() const;
+    // Each issue carries a stable key + the offending object's id/location.
+    std::vector<ValidationIssue> validateSchematic() const;
+
+    // "Bypass" registry: discrepancy keys the user has reviewed and accepted. They are
+    // filtered out of the active issue list and listed in the bypass table instead.
+    // Session-scoped (not written to the drawing file).
+    const QSet<QString>& bypassedIssues() const { return bypassed_; }
+    void bypassIssue(const QString& key) { bypassed_.insert(key); }
+    void restoreIssue(const QString& key) { bypassed_.remove(key); }
+
+    // Briefly flash a highlight ring at a world point (used to locate a discrepancy).
+    void flashHighlight(const Vec2& at);
 
     // Current draw color applied to newly created entities (empty => ByLayer).
     void setCurrentColor(const QString& hex) { currentColor_ = hex; }
@@ -489,6 +511,11 @@ private:
     // corner/pin end, return the anchor shifted so those points coincide (else none).
     std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor) const;
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
+
+    QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
+    bool flashOn_ = false;          // a locate-highlight ring is currently shown
+    Vec2 flashPt_{0.0, 0.0};        // where to draw it (world)
+    QTimer* flashTimer_ = nullptr;  // clears the flash after a moment
 
     Document* doc_ = nullptr;
     ToolId tool_ = ToolId::Select;

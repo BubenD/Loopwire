@@ -722,12 +722,23 @@ int run_harness_tests() {
         d.entities().push_back(w);
         const auto issues = ed.validateSchematic();
         auto has = [&](const char* frag) {
-            for (const QString& s : issues) if (s.contains(QLatin1String(frag))) return true;
+            for (const auto& s : issues)
+                if (s.message.contains(QLatin1String(frag))) return true;
             return false;
         };
         check(has("open"), "validate: reports the wire's open end");
         check(has("share the label"), "validate: reports the duplicate pin label");
         check(has("not connected"), "validate: reports the unconnected pins");
+        // Each issue carries a stable key + the offending entity id for jump/highlight.
+        check(!issues.empty() && !issues.front().key.isEmpty() &&
+                  !issues.front().entityId.isEmpty(),
+              "validate: issues carry a key + entity id");
+        // Bypass registry: accepting a discrepancy records its key; restore removes it.
+        const QString k = issues.front().key;
+        ed.bypassIssue(k);
+        check(ed.bypassedIssues().contains(k), "validate: bypass records the discrepancy key");
+        ed.restoreIssue(k);
+        check(!ed.bypassedIssues().contains(k), "validate: restore clears the bypass");
         // A clean schematic: pin 0 wired, others X-terminated, labels unique, wire closed.
         Document d2; d2.entities().clear();
         Editor ed2; ed2.setDocument(&d2); ed2.snapSettings().objectSnap = false;
