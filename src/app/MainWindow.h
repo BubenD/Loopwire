@@ -98,6 +98,12 @@ private:
     void refreshLayers();
     void refreshProperties();
     void refreshEntityList();
+    // A Properties-panel field edit rebuilds the whole panel, which would destroy the
+    // field the user just clicked into. Run the apply deferred, then re-focus the field
+    // now at the same row — so a single click moves editing straight to the new field.
+    void deferredPropApply(std::function<void()> apply);
+    int focusedPropsRow() const;      // row of the propsTable_ cell widget that has focus (-1 none)
+    void refocusPropsRow(int row);    // focus (and select) the value widget at that row
 
     void runCommand(const QString& text);
     void submitCommand(const QString& text); // shared by command bar + dynamic input

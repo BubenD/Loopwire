@@ -4272,6 +4272,39 @@ void MainWindow::refreshLayers() {
     }
 }
 
+int MainWindow::focusedPropsRow() const {
+    if (!propsTable_) return -1;
+    QWidget* f = QApplication::focusWidget();
+    if (!f) return -1;
+    for (int r = 0; r < propsTable_->rowCount(); ++r) {
+        QWidget* w = propsTable_->cellWidget(r, 1);
+        if (w && (w == f || w->isAncestorOf(f))) return r;
+    }
+    return -1;
+}
+
+void MainWindow::refocusPropsRow(int row) {
+    if (row < 0 || !propsTable_ || row >= propsTable_->rowCount()) return;
+    QWidget* w = propsTable_->cellWidget(row, 1);
+    if (!w) return;
+    w->setFocus(Qt::MouseFocusReason);
+    if (auto* le = qobject_cast<QLineEdit*>(w)) le->selectAll();
+    else if (auto* sp = qobject_cast<QDoubleSpinBox*>(w)) sp->selectAll();
+    else if (auto* cb = qobject_cast<QComboBox*>(w))
+        if (cb->isEditable() && cb->lineEdit()) cb->lineEdit()->selectAll();
+}
+
+void MainWindow::deferredPropApply(std::function<void()> apply) {
+    // Deferred so the field's own signal isn't destroyed mid-apply; after the panel
+    // rebuilds, restore focus to whatever field the user has moved into (if any) so a
+    // single click on another field lands there ready to edit.
+    QTimer::singleShot(0, this, [this, apply = std::move(apply)] {
+        const int row = focusedPropsRow(); // the field the user just clicked into
+        apply();                           // mutate + rebuild the Properties panel
+        refocusPropsRow(row);
+    });
+}
+
 void MainWindow::refreshProperties() {
     if (!propsTable_) return;
     refreshing_ = true;
@@ -4323,7 +4356,7 @@ void MainWindow::refreshProperties() {
         cb->setCurrentText(current);
         connect(cb, &QComboBox::currentTextChanged, this, [this, apply](const QString& t) {
             if (refreshing_) return;
-            QTimer::singleShot(0, this, [apply, t] { apply(t); });
+            deferredPropApply([apply, t] { apply(t); });
         });
         propsTable_->setCellWidget(r, 1, cb);
     };
@@ -4349,7 +4382,7 @@ void MainWindow::refreshProperties() {
                 [this, cb, apply](int i) {
                     if (refreshing_) return;
                     const QString d = cb->itemData(i).toString();
-                    QTimer::singleShot(0, this, [apply, d] { apply(d); });
+                    deferredPropApply([apply, d] { apply(d); });
                 });
         propsTable_->setCellWidget(r, 1, cb);
     };
@@ -4368,7 +4401,7 @@ void MainWindow::refreshProperties() {
         connect(sp, &QDoubleSpinBox::editingFinished, this, [this, sp, apply] {
             if (refreshing_) return;
             const double v = sp->value();
-            QTimer::singleShot(0, this, [apply, v] { apply(v); });
+            deferredPropApply([apply, v] { apply(v); });
         });
         propsTable_->setCellWidget(r, 1, sp);
     };
@@ -4385,7 +4418,7 @@ void MainWindow::refreshProperties() {
         connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
             if (refreshing_) return;
             const QString t = le->text();
-            QTimer::singleShot(0, this, [apply, t] { apply(t); });
+            deferredPropApply([apply, t] { apply(t); });
         });
         propsTable_->setCellWidget(r, 1, le);
     };
