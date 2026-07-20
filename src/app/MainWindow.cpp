@@ -5458,12 +5458,32 @@ static QIcon makeBypassIcon() {
     return QIcon(pm);
 }
 
-void MainWindow::showValidation() {
+void MainWindow::showValidation(bool revalidate) {
     const std::vector<ValidationIssue> all = editor_->validateSchematic();
-    // Active issues = those the user has not bypassed.
-    std::vector<ValidationIssue> active;
-    for (const auto& is : all)
-        if (!editor_->bypassedIssues().contains(is.key)) active.push_back(is);
+    QSet<QString> presentKeys; // discrepancies still detected in the drawing
+    for (const auto& is : all) presentKeys.insert(is.key);
+    const auto& bypassed = editor_->bypassedIssues();
+
+    // Tracked set: on a fresh open it's the current (non-bypassed) discrepancies; on
+    // Revalidate we KEEP the earlier set and merely add any newly-appeared ones, so a
+    // discrepancy the user has since fixed stays listed (and gets a green tick).
+    if (!revalidate) {
+        validationSnapshot_.clear();
+        for (const auto& is : all)
+            if (!bypassed.contains(is.key)) validationSnapshot_.push_back(is);
+    } else {
+        QSet<QString> known;
+        for (const auto& s : validationSnapshot_) known.insert(s.key);
+        for (const auto& is : all)
+            if (!bypassed.contains(is.key) && !known.contains(is.key))
+                validationSnapshot_.push_back(is);
+    }
+    // Display = tracked issues the user hasn't bypassed. Fixed ones are still shown.
+    std::vector<ValidationIssue> display;
+    for (const auto& is : validationSnapshot_)
+        if (!bypassed.contains(is.key)) display.push_back(is);
+    int open = 0, fixed = 0;
+    for (const auto& is : display) (presentKeys.contains(is.key) ? open : fixed)++;
 
     if (validationDlg_) { validationDlg_->close(); validationDlg_ = nullptr; }
     auto* dlg = new QDialog(this);
@@ -5476,11 +5496,11 @@ void MainWindow::showValidation() {
     auto* lay = new QVBoxLayout(dlg);
 
     auto* header = new QLabel(
-        active.empty()
+        display.empty()
             ? QStringLiteral("Schematic is valid — no active discrepancies.")
-            : QStringLiteral("%1 discrepancy(ies) found — click a row to jump to it; "
-                             "press Bypass to accept it.")
-                  .arg(active.size()),
+            : QStringLiteral("%1 open, %2 fixed — click a row to jump to it; Bypass to accept; "
+                             "Revalidate to re-check.")
+                  .arg(open).arg(fixed),
         dlg);
     header->setWordWrap(true);
     lay->addWidget(header);
@@ -5494,26 +5514,40 @@ void MainWindow::showValidation() {
     table->verticalHeader()->setVisible(false);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setRowCount(static_cast<int>(active.size()));
-    for (int r = 0; r < static_cast<int>(active.size()); ++r) {
-        table->setItem(r, 0, new QTableWidgetItem(active[r].message));
-        auto* by = new QPushButton(QStringLiteral("Bypass"), table);
-        const QString key = active[r].key;
-        connect(by, &QPushButton::clicked, this, [this, key] {
-            editor_->bypassIssue(key);
-            showValidation(); // rebuild the list without the bypassed item
-        });
-        table->setCellWidget(r, 1, by);
+    table->setRowCount(static_cast<int>(display.size()));
+    for (int r = 0; r < static_cast<int>(display.size()); ++r) {
+        const bool isFixed = !presentKeys.contains(display[r].key);
+        auto* item = new QTableWidgetItem(
+            isFixed ? QStringLiteral("✔  %1").arg(display[r].message) : display[r].message);
+        if (isFixed) {
+            item->setForeground(QColor("#3ec46d")); // green tick = resolved
+            QFont f = item->font();
+            f.setStrikeOut(true);
+            item->setFont(f);
+        }
+        table->setItem(r, 0, item);
+        // A still-open issue gets a Bypass button; a fixed one needs no action.
+        if (!isFixed) {
+            auto* by = new QPushButton(QStringLiteral("Bypass"), table);
+            const QString key = display[r].key;
+            connect(by, &QPushButton::clicked, this, [this, key] {
+                editor_->bypassIssue(key);
+                showValidation(true); // keep the tracked set; just drop the bypassed row
+            });
+            table->setCellWidget(r, 1, by);
+        }
     }
     // Click a row → jump to + highlight the offending object.
-    connect(table, &QTableWidget::cellClicked, this,
-            [this, active](int row, int) {
-                if (row >= 0 && row < static_cast<int>(active.size()))
-                    locateIssue(active[row]);
-            });
+    connect(table, &QTableWidget::cellClicked, this, [this, display](int row, int) {
+        if (row >= 0 && row < static_cast<int>(display.size())) locateIssue(display[row]);
+    });
     lay->addWidget(table);
 
     auto* btnRow = new QHBoxLayout();
+    auto* revalBtn = new QPushButton(QStringLiteral("Revalidate"), dlg);
+    revalBtn->setToolTip(QStringLiteral("Re-run the check; issues you have fixed get a green tick"));
+    connect(revalBtn, &QPushButton::clicked, this, [this] { showValidation(true); });
+    btnRow->addWidget(revalBtn);
     auto* bypassBtn = new QPushButton(makeBypassIcon(), QStringLiteral("Bypass table"), dlg);
     bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
     connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypassTable(); });
@@ -5571,8 +5605,8 @@ void MainWindow::showBypassTable() {
         const QString key = bypassed[r].key;
         connect(rest, &QPushButton::clicked, this, [this, key] {
             editor_->restoreIssue(key);
-            showBypassTable();          // drop it from this list
-            if (validationDlg_) showValidation(); // and re-flag it in the active list
+            showBypassTable();               // drop it from this list
+            if (validationDlg_) showValidation(true); // and re-flag it in the active list
         });
         table->setCellWidget(r, 1, rest);
     }

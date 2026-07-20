@@ -127,7 +127,10 @@ private:
     // Text / Actions), mirroring the Edraw web connector builder.
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
-    void showValidation();   // run the schematic design-rule check; list active issues
+    // Run the schematic design-rule check and (re)open the validation window. On a
+    // fresh open (revalidate=false) the current discrepancies become the tracked set;
+    // on Revalidate (true) that set is kept so issues now fixed can be shown ticked.
+    void showValidation(bool revalidate = false);
     void showBypassTable();  // list discrepancies the user has bypassed (accepted)
     // Center + flash-highlight the object carrying a discrepancy (and select it).
     void locateIssue(const ValidationIssue& issue);
@@ -168,6 +171,7 @@ private:
     CanvasWidget* canvas_ = nullptr;
     QDialog* validationDlg_ = nullptr; // modeless "Schematic validation" window (if open)
     QDialog* bypassDlg_ = nullptr;     // modeless "Bypassed discrepancies" window (if open)
+    std::vector<ValidationIssue> validationSnapshot_; // issues tracked in the open window
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;

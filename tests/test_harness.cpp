@@ -782,6 +782,22 @@ int run_harness_tests() {
               "validate: a fully X-terminated connector with no wires is valid");
     }
 
+    // The X (NotConnected) tool keeps placing until Esc — it does not revert to Select.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.setTool(ToolId::NotConnected);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+        int xs = 0;
+        for (const auto& e : d.entities()) if (e.type == EntityType::NotConnected) ++xs;
+        check(xs == 2, "x-repeat: two X markers placed in a row");
+        check(ed.tool() == ToolId::NotConnected, "x-repeat: tool stays active after placing");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(ed.tool() == ToolId::Select, "x-repeat: Esc ends the X tool");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

@@ -5736,7 +5736,12 @@ void Editor::handlePlacementPress(const Vec2& p) {
         emit message(QStringLiteral("%1 placed").arg(toolLabel(tool_)));
     }
     emit changed();
-    setTool(ToolId::Select); // return to Select after placing (Space repeats)
+    // The X (not-connected) terminator keeps placing until Esc, so all of a connector's
+    // unused pins can be X'd in a row; every other placement tool returns to Select.
+    if (tool_ == ToolId::NotConnected)
+        emit message(QStringLiteral("X placed — click to terminate more pins; Esc to finish"));
+    else
+        setTool(ToolId::Select); // return to Select after placing (Space repeats)
 }
 
 QString Editor::selectedConnectorId() const {

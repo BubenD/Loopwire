@@ -1163,7 +1163,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::NotConnected: {
         const QPointF c = vt.toScreen(e.a);
-        const double s = 5.0;
+        // World-sized so the X scales with the drawing (zooms out as you zoom out),
+        // matching the pins it terminates; a small screen floor keeps it visible.
+        const double halfWorld = e.meta.value("ncSize").toDouble(6.0);
+        const double s = std::max(3.0, halfWorld * vt.scale());
         p.drawLine(c + QPointF(-s, -s), c + QPointF(s, s));
         p.drawLine(c + QPointF(s, -s), c + QPointF(-s, s));
         break;
