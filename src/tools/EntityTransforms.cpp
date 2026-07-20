@@ -114,14 +114,22 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
         e.meta.insert(QLatin1String(k), arr);
     }
     // A connector is parametric (anchor + size fields in meta): scale its dimensions so
-    // the whole body / pins / text resize. mapPoints already moved the anchor about the
-    // base, so the connector scales uniformly about the scale base point.
+    // the whole body / pins / text resize UNIFORMLY, keeping its structure. mapPoints
+    // already moved the anchor about the base, so it scales about the scale base point.
     if (e.type == EntityType::Connector) {
-        for (const char* k : {"pitch", "pinLength", "rectWidth", "rectHeight", "textSize",
-                              "pinSize", "desSize", "pnSize", "pinTextDX", "pinTextDY",
-                              "desTextDX", "desTextDY", "pnTextDX", "pnTextDY"})
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta); // pre-scale sizes
+        const ConnectorGeometry g = connectorGeometry(e.a, spec); // current body W/H
+        for (const char* k : {"pitch", "pinLength", "textSize", "pinSize", "desSize", "pnSize",
+                              "pinTextDX", "pinTextDY", "desTextDX", "desTextDY", "pnTextDX",
+                              "pnTextDY"})
             if (e.meta.contains(QLatin1String(k)))
                 e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
+        // Bake the effective body into a custom W/H scaled by the same factor so the
+        // WIDTH scales too — dynamic mode otherwise pins the width at 40, which would
+        // stretch the connector out of proportion.
+        e.meta.insert(QStringLiteral("rectMode"), QStringLiteral("custom"));
+        e.meta.insert(QStringLiteral("rectWidth"), g.effectiveWidth * s);
+        e.meta.insert(QStringLiteral("rectHeight"), g.effectiveHeight * s);
     }
 }
 

@@ -2145,8 +2145,28 @@ void MainWindow::buildRibbon() {
         modG->setContentsMargins(0, 0, 0, 0);
         modG->setSpacing(2);
         auto* alignBtn = new QToolButton(modW);
-        alignBtn->setText(QStringLiteral("Align routing"));
-        alignBtn->setMinimumWidth(96);
+        alignBtn->setText(QStringLiteral("Align\nrouting"));
+        alignBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        alignBtn->setIconSize(QSize(26, 26));
+        alignBtn->setMinimumWidth(66);
+        // Icon: two pin stubs on the left joined by a right-angle (0°/90°) route to a
+        // pin stub on the right — the "make wires orthogonal" glyph.
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(1.8);
+            ip.setPen(pen);
+            ip.drawLine(3, 7, 12, 7);    // top pin exits right
+            ip.drawLine(12, 7, 12, 21);  // vertical run (90°)
+            ip.drawLine(12, 21, 25, 21); // into the lower-right pin
+            ip.drawLine(3, 14, 8, 14);   // a second (straight) pin stub
+            ip.drawLine(8, 14, 8, 21);
+            ip.end();
+            alignBtn->setIcon(QIcon(pm));
+        }
         alignBtn->setToolTip(QStringLiteral(
             "Click a reference connector; connectors wired to it shift so their wires "
             "become horizontal/vertical"));
@@ -2159,51 +2179,8 @@ void MainWindow::buildRibbon() {
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
-    {
-        auto [page, lay] = makeTabPage();
-        auto* lbl = new QLabel(QStringLiteral("Parametric constraints — coming soon"), page);
-        lay->addWidget(lbl);
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Parametric"));
-    }
-
-    // ---- OUTPUT : file actions ----
-    {
-        auto [page, lay] = makeTabPage();
-        auto* fileW = new QWidget(page);
-        auto* fg = new QGridLayout(fileW);
-        fg->setContentsMargins(0, 0, 0, 0);
-        fg->setSpacing(2);
-        auto fb = [&](const QString& t, std::function<void()> fn, int r, int c) {
-            auto* b = new QToolButton(fileW);
-            b->setText(t);
-            b->setMinimumWidth(74);
-            connect(b, &QToolButton::clicked, this, fn);
-            fg->addWidget(b, r, c);
-        };
-        fb(QStringLiteral("New"), [this] { newDrawing(); }, 0, 0);
-        fb(QStringLiteral("Open"), [this] { openDrawing(); }, 0, 1);
-        fb(QStringLiteral("Save DWX"), [this] { saveDwxAs(); }, 1, 0);
-        fb(QStringLiteral("Export DXF"), [this] { exportDxfAs(); }, 1, 1);
-        addGroup(lay, QStringLiteral("File"), fileW);
-        // Print / export to PDF: whole drawing, or a dragged window.
-        auto* pdfW = new QWidget(page);
-        auto* pg = new QGridLayout(pdfW);
-        pg->setContentsMargins(0, 0, 0, 0);
-        pg->setSpacing(2);
-        auto pb = [&](const QString& t, std::function<void()> fn, int r, int c) {
-            auto* b = new QToolButton(pdfW);
-            b->setText(t);
-            b->setMinimumWidth(96);
-            connect(b, &QToolButton::clicked, this, fn);
-            pg->addWidget(b, r, c);
-        };
-        pb(QStringLiteral("PDF (drawing)"), [this] { exportPdf(false); }, 0, 0);
-        pb(QStringLiteral("PDF (window)"), [this] { exportPdf(true); }, 1, 0);
-        addGroup(lay, QStringLiteral("Print"), pdfW);
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Output"));
-    }
+    // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
+    //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
 
     QToolBar* top = addToolBar(QStringLiteral("Ribbon"));
     top->setMovable(false);

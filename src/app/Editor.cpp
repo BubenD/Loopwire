@@ -4128,7 +4128,31 @@ void Editor::handleModifyPress(const Vec2& p) {
         const Vec2 base = modifyPts_[0];
         const double ref = selectionRefLength(sel);
         const double f = ref > 1e-9 ? distance(base, modifyPts_[1]) / ref : 1.0;
-        for (Entity* e : sel) scaleEntity(*e, base, std::max(1e-4, f));
+        const double sf = std::max(1e-4, f);
+        std::vector<QString> selIds;
+        for (Entity* e : sel) selIds.push_back(e->id);
+        for (Entity* e : sel) {
+            if (e->type == EntityType::Connector) {
+                // Scale the connector, then move any attached (non-selected) wire ends
+                // from the old pin positions to the new ones so the harness stays wired.
+                const ConnectorGeometry before =
+                    connectorGeometry(e->a, connectorSpecFromMeta(e->meta));
+                const std::vector<Vec2> oldPins = before.pinEnd;
+                scaleEntity(*e, base, sf);
+                const ConnectorGeometry after =
+                    connectorGeometry(e->a, connectorSpecFromMeta(e->meta));
+                for (auto& w : doc_->entities()) {
+                    if (w.type != EntityType::Wire) continue;
+                    if (std::find(selIds.begin(), selIds.end(), w.id) != selIds.end())
+                        continue; // a selected wire scales on its own and stays coincident
+                    for (auto& pt : w.points)
+                        for (size_t i = 0; i < oldPins.size() && i < after.pinEnd.size(); ++i)
+                            if (distance(pt, oldPins[i]) < 1e-6) { pt = after.pinEnd[i]; break; }
+                }
+            } else {
+                scaleEntity(*e, base, sf);
+            }
+        }
         break;
     }
     case ToolId::Offset: {

@@ -484,6 +484,35 @@ int run_harness_tests() {
               "scale-conn: text scales and the anchor scales about the base");
     }
 
+    // Scaling a connector keeps a (non-selected) attached wire wired to its pin.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // A at the origin
+        QString aid; const Entity* ea = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) { aid = e.id; ea = &e; }
+        const ConnectorGeometry ga = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta));
+        const Vec2 pin0 = ga.pinEnd[0];
+        Entity w; w.id = "sw"; w.type = EntityType::Wire; w.points = {pin0, {pin0.x + 300, pin0.y}};
+        d.entities().push_back(w);
+        // Select ONLY the connector and scale it x2 about the origin (its anchor).
+        ed.setTool(ToolId::Select); ed.selectById(aid);
+        ed.setTool(ToolId::Scale);
+        const double ref = distance(ga.rectMin, ga.rectMax);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({2 * ref, 0}, Qt::LeftButton, Qt::NoModifier); // factor 2
+        const Entity* ea2 = nullptr; const Entity* ww = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == aid) ea2 = &e; if (e.id == "sw") ww = &e; }
+        const ConnectorGeometry ga2 = connectorGeometry(ea2->a, connectorSpecFromMeta(ea2->meta));
+        check(ww && near(ww->points[0].x, ga2.pinEnd[0].x) && near(ww->points[0].y, ga2.pinEnd[0].y),
+              "scale-wire: the attached wire end follows the scaled connector's pin");
+        check(ww && near(ww->points[1].x, pin0.x + 300),
+              "scale-wire: the wire's open end is left where it was");
+    }
+
     // Wire grips: an open straight wire has a middle joint that moves the whole wire.
     {
         Document d; d.entities().clear();
