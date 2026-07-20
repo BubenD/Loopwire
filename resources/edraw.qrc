@@ -3,5 +3,6 @@
   <qresource prefix="/">
     <file>edraw.qss</file>
     <file>edraw.ico</file>
+    <file>caret-down.svg</file>
   </qresource>
 </RCC>
