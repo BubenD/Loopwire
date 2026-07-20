@@ -154,6 +154,14 @@ public:
     void clearSelection();
     void deleteSelected();
 
+    // Align routing (schematic): the next canvas click picks a reference connector
+    // that stays put; every OTHER connector wired to it is shifted so its connecting
+    // wires become axis-aligned (horizontal if the run is mostly horizontal, else
+    // vertical) and the wires are straightened. alignRoutingFrom runs it directly.
+    void beginAlignRouting();
+    void alignRoutingFrom(const QString& refConnectorId);
+    bool awaitingAlignRef() const { return awaitAlignRef_; }
+
     // Current draw color applied to newly created entities (empty => ByLayer).
     void setCurrentColor(const QString& hex) { currentColor_ = hex; }
     const QString& currentColor() const { return currentColor_; }
@@ -466,6 +474,7 @@ private:
     // or a pin end) at `rawAnchor` lands within snap tolerance of another connector's
     // corner/pin end, return the anchor shifted so those points coincide (else none).
     std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor) const;
+    bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
 
     Document* doc_ = nullptr;
     ToolId tool_ = ToolId::Select;

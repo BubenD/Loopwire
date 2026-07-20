@@ -425,6 +425,39 @@ int run_harness_tests() {
               "conn-snap-place: the ghost corner snaps onto another connector's corner");
     }
 
+    // Align routing: a connector wired to the reference shifts so the wire straightens.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);       // reference A
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({300, -30}, Qt::LeftButton, Qt::NoModifier);   // B, 30 below
+        QString aid, bid;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector) { if (aid.isEmpty()) aid = e.id; else bid = e.id; }
+        const Entity* ea = nullptr; const Entity* eb = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == aid) ea = &e; if (e.id == bid) eb = &e; }
+        const ConnectorGeometry ga = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta));
+        const ConnectorGeometry gb = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta));
+        // Wire from A pin 0 end to B pin 0 end (angled, since B is 30 lower).
+        Entity w; w.id = "aw"; w.type = EntityType::Wire;
+        w.points = {ga.pinEnd[0], gb.pinEnd[0]};
+        d.entities().push_back(w);
+        ed.alignRoutingFrom(aid);
+        auto wire = [&]() -> const Entity* {
+            for (const auto& e : d.entities()) if (e.id == "aw") return &e;
+            return nullptr;
+        };
+        check(wire() && wire()->points.size() == 2 &&
+                  near(wire()->points[0].y, wire()->points[1].y),
+              "align-routing: the connecting wire is straightened to horizontal");
+        const Entity* eb2 = nullptr;
+        for (const auto& e : d.entities()) if (e.id == bid) eb2 = &e;
+        check(eb2 && near(eb2->a.y, 0.0), "align-routing: the wired connector shifts into line");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

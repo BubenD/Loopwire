@@ -2139,6 +2139,23 @@ void MainWindow::buildRibbon() {
         addGroup(lay, QStringLiteral("Place"),
                  toolRow({ToolId::Connector, ToolId::Wire, ToolId::NetLabel,
                           ToolId::NotConnected}));
+        // Modify: straighten the wiring around a reference connector.
+        auto* modW = new QWidget(page);
+        auto* modG = new QGridLayout(modW);
+        modG->setContentsMargins(0, 0, 0, 0);
+        modG->setSpacing(2);
+        auto* alignBtn = new QToolButton(modW);
+        alignBtn->setText(QStringLiteral("Align routing"));
+        alignBtn->setMinimumWidth(96);
+        alignBtn->setToolTip(QStringLiteral(
+            "Click a reference connector; connectors wired to it shift so their wires "
+            "become horizontal/vertical"));
+        connect(alignBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginAlignRouting();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modG->addWidget(alignBtn, 0, 0);
+        addGroup(lay, QStringLiteral("Modify"), modW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
@@ -4706,6 +4723,8 @@ void MainWindow::buildCommands() {
         {{"notconnected", "nc"}, "Harness", "Not-connected marker", tool(ToolId::NotConnected)},
         {{"netlabel", "nl"}, "Harness", "Net label", tool(ToolId::NetLabel)},
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
+        {{"alignrouting", "align", "ar2"}, "Harness",
+         "Align routing to a reference connector", [this] { editor_->beginAlignRouting(); }},
         // Modify
         {{"move", "m"}, "Modify", "Move (base point, target)", tool(ToolId::Move)},
         {{"rotate", "ro"}, "Modify", "Rotate (pivot, ref, target)", tool(ToolId::Rotate)},

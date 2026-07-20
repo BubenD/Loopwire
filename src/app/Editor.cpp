@@ -1092,6 +1092,13 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
 
+    // Align routing: this click picks the reference connector, then aligns the rest.
+    if (awaitAlignRef_) {
+        if (auto hit = hitTest(p)) alignRoutingFrom(*hit);
+        else { awaitAlignRef_ = false; emit message(QStringLiteral("Align routing cancelled")); }
+        return;
+    }
+
     if (tool_ == ToolId::Select) { handleSelectPress(p, raw, mods); return; }
     // In Hatch mode a click first tries to fill a region/object; if there's
     // nothing to fill, fall through to normal selection (click or select-zone) so
@@ -1710,6 +1717,89 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor) const {
             if (d < best) { best = d; off = t - f; found = true; }
         }
     return found ? std::optional<Vec2>(rawAnchor + off) : std::nullopt;
+}
+
+void Editor::beginAlignRouting() {
+    if (!doc_) return;
+    setTool(ToolId::Select);
+    awaitAlignRef_ = true;
+    emit message(QStringLiteral("Align routing: click the reference connector (it stays put)"));
+}
+
+void Editor::alignRoutingFrom(const QString& refConnectorId) {
+    awaitAlignRef_ = false;
+    Entity* ref = entityById(refConnectorId);
+    if (!ref || ref->type != EntityType::Connector) {
+        emit message(QStringLiteral("Align routing: pick a connector as the reference"));
+        return;
+    }
+    const ConnectorGeometry rg = connectorGeometry(ref->a, connectorSpecFromMeta(ref->meta));
+    // A link = a wire connecting a reference pin end to another connector's pin end.
+    struct Link { QString wireId; bool refIsFirst; Vec2 refPin; QString otherId; Vec2 otherPin; };
+    auto connectorPinAt = [&](const Vec2& p, const QString& skip, Vec2& pinOut) -> QString {
+        for (const auto& c : doc_->entities()) {
+            if (c.type != EntityType::Connector || c.id == skip) continue;
+            const ConnectorGeometry cg = connectorGeometry(c.a, connectorSpecFromMeta(c.meta));
+            for (const Vec2& cp : cg.pinEnd)
+                if (distance(p, cp) < 1e-6) { pinOut = cp; return c.id; }
+        }
+        return {};
+    };
+    std::vector<Link> links;
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (bool first : {true, false}) {
+            const Vec2 end = first ? w.points.front() : w.points.back();
+            const Vec2 other = first ? w.points.back() : w.points.front();
+            bool onRef = false;
+            Vec2 refPin;
+            for (const Vec2& rp : rg.pinEnd)
+                if (distance(end, rp) < 1e-6) { onRef = true; refPin = rp; break; }
+            if (!onRef) continue;
+            Vec2 otherPin;
+            const QString oid = connectorPinAt(other, refConnectorId, otherPin);
+            if (!oid.isEmpty()) links.push_back({w.id, first, refPin, oid, otherPin});
+            break; // one end matched; don't double-count
+        }
+    }
+    if (links.empty()) {
+        emit message(QStringLiteral("Align routing: no connectors are wired to that one"));
+        return;
+    }
+    pushUndo();
+    // Process each connected connector once: translate it to axis-align the run, then
+    // straighten the connecting wires to a single straight (now axis-aligned) segment.
+    std::vector<QString> done;
+    for (const Link& seed : links) {
+        if (std::find(done.begin(), done.end(), seed.otherId) != done.end()) continue;
+        done.push_back(seed.otherId);
+        std::vector<Link> group;
+        double sdx = 0, sdy = 0;
+        for (const Link& l : links)
+            if (l.otherId == seed.otherId) {
+                group.push_back(l);
+                sdx += std::abs(l.otherPin.x - l.refPin.x);
+                sdy += std::abs(l.otherPin.y - l.refPin.y);
+            }
+        const bool horizontal = sdx >= sdy;          // run mostly horizontal -> align Y
+        const Vec2 delta = horizontal ? Vec2{0, group.front().refPin.y - group.front().otherPin.y}
+                                      : Vec2{group.front().refPin.x - group.front().otherPin.x, 0};
+        Entity* oc = entityById(seed.otherId);
+        if (!oc) continue;
+        dragAttachedWires(*oc, delta, {}); // carry all its wires along
+        translateEntity(*oc, delta);
+        // Straighten each connecting wire to a 2-point axis-aligned segment.
+        for (const Link& l : group)
+            if (Entity* w = entityById(l.wireId)) {
+                const Vec2 movedOther = l.otherPin + delta;
+                w->points = l.refIsFirst ? std::vector<Vec2>{l.refPin, movedOther}
+                                         : std::vector<Vec2>{movedOther, l.refPin};
+            }
+    }
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Routing aligned to the reference connector"));
+    emit selectionChanged();
+    emit changed();
 }
 
 void Editor::applyEditDrag(const Vec2& target) {
