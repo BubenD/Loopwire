@@ -1365,6 +1365,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
         updateConnectorContext(); // selecting a connector opens the Connector build tab
     });
+    // Keep the "Place connector" button pressed-state in sync when placement is armed
+    // by a canvas click (not just the button).
+    connect(editor_, &Editor::connectorArmedChanged, this, [this] {
+        if (connectorPlaceBtn_) connectorPlaceBtn_->setChecked(editor_->connectorArmed());
+    });
     // A hatch was created (or the creation session ended): re-point the tab so the
     // controls keep editing the just-placed hatch until you click out / Close.
     connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
@@ -5100,6 +5105,25 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
             canvas_->update();
             statusBar()->showMessage(QStringLiteral("Connector scaled to ~10%% of the view"));
         });
+        auto* resetBtn = new QToolButton(w);
+        resetBtn->setText(QStringLiteral("Reset size"));
+        resetBtn->setMinimumWidth(96);
+        resetBtn->setToolTip(QStringLiteral("Reset the connector's size (pitch, pin length, "
+                                            "body, text) to the defaults"));
+        connect(resetBtn, &QToolButton::clicked, this, [this] {
+            ConnectorSpec s = editor_->connectorSpec();
+            const ConnectorSpec d = defaultConnectorSpec(std::max(1, s.pinCount));
+            s.pitch = d.pitch; s.pinLength = d.pinLength;
+            s.rectMode = d.rectMode; s.rectWidth = d.rectWidth; s.rectHeight = d.rectHeight;
+            s.textSize = d.textSize; s.pinSize = d.pinSize; s.desSize = d.desSize; s.pnSize = d.pnSize;
+            if (!editor_->selectedConnectorId().isEmpty())
+                editor_->applyConnectorSpecToSelection(s);
+            else
+                editor_->connectorSpec() = s;
+            if (syncConnectorRibbon_) syncConnectorRibbon_();
+            canvas_->update();
+            statusBar()->showMessage(QStringLiteral("Connector size reset to default"));
+        });
         auto* placeBtn = new QToolButton(w);
         connectorPlaceBtn_ = placeBtn;
         placeBtn->setText(QStringLiteral("Place connector"));
@@ -5121,7 +5145,8 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
                 "Connector preview follows the cursor — X/Y flip, Tab to edit, click to place"));
         });
         g->addWidget(autoBtn, 0, 0);
-        g->addWidget(placeBtn, 1, 0);
+        g->addWidget(resetBtn, 0, 1);
+        g->addWidget(placeBtn, 1, 0, 1, 2);
         addGroup(QStringLiteral("Actions"), w);
     }
     apply(); // sync W/H enabled state + store the initial spec

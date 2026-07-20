@@ -1140,6 +1140,16 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         emit overlayChanged();
         return;
     }
+    // In Connector mode the FIRST click starts the preview (arms it) rather than
+    // placing — the ghost then follows the cursor and the next click places it.
+    if (tool_ == ToolId::Connector && !connectorArmed_) {
+        connectorArmed_ = true;
+        emit message(QStringLiteral("Connector preview started — click to place, "
+                                    "Tab to edit, X/Y to flip"));
+        emit connectorArmedChanged();
+        emit overlayChanged();
+        return;
+    }
     if (isPlacementTool(tool_)) { handlePlacementPress(p); return; }
     handleModifyPress(p);
 }
@@ -5324,6 +5334,7 @@ void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& t
 void Editor::armConnectorPlacement() {
     setTool(ToolId::Connector);   // resets connectorArmed_/connectorFrozen_ to false...
     connectorArmed_ = true;       // ...then arm so the preview ghost appears
+    emit connectorArmedChanged();
     emit overlayChanged();
 }
 

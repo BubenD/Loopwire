@@ -135,7 +135,8 @@ int run_harness_tests() {
         ed.connectorSpec().designator = "J1";
         ed.connectorSpec().partNumber = "ACME-9";
         ed.setTool(ToolId::Connector);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.armConnectorPlacement(); // in Connector mode the 1st click starts the preview;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // armed -> this click places
         check(doc.entities().size() == 1 &&
                   doc.entities()[0].type == EntityType::Connector,
               "editor: connector placed");
@@ -170,7 +171,8 @@ int run_harness_tests() {
         ed.connectorSpec() = defaultConnectorSpec(3);
         ed.connectorSpec().associative = false;
         ed.setTool(ToolId::Connector);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.armConnectorPlacement(); // in Connector mode the 1st click starts the preview;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // armed -> this click places
         bool anyConnector = false, anyLine = false, anyText = false;
         for (const auto& e : doc.entities()) {
             if (e.type == EntityType::Connector) anyConnector = true;
@@ -211,6 +213,7 @@ int run_harness_tests() {
         ed.snapSettings().objectSnap = false; // deterministic placement
         ed.connectorSpec() = defaultConnectorSpec(4);
         ed.setTool(ToolId::Connector);
+        ed.armConnectorPlacement(); // arm so the click places (1st click otherwise starts preview)
         ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
         const Entity* conn = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
@@ -267,7 +270,8 @@ int run_harness_tests() {
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
         ed.connectorSpec() = defaultConnectorSpec(4);
         ed.setTool(ToolId::Connector);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.armConnectorPlacement(); // in Connector mode the 1st click starts the preview;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // armed -> this click places
         const Entity* c = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
         check(c, "conn-interior: connector placed");
@@ -291,7 +295,8 @@ int run_harness_tests() {
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
         ed.connectorSpec() = defaultConnectorSpec(3);
         ed.setTool(ToolId::Connector);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.armConnectorPlacement(); // in Connector mode the 1st click starts the preview;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // armed -> this click places
         QString id;
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) id = e.id;
         ed.applyConnectorPinLabel(id, 1, QStringLiteral("K9"), QStringLiteral("Consolas"));
@@ -301,6 +306,57 @@ int run_harness_tests() {
               "conn-pin: applyConnectorPinLabel sets the pin's text");
         check(c && c->meta.value("pinFont").toString() == QLatin1String("Consolas"),
               "conn-pin: a chosen font from the library applies to the pin text");
+    }
+
+    // A wire on a connector pin follows the connector when it moves; a wire off the
+    // pin (disconnected) does not.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector);
+        ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        const QString cid = conn->id;
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        const Vec2 pe = g.pinEnd[0];
+        Entity w; w.id = "w1"; w.type = EntityType::Wire; w.points = {pe, {pe.x + 50, pe.y}};
+        d.entities().push_back(w);
+        Entity fw; fw.id = "w2"; fw.type = EntityType::Wire; fw.points = {{300, 300}, {360, 300}};
+        d.entities().push_back(fw);
+        // Move the connector by (0,-30) via the Move tool.
+        ed.setTool(ToolId::Select);
+        ed.selectById(cid);
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, -30}, Qt::LeftButton, Qt::NoModifier);
+        auto wire = [&](const char* id) -> const Entity* {
+            for (const auto& e : d.entities()) if (e.id == id) return &e;
+            return nullptr;
+        };
+        check(wire("w1") && near(wire("w1")->points[0].x, pe.x) &&
+                  near(wire("w1")->points[0].y, pe.y - 30),
+              "wire-follow: a wire on a pin follows the connector move");
+        check(wire("w2") && near(wire("w2")->points[0].x, 300),
+              "wire-follow: an unconnected wire does not move");
+        // Disconnect: move w1's start off the pin, then move the connector again — the
+        // wire no longer follows (positional connection is broken).
+        const Vec2 movedPin{pe.x, pe.y - 30};
+        ed.setTool(ToolId::Select);
+        ed.selectById("w1");
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({movedPin.x, movedPin.y}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({movedPin.x + 20, movedPin.y}, Qt::LeftButton, Qt::NoModifier); // pull off pin
+        const double afterPullX = wire("w1")->points[0].x;
+        ed.setTool(ToolId::Select);
+        ed.selectById(cid);
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0, -10}, Qt::LeftButton, Qt::NoModifier); // move connector again
+        check(near(wire("w1")->points[0].x, afterPullX),
+              "wire-disconnect: a wire pulled off the pin no longer follows the connector");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

@@ -341,6 +341,9 @@ signals:
                                 double cellW, double cellH);
     // A table cell was selected/deselected — the host shows/hides the Table Cell tab.
     void cellSelectionChanged();
+    // Connector placement was armed/disarmed (e.g. first canvas click starts the
+    // preview) — the host reflects it on the "Place connector" button.
+    void connectorArmedChanged();
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
