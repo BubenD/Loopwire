@@ -1023,9 +1023,10 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Placing a connector: snap the ghost by ANY of its own corners/pin ends onto
     // another connector's corners/pin ends (so pins line up), not just its anchor.
     if (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_ && snap.objectSnap) {
-        if (auto a = connectorFeatureSnap(raw)) {
-            cursor_ = *a;
-            snapResult_.point = *a;
+        Vec2 catchAt;
+        if (auto a = connectorFeatureSnap(raw, &catchAt)) {
+            cursor_ = *a;                 // ghost anchor (top-left) so the caught feature lands
+            snapResult_.point = catchAt;  // marker sits on the actual connection point
             snapResult_.snapped = true;
         }
     }
@@ -1725,7 +1726,7 @@ void Editor::dragAttachedWires(const Entity& conn, const Vec2& delta,
     }
 }
 
-std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor) const {
+std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut) const {
     if (!doc_) return std::nullopt;
     // Ghost feature points (body corners + pin ends) at the candidate anchor.
     const ConnectorGeometry gg = connectorGeometry(rawAnchor, connectorSpec_);
@@ -1734,26 +1735,37 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor) const {
                                gg.rectMax,
                                {gg.rectMin.x, gg.rectMax.y}};
     for (const Vec2& pe : gg.pinEnd) feats.push_back(pe);
-    // Target points: every existing connector's corners + pin ends.
+    // Target points to catch onto: every existing connector's corners + pin ends, plus
+    // wire endpoints, splices, and X (not-connected) markers — so the ghost's nearest
+    // feature latches onto whatever schematic point is closest (a harness connection).
     std::vector<Vec2> targets;
     for (const auto& e : doc_->entities()) {
-        if (e.type != EntityType::Connector) continue;
-        const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
-        targets.push_back(g.rectMin);
-        targets.push_back({g.rectMax.x, g.rectMin.y});
-        targets.push_back(g.rectMax);
-        targets.push_back({g.rectMin.x, g.rectMax.y});
-        for (const Vec2& pe : g.pinEnd) targets.push_back(pe);
+        if (e.type == EntityType::Connector) {
+            const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+            targets.push_back(g.rectMin);
+            targets.push_back({g.rectMax.x, g.rectMin.y});
+            targets.push_back(g.rectMax);
+            targets.push_back({g.rectMin.x, g.rectMax.y});
+            for (const Vec2& pe : g.pinEnd) targets.push_back(pe);
+        } else if (e.type == EntityType::Wire && e.points.size() >= 2) {
+            targets.push_back(e.points.front());
+            targets.push_back(e.points.back());
+        } else if (e.type == EntityType::Splice || e.type == EntityType::NotConnected) {
+            targets.push_back(e.a);
+        }
     }
     double best = worldTolerance();
     Vec2 off{0, 0};
+    Vec2 catchAt{0, 0};
     bool found = false;
     for (const Vec2& f : feats)
         for (const Vec2& t : targets) {
             const double d = distance(f, t);
-            if (d < best) { best = d; off = t - f; found = true; }
+            if (d < best) { best = d; off = t - f; catchAt = t; found = true; }
         }
-    return found ? std::optional<Vec2>(rawAnchor + off) : std::nullopt;
+    if (!found) return std::nullopt;
+    if (catchOut) *catchOut = catchAt; // the connection point the ghost latched onto
+    return std::optional<Vec2>(rawAnchor + off);
 }
 
 int Editor::assignEntityNumber() const {

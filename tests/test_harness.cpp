@@ -437,6 +437,28 @@ int run_harness_tests() {
               "conn-snap-place: the ghost corner snaps onto another connector's corner");
     }
 
+    // Connector preview auto-catches its nearest pin end onto a wire endpoint, so the
+    // connector can be dropped straight onto an existing harness connection.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); // object snap on by default
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        const Vec2 T{140.0, -18.0}; // a wire end to catch onto
+        Entity w; w.id = "w1"; w.type = EntityType::Wire; w.points = {{300, -18}, T};
+        d.entities().push_back(w);
+        // Where pin end 0 sits relative to the anchor, so we can aim the click.
+        const Vec2 off0 = connectorGeometry({0, 0}, ed.connectorSpec()).pinEnd[0];
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        // Click so pin end 0 lands ~2.8 units from T (inside snap tolerance).
+        ed.onPointerPress({T.x - off0.x + 2, T.y - off0.y + 2}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        const ConnectorGeometry gc =
+            connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        check(c && near(gc.pinEnd[0].x, T.x) && near(gc.pinEnd[0].y, T.y),
+              "conn-snap-place: a pin end auto-catches onto a wire end");
+    }
+
     // Align routing helper: place two facing connectors (A fixed, B mirrored so its
     // pins face A) with B `dy` below, wire pin 0<->0, then align from A.
     auto alignCase = [](double bx, double by, bool knee) {

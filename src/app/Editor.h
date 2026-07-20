@@ -507,9 +507,11 @@ private:
     void dragAttachedWires(const Entity& conn, const Vec2& delta,
                            const std::vector<QString>& movingIds);
     // For the connector placement preview: if any feature of the ghost (a body corner
-    // or a pin end) at `rawAnchor` lands within snap tolerance of another connector's
-    // corner/pin end, return the anchor shifted so those points coincide (else none).
-    std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor) const;
+    // or a pin end) at `rawAnchor` lands within snap tolerance of an existing schematic
+    // point (another connector's corner/pin end, a wire end, splice, or X marker),
+    // return the anchor shifted so those points coincide (else none). The nearest
+    // feature wins. If `catchOut` is given, it receives the connection point latched on.
+    std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut = nullptr) const;
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
