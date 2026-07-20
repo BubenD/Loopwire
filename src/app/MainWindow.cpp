@@ -3559,7 +3559,9 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
     if (!inlineEdit_) {
         inlineEdit_ = new QPlainTextEdit(canvas_);
         inlineEdit_->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;}"));
+            "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;"
+            // A bright, high-contrast highlight so selected text is clearly visible.
+            "selection-background-color:#3d8bfd;selection-color:#ffffff;}"));
         // Show the normal arrow cursor over the editor instead of the I-beam
         // "cross" text cursor while editing on-canvas text.
         inlineEdit_->setCursor(Qt::ArrowCursor);
@@ -3740,7 +3742,10 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
     inlineEdit_->show();
     inlineBar_->raise();
     inlineEdit_->setFocus();
-    inlineEdit_->moveCursor(QTextCursor::End);
+    // Pre-select existing content (shown highlighted) so it's clear what will change and
+    // typing overwrites it; a fresh insert just parks the cursor at the end.
+    if (!text.isEmpty()) inlineEdit_->selectAll();
+    else inlineEdit_->moveCursor(QTextCursor::End);
     canvas_->setInlineEditing(true);
     canvas_->raiseCrosshairOverlay(); // keep the crosshair above the editor toolbar
 }
