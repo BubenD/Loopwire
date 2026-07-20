@@ -2199,6 +2199,35 @@ void MainWindow::buildRibbon() {
         }
         connect(bypassBtn, &QToolButton::clicked, this, [this] { showBypassTable(); });
         modG->addWidget(bypassBtn, 0, 2);
+        // Validation rules button: choose which design-rule checks run.
+        auto* rulesBtn = new QToolButton(modW);
+        rulesBtn->setText(QStringLiteral("Rules"));
+        rulesBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        rulesBtn->setIconSize(QSize(26, 26));
+        rulesBtn->setMinimumWidth(66);
+        rulesBtn->setToolTip(QStringLiteral("Choose which validation rules are checked"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#8fb7ff"));
+            pen.setWidthF(2.2);
+            pen.setCapStyle(Qt::RoundCap);
+            pen.setJoinStyle(Qt::RoundJoin);
+            ip.setPen(pen);
+            // A checklist: three rows, each a tiny check + a rule line.
+            for (int i = 0; i < 3; ++i) {
+                const int y = 8 + i * 6;
+                ip.drawLine(6, y, 8, y + 2);
+                ip.drawLine(8, y + 2, 11, y - 1);
+                ip.drawLine(14, y + 1, 22, y + 1);
+            }
+            ip.end();
+            rulesBtn->setIcon(QIcon(pm));
+        }
+        connect(rulesBtn, &QToolButton::clicked, this, [this] { showValidationRules(); });
+        modG->addWidget(rulesBtn, 0, 3);
         addGroup(lay, QStringLiteral("Modify"), modW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
@@ -5548,6 +5577,10 @@ void MainWindow::showValidation(bool revalidate) {
     revalBtn->setToolTip(QStringLiteral("Re-run the check; issues you have fixed get a green tick"));
     connect(revalBtn, &QPushButton::clicked, this, [this] { showValidation(true); });
     btnRow->addWidget(revalBtn);
+    auto* rulesBtn = new QPushButton(QStringLiteral("Rules…"), dlg);
+    rulesBtn->setToolTip(QStringLiteral("Choose which design-rule checks are active"));
+    connect(rulesBtn, &QPushButton::clicked, this, [this] { showValidationRules(); });
+    btnRow->addWidget(rulesBtn);
     auto* bypassBtn = new QPushButton(makeBypassIcon(), QStringLiteral("Bypass table"), dlg);
     bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
     connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypassTable(); });
@@ -5617,6 +5650,52 @@ void MainWindow::showBypassTable() {
             });
     lay->addWidget(table);
 
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::close);
+    lay->addWidget(box);
+
+    dlg->show();
+    dlg->raise();
+}
+
+// The set of design-rule checks (id must match the discrepancy key prefix in
+// Editor::validateSchematic) plus a human label for the chooser.
+static const std::vector<std::pair<QString, QString>>& validationRuleDefs() {
+    static const std::vector<std::pair<QString, QString>> defs = {
+        {QStringLiteral("nc"), QStringLiteral("Pin not connected (no wire and no X marker)")},
+        {QStringLiteral("openwire"), QStringLiteral("Wire with an open (unconnected) end")},
+        {QStringLiteral("dup"), QStringLiteral("Duplicate pin labels in a connector")},
+        {QStringLiteral("mixedpins"), QStringLiteral("Connector mixes numeric and letter pins")},
+        {QStringLiteral("norefdes"), QStringLiteral("Connector has no reference designator")},
+        {QStringLiteral("nopn"), QStringLiteral("Connector has no part number (P/N)")},
+    };
+    return defs;
+}
+
+void MainWindow::showValidationRules() {
+    if (rulesDlg_) { rulesDlg_->close(); rulesDlg_ = nullptr; }
+    auto* dlg = new QDialog(this);
+    rulesDlg_ = dlg;
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] { rulesDlg_ = nullptr; });
+    dlg->setWindowTitle(QStringLiteral("Validation rules"));
+    dlg->setModal(false);
+    dlg->resize(420, 260);
+    auto* lay = new QVBoxLayout(dlg);
+    lay->addWidget(new QLabel(QStringLiteral("Tick the checks to run when validating:"), dlg));
+
+    for (const auto& [id, label] : validationRuleDefs()) {
+        auto* cb = new QCheckBox(label, dlg);
+        cb->setChecked(editor_->ruleEnabled(id));
+        const QString rid = id;
+        connect(cb, &QCheckBox::toggled, this, [this, rid](bool on) {
+            editor_->setRuleEnabled(rid, on);
+            // Re-run so the open validation window reflects the new rule set.
+            if (validationDlg_) showValidation(false);
+        });
+        lay->addWidget(cb);
+    }
+    lay->addStretch(1);
     auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
     connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::close);
     lay->addWidget(box);

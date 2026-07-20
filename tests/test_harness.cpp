@@ -765,6 +765,16 @@ int run_harness_tests() {
         check(ed.bypassedIssues().contains(k), "validate: bypass records the discrepancy key");
         ed.restoreIssue(k);
         check(!ed.bypassedIssues().contains(k), "validate: restore clears the bypass");
+        // Turning a rule off suppresses only that rule's discrepancies.
+        ed.setRuleEnabled(QStringLiteral("nc"), false);
+        bool anyNc = false, anyDup = false;
+        for (const auto& s : ed.validateSchematic()) {
+            if (s.key.startsWith(QLatin1String("nc:"))) anyNc = true;
+            if (s.key.startsWith(QLatin1String("dup:"))) anyDup = true;
+        }
+        check(!anyNc, "validate: a disabled rule (nc) produces no discrepancies");
+        check(anyDup, "validate: other rules still run when one is off");
+        ed.setRuleEnabled(QStringLiteral("nc"), true); // restore for the rest of the test
         // A clean schematic: refdes + P/N set, single numeric pin X-terminated, no wires.
         Document d2; d2.entities().clear();
         Editor ed2; ed2.setDocument(&d2); ed2.snapSettings().objectSnap = false;

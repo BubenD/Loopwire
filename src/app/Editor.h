@@ -192,6 +192,14 @@ public:
     void bypassIssue(const QString& key) { bypassed_.insert(key); }
     void restoreIssue(const QString& key) { bypassed_.remove(key); }
 
+    // Per-rule enable flags for validateSchematic (all on by default; session-scoped).
+    // `id` is the rule's key prefix: nc / dup / openwire / mixedpins / norefdes / nopn.
+    bool ruleEnabled(const QString& id) const { return !disabledRules_.contains(id); }
+    void setRuleEnabled(const QString& id, bool on) {
+        if (on) disabledRules_.remove(id);
+        else disabledRules_.insert(id);
+    }
+
     // Briefly flash a highlight ring at a world point (used to locate a discrepancy).
     void flashHighlight(const Vec2& at);
 
@@ -517,6 +525,7 @@ private:
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
+    QSet<QString> disabledRules_;   // validation rule ids the user turned off
     bool flashOn_ = false;          // a locate-highlight ring is currently shown
     Vec2 flashPt_{0.0, 0.0};        // where to draw it (world)
     QTimer* flashTimer_ = nullptr;  // clears the flash after a moment

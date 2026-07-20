@@ -131,7 +131,8 @@ private:
     // fresh open (revalidate=false) the current discrepancies become the tracked set;
     // on Revalidate (true) that set is kept so issues now fixed can be shown ticked.
     void showValidation(bool revalidate = false);
-    void showBypassTable();  // list discrepancies the user has bypassed (accepted)
+    void showBypassTable();    // list discrepancies the user has bypassed (accepted)
+    void showValidationRules(); // choose which design-rule checks are active
     // Center + flash-highlight the object carrying a discrepancy (and select it).
     void locateIssue(const ValidationIssue& issue);
 
@@ -171,6 +172,7 @@ private:
     CanvasWidget* canvas_ = nullptr;
     QDialog* validationDlg_ = nullptr; // modeless "Schematic validation" window (if open)
     QDialog* bypassDlg_ = nullptr;     // modeless "Bypassed discrepancies" window (if open)
+    QDialog* rulesDlg_ = nullptr;      // modeless "Validation rules" chooser (if open)
     std::vector<ValidationIssue> validationSnapshot_; // issues tracked in the open window
 
     QActionGroup* toolGroup_ = nullptr;

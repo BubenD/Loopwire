@@ -1814,50 +1814,54 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
             if (c0.isDigit()) anyNumPin = true;
             else if (c0.isLetter()) anyLetterPin = true;
         }
-        if (anyNumPin && anyLetterPin)
+        if (ruleEnabled("mixedpins") && anyNumPin && anyLetterPin)
             issues.push_back({QStringLiteral("mixedpins:%1").arg(e.id),
                               QStringLiteral("Connector %1 mixes numeric and letter pin labels")
                                   .arg(name),
                               e.id, bodyMid});
         // (e) missing reference designator.
-        if (spec.designator.isEmpty())
+        if (ruleEnabled("norefdes") && spec.designator.isEmpty())
             issues.push_back({QStringLiteral("norefdes:%1").arg(e.id),
                               QStringLiteral("Connector %1 has no reference designator")
                                   .arg(name),
                               e.id, g.designatorPos});
         // (f) missing part number.
-        if (spec.partNumber.isEmpty())
+        if (ruleEnabled("nopn") && spec.partNumber.isEmpty())
             issues.push_back({QStringLiteral("nopn:%1").arg(e.id),
                               QStringLiteral("Connector %1 has no part number (P/N)").arg(name),
                               e.id, g.partPos});
         // (b) duplicate pin labels within this connector.
-        for (int i = 0; i < spec.pins.size(); ++i)
-            for (int j = i + 1; j < spec.pins.size(); ++j)
-                if (!spec.pins[i].isEmpty() && spec.pins[i] == spec.pins[j]) {
-                    const Vec2 at = j < static_cast<int>(g.pinEnd.size()) ? g.pinEnd[j] : e.a;
-                    issues.push_back(
-                        {QStringLiteral("dup:%1:%2:%3").arg(e.id).arg(i).arg(j),
-                         QStringLiteral("Connector %1: pins %2 and %3 share the label \"%4\"")
-                             .arg(name).arg(i + 1).arg(j + 1).arg(spec.pins[i]),
-                         e.id, at});
-                }
+        if (ruleEnabled("dup"))
+            for (int i = 0; i < spec.pins.size(); ++i)
+                for (int j = i + 1; j < spec.pins.size(); ++j)
+                    if (!spec.pins[i].isEmpty() && spec.pins[i] == spec.pins[j]) {
+                        const Vec2 at = j < static_cast<int>(g.pinEnd.size()) ? g.pinEnd[j] : e.a;
+                        issues.push_back(
+                            {QStringLiteral("dup:%1:%2:%3").arg(e.id).arg(i).arg(j),
+                             QStringLiteral("Connector %1: pins %2 and %3 share the label \"%4\"")
+                                 .arg(name).arg(i + 1).arg(j + 1).arg(spec.pins[i]),
+                             e.id, at});
+                    }
         // (a) each pin connected to a wire or terminated by an X.
-        for (int i = 0; i < spec.pinCount && i < static_cast<int>(g.pinEnd.size()); ++i) {
-            const Vec2 pe = g.pinEnd[i];
-            if (!nearAny(pe, wireEnds) && !nearAny(pe, ncMarks)) {
-                const QString lbl = i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
-                issues.push_back({QStringLiteral("nc:%1:%2").arg(e.id).arg(i),
-                                  QStringLiteral("Connector %1 pin %2 is not connected "
-                                                 "(no wire and no X marker)")
-                                      .arg(name, lbl),
-                                  e.id, pe});
+        if (ruleEnabled("nc"))
+            for (int i = 0; i < spec.pinCount && i < static_cast<int>(g.pinEnd.size()); ++i) {
+                const Vec2 pe = g.pinEnd[i];
+                if (!nearAny(pe, wireEnds) && !nearAny(pe, ncMarks)) {
+                    const QString lbl =
+                        i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
+                    issues.push_back({QStringLiteral("nc:%1:%2").arg(e.id).arg(i),
+                                      QStringLiteral("Connector %1 pin %2 is not connected "
+                                                     "(no wire and no X marker)")
+                                          .arg(name, lbl),
+                                      e.id, pe});
+                }
             }
-        }
     }
     // (c) wires with an open end — an endpoint not on a pin, splice, X marker, or another
     // wire endpoint.
     std::vector<Vec2> pinEnds = collectPinEnds(doc_);
     for (const auto& w : doc_->entities()) {
+        if (!ruleEnabled("openwire")) break;
         if (w.type != EntityType::Wire || w.points.size() < 2) continue;
         for (int end = 0; end < 2; ++end) {
             const Vec2 p = end == 0 ? w.points.front() : w.points.back();
