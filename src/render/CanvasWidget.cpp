@@ -527,10 +527,10 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         lastPanPos_ = e->pos();
         doc_->view().x += delta.x();
         doc_->view().y += delta.y();
-        // Blit the cached scene shifted instead of re-rendering every tick; the cache
-        // is rebuilt once on release (newly exposed edges fill in then).
-        sceneOffset_ += QPointF(delta.x(), delta.y());
-        update();
+        // Re-render the scene at the new view each tick so the grid + entities fill the
+        // WHOLE viewport while panning (a shifted blit would leave a grid-less strip on
+        // the leading edge).
+        invalidateScene();
         emit viewChanged();
     }
     const Vec2 world = transform().toWorld(e->position());
