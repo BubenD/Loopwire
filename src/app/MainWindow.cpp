@@ -2100,52 +2100,9 @@ void MainWindow::buildRibbon() {
         ribbon_->addTab(page, QStringLiteral("Annotation"));
     }
 
-    // ---- HARNESS BUILD ----
+    // ---- HARNESS BUILD ---- (intentionally empty tab; groups removed per request) ----
     {
         auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Place"),
-                 toolRow({ToolId::Wire, ToolId::Connector, ToolId::Splice,
-                          ToolId::NotConnected, ToolId::NetLabel}));
-
-        auto* wireW = new QWidget(page);
-        auto* wg = new QGridLayout(wireW);
-        wg->setContentsMargins(0, 0, 0, 0);
-        wg->setSpacing(2);
-        auto* colorBox = new QComboBox(wireW);
-        colorBox->addItems(wireColorCodes());
-        colorBox->setCurrentText(editor_->wireColor());
-        connect(colorBox, &QComboBox::currentTextChanged, this,
-                [this](const QString& c) { editor_->wireColor() = c; });
-        auto* gaugeBox = new QComboBox(wireW);
-        gaugeBox->addItems({"0.25", "0.35", "0.5", "0.75", "1.0", "1.5", "2.5", "4.0", "6.0"});
-        gaugeBox->setCurrentText(editor_->wireGauge());
-        connect(gaugeBox, &QComboBox::currentTextChanged, this,
-                [this](const QString& g) { editor_->wireGauge() = g; });
-        auto* netEdit = new QLineEdit(wireW);
-        netEdit->setMaximumWidth(110);
-        connect(netEdit, &QLineEdit::textChanged, this,
-                [this](const QString& n) { editor_->wireNet() = n; });
-        wg->addWidget(new QLabel(QStringLiteral("Color"), wireW), 0, 0);
-        wg->addWidget(colorBox, 0, 1);
-        wg->addWidget(new QLabel(QStringLiteral("Gauge"), wireW), 1, 0);
-        wg->addWidget(gaugeBox, 1, 1);
-        wg->addWidget(new QLabel(QStringLiteral("Net"), wireW), 2, 0);
-        wg->addWidget(netEdit, 2, 1);
-        addGroup(lay, QStringLiteral("Wire"), wireW);
-
-        auto* toolsW = new QWidget(page);
-        auto* tg = new QGridLayout(toolsW);
-        tg->setContentsMargins(0, 0, 0, 0);
-        tg->setSpacing(2);
-        auto* cfgBtn = new QToolButton(toolsW);
-        cfgBtn->setText(QStringLiteral("Connector..."));
-        connect(cfgBtn, &QToolButton::clicked, this, [this] { showConnectorDialog(); });
-        auto* bomBtn = new QToolButton(toolsW);
-        bomBtn->setText(QStringLiteral("BOM"));
-        connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
-        tg->addWidget(cfgBtn, 0, 0);
-        tg->addWidget(bomBtn, 1, 0);
-        lay->addWidget(ribbonGroup(QStringLiteral("Tools"), toolsW));
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Harness build"));
     }
