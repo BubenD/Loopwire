@@ -42,7 +42,7 @@ struct ConnectorSpec {
     QString pinFont = QStringLiteral("Arial");
     QString desFont = QStringLiteral("Arial");
     QString pnFont = QStringLiteral("Arial");
-    double pinSize = 10.0;
+    double pinSize = 15.0;
     double desSize = 10.0;
     double pnSize = 10.0;
     // Movable-text offsets (world units, relative to the connector). Dragged via grips;

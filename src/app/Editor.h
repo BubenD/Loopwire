@@ -162,6 +162,15 @@ public:
     void alignRoutingFrom(const QString& refConnectorId);
     bool awaitingAlignRef() const { return awaitAlignRef_; }
 
+    // A unique sequential number for a new connector/wire (stored in meta["entNum"]),
+    // one greater than the largest already in the document.
+    int assignEntityNumber() const;
+    // Schematic design-rule check: returns a list of problems (empty = valid):
+    //  - a connector pin not on a wire and not terminated by an X (not-connected) marker
+    //  - duplicate pin labels within one connector
+    //  - a wire with an open (dangling) end
+    std::vector<QString> validateSchematic() const;
+
     // Current draw color applied to newly created entities (empty => ByLayer).
     void setCurrentColor(const QString& hex) { currentColor_ = hex; }
     const QString& currentColor() const { return currentColor_; }

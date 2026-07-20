@@ -1853,7 +1853,11 @@ void MainWindow::buildRibbon() {
         // read against the charcoal ribbon in dark mode.
         "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
         "QComboBox:hover{border-color:#5aa0ff;}"
-        "QComboBox::drop-down{border:none;width:16px;}"
+        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
+        "border-left:1px solid #7b818b;width:16px;}"
+        // A visible down-triangle for the dropdown button (font/label/etc. pickers).
+        "QComboBox::down-arrow{image:none;width:8px;height:8px;border-left:4px solid transparent;"
+        "border-right:4px solid transparent;border-top:6px solid #e8eaed;}"
         "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
         "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
         "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
@@ -2175,6 +2179,32 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(alignBtn, 0, 0);
+        // Validate button: schematic design-rule check.
+        auto* valBtn = new QToolButton(modW);
+        valBtn->setText(QStringLiteral("Validate"));
+        valBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        valBtn->setIconSize(QSize(26, 26));
+        valBtn->setMinimumWidth(66);
+        valBtn->setToolTip(QStringLiteral(
+            "Check the schematic: every connector pin wired or X-terminated, no duplicate "
+            "pin labels, no open wires"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#7ee0a0"));
+            pen.setWidthF(2.4);
+            pen.setCapStyle(Qt::RoundCap);
+            pen.setJoinStyle(Qt::RoundJoin);
+            ip.setPen(pen);
+            ip.drawLine(6, 15, 12, 21); // check mark
+            ip.drawLine(12, 21, 23, 7);
+            ip.end();
+            valBtn->setIcon(QIcon(pm));
+        }
+        connect(valBtn, &QToolButton::clicked, this, [this] { showValidation(); });
+        modG->addWidget(valBtn, 0, 1);
         addGroup(lay, QStringLiteral("Modify"), modW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
@@ -4707,6 +4737,8 @@ void MainWindow::buildCommands() {
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
         {{"alignrouting", "align", "ar2"}, "Harness",
          "Align routing to a reference connector", [this] { editor_->beginAlignRouting(); }},
+        {{"validate", "drc", "check"}, "Harness",
+         "Validate the schematic (pins/labels/wires)", [this] { showValidation(); }},
         // Modify
         {{"move", "m"}, "Modify", "Move (base point, target)", tool(ToolId::Move)},
         {{"rotate", "ro"}, "Modify", "Rotate (pivot, ref, target)", tool(ToolId::Rotate)},
@@ -5017,6 +5049,15 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
         const bool custom = s.rectMode == QLatin1String("custom");
         wSpin->setEnabled(custom);
         hSpin->setEnabled(custom);
+        // Dynamic body: show the auto-computed W/H in the (disabled) fields so the
+        // ribbon reflects the real size as pitch / text size / pin count change.
+        if (!custom) {
+            const ConnectorGeometry g = connectorGeometry({0, 0}, s);
+            connectorSyncing_ = true; // don't let the setValue re-enter apply()
+            wSpin->setValue(g.effectiveWidth);
+            hSpin->setValue(g.effectiveHeight);
+            connectorSyncing_ = false;
+        }
         // If a connector is selected, edit it in place; otherwise set the placement
         // default. Either way repaint so a selected connector or the placement preview
         // ghost reflects the change live.
@@ -5261,6 +5302,23 @@ void MainWindow::showConnectorDialog() {
     refreshPanels();
     statusBar()->showMessage(selId.isEmpty() ? QStringLiteral("Connector defaults updated")
                                              : QStringLiteral("Connector updated"));
+}
+
+void MainWindow::showValidation() {
+    const std::vector<QString> issues = editor_->validateSchematic();
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("Schematic validation"));
+    if (issues.empty()) {
+        box.setIcon(QMessageBox::Information);
+        box.setText(QStringLiteral("Schematic is valid — no issues found."));
+    } else {
+        box.setIcon(QMessageBox::Warning);
+        box.setText(QStringLiteral("%1 issue(s) found:").arg(issues.size()));
+        QStringList lines;
+        for (const QString& s : issues) lines << QStringLiteral("•  ") + s;
+        box.setInformativeText(lines.join('\n'));
+    }
+    box.exec();
 }
 
 void MainWindow::showBomDialog() {

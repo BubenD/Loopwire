@@ -120,6 +120,7 @@ private:
     // Text / Actions), mirroring the Edraw web connector builder.
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
+    void showValidation(); // run the schematic design-rule check and report issues
 
     void newDrawing();
     void openDrawing();

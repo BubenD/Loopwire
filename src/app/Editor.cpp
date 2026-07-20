@@ -1756,6 +1756,79 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor) const {
     return found ? std::optional<Vec2>(rawAnchor + off) : std::nullopt;
 }
 
+int Editor::assignEntityNumber() const {
+    int mx = 0;
+    if (doc_)
+        for (const auto& e : doc_->entities())
+            mx = std::max(mx, e.meta.value("entNum").toInt(0));
+    return mx + 1;
+}
+
+std::vector<QString> Editor::validateSchematic() const {
+    std::vector<QString> issues;
+    if (!doc_) return issues;
+    const double tol = 1e-6;
+    // Gather every wire endpoint, splice, and not-connected ("X") marker position.
+    std::vector<Vec2> wireEnds, ncMarks, splices;
+    for (const auto& e : doc_->entities()) {
+        if (e.type == EntityType::Wire && e.points.size() >= 2) {
+            wireEnds.push_back(e.points.front());
+            wireEnds.push_back(e.points.back());
+        } else if (e.type == EntityType::NotConnected) {
+            ncMarks.push_back(e.a);
+        } else if (e.type == EntityType::Splice) {
+            splices.push_back(e.a);
+        }
+    }
+    auto nearAny = [&](const Vec2& p, const std::vector<Vec2>& pts) {
+        for (const Vec2& q : pts) if (distance(p, q) < tol) return true;
+        return false;
+    };
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        const QString name = spec.designator.isEmpty()
+                                 ? QStringLiteral("#%1").arg(e.meta.value("entNum").toInt())
+                                 : spec.designator;
+        // (b) duplicate pin labels within this connector.
+        for (int i = 0; i < spec.pins.size(); ++i)
+            for (int j = i + 1; j < spec.pins.size(); ++j)
+                if (!spec.pins[i].isEmpty() && spec.pins[i] == spec.pins[j]) {
+                    issues.push_back(
+                        QStringLiteral("Connector %1: pins %2 and %3 share the label \"%4\"")
+                            .arg(name).arg(i + 1).arg(j + 1).arg(spec.pins[i]));
+                }
+        // (a) each pin connected to a wire or terminated by an X.
+        for (int i = 0; i < spec.pinCount && i < static_cast<int>(g.pinEnd.size()); ++i) {
+            const Vec2 pe = g.pinEnd[i];
+            if (!nearAny(pe, wireEnds) && !nearAny(pe, ncMarks)) {
+                const QString lbl = i < spec.pins.size() ? spec.pins[i] : QString::number(i + 1);
+                issues.push_back(QStringLiteral("Connector %1 pin %2 is not connected "
+                                                "(no wire and no X marker)")
+                                     .arg(name, lbl));
+            }
+        }
+    }
+    // (c) wires with an open end — an endpoint not on a pin, splice, X marker, or another
+    // wire endpoint.
+    std::vector<Vec2> pinEnds = collectPinEnds(doc_);
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (int end = 0; end < 2; ++end) {
+            const Vec2 p = end == 0 ? w.points.front() : w.points.back();
+            int shares = 0; // how many wire endpoints sit here (this one + any others)
+            for (const Vec2& q : wireEnds) if (distance(p, q) < tol) ++shares;
+            const bool joined = nearAny(p, pinEnds) || nearAny(p, ncMarks) ||
+                                nearAny(p, splices) || shares > 1;
+            if (!joined)
+                issues.push_back(QStringLiteral("Wire #%1 has an open (unconnected) end")
+                                     .arg(w.meta.value("entNum").toInt()));
+        }
+    }
+    return issues;
+}
+
 void Editor::beginAlignRouting() {
     if (!doc_) return;
     setTool(ToolId::Select);
@@ -3281,6 +3354,7 @@ void Editor::finishDraw() {
         e.meta.insert("wireGauge", wireGauge_);
         e.meta.insert("netName", wireNet_);
         e.meta.insert("showLabel", true);
+        e.meta.insert("entNum", assignEntityNumber()); // unique entity number
         break;
     case ToolId::Hatch:
     case ToolId::Wipeout:
@@ -5531,6 +5605,7 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.type = EntityType::Connector;
         e.a = p;
         writeConnectorSpec(e.meta, connectorSpec_);
+        e.meta.insert("entNum", assignEntityNumber()); // unique entity number
         break;
     case ToolId::Splice:
         e.type = EntityType::Splice;

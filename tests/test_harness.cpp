@@ -629,6 +629,70 @@ int run_harness_tests() {
               "align-routing: monotonic mapping re-routes at 90 deg with no crossings");
     }
 
+    // Placed connectors and wires each get a unique entity number.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(2);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({200, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress({0, -80}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, -80}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        std::vector<int> nums;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector || e.type == EntityType::Wire)
+                nums.push_back(e.meta.value("entNum").toInt(-1));
+        bool allUnique = nums.size() == 3;
+        for (size_t i = 0; i < nums.size() && allUnique; ++i) {
+            if (nums[i] <= 0) allUnique = false;
+            for (size_t j = i + 1; j < nums.size(); ++j) if (nums[i] == nums[j]) allUnique = false;
+        }
+        check(allUnique, "entnum: connectors and wires get unique nonzero numbers");
+    }
+
+    // Validation flags an unconnected pin, a duplicate pin label, and an open wire.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(3);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        QString cid; const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) { cid = e.id; c = &e; }
+        const ConnectorGeometry g = connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        // Duplicate a pin label.
+        ed.applyConnectorPinLabel(cid, 1, QStringLiteral("1")); // pin 2 label == pin 1 label
+        // Wire from pin 0 to a dangling point (open end) — leaves pins 1,2 unconnected.
+        Entity w; w.id = "vw"; w.type = EntityType::Wire;
+        w.points = {g.pinEnd[0], {g.pinEnd[0].x + 200, g.pinEnd[0].y - 100}};
+        d.entities().push_back(w);
+        const auto issues = ed.validateSchematic();
+        auto has = [&](const char* frag) {
+            for (const QString& s : issues) if (s.contains(QLatin1String(frag))) return true;
+            return false;
+        };
+        check(has("open"), "validate: reports the wire's open end");
+        check(has("share the label"), "validate: reports the duplicate pin label");
+        check(has("not connected"), "validate: reports the unconnected pins");
+        // A clean schematic: pin 0 wired, others X-terminated, labels unique, wire closed.
+        Document d2; d2.entities().clear();
+        Editor ed2; ed2.setDocument(&d2); ed2.snapSettings().objectSnap = false;
+        ed2.connectorSpec() = defaultConnectorSpec(1);
+        ed2.setTool(ToolId::Connector); ed2.armConnectorPlacement();
+        ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* c2 = nullptr;
+        for (const auto& e : d2.entities()) if (e.type == EntityType::Connector) c2 = &e;
+        const ConnectorGeometry g2 = connectorGeometry(c2->a, connectorSpecFromMeta(c2->meta));
+        Entity nc; nc.type = EntityType::NotConnected; nc.a = g2.pinEnd[0]; // X on the only pin
+        d2.entities().push_back(nc);
+        check(ed2.validateSchematic().empty(),
+              "validate: a fully X-terminated connector with no wires is valid");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
