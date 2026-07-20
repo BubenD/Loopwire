@@ -483,6 +483,55 @@ int run_harness_tests() {
               "scale-conn: text scales and the anchor scales about the base");
     }
 
+    // Wire grips: an open straight wire has a middle joint that moves the whole wire.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w; w.id = "ow"; w.type = EntityType::Wire; w.points = {{0, 0}, {100, 0}};
+        d.entities().push_back(w);
+        ed.setTool(ToolId::Select); ed.selectById("ow");
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);  // grab middle joint
+        ed.onPointerPress({50, 20}, Qt::LeftButton, Qt::NoModifier); // place -> move wire
+        const Entity* ww = nullptr; for (const auto& e : d.entities()) if (e.id == "ow") ww = &e;
+        check(ww && near(ww->points[0].y, 20) && near(ww->points[1].y, 20),
+              "wire-grip: an open wire's middle joint moves the whole wire");
+    }
+    // A bent wire's between-knee joint moves that run and keeps the ends in place.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w; w.id = "bw"; w.type = EntityType::Wire;
+        w.points = {{0, 0}, {50, 0}, {50, -100}, {100, -100}}; // end, knee, knee, end
+        d.entities().push_back(w);
+        ed.setTool(ToolId::Select); ed.selectById("bw");
+        ed.onPointerPress({50, -50}, Qt::LeftButton, Qt::NoModifier);  // grab middle-run joint
+        ed.onPointerPress({70, -50}, Qt::LeftButton, Qt::NoModifier);  // drag the run +20 in x
+        const Entity* ww = nullptr; for (const auto& e : d.entities()) if (e.id == "bw") ww = &e;
+        check(ww && near(ww->points[1].x, 70) && near(ww->points[2].x, 70) &&
+                  near(ww->points[0].x, 0) && near(ww->points[3].x, 100),
+              "wire-grip: a between-knee joint moves the run, ends stay put");
+    }
+    // A straight wire connected to a pin has NO middle move joint.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* c = nullptr; for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        const ConnectorGeometry g = connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        const Vec2 pe = g.pinEnd[0];
+        Entity w; w.id = "cw"; w.type = EntityType::Wire; w.points = {pe, {pe.x + 100, pe.y}};
+        d.entities().push_back(w);
+        ed.setTool(ToolId::Select); ed.selectById("cw");
+        const Vec2 mid{pe.x + 50, pe.y};
+        ed.onPointerPress(mid, Qt::LeftButton, Qt::NoModifier);           // no grip here
+        ed.onPointerPress({mid.x, mid.y + 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* ww = nullptr; for (const auto& e : d.entities()) if (e.id == "cw") ww = &e;
+        check(ww && near(ww->points[0].x, pe.x) && near(ww->points[0].y, pe.y),
+              "wire-grip: a pin-connected wire has no middle joint (not moved)");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

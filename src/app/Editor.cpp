@@ -41,7 +41,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
                       DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
-                      ConnPinText, ConnDesText, ConnPnText, ConnAllText };
+                      ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -188,7 +188,20 @@ Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, cons
     return x ? *x : thisEnd;
 }
 
-std::vector<Grip> gripsOf(const Entity& e) {
+// Every connector pin-end point in the document (used to tell whether a wire end is
+// connected, which decides its grips).
+std::vector<Vec2> collectPinEnds(const Document* doc) {
+    std::vector<Vec2> out;
+    if (!doc) return out;
+    for (const auto& e : doc->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+        for (const Vec2& pe : g.pinEnd) out.push_back(pe);
+    }
+    return out;
+}
+
+std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}) {
     std::vector<Grip> g;
     switch (e.type) {
     case EntityType::Line:
@@ -286,11 +299,34 @@ std::vector<Grip> gripsOf(const Entity& e) {
             g.push_back({e.points[i], GripRole::Vertex, i});
         break;
     case EntityType::Spline:
-    case EntityType::Wire:
     case EntityType::Wipeout:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
         break;
+    case EntityType::Wire: {
+        const int n = static_cast<int>(e.points.size());
+        for (int i = 0; i < n; ++i) g.push_back({e.points[i], GripRole::Vertex, i});
+        if (n < 2) break;
+        auto connected = [&](int idx) {
+            for (const Vec2& pe : pinEnds)
+                if (distance(e.points[idx], pe) < 1e-6) return true;
+            return false;
+        };
+        const bool endConnected = connected(0) || connected(n - 1);
+        if (n == 2) {
+            // A straight wire gets a middle move joint only while BOTH ends are open
+            // (free); once an end is on a pin, moving it would detach it — so no joint
+            // until the wire has a knee (below) or the other end connects.
+            if (!endConnected)
+                g.push_back({lerp(e.points[0], e.points[1], 0.5), GripRole::WireSegMove, 0});
+        } else {
+            // A bent wire gets a joint on each run BETWEEN two knees (not a terminal
+            // segment), to drag that run without moving the connected ends.
+            for (int i = 1; i <= n - 3; ++i)
+                g.push_back({lerp(e.points[i], e.points[i + 1], 0.5), GripRole::WireSegMove, i});
+        }
+        break;
+    }
     case EntityType::Polygon:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
@@ -1546,7 +1582,7 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
             p.drawRect(QRectF(tl, br).normalized());
         }
     }
-    for (const auto& g : gripsOf(e)) {
+    for (const auto& g : gripsOf(e, collectPinEnds(doc_))) {
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
@@ -1578,10 +1614,11 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     Grip bestGrip;
     double bestDist = tol;
     bool found = false;
+    const std::vector<Vec2> pinEnds = collectPinEnds(doc_);
     for (const auto& id : selected_) {
         Entity* e = entityById(id);
         if (!e) continue;
-        for (const auto& gr : gripsOf(*e)) {
+        for (const auto& gr : gripsOf(*e, pinEnds)) {
             const double d = distance(at, gr.pos);
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
         }
@@ -1890,6 +1927,15 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::LineMid:
             // The middle joint moves the whole line (stays straight, no knee).
             translateEntity(*e, delta);
+            break;
+        case GripRole::WireSegMove:
+            // Move one wire run: shift both vertices of segment `index` by the drag.
+            // (For a straight open wire that segment is the whole wire; for a bent wire
+            // it's the run between two knees, so the connected ends stay put.)
+            if (index >= 0 && index + 1 < static_cast<int>(e->points.size())) {
+                e->points[index] = e->points[index] + delta;
+                e->points[index + 1] = e->points[index + 1] + delta;
+            }
             break;
         case GripRole::Vertex:
             if (index >= 0 && index < static_cast<int>(e->points.size())) {
