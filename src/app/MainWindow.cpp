@@ -4405,9 +4405,11 @@ void MainWindow::refreshProperties() {
         });
         propsTable_->setCellWidget(r, 1, sp);
     };
-    // An editable text cell that applies on Enter / focus-out (deferred).
+    // An editable text cell that applies on Enter / focus-out (deferred). `placeholder`
+    // (if given) is shown greyed/semi-transparent while the field is empty.
     auto addText = [&](const QString& k, const QString& value,
-                       std::function<void(const QString&)> apply) {
+                       std::function<void(const QString&)> apply,
+                       const QString& placeholder = QString()) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
         auto* key = new QTableWidgetItem(k);
@@ -4415,6 +4417,7 @@ void MainWindow::refreshProperties() {
         propsTable_->setItem(r, 0, key);
         auto* le = new QLineEdit(propsTable_);
         le->setText(value);
+        if (!placeholder.isEmpty()) le->setPlaceholderText(placeholder);
         connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
             if (refreshing_) return;
             const QString t = le->text();
@@ -4548,8 +4551,12 @@ void MainWindow::refreshProperties() {
         };
         const ConnectorSpec cs = connectorSpecFromMeta(e->meta);
         const QStringList fonts = FontLibrary::families();
+        // With no designator, show the validation fallback name (#<entNum>) as a
+        // semi-transparent placeholder so it matches what Validate reports.
+        const QString refdesHint = QStringLiteral("#%1").arg(e->meta.value("entNum").toInt());
         addText(QStringLiteral("Designator"), cs.designator,
-                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); });
+                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); },
+                refdesHint);
         addText(QStringLiteral("Part number"), cs.partNumber,
                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); });
         addNum(QStringLiteral("Pins"), cs.pinCount, [edit](double v) {
