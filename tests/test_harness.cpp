@@ -1,6 +1,7 @@
 #include "app/Editor.h"
 #include "geometry/Snap.h"
 #include "harness/Harness.h"
+#include "geometry/Geometry.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
 
@@ -530,6 +531,43 @@ int run_harness_tests() {
         const Entity* ww = nullptr; for (const auto& e : d.entities()) if (e.id == "cw") ww = &e;
         check(ww && near(ww->points[0].x, pe.x) && near(ww->points[0].y, pe.y),
               "wire-grip: a pin-connected wire has no middle joint (not moved)");
+    }
+
+    // Align routing at 90 deg picks a lane order with no crossings for a 1:1 mapping.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4); ed.connectorSpec().mirrorX = false;
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);          // A (pins right)
+        ed.connectorSpec().mirrorX = true;
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({600, -400}, Qt::LeftButton, Qt::NoModifier);     // B facing, far below
+        QString aid, bid;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector) { if (aid.isEmpty()) aid = e.id; else bid = e.id; }
+        const Entity* ea = nullptr; const Entity* eb = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == aid) ea = &e; if (e.id == bid) eb = &e; }
+        const ConnectorGeometry ga = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta));
+        const ConnectorGeometry gb = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta));
+        for (int i = 0; i < 4; ++i) {
+            Entity w; w.id = QStringLiteral("cw%1").arg(i); w.type = EntityType::Wire;
+            w.points = {ga.pinEnd[i], gb.pinEnd[i]}; // pin i -> pin i (monotonic)
+            d.entities().push_back(w);
+        }
+        ed.alignRoutingFrom(aid);
+        std::vector<const Entity*> ws;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Wire) ws.push_back(&e);
+        int cross = 0;
+        for (size_t a = 0; a < ws.size(); ++a)
+            for (size_t b = a + 1; b < ws.size(); ++b)
+                for (size_t i = 1; i < ws[a]->points.size(); ++i)
+                    for (size_t j = 1; j < ws[b]->points.size(); ++j)
+                        if (segmentSegmentIntersection(ws[a]->points[i - 1], ws[a]->points[i],
+                                                       ws[b]->points[j - 1], ws[b]->points[j]))
+                            ++cross;
+        check(ws.size() == 4 && cross == 0,
+              "align-routing: monotonic mapping re-routes at 90 deg with no crossings");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

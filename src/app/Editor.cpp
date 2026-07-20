@@ -1849,21 +1849,60 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
         } else {
             // Orthogonal (Manhattan) re-route, connectors stay put. Each wire exits the
             // ref pin horizontally to its own vertical lane, drops/rises, then runs into
-            // the other pin. Staggered lanes keep the vertical segments from overlapping.
-            std::sort(group.begin(), group.end(),
-                      [](const Link& a, const Link& b) { return a.refPin.y > b.refPin.y; });
+            // the other pin. The lane ORDER is chosen to minimise crossings: we try a few
+            // candidate orderings and keep the one with the fewest segment intersections.
+            const int k = static_cast<int>(group.size());
             const double toward = (group.front().otherPin.x >= group.front().refPin.x) ? 1.0 : -1.0;
             const double laneGap = std::max(4.0, refSpec.pitch * 0.6);
             const double baseStub = std::max(refSpec.pinLength, laneGap * 2.0);
-            for (int i = 0; i < static_cast<int>(group.size()); ++i) {
-                const Link& l = group[i];
-                const double laneX = l.refPin.x + toward * (baseStub + i * laneGap);
-                std::vector<Vec2> pts = {l.refPin,
-                                         {laneX, l.refPin.y},
-                                         {laneX, l.otherPin.y},
-                                         l.otherPin};
-                if (!l.refIsFirst) std::reverse(pts.begin(), pts.end());
-                if (Entity* w = entityById(l.wireId)) w->points = pts;
+            // Build the H-V-H route for a given lane assignment (lanePos[g] = 0..k-1).
+            auto buildRoutes = [&](const std::vector<int>& lanePos) {
+                std::vector<std::vector<Vec2>> routes(k);
+                for (int gi = 0; gi < k; ++gi) {
+                    const Link& l = group[gi];
+                    const double laneX = l.refPin.x + toward * (baseStub + lanePos[gi] * laneGap);
+                    routes[gi] = {l.refPin, {laneX, l.refPin.y}, {laneX, l.otherPin.y}, l.otherPin};
+                }
+                return routes;
+            };
+            auto crossings = [&](const std::vector<std::vector<Vec2>>& rs) {
+                int c = 0;
+                for (int a = 0; a < k; ++a)
+                    for (int b = a + 1; b < k; ++b)
+                        for (size_t i = 1; i < rs[a].size(); ++i)
+                            for (size_t j = 1; j < rs[b].size(); ++j)
+                                if (segmentSegmentIntersection(rs[a][i - 1], rs[a][i],
+                                                               rs[b][j - 1], rs[b][j]))
+                                    ++c;
+                return c;
+            };
+            // Candidate lane orders: by source Y and by destination Y (both directions).
+            std::vector<int> idx(k);
+            for (int i = 0; i < k; ++i) idx[i] = i;
+            auto orderBy = [&](auto key, bool asc) {
+                std::vector<int> o = idx;
+                std::sort(o.begin(), o.end(), [&](int a, int b) {
+                    return asc ? key(group[a]) < key(group[b]) : key(group[a]) > key(group[b]);
+                });
+                std::vector<int> lanePos(k);
+                for (int pos = 0; pos < k; ++pos) lanePos[o[pos]] = pos;
+                return lanePos;
+            };
+            auto srcY = [](const Link& l) { return l.refPin.y; };
+            auto dstY = [](const Link& l) { return l.otherPin.y; };
+            std::vector<std::vector<int>> candidates = {
+                orderBy(srcY, true), orderBy(srcY, false), orderBy(dstY, true), orderBy(dstY, false)};
+            std::vector<std::vector<Vec2>> best;
+            int bestC = std::numeric_limits<int>::max();
+            for (const auto& lp : candidates) {
+                auto rs = buildRoutes(lp);
+                const int c = crossings(rs);
+                if (c < bestC) { bestC = c; best = rs; }
+            }
+            for (int gi = 0; gi < k; ++gi) {
+                std::vector<Vec2> pts = best[gi];
+                if (!group[gi].refIsFirst) std::reverse(pts.begin(), pts.end());
+                if (Entity* w = entityById(group[gi].wireId)) w->points = pts;
             }
             ++routed;
         }
