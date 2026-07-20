@@ -792,6 +792,23 @@ int run_harness_tests() {
               "validate: a fully X-terminated connector with no wires is valid");
     }
 
+    // Wire endpoint reference: "Des/pinLabel" when on a connector pin, else empty ("open").
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.connectorSpec().designator = QStringLiteral("P3");
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        const ConnectorGeometry g = connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        check(ed.pinRefAt(g.pinEnd[0]) == QLatin1String("P3/1"),
+              "wire-endref: a point on pin 0's end resolves to P3/1");
+        check(ed.pinRefAt({9999, 9999}).isEmpty(),
+              "wire-endref: a point off any pin is open (empty)");
+    }
+
     // Per-pin wire gauge + ampere round-trip through the connector meta.
     {
         ConnectorSpec s = defaultConnectorSpec(3);

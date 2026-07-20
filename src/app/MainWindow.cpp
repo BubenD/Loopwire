@@ -4681,6 +4681,62 @@ void MainWindow::refreshProperties() {
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pnSize = std::max(1.0, v); }); });
     }
 
+    // A selected wire shows its harness attributes (number, gauge, colour, insulation,
+    // conductor type/strand) plus its endpoints' connections.
+    if (e && e->type == EntityType::Wire) {
+        addHeader(QStringLiteral("Wire"));
+        const QJsonObject& m = e->meta;
+        addRow(QStringLiteral("Number"),
+               QStringLiteral("#%1").arg(m.value(QStringLiteral("entNum")).toInt()));
+        // From / To: the connector pin each end lands on, else "open".
+        auto endLabel = [this, e](bool first) -> QString {
+            if (e->points.size() < 2) return QStringLiteral("open");
+            const Vec2 p = first ? e->points.front() : e->points.back();
+            const QString ref = editor_->pinRefAt(p);
+            return ref.isEmpty() ? QStringLiteral("open") : ref;
+        };
+        addRow(QStringLiteral("From"), endLabel(true));
+        addRow(QStringLiteral("To"), endLabel(false));
+        // AWG cross-section, 4 (thick) … 32 (thin).
+        QStringList awgList;
+        for (int g = 4; g <= 32; g += 2) awgList << QStringLiteral("%1 AWG").arg(g);
+        const QString curAwg = m.value(QStringLiteral("awg")).toString();
+        addCombo(QStringLiteral("AWG"), awgList, curAwg, false, [this](const QString& t) {
+            editor_->setSelectionMeta(QStringLiteral("awg"), t);
+        });
+        // Wire colour code (WH, BK, …).
+        addCombo(QStringLiteral("Wire color"), wireColorCodes(),
+                 m.value(QStringLiteral("wireColor")).toString(QStringLiteral("WH")), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("wireColor"), t);
+                     if (canvas_) canvas_->update();
+                 });
+        // Insulation type (editable — user may enter any material).
+        addCombo(QStringLiteral("Insulation"),
+                 {"PVC", "XLPE", "PTFE", "FEP", "Silicone", "Rubber", "Polyethylene"},
+                 m.value(QStringLiteral("insulation")).toString(), true, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("insulation"), t);
+                 });
+        // Insulation voltage rating.
+        addCombo(QStringLiteral("Voltage"), {"30V", "60V", "150V", "300V", "600V", "1000V"},
+                 m.value(QStringLiteral("insulationVoltage")).toString(), true,
+                 [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("insulationVoltage"), t);
+                 });
+        // Conductor type: solid / stranded.
+        addCombo(QStringLiteral("Type"), {QStringLiteral("Solid"), QStringLiteral("Stranded")},
+                 m.value(QStringLiteral("conductorType")).toString(QStringLiteral("Stranded")),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("conductorType"), t);
+                 });
+        // Strand definition, e.g. "7/0.20" (strands / strand-diameter).
+        addText(QStringLiteral("Strands"), m.value(QStringLiteral("strandDef")).toString(),
+                [this](const QString& t) {
+                    editor_->setSelectionMeta(QStringLiteral("strandDef"), t);
+                },
+                QStringLiteral("e.g. 7/0.20"));
+    }
+
     addHeader(QStringLiteral("Geometry"));
     if (e) {
         const Bounds b = e->bounds();

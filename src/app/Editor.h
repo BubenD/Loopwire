@@ -173,6 +173,10 @@ public:
     void alignRoutingFrom(const QString& refConnectorId);
     bool awaitingAlignRef() const { return awaitAlignRef_; }
 
+    // For a wire endpoint: the connector pin it lands on, as "Des/pinLabel" (e.g.
+    // "P3/5"), or empty if the point is not on any connector pin (i.e. "open").
+    QString pinRefAt(const Vec2& p) const;
+
     // A unique sequential number for a new connector/wire (stored in meta["entNum"]),
     // one greater than the largest already in the document.
     int assignEntityNumber() const;

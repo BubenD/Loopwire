@@ -1768,6 +1768,24 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* ca
     return std::optional<Vec2>(rawAnchor + off);
 }
 
+QString Editor::pinRefAt(const Vec2& p) const {
+    if (!doc_) return {};
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorSpec s = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, s);
+        for (int i = 0; i < static_cast<int>(g.pinEnd.size()); ++i)
+            if (distance(p, g.pinEnd[i]) < 1e-6) {
+                const QString des = s.designator.isEmpty()
+                                        ? QStringLiteral("#%1").arg(e.meta.value("entNum").toInt())
+                                        : s.designator;
+                const QString lbl = i < s.pins.size() ? s.pins[i] : QString::number(i + 1);
+                return des + QLatin1Char('/') + lbl;
+            }
+    }
+    return {};
+}
+
 int Editor::assignEntityNumber() const {
     int mx = 0;
     if (doc_)
