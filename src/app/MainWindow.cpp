@@ -4377,6 +4377,23 @@ void MainWindow::refreshProperties() {
         });
         propsTable_->setCellWidget(r, 1, sp);
     };
+    // An editable text cell that applies on Enter / focus-out (deferred).
+    auto addText = [&](const QString& k, const QString& value,
+                       std::function<void(const QString&)> apply) {
+        const int r = propsTable_->rowCount();
+        propsTable_->insertRow(r);
+        auto* key = new QTableWidgetItem(k);
+        key->setFlags(Qt::ItemIsEnabled);
+        propsTable_->setItem(r, 0, key);
+        auto* le = new QLineEdit(propsTable_);
+        le->setText(value);
+        connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
+            if (refreshing_) return;
+            const QString t = le->text();
+            QTimer::singleShot(0, this, [apply, t] { apply(t); });
+        });
+        propsTable_->setCellWidget(r, 1, le);
+    };
 
     const Entity* e = nullptr;
     if (sel.size() == 1)
@@ -4483,6 +4500,88 @@ void MainWindow::refreshProperties() {
     }
     addRow(QStringLiteral("Transparency"), QStringLiteral("0"));
     addRow(QStringLiteral("Thickness"), QStringLiteral("0.0000"));
+
+    // A selected connector shows its full editable spec here (so it can be changed
+    // without opening the Connector build ribbon).
+    if (e && e->type == EntityType::Connector) {
+        addHeader(QStringLiteral("Connector"));
+        // Change one field of the selected connector's spec and apply it in place.
+        auto edit = [this](std::function<void(ConnectorSpec&)> mut) {
+            const QString id = editor_->selectedConnectorId();
+            if (id.isEmpty()) return;
+            ConnectorSpec s;
+            for (const auto& en : doc_->entities())
+                if (en.id == id) { s = connectorSpecFromMeta(en.meta); break; }
+            mut(s);
+            s.textSize = std::max({s.pinSize, s.desSize, s.pnSize});
+            regenPinLabels(s);
+            editor_->applyConnectorSpecToSelection(s);
+            if (canvas_) canvas_->update();
+        };
+        const ConnectorSpec cs = connectorSpecFromMeta(e->meta);
+        const QStringList fonts = FontLibrary::families();
+        addText(QStringLiteral("Designator"), cs.designator,
+                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); });
+        addText(QStringLiteral("Part number"), cs.partNumber,
+                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); });
+        addNum(QStringLiteral("Pins"), cs.pinCount, [edit](double v) {
+            edit([v](ConnectorSpec& s) { s.pinCount = std::clamp(int(v + 0.5), 1, 128); });
+        });
+        addCombo(QStringLiteral("Labels"), {QStringLiteral("Numbers"), QStringLiteral("Letters")},
+                 cs.annotation == QLatin1String("letters") ? QStringLiteral("Letters")
+                                                           : QStringLiteral("Numbers"),
+                 false, [edit](const QString& t) {
+                     edit([t](ConnectorSpec& s) {
+                         s.annotation = t == QLatin1String("Letters") ? QStringLiteral("letters")
+                                                                     : QStringLiteral("numbers");
+                     });
+                 });
+        addCombo(QStringLiteral("Order"), {QStringLiteral("Top"), QStringLiteral("Bottom")},
+                 cs.pinOrder == QLatin1String("bottom") ? QStringLiteral("Bottom")
+                                                       : QStringLiteral("Top"),
+                 false, [edit](const QString& t) {
+                     edit([t](ConnectorSpec& s) {
+                         s.pinOrder = t == QLatin1String("Bottom") ? QStringLiteral("bottom")
+                                                                  : QStringLiteral("top");
+                     });
+                 });
+        addNum(QStringLiteral("Pitch"), cs.pitch,
+               [edit](double v) { edit([v](ConnectorSpec& s) { s.pitch = std::max(1.0, v); }); });
+        addNum(QStringLiteral("Pin length"), cs.pinLength,
+               [edit](double v) { edit([v](ConnectorSpec& s) { s.pinLength = std::max(1.0, v); }); });
+        addCombo(QStringLiteral("Body"), {QStringLiteral("Dynamic"), QStringLiteral("Custom")},
+                 cs.rectMode == QLatin1String("custom") ? QStringLiteral("Custom")
+                                                       : QStringLiteral("Dynamic"),
+                 false, [edit](const QString& t) {
+                     edit([t](ConnectorSpec& s) {
+                         s.rectMode = t == QLatin1String("Custom") ? QStringLiteral("custom")
+                                                                  : QStringLiteral("dynamic");
+                     });
+                 });
+        addNum(QStringLiteral("Width"), cs.rectWidth, [edit](double v) {
+            edit([v](ConnectorSpec& s) { s.rectMode = QStringLiteral("custom"); s.rectWidth = std::max(1.0, v); });
+        });
+        addNum(QStringLiteral("Height"), cs.rectHeight, [edit](double v) {
+            edit([v](ConnectorSpec& s) { s.rectMode = QStringLiteral("custom"); s.rectHeight = std::max(1.0, v); });
+        });
+        addCombo(QStringLiteral("Associative"), {QStringLiteral("Yes"), QStringLiteral("No")},
+                 cs.associative ? QStringLiteral("Yes") : QStringLiteral("No"), false,
+                 [edit](const QString& t) {
+                     edit([t](ConnectorSpec& s) { s.associative = (t == QLatin1String("Yes")); });
+                 });
+        addCombo(QStringLiteral("Pin font"), fonts, cs.pinFont, false,
+                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.pinFont = t; }); });
+        addNum(QStringLiteral("Pin size"), cs.pinSize,
+               [edit](double v) { edit([v](ConnectorSpec& s) { s.pinSize = std::max(1.0, v); }); });
+        addCombo(QStringLiteral("Des. font"), fonts, cs.desFont, false,
+                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.desFont = t; }); });
+        addNum(QStringLiteral("Des. size"), cs.desSize,
+               [edit](double v) { edit([v](ConnectorSpec& s) { s.desSize = std::max(1.0, v); }); });
+        addCombo(QStringLiteral("P/N font"), fonts, cs.pnFont, false,
+                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.pnFont = t; }); });
+        addNum(QStringLiteral("P/N size"), cs.pnSize,
+               [edit](double v) { edit([v](ConnectorSpec& s) { s.pnSize = std::max(1.0, v); }); });
+    }
 
     addHeader(QStringLiteral("Geometry"));
     if (e) {
@@ -5238,15 +5337,9 @@ void MainWindow::showConnectorRibbon(bool on) {
 }
 
 void MainWindow::updateConnectorContext() {
-    // Show the connector build ribbon only while placing a connector (Connector tool)
-    // or while a single connector entity is selected ("pressed").
-    bool ctx = editor_->tool() == ToolId::Connector;
-    if (!ctx && doc_ && editor_->selection().size() == 1) {
-        const QString id = editor_->selection().front();
-        for (const auto& e : doc_->entities())
-            if (e.id == id && e.type == EntityType::Connector) { ctx = true; break; }
-    }
-    showConnectorRibbon(ctx);
+    // Show the connector build ribbon only while PLACING a connector (Connector tool).
+    // A selected connector is edited in the side Properties panel instead of the ribbon.
+    showConnectorRibbon(editor_->tool() == ToolId::Connector);
 }
 
 void MainWindow::showConnectorDialog() {
