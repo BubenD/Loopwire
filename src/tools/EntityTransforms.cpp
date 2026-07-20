@@ -1,6 +1,9 @@
 #include "tools/EntityTransforms.h"
 
+#include "harness/Harness.h"
+
 #include <QJsonArray>
+#include <algorithm>
 #include <cmath>
 
 namespace Edraw_Desktop {
@@ -114,6 +117,24 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
 
 void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
     const Vec2 u = (b - a).normalized();
+    // A connector is parametric (axis-aligned body + horizontal pins): mirror its
+    // body box and flip the matching orientation flag (mirrorX for a vertical mirror
+    // line, mirrorY for a horizontal one), re-anchoring the top corner. Its text
+    // offsets stay relative, so skip the generic point map.
+    if (e.type == EntityType::Connector) {
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        const Vec2 m0 = mirrorPoint(g.rectMin, a, u), m1 = mirrorPoint(g.rectMax, a, u);
+        const double minX = std::min(m0.x, m1.x), maxX = std::max(m0.x, m1.x);
+        const double maxY = std::max(m0.y, m1.y);
+        const bool vertical = std::abs(u.x) < std::abs(u.y); // mirror line is vertical-ish
+        bool mx = spec.mirrorX, my = spec.mirrorY;
+        if (vertical) mx = !mx; else my = !my;
+        e.meta["mirrorX"] = mx;
+        e.meta["mirrorY"] = my;
+        e.a = {mx ? maxX : minX, maxY}; // origin = top-left (mx=false) / top-right (mx=true)
+        return;
+    }
     mapPoints(e, [&](const Vec2& p) { return mirrorPoint(p, a, u); });
     // Reflect arc angles about the mirror line direction.
     const double axis = std::atan2(u.y, u.x);

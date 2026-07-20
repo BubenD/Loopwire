@@ -39,9 +39,9 @@ struct ConnectorSpec {
     QString pinOrder = QStringLiteral("top");       // "top" (1 at top) | "bottom"
     QString rectMode = QStringLiteral("dynamic");   // "dynamic" (auto H, W=40) | "custom"
     bool associative = true;                        // re-editable as a group
-    QString pinFont = QStringLiteral("Segoe UI");
-    QString desFont = QStringLiteral("Segoe UI");
-    QString pnFont = QStringLiteral("Segoe UI");
+    QString pinFont = QStringLiteral("Arial");
+    QString desFont = QStringLiteral("Arial");
+    QString pnFont = QStringLiteral("Arial");
     double pinSize = 10.0;
     double desSize = 10.0;
     double pnSize = 10.0;

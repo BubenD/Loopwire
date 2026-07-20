@@ -5177,7 +5177,11 @@ void MainWindow::showConnectorRibbon(bool on) {
         connectorTab_->show();
     } else if (idx >= 0) {
         ribbon_->removeTab(idx); // detaches but does not delete connectorTab_
-        ribbon_->setCurrentIndex(0);
+        // Return to the Schematic build tab (where the connector was opened from), not Home.
+        int sb = 0;
+        for (int i = 0; i < ribbon_->count(); ++i)
+            if (ribbon_->tabText(i) == QStringLiteral("Schematic build")) { sb = i; break; }
+        ribbon_->setCurrentIndex(sb);
     }
 }
 

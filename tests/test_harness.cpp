@@ -2,6 +2,7 @@
 #include "geometry/Snap.h"
 #include "harness/Harness.h"
 #include "model/Document.h"
+#include "tools/EntityTransforms.h"
 
 #include <QJsonArray>
 #include <cmath>
@@ -357,6 +358,26 @@ int run_harness_tests() {
         ed.onPointerPress({0, -10}, Qt::LeftButton, Qt::NoModifier); // move connector again
         check(near(wire("w1")->points[0].x, afterPullX),
               "wire-disconnect: a wire pulled off the pin no longer follows the connector");
+    }
+
+    // Mirroring a connector across a vertical line flips its pin direction (mirrorX)
+    // and reflects the body; across a horizontal line flips the pin order (mirrorY).
+    {
+        Entity c; c.type = EntityType::Connector; c.a = {0, 0};
+        ConnectorSpec s = defaultConnectorSpec(4); s.mirrorX = false; s.mirrorY = false;
+        writeConnectorSpec(c.meta, s);
+        const ConnectorGeometry g0 = connectorGeometry(c.a, connectorSpecFromMeta(c.meta));
+        Entity v = c;
+        mirrorEntity(v, {100, 0}, {100, 10}); // vertical mirror line at x=100
+        const ConnectorSpec sv = connectorSpecFromMeta(v.meta);
+        const ConnectorGeometry gv = connectorGeometry(v.a, sv);
+        check(sv.mirrorX && !sv.mirrorY, "mirror-conn: vertical mirror flips mirrorX only");
+        check(near(gv.rectMin.x, 200 - g0.rectMax.x) && near(gv.rectMax.x, 200 - g0.rectMin.x),
+              "mirror-conn: body reflects across the vertical line");
+        Entity h = c;
+        mirrorEntity(h, {0, 50}, {10, 50}); // horizontal mirror line at y=50
+        const ConnectorSpec sh = connectorSpecFromMeta(h.meta);
+        check(!sh.mirrorX && sh.mirrorY, "mirror-conn: horizontal mirror flips mirrorY only");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

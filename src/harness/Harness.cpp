@@ -95,9 +95,9 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
     s.pinOrder = meta.value("pinOrder").toString(QStringLiteral("top"));
     s.rectMode = meta.value("rectMode").toString(QStringLiteral("dynamic"));
     s.associative = meta.value("associative").toBool(true);
-    s.pinFont = meta.value("pinFont").toString(QStringLiteral("Segoe UI"));
-    s.desFont = meta.value("desFont").toString(QStringLiteral("Segoe UI"));
-    s.pnFont = meta.value("pnFont").toString(QStringLiteral("Segoe UI"));
+    s.pinFont = meta.value("pinFont").toString(QStringLiteral("Arial"));
+    s.desFont = meta.value("desFont").toString(QStringLiteral("Arial"));
+    s.pnFont = meta.value("pnFont").toString(QStringLiteral("Arial"));
     s.pinSize = meta.value("pinSize").toDouble(s.textSize);
     s.desSize = meta.value("desSize").toDouble(s.textSize);
     s.pnSize = meta.value("pnSize").toDouble(s.textSize);
