@@ -462,6 +462,10 @@ private:
     // so a selected wire isn't shifted twice).
     void dragAttachedWires(const Entity& conn, const Vec2& delta,
                            const std::vector<QString>& movingIds);
+    // For the connector placement preview: if any feature of the ghost (a body corner
+    // or a pin end) at `rawAnchor` lands within snap tolerance of another connector's
+    // corner/pin end, return the anchor shifted so those points coincide (else none).
+    std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor) const;
 
     Document* doc_ = nullptr;
     ToolId tool_ = ToolId::Select;

@@ -984,6 +984,16 @@ void Editor::onPointerMove(const Vec2& raw) {
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
     cursor_ = snapResult_.point;
 
+    // Placing a connector: snap the ghost by ANY of its own corners/pin ends onto
+    // another connector's corners/pin ends (so pins line up), not just its anchor.
+    if (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_ && snap.objectSnap) {
+        if (auto a = connectorFeatureSnap(raw)) {
+            cursor_ = *a;
+            snapResult_.point = *a;
+            snapResult_.snapped = true;
+        }
+    }
+
     // Apply an in-progress direct edit: a body move (button held) or a grabbed
     // joint that follows the cursor (no button) until clicked to place. Panels
     // refresh on commit, so emit the repaint-only overlay signal here.
@@ -1669,6 +1679,37 @@ void Editor::dragAttachedWires(const Entity& conn, const Vec2& delta,
                     break;
                 }
     }
+}
+
+std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor) const {
+    if (!doc_) return std::nullopt;
+    // Ghost feature points (body corners + pin ends) at the candidate anchor.
+    const ConnectorGeometry gg = connectorGeometry(rawAnchor, connectorSpec_);
+    std::vector<Vec2> feats = {gg.rectMin,
+                               {gg.rectMax.x, gg.rectMin.y},
+                               gg.rectMax,
+                               {gg.rectMin.x, gg.rectMax.y}};
+    for (const Vec2& pe : gg.pinEnd) feats.push_back(pe);
+    // Target points: every existing connector's corners + pin ends.
+    std::vector<Vec2> targets;
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+        targets.push_back(g.rectMin);
+        targets.push_back({g.rectMax.x, g.rectMin.y});
+        targets.push_back(g.rectMax);
+        targets.push_back({g.rectMin.x, g.rectMax.y});
+        for (const Vec2& pe : g.pinEnd) targets.push_back(pe);
+    }
+    double best = worldTolerance();
+    Vec2 off{0, 0};
+    bool found = false;
+    for (const Vec2& f : feats)
+        for (const Vec2& t : targets) {
+            const double d = distance(f, t);
+            if (d < best) { best = d; off = t - f; found = true; }
+        }
+    return found ? std::optional<Vec2>(rawAnchor + off) : std::nullopt;
 }
 
 void Editor::applyEditDrag(const Vec2& target) {

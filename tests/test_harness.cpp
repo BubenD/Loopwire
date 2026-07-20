@@ -404,6 +404,27 @@ int run_harness_tests() {
               "paste-mirror: X mirror flips the pasted connector's pin direction");
     }
 
+    // Connector preview snaps by its own corner onto another connector's corner.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); // object snap on by default
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector);
+        ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // connector A at (0,0)
+        QString aid;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) aid = e.id;
+        // Arm a second connector; move its top-left corner near A's top-left corner (0,0)
+        // (within the 10-unit tolerance) so the feature snap pulls the anchor onto (0,0).
+        ed.armConnectorPlacement();
+        ed.onPointerPress({4, 4}, Qt::LeftButton, Qt::NoModifier); // snapped -> anchor (0,0)
+        const Entity* b = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector && e.id != aid) b = &e;
+        check(b && near(b->a.x, 0.0) && near(b->a.y, 0.0),
+              "conn-snap-place: the ghost corner snaps onto another connector's corner");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
