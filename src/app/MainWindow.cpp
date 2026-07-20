@@ -998,11 +998,13 @@ private:
 
 // A dock that can auto-hide: when "pinned" it stays open; when unpinned it
 // collapses to a VerticalStrip whenever the cursor isn't over it, expanding on
-// hover and re-collapsing 2 s after the cursor leaves.
+// hover and re-collapsing 500 ms after the cursor leaves. Only ONE side may be
+// pinned at a time across the whole app — pinning one auto-hides every other.
 class AutoHideDock : public QDockWidget {
 public:
     AutoHideDock(const QString& title, QMainWindow* mw)
         : QDockWidget(title, mw), mw_(mw), title_(title) {
+        allDocks_.push_back(this);
         poll_ = new QTimer(this);
         poll_->setInterval(200);
         QObject::connect(poll_, &QTimer::timeout, this, [this] { onPoll(); });
@@ -1083,8 +1085,12 @@ public:
 
     bool pinned() const { return pinned_; }
 
-    // Toggling the pin on one panel pins/unpins the whole side group.
+    // Toggling the pin on one panel pins/unpins the whole side group. Only one
+    // side stays pinned at a time: pinning this side auto-hides every other.
     void setPinned(bool v) {
+        if (v)
+            for (auto* d : allDocks_)
+                if (d && !group().contains(d) && d->pinned_) d->setPinned(false);
         for (auto* d : group()) {
             d->applyPinned(v);
             if (d->pinBtn_ && d->pinBtn_->isChecked() != v) {
@@ -1136,7 +1142,7 @@ private:
         } else if (!collapsed_) {
             if (!outside_.isValid())
                 outside_.start();
-            else if (outside_.elapsed() >= 2000)
+            else if (outside_.elapsed() >= 500)
                 collapse();
         }
     }
@@ -1204,7 +1210,13 @@ private:
     int expandedExtent_ = 0;
     QToolButton* pinBtn_ = nullptr;   // the title bar's pin toggle (for group sync)
     QVector<AutoHideDock*> peers_;     // docks on the same side (pinned as a unit)
+    static QVector<AutoHideDock*> allDocks_; // every auto-hide dock (single-pin rule)
+
+public:
+    ~AutoHideDock() override { allDocks_.removeAll(this); }
 };
+
+QVector<AutoHideDock*> AutoHideDock::allDocks_;
 
 // Custom panel title bar: a dots grip (the only drag handle), the title, a
 // pin/auto-hide toggle, and a close button.
@@ -3218,6 +3230,10 @@ void MainWindow::buildPanels() {
     layersDock->setGroup(leftGroup);
     const QVector<AutoHideDock*> rightGroup{listDock};
     listDock->setGroup(rightGroup);
+
+    // Only one side may be pinned at a time — start with the left column pinned
+    // and the right (Entities) auto-hidden.
+    listDock->setPinned(false);
 }
 
 void MainWindow::buildCommandBar() {
