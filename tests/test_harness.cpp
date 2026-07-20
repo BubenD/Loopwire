@@ -736,8 +736,9 @@ int run_harness_tests() {
         QString cid; const Entity* c = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) { cid = e.id; c = &e; }
         const ConnectorGeometry g = connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
-        // Duplicate a pin label.
+        // Duplicate a pin label + make the labels a numeric/letter mix (no refdes/PN either).
         ed.applyConnectorPinLabel(cid, 1, QStringLiteral("1")); // pin 2 label == pin 1 label
+        ed.applyConnectorPinLabel(cid, 2, QStringLiteral("A")); // letter among numbers -> mixed
         // Wire from pin 0 to a dangling point (open end) — leaves pins 1,2 unconnected.
         Entity w; w.id = "vw"; w.type = EntityType::Wire;
         w.points = {g.pinEnd[0], {g.pinEnd[0].x + 200, g.pinEnd[0].y - 100}};
@@ -751,6 +752,9 @@ int run_harness_tests() {
         check(has("open"), "validate: reports the wire's open end");
         check(has("share the label"), "validate: reports the duplicate pin label");
         check(has("not connected"), "validate: reports the unconnected pins");
+        check(has("mixes numeric and letter"), "validate: reports mixed numeric/letter pin labels");
+        check(has("no reference designator"), "validate: reports a missing refdes");
+        check(has("no part number"), "validate: reports a missing P/N");
         // Each issue carries a stable key + the offending entity id for jump/highlight.
         check(!issues.empty() && !issues.front().key.isEmpty() &&
                   !issues.front().entityId.isEmpty(),
@@ -761,10 +765,12 @@ int run_harness_tests() {
         check(ed.bypassedIssues().contains(k), "validate: bypass records the discrepancy key");
         ed.restoreIssue(k);
         check(!ed.bypassedIssues().contains(k), "validate: restore clears the bypass");
-        // A clean schematic: pin 0 wired, others X-terminated, labels unique, wire closed.
+        // A clean schematic: refdes + P/N set, single numeric pin X-terminated, no wires.
         Document d2; d2.entities().clear();
         Editor ed2; ed2.setDocument(&d2); ed2.snapSettings().objectSnap = false;
         ed2.connectorSpec() = defaultConnectorSpec(1);
+        ed2.connectorSpec().designator = QStringLiteral("P1");
+        ed2.connectorSpec().partNumber = QStringLiteral("PN-0001");
         ed2.setTool(ToolId::Connector); ed2.armConnectorPlacement();
         ed2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* c2 = nullptr;

@@ -1803,6 +1803,33 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
         const QString name = spec.designator.isEmpty()
                                  ? QStringLiteral("#%1").arg(e.meta.value("entNum").toInt())
                                  : spec.designator;
+        const Vec2 bodyMid{(g.rectMin.x + g.rectMax.x) / 2.0,
+                           (g.rectMin.y + g.rectMax.y) / 2.0};
+        // (d) mixed numbering: some pins labelled with numbers and others with letters
+        // (classified by the label's first character) — one warning for the connector.
+        bool anyNumPin = false, anyLetterPin = false;
+        for (const QString& pl : spec.pins) {
+            if (pl.isEmpty()) continue;
+            const QChar c0 = pl.at(0);
+            if (c0.isDigit()) anyNumPin = true;
+            else if (c0.isLetter()) anyLetterPin = true;
+        }
+        if (anyNumPin && anyLetterPin)
+            issues.push_back({QStringLiteral("mixedpins:%1").arg(e.id),
+                              QStringLiteral("Connector %1 mixes numeric and letter pin labels")
+                                  .arg(name),
+                              e.id, bodyMid});
+        // (e) missing reference designator.
+        if (spec.designator.isEmpty())
+            issues.push_back({QStringLiteral("norefdes:%1").arg(e.id),
+                              QStringLiteral("Connector %1 has no reference designator")
+                                  .arg(name),
+                              e.id, g.designatorPos});
+        // (f) missing part number.
+        if (spec.partNumber.isEmpty())
+            issues.push_back({QStringLiteral("nopn:%1").arg(e.id),
+                              QStringLiteral("Connector %1 has no part number (P/N)").arg(name),
+                              e.id, g.partPos});
         // (b) duplicate pin labels within this connector.
         for (int i = 0; i < spec.pins.size(); ++i)
             for (int j = i + 1; j < spec.pins.size(); ++j)

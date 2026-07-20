@@ -179,6 +179,8 @@ public:
     // Schematic design-rule check: returns every problem found (empty = valid):
     //  - a connector pin not on a wire and not terminated by an X (not-connected) marker
     //  - duplicate pin labels within one connector
+    //  - a connector mixing numeric and letter pin labels
+    //  - a connector with no reference designator / no part number (P/N)
     //  - a wire with an open (dangling) end
     // Each issue carries a stable key + the offending object's id/location.
     std::vector<ValidationIssue> validateSchematic() const;
