@@ -655,6 +655,12 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // Paste preview: X / Y mirror the clipboard contents before dropping them.
+        if (editor_->isPastePlacing() && (e->key() == Qt::Key_X || e->key() == Qt::Key_Y)) {
+            editor_->togglePasteMirror(e->key() == Qt::Key_X);
+            e->accept();
+            return;
+        }
         // Tab switches the active dynamic-input reference field (Length<->Angle,
         // X radius<->Y radius, ...) even before the input box has been opened.
         // (focusNextPrevChild is overridden so Tab reaches us instead of moving focus.)

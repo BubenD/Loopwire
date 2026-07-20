@@ -1067,11 +1067,14 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         selected_.clear();
         for (Entity e : clipboard_) {
             e.id = uid();
+            if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
+            if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
             translateEntity(e, off);
             selected_.push_back(e.id);
             doc_->entities().push_back(std::move(e));
         }
         pastePlacing_ = false;
+        pasteMirrorX_ = pasteMirrorY_ = false;
         doc_->setDirty(true);
         emit message(QStringLiteral("Pasted %1 object(s)").arg(clipboard_.size()));
         emit selectionChanged();
@@ -5749,7 +5752,17 @@ void Editor::paste() {
     }
     awaitClipBase_ = false;
     pastePlacing_ = true; // the contents now follow the cursor until clicked to place
-    emit message(QStringLiteral("Specify insertion point"));
+    pasteMirrorX_ = pasteMirrorY_ = false;
+    emit message(QStringLiteral("Specify insertion point — X / Y mirror before placing"));
+    emit overlayChanged();
+}
+
+void Editor::togglePasteMirror(bool xAxis) {
+    if (!pastePlacing_) return;
+    if (xAxis) pasteMirrorX_ = !pasteMirrorX_;
+    else pasteMirrorY_ = !pasteMirrorY_;
+    emit message(xAxis ? QStringLiteral("Paste mirrored across the Y axis (X to flip back)")
+                       : QStringLiteral("Paste mirrored across the X axis (Y to flip back)"));
     emit overlayChanged();
 }
 
@@ -5896,6 +5909,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const Vec2 off = cursor_ - clipboardBase_;
         const QColor ghost(120, 200, 255, 170);
         for (Entity e : clipboard_) {
+            if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
+            if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
             translateEntity(e, off);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }

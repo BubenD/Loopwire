@@ -380,6 +380,30 @@ int run_harness_tests() {
         check(!sh.mirrorX && sh.mirrorY, "mirror-conn: horizontal mirror flips mirrorY only");
     }
 
+    // Copying a connector then X-mirroring the paste preview flips the placed copy.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector);
+        ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        QString cid;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) cid = e.id;
+        ed.setTool(ToolId::Select);
+        ed.selectById(cid);
+        ed.copySelection();
+        ed.paste();
+        ed.togglePasteMirror(true); // X -> flip across a vertical line through the base
+        ed.onPointerPress({200, 0}, Qt::LeftButton, Qt::NoModifier); // drop the mirrored copy
+        int conns = 0; const Entity* pasted = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector) { ++conns; if (e.id != cid) pasted = &e; }
+        check(conns == 2 && pasted, "paste-mirror: a second connector was pasted");
+        check(pasted && connectorSpecFromMeta(pasted->meta).mirrorX,
+              "paste-mirror: X mirror flips the pasted connector's pin direction");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

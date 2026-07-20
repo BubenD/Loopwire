@@ -195,6 +195,10 @@ public:
     void cutSelection();           // Ctrl+X: copy to clipboard + delete the originals
     void copyWithBase(bool cut);   // Ctrl+Shift+C: then pick a base point
     void paste();                  // Ctrl+V: then click to place (relative to base)
+    bool isPastePlacing() const { return pastePlacing_; }
+    // Flip the paste preview before placing: xAxis mirrors across a vertical line
+    // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
+    void togglePasteMirror(bool xAxis);
     void undo();
     void redo();
 
@@ -620,6 +624,8 @@ private:
     bool awaitClipBase_ = false;  // next click sets the base point (after Ctrl+Shift+C / Ctrl+X)
     bool clipCut_ = false;        // the pending base-point op is a cut (delete originals)
     bool pastePlacing_ = false;   // paste in progress: next click drops the contents
+    bool pasteMirrorX_ = false;   // X/Y flip the paste preview about the base before placing
+    bool pasteMirrorY_ = false;
     // Cut originals stay visible until the paste lands; these ids are removed when
     // the contents are finally placed (so a cut object isn't gone mid-move).
     std::vector<QString> cutPending_;
