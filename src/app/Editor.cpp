@@ -3786,7 +3786,7 @@ bool Editor::acceptCommandInput(const QString& text) {
                     base = b.valid ? b.center() : Vec2{0, 0};
                 }
                 pushUndo();
-                for (Entity* e : sel) scaleEntity(*e, base, std::max(1e-4, f));
+                scaleSelection(sel, base, std::max(1e-4, f));
                 modifyPts_.clear();
                 doc_->setDirty(true);
                 emit changed();
@@ -4212,31 +4212,7 @@ void Editor::handleModifyPress(const Vec2& p) {
         const Vec2 base = modifyPts_[0];
         const double ref = selectionRefLength(sel);
         const double f = ref > 1e-9 ? distance(base, modifyPts_[1]) / ref : 1.0;
-        const double sf = std::max(1e-4, f);
-        std::vector<QString> selIds;
-        for (Entity* e : sel) selIds.push_back(e->id);
-        for (Entity* e : sel) {
-            if (e->type == EntityType::Connector) {
-                // Scale the connector, then move any attached (non-selected) wire ends
-                // from the old pin positions to the new ones so the harness stays wired.
-                const ConnectorGeometry before =
-                    connectorGeometry(e->a, connectorSpecFromMeta(e->meta));
-                const std::vector<Vec2> oldPins = before.pinEnd;
-                scaleEntity(*e, base, sf);
-                const ConnectorGeometry after =
-                    connectorGeometry(e->a, connectorSpecFromMeta(e->meta));
-                for (auto& w : doc_->entities()) {
-                    if (w.type != EntityType::Wire) continue;
-                    if (std::find(selIds.begin(), selIds.end(), w.id) != selIds.end())
-                        continue; // a selected wire scales on its own and stays coincident
-                    for (auto& pt : w.points)
-                        for (size_t i = 0; i < oldPins.size() && i < after.pinEnd.size(); ++i)
-                            if (distance(pt, oldPins[i]) < 1e-6) { pt = after.pinEnd[i]; break; }
-                }
-            } else {
-                scaleEntity(*e, base, sf);
-            }
-        }
+        scaleSelection(sel, base, std::max(1e-4, f));
         break;
     }
     case ToolId::Offset: {
@@ -4408,6 +4384,41 @@ double Editor::selectionRefLength(const std::vector<Entity*>& sel) const {
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
     }
     return b.valid ? std::max(1e-6, distance(b.min, b.max)) : 1.0;
+}
+
+void Editor::scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, double sf) {
+    if (!doc_) return;
+    // 1) Record every wire endpoint that sits on a SELECTED connector's pin end BEFORE
+    //    scaling (by wire + point index + which connector/pin). Both selected and
+    //    non-selected wires are captured so the whole harness follows the connectors.
+    struct Attach { Entity* wire; size_t ptIdx; Entity* conn; size_t pin; };
+    std::vector<Attach> attaches;
+    for (Entity* c : sel) {
+        if (c->type != EntityType::Connector) continue;
+        const std::vector<Vec2> ends =
+            connectorGeometry(c->a, connectorSpecFromMeta(c->meta)).pinEnd;
+        for (auto& w : doc_->entities()) {
+            if (w.type != EntityType::Wire) continue;
+            for (size_t pi = 0; pi < w.points.size(); ++pi)
+                for (size_t k = 0; k < ends.size(); ++k)
+                    if (distance(w.points[pi], ends[k]) < 1e-6)
+                        attaches.push_back({&w, pi, c, k});
+        }
+    }
+
+    // 2) Scale every selected entity uniformly about the base — connectors scale their
+    //    structure parametrically (scaleEntity), wires/other geometry scale their points.
+    for (Entity* e : sel) scaleEntity(*e, base, sf);
+
+    // 3) Re-snap each recorded wire point to its connector's NEW pin end so connections
+    //    hold exactly (even if the connector's internal pin spacing scaled differently
+    //    from a uniform point scale, and even for wires that weren't in the selection).
+    for (const Attach& a : attaches) {
+        const std::vector<Vec2> ne =
+            connectorGeometry(a.conn->a, connectorSpecFromMeta(a.conn->meta)).pinEnd;
+        if (a.pin < ne.size() && a.ptIdx < a.wire->points.size())
+            a.wire->points[a.ptIdx] = ne[a.pin];
+    }
 }
 
 std::vector<Entity> Editor::modifyPreview() const {

@@ -531,6 +531,45 @@ int run_harness_tests() {
               "scale-wire: the wire's open end is left where it was");
     }
 
+    // Scaling a WHOLE harness (both connectors + the wire between them, all selected)
+    // scales every part and keeps BOTH wire ends wired to their pins.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        // Connector A at origin.
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        // Connector B further right.
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({400, 0}, Qt::LeftButton, Qt::NoModifier);
+        QString aid, bid; const Entity* ea = nullptr; const Entity* eb = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Connector) { if (aid.isEmpty()) { aid = e.id; ea = &e; } else { bid = e.id; eb = &e; } }
+        const Vec2 pinA = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta)).pinEnd[0];
+        const Vec2 pinB = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta)).pinEnd[0];
+        Entity w; w.id = "hw"; w.type = EntityType::Wire; w.points = {pinA, {pinA.x, pinB.y}, pinB};
+        d.entities().push_back(w);
+        // Select the ENTIRE harness and scale x2 about the origin.
+        ed.setTool(ToolId::Select);
+        ed.selectById(aid); ed.selectById(bid, true); ed.selectById("hw", true);
+        ed.setTool(ToolId::Scale);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.acceptCommandInput("2"); // typed scale factor about the picked base
+        const Entity* a2 = nullptr; const Entity* b2 = nullptr; const Entity* w2 = nullptr;
+        for (const auto& e : d.entities()) { if (e.id == aid) a2 = &e; if (e.id == bid) b2 = &e; if (e.id == "hw") w2 = &e; }
+        const Vec2 pinA2 = connectorGeometry(a2->a, connectorSpecFromMeta(a2->meta)).pinEnd[0];
+        const Vec2 pinB2 = connectorGeometry(b2->a, connectorSpecFromMeta(b2->meta)).pinEnd[0];
+        check(a2 && near(a2->meta.value("pitch").toDouble(), 30.0),
+              "scale-harness: connector structure scales (pitch x2)");
+        check(w2 && near(w2->points.front().x, pinA2.x) && near(w2->points.front().y, pinA2.y),
+              "scale-harness: near wire end stays wired to connector A");
+        check(w2 && near(w2->points.back().x, pinB2.x) && near(w2->points.back().y, pinB2.y),
+              "scale-harness: far wire end stays wired to connector B");
+    }
+
     // Editing a mirrored connector's pin count keeps it mirrored (ribbon seeds the spec
     // from the selected connector, so mirrorX/mirrorY aren't reset to the default).
     {

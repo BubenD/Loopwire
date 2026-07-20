@@ -455,6 +455,11 @@ private:
     // Reference length for a 2-click scale: the selection's bounding-box diagonal,
     // so dragging out to ~that distance is ~1x.
     double selectionRefLength(const std::vector<Entity*>& sel) const;
+    // Scale a whole selection about `base` by `sf`, keeping a harness intact: connectors
+    // scale their structure parametrically, wires/other geometry scale their points, and
+    // EVERY wire endpoint that sat on a scaled connector's pin end (selected or not) is
+    // re-snapped to the connector's new pin end so the harness stays wired.
+    void scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, double sf);
     void handlePickModifyPress(const Vec2& p);
     // Apply the active corner modifier (Fillet radius or Chamfer distance) to vertex
     // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
