@@ -111,6 +111,13 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
     for (const auto& v : pins) s.pins << v.toString();
     while (s.pins.size() < s.pinCount) s.pins << connectorPinLabel(s.pins.size(), s);
     s.pins = s.pins.mid(0, s.pinCount);
+    // Per-pin wire gauge + ampere (parallel to pins; padded/trimmed to pinCount).
+    for (const auto& v : meta.value("pinGauge").toArray()) s.pinGauge << v.toString();
+    for (const auto& v : meta.value("pinAmp").toArray()) s.pinAmp << v.toString();
+    while (s.pinGauge.size() < s.pinCount) s.pinGauge << QString();
+    while (s.pinAmp.size() < s.pinCount) s.pinAmp << QString();
+    s.pinGauge = s.pinGauge.mid(0, s.pinCount);
+    s.pinAmp = s.pinAmp.mid(0, s.pinCount);
     return s;
 }
 
@@ -144,6 +151,11 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     QJsonArray pins;
     for (const QString& p : spec.pins) pins.append(p);
     meta["pins"] = pins;
+    QJsonArray gauge, amp;
+    for (const QString& g : spec.pinGauge) gauge.append(g);
+    for (const QString& a : spec.pinAmp) amp.append(a);
+    meta["pinGauge"] = gauge;
+    meta["pinAmp"] = amp;
 }
 
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec) {

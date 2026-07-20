@@ -43,6 +43,17 @@ public:
     static void setDimensionDecimals(int d);
     static int dimensionDecimals();
 
+    // Measurement units (Options dialog). The drawing's world unit is 1 mm; inch mode
+    // divides by 25.4 for display. With dual units on, the other unit is appended in
+    // parentheses, e.g. "25.40 (1.00\")".
+    static void setLengthUnitInch(bool inch); // true = inch primary, false = mm
+    static bool lengthUnitInch();
+    static void setDualUnits(bool on);
+    static bool dualUnits();
+    // Format a world-space length (mm) for a dimension label per the settings above.
+    // `decimals` < 0 uses the global dimension-decimals setting.
+    static QString formatLength(double world, int decimals = -1);
+
     // Canvas background color, so a Wipeout fills with an opaque mask that matches
     // the model-space background (kept in sync by the CanvasWidget).
     static void setBackgroundColor(const QColor& c);

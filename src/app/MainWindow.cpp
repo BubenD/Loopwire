@@ -4177,6 +4177,22 @@ void MainWindow::showOptions() {
     sfm->addRow(QStringLiteral("Dimension decimals"), dimDec);
     tabs->addTab(sel, QStringLiteral("Selection"));
 
+    // ===== Units =====
+    auto* units = new QWidget(tabs);
+    auto* ufm = new QFormLayout(units);
+    auto* lenUnit = new QComboBox(units);
+    lenUnit->addItems({QStringLiteral("Millimeters (metric)"), QStringLiteral("Inches")});
+    lenUnit->setCurrentIndex(EntityRenderer::lengthUnitInch() ? 1 : 0);
+    ufm->addRow(QStringLiteral("Working length unit"), lenUnit);
+    auto* dualUnits = new QCheckBox(QStringLiteral("Show both units (other in parentheses)"), units);
+    dualUnits->setChecked(EntityRenderer::dualUnits());
+    ufm->addRow(QString(), dualUnits);
+    auto* xsec = new QComboBox(units);
+    xsec->addItems({QString::fromUtf8("mm\xC2\xB2 (metric)"), QStringLiteral("AWG")});
+    xsec->setCurrentIndex(crossSectionAwg_ ? 1 : 0);
+    ufm->addRow(QStringLiteral("Wire cross-section"), xsec);
+    tabs->addTab(units, QStringLiteral("Units"));
+
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     outer->addWidget(bb);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
@@ -4212,6 +4228,10 @@ void MainWindow::showOptions() {
     s.snapNearest = snNear->isChecked();
     editor_->setShowAngles(angles->isChecked());
     EntityRenderer::setDimensionDecimals(dimDec->value());
+    EntityRenderer::setLengthUnitInch(lenUnit->currentIndex() == 1);
+    EntityRenderer::setDualUnits(dualUnits->isChecked());
+    crossSectionAwg_ = (xsec->currentIndex() == 1);
+    saveSettings();
     canvas_->update();
 }
 
@@ -4454,6 +4474,17 @@ void MainWindow::refreshProperties() {
         });
         propsTable_->setCellWidget(r, 1, le);
     };
+    // A row whose value cell is an action button (opens a sub-editor, etc.).
+    auto addButton = [&](const QString& k, const QString& text, std::function<void()> onClick) {
+        const int r = propsTable_->rowCount();
+        propsTable_->insertRow(r);
+        auto* key = new QTableWidgetItem(k);
+        key->setFlags(Qt::ItemIsEnabled);
+        propsTable_->setItem(r, 0, key);
+        auto* btn = new QPushButton(text, propsTable_);
+        connect(btn, &QPushButton::clicked, this, [onClick] { onClick(); });
+        propsTable_->setCellWidget(r, 1, btn);
+    };
 
     const Entity* e = nullptr;
     if (sel.size() == 1)
@@ -4588,6 +4619,9 @@ void MainWindow::refreshProperties() {
                 refdesHint);
         addText(QStringLiteral("Part number"), cs.partNumber,
                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); });
+        // Per-pin wire cross-section (AWG/mm²) + ampere editor.
+        addButton(QStringLiteral("Pin wiring"), QStringLiteral("Pin table…"),
+                  [this] { showPinTable(editor_->selectedConnectorId()); });
         addNum(QStringLiteral("Pins"), cs.pinCount, [edit](double v) {
             edit([v](ConnectorSpec& s) { s.pinCount = std::clamp(int(v + 0.5), 1, 128); });
         });
@@ -5704,6 +5738,62 @@ void MainWindow::showValidationRules() {
     dlg->raise();
 }
 
+void MainWindow::showPinTable(const QString& connectorId) {
+    if (connectorId.isEmpty() || !doc_) return;
+    ConnectorSpec s;
+    bool found = false;
+    for (const auto& en : doc_->entities())
+        if (en.id == connectorId && en.type == EntityType::Connector) {
+            s = connectorSpecFromMeta(en.meta);
+            found = true;
+            break;
+        }
+    if (!found) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Pin wiring — %1")
+                           .arg(s.designator.isEmpty() ? QStringLiteral("connector") : s.designator));
+    dlg.resize(480, 440);
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(
+        QStringLiteral("Define each pin's wire cross-section and current rating:"), &dlg));
+    auto* table = new QTableWidget(&dlg);
+    const QString gaugeHdr = crossSectionAwg_ ? QStringLiteral("AWG") : QString::fromUtf8("mm\xC2\xB2");
+    table->setColumnCount(4);
+    table->setHorizontalHeaderLabels(
+        {QStringLiteral("Pin"), QStringLiteral("Label"), gaugeHdr, QStringLiteral("Ampere (A)")});
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->verticalHeader()->setVisible(false);
+    table->setRowCount(s.pinCount);
+    for (int i = 0; i < s.pinCount; ++i) {
+        auto* pn = new QTableWidgetItem(QString::number(i + 1));
+        pn->setFlags(Qt::ItemIsEnabled); // pin index is read-only
+        table->setItem(i, 0, pn);
+        table->setItem(i, 1, new QTableWidgetItem(i < s.pins.size() ? s.pins[i] : QString()));
+        table->setItem(i, 2, new QTableWidgetItem(i < s.pinGauge.size() ? s.pinGauge[i] : QString()));
+        table->setItem(i, 3, new QTableWidgetItem(i < s.pinAmp.size() ? s.pinAmp[i] : QString()));
+    }
+    lay->addWidget(table);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(bb);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    // Read the table back into the spec (labels + per-pin gauge + ampere) and apply.
+    s.pins.clear();
+    s.pinGauge.clear();
+    s.pinAmp.clear();
+    for (int i = 0; i < s.pinCount; ++i) {
+        s.pins << (table->item(i, 1) ? table->item(i, 1)->text() : QString());
+        s.pinGauge << (table->item(i, 2) ? table->item(i, 2)->text() : QString());
+        s.pinAmp << (table->item(i, 3) ? table->item(i, 3)->text() : QString());
+    }
+    editor_->applyConnectorSpecToSelection(s);
+    refreshProperties();
+    if (canvas_) canvas_->update();
+}
+
 void MainWindow::showBomDialog() {
     const auto rows = editor_->buildBom();
     QDialog dlg(this);
@@ -5858,6 +5948,10 @@ void MainWindow::loadSettings() {
     canvas_->setGridSize(sn.gridSize);
     canvas_->setGridVisible(s.value(QStringLiteral("draft/gridVisible"), canvas_->gridVisible()).toBool());
     editor_->setShowAngles(s.value(QStringLiteral("draft/showAngles"), editor_->showAngles()).toBool());
+    // Measurement / cross-section units.
+    EntityRenderer::setLengthUnitInch(s.value(QStringLiteral("units/inch"), false).toBool());
+    EntityRenderer::setDualUnits(s.value(QStringLiteral("units/dual"), false).toBool());
+    crossSectionAwg_ = s.value(QStringLiteral("units/awg"), false).toBool();
 }
 
 void MainWindow::saveSettings() {
@@ -5883,6 +5977,9 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("draft/gridSize"), canvas_->gridSize());
     s.setValue(QStringLiteral("draft/gridVisible"), canvas_->gridVisible());
     s.setValue(QStringLiteral("draft/showAngles"), editor_->showAngles());
+    s.setValue(QStringLiteral("units/inch"), EntityRenderer::lengthUnitInch());
+    s.setValue(QStringLiteral("units/dual"), EntityRenderer::dualUnits());
+    s.setValue(QStringLiteral("units/awg"), crossSectionAwg_);
 }
 
 // ---- File actions ----------------------------------------------------------

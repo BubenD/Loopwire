@@ -34,6 +34,8 @@ struct ConnectorSpec {
     bool mirrorX = false;     // false: pins exit right; true: exit left (mirror across Y)
     bool mirrorY = false;     // true: pin order flipped top<->bottom (mirror across X)
     QStringList pins;         // per-pin labels (size == pinCount)
+    QStringList pinGauge;     // per-pin wire cross-section (AWG or mm² string), size==pinCount
+    QStringList pinAmp;       // per-pin ampere rating (string), size==pinCount
     // Web-parity build options (Schematic build "Connector build" ribbon):
     QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"
     QString pinOrder = QStringLiteral("top");       // "top" (1 at top) | "bottom"

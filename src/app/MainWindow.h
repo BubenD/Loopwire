@@ -133,6 +133,8 @@ private:
     void showValidation(bool revalidate = false);
     void showBypassTable();    // list discrepancies the user has bypassed (accepted)
     void showValidationRules(); // choose which design-rule checks are active
+    // Per-pin AWG/mm² + ampere editor for the selected connector (opened from Properties).
+    void showPinTable(const QString& connectorId);
     // Center + flash-highlight the object carrying a discrepancy (and select it).
     void locateIssue(const ValidationIssue& issue);
 
@@ -174,6 +176,7 @@ private:
     QDialog* bypassDlg_ = nullptr;     // modeless "Bypassed discrepancies" window (if open)
     QDialog* rulesDlg_ = nullptr;      // modeless "Validation rules" chooser (if open)
     std::vector<ValidationIssue> validationSnapshot_; // issues tracked in the open window
+    bool crossSectionAwg_ = false;     // wire cross-section notation: false = mm², true = AWG
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;

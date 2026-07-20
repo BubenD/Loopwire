@@ -18,11 +18,28 @@ namespace Edraw_Desktop {
 namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
+bool g_lengthInch = false;   // dimension unit: false = mm (world), true = inch
+bool g_dualUnits = false;    // append the other unit in parentheses
 }
 void EntityRenderer::setDimensionDecimals(int d) { g_dimDecimals = std::clamp(d, 0, 6); }
 int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
 void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
+void EntityRenderer::setLengthUnitInch(bool inch) { g_lengthInch = inch; }
+bool EntityRenderer::lengthUnitInch() { return g_lengthInch; }
+void EntityRenderer::setDualUnits(bool on) { g_dualUnits = on; }
+bool EntityRenderer::dualUnits() { return g_dualUnits; }
+
+QString EntityRenderer::formatLength(double world, int decimals) {
+    const int dec = decimals >= 0 ? decimals : g_dimDecimals;
+    const double mm = world;         // world unit == 1 mm
+    const double in = world / 25.4;  // inch conversion
+    const QString mmStr = QStringLiteral("%1").arg(mm, 0, 'f', dec);
+    const QString inStr = QStringLiteral("%1\"").arg(in, 0, 'f', dec);
+    if (g_lengthInch)
+        return g_dualUnits ? QStringLiteral("%1 (%2)").arg(inStr, mmStr) : inStr;
+    return g_dualUnits ? QStringLiteral("%1 (%2)").arg(mmStr, inStr) : mmStr;
+}
 
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     QString layerHex = QStringLiteral("#ffffff");
@@ -486,7 +503,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const QPointF on = c + dir * (e.radius * vt.scale());
         p.drawLine(c, tp);
         drawArrowHead(p, on, dir, color, arrowPx); // tip on the ring, pointing outward
-        label(tp, QStringLiteral("R%1").arg(e.radius, 0, 'f', dec));
+        label(tp, QStringLiteral("R%1").arg(EntityRenderer::formatLength(e.radius, dec)));
         return;
     }
     if (ty == QLatin1String("diameter")) {
@@ -498,7 +515,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         p.drawLine(a1, a2);
         drawArrowHead(p, a1, QPointF(-dir.x(), -dir.y()), color, arrowPx); // ring, outward
         drawArrowHead(p, a2, dir, color, arrowPx);
-        label(tp, QString::fromUtf8("\xC3\x98%1").arg(e.radius * 2.0, 0, 'f', dec));
+        label(tp, QString::fromUtf8("\xC3\x98%1").arg(EntityRenderer::formatLength(e.radius * 2.0, dec)));
         return;
     }
     if (ty == QLatin1String("angular") && e.points.size() >= 3) {
@@ -524,7 +541,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const QPointF f = vt.toScreen(e.a), le = vt.toScreen(e.b);
         p.drawLine(f, le);
         const bool xOrd = std::abs(e.b.x - e.a.x) >= std::abs(e.b.y - e.a.y);
-        label(le, QStringLiteral("%1").arg(xOrd ? e.a.x : e.a.y, 0, 'f', dec));
+        label(le, EntityRenderer::formatLength(xOrd ? e.a.x : e.a.y, dec));
         return;
     }
 
@@ -567,8 +584,8 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     const QPointF nOut = unit(dimMid - measMid);
     const QPointF txtAt = dimMid + nOut * (textH * vt.scale() * 0.5 + 3.0);
     const QString txt = (ty == QLatin1String("arclength"))
-                            ? QString::fromUtf8("\xE2\x8C\x92%1").arg(measure, 0, 'f', dec)
-                            : QStringLiteral("%1").arg(measure, 0, 'f', dec);
+                            ? QString::fromUtf8("\xE2\x8C\x92%1").arg(EntityRenderer::formatLength(measure, dec))
+                            : EntityRenderer::formatLength(measure, dec);
     // If the text was dragged off the dimension line, draw it there and connect it
     // back to the line's midpoint with a dashed leader (AutoCAD-style).
     if (e.meta.contains("textPosX")) {

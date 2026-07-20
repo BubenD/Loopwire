@@ -792,6 +792,45 @@ int run_harness_tests() {
               "validate: a fully X-terminated connector with no wires is valid");
     }
 
+    // Per-pin wire gauge + ampere round-trip through the connector meta.
+    {
+        ConnectorSpec s = defaultConnectorSpec(3);
+        s.pinGauge = {QStringLiteral("0.5"), QStringLiteral("0.75"), QStringLiteral("1.0")};
+        s.pinAmp = {QStringLiteral("5"), QStringLiteral("7.5"), QStringLiteral("10")};
+        QJsonObject meta;
+        writeConnectorSpec(meta, s);
+        const ConnectorSpec r = connectorSpecFromMeta(meta);
+        check(r.pinGauge.size() == 3 && r.pinGauge[1] == QLatin1String("0.75"),
+              "pin-table: per-pin gauge round-trips through meta");
+        check(r.pinAmp.size() == 3 && r.pinAmp[2] == QLatin1String("10"),
+              "pin-table: per-pin ampere round-trips through meta");
+        // A spec with no gauge/amp arrays pads to pinCount (empty strings).
+        QJsonObject bare;
+        writeConnectorSpec(bare, defaultConnectorSpec(4));
+        bare.remove("pinGauge");
+        bare.remove("pinAmp");
+        const ConnectorSpec p = connectorSpecFromMeta(bare);
+        check(p.pinGauge.size() == 4 && p.pinAmp.size() == 4,
+              "pin-table: missing gauge/amp arrays pad to pin count");
+    }
+
+    // Dimension length formatting: mm, inch, and dual-unit parentheses.
+    {
+        EntityRenderer::setDimensionDecimals(2);
+        EntityRenderer::setLengthUnitInch(false);
+        EntityRenderer::setDualUnits(false);
+        check(EntityRenderer::formatLength(25.4) == QLatin1String("25.40"),
+              "units: metric length shows the mm value");
+        EntityRenderer::setLengthUnitInch(true);
+        check(EntityRenderer::formatLength(25.4) == QString::fromUtf8("1.00\""),
+              "units: inch length divides by 25.4");
+        EntityRenderer::setDualUnits(true);
+        check(EntityRenderer::formatLength(25.4).contains(QLatin1String("25.40")),
+              "units: dual units append the other unit in parentheses");
+        EntityRenderer::setLengthUnitInch(false); // restore defaults
+        EntityRenderer::setDualUnits(false);
+    }
+
     // The X (NotConnected) tool keeps placing until Esc — it does not revert to Select.
     {
         Document d; d.entities().clear();
