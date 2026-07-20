@@ -428,7 +428,7 @@ int run_harness_tests() {
 
     // Align routing helper: place two facing connectors (A fixed, B mirrored so its
     // pins face A) with B `dy` below, wire pin 0<->0, then align from A.
-    auto alignCase = [](double bx, double by) {
+    auto alignCase = [](double bx, double by, bool knee) {
         struct R { double wpts; double way0; double way1; double bay; bool built; };
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
@@ -445,7 +445,12 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) { if (e.id == aid) ea = &e; if (e.id == bid) eb = &e; }
         const ConnectorGeometry ga = connectorGeometry(ea->a, connectorSpecFromMeta(ea->meta));
         const ConnectorGeometry gb = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta));
-        Entity w; w.id = "aw"; w.type = EntityType::Wire; w.points = {ga.pinEnd[0], gb.pinEnd[0]};
+        Entity w; w.id = "aw"; w.type = EntityType::Wire;
+        if (knee) // a wire with a bend (knee) between the pins
+            w.points = {ga.pinEnd[0], {(ga.pinEnd[0].x + gb.pinEnd[0].x) / 2, ga.pinEnd[0].y},
+                        gb.pinEnd[0]};
+        else
+            w.points = {ga.pinEnd[0], gb.pinEnd[0]}; // straight
         d.entities().push_back(w);
         ed.alignRoutingFrom(aid);
         const Entity* ww = nullptr; const Entity* bb = nullptr;
@@ -456,17 +461,19 @@ int run_harness_tests() {
                  bb ? bb->a.y : -999, ww && bb};
     };
     {
-        // Facing + small offset -> straighten: B shifts into line, wire is 2 pts horizontal.
-        auto r = alignCase(300, -30);
+        // Straight wire (no knees), any offset -> straighten: B shifts into line, wire
+        // becomes 2 pts horizontal.
+        auto r = alignCase(600, -400, false);
         check(r.built && r.wpts == 2 && near(r.way0, r.way1),
-              "align-routing: small offset straightens the wire (0 deg)");
-        check(near(r.bay, 0.0), "align-routing: the connector shifts into line when straightening");
+              "align-routing: a straight wire is straightened (0 deg)");
+        check(near(r.bay, 0.0),
+              "align-routing: the connector moves into line when the wires have no knees");
     }
     {
-        // Facing + large offset -> keep the connector, re-route the wire at 90 deg.
-        auto r = alignCase(400, -400);
-        check(r.built && r.wpts == 4, "align-routing: large offset re-routes the wire with 90 deg bends");
-        check(near(r.bay, -400.0), "align-routing: the connector stays put when re-routing at 90 deg");
+        // A wire that already has a knee -> keep the connector, re-route it at 90 deg.
+        auto r = alignCase(600, -400, true);
+        check(r.built && r.wpts == 4, "align-routing: a knee'd wire re-routes with 90 deg bends");
+        check(near(r.bay, -400.0), "align-routing: the connector stays put for knee'd wires");
     }
 
     // Scaling a connector resizes its parametric geometry (not just its position).
@@ -601,7 +608,10 @@ int run_harness_tests() {
         const ConnectorGeometry gb = connectorGeometry(eb->a, connectorSpecFromMeta(eb->meta));
         for (int i = 0; i < 4; ++i) {
             Entity w; w.id = QStringLiteral("cw%1").arg(i); w.type = EntityType::Wire;
-            w.points = {ga.pinEnd[i], gb.pinEnd[i]}; // pin i -> pin i (monotonic)
+            // Pin i -> pin i (monotonic), with a knee so align re-routes at 90° (rather
+            // than straightening) and the crossing-minimiser picks a clean lane order.
+            w.points = {ga.pinEnd[i], {(ga.pinEnd[i].x + gb.pinEnd[i].x) / 2, ga.pinEnd[i].y},
+                        gb.pinEnd[i]};
             d.entities().push_back(w);
         }
         ed.alignRoutingFrom(aid);

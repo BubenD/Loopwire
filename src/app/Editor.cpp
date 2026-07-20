@@ -1832,8 +1832,16 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
         bool sameDy = true;
         for (const Link& l : group)
             if (std::abs((l.refPin.y - l.otherPin.y) - dy0) > 1e-6) { sameDy = false; break; }
-        const double refH = rg.rectMax.y - rg.rectMin.y;
-        const bool straighten = facing && sameDy && std::abs(dy0) <= refH;
+        // Are the connecting wires straight (no knees) already? If so, MOVE the other
+        // connector to line the wires up (any offset). If any wire is already bent
+        // (has knees), leave the connector put and re-route the wires at 90° instead.
+        bool anyKnees = false;
+        for (const Link& l : group)
+            if (const Entity* w = entityById(l.wireId); w && w->points.size() > 2) {
+                anyKnees = true;
+                break;
+            }
+        const bool straighten = !anyKnees && facing && sameDy;
 
         if (straighten) {
             const Vec2 delta{0, dy0};
