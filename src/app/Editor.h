@@ -223,6 +223,7 @@ public:
     void setSelectionWeight(double weight);      // 0 => ByLayer
     void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
     void setSelectionMetaNumber(const QString& key, double value);   // gap, ...
+    void setSelectionMetaBool(const QString& key, bool value);       // showS, ...
     void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
     void setSelectionHatchMeta(const QString& key, const QJsonValue& value); // hatch pattern/angle/...
     void setSelectionDimMeta(const QString& key, const QJsonValue& value); // dimension props
@@ -307,6 +308,10 @@ public:
     // Default marker sizes for newly placed splices / X (not-connected) terminations.
     double& spliceSize() { return spliceSize_; }
     double& ncSize() { return ncSize_; }
+    // Screen (shield) defaults: small radius (rx), drain-leg length, and show the "S".
+    double& screenRx() { return screenRx_; }
+    double& screenLeg() { return screenLeg_; }
+    bool& screenShowS() { return screenShowS_; }
 
     // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
     // (bridge) and a plain cross. Armed until Esc.
@@ -706,6 +711,9 @@ private:
     bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
+    double screenRx_ = 12.0;      // screen ellipse small radius
+    double screenLeg_ = 40.0;     // screen drain-leg length
+    bool screenShowS_ = true;     // draw the "S" shield label
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)

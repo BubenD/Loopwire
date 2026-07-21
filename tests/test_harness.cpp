@@ -919,6 +919,18 @@ int run_harness_tests() {
         check(sc && sc->meta.value("catch").toInt() == 2 && sc->points.size() == 3 &&
                   sc->meta.value("wires").toArray().size() == 2,
               "screen: a crossing line over two wires shields both (ellipse + drain)");
+        // Screen radii/showS are editable via setSelectionMetaNumber/Bool (Properties).
+        ed.setTool(ToolId::Select);
+        ed.selectById(sc->id);
+        ed.setSelectionMetaNumber(QStringLiteral("ry"), 30.0);
+        ed.setSelectionMetaNumber(QStringLiteral("rx"), 8.0);
+        ed.setSelectionMetaBool(QStringLiteral("showS"), false);
+        const Entity* sc2 = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc2 = &e;
+        check(sc2 && near(sc2->meta.value("ry").toDouble(), 30.0) &&
+                  near(sc2->meta.value("rx").toDouble(), 8.0) &&
+                  sc2->meta.value("showS").toBool(true) == false,
+              "screen: large/small radius and showS are editable");
     }
 
     // Cross switch: toggling a wire crossing adds a hop to one wire, toggling again removes it.

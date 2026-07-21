@@ -1301,7 +1301,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double pad = 6.0;
         const double rx = e.meta.value("rx").toDouble(12.0);
         const double cyMid = (yMin + yMax) / 2.0;
-        const double ry = (yMax - yMin) / 2.0 + pad;
+        // Large radius: explicit override (Properties) or auto-fit to the caught wires.
+        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                : (yMax - yMin) / 2.0 + pad;
         const QPointF c = vt.toScreen({cx, cyMid});
         p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
         // Drain lead + endpoint (the point after the k caught wires).
@@ -1314,8 +1316,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick
             p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
         }
-        drawWorldText(p, c + QPointF(rx * vt.scale() + 3, 0), QStringLiteral("S"), 4.0,
-                      vt.scale(), color);
+        if (e.meta.value("showS").toBool(true))
+            drawWorldText(p, c + QPointF(rx * vt.scale() + 3, 0), QStringLiteral("S"), 4.0,
+                          vt.scale(), color);
         break;
     }
 

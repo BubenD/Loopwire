@@ -2129,6 +2129,7 @@ void MainWindow::buildRibbon() {
         markerSpin_ = new QDoubleSpinBox(mkW);
         markerSpin_->setRange(0.5, 500.0);
         markerSpin_->setDecimals(1);
+        markerSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons); // field only, no +/-
         connect(markerSpin_, &QDoubleSpinBox::editingFinished, this, [this] {
             if (editor_->tool() == ToolId::Splice) editor_->spliceSize() = markerSpin_->value();
             else if (editor_->tool() == ToolId::NotConnected)
@@ -4839,6 +4840,55 @@ void MainWindow::refreshProperties() {
                });
     }
 
+    // A selected Screen (shield): edit its ellipse radii and whether the "S" shows.
+    if (e && e->type == EntityType::Screen) {
+        addHeader(QStringLiteral("Screen"));
+        const QJsonObject& m = e->meta;
+        // Current large radius: explicit override, else auto-fit to the caught wires.
+        double ry = m.value(QStringLiteral("ry")).toDouble(0.0);
+        if (ry <= 0.0) {
+            const int kc = std::min(m.value(QStringLiteral("catch"))
+                                        .toInt(static_cast<int>(e->points.size())),
+                                    static_cast<int>(e->points.size()));
+            double yMin = 1e18, yMax = -1e18;
+            for (int i = 0; i < kc; ++i) {
+                yMin = std::min(yMin, e->points[i].y);
+                yMax = std::max(yMax, e->points[i].y);
+            }
+            ry = (yMax - yMin) / 2.0 + 6.0;
+        }
+        addNum(QStringLiteral("Large radius"), ry, [this](double v) {
+            editor_->setSelectionMetaNumber(QStringLiteral("ry"), std::max(1.0, v));
+        });
+        addNum(QStringLiteral("Small radius"), m.value(QStringLiteral("rx")).toDouble(12.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("rx"), std::max(1.0, v));
+               });
+        addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
+                 m.value(QStringLiteral("showS")).toBool(true) ? QStringLiteral("Yes")
+                                                               : QStringLiteral("No"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("showS"),
+                                                   t == QLatin1String("Yes"));
+                 });
+    }
+
+    // A selected Splice / X termination: edit its marker size.
+    if (e && e->type == EntityType::Splice) {
+        addHeader(QStringLiteral("Splice"));
+        addNum(QStringLiteral("Size"), e->meta.value(QStringLiteral("size")).toDouble(4.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("size"), std::max(0.5, v));
+               });
+    }
+    if (e && e->type == EntityType::NotConnected) {
+        addHeader(QStringLiteral("Termination"));
+        addNum(QStringLiteral("Size"), e->meta.value(QStringLiteral("ncSize")).toDouble(6.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("ncSize"), std::max(0.5, v));
+               });
+    }
+
     addHeader(QStringLiteral("Geometry"));
     if (e) {
         const Bounds b = e->bounds();
@@ -5857,6 +5907,36 @@ void MainWindow::buildWireRibbonTab() {
     });
     bg->addWidget(screenBtn, 0, 1);
     lay->addWidget(ribbonGroup(QStringLiteral("Bundle"), bundleW));
+
+    // ---- Screen defaults: small radius + drain-leg length + show the "S" ----
+    auto* scW = new QWidget(wireTab_);
+    auto* scg = new QGridLayout(scW);
+    scg->setContentsMargins(0, 0, 0, 0);
+    scg->setSpacing(2);
+    auto* scRx = new QDoubleSpinBox(scW);
+    scRx->setRange(1.0, 500.0);
+    scRx->setDecimals(1);
+    scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scRx->setValue(editor_->screenRx());
+    connect(scRx, &QDoubleSpinBox::editingFinished, this,
+            [this, scRx] { editor_->screenRx() = scRx->value(); });
+    auto* scLeg = new QDoubleSpinBox(scW);
+    scLeg->setRange(0.0, 5000.0);
+    scLeg->setDecimals(1);
+    scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scLeg->setValue(editor_->screenLeg());
+    connect(scLeg, &QDoubleSpinBox::editingFinished, this,
+            [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
+    auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
+    scShowS->setChecked(editor_->screenShowS());
+    connect(scShowS, &QCheckBox::toggled, this,
+            [this](bool on) { editor_->screenShowS() = on; });
+    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), 0, 0);
+    scg->addWidget(scRx, 0, 1);
+    scg->addWidget(new QLabel(QStringLiteral("Leg"), scW), 1, 0);
+    scg->addWidget(scLeg, 1, 1);
+    scg->addWidget(scShowS, 2, 0, 1, 2);
+    lay->addWidget(ribbonGroup(QStringLiteral("Screen"), scW));
 
     // ---- Routing: gap between the parallel wire lanes after a knee ----
     auto* routeW = new QWidget(wireTab_);

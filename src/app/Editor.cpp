@@ -1125,8 +1125,9 @@ void Editor::onPointerMove(const Vec2& raw) {
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
-        trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_))
-        emit overlayChanged(); // armed connector ghost / frozen grab marker tracks the cursor
+        trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_) ||
+        ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
+        emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
 }
 
 void Editor::onDragTick() {
@@ -2207,10 +2208,12 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         Entity e;
         e.type = EntityType::Screen;
         e.layer = QStringLiteral("Wires");
-        e.points = crossings;                        // the caught wires (connection joints)
-        e.points.push_back({cx, yMin - 40.0});       // drain lead endpoint (below the bundle)
+        e.points = crossings;                          // the caught wires (connection joints)
+        e.points.push_back({cx, yMin - screenLeg_});   // drain lead endpoint (below the bundle)
         e.meta.insert("catch", static_cast<int>(crossings.size()));
         e.meta.insert("wires", ids);
+        e.meta.insert("rx", screenRx_);
+        e.meta.insert("showS", screenShowS_);
         e.meta.insert("entNum", assignEntityNumber());
         doc_->entities().push_back(e);
         screenArm_ = false;
@@ -6273,6 +6276,15 @@ void Editor::setSelectionMetaNumber(const QString& key, double value) {
     emit changed();
 }
 
+void Editor::setSelectionMetaBool(const QString& key, bool value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
 void Editor::setSelectionTextMeta(const QString& key, const QJsonValue& value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;
@@ -6689,6 +6701,39 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
+
+    // Twist / Screen: preview the crossing line, and (for Screen) a ghost ellipse over
+    // the wires it currently crosses, so the shield can be judged before committing.
+    if ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_) {
+        p.save();
+        QPen pv(QColor(120, 200, 255, 200));
+        pv.setCosmetic(true);
+        pv.setWidthF(1.4);
+        pv.setStyle(Qt::DashLine);
+        p.setPen(pv);
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(cursor_));
+        if (screenArm_) {
+            std::vector<Vec2> xs;
+            for (const auto& w : doc_->entities()) {
+                if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                for (size_t i = 1; i < w.points.size(); ++i)
+                    if (auto x = segmentSegmentIntersection(wireBandStart_, cursor_,
+                                                            w.points[i - 1], w.points[i])) {
+                        xs.push_back(*x);
+                        break;
+                    }
+            }
+            if (!xs.empty()) {
+                double cx = 0, yMin = 1e18, yMax = -1e18;
+                for (const Vec2& v : xs) { cx += v.x; yMin = std::min(yMin, v.y); yMax = std::max(yMax, v.y); }
+                cx /= xs.size();
+                const QPointF c = vt.toScreen({cx, (yMin + yMax) / 2.0});
+                p.drawEllipse(c, screenRx_ * vt.scale(), ((yMax - yMin) / 2.0 + 6.0) * vt.scale());
+            }
+        }
+        p.restore();
+    }
 
     // Locate-highlight: a bright ring flashed at a discrepancy the user clicked in the
     // validation dialog, so the jumped-to object is easy to spot.
