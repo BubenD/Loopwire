@@ -1866,6 +1866,10 @@ void MainWindow::buildRibbon() {
         // read against the charcoal ribbon in dark mode.
         "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
         "QComboBox:hover{border-color:#5aa0ff;}"
+        // Line edits (and the editable-combo line edit) need bright text too, else they
+        // render near-black on the ribbon.
+        "QLineEdit{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QComboBox QLineEdit{background-color:transparent;border:none;color:#f2f4f7;}"
         // A distinct, button-like drop-down box with a clear down-triangle (a non-zero
         // arrow box is required for the CSS border-triangle to render).
         "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
@@ -2113,8 +2117,37 @@ void MainWindow::buildRibbon() {
     {
         auto [page, lay] = makeTabPage();
         addGroup(lay, QStringLiteral("Place"),
-                 toolRow({ToolId::Connector, ToolId::Wire, ToolId::NetLabel,
+                 toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice, ToolId::NetLabel,
                           ToolId::NotConnected}));
+        // Marker sizes for Splice (junction) and X (termination), also typeable in the
+        // flying command field while the tool is active.
+        auto* mkW = new QWidget(page);
+        auto* mkG = new QGridLayout(mkW);
+        mkG->setContentsMargins(0, 0, 0, 0);
+        mkG->setSpacing(2);
+        auto* spliceSp = new QDoubleSpinBox(mkW);
+        spliceSp->setRange(0.5, 500.0);
+        spliceSp->setDecimals(1);
+        spliceSp->setValue(editor_->spliceSize());
+        connect(spliceSp, &QDoubleSpinBox::editingFinished, this,
+                [this, spliceSp] { editor_->spliceSize() = spliceSp->value(); });
+        auto* xSp = new QDoubleSpinBox(mkW);
+        xSp->setRange(0.5, 500.0);
+        xSp->setDecimals(1);
+        xSp->setValue(editor_->ncSize());
+        connect(xSp, &QDoubleSpinBox::editingFinished, this,
+                [this, xSp] { editor_->ncSize() = xSp->value(); });
+        // Keep the spins in sync when the size is typed in the flying field.
+        connect(editor_, &Editor::markerSizeChanged, this, [this, spliceSp, xSp] {
+            QSignalBlocker b1(spliceSp), b2(xSp);
+            spliceSp->setValue(editor_->spliceSize());
+            xSp->setValue(editor_->ncSize());
+        });
+        mkG->addWidget(new QLabel(QStringLiteral("Splice ⌀"), mkW), 0, 0);
+        mkG->addWidget(spliceSp, 0, 1);
+        mkG->addWidget(new QLabel(QStringLiteral("X size"), mkW), 1, 0);
+        mkG->addWidget(xSp, 1, 1);
+        addGroup(lay, QStringLiteral("Markers"), mkW);
         // Modify: straighten the wiring around a reference connector.
         auto* modW = new QWidget(page);
         auto* modG = new QGridLayout(modW);
@@ -5774,9 +5807,14 @@ void MainWindow::buildWireRibbonTab() {
     });
     connect(gapVal, &QDoubleSpinBox::editingFinished, this,
             [this, gapVal] { editor_->wireGapCustom() = gapVal->value(); });
-    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 0, 0, 1, 2);
-    rgl->addWidget(gapRule, 1, 0);
-    rgl->addWidget(gapVal, 1, 1);
+    auto* ortho90 = new QCheckBox(QStringLiteral("90° only"), routeW);
+    ortho90->setChecked(editor_->wireOrtho());
+    ortho90->setToolTip(QStringLiteral("Constrain wire drawing to horizontal / vertical segments"));
+    connect(ortho90, &QCheckBox::toggled, this, [this](bool on) { editor_->wireOrtho() = on; });
+    rgl->addWidget(ortho90, 0, 0, 1, 2);
+    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 1, 0, 1, 2);
+    rgl->addWidget(gapRule, 2, 0);
+    rgl->addWidget(gapVal, 2, 1);
     lay->addWidget(ribbonGroup(QStringLiteral("Routing"), routeW));
 
     lay->addStretch(1);

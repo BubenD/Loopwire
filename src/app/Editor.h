@@ -104,7 +104,10 @@ public:
     }
     // Modify tools that accept a TYPED numeric value (e.g. Scale factor) even though
     // they are not draw tools — lets a digit pop the flying input field at the cursor.
-    bool wantsValueInput() const { return tool_ == ToolId::Scale || tool_ == ToolId::Offset; }
+    bool wantsValueInput() const {
+        return tool_ == ToolId::Scale || tool_ == ToolId::Offset ||
+               tool_ == ToolId::Splice || tool_ == ToolId::NotConnected;
+    }
 
     // Dynamic-input reference fields (AutoCAD-style). For the current draw step
     // these are the typed references — line/segment: Length + Angle; circle:
@@ -297,6 +300,11 @@ public:
     // reference connector's pitch, "custom" uses wireGapCustom().
     QString& wireGapRule() { return wireGapRule_; }
     double& wireGapCustom() { return wireGapCustom_; }
+    // Constrain wire drawing to horizontal/vertical (90°) segments only.
+    bool& wireOrtho() { return wireOrtho_; }
+    // Default marker sizes for newly placed splices / X (not-connected) terminations.
+    double& spliceSize() { return spliceSize_; }
+    double& ncSize() { return ncSize_; }
 
     // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
     // (bridge) and a plain cross. Armed until Esc.
@@ -423,6 +431,7 @@ signals:
     // Connector placement was armed/disarmed (e.g. first canvas click starts the
     // preview) — the host reflects it on the "Place connector" button.
     void connectorArmedChanged();
+    void markerSizeChanged(); // splice/X default size changed (ribbon field re-syncs)
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
@@ -690,6 +699,9 @@ private:
     QString wireType_ = QStringLiteral("Stranded");
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
+    bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
+    double spliceSize_ = 4.0;     // splice dot radius (world units)
+    double ncSize_ = 6.0;         // X termination half-size (world units)
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)

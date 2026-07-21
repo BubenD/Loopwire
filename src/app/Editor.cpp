@@ -539,6 +539,11 @@ void Editor::setTool(ToolId t) {
     // entered, so it stays repeatable.
     if (t == ToolId::Scale && !selected_.empty())
         emit dynamicPrompt(QStringLiteral("Scale factor (or pick base point)"));
+    // Splice / X: pop the flying field so the marker size can be typed before placing.
+    if (t == ToolId::Splice)
+        emit dynamicPrompt(QStringLiteral("Splice size <%1>").arg(spliceSize_));
+    else if (t == ToolId::NotConnected)
+        emit dynamicPrompt(QStringLiteral("X size <%1>").arg(ncSize_));
 }
 
 void Editor::repeatLastTool() {
@@ -1013,6 +1018,8 @@ void Editor::onPointerMove(const Vec2& raw) {
     // and grid snapping still apply so you can snap to real points.
     SnapSettings snap = snap_;
     if (tool_ == ToolId::Dimension) { snap.polar = false; snap.ortho = false; }
+    // Wire "90° only": force orthogonal segments while drawing a wire.
+    if (tool_ == ToolId::Wire && wireOrtho_) snap.ortho = true;
     // Holding Ctrl temporarily suspends ALL snapping (object/grid/polar/ortho) so a
     // point can be placed freely — e.g. picking a hatch location. Snap resumes when
     // Ctrl is released.
@@ -4105,6 +4112,25 @@ bool Editor::acceptCommandInput(const QString& text) {
         return true;
     }
 
+    // Splice / X termination: a typed number sets the marker size (world units) for the
+    // next placements; the flying field shows the current value.
+    if ((tool_ == ToolId::Splice || tool_ == ToolId::NotConnected) && !t.contains(',')) {
+        bool ok = false;
+        const double v = t.toDouble(&ok);
+        if (ok && v > 0) {
+            if (tool_ == ToolId::Splice) spliceSize_ = v;
+            else ncSize_ = v;
+            emit message(QStringLiteral("Size set to %1 — click to place").arg(v));
+            emit markerSizeChanged();
+            emit dynamicPrompt(tool_ == ToolId::Splice
+                                   ? QStringLiteral("Splice size <%1>").arg(spliceSize_)
+                                   : QStringLiteral("X size <%1>").arg(ncSize_));
+        } else {
+            emit message(QStringLiteral("Enter a positive size"));
+        }
+        return true;
+    }
+
     // Scale: type a scale factor instead of picking a size. 2 = double, 0.5 = half.
     // The base point is the one already picked, else the selection's bounding centre.
     if (tool_ == ToolId::Scale && !t.contains(',')) {
@@ -5961,10 +5987,12 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.type = EntityType::Splice;
         e.layer = QStringLiteral("Wires");
         e.a = p;
+        e.meta.insert("size", spliceSize_); // dot radius (world units)
         break;
     case ToolId::NotConnected:
         e.type = EntityType::NotConnected;
         e.a = p;
+        e.meta.insert("ncSize", ncSize_); // X half-size (world units)
         break;
     case ToolId::NetLabel:
         e.type = EntityType::NetLabel;

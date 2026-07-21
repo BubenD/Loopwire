@@ -1213,8 +1213,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Splice: {
         const QPointF c = vt.toScreen(e.a);
+        // World-sized dot so it scales with zoom (screen floor keeps it visible).
+        const double r = std::max(2.5, e.meta.value("size").toDouble(4.0) * vt.scale());
         p.setBrush(color);
-        p.drawEllipse(c, 4.0, 4.0);
+        p.drawEllipse(c, r, r);
         p.setBrush(Qt::NoBrush);
         break;
     }

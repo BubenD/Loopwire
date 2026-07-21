@@ -849,6 +849,27 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
+    // Splice / X size: the typed/ribbon size is written onto the placed marker's meta.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        ed.spliceSize() = 8.0;
+        ed.setTool(ToolId::Splice);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sp = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Splice) sp = &e;
+        check(sp && near(sp->meta.value("size").toDouble(), 8.0),
+              "marker-size: a placed splice carries the splice size");
+        ed.ncSize() = 12.0;
+        ed.setTool(ToolId::NotConnected);
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* nc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::NotConnected) nc = &e;
+        check(nc && near(nc->meta.value("ncSize").toDouble(), 12.0),
+              "marker-size: a placed X carries the X size");
+        check(ed.wantsValueInput(), "marker-size: X tool accepts a typed value (flying field)");
+    }
+
     // Twist: arm, then a crossing line across two wires creates a Twist annotation.
     {
         Document d; d.entities().clear();
