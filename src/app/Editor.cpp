@@ -1020,15 +1020,20 @@ void Editor::onPointerMove(const Vec2& raw) {
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
     cursor_ = snapResult_.point;
 
-    // Placing a connector: snap the ghost by ANY of its own corners/pin ends onto
-    // another connector's corners/pin ends (so pins line up), not just its anchor.
-    if (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_ && snap.objectSnap) {
-        Vec2 catchAt;
-        if (auto a = connectorFeatureSnap(raw, &catchAt)) {
-            cursor_ = *a;                 // ghost anchor (top-left) so the caught feature lands
-            snapResult_.point = catchAt;  // marker sits on the actual connection point
-            snapResult_.snapped = true;
+    // Placing a connector: the grab handle (a chosen pin/corner, or the top-left by
+    // default) tracks the snapped cursor; the ghost is then snapped by ANY of its own
+    // corners/pin ends onto existing geometry so features line up.
+    if (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_) {
+        Vec2 anchor = cursor_ - connectorGrab_; // hold the connector by the grab handle
+        if (snap.objectSnap) {
+            Vec2 catchAt;
+            if (auto a = connectorFeatureSnap(anchor, &catchAt)) {
+                anchor = *a;
+                snapResult_.point = catchAt; // marker on the actual connection point
+                snapResult_.snapped = true;
+            }
         }
+        cursor_ = anchor; // cursor_ now carries the ghost anchor (preview + placement use it)
     }
 
     // Apply an in-progress direct edit: a body move (button held) or a grabbed
@@ -1190,10 +1195,26 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     if (isPickModifyTool(tool_)) { handlePickModifyPress(p); return; }
     if (tool_ == ToolId::Offset) { handleOffsetPress(p); return; }
     // A frozen connector preview (Tab pressed to edit): the next click re-attaches the
-    // ghost to the cursor instead of placing it.
+    // ghost to the cursor. If that click lands ON one of the frozen connector's pins or
+    // corners, GRAB it there (that feature becomes the point held under the cursor);
+    // clicking empty canvas keeps the current handle and jumps the ghost to the cursor.
     if (tool_ == ToolId::Connector && connectorArmed_ && connectorFrozen_) {
+        const ConnectorGeometry fg = connectorGeometry(connectorFrozenPos_, connectorSpec_);
+        std::vector<Vec2> feats = {fg.rectMin,
+                                   {fg.rectMax.x, fg.rectMin.y},
+                                   fg.rectMax,
+                                   {fg.rectMin.x, fg.rectMax.y}};
+        for (const Vec2& pe : fg.pinEnd) feats.push_back(pe);
+        double best = worldTolerance();
+        bool grabbed = false;
+        for (const Vec2& f : feats) {
+            const double d = distance(p, f);
+            if (d < best) { best = d; connectorGrab_ = f - connectorFrozenPos_; grabbed = true; }
+        }
         connectorFrozen_ = false;
-        emit message(QStringLiteral("Preview follows the cursor again — click to place"));
+        emit message(grabbed
+                         ? QStringLiteral("Connector grabbed by that point — click to place")
+                         : QStringLiteral("Preview follows the cursor again — click to place"));
         emit overlayChanged();
         return;
     }
@@ -1201,6 +1222,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // placing — the ghost then follows the cursor and the next click places it.
     if (tool_ == ToolId::Connector && !connectorArmed_) {
         connectorArmed_ = true;
+        connectorGrab_ = {0.0, 0.0}; // fresh preview starts held by the top-left corner
         emit message(QStringLiteral("Connector preview started — click to place, "
                                     "Tab to edit, X/Y to flip"));
         emit connectorArmedChanged();
@@ -5822,6 +5844,7 @@ void Editor::applyConnectorPinLabel(const QString& id, int pin, const QString& t
 void Editor::armConnectorPlacement() {
     setTool(ToolId::Connector);   // resets connectorArmed_/connectorFrozen_ to false...
     connectorArmed_ = true;       // ...then arm so the preview ghost appears
+    connectorGrab_ = {0.0, 0.0};  // held by the top-left corner until a pin/corner is grabbed
     emit connectorArmedChanged();
     emit overlayChanged();
 }

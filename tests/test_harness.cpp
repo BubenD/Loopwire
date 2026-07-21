@@ -476,6 +476,29 @@ int run_harness_tests() {
               "conn-snap-place: the ghost corner catches a wire's interior joint");
     }
 
+    // Freeze the preview, grab it by a specific pin end, then place: the grabbed pin
+    // lands exactly at the placement click (the connector is held by that point).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerMove({0, 0});             // ghost anchor at origin
+        ed.freezeConnectorPreview();          // Tab: freeze at (0,0)
+        const ConnectorGeometry fg = connectorGeometry({0, 0}, ed.connectorSpec());
+        const Vec2 pin0 = fg.pinEnd[0];
+        ed.onPointerPress(pin0, Qt::LeftButton, Qt::NoModifier); // grab by pin 0 (unfreezes)
+        const Vec2 C{250, -40};
+        ed.onPointerPress(C, Qt::LeftButton, Qt::NoModifier);    // place, held by pin 0
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        const ConnectorGeometry gc =
+            connectorGeometry(c->a, connectorSpecFromMeta(c->meta));
+        check(c && near(gc.pinEnd[0].x, C.x) && near(gc.pinEnd[0].y, C.y),
+              "freeze-grab: the grabbed pin lands at the placement point");
+    }
+
     // Align routing helper: place two facing connectors (A fixed, B mirrored so its
     // pins face A) with B `dy` below, wire pin 0<->0, then align from A.
     auto alignCase = [](double bx, double by, bool knee) {

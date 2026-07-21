@@ -627,6 +627,10 @@ private:
     // instead of following the cursor; the next canvas click re-attaches it to the cursor.
     bool connectorFrozen_ = false;
     Vec2 connectorFrozenPos_;
+    // Grab handle: the offset from the ghost anchor to the point that tracks the cursor.
+    // {0,0} = the top-left corner (default). While frozen, clicking one of the connector's
+    // own pins/corners sets this so the ghost is then held by that feature.
+    Vec2 connectorGrab_{0.0, 0.0};
 
     // Offset tool state.
     double offsetDist_ = 0.0;             // the offset distance once set
