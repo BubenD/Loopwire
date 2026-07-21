@@ -2119,35 +2119,43 @@ void MainWindow::buildRibbon() {
         addGroup(lay, QStringLiteral("Place"),
                  toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice, ToolId::NetLabel,
                           ToolId::NotConnected}));
-        // Marker sizes for Splice (junction) and X (termination), also typeable in the
-        // flying command field while the tool is active.
+        // Marker size — appears ONLY while the Splice or X (termination) tool is active,
+        // editing that tool's size; also typeable in the flying command field.
         auto* mkW = new QWidget(page);
         auto* mkG = new QGridLayout(mkW);
         mkG->setContentsMargins(0, 0, 0, 0);
         mkG->setSpacing(2);
-        auto* spliceSp = new QDoubleSpinBox(mkW);
-        spliceSp->setRange(0.5, 500.0);
-        spliceSp->setDecimals(1);
-        spliceSp->setValue(editor_->spliceSize());
-        connect(spliceSp, &QDoubleSpinBox::editingFinished, this,
-                [this, spliceSp] { editor_->spliceSize() = spliceSp->value(); });
-        auto* xSp = new QDoubleSpinBox(mkW);
-        xSp->setRange(0.5, 500.0);
-        xSp->setDecimals(1);
-        xSp->setValue(editor_->ncSize());
-        connect(xSp, &QDoubleSpinBox::editingFinished, this,
-                [this, xSp] { editor_->ncSize() = xSp->value(); });
-        // Keep the spins in sync when the size is typed in the flying field.
-        connect(editor_, &Editor::markerSizeChanged, this, [this, spliceSp, xSp] {
-            QSignalBlocker b1(spliceSp), b2(xSp);
-            spliceSp->setValue(editor_->spliceSize());
-            xSp->setValue(editor_->ncSize());
+        markerLabel_ = new QLabel(QStringLiteral("Size"), mkW);
+        markerSpin_ = new QDoubleSpinBox(mkW);
+        markerSpin_->setRange(0.5, 500.0);
+        markerSpin_->setDecimals(1);
+        connect(markerSpin_, &QDoubleSpinBox::editingFinished, this, [this] {
+            if (editor_->tool() == ToolId::Splice) editor_->spliceSize() = markerSpin_->value();
+            else if (editor_->tool() == ToolId::NotConnected)
+                editor_->ncSize() = markerSpin_->value();
         });
-        mkG->addWidget(new QLabel(QStringLiteral("Splice ⌀"), mkW), 0, 0);
-        mkG->addWidget(spliceSp, 0, 1);
-        mkG->addWidget(new QLabel(QStringLiteral("X size"), mkW), 1, 0);
-        mkG->addWidget(xSp, 1, 1);
-        addGroup(lay, QStringLiteral("Markers"), mkW);
+        mkG->addWidget(markerLabel_, 0, 0);
+        mkG->addWidget(markerSpin_, 1, 0);
+        auto* mkGroup = ribbonGroup(QStringLiteral("Marker"), mkW);
+        // Bright text (the ribbon label cascade doesn't reach inline labels/fields).
+        mkGroup->setStyleSheet(QStringLiteral("QLabel,QCheckBox{color:#e6e9ef;background:transparent;}"));
+        mkGroup->setVisible(false);
+        markerGroup_ = mkGroup;
+        lay->addWidget(mkGroup);
+        // Show + relabel the marker size for the active tool (Splice / X), hide otherwise.
+        auto syncMarker = [this] {
+            const ToolId t = editor_->tool();
+            const bool splice = t == ToolId::Splice, x = t == ToolId::NotConnected;
+            if (markerGroup_) markerGroup_->setVisible(splice || x);
+            if ((splice || x) && markerSpin_) {
+                QSignalBlocker b(markerSpin_);
+                markerLabel_->setText(splice ? QStringLiteral("Splice ⌀") : QStringLiteral("X size"));
+                markerSpin_->setValue(splice ? editor_->spliceSize() : editor_->ncSize());
+            }
+        };
+        connect(editor_, &Editor::toolChanged, this, [syncMarker](ToolId) { syncMarker(); });
+        connect(editor_, &Editor::markerSizeChanged, this, [syncMarker] { syncMarker(); });
+        syncMarker();
         // Modify: straighten the wiring around a reference connector.
         auto* modW = new QWidget(page);
         auto* modG = new QGridLayout(modW);
@@ -5577,6 +5585,9 @@ void MainWindow::buildWireRibbonTab() {
         insulationMaterials_ = {"PVC",      "XLPE",   "PTFE",        "FEP",
                                 "Silicone", "Rubber", "Polyethylene"};
     wireTab_ = new QWidget(ribbon_);
+    // Bright label/checkbox text (the ribbon's QLabel style doesn't cascade to these
+    // inline labels, so they'd otherwise render dark and be unreadable).
+    wireTab_->setStyleSheet(QStringLiteral("QLabel,QCheckBox{color:#e6e9ef;background:transparent;}"));
     auto* lay = new QHBoxLayout(wireTab_);
     lay->setContentsMargins(6, 4, 6, 2);
     lay->setSpacing(0);
