@@ -1024,16 +1024,16 @@ void Editor::onPointerMove(const Vec2& raw) {
     // default) tracks the snapped cursor; the ghost is then snapped by ANY of its own
     // corners/pin ends onto existing geometry so features line up.
     if (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_) {
-        Vec2 anchor = cursor_ - connectorGrab_; // hold the connector by the grab handle
+        Vec2 ghostAnchor = cursor_ - connectorGrab_; // hold the connector by the grab handle
         if (snap.objectSnap) {
             Vec2 catchAt;
-            if (auto a = connectorFeatureSnap(anchor, &catchAt)) {
-                anchor = *a;
+            if (auto a = connectorFeatureSnap(ghostAnchor, &catchAt)) {
+                ghostAnchor = *a;
                 snapResult_.point = catchAt; // marker on the actual connection point
                 snapResult_.snapped = true;
             }
         }
-        cursor_ = anchor; // cursor_ now carries the ghost anchor (preview + placement use it)
+        cursor_ = ghostAnchor; // cursor_ now carries the ghost anchor (preview + placement)
     }
 
     // Apply an in-progress direct edit: a body move (button held) or a grabbed
@@ -1205,10 +1205,12 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
                                    fg.rectMax,
                                    {fg.rectMin.x, fg.rectMax.y}};
         for (const Vec2& pe : fg.pinEnd) feats.push_back(pe);
-        double best = worldTolerance();
+        // Hit-test against the RAW click (not the grid/object-snapped cursor_) so a pin/
+        // corner is caught even with grid snap on; a slightly generous pick radius helps.
+        double best = worldTolerance() * 1.8;
         bool grabbed = false;
         for (const Vec2& f : feats) {
-            const double d = distance(p, f);
+            const double d = distance(raw, f);
             if (d < best) { best = d; connectorGrab_ = f - connectorFrozenPos_; grabbed = true; }
         }
         connectorFrozen_ = false;
