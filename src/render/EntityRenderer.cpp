@@ -1251,7 +1251,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        const int n = (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 1 : 2;
+        // Type 2 (single) is now TWICE-twisted (2 crossings); Type 1 (crossed) is a
+        // fuller braid (3 crossings).
+        const int n = (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 2 : 3;
         const double band = std::max(1.0, yMax - yMin);
         const double w = std::max(28.0, band * 1.4);
         const double x0 = cx - w / 2.0, x1 = cx + w / 2.0;

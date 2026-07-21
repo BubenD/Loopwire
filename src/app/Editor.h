@@ -296,6 +296,8 @@ public:
     QString& wireInsulation() { return wireInsulation_; }
     QString& wireVoltage() { return wireVoltage_; }
     QString& wireType() { return wireType_; }
+    double& wireRes() { return wireRes_; }          // default resistance for new wires
+    QString& wireResUnit() { return wireResUnit_; } // "m" | "ft"
     // Gap between the parallel wire lanes after a knee (align routing): "pitch" uses the
     // reference connector's pitch, "custom" uses wireGapCustom().
     QString& wireGapRule() { return wireGapRule_; }
@@ -697,6 +699,8 @@ private:
     QString wireInsulation_;
     QString wireVoltage_;
     QString wireType_ = QStringLiteral("Stranded");
+    double wireRes_ = 0.0;
+    QString wireResUnit_ = QStringLiteral("m");
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
     bool wireOrtho_ = false;      // wire drawing constrained to 90° segments

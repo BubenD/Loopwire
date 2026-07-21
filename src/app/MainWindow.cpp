@@ -4808,15 +4808,35 @@ void MainWindow::refreshProperties() {
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("od"), std::max(0.0, v));
                });
-        // Conductor resistance per metre / per foot (Ω).
-        addText(QStringLiteral("R/m (Ω/m)"), m.value(QStringLiteral("resPerM")).toString(),
-                [this](const QString& t) {
-                    editor_->setSelectionMeta(QStringLiteral("resPerM"), t);
-                });
-        addText(QStringLiteral("R/ft (Ω/ft)"), m.value(QStringLiteral("resPerFt")).toString(),
-                [this](const QString& t) {
-                    editor_->setSelectionMeta(QStringLiteral("resPerFt"), t);
-                });
+        // Conductor resistance with a per-metre / per-foot unit; switching the unit
+        // converts the value (1 ft = 0.3048 m, so Ω/ft = Ω/m × 0.3048).
+        const QString rUnit = m.value(QStringLiteral("resUnit")).toString(QStringLiteral("m"));
+        addCombo(QStringLiteral("R unit"),
+                 {QString::fromUtf8("Ω/m"), QString::fromUtf8("Ω/ft")},
+                 rUnit == QLatin1String("ft") ? QString::fromUtf8("Ω/ft") : QString::fromUtf8("Ω/m"),
+                 false, [this](const QString& t) {
+                     const bool toFt = t.contains(QLatin1String("ft"));
+                     double val = 0.0;
+                     QString cur = QStringLiteral("m");
+                     if (doc_ && editor_->selection().size() == 1)
+                         for (const auto& en : doc_->entities())
+                             if (en.id == editor_->selection().front()) {
+                                 val = en.meta.value(QStringLiteral("resistance")).toDouble();
+                                 cur = en.meta.value(QStringLiteral("resUnit")).toString(QStringLiteral("m"));
+                                 break;
+                             }
+                     if ((cur == QLatin1String("ft")) != toFt && val != 0.0)
+                         val = toFt ? val * 0.3048 : val / 0.3048;
+                     editor_->setSelectionMeta(QStringLiteral("resUnit"),
+                                               toFt ? QStringLiteral("ft") : QStringLiteral("m"));
+                     editor_->setSelectionMetaNumber(QStringLiteral("resistance"), val);
+                 });
+        addNum(QString::fromUtf8("Resistance (Ω/%1)").arg(rUnit == QLatin1String("ft")
+                                                              ? QStringLiteral("ft")
+                                                              : QStringLiteral("m")),
+               m.value(QStringLiteral("resistance")).toDouble(), [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("resistance"), v);
+               });
     }
 
     addHeader(QStringLiteral("Geometry"));
@@ -5692,6 +5712,37 @@ void MainWindow::buildWireRibbonTab() {
     ig->addWidget(typeBox, 2, 1, 1, 3);
     lay->addWidget(ribbonGroup(QStringLiteral("Insulation"), insW));
 
+    // ---- Resistance: value + per-m / per-ft unit (switching converts the value) ----
+    auto* resW = new QWidget(wireTab_);
+    auto* rg = new QGridLayout(resW);
+    rg->setContentsMargins(0, 0, 0, 0);
+    rg->setSpacing(2);
+    auto* resSpin = new QDoubleSpinBox(resW);
+    resSpin->setRange(0.0, 1e6);
+    resSpin->setDecimals(4);
+    resSpin->setValue(editor_->wireRes());
+    connect(resSpin, &QDoubleSpinBox::editingFinished, this,
+            [this, resSpin] { editor_->wireRes() = resSpin->value(); });
+    auto* resUnitBox = new QComboBox(resW);
+    resUnitBox->addItems({QString::fromUtf8("Ω/m"), QString::fromUtf8("Ω/ft")});
+    resUnitBox->setCurrentIndex(editor_->wireResUnit() == QLatin1String("ft") ? 1 : 0);
+    connect(resUnitBox, &QComboBox::currentTextChanged, this,
+            [this, resSpin](const QString& t) {
+                const bool toFt = t.contains(QLatin1String("ft"));
+                const bool curFt = editor_->wireResUnit() == QLatin1String("ft");
+                if (curFt != toFt && resSpin->value() != 0.0) {
+                    const double v = toFt ? resSpin->value() * 0.3048 : resSpin->value() / 0.3048;
+                    QSignalBlocker b(resSpin);
+                    resSpin->setValue(v);
+                    editor_->wireRes() = v;
+                }
+                editor_->wireResUnit() = toFt ? QStringLiteral("ft") : QStringLiteral("m");
+            });
+    rg->addWidget(new QLabel(QString::fromUtf8("Resistance"), resW), 0, 0, 1, 2);
+    rg->addWidget(resSpin, 1, 0);
+    rg->addWidget(resUnitBox, 1, 1);
+    lay->addWidget(ribbonGroup(QStringLiteral("Resistance"), resW));
+
     // ---- Crossings: per-crossing bridge switch ----
     auto* crossBtn = new QToolButton(wireTab_);
     crossBtn->setText(QStringLiteral("Cross\nswitch"));
@@ -5731,13 +5782,13 @@ void MainWindow::buildWireRibbonTab() {
     bg->setSpacing(2);
     // Twist: a split-button; click = braided twist, the ▾ menu picks the type.
     auto* twistBtn = new QToolButton(bundleW);
-    twistBtn->setText(QStringLiteral("Twist"));
+    twistBtn->setText(QStringLiteral("Twist\ntype"));
     twistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     twistBtn->setIconSize(QSize(26, 26));
     twistBtn->setMinimumWidth(66);
     twistBtn->setPopupMode(QToolButton::MenuButtonPopup);
     twistBtn->setToolTip(QStringLiteral(
-        "Twist wires: click, then drag a crossing line across the wires (▾ for the type)"));
+        "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
     {
         QPixmap pm(28, 28);
         pm.fill(Qt::transparent);
@@ -5759,11 +5810,11 @@ void MainWindow::buildWireRibbonTab() {
         twistBtn->setIcon(QIcon(pm));
     }
     auto* tm = new QMenu(twistBtn);
-    tm->addAction(QStringLiteral("Twisted (crossed)"), this, [this] {
+    tm->addAction(QStringLiteral("Type 1 (crossed braid)"), this, [this] {
         editor_->beginTwist(QStringLiteral("cross"));
         canvas_->setFocus(Qt::OtherFocusReason);
     });
-    tm->addAction(QStringLiteral("Transposition (single)"), this, [this] {
+    tm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
         editor_->beginTwist(QStringLiteral("jog"));
         canvas_->setFocus(Qt::OtherFocusReason);
     });

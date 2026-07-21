@@ -2062,7 +2062,7 @@ void Editor::beginAlignRouting() {
 
 void Editor::beginCrossSwitch() {
     if (!doc_) return;
-    setTool(ToolId::Select);
+    setTool(ToolId::Wire); // stay in the Wire tool/ribbon (Esc exits)
     awaitCrossSwitch_ = true;
     emit message(QStringLiteral("Cross switch: click a wire crossing to toggle its bridge (hop); "
                                 "Esc to finish"));
@@ -2145,7 +2145,7 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
 
 void Editor::beginTwist(const QString& type) {
     if (!doc_) return;
-    setTool(ToolId::Select);
+    setTool(ToolId::Wire); // stay in the Wire tool/ribbon (Esc exits)
     twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
@@ -2153,7 +2153,7 @@ void Editor::beginTwist(const QString& type) {
 
 void Editor::beginScreen() {
     if (!doc_) return;
-    setTool(ToolId::Select);
+    setTool(ToolId::Wire); // stay in the Wire tool/ribbon (Esc exits)
     screenArm_ = true;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Screen: draw a crossing line across the wires to shield"));
@@ -3744,6 +3744,10 @@ void Editor::finishDraw() {
         if (!wireInsulation_.isEmpty()) e.meta.insert("insulation", wireInsulation_);
         if (!wireVoltage_.isEmpty()) e.meta.insert("insulationVoltage", wireVoltage_);
         if (!wireType_.isEmpty()) e.meta.insert("conductorType", wireType_);
+        if (wireRes_ > 0.0) {
+            e.meta.insert("resistance", wireRes_);
+            e.meta.insert("resUnit", wireResUnit_);
+        }
         e.meta.insert("showLabel", true);
         e.meta.insert("entNum", assignEntityNumber()); // unique entity number
         break;
@@ -3778,12 +3782,21 @@ void Editor::finishDraw() {
     }
     drawStartShift_ = drawEndShift_ = false;
 
+    const bool keepWire = (tool_ == ToolId::Wire); // wire placement is continuous until Esc
     pushUndo();
     addEntity(std::move(e));
     draftPts_.clear();
     drafting_ = false;
     emit changed();
-    setTool(ToolId::Select); // finished: return to Select (Space repeats last tool)
+    if (keepWire) {
+        // Stay in the Wire tool (and its ribbon) so more wires/twists can be added; Esc
+        // ends the session. Reset the per-wire draft chrome without leaving the tool.
+        draftBulges_.clear();
+        draftCornerRadii_.clear();
+        emit message(QStringLiteral("Wire placed — click to draw another; Esc to finish"));
+    } else {
+        setTool(ToolId::Select); // finished: return to Select (Space repeats last tool)
+    }
     if (filletTooBig) // emit after setTool so the warning isn't overwritten
         emit message(QStringLiteral("Fillet radius %1 is too big for a corner — drawn with sharp corners")
                          .arg(cornerRadius_));
@@ -6591,6 +6604,25 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // line, so Esc ends the trim command.)
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
+        // Wire session: while a wire function is in progress (drawing / twist / screen /
+        // cross-switch), Esc cancels just that and STAYS in the Wire tool + ribbon; a
+        // second Esc with nothing in progress exits to Select.
+        if (tool_ == ToolId::Wire &&
+            (drafting_ || !twistArmType_.isEmpty() || screenArm_ || awaitCrossSwitch_)) {
+            cancelDraw();
+            twistArmType_.clear();
+            screenArm_ = false;
+            awaitCrossSwitch_ = false;
+            wireBandHasStart_ = false;
+            editing_ = false;
+            gripGrab_ = false;
+            editMoved_ = false;
+            modifyPts_.clear();
+            clearSelection();
+            emit message(QStringLiteral("Wire: click to draw, or pick a tool; Esc again to finish"));
+            emit changed();
+            return true;
+        }
         cancelRightDrag();
         cancelDraw();
         modifyPts_.clear();

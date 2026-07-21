@@ -849,6 +849,20 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
+    // Wire session: a wire function keeps the Wire tool active; the first Esc cancels the
+    // in-progress function but stays in Wire, and a second Esc exits to Select.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.setTool(ToolId::Wire);
+        ed.beginTwist(QStringLiteral("cross"));
+        check(ed.tool() == ToolId::Wire, "wire-session: a wire function keeps the Wire tool");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(ed.tool() == ToolId::Wire, "wire-session: first Esc cancels the function, stays in Wire");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(ed.tool() == ToolId::Select, "wire-session: second Esc exits to Select");
+    }
+
     // Splice / X size: the typed/ribbon size is written onto the placed marker's meta.
     {
         Document d; d.entities().clear();
