@@ -1735,23 +1735,45 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* ca
                                gg.rectMax,
                                {gg.rectMin.x, gg.rectMax.y}};
     for (const Vec2& pe : gg.pinEnd) feats.push_back(pe);
-    // Target points to catch onto: every existing connector's corners + pin ends, plus
-    // wire endpoints, splices, and X (not-connected) markers — so the ghost's nearest
-    // feature latches onto whatever schematic point is closest (a harness connection).
+    // Target points to catch onto — a broad set so the ghost's nearest feature can latch
+    // onto ANY meaningful point: connector corners + pin ends, EVERY wire vertex (endpoints
+    // AND interior joints/knees), splices, X markers, and the endpoints/corners/centres of
+    // ordinary geometry (lines, polylines, rects, circles/arcs).
     std::vector<Vec2> targets;
     for (const auto& e : doc_->entities()) {
-        if (e.type == EntityType::Connector) {
+        switch (e.type) {
+        case EntityType::Connector: {
             const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
             targets.push_back(g.rectMin);
             targets.push_back({g.rectMax.x, g.rectMin.y});
             targets.push_back(g.rectMax);
             targets.push_back({g.rectMin.x, g.rectMax.y});
             for (const Vec2& pe : g.pinEnd) targets.push_back(pe);
-        } else if (e.type == EntityType::Wire && e.points.size() >= 2) {
-            targets.push_back(e.points.front());
-            targets.push_back(e.points.back());
-        } else if (e.type == EntityType::Splice || e.type == EntityType::NotConnected) {
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Polyline:
+        case EntityType::Rect:
+            for (const Vec2& pt : e.points) targets.push_back(pt); // every vertex / joint
+            break;
+        case EntityType::Line:
+        case EntityType::DoubleLine:
             targets.push_back(e.a);
+            targets.push_back(e.b);
+            break;
+        case EntityType::Circle:
+        case EntityType::Arc:
+        case EntityType::Ellipse:
+            targets.push_back(e.center);
+            break;
+        case EntityType::Splice:
+        case EntityType::NotConnected:
+        case EntityType::NetLabel:
+            targets.push_back(e.a);
+            break;
+        default:
+            for (const Vec2& pt : e.points) targets.push_back(pt);
+            break;
         }
     }
     double best = worldTolerance();

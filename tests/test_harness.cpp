@@ -459,6 +459,23 @@ int run_harness_tests() {
               "conn-snap-place: a pin end auto-catches onto a wire end");
     }
 
+    // Connector preview can also catch onto a wire's INTERIOR joint (a mid vertex/knee),
+    // not just its endpoints.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); // object snap on by default
+        const Vec2 J{100.0, 50.0}; // interior joint; endpoints are far away
+        Entity w; w.id = "wj"; w.type = EntityType::Wire; w.points = {{0, 0}, J, {300, 0}};
+        d.entities().push_back(w);
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({J.x + 2, J.y + 2}, Qt::LeftButton, Qt::NoModifier); // near the joint
+        const Entity* c = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) c = &e;
+        check(c && near(c->a.x, J.x) && near(c->a.y, J.y),
+              "conn-snap-place: the ghost corner catches a wire's interior joint");
+    }
+
     // Align routing helper: place two facing connectors (A fixed, B mirrored so its
     // pins face A) with B `dy` below, wire pin 0<->0, then align from A.
     auto alignCase = [](double bx, double by, bool knee) {
