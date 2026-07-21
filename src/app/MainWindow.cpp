@@ -52,6 +52,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QScrollBar>
 #include <QCloseEvent>
 #include <QTabBar>
 #include <QTabWidget>
@@ -4353,16 +4354,34 @@ void MainWindow::refocusPropsRow(int row) {
 void MainWindow::deferredPropApply(std::function<void()> apply) {
     // Deferred so the field's own signal isn't destroyed mid-apply; after the panel
     // rebuilds, restore focus to whatever field the user has moved into (if any) so a
-    // single click on another field lands there ready to edit.
+    // single click on another field lands there ready to edit — and keep the panel
+    // scrolled where it was (don't jump to the top).
     QTimer::singleShot(0, this, [this, apply = std::move(apply)] {
         const int row = focusedPropsRow(); // the field the user just clicked into
-        apply();                           // mutate + rebuild the Properties panel
+        const int scroll = propsTable_ && propsTable_->verticalScrollBar()
+                               ? propsTable_->verticalScrollBar()->value()
+                               : 0;
+        applyingPropEdit_ = true; // this rebuild is intentional — don't skip it
+        apply();                  // mutate + rebuild the Properties panel
+        applyingPropEdit_ = false;
+        if (propsTable_ && propsTable_->verticalScrollBar())
+            propsTable_->verticalScrollBar()->setValue(scroll);
         refocusPropsRow(row);
     });
 }
 
 void MainWindow::refreshProperties() {
     if (!propsTable_) return;
+    // Don't rebuild while the user is typing in one of our text fields: an external
+    // changed()/selectionChanged() would destroy the field mid-edit (making it jitter).
+    // Only a live text/number editor blocks — a focused button (e.g. Pin table) doesn't.
+    // The field's own commit re-enters here with applyingPropEdit_ set, so it still applies.
+    if (!applyingPropEdit_) {
+        QWidget* f = QApplication::focusWidget();
+        if (f && propsTable_->isAncestorOf(f) &&
+            (qobject_cast<QLineEdit*>(f) || qobject_cast<QDoubleSpinBox*>(f)))
+            return;
+    }
     refreshing_ = true;
     const auto& sel = editor_->selection();
     propsTable_->setRowCount(0);

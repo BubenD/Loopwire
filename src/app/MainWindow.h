@@ -180,6 +180,7 @@ private:
     QLabel* validationHeader_ = nullptr;       // its header label
     std::vector<ValidationIssue> validationRows_; // rows currently shown (for click → locate)
     bool crossSectionAwg_ = false;     // wire cross-section notation: false = mm², true = AWG
+    bool applyingPropEdit_ = false;    // a Properties field edit is being applied (allow rebuild)
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;
