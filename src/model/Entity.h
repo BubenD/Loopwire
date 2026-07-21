@@ -33,6 +33,8 @@ enum class EntityType {
     Bundle,
     NetLabel,
     NotConnected,
+    Twist,   // twisted-pair/bundle annotation over a set of wires (points = crossing pts)
+    Screen,  // shield/screen annotation enclosing a set of wires (points = bbox corners)
 };
 
 EntityType entityTypeFromString(const QString& s);

@@ -303,6 +303,13 @@ public:
     void beginCrossSwitch();
     bool awaitingCrossSwitch() const { return awaitCrossSwitch_; }
     void toggleWireCrossAt(const Vec2& p); // toggle the hop at the crossing nearest p
+
+    // Twist / Screen: click the button, then draw a crossing line across the wires to
+    // select them. Twist adds a twisted-pair/bundle symbol of the given type ("cross"
+    // braid or "jog" transposition); Screen adds a shield enclosing the selected wires.
+    void beginTwist(const QString& type);
+    void beginScreen();
+    bool awaitingWireBand() const { return !twistArmType_.isEmpty() || screenArm_; }
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
@@ -520,6 +527,9 @@ private:
     // balloons in e's batch (empty if e has no chain). The batch moves as one unit.
     std::vector<Entity*> chainMatesOf(const Entity& e);
     void handlePlacementPress(const Vec2& p);
+    // Second click of the twist/screen crossing line: gather the wires it crosses and
+    // create the Twist or Screen annotation.
+    void finishWireBand(const Vec2& fenceEnd);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -681,6 +691,10 @@ private:
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
+    QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
+    bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
+    bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken
+    Vec2 wireBandStart_;
     double doubleLineGap_ = 10.0;
     // Double line/polyline "ls" (line-start): the next click picks a reference line
     // that both physical runs are extended to start from. dpolyLsArm_ awaits that

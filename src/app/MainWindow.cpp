@@ -5671,6 +5671,89 @@ void MainWindow::buildWireRibbonTab() {
     });
     lay->addWidget(ribbonGroup(QStringLiteral("Crossings"), crossBtn));
 
+    // ---- Bundle: twist (type menu) + screen/shield ----
+    auto* bundleW = new QWidget(wireTab_);
+    auto* bg = new QGridLayout(bundleW);
+    bg->setContentsMargins(0, 0, 0, 0);
+    bg->setSpacing(2);
+    // Twist: a split-button; click = braided twist, the ▾ menu picks the type.
+    auto* twistBtn = new QToolButton(bundleW);
+    twistBtn->setText(QStringLiteral("Twist"));
+    twistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    twistBtn->setIconSize(QSize(26, 26));
+    twistBtn->setMinimumWidth(66);
+    twistBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    twistBtn->setToolTip(QStringLiteral(
+        "Twist wires: click, then drag a crossing line across the wires (▾ for the type)"));
+    {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(QColor("#cfe3ff"));
+        pen.setWidthF(1.8);
+        ip.setPen(pen);
+        // a small braid (two zigzags crossing three times)
+        QPolygonF a, b;
+        for (int k = 0; k <= 3; ++k) {
+            const double x = 4 + k * 6.7;
+            a << QPointF(x, (k % 2 == 0) ? 9 : 19);
+            b << QPointF(x, (k % 2 == 0) ? 19 : 9);
+        }
+        ip.drawPolyline(a);
+        ip.drawPolyline(b);
+        ip.end();
+        twistBtn->setIcon(QIcon(pm));
+    }
+    auto* tm = new QMenu(twistBtn);
+    tm->addAction(QStringLiteral("Twisted (crossed)"), this, [this] {
+        editor_->beginTwist(QStringLiteral("cross"));
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+    tm->addAction(QStringLiteral("Transposition (single)"), this, [this] {
+        editor_->beginTwist(QStringLiteral("jog"));
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+    twistBtn->setMenu(tm);
+    connect(twistBtn, &QToolButton::clicked, this, [this] {
+        editor_->beginTwist(QStringLiteral("cross"));
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+    bg->addWidget(twistBtn, 0, 0);
+    // Screen / shield.
+    auto* screenBtn = new QToolButton(bundleW);
+    screenBtn->setText(QStringLiteral("Screen"));
+    screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    screenBtn->setIconSize(QSize(26, 26));
+    screenBtn->setMinimumWidth(66);
+    screenBtn->setToolTip(QStringLiteral(
+        "Shield: click, then drag a crossing line across the wires to screen them"));
+    {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        QPen wp(QColor("#cfe3ff"));
+        wp.setWidthF(1.6);
+        ip.setPen(wp);
+        ip.drawLine(4, 11, 24, 11); // two wires
+        ip.drawLine(4, 17, 24, 17);
+        QPen dp(QColor("#8fb7ff"));
+        dp.setWidthF(1.4);
+        dp.setStyle(Qt::DashLine);
+        ip.setPen(dp);
+        ip.setBrush(Qt::NoBrush);
+        ip.drawRect(3, 6, 22, 16); // the shield outline
+        ip.end();
+        screenBtn->setIcon(QIcon(pm));
+    }
+    connect(screenBtn, &QToolButton::clicked, this, [this] {
+        editor_->beginScreen();
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+    bg->addWidget(screenBtn, 0, 1);
+    lay->addWidget(ribbonGroup(QStringLiteral("Bundle"), bundleW));
+
     // ---- Routing: gap between the parallel wire lanes after a knee ----
     auto* routeW = new QWidget(wireTab_);
     auto* rgl = new QGridLayout(routeW);

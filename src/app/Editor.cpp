@@ -502,6 +502,9 @@ void Editor::setTool(ToolId t) {
     mirrorPending_ = false;
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
+    twistArmType_.clear();    // ...and the twist / screen band modes
+    screenArm_ = false;
+    wireBandHasStart_ = false;
     connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
     connectorFrozen_ = false;
     editing_ = false;
@@ -1155,6 +1158,19 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // Cross switch: each click toggles the hop at the nearest wire crossing (stays armed).
     if (awaitCrossSwitch_) {
         toggleWireCrossAt(raw);
+        return;
+    }
+    // Twist / Screen: two clicks define a crossing line across the wires to select them.
+    if (!twistArmType_.isEmpty() || screenArm_) {
+        if (!wireBandHasStart_) {
+            wireBandStart_ = raw;
+            wireBandHasStart_ = true;
+            emit message(QStringLiteral("Click the other end of the crossing line"));
+            emit overlayChanged();
+        } else {
+            wireBandHasStart_ = false;
+            finishWireBand(raw);
+        }
         return;
     }
 
@@ -2069,6 +2085,84 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
             hop->meta["hops"] = hops;
         }
         emit message(QStringLiteral("Crossing set to bridge (hop)"));
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::beginTwist(const QString& type) {
+    if (!doc_) return;
+    setTool(ToolId::Select);
+    twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
+    wireBandHasStart_ = false;
+    emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
+}
+
+void Editor::beginScreen() {
+    if (!doc_) return;
+    setTool(ToolId::Select);
+    screenArm_ = true;
+    wireBandHasStart_ = false;
+    emit message(QStringLiteral("Screen: draw a crossing line across the wires to shield"));
+}
+
+void Editor::finishWireBand(const Vec2& fenceEnd) {
+    const Vec2 f0 = wireBandStart_, f1 = fenceEnd;
+    std::vector<Vec2> crossings;
+    std::vector<QString> wireIds;
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (size_t i = 1; i < w.points.size(); ++i)
+            if (auto x = segmentSegmentIntersection(f0, f1, w.points[i - 1], w.points[i])) {
+                crossings.push_back(*x);
+                wireIds.push_back(w.id);
+                break; // one crossing per wire
+            }
+    }
+    const bool twist = !twistArmType_.isEmpty();
+    if (crossings.size() < (twist ? 2u : 1u)) {
+        emit message(QStringLiteral("Draw the line across the wires you want to %1")
+                         .arg(twist ? QStringLiteral("twist") : QStringLiteral("screen")));
+        twistArmType_.clear();
+        screenArm_ = false;
+        emit overlayChanged();
+        return;
+    }
+    pushUndo();
+    if (twist) {
+        Entity e;
+        e.type = EntityType::Twist;
+        e.layer = QStringLiteral("Wires");
+        e.points = crossings; // the per-wire crossing points define the band
+        e.meta.insert("twistType", twistArmType_);
+        e.meta.insert("entNum", assignEntityNumber());
+        doc_->entities().push_back(e);
+        twistArmType_.clear();
+        emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
+    } else {
+        // Enclose the selected wires (their full extent) in a shield rectangle.
+        Bounds b;
+        QJsonArray ids;
+        for (const QString& id : wireIds)
+            if (const Entity* w = entityById(id)) {
+                for (const Vec2& pt : w->points) b.expand(pt);
+                ids.append(id);
+            }
+        if (b.valid) {
+            const double pad = 4.0;
+            Entity e;
+            e.type = EntityType::Screen;
+            e.layer = QStringLiteral("Wires");
+            e.points = {{b.min.x - pad, b.min.y - pad},
+                        {b.max.x + pad, b.min.y - pad},
+                        {b.max.x + pad, b.max.y + pad},
+                        {b.min.x - pad, b.max.y + pad}};
+            e.meta.insert("wires", ids);
+            e.meta.insert("entNum", assignEntityNumber());
+            doc_->entities().push_back(e);
+        }
+        screenArm_ = false;
+        emit message(QStringLiteral("Screen added over %1 wires").arg(wireIds.size()));
     }
     doc_->setDirty(true);
     emit changed();

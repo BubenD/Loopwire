@@ -1236,6 +1236,56 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
+    case EntityType::Twist: {
+        // A twisted-pair/bundle symbol drawn over the band spanned by the crossed wires:
+        // "cross" = a multi-crossing braid, "jog" = a single transposition (one X).
+        if (e.points.empty()) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (const Vec2& pt : e.points) {
+            cx += pt.x;
+            yMin = std::min(yMin, pt.y);
+            yMax = std::max(yMax, pt.y);
+        }
+        cx /= e.points.size();
+        const bool jog = e.meta.value("twistType").toString() == QLatin1String("jog");
+        const int n = jog ? 1 : 3; // number of crossings
+        const double w = std::max(24.0, (yMax - yMin) * 0.9);
+        const double x0 = cx - w / 2.0, x1 = cx + w / 2.0;
+        // Mask the straight wires under the band so the twist reads as the real routing.
+        p.save();
+        p.setPen(Qt::NoPen);
+        p.setBrush(g_bgColor);
+        p.drawRect(QRectF(vt.toScreen({x0, yMax}), vt.toScreen({x1, yMin})).normalized());
+        p.restore();
+        QPolygonF A, B;
+        for (int k = 0; k <= n; ++k) {
+            const double x = x0 + (x1 - x0) * (static_cast<double>(k) / n);
+            const bool up = (k % 2 == 0);
+            A << vt.toScreen({x, up ? yMin : yMax});
+            B << vt.toScreen({x, up ? yMax : yMin});
+        }
+        p.drawPolyline(A);
+        p.drawPolyline(B);
+        break;
+    }
+
+    case EntityType::Screen: {
+        // A shield/screen: a dashed outline enclosing the selected wires, marked "S".
+        if (e.points.size() < 4) break;
+        p.save();
+        QPen dp(color);
+        dp.setCosmetic(true);
+        dp.setWidthF(1.2);
+        dp.setStyle(Qt::DashLine);
+        p.setPen(dp);
+        p.setBrush(Qt::NoBrush);
+        p.drawPolygon(toScreenPoly(e.points, vt));
+        p.restore();
+        drawWorldText(p, vt.toScreen(e.points[3]) + QPointF(3, 10), QStringLiteral("S"), 4.0,
+                      vt.scale(), color);
+        break;
+    }
+
     case EntityType::Breakout:
     case EntityType::Bundle:
     default:

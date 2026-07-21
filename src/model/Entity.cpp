@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 20> kTypeNames = {{
+const std::array<TypeName, 22> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -33,6 +33,8 @@ const std::array<TypeName, 20> kTypeNames = {{
     {EntityType::Bundle, "bundle"},
     {EntityType::NetLabel, "netlabel"},
     {EntityType::NotConnected, "notconnected"},
+    {EntityType::Twist, "twist"},
+    {EntityType::Screen, "screen"},
 }};
 } // namespace
 

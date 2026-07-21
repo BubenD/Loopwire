@@ -849,6 +849,42 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
+    // Twist: arm, then a crossing line across two wires creates a Twist annotation.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("cross"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier); // start of crossing line
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);  // across both wires
+        const Entity* tw = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
+        check(tw && tw->points.size() == 2 &&
+                  tw->meta.value("twistType").toString() == QLatin1String("cross"),
+              "twist: a crossing line over two wires makes a Twist over both");
+    }
+
+    // Screen: a crossing line over wires creates a Screen annotation enclosing them.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->points.size() == 4 &&
+                  sc->meta.value("wires").toArray().size() == 2,
+              "screen: a crossing line over two wires shields both");
+    }
+
     // Cross switch: toggling a wire crossing adds a hop to one wire, toggling again removes it.
     {
         Document d; d.entities().clear();
