@@ -1251,30 +1251,43 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        // Type 2 (single) is now TWICE-twisted (2 crossings); Type 1 (crossed) is a
-        // fuller braid (3 crossings).
-        const int n = (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 2 : 3;
+        // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
+        // (2 crossings); both now REST FLAT between crossings (a short level run at each
+        // peak/trough) instead of meeting at a sharp point, mirrored top/bottom. Type 3
+        // ("type3") keeps the original sharp diamond point between 2 crossings.
+        const bool type3 = (ty == QLatin1String("type3"));
+        const int n = type3 ? 2 : (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 2 : 3;
+        const bool flatten = !type3;
         const double band = std::max(1.0, yMax - yMin);
         const double w = std::max(28.0, band * 1.4);
         const double x0 = cx - w / 2.0, x1 = cx + w / 2.0;
         const double lead = std::min(w * 0.18, 8.0);      // short horizontal lead lines
         const double mx0 = x0 + lead, mx1 = x1 - lead;    // crossing span
         const double pad = std::max(1.5, band * 0.08);    // fully cover the wire strokes
+        const double pitch = (mx1 - mx0) / n;
+        const double flatHalf = flatten ? std::min(pitch * 0.25, 6.0) : 0.0;
         // Cut the straight top/bottom wires between the twists.
         p.save();
         p.setPen(Qt::NoPen);
         p.setBrush(g_bgColor);
         p.drawRect(QRectF(vt.toScreen({x0, yMax + pad}), vt.toScreen({x1, yMin - pad})).normalized());
         p.restore();
-        // Two conductors: horizontal lead, n diagonal crossings, horizontal lead out.
+        // Two conductors: horizontal lead, n diagonal crossings (resting flat between them
+        // at each intermediate peak/trough), horizontal lead out.
         QPolygonF A, B;
         A << vt.toScreen({x0, yMin});
         B << vt.toScreen({x0, yMax});
         for (int k = 0; k <= n; ++k) {
-            const double x = mx0 + (mx1 - mx0) * (static_cast<double>(k) / n);
+            const double xc = mx0 + pitch * k;
             const bool up = (k % 2 == 0);
-            A << vt.toScreen({x, up ? yMin : yMax});
-            B << vt.toScreen({x, up ? yMax : yMin});
+            const double aY = up ? yMin : yMax, bY = up ? yMax : yMin;
+            if (k == 0 || k == n || flatHalf <= 0.0) {
+                A << vt.toScreen({xc, aY});
+                B << vt.toScreen({xc, bY});
+            } else {
+                A << vt.toScreen({xc - flatHalf, aY}) << vt.toScreen({xc + flatHalf, aY});
+                B << vt.toScreen({xc - flatHalf, bY}) << vt.toScreen({xc + flatHalf, bY});
+            }
         }
         const bool aEndsTop = (n % 2 == 0);
         A << vt.toScreen({x1, aEndsTop ? yMin : yMax});

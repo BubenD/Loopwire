@@ -5868,6 +5868,10 @@ void MainWindow::buildWireRibbonTab() {
         editor_->beginTwist(QStringLiteral("jog"));
         canvas_->setFocus(Qt::OtherFocusReason);
     });
+    tm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
+        editor_->beginTwist(QStringLiteral("type3"));
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
     twistBtn->setMenu(tm);
     connect(twistBtn, &QToolButton::clicked, this, [this] {
         editor_->beginTwist(QStringLiteral("cross"));
