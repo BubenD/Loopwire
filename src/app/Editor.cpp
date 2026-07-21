@@ -41,7 +41,7 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
                       DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
-                      ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove };
+                      ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove, TwistMove };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -327,6 +327,16 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         }
         break;
     }
+    case EntityType::Twist: {
+        // A single grip that SLIDES the twist along its wires (constrained: dragging it
+        // only changes its position along the wire run, never off the wires).
+        if (e.points.empty()) break;
+        Vec2 c{0, 0};
+        for (const Vec2& pt : e.points) c = c + pt;
+        c = c * (1.0 / static_cast<double>(e.points.size()));
+        g.push_back({c, GripRole::TwistMove, 0});
+        break;
+    }
     case EntityType::Screen: {
         // A joint at each caught wire + the drain endpoint (all draggable), plus a Move
         // handle at the ellipse centre to relocate the whole shield.
@@ -519,6 +529,7 @@ void Editor::setTool(ToolId t) {
     clearCellSelection();
     mirrorPending_ = false;
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
+    awaitTwistAlign_ = false; // ...and twist-align pick mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
     twistArmType_.clear();    // ...and the twist / screen band modes
     const bool wasScreenArmed = screenArm_;
@@ -1212,6 +1223,12 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
 
+    // Twist align: this click is the destination point (on a wire) to align to.
+    if (awaitTwistAlign_) {
+        twistAlignTo(raw);
+        return;
+    }
+
     // Align routing: this click picks the reference connector, then aligns the rest.
     if (awaitAlignRef_) {
         if (auto hit = hitTest(p)) alignRoutingFrom(*hit);
@@ -1842,6 +1859,63 @@ void Editor::dragAttachedWires(const Entity& conn, const Vec2& delta,
     }
 }
 
+void Editor::repositionTwistAtX(Entity& twist, double x) {
+    if (!doc_) return;
+    const QJsonArray ids = twist.meta.value("wires").toArray();
+    for (int i = 0; i < static_cast<int>(twist.points.size()) && i < ids.size(); ++i) {
+        Entity* w = entityById(ids[i].toString());
+        if (!w || w->points.size() < 2) continue;
+        // Clamp to this wire's own x-extent — the twist can never slide off its wires.
+        double xMin = 1e18, xMax = -1e18;
+        for (const Vec2& pt : w->points) {
+            xMin = std::min(xMin, pt.x);
+            xMax = std::max(xMax, pt.x);
+        }
+        const double xc = std::clamp(x, xMin, xMax);
+        // Interpolate the wire's y at xc (along whichever segment contains it).
+        double y = w->points[0].y;
+        for (size_t s = 1; s < w->points.size(); ++s) {
+            const Vec2 a = w->points[s - 1], b = w->points[s];
+            const double lo = std::min(a.x, b.x), hi = std::max(a.x, b.x);
+            if (xc >= lo - 1e-9 && xc <= hi + 1e-9) {
+                const double t = (b.x != a.x) ? (xc - a.x) / (b.x - a.x) : 0.0;
+                y = a.y + (b.y - a.y) * t;
+                break;
+            }
+        }
+        twist.points[i] = {xc, y};
+    }
+}
+
+void Editor::beginTwistAlign() {
+    if (!doc_) return;
+    bool anyTwist = false;
+    for (const QString& id : selected_)
+        if (const Entity* e = entityById(id); e && e->type == EntityType::Twist) anyTwist = true;
+    if (!anyTwist) {
+        emit message(QStringLiteral("Select one or more twist marks first, then Twist align"));
+        return;
+    }
+    awaitTwistAlign_ = true;
+    emit message(QStringLiteral("Twist align: click a destination point on a wire"));
+}
+
+void Editor::twistAlignTo(const Vec2& dest) {
+    awaitTwistAlign_ = false;
+    if (!doc_) return;
+    pushUndo();
+    int n = 0;
+    for (const QString& id : selected_) {
+        Entity* e = entityById(id);
+        if (!e || e->type != EntityType::Twist) continue;
+        repositionTwistAtX(*e, dest.x);
+        ++n;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Aligned %1 twist mark(s)").arg(n));
+}
+
 std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut) const {
     if (!doc_) return std::nullopt;
     // Ghost feature points (body corners + pin ends) at the candidate anchor.
@@ -2211,11 +2285,14 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     }
     pushUndo();
     if (twist) {
+        QJsonArray ids;
+        for (const QString& id : wireIds) ids.append(id);
         Entity e;
         e.type = EntityType::Twist;
         e.layer = QStringLiteral("Wires");
-        e.points = crossings; // the per-wire crossing points define the band
+        e.points = crossings; // the per-wire crossing points (parallel to "wires" below)
         e.meta.insert("twistType", twistArmType_);
+        e.meta.insert("wires", ids); // which wire each points[i] belongs to
         e.meta.insert("entNum", assignEntityNumber());
         doc_->entities().push_back(e);
         twistArmType_.clear();
@@ -2486,6 +2563,11 @@ void Editor::applyEditDrag(const Vec2& target) {
                 e->points[index] = e->points[index] + delta;
                 e->points[index + 1] = e->points[index + 1] + delta;
             }
+            break;
+        case GripRole::TwistMove:
+            // Constrained: only the position ALONG the wires (world x) changes; each
+            // per-wire crossing point is re-interpolated from its own wire at that x.
+            repositionTwistAtX(*e, target.x);
             break;
         case GripRole::Vertex:
             if (index >= 0 && index < static_cast<int>(e->points.size())) {

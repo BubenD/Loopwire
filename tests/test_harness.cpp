@@ -900,6 +900,102 @@ int run_harness_tests() {
         check(tw && tw->points.size() == 2 &&
                   tw->meta.value("twistType").toString() == QLatin1String("cross"),
               "twist: a crossing line over two wires makes a Twist over both");
+        check(tw && tw->meta.value("wires").toArray().size() == 2,
+              "twist: records which wire each crossing point belongs to");
+
+        // Constrained move: the twist's grip only slides it ALONG its wires (world x);
+        // the per-wire crossing points stay ON their wires (y re-interpolated). Driven
+        // through the real grip-grab flow (click grip, click destination), like the
+        // wire-grip tests above.
+        const QString twId = tw->id;
+        ed.setTool(ToolId::Select);
+        ed.selectById(twId);
+        const Vec2 gripAt = lerp(tw->points[0], tw->points[1], 0.5); // twist's Move grip
+        ed.onPointerPress(gripAt, Qt::LeftButton, Qt::NoModifier);   // grab
+        ed.onPointerPress({150, 999}, Qt::LeftButton, Qt::NoModifier); // place (y ignored)
+        const Entity* tw2 = nullptr;
+        for (const auto& e : d.entities()) if (e.id == twId) tw2 = &e;
+        check(tw2 && near(tw2->points[0].x, 150.0) && near(tw2->points[0].y, 0.0) &&
+                  near(tw2->points[1].x, 150.0) && near(tw2->points[1].y, 30.0),
+              "twist-move: dragging the grip slides both crossing points along their wires");
+        // Clamped to the wire's own extent — can't slide past its endpoints.
+        ed.selectById(twId);
+        const Vec2 gripAt2 = lerp(tw2->points[0], tw2->points[1], 0.5);
+        ed.onPointerPress(gripAt2, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({9999, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* tw3 = nullptr;
+        for (const auto& e : d.entities()) if (e.id == twId) tw3 = &e;
+        check(tw3 && near(tw3->points[0].x, 200.0),
+              "twist-move: clamped to the wire's own x-extent");
+    }
+
+    // Twist align: select twist marks, then click a destination — they all slide there.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("cross"));
+        ed.onPointerPress({50, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 40}, Qt::LeftButton, Qt::NoModifier);
+        QString twId;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) twId = e.id;
+        ed.setTool(ToolId::Select);
+        ed.selectById(twId);
+        ed.beginTwistAlign();
+        check(ed.awaitingTwistAlign(), "twist-align: arms after a twist is selected");
+        ed.onPointerPress({160, 5}, Qt::LeftButton, Qt::NoModifier); // destination on a wire
+        const Entity* tw = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
+        check(tw && near(tw->points[0].x, 160.0) && near(tw->points[1].x, 160.0),
+              "twist-align: the selected twist slides to the destination x");
+        check(!ed.awaitingTwistAlign(), "twist-align: disarms after aligning");
+    }
+
+    // Twist structure fix: the wire itself is what's clipped through the twist band (no
+    // separate masking rectangle) — verified via EntityRenderer::formatLength-adjacent
+    // API isn't applicable here, so we check the underlying data model stays intact:
+    // the wire's OWN points are untouched by adding a twist (only the Twist stores the
+    // crossing points) — i.e. the wire's structure is preserved, not overwritten.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("cross"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* w1After = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "w1") w1After = &e;
+        check(w1After && w1After->points.size() == 2 &&
+                  near(w1After->points[0].x, 0.0) && near(w1After->points[1].x, 200.0),
+              "twist-structure: the wire's own points are unchanged by adding a twist");
+    }
+
+    // Screen leg termination is a snappable joint (a new wire's endpoint can catch it).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenLegDir() = QStringLiteral("bottom");
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
+        const Vec2 drain = sc->points.back();
+        SnapSettings s; // objectSnap + endpoint on by default
+        auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
+        check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
+              "screen-leg-snap: a nearby point snaps onto the drain-leg termination");
     }
 
     // Screen: a crossing line over wires creates a Screen annotation enclosing them.

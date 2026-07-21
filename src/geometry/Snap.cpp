@@ -253,6 +253,11 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::NotConnected:
         out.push_back(e.a);
         break;
+    case EntityType::Screen:
+        // The drain-leg termination point (last point, after the caught-wire joints)
+        // is a snappable endpoint, so a wire can connect to it.
+        if (!e.points.empty()) out.push_back(e.points.back());
+        break;
     case EntityType::Connector: {
         // Endpoint joints: the four body-rectangle corners and each pin's ends (the
         // wire-connection tip and the body-edge tip).

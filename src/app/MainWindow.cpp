@@ -2116,9 +2116,45 @@ void MainWindow::buildRibbon() {
     //      contextual tab that opens only when a connector is being placed / edited. ----
     {
         auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Place"),
-                 toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice, ToolId::NetLabel,
-                          ToolId::NotConnected}));
+        // Screen / shield button (joins the Place group below).
+        auto* screenBtn = new QToolButton(page);
+        screenBtn->setText(QStringLiteral("Screen"));
+        screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        screenBtn->setIconSize(QSize(26, 26));
+        screenBtn->setMinimumWidth(66);
+        screenBtn->setToolTip(QStringLiteral(
+            "Shield: click, then drag a crossing line across the wires to screen them"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen wp(QColor("#cfe3ff"));
+            wp.setWidthF(1.6);
+            ip.setPen(wp);
+            ip.drawLine(4, 11, 24, 11); // two wires
+            ip.drawLine(4, 17, 24, 17);
+            QPen dp(QColor("#8fb7ff"));
+            dp.setWidthF(1.4);
+            dp.setStyle(Qt::DashLine);
+            ip.setPen(dp);
+            ip.setBrush(Qt::NoBrush);
+            ip.drawRect(3, 6, 22, 16); // the shield outline
+            ip.end();
+            screenBtn->setIcon(QIcon(pm));
+        }
+        connect(screenBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginScreen();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        auto* placeW = new QWidget(page);
+        auto* placeLay = new QHBoxLayout(placeW);
+        placeLay->setContentsMargins(0, 0, 0, 0);
+        placeLay->setSpacing(4);
+        placeLay->addWidget(toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice,
+                                     ToolId::NetLabel, ToolId::NotConnected}));
+        placeLay->addWidget(screenBtn);
+        addGroup(lay, QStringLiteral("Place"), placeW);
         // Marker size — appears ONLY while the Splice or X (termination) tool is active,
         // editing that tool's size; also typeable in the flying command field.
         auto* mkW = new QWidget(page);
@@ -2271,6 +2307,42 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(modCrossBtn, 0, 2);
+        // Twist align: select one or more twist marks first, click this, then click a
+        // destination point on a wire — every selected twist slides to that position.
+        auto* twistAlignBtn = new QToolButton(modW);
+        twistAlignBtn->setText(QStringLiteral("Twist\nalign"));
+        twistAlignBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        twistAlignBtn->setIconSize(QSize(26, 26));
+        twistAlignBtn->setMinimumWidth(66);
+        twistAlignBtn->setToolTip(QStringLiteral(
+            "Select twist marks, click this, then click a destination point on a wire "
+            "to align them all there"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(1.8);
+            ip.setPen(pen);
+            // Two small braids (twist marks) with a dashed alignment line through them.
+            for (int cx : {8, 20}) {
+                ip.drawLine(cx - 4, 8, cx + 4, 16);
+                ip.drawLine(cx + 4, 8, cx - 4, 16);
+            }
+            QPen dash(QColor("#8fb7ff"));
+            dash.setWidthF(1.2);
+            dash.setStyle(Qt::DashLine);
+            ip.setPen(dash);
+            ip.drawLine(14, 4, 14, 24);
+            ip.end();
+            twistAlignBtn->setIcon(QIcon(pm));
+        }
+        connect(twistAlignBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginTwistAlign();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modG->addWidget(twistAlignBtn, 0, 3);
         addGroup(lay, QStringLiteral("Modify"), modW);
 
         // ---- DRC (design-rule check) group: Validate / Bypass table / Rules ----
@@ -5741,47 +5813,11 @@ void MainWindow::buildWireRibbonTab() {
     lay->setSpacing(0);
     lay->setAlignment(Qt::AlignLeft);
 
-    // Screen / shield button (built here so it can join the Place group below).
-    auto* screenBtn = new QToolButton(wireTab_);
-    screenBtn->setText(QStringLiteral("Screen"));
-    screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    screenBtn->setIconSize(QSize(26, 26));
-    screenBtn->setMinimumWidth(66);
-    screenBtn->setToolTip(QStringLiteral(
-        "Shield: click, then drag a crossing line across the wires to screen them"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen wp(QColor("#cfe3ff"));
-        wp.setWidthF(1.6);
-        ip.setPen(wp);
-        ip.drawLine(4, 11, 24, 11); // two wires
-        ip.drawLine(4, 17, 24, 17);
-        QPen dp(QColor("#8fb7ff"));
-        dp.setWidthF(1.4);
-        dp.setStyle(Qt::DashLine);
-        ip.setPen(dp);
-        ip.setBrush(Qt::NoBrush);
-        ip.drawRect(3, 6, 22, 16); // the shield outline
-        ip.end();
-        screenBtn->setIcon(QIcon(pm));
-    }
-    connect(screenBtn, &QToolButton::clicked, this, [this] {
-        editor_->beginScreen();
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-
-    // ---- Place: wire + junction markers + screen/shield ----
-    auto* placeW = new QWidget(wireTab_);
-    auto* placeLay = new QHBoxLayout(placeW);
-    placeLay->setContentsMargins(0, 0, 0, 0);
-    placeLay->setSpacing(4);
-    placeLay->addWidget(
-        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel}));
-    placeLay->addWidget(screenBtn);
-    lay->addWidget(ribbonGroup(QStringLiteral("Place"), placeW));
+    // ---- Place: wire + junction markers ----
+    // (Screen/shield lives on the Schematic-build tab's Place group, not here.)
+    lay->addWidget(ribbonGroup(
+        QStringLiteral("Place"),
+        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel})));
 
     // ---- Wire: colour / AWG / net ----
     auto* wireW = new QWidget(wireTab_);

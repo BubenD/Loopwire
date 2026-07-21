@@ -330,6 +330,13 @@ public:
     bool awaitingCrossSwitch() const { return awaitCrossSwitch_; }
     void toggleWireCrossAt(const Vec2& p); // toggle the hop at the crossing nearest p
 
+    // Twist align: select one or more Twist entities, press Twist align, then click a
+    // destination point on a wire — every selected twist slides to that x position
+    // along its own wires (same constraint as the twist's move grip).
+    void beginTwistAlign();
+    void twistAlignTo(const Vec2& dest);
+    bool awaitingTwistAlign() const { return awaitTwistAlign_; }
+
     // Twist / Screen: click the button, then draw a crossing line across the wires to
     // select them. Twist adds a twisted-pair/bundle symbol of the given type ("cross"
     // braid or "jog" transposition); Screen adds a shield enclosing the selected wires.
@@ -573,6 +580,10 @@ private:
     // so a selected wire isn't shifted twice).
     void dragAttachedWires(const Entity& conn, const Vec2& delta,
                            const std::vector<QString>& movingIds);
+    // Reposition a Twist entity's per-wire crossing points to world-x `x`, clamped to
+    // each referenced wire's own extent and interpolated along it. Shared by the twist's
+    // constrained move grip and Twist Align.
+    void repositionTwistAtX(Entity& twist, double x);
     // For the connector placement preview: if any feature of the ghost (a body corner
     // or a pin end) at `rawAnchor` lands within snap tolerance of an existing schematic
     // point (another connector's corner/pin end, a wire end, splice, or X marker),
@@ -732,6 +743,7 @@ private:
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
+    bool awaitTwistAlign_ = false;  // Twist Align armed (next click = destination point)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
     bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken

@@ -605,6 +605,83 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     }
 }
 
+// The world x-range spanned by a Twist symbol's band (leads + crossings). A wire the
+// twist references must not draw its own straight segment through this range — the
+// twist symbol takes over there — so the wire's actual structure stays intact (no
+// separate mask painted over it).
+std::pair<double, double> twistBandX(const Entity& twist) {
+    double cx = 0.0, yMin = 1e18, yMax = -1e18;
+    for (const Vec2& pt : twist.points) {
+        cx += pt.x;
+        yMin = std::min(yMin, pt.y);
+        yMax = std::max(yMax, pt.y);
+    }
+    if (!twist.points.empty()) cx /= twist.points.size();
+    const double band = std::max(1.0, yMax - yMin);
+    const double w = std::max(28.0, band * 1.4);
+    return {cx - w / 2.0, cx + w / 2.0};
+}
+
+// Every Twist band that references `wireId` (via its "wires" meta), so the wire's own
+// render can skip drawing through those x-ranges.
+std::vector<std::pair<double, double>> twistBandsForWire(const QString& wireId,
+                                                          const Document& doc) {
+    std::vector<std::pair<double, double>> bands;
+    for (const auto& t : doc.entities()) {
+        if (t.type != EntityType::Twist) continue;
+        const QJsonArray ids = t.meta.value("wires").toArray();
+        bool refs = false;
+        for (const auto& v : ids)
+            if (v.toString() == wireId) { refs = true; break; }
+        if (refs) bands.push_back(twistBandX(t));
+    }
+    return bands;
+}
+
+// Split a polyline into sub-polylines with the given world-x ranges removed (assumes
+// near-horizontal segments, matching the Twist symbol's own horizontal-run geometry).
+// Fragments shorter than 2 points are dropped.
+std::vector<std::vector<Vec2>> clipPolylineByXBands(
+    const std::vector<Vec2>& pts, const std::vector<std::pair<double, double>>& bands) {
+    if (bands.empty() || pts.size() < 2) return {pts};
+    std::vector<std::vector<Vec2>> result;
+    std::vector<Vec2> cur = {pts[0]};
+    auto flush = [&] {
+        if (cur.size() >= 2) result.push_back(cur);
+        cur.clear();
+    };
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const Vec2 a = pts[i - 1], b = pts[i];
+        const double xLo = std::min(a.x, b.x), xHi = std::max(a.x, b.x);
+        std::vector<std::pair<double, double>> cuts;
+        for (const auto& bd : bands) {
+            const double c0 = std::max(xLo, bd.first), c1 = std::min(xHi, bd.second);
+            if (c0 < c1) cuts.push_back({c0, c1});
+        }
+        if (cuts.empty()) {
+            cur.push_back(b);
+            continue;
+        }
+        std::sort(cuts.begin(), cuts.end());
+        const bool reversed = a.x > b.x;
+        if (reversed) std::reverse(cuts.begin(), cuts.end());
+        auto atX = [&](double x) -> Vec2 {
+            const double t = (b.x != a.x) ? (x - a.x) / (b.x - a.x) : 0.0;
+            return {x, a.y + (b.y - a.y) * t};
+        };
+        for (const auto& cut : cuts) {
+            const double startX = reversed ? cut.second : cut.first;
+            const double endX = reversed ? cut.first : cut.second;
+            cur.push_back(atX(startX));
+            flush();
+            cur = {atX(endX)};
+        }
+        cur.push_back(b);
+    }
+    flush();
+    return result;
+}
+
 } // namespace
 
 void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
@@ -753,15 +830,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             const QJsonArray a = h.toArray();
             if (a.size() == 2) hops.push_back({a[0].toDouble(), a[1].toDouble()});
         }
-        if (hops.empty()) {
-            p.drawPolyline(toScreenPoly(e.points, vt));
-        } else {
+        // A Twisted-pair symbol (Twist entity) that references this wire takes over
+        // drawing within its band — split the wire's own points around that x-range so
+        // the wire's actual structure simply doesn't run through it (nothing to mask).
+        const auto bands = twistBandsForWire(e.id, doc);
+        const auto polys = clipPolylineByXBands(e.points, bands);
+        for (const auto& poly : polys) {
+            if (poly.size() < 2) continue;
+            if (hops.empty()) {
+                p.drawPolyline(toScreenPoly(poly, vt));
+                continue;
+            }
             const double r = 5.0 * vt.scale(); // hop radius (≈5 world units)
             QPainterPath path;
-            path.moveTo(vt.toScreen(e.points[0]));
-            for (size_t s = 1; s < e.points.size(); ++s) {
-                const QPointF a0 = vt.toScreen(e.points[s - 1]);
-                const QPointF a1 = vt.toScreen(e.points[s]);
+            path.moveTo(vt.toScreen(poly[0]));
+            for (size_t s = 1; s < poly.size(); ++s) {
+                const QPointF a0 = vt.toScreen(poly[s - 1]);
+                const QPointF a1 = vt.toScreen(poly[s]);
                 const QPointF d = a1 - a0;
                 const double L = std::hypot(d.x(), d.y());
                 if (L < 1e-6) { path.lineTo(a1); continue; }
@@ -1240,8 +1325,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Twist: {
         // Twisted-pair symbol over the band spanned by the crossed wires. "cross" = a
-        // braid of two X crossings; "single" (jog) = one X. The straight top/bottom wires
-        // are CUT (masked) within the band, and short horizontal leads flank the crossings.
+        // braid of two X crossings; "single" (jog) = one X. The two wires' OWN render
+        // (case Wire, via twistBandsForWire) already skips drawing through this band, so
+        // no mask is painted here — the wire's actual structure is simply not routed
+        // straight through the twist; this case only draws the twist motif itself.
         if (e.points.empty()) break;
         double cx = 0.0, yMin = 1e18, yMax = -1e18;
         for (const Vec2& pt : e.points) {
@@ -1258,20 +1345,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const bool type3 = (ty == QLatin1String("type3"));
         const int n = type3 ? 2 : (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 2 : 3;
         const bool flatten = !type3;
-        const double band = std::max(1.0, yMax - yMin);
-        const double w = std::max(28.0, band * 1.4);
-        const double x0 = cx - w / 2.0, x1 = cx + w / 2.0;
-        const double lead = std::min(w * 0.18, 8.0);      // short horizontal lead lines
-        const double mx0 = x0 + lead, mx1 = x1 - lead;    // crossing span
-        const double pad = std::max(1.5, band * 0.08);    // fully cover the wire strokes
+        const auto [x0, x1] = twistBandX(e);
+        const double lead = std::min((x1 - x0) * 0.18, 8.0); // short horizontal lead lines
+        const double mx0 = x0 + lead, mx1 = x1 - lead;       // crossing span
         const double pitch = (mx1 - mx0) / n;
         const double flatHalf = flatten ? std::min(pitch * 0.25, 6.0) : 0.0;
-        // Cut the straight top/bottom wires between the twists.
-        p.save();
-        p.setPen(Qt::NoPen);
-        p.setBrush(g_bgColor);
-        p.drawRect(QRectF(vt.toScreen({x0, yMax + pad}), vt.toScreen({x1, yMin - pad})).normalized());
-        p.restore();
         // Two conductors: horizontal lead, n diagonal crossings (resting flat between them
         // at each intermediate peak/trough), horizontal lead out.
         QPolygonF A, B;
@@ -1331,9 +1409,25 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             else if (legDir == QLatin1String("right")) edge = {cx + rx, cyMid};
             else edge = {cx, cyMid - ry};
             p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
-            const QPointF d = vt.toScreen(drain);
-            p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick
-            p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
+            // The small "unterminated" end tick only shows while the leg is actually
+            // open — once a wire's endpoint connects here, the tick disappears (the
+            // wire itself now visibly continues from this point).
+            bool connected = false;
+            for (const auto& w : doc.entities()) {
+                if (w.type != EntityType::Wire || w.points.empty()) continue;
+                const Vec2& a = w.points.front();
+                const Vec2& b = w.points.back();
+                if (std::hypot(a.x - drain.x, a.y - drain.y) < 1e-6 ||
+                    std::hypot(b.x - drain.x, b.y - drain.y) < 1e-6) {
+                    connected = true;
+                    break;
+                }
+            }
+            if (!connected) {
+                const QPointF d = vt.toScreen(drain);
+                p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick
+                p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
+            }
         }
         if (e.meta.value("showS").toBool(true))
             drawWorldText(p, c + QPointF(rx * vt.scale() + 3, 0), QStringLiteral("S"), 4.0,
