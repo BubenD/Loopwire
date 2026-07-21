@@ -4800,6 +4800,15 @@ void MainWindow::refreshProperties() {
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("od"), std::max(0.0, v));
                });
+        // Conductor resistance per metre / per foot (Ω).
+        addText(QStringLiteral("R/m (Ω/m)"), m.value(QStringLiteral("resPerM")).toString(),
+                [this](const QString& t) {
+                    editor_->setSelectionMeta(QStringLiteral("resPerM"), t);
+                });
+        addText(QStringLiteral("R/ft (Ω/ft)"), m.value(QStringLiteral("resPerFt")).toString(),
+                [this](const QString& t) {
+                    editor_->setSelectionMeta(QStringLiteral("resPerFt"), t);
+                });
     }
 
     addHeader(QStringLiteral("Geometry"));

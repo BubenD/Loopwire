@@ -1239,8 +1239,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 
     case EntityType::Twist: {
-        // A twisted-pair/bundle symbol drawn over the band spanned by the crossed wires:
-        // "cross" = a multi-crossing braid, "jog" = a single transposition (one X).
+        // Twisted-pair symbol over the band spanned by the crossed wires. "cross" = a
+        // braid of two X crossings; "single" (jog) = one X. The straight top/bottom wires
+        // are CUT (masked) within the band, and short horizontal leads flank the crossings.
         if (e.points.empty()) break;
         double cx = 0.0, yMin = 1e18, yMax = -1e18;
         for (const Vec2& pt : e.points) {
@@ -1249,23 +1250,33 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             yMax = std::max(yMax, pt.y);
         }
         cx /= e.points.size();
-        const bool jog = e.meta.value("twistType").toString() == QLatin1String("jog");
-        const int n = jog ? 1 : 3; // number of crossings
-        const double w = std::max(24.0, (yMax - yMin) * 0.9);
+        const QString ty = e.meta.value("twistType").toString();
+        const int n = (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 1 : 2;
+        const double band = std::max(1.0, yMax - yMin);
+        const double w = std::max(28.0, band * 1.4);
         const double x0 = cx - w / 2.0, x1 = cx + w / 2.0;
-        // Mask the straight wires under the band so the twist reads as the real routing.
+        const double lead = std::min(w * 0.18, 8.0);      // short horizontal lead lines
+        const double mx0 = x0 + lead, mx1 = x1 - lead;    // crossing span
+        const double pad = std::max(1.5, band * 0.08);    // fully cover the wire strokes
+        // Cut the straight top/bottom wires between the twists.
         p.save();
         p.setPen(Qt::NoPen);
         p.setBrush(g_bgColor);
-        p.drawRect(QRectF(vt.toScreen({x0, yMax}), vt.toScreen({x1, yMin})).normalized());
+        p.drawRect(QRectF(vt.toScreen({x0, yMax + pad}), vt.toScreen({x1, yMin - pad})).normalized());
         p.restore();
+        // Two conductors: horizontal lead, n diagonal crossings, horizontal lead out.
         QPolygonF A, B;
+        A << vt.toScreen({x0, yMin});
+        B << vt.toScreen({x0, yMax});
         for (int k = 0; k <= n; ++k) {
-            const double x = x0 + (x1 - x0) * (static_cast<double>(k) / n);
+            const double x = mx0 + (mx1 - mx0) * (static_cast<double>(k) / n);
             const bool up = (k % 2 == 0);
             A << vt.toScreen({x, up ? yMin : yMax});
             B << vt.toScreen({x, up ? yMax : yMin});
         }
+        const bool aEndsTop = (n % 2 == 0);
+        A << vt.toScreen({x1, aEndsTop ? yMin : yMax});
+        B << vt.toScreen({x1, aEndsTop ? yMax : yMin});
         p.drawPolyline(A);
         p.drawPolyline(B);
         break;
