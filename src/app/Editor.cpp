@@ -1029,8 +1029,9 @@ void Editor::onPointerMove(const Vec2& raw) {
             Vec2 catchAt;
             if (auto a = connectorFeatureSnap(ghostAnchor, &catchAt)) {
                 ghostAnchor = *a;
-                snapResult_.point = catchAt; // marker on the actual connection point
+                snapResult_.point = catchAt;         // marker on the actual connection point
                 snapResult_.snapped = true;
+                snapResult_.kind = SnapKind::Endpoint; // draw the amber snap square there
             }
         }
         cursor_ = ghostAnchor; // cursor_ now carries the ghost anchor (preview + placement)
