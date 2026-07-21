@@ -526,6 +526,10 @@ private:
     // return the anchor shifted so those points coincide (else none). The nearest
     // feature wins. If `catchOut` is given, it receives the connection point latched on.
     std::optional<Vec2> connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut = nullptr) const;
+    // While the preview is FROZEN: the frozen connector's pin/corner nearest world point
+    // `p` (within a grab pick radius), or none. Used to show the snap square on hover and
+    // to catch that feature on click.
+    std::optional<Vec2> frozenGrabFeature(const Vec2& p) const;
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted

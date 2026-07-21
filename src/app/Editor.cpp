@@ -1036,6 +1036,15 @@ void Editor::onPointerMove(const Vec2& raw) {
         }
         cursor_ = ghostAnchor; // cursor_ now carries the ghost anchor (preview + placement)
     }
+    // While frozen: show the osnap square on the pin/corner the cursor is over, so it's
+    // clear which point a click will catch (the grab uses the same hit-test).
+    if (tool_ == ToolId::Connector && connectorArmed_ && connectorFrozen_) {
+        if (auto f = frozenGrabFeature(raw)) {
+            snapResult_.point = *f;
+            snapResult_.snapped = true;
+            snapResult_.kind = SnapKind::Endpoint;
+        }
+    }
 
     // Apply an in-progress direct edit: a body move (button held) or a grabbed
     // joint that follows the cursor (no button) until clicked to place. Panels
@@ -1058,8 +1067,8 @@ void Editor::onPointerMove(const Vec2& raw) {
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
-        trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_ && !connectorFrozen_))
-        emit overlayChanged(); // the armed connector ghost tracks the snapped cursor
+        trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_))
+        emit overlayChanged(); // armed connector ghost / frozen grab marker tracks the cursor
 }
 
 void Editor::onDragTick() {
@@ -1200,20 +1209,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // corners, GRAB it there (that feature becomes the point held under the cursor);
     // clicking empty canvas keeps the current handle and jumps the ghost to the cursor.
     if (tool_ == ToolId::Connector && connectorArmed_ && connectorFrozen_) {
-        const ConnectorGeometry fg = connectorGeometry(connectorFrozenPos_, connectorSpec_);
-        std::vector<Vec2> feats = {fg.rectMin,
-                                   {fg.rectMax.x, fg.rectMin.y},
-                                   fg.rectMax,
-                                   {fg.rectMin.x, fg.rectMax.y}};
-        for (const Vec2& pe : fg.pinEnd) feats.push_back(pe);
         // Hit-test against the RAW click (not the grid/object-snapped cursor_) so a pin/
-        // corner is caught even with grid snap on; a slightly generous pick radius helps.
-        double best = worldTolerance() * 1.8;
-        bool grabbed = false;
-        for (const Vec2& f : feats) {
-            const double d = distance(raw, f);
-            if (d < best) { best = d; connectorGrab_ = f - connectorFrozenPos_; grabbed = true; }
-        }
+        // corner is caught even with grid snap on.
+        const auto grab = frozenGrabFeature(raw);
+        const bool grabbed = grab.has_value();
+        if (grabbed) connectorGrab_ = *grab - connectorFrozenPos_;
         connectorFrozen_ = false;
         emit message(grabbed
                          ? QStringLiteral("Connector grabbed by that point — click to place")
@@ -1813,6 +1813,24 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* ca
     if (!found) return std::nullopt;
     if (catchOut) *catchOut = catchAt; // the connection point the ghost latched onto
     return std::optional<Vec2>(rawAnchor + off);
+}
+
+std::optional<Vec2> Editor::frozenGrabFeature(const Vec2& p) const {
+    if (tool_ != ToolId::Connector || !connectorArmed_ || !connectorFrozen_)
+        return std::nullopt;
+    const ConnectorGeometry fg = connectorGeometry(connectorFrozenPos_, connectorSpec_);
+    std::vector<Vec2> feats = {fg.rectMin,
+                               {fg.rectMax.x, fg.rectMin.y},
+                               fg.rectMax,
+                               {fg.rectMin.x, fg.rectMax.y}};
+    for (const Vec2& pe : fg.pinEnd) feats.push_back(pe);
+    double best = worldTolerance() * 1.8; // forgiving pick radius
+    std::optional<Vec2> hit;
+    for (const Vec2& f : feats) {
+        const double d = distance(p, f);
+        if (d < best) { best = d; hit = f; }
+    }
+    return hit;
 }
 
 QString Editor::pinRefAt(const Vec2& p) const {
