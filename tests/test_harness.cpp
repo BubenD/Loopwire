@@ -849,6 +849,31 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
+    // Cross switch: toggling a wire crossing adds a hop to one wire, toggling again removes it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        Entity h; h.id = "h"; h.type = EntityType::Wire; h.points = {{0, 0}, {100, 0}};   // horizontal
+        Entity v; v.id = "v"; v.type = EntityType::Wire; v.points = {{50, -50}, {50, 50}}; // vertical
+        d.entities().push_back(h);
+        d.entities().push_back(v);
+        auto hopCount = [&] {
+            int n = 0;
+            for (const auto& e : d.entities())
+                n += e.meta.value("hops").toArray().size();
+            return n;
+        };
+        ed.toggleWireCrossAt({50, 0}); // click the crossing
+        check(hopCount() == 1, "cross-switch: first click adds a bridge hop at the crossing");
+        // The horizontal wire is the one that hops (it is the more horizontal segment).
+        const Entity* hw = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "h") hw = &e;
+        check(hw && hw->meta.value("hops").toArray().size() == 1,
+              "cross-switch: the horizontal wire carries the hop");
+        ed.toggleWireCrossAt({50, 0}); // click again
+        check(hopCount() == 0, "cross-switch: second click removes the hop (plain cross)");
+    }
+
     // Per-pin wire gauge + ampere round-trip through the connector meta.
     {
         ConnectorSpec s = defaultConnectorSpec(3);

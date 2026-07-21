@@ -288,6 +288,21 @@ public:
     QString& wireColor() { return wireColor_; }
     QString& wireGauge() { return wireGauge_; }
     QString& wireNet() { return wireNet_; }
+    // Extra wire defaults applied to newly drawn wires (set from the Wire ribbon).
+    QString& wireAwg() { return wireAwg_; }
+    QString& wireInsulation() { return wireInsulation_; }
+    QString& wireVoltage() { return wireVoltage_; }
+    QString& wireType() { return wireType_; }
+    // Gap between the parallel wire lanes after a knee (align routing): "pitch" uses the
+    // reference connector's pitch, "custom" uses wireGapCustom().
+    QString& wireGapRule() { return wireGapRule_; }
+    double& wireGapCustom() { return wireGapCustom_; }
+
+    // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
+    // (bridge) and a plain cross. Armed until Esc.
+    void beginCrossSwitch();
+    bool awaitingCrossSwitch() const { return awaitCrossSwitch_; }
+    void toggleWireCrossAt(const Vec2& p); // toggle the hop at the crossing nearest p
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
@@ -659,6 +674,13 @@ private:
     QString wireColor_ = "WH";
     QString wireGauge_ = "0.5";
     QString wireNet_;
+    QString wireAwg_;
+    QString wireInsulation_;
+    QString wireVoltage_;
+    QString wireType_ = QStringLiteral("Stranded");
+    QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
+    double wireGapCustom_ = 15.0;
+    bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     double doubleLineGap_ = 10.0;
     // Double line/polyline "ls" (line-start): the next click picks a reference line
     // that both physical runs are extended to start from. dpolyLsArm_ awaits that

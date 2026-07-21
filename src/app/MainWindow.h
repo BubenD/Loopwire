@@ -67,6 +67,8 @@ private:
     void buildConnectorRibbonTab();    // build the contextual "Connector build" tab (hidden)
     void showConnectorRibbon(bool on); // add/select or remove the contextual tab
     void updateConnectorContext();     // open/close: Connector tool active OR a connector selected
+    void buildWireRibbonTab();         // build the contextual "Wire" tab (hidden)
+    void showWireRibbon(bool on);      // add/select or remove the contextual Wire tab
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -198,6 +200,9 @@ private:
     QWidget* hatchTab_ = nullptr;
     QWidget* tableCellTab_ = nullptr;
     QWidget* connectorTab_ = nullptr;
+    QWidget* wireTab_ = nullptr;                 // contextual "Wire" ribbon (Wire tool active)
+    QStringList customWireColors_;               // user-added wire colours (persisted)
+    QStringList insulationMaterials_;            // insulation material menu (persisted, editable)
     QToolButton* connectorPlaceBtn_ = nullptr;  // "Place connector" — checked while armed
     std::function<void()> syncConnectorRibbon_; // reload the connector tab from context
     bool connectorSyncing_ = false;             // guard: skip apply() while syncing widgets

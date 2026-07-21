@@ -2250,6 +2250,7 @@ void MainWindow::buildRibbon() {
     buildHatchRibbonTab(); // built once, added to the ribbon only while hatching
     buildTableCellRibbonTab(); // built once, added only while a table cell is selected
     buildConnectorRibbonTab(); // built once, added only while placing/editing a connector
+    buildWireRibbonTab();      // built once, added only while the Wire tool is active
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
 }
@@ -5525,6 +5526,194 @@ void MainWindow::updateConnectorContext() {
     // Show the connector build ribbon only while PLACING a connector (Connector tool).
     // A selected connector is edited in the side Properties panel instead of the ribbon.
     showConnectorRibbon(editor_->tool() == ToolId::Connector);
+    // The Wire tab opens while the Wire tool is active.
+    showWireRibbon(editor_->tool() == ToolId::Wire);
+}
+
+void MainWindow::buildWireRibbonTab() {
+    if (insulationMaterials_.isEmpty())
+        insulationMaterials_ = {"PVC",      "XLPE",   "PTFE",        "FEP",
+                                "Silicone", "Rubber", "Polyethylene"};
+    wireTab_ = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(wireTab_);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+
+    // ---- Place: wire + junction markers ----
+    lay->addWidget(ribbonGroup(
+        QStringLiteral("Place"),
+        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel})));
+
+    // ---- Wire: colour / AWG / net ----
+    auto* wireW = new QWidget(wireTab_);
+    auto* wg = new QGridLayout(wireW);
+    wg->setContentsMargins(0, 0, 0, 0);
+    wg->setSpacing(2);
+    auto* colorBox = new QComboBox(wireW);
+    colorBox->setEditable(true); // type a custom code / #hex to add it to the list
+    colorBox->addItems(wireColorCodes());
+    colorBox->addItems(customWireColors_);
+    colorBox->setCurrentText(editor_->wireColor());
+    connect(colorBox, &QComboBox::currentTextChanged, this, [this, colorBox](const QString& c) {
+        editor_->wireColor() = c;
+        if (!c.isEmpty() && colorBox->findText(c) < 0 && !wireColorCodes().contains(c)) {
+            customWireColors_ << c; // remember custom colours across sessions
+            saveSettings();
+        }
+    });
+    auto* awgBox = new QComboBox(wireW);
+    awgBox->setEditable(true);
+    for (int g = 4; g <= 32; g += 2) awgBox->addItem(QStringLiteral("%1 AWG").arg(g));
+    awgBox->setCurrentText(editor_->wireAwg());
+    connect(awgBox, &QComboBox::currentTextChanged, this,
+            [this](const QString& t) { editor_->wireAwg() = t; });
+    auto* netEdit = new QLineEdit(wireW);
+    netEdit->setMaximumWidth(110);
+    netEdit->setText(editor_->wireNet());
+    connect(netEdit, &QLineEdit::textChanged, this,
+            [this](const QString& n) { editor_->wireNet() = n; });
+    wg->addWidget(new QLabel(QStringLiteral("Color"), wireW), 0, 0);
+    wg->addWidget(colorBox, 0, 1, 1, 2);
+    wg->addWidget(new QLabel(QStringLiteral("AWG"), wireW), 1, 0);
+    wg->addWidget(awgBox, 1, 1, 1, 2);
+    wg->addWidget(new QLabel(QStringLiteral("Net"), wireW), 2, 0);
+    wg->addWidget(netEdit, 2, 1, 1, 2);
+    lay->addWidget(ribbonGroup(QStringLiteral("Wire"), wireW));
+
+    // ---- Insulation: material (add/delete) / voltage / conductor type ----
+    auto* insW = new QWidget(wireTab_);
+    auto* ig = new QGridLayout(insW);
+    ig->setContentsMargins(0, 0, 0, 0);
+    ig->setSpacing(2);
+    auto* matBox = new QComboBox(insW);
+    matBox->setEditable(true);
+    matBox->addItems(insulationMaterials_);
+    matBox->setCurrentText(editor_->wireInsulation());
+    connect(matBox, &QComboBox::currentTextChanged, this,
+            [this](const QString& t) { editor_->wireInsulation() = t; });
+    auto* addMat = new QToolButton(insW);
+    addMat->setText(QStringLiteral("Add"));
+    addMat->setToolTip(QStringLiteral("Add a new insulation material to the menu (kept)"));
+    connect(addMat, &QToolButton::clicked, this, [this, matBox] {
+        bool ok = false;
+        const QString m = QInputDialog::getText(this, QStringLiteral("Add material"),
+                                                QStringLiteral("Insulation material:"),
+                                                QLineEdit::Normal, QString(), &ok)
+                              .trimmed();
+        if (ok && !m.isEmpty() && !insulationMaterials_.contains(m)) {
+            insulationMaterials_ << m;
+            matBox->addItem(m);
+            matBox->setCurrentText(m);
+            saveSettings();
+        }
+    });
+    auto* delMat = new QToolButton(insW);
+    delMat->setText(QStringLiteral("Del"));
+    delMat->setToolTip(QStringLiteral("Remove the shown material from the menu"));
+    connect(delMat, &QToolButton::clicked, this, [this, matBox] {
+        const QString m = matBox->currentText();
+        const int idx = matBox->findText(m);
+        if (idx >= 0) matBox->removeItem(idx);
+        insulationMaterials_.removeAll(m);
+        saveSettings();
+    });
+    auto* voltBox = new QComboBox(insW);
+    voltBox->setEditable(true);
+    voltBox->addItems({"30V", "60V", "150V", "300V", "600V", "1000V"});
+    voltBox->setCurrentText(editor_->wireVoltage());
+    connect(voltBox, &QComboBox::currentTextChanged, this,
+            [this](const QString& t) { editor_->wireVoltage() = t; });
+    auto* typeBox = new QComboBox(insW);
+    typeBox->addItems({QStringLiteral("Solid"), QStringLiteral("Stranded")});
+    typeBox->setCurrentText(editor_->wireType());
+    connect(typeBox, &QComboBox::currentTextChanged, this,
+            [this](const QString& t) { editor_->wireType() = t; });
+    ig->addWidget(new QLabel(QStringLiteral("Material"), insW), 0, 0);
+    ig->addWidget(matBox, 0, 1);
+    ig->addWidget(addMat, 0, 2);
+    ig->addWidget(delMat, 0, 3);
+    ig->addWidget(new QLabel(QStringLiteral("Voltage"), insW), 1, 0);
+    ig->addWidget(voltBox, 1, 1, 1, 3);
+    ig->addWidget(new QLabel(QStringLiteral("Type"), insW), 2, 0);
+    ig->addWidget(typeBox, 2, 1, 1, 3);
+    lay->addWidget(ribbonGroup(QStringLiteral("Insulation"), insW));
+
+    // ---- Crossings: per-crossing bridge switch ----
+    auto* crossBtn = new QToolButton(wireTab_);
+    crossBtn->setText(QStringLiteral("Cross\nswitch"));
+    crossBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    crossBtn->setIconSize(QSize(26, 26));
+    crossBtn->setMinimumWidth(66);
+    crossBtn->setToolTip(QStringLiteral(
+        "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
+    {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(QColor("#cfe3ff"));
+        pen.setWidthF(2.0);
+        ip.setPen(pen);
+        ip.drawLine(3, 20, 9, 20); // wire in
+        QPainterPath hop;
+        hop.moveTo(9, 20);
+        hop.arcTo(9, 12, 10, 16, 180, -180); // the hop arc
+        ip.drawPath(hop);
+        ip.drawLine(19, 20, 25, 20);          // wire out
+        ip.drawLine(14, 6, 14, 26);           // the crossing wire (straight through)
+        ip.end();
+        crossBtn->setIcon(QIcon(pm));
+    }
+    connect(crossBtn, &QToolButton::clicked, this, [this] {
+        editor_->beginCrossSwitch();
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+    lay->addWidget(ribbonGroup(QStringLiteral("Crossings"), crossBtn));
+
+    // ---- Routing: gap between the parallel wire lanes after a knee ----
+    auto* routeW = new QWidget(wireTab_);
+    auto* rgl = new QGridLayout(routeW);
+    rgl->setContentsMargins(0, 0, 0, 0);
+    rgl->setSpacing(2);
+    auto* gapRule = new QComboBox(routeW);
+    gapRule->addItems({QStringLiteral("Connector pitch"), QStringLiteral("Custom")});
+    gapRule->setCurrentIndex(editor_->wireGapRule() == QLatin1String("custom") ? 1 : 0);
+    auto* gapVal = new QDoubleSpinBox(routeW);
+    gapVal->setRange(0.5, 1000.0);
+    gapVal->setDecimals(2);
+    gapVal->setValue(editor_->wireGapCustom());
+    gapVal->setEnabled(editor_->wireGapRule() == QLatin1String("custom"));
+    connect(gapRule, &QComboBox::currentTextChanged, this, [this, gapVal](const QString& t) {
+        const bool custom = t == QLatin1String("Custom");
+        editor_->wireGapRule() = custom ? QStringLiteral("custom") : QStringLiteral("pitch");
+        gapVal->setEnabled(custom);
+    });
+    connect(gapVal, &QDoubleSpinBox::editingFinished, this,
+            [this, gapVal] { editor_->wireGapCustom() = gapVal->value(); });
+    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 0, 0, 1, 2);
+    rgl->addWidget(gapRule, 1, 0);
+    rgl->addWidget(gapVal, 1, 1);
+    lay->addWidget(ribbonGroup(QStringLiteral("Routing"), routeW));
+
+    lay->addStretch(1);
+    wireTab_->hide();
+}
+
+void MainWindow::showWireRibbon(bool on) {
+    if (!wireTab_ || !ribbon_) return;
+    const int idx = ribbon_->indexOf(wireTab_);
+    if (on) {
+        if (idx < 0) {
+            const int at = ribbon_->addTab(wireTab_, QStringLiteral("Wire"));
+            ribbon_->setCurrentIndex(at);
+        } else {
+            ribbon_->setCurrentIndex(idx);
+        }
+        wireTab_->show();
+    } else if (idx >= 0) {
+        ribbon_->removeTab(idx); // detaches, does not delete
+    }
 }
 
 void MainWindow::showConnectorDialog() {
@@ -6080,6 +6269,8 @@ void MainWindow::loadSettings() {
     EntityRenderer::setLengthUnitInch(s.value(QStringLiteral("units/inch"), false).toBool());
     EntityRenderer::setDualUnits(s.value(QStringLiteral("units/dual"), false).toBool());
     crossSectionAwg_ = s.value(QStringLiteral("units/awg"), false).toBool();
+    customWireColors_ = s.value(QStringLiteral("wire/customColors")).toStringList();
+    insulationMaterials_ = s.value(QStringLiteral("wire/insulationMaterials")).toStringList();
 }
 
 void MainWindow::saveSettings() {
@@ -6108,6 +6299,8 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("units/inch"), EntityRenderer::lengthUnitInch());
     s.setValue(QStringLiteral("units/dual"), EntityRenderer::dualUnits());
     s.setValue(QStringLiteral("units/awg"), crossSectionAwg_);
+    s.setValue(QStringLiteral("wire/customColors"), customWireColors_);
+    s.setValue(QStringLiteral("wire/insulationMaterials"), insulationMaterials_);
 }
 
 // ---- File actions ----------------------------------------------------------

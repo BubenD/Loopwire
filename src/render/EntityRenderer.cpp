@@ -746,7 +746,48 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Wire: {
         if (e.points.size() < 2) break;
-        p.drawPolyline(toScreenPoly(e.points, vt));
+        // Per-crossing "bridge" hops (Cross switch tool): points on this wire where it
+        // hops OVER a crossing wire with a small semicircle instead of a plain cross.
+        std::vector<Vec2> hops;
+        for (const auto& h : e.meta.value("hops").toArray()) {
+            const QJsonArray a = h.toArray();
+            if (a.size() == 2) hops.push_back({a[0].toDouble(), a[1].toDouble()});
+        }
+        if (hops.empty()) {
+            p.drawPolyline(toScreenPoly(e.points, vt));
+        } else {
+            const double r = 5.0 * vt.scale(); // hop radius (≈5 world units)
+            QPainterPath path;
+            path.moveTo(vt.toScreen(e.points[0]));
+            for (size_t s = 1; s < e.points.size(); ++s) {
+                const QPointF a0 = vt.toScreen(e.points[s - 1]);
+                const QPointF a1 = vt.toScreen(e.points[s]);
+                const QPointF d = a1 - a0;
+                const double L = std::hypot(d.x(), d.y());
+                if (L < 1e-6) { path.lineTo(a1); continue; }
+                const QPointF dir(d.x() / L, d.y() / L);
+                const QPointF perp(-dir.y(), dir.x());
+                std::vector<double> ts; // hop centres as distance along this segment
+                for (const Vec2& h : hops) {
+                    const QPointF hs = vt.toScreen(h);
+                    const double t = QPointF::dotProduct(hs - a0, dir);
+                    const double pd = std::abs(QPointF::dotProduct(hs - a0, perp));
+                    if (pd < 1.5 && t > r && t < L - r) ts.push_back(t);
+                }
+                std::sort(ts.begin(), ts.end());
+                for (double t : ts) {
+                    const QPointF hc = a0 + dir * t;
+                    path.lineTo(hc - dir * r); // up to the hop entry
+                    const int N = 10;          // semicircle bulging to +perp
+                    for (int k = 1; k <= N; ++k) {
+                        const double th = M_PI - M_PI * k / N;
+                        path.lineTo(hc + dir * (r * std::cos(th)) + perp * (r * std::sin(th)));
+                    }
+                }
+                path.lineTo(a1);
+            }
+            p.drawPath(path);
+        }
         // Net label at the polyline midpoint segment.
         const QString net = e.meta.value("netName").toString();
         if (!net.isEmpty() && e.meta.value("showLabel").toBool(true)) {

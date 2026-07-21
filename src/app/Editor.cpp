@@ -500,6 +500,8 @@ void Editor::setTool(ToolId t) {
     offsetSourceId_.clear();
     clearCellSelection();
     mirrorPending_ = false;
+    awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
+    awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
     connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
     connectorFrozen_ = false;
     editing_ = false;
@@ -1148,6 +1150,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     if (awaitAlignRef_) {
         if (auto hit = hitTest(p)) alignRoutingFrom(*hit);
         else { awaitAlignRef_ = false; emit message(QStringLiteral("Align routing cancelled")); }
+        return;
+    }
+    // Cross switch: each click toggles the hop at the nearest wire crossing (stays armed).
+    if (awaitCrossSwitch_) {
+        toggleWireCrossAt(raw);
         return;
     }
 
@@ -1984,6 +1991,89 @@ void Editor::beginAlignRouting() {
     emit message(QStringLiteral("Align routing: click the reference connector (it stays put)"));
 }
 
+void Editor::beginCrossSwitch() {
+    if (!doc_) return;
+    setTool(ToolId::Select);
+    awaitCrossSwitch_ = true;
+    emit message(QStringLiteral("Cross switch: click a wire crossing to toggle its bridge (hop); "
+                                "Esc to finish"));
+}
+
+void Editor::toggleWireCrossAt(const Vec2& p) {
+    if (!doc_) return;
+    // Gather every wire-over-wire crossing (segments that actually cross, not shared
+    // endpoints), remembering the two wires and their segment directions.
+    struct Cross { Vec2 pt; QString idA, idB; bool aHoriz; };
+    std::vector<Cross> crosses;
+    auto& ents = doc_->entities();
+    for (size_t i = 0; i < ents.size(); ++i) {
+        if (ents[i].type != EntityType::Wire || ents[i].points.size() < 2) continue;
+        for (size_t j = i + 1; j < ents.size(); ++j) {
+            if (ents[j].type != EntityType::Wire || ents[j].points.size() < 2) continue;
+            const auto& A = ents[i].points;
+            const auto& B = ents[j].points;
+            for (size_t a = 1; a < A.size(); ++a)
+                for (size_t b = 1; b < B.size(); ++b) {
+                    auto x = segmentSegmentIntersection(A[a - 1], A[a], B[b - 1], B[b]);
+                    if (!x) continue;
+                    // Skip shared endpoints (a real junction, not a crossing).
+                    if (distance(*x, A[a - 1]) < 1e-6 || distance(*x, A[a]) < 1e-6 ||
+                        distance(*x, B[b - 1]) < 1e-6 || distance(*x, B[b]) < 1e-6)
+                        continue;
+                    const bool aHoriz = std::abs(A[a].x - A[a - 1].x) >=
+                                        std::abs(A[a].y - A[a - 1].y);
+                    crosses.push_back({*x, ents[i].id, ents[j].id, aHoriz});
+                }
+        }
+    }
+    // Nearest crossing to the click.
+    double best = worldTolerance() * 2.5;
+    const Cross* hit = nullptr;
+    for (const auto& c : crosses) {
+        const double d = distance(p, c.pt);
+        if (d < best) { best = d; hit = &c; }
+    }
+    if (!hit) { emit message(QStringLiteral("No wire crossing here")); return; }
+
+    auto hasHop = [&](Entity* w) {
+        if (!w) return -1;
+        const QJsonArray hops = w->meta.value("hops").toArray();
+        for (int k = 0; k < hops.size(); ++k) {
+            const QJsonArray pt = hops[k].toArray();
+            if (pt.size() == 2 &&
+                distance({pt[0].toDouble(), pt[1].toDouble()}, hit->pt) < 1e-6)
+                return k;
+        }
+        return -1;
+    };
+    Entity* wa = entityById(hit->idA);
+    Entity* wb = entityById(hit->idB);
+    pushUndo();
+    // If either wire already hops here, turn it OFF; else turn it ON for the more
+    // horizontal wire (it hops over the vertical one).
+    const int ka = hasHop(wa), kb = hasHop(wb);
+    if (ka >= 0 || kb >= 0) {
+        for (Entity* w : {wa, wb}) {
+            const int k = hasHop(w);
+            if (k < 0) continue;
+            QJsonArray hops = w->meta.value("hops").toArray();
+            hops.removeAt(k);
+            w->meta["hops"] = hops;
+        }
+        emit message(QStringLiteral("Crossing set to plain"));
+    } else {
+        Entity* hop = hit->aHoriz ? wa : wb;
+        if (hop) {
+            QJsonArray hops = hop->meta.value("hops").toArray();
+            hops.append(QJsonArray{hit->pt.x, hit->pt.y});
+            hop->meta["hops"] = hops;
+        }
+        emit message(QStringLiteral("Crossing set to bridge (hop)"));
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
 void Editor::alignRoutingFrom(const QString& refConnectorId) {
     awaitAlignRef_ = false;
     Entity* ref = entityById(refConnectorId);
@@ -2082,9 +2172,11 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
             // candidate orderings and keep the one with the fewest segment intersections.
             const int k = static_cast<int>(group.size());
             const double toward = (group.front().otherPin.x >= group.front().refPin.x) ? 1.0 : -1.0;
-            // Horizontal gap between vertical lanes == the pin pitch (the vertical gap
-            // between the horizontal wires), so the routing spacing is uniform.
-            const double laneGap = std::max(4.0, refSpec.pitch);
+            // Gap between the parallel wire lanes after the knee: the reference pin pitch
+            // (uniform with the vertical gap) or a user-set custom value (Wire ribbon).
+            const double laneGap = wireGapRule_ == QLatin1String("custom")
+                                       ? std::max(1.0, wireGapCustom_)
+                                       : std::max(4.0, refSpec.pitch);
             const double baseStub = std::max(refSpec.pinLength, laneGap);
             // Build the H-V-H route for a given lane assignment (lanePos[g] = 0..k-1).
             auto buildRoutes = [&](const std::vector<int>& lanePos) {
@@ -3501,6 +3593,11 @@ void Editor::finishDraw() {
         e.meta.insert("wireColor", wireColor_);
         e.meta.insert("wireGauge", wireGauge_);
         e.meta.insert("netName", wireNet_);
+        // Wire ribbon defaults carried onto the new wire (blank ones are simply absent).
+        if (!wireAwg_.isEmpty()) e.meta.insert("awg", wireAwg_);
+        if (!wireInsulation_.isEmpty()) e.meta.insert("insulation", wireInsulation_);
+        if (!wireVoltage_.isEmpty()) e.meta.insert("insulationVoltage", wireVoltage_);
+        if (!wireType_.isEmpty()) e.meta.insert("conductorType", wireType_);
         e.meta.insert("showLabel", true);
         e.meta.insert("entNum", assignEntityNumber()); // unique entity number
         break;
