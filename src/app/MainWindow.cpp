@@ -2150,8 +2150,15 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(alignBtn, 0, 0);
+        addGroup(lay, QStringLiteral("Modify"), modW);
+
+        // ---- DRC (design-rule check) group: Validate / Bypass table / Rules ----
+        auto* drcW = new QWidget(page);
+        auto* drcG = new QGridLayout(drcW);
+        drcG->setContentsMargins(0, 0, 0, 0);
+        drcG->setSpacing(2);
         // Validate button: schematic design-rule check.
-        auto* valBtn = new QToolButton(modW);
+        auto* valBtn = new QToolButton(drcW);
         valBtn->setText(QStringLiteral("Validate"));
         valBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         valBtn->setIconSize(QSize(26, 26));
@@ -2175,9 +2182,9 @@ void MainWindow::buildRibbon() {
             valBtn->setIcon(QIcon(pm));
         }
         connect(valBtn, &QToolButton::clicked, this, [this] { showValidation(); });
-        modG->addWidget(valBtn, 0, 1);
+        drcG->addWidget(valBtn, 0, 0);
         // Bypass table button: review discrepancies the user accepted (bypassed).
-        auto* bypassBtn = new QToolButton(modW);
+        auto* bypassBtn = new QToolButton(drcW);
         bypassBtn->setText(QStringLiteral("Bypass table"));
         bypassBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         bypassBtn->setIconSize(QSize(26, 26));
@@ -2198,9 +2205,9 @@ void MainWindow::buildRibbon() {
             bypassBtn->setIcon(QIcon(pm));
         }
         connect(bypassBtn, &QToolButton::clicked, this, [this] { showBypassTable(); });
-        modG->addWidget(bypassBtn, 0, 2);
+        drcG->addWidget(bypassBtn, 0, 1);
         // Validation rules button: choose which design-rule checks run.
-        auto* rulesBtn = new QToolButton(modW);
+        auto* rulesBtn = new QToolButton(drcW);
         rulesBtn->setText(QStringLiteral("Rules"));
         rulesBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         rulesBtn->setIconSize(QSize(26, 26));
@@ -2227,8 +2234,8 @@ void MainWindow::buildRibbon() {
             rulesBtn->setIcon(QIcon(pm));
         }
         connect(rulesBtn, &QToolButton::clicked, this, [this] { showValidationRules(); });
-        modG->addWidget(rulesBtn, 0, 3);
-        addGroup(lay, QStringLiteral("Modify"), modW);
+        drcG->addWidget(rulesBtn, 0, 2);
+        addGroup(lay, QStringLiteral("DRC"), drcW);
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
