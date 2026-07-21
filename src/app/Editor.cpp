@@ -327,6 +327,24 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         }
         break;
     }
+    case EntityType::Screen: {
+        // A joint at each caught wire + the drain endpoint (all draggable), plus a Move
+        // handle at the ellipse centre to relocate the whole shield.
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
+            g.push_back({e.points[i], GripRole::Vertex, i});
+        if (k >= 1) {
+            double cx = 0.0, yMin = 1e18, yMax = -1e18;
+            for (int i = 0; i < k; ++i) {
+                cx += e.points[i].x;
+                yMin = std::min(yMin, e.points[i].y);
+                yMax = std::max(yMax, e.points[i].y);
+            }
+            g.push_back({{cx / k, (yMin + yMax) / 2.0}, GripRole::Move, 0});
+        }
+        break;
+    }
     case EntityType::Polygon:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
@@ -668,6 +686,34 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         for (size_t i = 1; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i - 1], e.points[i]));
         break;
+    case EntityType::Screen: {
+        // Pick on the ellipse outline (approx) or the drain lead.
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        if (k < 1) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (int i = 0; i < k; ++i) {
+            cx += e.points[i].x;
+            yMin = std::min(yMin, e.points[i].y);
+            yMax = std::max(yMax, e.points[i].y);
+        }
+        cx /= k;
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double rx = e.meta.value("rx").toDouble(12.0);
+        const double ry = (yMax - yMin) / 2.0 + 6.0;
+        const Vec2 ctr{cx, cyMid};
+        const Vec2 dv = p - ctr;
+        const double ang = std::atan2(dv.y, dv.x);
+        const double rAng = rx * ry / std::sqrt(std::pow(ry * std::cos(ang), 2) +
+                                                std::pow(rx * std::sin(ang), 2));
+        best = std::abs(dv.length() - rAng);
+        if (static_cast<int>(e.points.size()) > k) {
+            const Vec2 drain = e.points.back();
+            const Vec2 edge{cx, drain.y < cyMid ? yMin - 6.0 : yMax + 6.0};
+            best = std::min(best, segDist(edge, drain));
+        }
+        break;
+    }
     case EntityType::Rect:
     case EntityType::Polygon:
         for (size_t i = 0; i < e.points.size(); ++i)
@@ -2147,27 +2193,26 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         twistArmType_.clear();
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
     } else {
-        // Enclose the selected wires (their full extent) in a shield rectangle.
-        Bounds b;
-        QJsonArray ids;
-        for (const QString& id : wireIds)
-            if (const Entity* w = entityById(id)) {
-                for (const Vec2& pt : w->points) b.expand(pt);
-                ids.append(id);
-            }
-        if (b.valid) {
-            const double pad = 4.0;
-            Entity e;
-            e.type = EntityType::Screen;
-            e.layer = QStringLiteral("Wires");
-            e.points = {{b.min.x - pad, b.min.y - pad},
-                        {b.max.x + pad, b.min.y - pad},
-                        {b.max.x + pad, b.max.y + pad},
-                        {b.min.x - pad, b.max.y + pad}};
-            e.meta.insert("wires", ids);
-            e.meta.insert("entNum", assignEntityNumber());
-            doc_->entities().push_back(e);
+        // Shield: an ellipse catching the crossed wires (a joint on each), plus a drain
+        // lead whose endpoint can be dragged to a connector body or an X to terminate.
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (const Vec2& c : crossings) {
+            cx += c.x;
+            yMin = std::min(yMin, c.y);
+            yMax = std::max(yMax, c.y);
         }
+        cx /= crossings.size();
+        QJsonArray ids;
+        for (const QString& id : wireIds) ids.append(id);
+        Entity e;
+        e.type = EntityType::Screen;
+        e.layer = QStringLiteral("Wires");
+        e.points = crossings;                        // the caught wires (connection joints)
+        e.points.push_back({cx, yMin - 40.0});       // drain lead endpoint (below the bundle)
+        e.meta.insert("catch", static_cast<int>(crossings.size()));
+        e.meta.insert("wires", ids);
+        e.meta.insert("entNum", assignEntityNumber());
+        doc_->entities().push_back(e);
         screenArm_ = false;
         emit message(QStringLiteral("Screen added over %1 wires").arg(wireIds.size()));
     }

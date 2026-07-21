@@ -1283,18 +1283,36 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 
     case EntityType::Screen: {
-        // A shield/screen: a dashed outline enclosing the selected wires, marked "S".
-        if (e.points.size() < 4) break;
-        p.save();
-        QPen dp(color);
-        dp.setCosmetic(true);
-        dp.setWidthF(1.2);
-        dp.setStyle(Qt::DashLine);
-        p.setPen(dp);
-        p.setBrush(Qt::NoBrush);
-        p.drawPolygon(toScreenPoly(e.points, vt));
-        p.restore();
-        drawWorldText(p, vt.toScreen(e.points[3]) + QPointF(3, 10), QStringLiteral("S"), 4.0,
+        // A shield/screen: a vertical ellipse catching (crossing) the selected wires, a
+        // joint on each, and a drain lead to the last point (drag it onto a connector
+        // body or an X to connect / terminate).
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        if (k < 1) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (int i = 0; i < k; ++i) {
+            cx += e.points[i].x;
+            yMin = std::min(yMin, e.points[i].y);
+            yMax = std::max(yMax, e.points[i].y);
+        }
+        cx /= k;
+        const double pad = 6.0;
+        const double rx = e.meta.value("rx").toDouble(12.0);
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double ry = (yMax - yMin) / 2.0 + pad;
+        const QPointF c = vt.toScreen({cx, cyMid});
+        p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
+        // Drain lead + endpoint (the point after the k caught wires).
+        if (static_cast<int>(e.points.size()) > k) {
+            const Vec2 drain = e.points.back();
+            const bool below = drain.y < cyMid;
+            const Vec2 edge{cx, below ? yMin - pad : yMax + pad};
+            p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
+            const QPointF d = vt.toScreen(drain);
+            p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick
+            p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
+        }
+        drawWorldText(p, c + QPointF(rx * vt.scale() + 3, 0), QStringLiteral("S"), 4.0,
                       vt.scale(), color);
         break;
     }

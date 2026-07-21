@@ -901,9 +901,10 @@ int run_harness_tests() {
         ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
         const Entity* sc = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
-        check(sc && sc->points.size() == 4 &&
+        // 2 caught-wire joints + 1 drain endpoint; catch count = 2.
+        check(sc && sc->meta.value("catch").toInt() == 2 && sc->points.size() == 3 &&
                   sc->meta.value("wires").toArray().size() == 2,
-              "screen: a crossing line over two wires shields both");
+              "screen: a crossing line over two wires shields both (ellipse + drain)");
     }
 
     // Cross switch: toggling a wire crossing adds a hop to one wire, toggling again removes it.
