@@ -4735,6 +4735,11 @@ void MainWindow::refreshProperties() {
                     editor_->setSelectionMeta(QStringLiteral("strandDef"), t);
                 },
                 QStringLiteral("e.g. 7/0.20"));
+        // Outer diameter of the finished (insulated) wire, in the working length unit.
+        addNum(QStringLiteral("OD (outer dia.)"), m.value(QStringLiteral("od")).toDouble(),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("od"), std::max(0.0, v));
+               });
     }
 
     addHeader(QStringLiteral("Geometry"));
@@ -5833,14 +5838,41 @@ void MainWindow::showPinTable(const QString& connectorId) {
     table->setHorizontalHeaderLabels(
         {QStringLiteral("Pin"), QStringLiteral("Label"), gaugeHdr, QStringLiteral("Ampere (A)")});
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->setColumnWidth(2, 120);
     table->verticalHeader()->setVisible(false);
     table->setRowCount(s.pinCount);
+    // Fall-menu choices for the gauge column: single values plus common min–max ranges.
+    // The combo is editable so any other single value or range can be typed.
+    QStringList gaugeItems;
+    gaugeItems << QString(); // blank = unset
+    if (crossSectionAwg_) {
+        for (int g = 4; g <= 32; g += 2) gaugeItems << QStringLiteral("%1 AWG").arg(g);
+        gaugeItems << QStringLiteral("4-8 AWG") << QStringLiteral("10-14 AWG")
+                   << QStringLiteral("16-20 AWG") << QStringLiteral("20-24 AWG")
+                   << QStringLiteral("22-26 AWG") << QStringLiteral("24-28 AWG")
+                   << QStringLiteral("28-32 AWG");
+    } else {
+        for (const char* v : {"0.13", "0.25", "0.34", "0.5", "0.75", "1.0", "1.5", "2.5", "4.0",
+                              "6.0", "10.0", "16.0", "25.0"})
+            gaugeItems << QString::fromLatin1(v);
+        gaugeItems << QStringLiteral("0.25-0.5") << QStringLiteral("0.5-1.0")
+                   << QStringLiteral("0.75-1.5") << QStringLiteral("1.0-2.5");
+    }
+    std::vector<QComboBox*> gaugeCombos(s.pinCount, nullptr);
     for (int i = 0; i < s.pinCount; ++i) {
         auto* pn = new QTableWidgetItem(QString::number(i + 1));
         pn->setFlags(Qt::ItemIsEnabled); // pin index is read-only
         table->setItem(i, 0, pn);
         table->setItem(i, 1, new QTableWidgetItem(i < s.pins.size() ? s.pins[i] : QString()));
-        table->setItem(i, 2, new QTableWidgetItem(i < s.pinGauge.size() ? s.pinGauge[i] : QString()));
+        auto* gc = new QComboBox(table);
+        gc->setEditable(true); // single value from the list, or a typed min–max range
+        gc->setToolTip(QStringLiteral("Pick a gauge, or type a range like 20-24"));
+        gc->addItems(gaugeItems);
+        const QString cur = i < s.pinGauge.size() ? s.pinGauge[i] : QString();
+        if (gc->findText(cur) < 0) gc->addItem(cur);
+        gc->setCurrentText(cur);
+        table->setCellWidget(i, 2, gc);
+        gaugeCombos[i] = gc;
         table->setItem(i, 3, new QTableWidgetItem(i < s.pinAmp.size() ? s.pinAmp[i] : QString()));
     }
     lay->addWidget(table);
@@ -5856,7 +5888,7 @@ void MainWindow::showPinTable(const QString& connectorId) {
     s.pinAmp.clear();
     for (int i = 0; i < s.pinCount; ++i) {
         s.pins << (table->item(i, 1) ? table->item(i, 1)->text() : QString());
-        s.pinGauge << (table->item(i, 2) ? table->item(i, 2)->text() : QString());
+        s.pinGauge << (gaugeCombos[i] ? gaugeCombos[i]->currentText() : QString());
         s.pinAmp << (table->item(i, 3) ? table->item(i, 3)->text() : QString());
     }
     editor_->applyConnectorSpecToSelection(s);
