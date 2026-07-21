@@ -723,6 +723,12 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
         emit connectorEditRequested();
         return true;
     }
+    // Tab mid-drag while placing a Screen: freeze the crossing-line end so the Wire
+    // ribbon's Screen fields can be tuned without the drag changing the caught wires.
+    if (editor_ && next && editor_->tool() == ToolId::Wire && editor_->screenArmed()) {
+        editor_->freezeScreenPreview();
+        return true;
+    }
     return QWidget::focusNextPrevChild(next);
 }
 

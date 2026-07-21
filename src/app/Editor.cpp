@@ -521,8 +521,11 @@ void Editor::setTool(ToolId t) {
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
     twistArmType_.clear();    // ...and the twist / screen band modes
+    const bool wasScreenArmed = screenArm_;
     screenArm_ = false;
+    screenFrozen_ = false;
     wireBandHasStart_ = false;
+    if (wasScreenArmed) emit screenArmedChanged();
     connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
     connectorFrozen_ = false;
     editing_ = false;
@@ -700,7 +703,8 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         cx /= k;
         const double cyMid = (yMin + yMax) / 2.0;
         const double rx = e.meta.value("rx").toDouble(12.0);
-        const double ry = (yMax - yMin) / 2.0 + 6.0;
+        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                : (yMax - yMin) / 2.0 + 6.0;
         const Vec2 ctr{cx, cyMid};
         const Vec2 dv = p - ctr;
         const double ang = std::atan2(dv.y, dv.x);
@@ -709,7 +713,12 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         best = std::abs(dv.length() - rAng);
         if (static_cast<int>(e.points.size()) > k) {
             const Vec2 drain = e.points.back();
-            const Vec2 edge{cx, drain.y < cyMid ? yMin - 6.0 : yMax + 6.0};
+            const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
+            Vec2 edge;
+            if (legDir == QLatin1String("top")) edge = {cx, cyMid + ry};
+            else if (legDir == QLatin1String("left")) edge = {cx - rx, cyMid};
+            else if (legDir == QLatin1String("right")) edge = {cx + rx, cyMid};
+            else edge = {cx, cyMid - ry};
             best = std::min(best, segDist(edge, drain));
         }
         break;
@@ -1215,12 +1224,17 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     // Twist / Screen: two clicks define a crossing line across the wires to select them.
+    // For Screen, once frozen (Tab), ANY click commits at the frozen end point — the
+    // click no longer redefines the line, so ribbon fields can be tuned beforehand.
     if (!twistArmType_.isEmpty() || screenArm_) {
         if (!wireBandHasStart_) {
             wireBandStart_ = raw;
             wireBandHasStart_ = true;
             emit message(QStringLiteral("Click the other end of the crossing line"));
             emit overlayChanged();
+        } else if (screenArm_ && screenFrozen_) {
+            wireBandHasStart_ = false;
+            finishWireBand(screenFrozenEnd_);
         } else {
             wireBandHasStart_ = false;
             finishWireBand(raw);
@@ -2156,8 +2170,19 @@ void Editor::beginScreen() {
     if (!doc_) return;
     setTool(ToolId::Wire); // stay in the Wire tool/ribbon (Esc exits)
     screenArm_ = true;
+    screenFrozen_ = false;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Screen: draw a crossing line across the wires to shield"));
+    emit screenArmedChanged();
+}
+
+void Editor::freezeScreenPreview() {
+    if (tool_ != ToolId::Wire || !screenArm_ || !wireBandHasStart_ || screenFrozen_) return;
+    screenFrozen_ = true;
+    screenFrozenEnd_ = cursor_;
+    emit message(QStringLiteral("Screen preview frozen — edit the fields; click to place"));
+    emit screenArmedChanged();
+    emit overlayChanged();
 }
 
 void Editor::finishWireBand(const Vec2& fenceEnd) {
@@ -2179,7 +2204,9 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
                          .arg(twist ? QStringLiteral("twist") : QStringLiteral("screen")));
         twistArmType_.clear();
         screenArm_ = false;
+        screenFrozen_ = false;
         emit overlayChanged();
+        emit screenArmedChanged();
         return;
     }
     pushUndo();
@@ -2195,7 +2222,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
     } else {
         // Shield: an ellipse catching the crossed wires (a joint on each), plus a drain
-        // lead whose endpoint can be dragged to a connector body or an X to terminate.
+        // lead exiting the chosen side of the ellipse to a terminable endpoint.
         double cx = 0.0, yMin = 1e18, yMax = -1e18;
         for (const Vec2& c : crossings) {
             cx += c.x;
@@ -2203,21 +2230,33 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             yMax = std::max(yMax, c.y);
         }
         cx /= crossings.size();
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double ryActual = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
+        const double rxActual = screenRx_;
+        Vec2 drain;
+        if (screenLegDir_ == QLatin1String("top")) drain = {cx, cyMid + ryActual + screenLeg_};
+        else if (screenLegDir_ == QLatin1String("left")) drain = {cx - rxActual - screenLeg_, cyMid};
+        else if (screenLegDir_ == QLatin1String("right")) drain = {cx + rxActual + screenLeg_, cyMid};
+        else drain = {cx, cyMid - ryActual - screenLeg_}; // "bottom" (default)
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
         Entity e;
         e.type = EntityType::Screen;
         e.layer = QStringLiteral("Wires");
-        e.points = crossings;                          // the caught wires (connection joints)
-        e.points.push_back({cx, yMin - screenLeg_});   // drain lead endpoint (below the bundle)
+        e.points = crossings;   // the caught wires (connection joints)
+        e.points.push_back(drain);
         e.meta.insert("catch", static_cast<int>(crossings.size()));
         e.meta.insert("wires", ids);
         e.meta.insert("rx", screenRx_);
+        if (!screenRyLocked_) e.meta.insert("ry", screenRy_); // else auto-fit on render
+        e.meta.insert("legDir", screenLegDir_);
         e.meta.insert("showS", screenShowS_);
         e.meta.insert("entNum", assignEntityNumber());
         doc_->entities().push_back(e);
         screenArm_ = false;
+        screenFrozen_ = false;
         emit message(QStringLiteral("Screen added over %1 wires").arg(wireIds.size()));
+        emit screenArmedChanged();
     }
     doc_->setDirty(true);
     emit changed();
@@ -6623,7 +6662,9 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             (drafting_ || !twistArmType_.isEmpty() || screenArm_ || awaitCrossSwitch_)) {
             cancelDraw();
             twistArmType_.clear();
+            const bool wasScreenArmed = screenArm_;
             screenArm_ = false;
+            screenFrozen_ = false;
             awaitCrossSwitch_ = false;
             wireBandHasStart_ = false;
             editing_ = false;
@@ -6633,6 +6674,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             clearSelection();
             emit message(QStringLiteral("Wire: click to draw, or pick a tool; Esc again to finish"));
             emit changed();
+            if (wasScreenArmed) emit screenArmedChanged();
             return true;
         }
         cancelRightDrag();
@@ -6702,9 +6744,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
 
-    // Twist / Screen: preview the crossing line, and (for Screen) a ghost ellipse over
-    // the wires it currently crosses, so the shield can be judged before committing.
+    // Twist / Screen: preview the crossing line, and (for Screen) a ghost ellipse + drain
+    // leg over the wires it currently crosses, so the shield can be judged before
+    // committing. Once frozen (Tab), the END is pinned (screenFrozenEnd_) so ribbon
+    // fields can be tuned without the drag changing which wires are caught.
     if ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_) {
+        const Vec2 bandEnd = (screenArm_ && screenFrozen_) ? screenFrozenEnd_ : cursor_;
         p.save();
         QPen pv(QColor(120, 200, 255, 200));
         pv.setCosmetic(true);
@@ -6712,13 +6757,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         pv.setStyle(Qt::DashLine);
         p.setPen(pv);
         p.setBrush(Qt::NoBrush);
-        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(cursor_));
+        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(bandEnd));
         if (screenArm_) {
             std::vector<Vec2> xs;
             for (const auto& w : doc_->entities()) {
                 if (w.type != EntityType::Wire || w.points.size() < 2) continue;
                 for (size_t i = 1; i < w.points.size(); ++i)
-                    if (auto x = segmentSegmentIntersection(wireBandStart_, cursor_,
+                    if (auto x = segmentSegmentIntersection(wireBandStart_, bandEnd,
                                                             w.points[i - 1], w.points[i])) {
                         xs.push_back(*x);
                         break;
@@ -6728,8 +6773,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 double cx = 0, yMin = 1e18, yMax = -1e18;
                 for (const Vec2& v : xs) { cx += v.x; yMin = std::min(yMin, v.y); yMax = std::max(yMax, v.y); }
                 cx /= xs.size();
-                const QPointF c = vt.toScreen({cx, (yMin + yMax) / 2.0});
-                p.drawEllipse(c, screenRx_ * vt.scale(), ((yMax - yMin) / 2.0 + 6.0) * vt.scale());
+                const double cyMid = (yMin + yMax) / 2.0;
+                const double ry = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
+                const double rx = screenRx_;
+                p.drawEllipse(vt.toScreen({cx, cyMid}), rx * vt.scale(), ry * vt.scale());
+                // Drain leg preview, from the ellipse edge on the chosen side.
+                Vec2 edge, drain;
+                if (screenLegDir_ == QLatin1String("top")) {
+                    edge = {cx, cyMid + ry}; drain = {cx, cyMid + ry + screenLeg_};
+                } else if (screenLegDir_ == QLatin1String("left")) {
+                    edge = {cx - rx, cyMid}; drain = {cx - rx - screenLeg_, cyMid};
+                } else if (screenLegDir_ == QLatin1String("right")) {
+                    edge = {cx + rx, cyMid}; drain = {cx + rx + screenLeg_, cyMid};
+                } else {
+                    edge = {cx, cyMid - ry}; drain = {cx, cyMid - ry - screenLeg_};
+                }
+                p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
             }
         }
         p.restore();

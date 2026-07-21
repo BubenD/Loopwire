@@ -2193,6 +2193,84 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(alignBtn, 0, 0);
+        // Twist: same split-button/type-menu as the Wire ribbon, available here too.
+        auto* modTwistBtn = new QToolButton(modW);
+        modTwistBtn->setText(QStringLiteral("Twist\ntype"));
+        modTwistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        modTwistBtn->setIconSize(QSize(26, 26));
+        modTwistBtn->setMinimumWidth(66);
+        modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
+        modTwistBtn->setToolTip(QStringLiteral(
+            "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(1.8);
+            ip.setPen(pen);
+            QPolygonF a, b;
+            for (int k = 0; k <= 3; ++k) {
+                const double x = 4 + k * 6.7;
+                a << QPointF(x, (k % 2 == 0) ? 9 : 19);
+                b << QPointF(x, (k % 2 == 0) ? 19 : 9);
+            }
+            ip.drawPolyline(a);
+            ip.drawPolyline(b);
+            ip.end();
+            modTwistBtn->setIcon(QIcon(pm));
+        }
+        auto* modTm = new QMenu(modTwistBtn);
+        modTm->addAction(QStringLiteral("Type 1 (crossed braid)"), this, [this] {
+            editor_->beginTwist(QStringLiteral("cross"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modTm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
+            editor_->beginTwist(QStringLiteral("jog"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modTm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
+            editor_->beginTwist(QStringLiteral("type3"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modTwistBtn->setMenu(modTm);
+        connect(modTwistBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginTwist(QStringLiteral("cross"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modG->addWidget(modTwistBtn, 0, 1);
+        // Cross switch: toggle a wire crossing between a bridge (hop) and a plain cross.
+        auto* modCrossBtn = new QToolButton(modW);
+        modCrossBtn->setText(QStringLiteral("Cross\nswitch"));
+        modCrossBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        modCrossBtn->setIconSize(QSize(26, 26));
+        modCrossBtn->setMinimumWidth(66);
+        modCrossBtn->setToolTip(QStringLiteral(
+            "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(2.0);
+            ip.setPen(pen);
+            ip.drawLine(3, 20, 9, 20);
+            QPainterPath hop;
+            hop.moveTo(9, 20);
+            hop.arcTo(9, 12, 10, 16, 180, -180);
+            ip.drawPath(hop);
+            ip.drawLine(19, 20, 25, 20);
+            ip.drawLine(14, 6, 14, 26);
+            ip.end();
+            modCrossBtn->setIcon(QIcon(pm));
+        }
+        connect(modCrossBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginCrossSwitch();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modG->addWidget(modCrossBtn, 0, 2);
         addGroup(lay, QStringLiteral("Modify"), modW);
 
         // ---- DRC (design-rule check) group: Validate / Bypass table / Rules ----
@@ -5663,10 +5741,47 @@ void MainWindow::buildWireRibbonTab() {
     lay->setSpacing(0);
     lay->setAlignment(Qt::AlignLeft);
 
-    // ---- Place: wire + junction markers ----
-    lay->addWidget(ribbonGroup(
-        QStringLiteral("Place"),
-        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel})));
+    // Screen / shield button (built here so it can join the Place group below).
+    auto* screenBtn = new QToolButton(wireTab_);
+    screenBtn->setText(QStringLiteral("Screen"));
+    screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    screenBtn->setIconSize(QSize(26, 26));
+    screenBtn->setMinimumWidth(66);
+    screenBtn->setToolTip(QStringLiteral(
+        "Shield: click, then drag a crossing line across the wires to screen them"));
+    {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        QPen wp(QColor("#cfe3ff"));
+        wp.setWidthF(1.6);
+        ip.setPen(wp);
+        ip.drawLine(4, 11, 24, 11); // two wires
+        ip.drawLine(4, 17, 24, 17);
+        QPen dp(QColor("#8fb7ff"));
+        dp.setWidthF(1.4);
+        dp.setStyle(Qt::DashLine);
+        ip.setPen(dp);
+        ip.setBrush(Qt::NoBrush);
+        ip.drawRect(3, 6, 22, 16); // the shield outline
+        ip.end();
+        screenBtn->setIcon(QIcon(pm));
+    }
+    connect(screenBtn, &QToolButton::clicked, this, [this] {
+        editor_->beginScreen();
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+
+    // ---- Place: wire + junction markers + screen/shield ----
+    auto* placeW = new QWidget(wireTab_);
+    auto* placeLay = new QHBoxLayout(placeW);
+    placeLay->setContentsMargins(0, 0, 0, 0);
+    placeLay->setSpacing(4);
+    placeLay->addWidget(
+        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel}));
+    placeLay->addWidget(screenBtn);
+    lay->addWidget(ribbonGroup(QStringLiteral("Place"), placeW));
 
     // ---- Wire: colour / AWG / net ----
     auto* wireW = new QWidget(wireTab_);
@@ -5825,7 +5940,7 @@ void MainWindow::buildWireRibbonTab() {
     });
     lay->addWidget(ribbonGroup(QStringLiteral("Crossings"), crossBtn));
 
-    // ---- Bundle: twist (type menu) + screen/shield ----
+    // ---- Twist: split-button with a type menu ----
     auto* bundleW = new QWidget(wireTab_);
     auto* bg = new QGridLayout(bundleW);
     bg->setContentsMargins(0, 0, 0, 0);
@@ -5878,69 +5993,80 @@ void MainWindow::buildWireRibbonTab() {
         canvas_->setFocus(Qt::OtherFocusReason);
     });
     bg->addWidget(twistBtn, 0, 0);
-    // Screen / shield.
-    auto* screenBtn = new QToolButton(bundleW);
-    screenBtn->setText(QStringLiteral("Screen"));
-    screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    screenBtn->setIconSize(QSize(26, 26));
-    screenBtn->setMinimumWidth(66);
-    screenBtn->setToolTip(QStringLiteral(
-        "Shield: click, then drag a crossing line across the wires to screen them"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen wp(QColor("#cfe3ff"));
-        wp.setWidthF(1.6);
-        ip.setPen(wp);
-        ip.drawLine(4, 11, 24, 11); // two wires
-        ip.drawLine(4, 17, 24, 17);
-        QPen dp(QColor("#8fb7ff"));
-        dp.setWidthF(1.4);
-        dp.setStyle(Qt::DashLine);
-        ip.setPen(dp);
-        ip.setBrush(Qt::NoBrush);
-        ip.drawRect(3, 6, 22, 16); // the shield outline
-        ip.end();
-        screenBtn->setIcon(QIcon(pm));
-    }
-    connect(screenBtn, &QToolButton::clicked, this, [this] {
-        editor_->beginScreen();
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    bg->addWidget(screenBtn, 0, 1);
-    lay->addWidget(ribbonGroup(QStringLiteral("Bundle"), bundleW));
+    lay->addWidget(ribbonGroup(QStringLiteral("Twist"), bundleW));
 
-    // ---- Screen defaults: small radius + drain-leg length + show the "S" ----
+    // ---- Screen fields: appear only WHILE placing a shield (armed via the Screen
+    // button). Show S, small radius, leg direction + length are always editable; the
+    // large radius stays locked (auto-fit to the caught wires) until unlocked. ----
     auto* scW = new QWidget(wireTab_);
     auto* scg = new QGridLayout(scW);
     scg->setContentsMargins(0, 0, 0, 0);
     scg->setSpacing(2);
+    auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
+    connect(scShowS, &QCheckBox::toggled, this,
+            [this](bool on) { editor_->screenShowS() = on; });
     auto* scRx = new QDoubleSpinBox(scW);
     scRx->setRange(1.0, 500.0);
     scRx->setDecimals(1);
     scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    scRx->setValue(editor_->screenRx());
     connect(scRx, &QDoubleSpinBox::editingFinished, this,
             [this, scRx] { editor_->screenRx() = scRx->value(); });
+    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), scW);
+    auto* scRy = new QDoubleSpinBox(scW);
+    scRy->setRange(1.0, 500.0);
+    scRy->setDecimals(1);
+    scRy->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scRy->setEnabled(false); // locked (auto-fit) until "Unlock" is checked
+    connect(scRyUnlock, &QCheckBox::toggled, this, [this, scRy](bool unlocked) {
+        editor_->screenRyLocked() = !unlocked;
+        scRy->setEnabled(unlocked);
+    });
+    connect(scRy, &QDoubleSpinBox::editingFinished, this,
+            [this, scRy] { editor_->screenRy() = scRy->value(); });
+    auto* scLegDir = new QComboBox(scW);
+    scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
+                        QStringLiteral("Left"), QStringLiteral("Right")});
+    connect(scLegDir, &QComboBox::currentTextChanged, this,
+            [this](const QString& t) { editor_->screenLegDir() = t.toLower(); });
     auto* scLeg = new QDoubleSpinBox(scW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    scLeg->setValue(editor_->screenLeg());
     connect(scLeg, &QDoubleSpinBox::editingFinished, this,
             [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
-    auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
-    scShowS->setChecked(editor_->screenShowS());
-    connect(scShowS, &QCheckBox::toggled, this,
-            [this](bool on) { editor_->screenShowS() = on; });
-    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), 0, 0);
-    scg->addWidget(scRx, 0, 1);
-    scg->addWidget(new QLabel(QStringLiteral("Leg"), scW), 1, 0);
-    scg->addWidget(scLeg, 1, 1);
-    scg->addWidget(scShowS, 2, 0, 1, 2);
-    lay->addWidget(ribbonGroup(QStringLiteral("Screen"), scW));
+    scg->addWidget(scShowS, 0, 0, 1, 2);
+    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), 1, 0);
+    scg->addWidget(scRx, 1, 1);
+    scg->addWidget(new QLabel(QStringLiteral("Large radius"), scW), 2, 0);
+    scg->addWidget(scRy, 2, 1);
+    scg->addWidget(scRyUnlock, 3, 0, 1, 2);
+    scg->addWidget(new QLabel(QStringLiteral("Leg side"), scW), 4, 0);
+    scg->addWidget(scLegDir, 4, 1);
+    scg->addWidget(new QLabel(QStringLiteral("Leg length"), scW), 5, 0);
+    scg->addWidget(scLeg, 5, 1);
+    auto* scGroup = ribbonGroup(QStringLiteral("Screen"), scW);
+    scGroup->setVisible(false); // shown only while a screen is being placed
+    lay->addWidget(scGroup);
+    // Show/hide + (re)load from the Editor's current defaults whenever placement
+    // arms, is cancelled, is placed, or is frozen (Tab).
+    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRyUnlock, scLegDir,
+                           scLeg] {
+        const bool armed = editor_->screenArmed();
+        scGroup->setVisible(armed);
+        if (!armed) return;
+        QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRyUnlock), b5(scLegDir),
+            b6(scLeg);
+        scShowS->setChecked(editor_->screenShowS());
+        scRx->setValue(editor_->screenRx());
+        scRyUnlock->setChecked(!editor_->screenRyLocked());
+        scRy->setEnabled(!editor_->screenRyLocked());
+        scRy->setValue(editor_->screenRy());
+        const QString dir = editor_->screenLegDir();
+        scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
+                                               : dir.left(1).toUpper() + dir.mid(1));
+        scLeg->setValue(editor_->screenLeg());
+    };
+    connect(editor_, &Editor::screenArmedChanged, this, [syncScreenGroup] { syncScreenGroup(); });
 
     // ---- Routing: gap between the parallel wire lanes after a knee ----
     auto* routeW = new QWidget(wireTab_);

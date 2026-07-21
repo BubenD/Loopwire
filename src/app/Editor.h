@@ -312,6 +312,17 @@ public:
     double& screenRx() { return screenRx_; }
     double& screenLeg() { return screenLeg_; }
     bool& screenShowS() { return screenShowS_; }
+    // Large radius: locked (auto-fit to the caught wires) unless explicitly unlocked.
+    bool& screenRyLocked() { return screenRyLocked_; }
+    double& screenRy() { return screenRy_; }
+    // Which side of the ellipse the drain leg exits from.
+    QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
+    bool screenArmed() const { return screenArm_; }
+    // Freeze the in-progress screen preview (Tab) so its ribbon fields can be edited
+    // without the crossing-line drag changing the caught wires; a click then places it
+    // at the frozen end point regardless of where the click lands.
+    void freezeScreenPreview();
+    bool screenFrozen() const { return screenFrozen_; }
 
     // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
     // (bridge) and a plain cross. Armed until Esc.
@@ -439,6 +450,7 @@ signals:
     // preview) — the host reflects it on the "Place connector" button.
     void connectorArmedChanged();
     void markerSizeChanged(); // splice/X default size changed (ribbon field re-syncs)
+    void screenArmedChanged(); // screen placement armed/disarmed/frozen (ribbon group re-syncs)
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
@@ -714,6 +726,11 @@ private:
     double screenRx_ = 12.0;      // screen ellipse small radius
     double screenLeg_ = 40.0;     // screen drain-leg length
     bool screenShowS_ = true;     // draw the "S" shield label
+    bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
+    double screenRy_ = 20.0;      // large radius when unlocked
+    QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
+    bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
+    Vec2 screenFrozenEnd_;
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)

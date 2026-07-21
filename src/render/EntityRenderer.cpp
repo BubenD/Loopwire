@@ -1319,11 +1319,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                                 : (yMax - yMin) / 2.0 + pad;
         const QPointF c = vt.toScreen({cx, cyMid});
         p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
-        // Drain lead + endpoint (the point after the k caught wires).
+        // Drain lead + endpoint (the point after the k caught wires); the lead exits
+        // the ellipse edge on the meta "legDir" side (default "bottom", matching the
+        // original behavior before left/right were supported).
         if (static_cast<int>(e.points.size()) > k) {
             const Vec2 drain = e.points.back();
-            const bool below = drain.y < cyMid;
-            const Vec2 edge{cx, below ? yMin - pad : yMax + pad};
+            const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
+            Vec2 edge;
+            if (legDir == QLatin1String("top")) edge = {cx, cyMid + ry};
+            else if (legDir == QLatin1String("left")) edge = {cx - rx, cyMid};
+            else if (legDir == QLatin1String("right")) edge = {cx + rx, cyMid};
+            else edge = {cx, cyMid - ry};
             p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
             const QPointF d = vt.toScreen(drain);
             p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick

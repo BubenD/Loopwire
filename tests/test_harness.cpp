@@ -933,6 +933,33 @@ int run_harness_tests() {
               "screen: large/small radius and showS are editable");
     }
 
+    // Screen freeze (Tab): pins the crossing-line end so a click anywhere commits at
+    // the frozen point, and the leg direction picks which side the drain exits.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenLegDir() = QStringLiteral("top");
+        ed.beginScreen();
+        check(ed.screenArmed(), "screen-freeze: beginScreen arms placement");
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier); // start of crossing line
+        ed.onPointerMove({100, 40});   // drag toward the intended end
+        ed.freezeScreenPreview();      // Tab: pin the end at (100,40)
+        check(ed.screenFrozen(), "screen-freeze: Tab freezes the preview");
+        ed.onPointerMove({500, 500});  // move far away — must NOT change the frozen end
+        ed.onPointerPress({-999, -999}, Qt::LeftButton, Qt::NoModifier); // click anywhere commits
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("wires").toArray().size() == 2,
+              "screen-freeze: click anywhere (not just at the frozen point) commits it");
+        check(sc && sc->meta.value("legDir").toString() == QLatin1String("top"),
+              "screen-freeze: the leg direction is stored on the placed screen");
+        check(!ed.screenArmed(), "screen-freeze: placing disarms the screen tool");
+    }
+
     // Cross switch: toggling a wire crossing adds a hop to one wire, toggling again removes it.
     {
         Document d; d.entities().clear();
