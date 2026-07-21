@@ -5813,11 +5813,16 @@ void MainWindow::buildWireRibbonTab() {
     lay->setSpacing(0);
     lay->setAlignment(Qt::AlignLeft);
 
+    // Groups hidden while a shield is being placed (only the Screen panel shows then).
+    std::vector<QWidget*> otherWireGroups;
+
     // ---- Place: wire + junction markers ----
     // (Screen/shield lives on the Schematic-build tab's Place group, not here.)
-    lay->addWidget(ribbonGroup(
+    auto* placeGroup = ribbonGroup(
         QStringLiteral("Place"),
-        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel})));
+        toolRow({ToolId::Wire, ToolId::Splice, ToolId::NotConnected, ToolId::NetLabel}));
+    otherWireGroups.push_back(placeGroup);
+    lay->addWidget(placeGroup);
 
     // ---- Wire: colour / AWG / net ----
     auto* wireW = new QWidget(wireTab_);
@@ -5853,7 +5858,9 @@ void MainWindow::buildWireRibbonTab() {
     wg->addWidget(awgBox, 1, 1, 1, 2);
     wg->addWidget(new QLabel(QStringLiteral("Net"), wireW), 2, 0);
     wg->addWidget(netEdit, 2, 1, 1, 2);
-    lay->addWidget(ribbonGroup(QStringLiteral("Wire"), wireW));
+    auto* wireGroup = ribbonGroup(QStringLiteral("Wire"), wireW);
+    otherWireGroups.push_back(wireGroup);
+    lay->addWidget(wireGroup);
 
     // ---- Insulation: material (add/delete) / voltage / conductor type ----
     auto* insW = new QWidget(wireTab_);
@@ -5911,7 +5918,9 @@ void MainWindow::buildWireRibbonTab() {
     ig->addWidget(voltBox, 1, 1, 1, 3);
     ig->addWidget(new QLabel(QStringLiteral("Type"), insW), 2, 0);
     ig->addWidget(typeBox, 2, 1, 1, 3);
-    lay->addWidget(ribbonGroup(QStringLiteral("Insulation"), insW));
+    auto* insGroup = ribbonGroup(QStringLiteral("Insulation"), insW);
+    otherWireGroups.push_back(insGroup);
+    lay->addWidget(insGroup);
 
     // ---- Resistance: value + per-m / per-ft unit (switching converts the value) ----
     auto* resW = new QWidget(wireTab_);
@@ -5942,7 +5951,9 @@ void MainWindow::buildWireRibbonTab() {
     rg->addWidget(new QLabel(QString::fromUtf8("Resistance"), resW), 0, 0, 1, 2);
     rg->addWidget(resSpin, 1, 0);
     rg->addWidget(resUnitBox, 1, 1);
-    lay->addWidget(ribbonGroup(QStringLiteral("Resistance"), resW));
+    auto* resGroup = ribbonGroup(QStringLiteral("Resistance"), resW);
+    otherWireGroups.push_back(resGroup);
+    lay->addWidget(resGroup);
 
     // ---- Crossings: per-crossing bridge switch ----
     auto* crossBtn = new QToolButton(wireTab_);
@@ -5974,7 +5985,9 @@ void MainWindow::buildWireRibbonTab() {
         editor_->beginCrossSwitch();
         canvas_->setFocus(Qt::OtherFocusReason);
     });
-    lay->addWidget(ribbonGroup(QStringLiteral("Crossings"), crossBtn));
+    auto* crossGroup = ribbonGroup(QStringLiteral("Crossings"), crossBtn);
+    otherWireGroups.push_back(crossGroup);
+    lay->addWidget(crossGroup);
 
     // ---- Twist: split-button with a type menu ----
     auto* bundleW = new QWidget(wireTab_);
@@ -6029,7 +6042,9 @@ void MainWindow::buildWireRibbonTab() {
         canvas_->setFocus(Qt::OtherFocusReason);
     });
     bg->addWidget(twistBtn, 0, 0);
-    lay->addWidget(ribbonGroup(QStringLiteral("Twist"), bundleW));
+    auto* twistGroup = ribbonGroup(QStringLiteral("Twist"), bundleW);
+    otherWireGroups.push_back(twistGroup);
+    lay->addWidget(twistGroup);
 
     // ---- Screen fields: appear only WHILE placing a shield (armed via the Screen
     // button). Show S, small radius, leg direction + length are always editable; the
@@ -6083,26 +6098,6 @@ void MainWindow::buildWireRibbonTab() {
     auto* scGroup = ribbonGroup(QStringLiteral("Screen"), scW);
     scGroup->setVisible(false); // shown only while a screen is being placed
     lay->addWidget(scGroup);
-    // Show/hide + (re)load from the Editor's current defaults whenever placement
-    // arms, is cancelled, is placed, or is frozen (Tab).
-    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRyUnlock, scLegDir,
-                           scLeg] {
-        const bool armed = editor_->screenArmed();
-        scGroup->setVisible(armed);
-        if (!armed) return;
-        QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRyUnlock), b5(scLegDir),
-            b6(scLeg);
-        scShowS->setChecked(editor_->screenShowS());
-        scRx->setValue(editor_->screenRx());
-        scRyUnlock->setChecked(!editor_->screenRyLocked());
-        scRy->setEnabled(!editor_->screenRyLocked());
-        scRy->setValue(editor_->screenRy());
-        const QString dir = editor_->screenLegDir();
-        scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
-                                               : dir.left(1).toUpper() + dir.mid(1));
-        scLeg->setValue(editor_->screenLeg());
-    };
-    connect(editor_, &Editor::screenArmedChanged, this, [syncScreenGroup] { syncScreenGroup(); });
 
     // ---- Routing: gap between the parallel wire lanes after a knee ----
     auto* routeW = new QWidget(wireTab_);
@@ -6132,7 +6127,32 @@ void MainWindow::buildWireRibbonTab() {
     rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 1, 0, 1, 2);
     rgl->addWidget(gapRule, 2, 0);
     rgl->addWidget(gapVal, 2, 1);
-    lay->addWidget(ribbonGroup(QStringLiteral("Routing"), routeW));
+    auto* routeGroup = ribbonGroup(QStringLiteral("Routing"), routeW);
+    otherWireGroups.push_back(routeGroup);
+    lay->addWidget(routeGroup);
+
+    // Show/hide the Screen panel + (re)load its fields from the Editor's current
+    // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
+    // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
+    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRyUnlock, scLegDir,
+                           scLeg, otherWireGroups] {
+        const bool armed = editor_->screenArmed();
+        scGroup->setVisible(armed);
+        for (QWidget* g : otherWireGroups) g->setVisible(!armed);
+        if (!armed) return;
+        QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRyUnlock), b5(scLegDir),
+            b6(scLeg);
+        scShowS->setChecked(editor_->screenShowS());
+        scRx->setValue(editor_->screenRx());
+        scRyUnlock->setChecked(!editor_->screenRyLocked());
+        scRy->setEnabled(!editor_->screenRyLocked());
+        scRy->setValue(editor_->screenRy());
+        const QString dir = editor_->screenLegDir();
+        scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
+                                               : dir.left(1).toUpper() + dir.mid(1));
+        scLeg->setValue(editor_->screenLeg());
+    };
+    connect(editor_, &Editor::screenArmedChanged, this, [syncScreenGroup] { syncScreenGroup(); });
 
     lay->addStretch(1);
     wireTab_->hide();
