@@ -6758,7 +6758,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // second Esc with nothing in progress exits to Select.
         if (tool_ == ToolId::Wire &&
             (drafting_ || !twistArmType_.isEmpty() || screenArm_ || awaitCrossSwitch_)) {
-            cancelDraw();
+            // A wire draft with at least 2 confirmed points is COMMITTED as-is (keeping
+            // whatever was already placed) instead of being thrown away; Esc only cancels
+            // the pending next point / segment. Fewer points (nothing to keep yet) still
+            // cancels outright, as does an in-progress Twist/Screen/Cross-switch pick.
+            if (drafting_ && draftPts_.size() >= 2) finishDraw();
+            else cancelDraw();
             twistArmType_.clear();
             const bool wasScreenArmed = screenArm_;
             screenArm_ = false;

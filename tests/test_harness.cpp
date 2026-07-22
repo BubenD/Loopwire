@@ -863,6 +863,29 @@ int run_harness_tests() {
         check(ed.tool() == ToolId::Select, "wire-session: second Esc exits to Select");
     }
 
+    // Esc while actively drawing a wire commits what was already placed (>=2 confirmed
+    // points) instead of discarding the whole draft — only the pending next segment is
+    // cancelled.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50, 50}, Qt::LeftButton, Qt::NoModifier); // 3 confirmed points
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier); // cancel the pending next point, keep the rest
+        int wires = 0; const Entity* w = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Wire) { ++wires; w = &e; }
+        check(wires == 1, "wire-esc-commit: Esc commits the wire with the points already placed");
+        check(w && w->points.size() == 3, "wire-esc-commit: exactly the 3 confirmed points are kept");
+        check(ed.tool() == ToolId::Wire,
+              "wire-esc-commit: stays in the Wire tool for continuous drawing");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier); // nothing pending now -> exits
+        check(ed.tool() == ToolId::Select,
+              "wire-esc-commit: a further Esc (nothing pending) exits to Select");
+    }
+
     // Splice / X size: the typed/ribbon size is written onto the placed marker's meta.
     {
         Document d; d.entities().clear();
