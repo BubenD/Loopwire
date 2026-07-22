@@ -1157,9 +1157,9 @@ int run_harness_tests() {
               "shield-scale: scaling the shield doubles its ellipse radii");
     }
 
-    // Shield small radius auto-scales (widens) with the number of wires caught, instead
-    // of staying fixed — catching 4 wires gives a visibly larger rx than the base 12.
-    // (Uses the non-all-locked path where shieldRxScale applies, so unlock the ratio.)
+    // Fitting to the crossed wires UNIFORMLY scales the shield: it grows to span the
+    // wires but keeps its aspect (ry/rx == ratio) — the structure is unchanged, not
+    // re-proportioned by the wire count.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
@@ -1168,15 +1168,17 @@ int run_harness_tests() {
             w.points = {{0, i * 10.0}, {200, i * 10.0}};
             d.entities().push_back(w);
         }
-        ed.screenRatioLock() = false; // not all-locked -> rx = base * shieldRxScale(n)
         ed.beginScreen();
         ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
         const Entity* sc = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
-        check(sc && sc->meta.value("catch").toInt() == 4, "shield-rx-scale: caught all 4 wires");
-        check(sc && sc->meta.value("rx").toDouble() > 12.0 + 1e-6,
-              "shield-rx-scale: small radius widened beyond the base default for 4 wires");
+        check(sc && sc->meta.value("catch").toInt() == 4, "shield-uniform: caught all 4 wires");
+        // ry fits the span (0..30 => 30*1.15/2 = 17.25); rx follows the ratio (structure kept).
+        const double rx = sc->meta.value("rx").toDouble();
+        const double ry = sc->meta.value("ry").toDouble();
+        check(near(ry, 17.25) && near(ry / rx, ed.screenRatio()),
+              "shield-uniform: fit scales uniformly, keeping ry/rx == ratio");
     }
 
     // Shield joints sit ON the ellipse boundary (not at the raw, possibly-centred wire

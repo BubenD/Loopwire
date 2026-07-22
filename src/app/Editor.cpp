@@ -23,12 +23,6 @@ namespace {
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
-// Shield ellipse small-radius auto-scale: as more wires are caught (and the ellipse
-// grows taller to fit them), widen the small radius proportionally too so it never
-// reads as a thin needle — the ratio adjusts with wire count instead of staying fixed.
-// k=2 -> the user's base radius unchanged; each pair beyond that widens it ~18%.
-double shieldRxScale(int k) { return 1.0 + 0.18 * std::max(0, k - 2); }
-
 // Horizontal half-width of a shield outline at a vertical offset dy from its centre.
 // For a capsule the sides are straight (== rx) through the middle and round off in the
 // semicircle caps; for an ellipse it's the usual rx*sqrt(1-(dy/ry)^2). Used to seat the
@@ -2441,21 +2435,15 @@ void Editor::freezeScreenPreview() {
     emit overlayChanged();
 }
 
-void Editor::shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const {
-    const bool allLocked = screenRxLock_ && screenRyLocked_ && screenRatioLock_;
-    if (allLocked) {
-        // Fully-automatic default: the shield's full height is 15% beyond the distance
-        // between the first and last caught wire (so the large radius / semi-axis is
-        // span*1.15/2), and the small radius follows the locked ratio.
-        ryOut = std::max(span * 1.15 / 2.0, 12.0); // floor so a single wire isn't degenerate
-        rxOut = ryOut / std::max(0.2, screenRatio_);
-    } else {
-        // Large radius: auto-fit the wire span (locked) or the manual value (unlocked).
-        ryOut = screenRyLocked_ ? (span / 2.0 + 6.0) : screenRy_;
-        rxOut = std::min(screenRx_ * shieldRxScale(nWires), ryOut * 0.85);
-        // A locked ratio then drives the large radius so Large/Small stays fixed.
-        if (screenRatioLock_) ryOut = std::max(ryOut, rxOut * screenRatio_);
-    }
+void Editor::shieldAutoSize(double span, int /*nWires*/, double& rxOut, double& ryOut) const {
+    // Fit the shield to the crossed wires by UNIFORMLY scaling its ratio-defined shape —
+    // the small radius always follows the ratio, so the aspect / geometric structure never
+    // changes with the wire count, only the overall size. When the large radius is auto
+    // (locked) its full height sits 15% beyond the first..last wire distance; when unlocked
+    // it uses the manual value.
+    const double ratio = std::max(0.2, screenRatio_);
+    ryOut = screenRyLocked_ ? std::max(span * 1.15 / 2.0, 12.0) : std::max(1.0, screenRy_);
+    rxOut = ryOut / ratio;
 }
 
 bool Editor::connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) const {
