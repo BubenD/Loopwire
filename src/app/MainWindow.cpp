@@ -2118,12 +2118,12 @@ void MainWindow::buildRibbon() {
         auto [page, lay] = makeTabPage();
         // Screen / shield button (joins the Place group below).
         auto* screenBtn = new QToolButton(page);
-        screenBtn->setText(QStringLiteral("Screen"));
+        screenBtn->setText(QStringLiteral("Shield"));
         screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         screenBtn->setIconSize(QSize(26, 26));
         screenBtn->setMinimumWidth(66);
         screenBtn->setToolTip(QStringLiteral(
-            "Shield: click, then drag a crossing line across the wires to screen them"));
+            "Shield: click, then drag a crossing line across the wires to shield them"));
         {
             QPixmap pm(28, 28);
             pm.fill(Qt::transparent);
@@ -4990,10 +4990,14 @@ void MainWindow::refreshProperties() {
                });
     }
 
-    // A selected Screen (shield): edit its ellipse radii and whether the "S" shows.
+    // A selected Shield: edit its ellipse radii and whether the "S" shows.
     if (e && e->type == EntityType::Screen) {
-        addHeader(QStringLiteral("Screen"));
+        addHeader(QStringLiteral("Shield"));
         const QJsonObject& m = e->meta;
+        addNum(QStringLiteral("Small radius"), m.value(QStringLiteral("rx")).toDouble(12.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("rx"), std::max(1.0, v));
+               });
         // Current large radius: explicit override, else auto-fit to the caught wires.
         double ry = m.value(QStringLiteral("ry")).toDouble(0.0);
         if (ry <= 0.0) {
@@ -5010,10 +5014,6 @@ void MainWindow::refreshProperties() {
         addNum(QStringLiteral("Large radius"), ry, [this](double v) {
             editor_->setSelectionMetaNumber(QStringLiteral("ry"), std::max(1.0, v));
         });
-        addNum(QStringLiteral("Small radius"), m.value(QStringLiteral("rx")).toDouble(12.0),
-               [this](double v) {
-                   editor_->setSelectionMetaNumber(QStringLiteral("rx"), std::max(1.0, v));
-               });
         addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
                  m.value(QStringLiteral("showS")).toBool(true) ? QStringLiteral("Yes")
                                                                : QStringLiteral("No"),
@@ -6046,34 +6046,37 @@ void MainWindow::buildWireRibbonTab() {
     otherWireGroups.push_back(twistGroup);
     lay->addWidget(twistGroup);
 
-    // ---- Screen fields: appear only WHILE placing a shield (armed via the Screen
-    // button). Show S, small radius, leg direction + length are always editable; the
-    // large radius stays locked (auto-fit to the caught wires) until unlocked. ----
+    // ---- Shield fields: appear only WHILE placing a shield (armed via the Shield
+    // button). Grouped for comfortable scanning: radii together (small, then large +
+    // its Unlock right beside it), then the leg (side + length) together, then the
+    // Show-S display toggle last (a cosmetic option, not part of the geometry). ----
     auto* scW = new QWidget(wireTab_);
     auto* scg = new QGridLayout(scW);
     scg->setContentsMargins(0, 0, 0, 0);
-    scg->setSpacing(2);
-    auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
-    connect(scShowS, &QCheckBox::toggled, this,
-            [this](bool on) { editor_->screenShowS() = on; });
+    scg->setHorizontalSpacing(6);
+    scg->setVerticalSpacing(3);
     auto* scRx = new QDoubleSpinBox(scW);
     scRx->setRange(1.0, 500.0);
     scRx->setDecimals(1);
+    scRx->setMinimumWidth(58);
     scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scRx, &QDoubleSpinBox::editingFinished, this,
             [this, scRx] { editor_->screenRx() = scRx->value(); });
-    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), scW);
     auto* scRy = new QDoubleSpinBox(scW);
     scRy->setRange(1.0, 500.0);
     scRy->setDecimals(1);
+    scRy->setMinimumWidth(58);
     scRy->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRy->setEnabled(false); // locked (auto-fit) until "Unlock" is checked
+    connect(scRy, &QDoubleSpinBox::editingFinished, this,
+            [this, scRy] { editor_->screenRy() = scRy->value(); });
+    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), scW);
+    scRyUnlock->setToolTip(QStringLiteral(
+        "Large radius auto-fits the caught wires until unlocked for manual entry"));
     connect(scRyUnlock, &QCheckBox::toggled, this, [this, scRy](bool unlocked) {
         editor_->screenRyLocked() = !unlocked;
         scRy->setEnabled(unlocked);
     });
-    connect(scRy, &QDoubleSpinBox::editingFinished, this,
-            [this, scRy] { editor_->screenRy() = scRy->value(); });
     auto* scLegDir = new QComboBox(scW);
     scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
                         QStringLiteral("Left"), QStringLiteral("Right")});
@@ -6082,21 +6085,26 @@ void MainWindow::buildWireRibbonTab() {
     auto* scLeg = new QDoubleSpinBox(scW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
+    scLeg->setMinimumWidth(58);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scLeg, &QDoubleSpinBox::editingFinished, this,
             [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
-    scg->addWidget(scShowS, 0, 0, 1, 2);
-    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), 1, 0);
-    scg->addWidget(scRx, 1, 1);
-    scg->addWidget(new QLabel(QStringLiteral("Large radius"), scW), 2, 0);
-    scg->addWidget(scRy, 2, 1);
-    scg->addWidget(scRyUnlock, 3, 0, 1, 2);
-    scg->addWidget(new QLabel(QStringLiteral("Leg side"), scW), 4, 0);
-    scg->addWidget(scLegDir, 4, 1);
-    scg->addWidget(new QLabel(QStringLiteral("Leg length"), scW), 5, 0);
-    scg->addWidget(scLeg, 5, 1);
-    auto* scGroup = ribbonGroup(QStringLiteral("Screen"), scW);
-    scGroup->setVisible(false); // shown only while a screen is being placed
+    auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
+    connect(scShowS, &QCheckBox::toggled, this,
+            [this](bool on) { editor_->screenShowS() = on; });
+    int r = 0;
+    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), r, 0);
+    scg->addWidget(scRx, r++, 1);
+    scg->addWidget(new QLabel(QStringLiteral("Large radius"), scW), r, 0);
+    scg->addWidget(scRy, r, 1);
+    scg->addWidget(scRyUnlock, r++, 2);
+    scg->addWidget(new QLabel(QStringLiteral("Leg side"), scW), r, 0);
+    scg->addWidget(scLegDir, r++, 1, 1, 2);
+    scg->addWidget(new QLabel(QStringLiteral("Leg length"), scW), r, 0);
+    scg->addWidget(scLeg, r++, 1);
+    scg->addWidget(scShowS, r++, 0, 1, 3);
+    auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
+    scGroup->setVisible(false); // shown only while a shield is being placed
     lay->addWidget(scGroup);
 
     // ---- Routing: gap between the parallel wire lanes after a knee ----

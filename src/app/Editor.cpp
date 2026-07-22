@@ -2262,7 +2262,7 @@ void Editor::beginScreen() {
     screenArm_ = true;
     screenFrozen_ = false;
     wireBandHasStart_ = false;
-    emit message(QStringLiteral("Screen: draw a crossing line across the wires to shield"));
+    emit message(QStringLiteral("Shield: draw a crossing line across the wires to shield"));
     emit screenArmedChanged();
 }
 
@@ -2270,7 +2270,7 @@ void Editor::freezeScreenPreview() {
     if (tool_ != ToolId::Wire || !screenArm_ || !wireBandHasStart_ || screenFrozen_) return;
     screenFrozen_ = true;
     screenFrozenEnd_ = cursor_;
-    emit message(QStringLiteral("Screen preview frozen — edit the fields; click to place"));
+    emit message(QStringLiteral("Shield preview frozen — edit the fields; click to place"));
     emit screenArmedChanged();
     emit overlayChanged();
 }
@@ -2348,7 +2348,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         screenArm_ = false;
         screenFrozen_ = false;
-        emit message(QStringLiteral("Screen added over %1 wires").arg(wireIds.size()));
+        emit message(QStringLiteral("Shield added over %1 wires").arg(wireIds.size()));
         emit screenArmedChanged();
     }
     doc_->setDirty(true);
