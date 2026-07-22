@@ -1467,6 +1467,16 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         for (const auto& pt : g.pinTip) pts.push_back(pt);
         break;
     }
+    case EntityType::Twist:
+    case EntityType::Screen: {
+        // The rendered glyph's bounding box (wider than the raw stored points — see
+        // Entity::bounds()), all 4 corners, so a crossing box that merely touches the
+        // drawn braid/ellipse/leg (not just the narrow crossing points) selects it.
+        const Bounds b = e.bounds();
+        if (b.valid) pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}};
+        else pts = {e.a};
+        break;
+    }
     default: {
         const Bounds b = e.bounds();
         if (b.valid) pts = {b.min, b.max, b.center()};
@@ -1597,6 +1607,12 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(g.pinTip[i], g.pinEnd[i]);
         break;
     }
+    case EntityType::Twist:
+    case EntityType::Screen:
+        // The bounding-box edges (from the corners above) so a crossing box touching
+        // any edge of the glyph's actual footprint registers as a hit.
+        for (size_t i = 0; i < pts.size(); ++i) segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
+        break;
     default:
         break;
     }
@@ -2294,7 +2310,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         e.meta.insert("twistType", twistArmType_);
         e.meta.insert("wires", ids); // which wire each points[i] belongs to
         e.meta.insert("entNum", assignEntityNumber());
-        doc_->entities().push_back(e);
+        addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         twistArmType_.clear();
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
     } else {
@@ -2329,7 +2345,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         e.meta.insert("legDir", screenLegDir_);
         e.meta.insert("showS", screenShowS_);
         e.meta.insert("entNum", assignEntityNumber());
-        doc_->entities().push_back(e);
+        addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         screenArm_ = false;
         screenFrozen_ = false;
         emit message(QStringLiteral("Screen added over %1 wires").arg(wireIds.size()));

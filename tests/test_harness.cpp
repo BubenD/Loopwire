@@ -976,6 +976,38 @@ int run_harness_tests() {
               "twist-structure: the wire's own points are unchanged by adding a twist");
     }
 
+    // A crossing box that only touches the RIGHT part of a Twist's rendered band (not
+    // its narrow raw crossing points) still selects it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("cross"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        QString twId;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) twId = e.id;
+        check(!twId.isEmpty(), "twist-touch-select: the twist was placed");
+        // Box spans x:[110,125] (inside the rendered band x0≈79..x1≈121 but NOT reaching
+        // the raw crossing points at x=100), and y far from both wires (0/30) so the
+        // corner clicks land on EMPTY space. A two-click rectangle needs press-RELEASE
+        // (Deciding -> RectPending) - move - press (commits), matching test_editor.cpp's
+        // regionDrag helper; without the release the 2nd press just starts a fresh drag.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({125, 100}, Qt::LeftButton, Qt::NoModifier);   // 1st corner (right)
+        ed.onPointerRelease({125, 100}, Qt::LeftButton);                // -> RectPending
+        ed.onPointerMove({110, -50});
+        ed.onPointerPress({110, -50}, Qt::LeftButton, Qt::NoModifier); // 2nd corner (left) -> crossing
+        auto has = [&](const QString& id) {
+            const auto& sel = ed.selection();
+            return std::find(sel.begin(), sel.end(), id) != sel.end();
+        };
+        check(has(twId), "twist-touch-select: a crossing box touching only the glyph's edge selects it");
+    }
+
     // Screen leg termination is a snappable joint (a new wire's endpoint can catch it).
     {
         Document d; d.entities().clear();

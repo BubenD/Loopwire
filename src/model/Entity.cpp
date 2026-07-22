@@ -148,6 +148,46 @@ Bounds Entity::bounds() const {
         for (const auto& pe : g.pinEnd) bnds.expand(pe);
         break;
     }
+    case EntityType::Twist: {
+        // The rendered braid/motif spans a wider band than the raw crossing points
+        // (matches EntityRenderer's twist band formula) — use that for bounds/selection
+        // so a region that only touches the drawn glyph (not the narrow crossing points)
+        // still counts.
+        if (points.empty()) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (const auto& p : points) {
+            cx += p.x;
+            yMin = std::min(yMin, p.y);
+            yMax = std::max(yMax, p.y);
+        }
+        cx /= static_cast<double>(points.size());
+        const double band = std::max(1.0, yMax - yMin);
+        const double w = std::max(28.0, band * 1.4);
+        bnds.expand({cx - w / 2.0, yMin});
+        bnds.expand({cx + w / 2.0, yMax});
+        break;
+    }
+    case EntityType::Screen: {
+        // The ellipse body + the drain leg's full extent (not just the stored joints).
+        const int k = std::min(meta.value("catch").toInt(static_cast<int>(points.size())),
+                               static_cast<int>(points.size()));
+        if (k < 1) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (int i = 0; i < k; ++i) {
+            cx += points[i].x;
+            yMin = std::min(yMin, points[i].y);
+            yMax = std::max(yMax, points[i].y);
+        }
+        cx /= k;
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double rx = meta.value("rx").toDouble(12.0);
+        const double ry = meta.contains("ry") ? meta.value("ry").toDouble()
+                                              : (yMax - yMin) / 2.0 + 6.0;
+        bnds.expand({cx - rx, cyMid - ry});
+        bnds.expand({cx + rx, cyMid + ry});
+        if (static_cast<int>(points.size()) > k) bnds.expand(points.back()); // drain point
+        break;
+    }
     default:
         for (const auto& p : points) bnds.expand(p);
         if (!points.empty()) break;
