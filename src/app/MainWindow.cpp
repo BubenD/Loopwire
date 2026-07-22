@@ -6047,44 +6047,45 @@ void MainWindow::buildWireRibbonTab() {
     lay->addWidget(twistGroup);
 
     // ---- Shield fields: appear only WHILE placing a shield (armed via the Shield
-    // button). Three SEPARATE sub-widgets (radii / leg / display), stacked in an outer
-    // QVBoxLayout with real spacing between them — this reads as genuinely distinct
-    // sections (not just a spacer row inside one grid, which read as too tight).
+    // button). A ribbon panel is only ~3 rows tall, so a tall vertical stack gets
+    // clipped and the labels overlap. Instead everything lives in ONE grid that is
+    // EXACTLY 3 rows high, spread across two column-groups (radii on the left, leg +
+    // display on the right) with a real gap column between them:
+    //   Row 0: Small radius [ ]        | Leg side  [v]
+    //   Row 1: Large radius [ ] Unlock | Leg length[ ]
+    //   Row 2: Ratio (L/S)  [ ]        | Show S
     auto* scW = new QWidget(wireTab_);
-    auto* scOuter = new QVBoxLayout(scW);
-    scOuter->setContentsMargins(4, 2, 4, 2);
-    scOuter->setSpacing(12); // real gap between the radii / leg / display blocks
-    auto scLabel = [&](QWidget* parent, const QString& text) {
-        auto* l = new QLabel(text, parent);
-        l->setMinimumWidth(80);
+    auto* scg = new QGridLayout(scW);
+    scg->setContentsMargins(6, 3, 6, 3);
+    scg->setHorizontalSpacing(8);
+    scg->setVerticalSpacing(7); // gap between the field rows
+    auto scLabel = [&](const QString& text) {
+        auto* l = new QLabel(text, scW);
+        l->setMinimumWidth(78);
         return l;
     };
+    // Columns: 0 label | 1 field | 2 unlock | 3 GAP | 4 label | 5 field
+    scg->setColumnMinimumWidth(3, 22); // real gap between the two column-groups
 
-    // Radii block: small radius, large radius + its Unlock, and the ratio between them.
-    auto* radiiW = new QWidget(scW);
-    auto* radiiG = new QGridLayout(radiiW);
-    radiiG->setContentsMargins(0, 0, 0, 0);
-    radiiG->setHorizontalSpacing(10);
-    radiiG->setVerticalSpacing(4);
-    auto* scRx = new QDoubleSpinBox(radiiW);
+    auto* scRx = new QDoubleSpinBox(scW);
     scRx->setRange(1.0, 500.0);
     scRx->setDecimals(1);
-    scRx->setMinimumWidth(72);
+    scRx->setMinimumWidth(70);
     scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    auto* scRy = new QDoubleSpinBox(radiiW);
+    auto* scRy = new QDoubleSpinBox(scW);
     scRy->setRange(1.0, 500.0);
     scRy->setDecimals(1);
-    scRy->setMinimumWidth(72);
+    scRy->setMinimumWidth(70);
     scRy->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRy->setEnabled(false); // locked (auto-fit) until "Unlock" is checked
-    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), radiiW);
+    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), scW);
     scRyUnlock->setToolTip(QStringLiteral(
         "Large radius auto-fits the caught wires until unlocked for manual entry"));
-    auto* scRatio = new QDoubleSpinBox(radiiW);
+    auto* scRatio = new QDoubleSpinBox(scW);
     scRatio->setRange(0.2, 20.0);
     scRatio->setDecimals(2);
     scRatio->setSingleStep(0.1);
-    scRatio->setMinimumWidth(72);
+    scRatio->setMinimumWidth(70);
     scRatio->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRatio->setToolTip(QStringLiteral(
         "Large ÷ Small radius. Stays in sync when either radius is edited; type a new "
@@ -6118,45 +6119,38 @@ void MainWindow::buildWireRibbonTab() {
                 scRy->setEnabled(true);
                 scRyUnlock->setChecked(true);
             });
-    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Small radius")), 0, 0);
-    radiiG->addWidget(scRx, 0, 1);
-    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Large radius")), 1, 0);
-    radiiG->addWidget(scRy, 1, 1);
-    radiiG->addWidget(scRyUnlock, 1, 2);
-    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Ratio (L÷S)")), 2, 0);
-    radiiG->addWidget(scRatio, 2, 1);
-    scOuter->addWidget(radiiW);
 
-    // Leg block: which side it exits + its length.
-    auto* legW = new QWidget(scW);
-    auto* legG = new QGridLayout(legW);
-    legG->setContentsMargins(0, 0, 0, 0);
-    legG->setHorizontalSpacing(10);
-    legG->setVerticalSpacing(4);
-    auto* scLegDir = new QComboBox(legW);
+    auto* scLegDir = new QComboBox(scW);
     scLegDir->setMinimumWidth(90);
     scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
                         QStringLiteral("Left"), QStringLiteral("Right")});
     connect(scLegDir, &QComboBox::currentTextChanged, this,
             [this](const QString& t) { editor_->screenLegDir() = t.toLower(); });
-    auto* scLeg = new QDoubleSpinBox(legW);
+    auto* scLeg = new QDoubleSpinBox(scW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
-    scLeg->setMinimumWidth(72);
+    scLeg->setMinimumWidth(70);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scLeg, &QDoubleSpinBox::editingFinished, this,
             [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
-    legG->addWidget(scLabel(legW, QStringLiteral("Leg side")), 0, 0);
-    legG->addWidget(scLegDir, 0, 1);
-    legG->addWidget(scLabel(legW, QStringLiteral("Leg length")), 1, 0);
-    legG->addWidget(scLeg, 1, 1);
-    scOuter->addWidget(legW);
-
-    // Display option, on its own.
     auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
     connect(scShowS, &QCheckBox::toggled, this,
             [this](bool on) { editor_->screenShowS() = on; });
-    scOuter->addWidget(scShowS);
+
+    // Left column-group: radii (3 rows)
+    scg->addWidget(scLabel(QStringLiteral("Small radius")), 0, 0);
+    scg->addWidget(scRx, 0, 1);
+    scg->addWidget(scLabel(QStringLiteral("Large radius")), 1, 0);
+    scg->addWidget(scRy, 1, 1);
+    scg->addWidget(scRyUnlock, 1, 2);
+    scg->addWidget(scLabel(QStringLiteral("Ratio (L÷S)")), 2, 0);
+    scg->addWidget(scRatio, 2, 1);
+    // Right column-group: leg + display (3 rows)
+    scg->addWidget(scLabel(QStringLiteral("Leg side")), 0, 4);
+    scg->addWidget(scLegDir, 0, 5);
+    scg->addWidget(scLabel(QStringLiteral("Leg length")), 1, 4);
+    scg->addWidget(scLeg, 1, 5);
+    scg->addWidget(scShowS, 2, 4, 1, 2);
 
     auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
     scGroup->setVisible(false); // shown only while a shield is being placed
