@@ -6047,72 +6047,117 @@ void MainWindow::buildWireRibbonTab() {
     lay->addWidget(twistGroup);
 
     // ---- Shield fields: appear only WHILE placing a shield (armed via the Shield
-    // button). Laid out roomier than the other Wire-ribbon groups (wider labels/fields,
-    // generous spacing, and a blank spacer row between each logical section) so the
-    // three sections — radii, leg, display — read as distinct at a glance:
-    // Small radius, Large radius + its Unlock beside it, [gap], Leg side + length,
-    // [gap], Show S last (a cosmetic option, not part of the geometry).
+    // button). Three SEPARATE sub-widgets (radii / leg / display), stacked in an outer
+    // QVBoxLayout with real spacing between them — this reads as genuinely distinct
+    // sections (not just a spacer row inside one grid, which read as too tight).
     auto* scW = new QWidget(wireTab_);
-    auto* scg = new QGridLayout(scW);
-    scg->setContentsMargins(4, 2, 4, 2);
-    scg->setHorizontalSpacing(10);
-    scg->setVerticalSpacing(5);
-    auto scLabel = [&](const QString& text) {
-        auto* l = new QLabel(text, scW);
-        l->setMinimumWidth(76);
+    auto* scOuter = new QVBoxLayout(scW);
+    scOuter->setContentsMargins(4, 2, 4, 2);
+    scOuter->setSpacing(12); // real gap between the radii / leg / display blocks
+    auto scLabel = [&](QWidget* parent, const QString& text) {
+        auto* l = new QLabel(text, parent);
+        l->setMinimumWidth(80);
         return l;
     };
-    auto* scRx = new QDoubleSpinBox(scW);
+
+    // Radii block: small radius, large radius + its Unlock, and the ratio between them.
+    auto* radiiW = new QWidget(scW);
+    auto* radiiG = new QGridLayout(radiiW);
+    radiiG->setContentsMargins(0, 0, 0, 0);
+    radiiG->setHorizontalSpacing(10);
+    radiiG->setVerticalSpacing(4);
+    auto* scRx = new QDoubleSpinBox(radiiW);
     scRx->setRange(1.0, 500.0);
     scRx->setDecimals(1);
     scRx->setMinimumWidth(72);
     scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    connect(scRx, &QDoubleSpinBox::editingFinished, this,
-            [this, scRx] { editor_->screenRx() = scRx->value(); });
-    auto* scRy = new QDoubleSpinBox(scW);
+    auto* scRy = new QDoubleSpinBox(radiiW);
     scRy->setRange(1.0, 500.0);
     scRy->setDecimals(1);
     scRy->setMinimumWidth(72);
     scRy->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRy->setEnabled(false); // locked (auto-fit) until "Unlock" is checked
-    connect(scRy, &QDoubleSpinBox::editingFinished, this,
-            [this, scRy] { editor_->screenRy() = scRy->value(); });
-    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), scW);
+    auto* scRyUnlock = new QCheckBox(QStringLiteral("Unlock"), radiiW);
     scRyUnlock->setToolTip(QStringLiteral(
         "Large radius auto-fits the caught wires until unlocked for manual entry"));
+    auto* scRatio = new QDoubleSpinBox(radiiW);
+    scRatio->setRange(0.2, 20.0);
+    scRatio->setDecimals(2);
+    scRatio->setSingleStep(0.1);
+    scRatio->setMinimumWidth(72);
+    scRatio->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scRatio->setToolTip(QStringLiteral(
+        "Large ÷ Small radius. Stays in sync when either radius is edited; type a new "
+        "ratio to derive Large radius from it (unlocks Large radius)."));
+    connect(scRx, &QDoubleSpinBox::editingFinished, this, [this, scRx, scRy, scRatio] {
+        editor_->screenRx() = scRx->value();
+        const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value() : editor_->screenRatio();
+        editor_->screenRatio() = ratio;
+        QSignalBlocker b(scRatio);
+        scRatio->setValue(ratio);
+    });
+    connect(scRy, &QDoubleSpinBox::editingFinished, this, [this, scRx, scRy, scRatio] {
+        editor_->screenRy() = scRy->value();
+        const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value() : editor_->screenRatio();
+        editor_->screenRatio() = ratio;
+        QSignalBlocker b(scRatio);
+        scRatio->setValue(ratio);
+    });
     connect(scRyUnlock, &QCheckBox::toggled, this, [this, scRy](bool unlocked) {
         editor_->screenRyLocked() = !unlocked;
         scRy->setEnabled(unlocked);
     });
-    auto* scLegDir = new QComboBox(scW);
+    connect(scRatio, &QDoubleSpinBox::editingFinished, this,
+            [this, scRx, scRy, scRatio, scRyUnlock] {
+                editor_->screenRatio() = scRatio->value();
+                const double newRy = std::max(1.0, scRx->value() * scRatio->value());
+                editor_->screenRy() = newRy;
+                editor_->screenRyLocked() = false; // now explicitly derived
+                QSignalBlocker b1(scRy), b2(scRyUnlock);
+                scRy->setValue(newRy);
+                scRy->setEnabled(true);
+                scRyUnlock->setChecked(true);
+            });
+    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Small radius")), 0, 0);
+    radiiG->addWidget(scRx, 0, 1);
+    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Large radius")), 1, 0);
+    radiiG->addWidget(scRy, 1, 1);
+    radiiG->addWidget(scRyUnlock, 1, 2);
+    radiiG->addWidget(scLabel(radiiW, QStringLiteral("Ratio (L÷S)")), 2, 0);
+    radiiG->addWidget(scRatio, 2, 1);
+    scOuter->addWidget(radiiW);
+
+    // Leg block: which side it exits + its length.
+    auto* legW = new QWidget(scW);
+    auto* legG = new QGridLayout(legW);
+    legG->setContentsMargins(0, 0, 0, 0);
+    legG->setHorizontalSpacing(10);
+    legG->setVerticalSpacing(4);
+    auto* scLegDir = new QComboBox(legW);
     scLegDir->setMinimumWidth(90);
     scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
                         QStringLiteral("Left"), QStringLiteral("Right")});
     connect(scLegDir, &QComboBox::currentTextChanged, this,
             [this](const QString& t) { editor_->screenLegDir() = t.toLower(); });
-    auto* scLeg = new QDoubleSpinBox(scW);
+    auto* scLeg = new QDoubleSpinBox(legW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
     scLeg->setMinimumWidth(72);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scLeg, &QDoubleSpinBox::editingFinished, this,
             [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
+    legG->addWidget(scLabel(legW, QStringLiteral("Leg side")), 0, 0);
+    legG->addWidget(scLegDir, 0, 1);
+    legG->addWidget(scLabel(legW, QStringLiteral("Leg length")), 1, 0);
+    legG->addWidget(scLeg, 1, 1);
+    scOuter->addWidget(legW);
+
+    // Display option, on its own.
     auto* scShowS = new QCheckBox(QStringLiteral("Show S"), scW);
     connect(scShowS, &QCheckBox::toggled, this,
             [this](bool on) { editor_->screenShowS() = on; });
-    int r = 0;
-    scg->addWidget(scLabel(QStringLiteral("Small radius")), r, 0);
-    scg->addWidget(scRx, r++, 1);
-    scg->addWidget(scLabel(QStringLiteral("Large radius")), r, 0);
-    scg->addWidget(scRy, r, 1);
-    scg->addWidget(scRyUnlock, r++, 2);
-    scg->setRowMinimumHeight(r++, 10); // gap: radii -> leg
-    scg->addWidget(scLabel(QStringLiteral("Leg side")), r, 0);
-    scg->addWidget(scLegDir, r++, 1, 1, 2);
-    scg->addWidget(scLabel(QStringLiteral("Leg length")), r, 0);
-    scg->addWidget(scLeg, r++, 1);
-    scg->setRowMinimumHeight(r++, 10); // gap: leg -> display option
-    scg->addWidget(scShowS, r++, 0, 1, 3);
+    scOuter->addWidget(scShowS);
+
     auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
     scGroup->setVisible(false); // shown only while a shield is being placed
     lay->addWidget(scGroup);
@@ -6152,19 +6197,20 @@ void MainWindow::buildWireRibbonTab() {
     // Show/hide the Screen panel + (re)load its fields from the Editor's current
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
-    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRyUnlock, scLegDir,
-                           scLeg, otherWireGroups] {
+    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRatio, scRyUnlock,
+                           scLegDir, scLeg, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
         for (QWidget* g : otherWireGroups) g->setVisible(!armed);
         if (!armed) return;
-        QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRyUnlock), b5(scLegDir),
-            b6(scLeg);
+        QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRatio), b5(scRyUnlock),
+            b6(scLegDir), b7(scLeg);
         scShowS->setChecked(editor_->screenShowS());
         scRx->setValue(editor_->screenRx());
         scRyUnlock->setChecked(!editor_->screenRyLocked());
         scRy->setEnabled(!editor_->screenRyLocked());
         scRy->setValue(editor_->screenRy());
+        scRatio->setValue(editor_->screenRatio());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
                                                : dir.left(1).toUpper() + dir.mid(1));

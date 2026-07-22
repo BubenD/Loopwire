@@ -1047,6 +1047,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
         const Vec2 drain = sc->points.back();
+        // Default leg length is 15: with ry auto-fit=(30-0)/2+6=21, cyMid=15, the
+        // bottom edge is at y=-6, so the drain sits at y=-6-15=-21.
+        check(near(drain.y, -21.0), "shield-default-leg: the default leg length is 15");
         SnapSettings s; // objectSnap + endpoint on by default
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),

@@ -315,6 +315,10 @@ public:
     // Large radius: locked (auto-fit to the caught wires) unless explicitly unlocked.
     bool& screenRyLocked() { return screenRyLocked_; }
     double& screenRy() { return screenRy_; }
+    // Large:small radius ratio. Read-only display that re-syncs whenever either radius
+    // default is edited; typing a new ratio instead derives Large = Small * ratio
+    // (unlocking Large radius). Purely a ribbon convenience for the NEXT shield placed.
+    double& screenRatio() { return screenRatio_; }
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
@@ -735,10 +739,11 @@ private:
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
     double screenRx_ = 12.0;      // screen ellipse small radius
-    double screenLeg_ = 40.0;     // screen drain-leg length
+    double screenLeg_ = 15.0;     // screen drain-leg length (default 15mm)
     bool screenShowS_ = true;     // draw the "S" shield label
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 20.0;      // large radius when unlocked
+    double screenRatio_ = 20.0 / 12.0; // large:small ratio (kept in sync with the radii above)
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;
