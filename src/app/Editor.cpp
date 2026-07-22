@@ -6456,11 +6456,50 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("size", spliceSize_); // dot radius (world units)
         break;
-    case ToolId::NotConnected:
+    case ToolId::NotConnected: {
+        // Shift + click on a connector pin: terminate EVERY still-unconnected pin of that
+        // connector at once (pins already wired or already X'd are skipped).
+        if (pressMods_ & Qt::ShiftModifier) {
+            std::vector<Vec2> pins;
+            int anchor = -1;
+            if (connectorPinsAt(p, pins, anchor)) {
+                const double tol = std::max(worldTolerance(), 1e-3);
+                auto occupied = [&](const Vec2& pe) {
+                    for (const auto& w : doc_->entities()) {
+                        if (w.type == EntityType::Wire && !w.points.empty()) {
+                            if (distance(w.points.front(), pe) <= tol ||
+                                distance(w.points.back(), pe) <= tol)
+                                return true;
+                        } else if (w.type == EntityType::NotConnected &&
+                                   distance(w.a, pe) <= tol) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                pushUndo();
+                int n = 0;
+                for (const Vec2& pe : pins) {
+                    if (occupied(pe)) continue;
+                    Entity x;
+                    x.type = EntityType::NotConnected;
+                    x.layer = e.layer;
+                    x.a = pe;
+                    x.meta.insert("ncSize", ncSize_);
+                    addEntity(std::move(x));
+                    ++n;
+                }
+                doc_->setDirty(true);
+                emit changed();
+                emit message(QStringLiteral("Terminated %1 unconnected pin(s)").arg(n));
+                return;
+            }
+        }
         e.type = EntityType::NotConnected;
         e.a = p;
         e.meta.insert("ncSize", ncSize_); // X half-size (world units)
         break;
+    }
     case ToolId::NetLabel:
         e.type = EntityType::NetLabel;
         e.a = p;

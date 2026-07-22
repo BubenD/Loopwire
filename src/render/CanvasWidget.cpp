@@ -681,17 +681,19 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // Wiring from a connector pin: Shift + a number key sets how many pins the wire
+        // fans out to (Shift+1 = single). Match on the KEY (Shift+digit yields a symbol
+        // character, so e->text() can't be used) and consume it before distance entry.
+        if (editor_->wireFanArmed() && (e->modifiers() & Qt::ShiftModifier) &&
+            e->key() >= Qt::Key_1 && e->key() <= Qt::Key_9) {
+            editor_->setWireFan(e->key() - Qt::Key_0);
+            e->accept();
+            return;
+        }
         const QString t = e->text();
         const bool isLetter = !t.isEmpty() && t[0].isLetter();
         const bool isValueChar =
             !t.isEmpty() && (t[0].isDigit() || t == "." || t == "-" || t == "@" || t == ",");
-        // Wiring from a connector pin: a digit sets how many pins the wire fans out to
-        // (1 = single), instead of opening the distance-entry field.
-        if (editor_->wireFanArmed() && !t.isEmpty() && t[0].isDigit() && t[0] != QLatin1Char('0')) {
-            editor_->setWireFan(t[0].digitValue());
-            e->accept();
-            return;
-        }
         const bool drafting = editor_->wantsTextInput();
         bool open = false;
         if (drafting) {

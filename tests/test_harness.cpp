@@ -624,6 +624,36 @@ int run_harness_tests() {
         check(wires == 3, "wire-fan-count: pressing 3 wires exactly three pins");
     }
 
+    // Termination: Shift + click a connector pin X-terminates every UNCONNECTED pin at
+    // once — pins already wired (or already terminated) are left alone.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        // Wire pin 1 (index 1) so it counts as connected; the other 3 stay open.
+        Entity w; w.id = "w"; w.type = EntityType::Wire;
+        w.points = {g.pinEnd[1], {g.pinEnd[1].x + 100, g.pinEnd[1].y}};
+        d.entities().push_back(w);
+        ed.setTool(ToolId::NotConnected);
+        ed.onPointerPress(g.pinEnd[0], Qt::LeftButton, Qt::ShiftModifier); // Shift+click a pin
+        int xs = 0;
+        for (const auto& e : d.entities()) if (e.type == EntityType::NotConnected) ++xs;
+        check(xs == 3, "term-fanout: the 3 unconnected pins are terminated, the wired one is not");
+        // Each X sits on a distinct unconnected pin end (not the wired pin 1).
+        bool onWired = false;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::NotConnected && near(e.a.x, g.pinEnd[1].x) &&
+                near(e.a.y, g.pinEnd[1].y))
+                onWired = true;
+        check(!onWired, "term-fanout: the already-wired pin is left un-terminated");
+    }
+
     // Scaling a connector keeps a (non-selected) attached wire wired to its pin.
     {
         Document d; d.entities().clear();
