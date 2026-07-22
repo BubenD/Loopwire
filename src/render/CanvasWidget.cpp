@@ -682,13 +682,27 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             return;
         }
         // Wiring from a connector pin: Shift + a number key sets how many pins the wire
-        // fans out to (Shift+1 = single). Match on the KEY (Shift+digit yields a symbol
-        // character, so e->text() can't be used) and consume it before distance entry.
-        if (editor_->wireFanArmed() && (e->modifiers() & Qt::ShiftModifier) &&
-            e->key() >= Qt::Key_1 && e->key() <= Qt::Key_9) {
-            editor_->setWireFan(e->key() - Qt::Key_0);
-            e->accept();
-            return;
+        // fans out to (Shift+1 = single). Shift+digit is reported either as Key_1..Key_9
+        // OR (US layout) as the shifted symbol key (!,@,#,...), so map both to a digit.
+        if (editor_->wireFanArmed() && (e->modifiers() & Qt::ShiftModifier)) {
+            int dgt = 0;
+            switch (e->key()) {
+            case Qt::Key_1: case Qt::Key_Exclam: dgt = 1; break;
+            case Qt::Key_2: case Qt::Key_At: dgt = 2; break;
+            case Qt::Key_3: case Qt::Key_NumberSign: dgt = 3; break;
+            case Qt::Key_4: case Qt::Key_Dollar: dgt = 4; break;
+            case Qt::Key_5: case Qt::Key_Percent: dgt = 5; break;
+            case Qt::Key_6: case Qt::Key_AsciiCircum: dgt = 6; break;
+            case Qt::Key_7: case Qt::Key_Ampersand: dgt = 7; break;
+            case Qt::Key_8: case Qt::Key_Asterisk: dgt = 8; break;
+            case Qt::Key_9: case Qt::Key_ParenLeft: dgt = 9; break;
+            default: break;
+            }
+            if (dgt > 0) {
+                editor_->setWireFan(dgt);
+                e->accept();
+                return;
+            }
         }
         const QString t = e->text();
         const bool isLetter = !t.isEmpty() && t[0].isLetter();

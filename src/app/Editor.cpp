@@ -2436,13 +2436,13 @@ void Editor::freezeScreenPreview() {
 }
 
 void Editor::shieldAutoSize(double span, int /*nWires*/, double& rxOut, double& ryOut) const {
-    // Fit the shield to the crossed wires by UNIFORMLY scaling its ratio-defined shape —
-    // the small radius always follows the ratio, so the aspect / geometric structure never
-    // changes with the wire count, only the overall size. When the large radius is auto
-    // (locked) its full height sits 15% beyond the first..last wire distance; when unlocked
-    // it uses the manual value.
+    // ALWAYS scale the shield's exact structure to fit the crossed wires: the full height
+    // sits 15% beyond the distance from the first to the last wire, and the small radius
+    // follows the ratio — so the shield uniformly grows/shrinks to wrap whatever wires the
+    // crossing line catches, keeping its shape/aspect. The Small/Large radius fields define
+    // that aspect (via the ratio); the placed size is driven by the wires, not the fields.
     const double ratio = std::max(0.2, screenRatio_);
-    ryOut = screenRyLocked_ ? std::max(span * 1.15 / 2.0, 12.0) : std::max(1.0, screenRy_);
+    ryOut = std::max(span * 1.15 / 2.0, 12.0); // floor so a single wire isn't degenerate
     rxOut = ryOut / ratio;
 }
 
