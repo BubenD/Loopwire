@@ -2458,6 +2458,23 @@ void Editor::shieldAutoSize(double span, int nWires, double& rxOut, double& ryOu
     }
 }
 
+bool Editor::connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) const {
+    if (!doc_) return false;
+    const double tol = std::max(worldTolerance(), 1e-3);
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+        int anchor = -1;
+        for (int i = 0; i < static_cast<int>(g.pinEnd.size()); ++i)
+            if (distance(p, g.pinEnd[i]) <= tol) { anchor = i; break; }
+        if (anchor < 0) continue;
+        offsetsOut.clear();
+        for (const Vec2& pe : g.pinEnd) offsetsOut.push_back(pe - g.pinEnd[anchor]);
+        return true;
+    }
+    return false;
+}
+
 void Editor::finishWireBand(const Vec2& fenceEnd) {
     const Vec2 f0 = wireBandStart_, f1 = fenceEnd;
     std::vector<Vec2> crossings;
@@ -3260,6 +3277,16 @@ void Editor::handleDrawPress(const Vec2& p) {
             // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
             if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
             drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
+        }
+        // Shift-start a wire on a connector pin: fan the wire out to EVERY pin at once.
+        if (tool_ == ToolId::Wire && draftPts_.empty() && (pressMods_ & Qt::ShiftModifier)) {
+            std::vector<Vec2> offs;
+            if (connectorPinFanout(p, offs) && offs.size() > 1) {
+                wireArray_ = true;
+                wireArrayOffsets_ = std::move(offs);
+                emit message(QStringLiteral("Wiring all %1 pins — click the route; Esc to finish")
+                                 .arg(wireArrayOffsets_.size()));
+            }
         }
         draftPts_.push_back(p);
         draftBulges_.push_back(bulge);
@@ -4090,6 +4117,31 @@ void Editor::finishDraw() {
         }
         e.meta.insert("showLabel", true);
         e.meta.insert("entNum", assignEntityNumber()); // unique entity number
+        // Shift-fanout: one wire per connector pin, each the drafted route offset by that
+        // pin's distance from the anchor pin. Commits them all as one undo step.
+        if (wireArray_ && wireArrayOffsets_.size() > 1) {
+            const int n = static_cast<int>(wireArrayOffsets_.size());
+            pushUndo();
+            for (const Vec2& off : wireArrayOffsets_) {
+                Entity w = e; // same wire properties (color/awg/net/...)
+                w.id.clear();
+                w.points.clear();
+                for (const Vec2& pt : draftPts_)
+                    w.points.push_back({pt.x + off.x, pt.y + off.y});
+                w.meta.insert("entNum", assignEntityNumber());
+                addEntity(std::move(w));
+            }
+            wireArray_ = false;
+            wireArrayOffsets_.clear();
+            draftPts_.clear();
+            draftBulges_.clear();
+            draftCornerRadii_.clear();
+            drafting_ = false;
+            emit changed();
+            emit message(
+                QStringLiteral("Wired %1 pins — click to draw another; Esc to finish").arg(n));
+            return;
+        }
         break;
     case ToolId::Hatch:
     case ToolId::Wipeout:
@@ -4162,6 +4214,8 @@ void Editor::cancelDraw() {
     tanPickIds_.clear();
     tanPickPts_.clear();
     tanAwaitRadius_ = false;
+    wireArray_ = false; // end any Shift-fanout wire session
+    wireArrayOffsets_.clear();
 }
 
 void Editor::toggleArcMirror() {
@@ -7671,6 +7725,21 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             QPolygonF poly;
             for (const auto& v : show) poly << vt.toScreen(v);
             p.drawPolyline(poly);
+        }
+
+        // Shift-fanout wire: ghost the same route from every OTHER pin of the connector.
+        if (wireArray_ && tool_ == ToolId::Wire && wireArrayOffsets_.size() > 1) {
+            QPen gp(QColor(127, 191, 255, 200));
+            gp.setCosmetic(true);
+            gp.setWidthF(1.2);
+            gp.setStyle(Qt::DashLine);
+            p.setPen(gp);
+            for (const Vec2& off : wireArrayOffsets_) {
+                if (std::abs(off.x) < 1e-9 && std::abs(off.y) < 1e-9) continue; // anchor drawn above
+                QPolygonF poly;
+                for (const Vec2& v : pts) poly << vt.toScreen({v.x + off.x, v.y + off.y});
+                p.drawPolyline(poly);
+            }
         }
 
         // Live length / angle readout of the current segment (toggle: Angles).

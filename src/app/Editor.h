@@ -594,6 +594,9 @@ private:
     // set (the fully-automatic default) the large radius sits 15% beyond the wire span and
     // the small radius follows the locked ratio.
     void shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const;
+    // If p sits on a connector pin end, fill offsetsOut with (pinEnd[i] - p) for EVERY pin
+    // of that connector (so the anchor pin's own offset is ~{0,0}) and return true.
+    bool connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) const;
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -761,6 +764,11 @@ private:
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
     bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
+    // Shift-drag a wire from a connector pin: the same wire is drawn from EVERY pin of that
+    // connector at once. wireArrayOffsets_ holds each pin's offset from the anchor pin
+    // (offset[anchor] == {0,0}); active only while such a wire is being drafted.
+    bool wireArray_ = false;
+    std::vector<Vec2> wireArrayOffsets_;
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
     double screenRx_ = 12.0;      // screen ellipse small radius
