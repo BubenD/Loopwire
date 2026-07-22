@@ -1383,6 +1383,20 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
+        // "bundle": a twisted-bundle sign for 2+ wires — parallel diagonal strokes across
+        // the WHOLE bundle height (every caught wire), rather than a two-conductor braid.
+        if (ty == QLatin1String("bundle")) {
+            const auto [bx0, bx1] = twistBandX(e);
+            const double w = bx1 - bx0;
+            const int n = std::max(3, static_cast<int>(w / 7.0));
+            const double step = w / n;
+            const double diag = std::min(step * 1.7, w); // diagonal run per stroke
+            for (int i = 0; i <= n; ++i) {
+                const double x = bx0 + step * i;
+                p.drawLine(vt.toScreen({x, yMin}), vt.toScreen({std::min(x + diag, bx1), yMax}));
+            }
+            break;
+        }
         // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
         // (2 crossings); both now REST FLAT between crossings (a short level run at each
         // peak/trough) instead of meeting at a sharp point, mirrored top/bottom. Type 3

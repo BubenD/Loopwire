@@ -23,6 +23,20 @@ namespace {
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
+// Smallest spacing between adjacent caught wires (their crossing points projected onto
+// the major axis, then sorted) — used as the "closest connected pins gap" for the shield
+// margin. Returns 0 for fewer than two crossings.
+double shieldWireGap(const std::vector<Vec2>& crossings, const Vec2& major) {
+    if (crossings.size() < 2) return 0.0;
+    std::vector<double> t;
+    t.reserve(crossings.size());
+    for (const Vec2& c : crossings) t.push_back(c.x * major.x + c.y * major.y);
+    std::sort(t.begin(), t.end());
+    double g = 1e18;
+    for (size_t i = 1; i < t.size(); ++i) g = std::min(g, t[i] - t[i - 1]);
+    return g < 1e17 ? g : 0.0;
+}
+
 // Snap a point to a horizontal or vertical segment from `prev` (the wire "90° only"
 // projection): keep whichever axis the cursor moved furthest along, zero the other.
 Vec2 orthoWirePoint(const Vec2& prev, const Vec2& p) {
@@ -2315,6 +2329,38 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
                                   w.id, p});
         }
     }
+    // (g)/(h) Shields and twist signs come in PAIRS: a shielded / twisted run is marked at
+    // both ends, so any wire carrying exactly ONE shield (or ONE twist sign) is incomplete
+    // — it must have at least 2, or none.
+    auto pairCheck = [&](EntityType type, const char* rule, const char* what) {
+        if (!ruleEnabled(QString::fromLatin1(rule))) return;
+        QHash<QString, int> countOnWire;   // wire id -> number of markers of this type
+        QHash<QString, Vec2> posOnWire;    // a representative marker position per wire
+        for (const auto& e : doc_->entities()) {
+            if (e.type != type) continue;
+            Vec2 at = e.points.empty() ? e.a : e.points.front();
+            for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray()) {
+                const QString wid = v.toString();
+                if (wid.isEmpty()) continue;
+                countOnWire[wid] += 1;
+                if (!posOnWire.contains(wid)) posOnWire.insert(wid, at);
+            }
+        }
+        for (auto it = countOnWire.begin(); it != countOnWire.end(); ++it) {
+            if (it.value() != 1) continue; // 0 = fine, >=2 = fine, exactly 1 = incomplete
+            int num = 0;
+            for (const auto& w : doc_->entities())
+                if (w.id == it.key()) { num = w.meta.value(QStringLiteral("entNum")).toInt(); break; }
+            issues.push_back({QStringLiteral("%1:%2").arg(QString::fromLatin1(rule), it.key()),
+                              QStringLiteral("Wire #%1 has a single %2 — it needs at least two "
+                                             "(one at each end) or none")
+                                  .arg(num)
+                                  .arg(QString::fromLatin1(what)),
+                              it.key(), posOnWire.value(it.key())});
+        }
+    };
+    pairCheck(EntityType::Screen, "shieldpair", "shield");
+    pairCheck(EntityType::Twist, "twistpair", "twist sign");
     return issues;
 }
 
@@ -2453,14 +2499,15 @@ void Editor::freezeScreenPreview() {
     emit overlayChanged();
 }
 
-void Editor::shieldAutoSize(double span, int /*nWires*/, double& rxOut, double& ryOut) const {
+void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const {
     // Large radius (semi-axis): when it is AUTO (Lock checked — the default) the shield
-    // scales to fit the crossed wires (full height 15% beyond the first..last wire span);
-    // when the user UNLOCKS it, the typed value is used verbatim so editing it is reflected
-    // live in the preview. The small radius always follows the ratio, so the shape/aspect
-    // is preserved either way.
+    // fits the crossed wires and extends beyond the first/last wire by 20% of the gap
+    // between the closest connected pins (≈ the wire spacing), so it clearly encloses the
+    // bundle. When the user UNLOCKS it, the typed value is used verbatim so editing it is
+    // reflected live in the preview. The small radius always follows the ratio.
     const double ratio = std::max(0.2, screenRatio_);
-    ryOut = screenRyLocked_ ? std::max(span * 1.15 / 2.0, 12.0) : std::max(1.0, screenRy_);
+    const double margin = 0.20 * std::max(0.0, pinGap);
+    ryOut = screenRyLocked_ ? std::max(span / 2.0 + margin, 12.0) : std::max(1.0, screenRy_);
     rxOut = ryOut / ratio;
 }
 
@@ -2569,11 +2616,11 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         double rxActual, ryActual;
         // Span = distance from the first to the last caught wire (works when angled too).
         const double span = distance(crossings.front(), crossings.back());
-        shieldAutoSize(span, static_cast<int>(crossings.size()), rxActual, ryActual);
         // The shield tilts with the wires: its major axis runs first->last crossing.
         const double rot = EntityRenderer::shieldRotation(crossings);
         const Vec2 major{std::cos(rot), std::sin(rot)};
         const Vec2 minor{-std::sin(rot), std::cos(rot)};
+        shieldAutoSize(span, shieldWireGap(crossings, major), rxActual, ryActual);
         Vec2 drain;
         if (screenLegDir_ == QLatin1String("top"))
             drain = {cx + (ryActual + screenLeg_) * major.x, cyMid + (ryActual + screenLeg_) * major.y};
@@ -7247,11 +7294,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 // shrinks live as the crossing line catches more or fewer wires.
                 double rx, ry;
                 const double span = distance(xs.front(), xs.back());
-                shieldAutoSize(span, static_cast<int>(xs.size()), rx, ry);
                 // Tilt to match the wires (major axis = first->last crossing).
                 const double rot = EntityRenderer::shieldRotation(xs);
                 const Vec2 major{std::cos(rot), std::sin(rot)};
                 const Vec2 minor{-std::sin(rot), std::cos(rot)};
+                shieldAutoSize(span, shieldWireGap(xs, major), rx, ry);
                 const bool capsule = screenShape_ == QLatin1String("capsule");
                 const int amount = std::clamp(screenAmount_, 1, 5);
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap

@@ -2330,6 +2330,10 @@ void MainWindow::buildRibbon() {
             editor_->beginTwist(QStringLiteral("type3"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
+        modTm->addAction(QStringLiteral("Bundle (2+ wires)"), this, [this] {
+            editor_->beginTwist(QStringLiteral("bundle"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
         modTwistBtn->setMenu(modTm);
         connect(modTwistBtn, &QToolButton::clicked, this, [this] {
             editor_->beginTwist(QStringLiteral("cross"));
@@ -6661,6 +6665,10 @@ static const std::vector<std::pair<QString, QString>>& validationRuleDefs() {
         {QStringLiteral("mixedpins"), QStringLiteral("Connector mixes numeric and letter pins")},
         {QStringLiteral("norefdes"), QStringLiteral("Connector has no reference designator")},
         {QStringLiteral("nopn"), QStringLiteral("Connector has no part number (P/N)")},
+        {QStringLiteral("shieldpair"),
+         QStringLiteral("Wire shielded by a single shield (needs at least 2, or none)")},
+        {QStringLiteral("twistpair"),
+         QStringLiteral("Wire with a single twist sign (needs at least 2, or none)")},
     };
     return defs;
 }

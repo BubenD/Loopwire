@@ -607,7 +607,7 @@ private:
     // preview so what you drag is exactly what gets placed. When all three lock flags are
     // set (the fully-automatic default) the large radius sits 15% beyond the wire span and
     // the small radius follows the locked ratio.
-    void shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const;
+    void shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const;
     // If p sits on a connector pin end, fill pinEndsOut with that connector's ordered pin
     // ends and anchorOut with the index of the matched pin; returns true.
     bool connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const;

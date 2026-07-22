@@ -1146,9 +1146,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
         const Vec2 drain = sc->points.back();
-        // Default is all-locked: full height = span*1.15, so ry = 30*1.15/2 = 17.25,
-        // cyMid=15, bottom edge = 15-17.25 = -2.25, drain sits 15 (leg) below at y=-17.25.
-        check(near(drain.y, -17.25), "shield-default-leg: the default leg length is 15");
+        // Default (auto): ry = span/2 + 20% of the wire gap = 15 + 0.2*30 = 21, cyMid=15,
+        // bottom edge = 15-21 = -6, drain sits 15 (leg) below it at y = -6-15 = -21.
+        check(near(drain.y, -21.0), "shield-default-leg: the default leg length is 15");
         SnapSettings s; // objectSnap + endpoint on by default
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
@@ -1242,6 +1242,55 @@ int run_harness_tests() {
               "shield-style: dashed line, dash scale and colour are stored");
     }
 
+    // Validation: a wire with a SINGLE shield (or single twist sign) is flagged; two on
+    // the same wire, or none, is fine.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        Entity w; w.id = "w1"; w.type = EntityType::Wire; w.points = {{0, 0}, {200, 0}};
+        w.meta.insert("entNum", 7);
+        d.entities().push_back(w);
+        QJsonArray wref; wref.append(QStringLiteral("w1"));
+        Entity s1; s1.id = "s1"; s1.type = EntityType::Screen; s1.points = {{50, 0}, {50, -20}};
+        s1.meta.insert("catch", 1); s1.meta.insert("wires", wref);
+        d.entities().push_back(s1);
+        auto hasKey = [&](const char* k) {
+            for (const auto& is : ed.validateSchematic())
+                if (is.key.startsWith(QLatin1String(k))) return true;
+            return false;
+        };
+        check(hasKey("shieldpair"), "validate: a single shield on a wire is flagged");
+        // Add a second shield on the same wire -> the pair is complete, no flag.
+        Entity s2; s2.id = "s2"; s2.type = EntityType::Screen; s2.points = {{150, 0}, {150, -20}};
+        s2.meta.insert("catch", 1); s2.meta.insert("wires", wref);
+        d.entities().push_back(s2);
+        check(!hasKey("shieldpair"), "validate: two shields on the wire clears the flag");
+        // One twist sign on the wire -> flagged; two -> fine.
+        Entity t1; t1.id = "t1"; t1.type = EntityType::Twist; t1.points = {{80, 0}};
+        t1.meta.insert("wires", wref);
+        d.entities().push_back(t1);
+        check(hasKey("twistpair"), "validate: a single twist sign on a wire is flagged");
+    }
+
+    // Bundle twist: type "bundle" is stored (a twist sign suitable for 2+ wires).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        for (int i = 0; i < 3; ++i) {
+            Entity w; w.id = QStringLiteral("w%1").arg(i); w.type = EntityType::Wire;
+            w.points = {{0, i * 20.0}, {200, i * 20.0}};
+            d.entities().push_back(w);
+        }
+        ed.beginTwist(QStringLiteral("bundle"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* tw = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
+        check(tw && tw->meta.value("twistType").toString() == "bundle" &&
+                  tw->meta.value("wires").toArray().size() == 3,
+              "twist-bundle: a bundle twist over 3 wires is placed");
+    }
+
     // Scaling a shield resizes its ellipse (rx/ry meta), not just its joint positions —
     // so a shield scales with the wires/harness when they are scaled together.
     {
@@ -1281,10 +1330,10 @@ int run_harness_tests() {
         const Entity* sc = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && sc->meta.value("catch").toInt() == 4, "shield-uniform: caught all 4 wires");
-        // ry fits the span (0..30 => 30*1.15/2 = 17.25); rx follows the ratio (structure kept).
+        // ry = span/2 + 20% of the wire gap = 15 + 0.2*10 = 17; rx follows the ratio.
         const double rx = sc->meta.value("rx").toDouble();
         const double ry = sc->meta.value("ry").toDouble();
-        check(near(ry, 17.25) && near(ry / rx, ed.screenRatio()),
+        check(near(ry, 17.0) && near(ry / rx, ed.screenRatio()),
               "shield-uniform: fit scales uniformly, keeping ry/rx == ratio");
     }
 
