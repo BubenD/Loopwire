@@ -555,6 +555,8 @@ void Editor::setTool(ToolId t) {
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
     awaitTwistAlign_ = false; // ...and twist-align pick mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
+    awaitMatchProps_ = false;  // ...and match-properties mode
+    matchSourceId_.clear();
     twistArmType_.clear();    // ...and the twist / screen band modes
     const bool wasScreenArmed = screenArm_;
     screenArm_ = false;
@@ -1262,6 +1264,12 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // Cross switch: each click toggles the hop at the nearest wire crossing (stays armed).
     if (awaitCrossSwitch_) {
         toggleWireCrossAt(raw);
+        return;
+    }
+    // Match properties: first click picks the source, each later click applies to the
+    // object under the cursor (stays armed until Esc).
+    if (awaitMatchProps_) {
+        matchPropsClick(p);
         return;
     }
     // Twist / Screen: two clicks define a crossing line across the wires to select them.
@@ -2011,6 +2019,66 @@ void Editor::twistAlignTo(const Vec2& dest) {
     doc_->setDirty(true);
     emit changed();
     emit message(QStringLiteral("Aligned %1 twist mark(s)").arg(n));
+}
+
+void Editor::beginMatchProps() {
+    if (!doc_) return;
+    setTool(ToolId::Select); // uses the pick cursor; setTool clears the flags first...
+    awaitMatchProps_ = true;  // ...so arm AFTER it
+    matchSourceId_.clear();
+    emit message(QStringLiteral("Match properties: click the source object to copy from"));
+}
+
+void Editor::matchPropsClick(const Vec2& p) {
+    if (!doc_) return;
+    auto hit = hitTest(p);
+    if (!hit) {
+        // Clicking empty space just re-prompts; the mode stays armed (Esc ends it).
+        emit message(matchSourceId_.isEmpty()
+                         ? QStringLiteral("Match properties: click the source object")
+                         : QStringLiteral("Match properties: click a target object (Esc to finish)"));
+        return;
+    }
+    // First click captures the source.
+    if (matchSourceId_.isEmpty()) {
+        matchSourceId_ = *hit;
+        selected_ = {matchSourceId_};
+        emit selectionChanged();
+        emit changed();
+        emit message(QStringLiteral(
+            "Match properties: now click objects to paint with these properties (Esc to finish)"));
+        return;
+    }
+    // Later clicks apply to the target under the cursor.
+    if (*hit == matchSourceId_) return; // clicking the source again is a no-op
+    const Entity* src = entityById(matchSourceId_);
+    Entity* dst = entityById(*hit);
+    if (!src || !dst) return;
+    pushUndo();
+    // Style / technical properties always copy across.
+    dst->layer = src->layer;
+    dst->color = src->color;
+    dst->weight = src->weight;
+    // Geometry dimensions, font and type-specific technical data only make sense between
+    // objects of the SAME type — copy the size fields + merge the source meta then.
+    if (dst->type == src->type) {
+        dst->radius = src->radius;
+        dst->radiusY = src->radiusY;
+        dst->rotation = src->rotation;
+        // Merge every source meta key (font/height, ncSize, wire AWG/net/insulation,
+        // twistType, shield radii, etc.) over the target's, preserving the target's
+        // identity-ish keys that must not be shared (pin labels, refdes, part number).
+        static const QStringList kKeepOnTarget = {
+            QStringLiteral("refdes"), QStringLiteral("pn"), QStringLiteral("pins"),
+            QStringLiteral("label"), QStringLiteral("net"), QStringLiteral("text")};
+        QJsonObject merged = dst->meta;
+        for (auto it = src->meta.begin(); it != src->meta.end(); ++it)
+            if (!kKeepOnTarget.contains(it.key())) merged.insert(it.key(), it.value());
+        dst->meta = merged;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(QStringLiteral("Matched properties onto 1 object — click more, or Esc to finish"));
 }
 
 std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut) const {

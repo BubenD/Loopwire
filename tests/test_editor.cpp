@@ -2477,6 +2477,55 @@ int run_editor_tests() {
         check(near(ed2.document()->entities()[0].radius, 15.0), "props: edit Radius");
     }
 
+    // --- Match properties: source style + size copies onto a clicked same-type target.
+    {
+        Document d; d.entities().clear();
+        // Source: a red, thick, radius-15 circle at (0,0). Target: a default circle far away.
+        Entity src; src.id = "src"; src.type = EntityType::Circle; src.center = {0, 0};
+        src.radius = 15.0; src.color = "#ff0000"; src.weight = 0.7; src.layer = "Wires";
+        Entity tgt; tgt.id = "tgt"; tgt.type = EntityType::Circle; tgt.center = {100, 0};
+        tgt.radius = 3.0;
+        d.entities().push_back(src);
+        d.entities().push_back(tgt);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.beginMatchProps();
+        check(ed.awaitingMatchProps(), "match: armed after beginMatchProps");
+        ed.onPointerPress({15, 0}, Qt::LeftButton, Qt::NoModifier);  // pick source (on its outline)
+        check(ed.awaitingMatchProps(), "match: still armed after picking the source");
+        ed.onPointerPress({103, 0}, Qt::LeftButton, Qt::NoModifier); // paint the target (on its outline)
+        const Entity* t = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "tgt") t = &e;
+        check(t && t->color == "#ff0000", "match: color copied to target");
+        check(t && near(t->weight, 0.7), "match: lineweight copied to target");
+        check(t && t->layer == "Wires", "match: layer copied to target");
+        check(t && near(t->radius, 15.0), "match: geometry (radius) copied for same type");
+        // The target keeps its own position — only style/size is matched, not location.
+        check(t && near(t->center.x, 100.0), "match: target position is unchanged");
+        // Esc ends the mode.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(!ed.awaitingMatchProps(), "match: Esc ends the mode");
+    }
+
+    // Match properties across DIFFERENT types copies only style, never geometry size.
+    {
+        Document d; d.entities().clear();
+        Entity src; src.id = "src"; src.type = EntityType::Circle; src.center = {0, 0};
+        src.radius = 15.0; src.color = "#00ff00";
+        Entity tgt; tgt.id = "tgt"; tgt.type = EntityType::Rect;
+        tgt.points = {{100, 0}, {110, 0}, {110, 10}, {100, 10}};
+        d.entities().push_back(src);
+        d.entities().push_back(tgt);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.beginMatchProps();
+        ed.onPointerPress({15, 0}, Qt::LeftButton, Qt::NoModifier);  // source on its outline
+        ed.onPointerPress({105, 0}, Qt::LeftButton, Qt::NoModifier); // on the rect's bottom edge
+        const Entity* t = nullptr;
+        for (const auto& e : d.entities()) if (e.id == "tgt") t = &e;
+        check(t && t->color == "#00ff00", "match: color copies across different types");
+        check(t && t->points.size() == 4 && near(t->points[0].x, 100.0),
+              "match: a rect target keeps its own geometry (no radius bleed-over)");
+    }
+
     // --- Direct distance entry while drawing a line.
     {
         // Bare distance along the cursor direction.

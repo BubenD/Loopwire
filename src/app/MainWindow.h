@@ -204,6 +204,12 @@ private:
     QWidget* markerGroup_ = nullptr;             // Schematic-build "Marker" size group (contextual)
     QLabel* markerLabel_ = nullptr;              // its label ("Splice ⌀" / "X size")
     QDoubleSpinBox* markerSpin_ = nullptr;       // its size spin (edits the active marker tool)
+    // Schematic-build Modify / DRC groups (+ their separator rules): hidden while the
+    // Splice or Termination tool is armed so only the marker preferences show.
+    QWidget* schemModifyGroup_ = nullptr;
+    QWidget* schemModifyRule_ = nullptr;
+    QWidget* schemDrcGroup_ = nullptr;
+    QWidget* schemDrcRule_ = nullptr;
     QStringList customWireColors_;               // user-added wire colours (persisted)
     QStringList insulationMaterials_;            // insulation material menu (persisted, editable)
     QToolButton* connectorPlaceBtn_ = nullptr;  // "Place connector" — checked while armed

@@ -341,6 +341,14 @@ public:
     void twistAlignTo(const Vec2& dest);
     bool awaitingTwistAlign() const { return awaitTwistAlign_; }
 
+    // Match properties (AutoCAD MATCHPROP): click a source object, then click similar
+    // objects to copy the source's style + technical properties (color, layer, weight,
+    // and geometry/font/meta) onto them. Armed until Esc; the first click captures the
+    // source, every later click applies to a compatible target under the cursor.
+    void beginMatchProps();
+    void matchPropsClick(const Vec2& p);
+    bool awaitingMatchProps() const { return awaitMatchProps_; }
+
     // Twist / Screen: click the button, then draw a crossing line across the wires to
     // select them. Twist adds a twisted-pair/bundle symbol of the given type ("cross"
     // braid or "jog" transposition); Screen adds a shield enclosing the selected wires.
@@ -749,6 +757,8 @@ private:
     Vec2 screenFrozenEnd_;
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     bool awaitTwistAlign_ = false;  // Twist Align armed (next click = destination point)
+    bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
+    QString matchSourceId_;         // source object id once picked (empty until the first click)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
     bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken

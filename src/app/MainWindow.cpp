@@ -1900,6 +1900,46 @@ void MainWindow::buildRibbon() {
         rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
         lay->addWidget(rule);
     };
+    // Match properties (paintbrush): pick a source object, then click similar-type
+    // targets to copy its style/geometry/technical properties. Shared by the Home and
+    // Schematic-build Modify groups.
+    auto makeMatchBtn = [this](QWidget* parent) {
+        auto* b = new QToolButton(parent);
+        b->setText(QStringLiteral("Match"));
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setIconSize(QSize(26, 26));
+        b->setMinimumWidth(66);
+        b->setToolTip(QStringLiteral(
+            "Match properties: click a source object, then click similar objects to copy "
+            "its geometry, color, font and technical properties onto them (Esc to end)"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            // A paintbrush: handle + ferrule + bristles (the AutoCAD MATCHPROP motif).
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(2.0);
+            pen.setCapStyle(Qt::RoundCap);
+            pen.setJoinStyle(Qt::RoundJoin);
+            ip.setPen(pen);
+            ip.drawLine(21, 5, 12, 14);            // handle
+            ip.setBrush(QColor("#8fb7ff"));
+            ip.drawRoundedRect(QRectF(8, 12, 8, 6), 1.5, 1.5); // ferrule
+            ip.setBrush(QColor("#ffd27f"));
+            QPolygonF bristles;
+            bristles << QPointF(8, 17) << QPointF(16, 17) << QPointF(13, 24) << QPointF(6, 22);
+            ip.setPen(QPen(QColor("#ffd27f"), 1.0));
+            ip.drawPolygon(bristles);            // bristle tuft
+            ip.end();
+            b->setIcon(QIcon(pm));
+        }
+        connect(b, &QToolButton::clicked, this, [this] {
+            editor_->beginMatchProps();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        return b;
+    };
 
     // ---- HOME : Draw | Modify | Properties | AI ----
     {
@@ -1920,6 +1960,7 @@ void MainWindow::buildRibbon() {
             mh->addWidget(toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
                                    ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
                                    ToolId::Chamfer}));
+            mh->addWidget(makeMatchBtn(modW));
             mh->addWidget(clipboardRow());
             addGroup(lay, QStringLiteral("Modify"), modW);
         }
@@ -2183,8 +2224,15 @@ void MainWindow::buildRibbon() {
         auto syncMarker = [this] {
             const ToolId t = editor_->tool();
             const bool splice = t == ToolId::Splice, x = t == ToolId::NotConnected;
-            if (markerGroup_) markerGroup_->setVisible(splice || x);
-            if ((splice || x) && markerSpin_) {
+            const bool markerArmed = splice || x;
+            if (markerGroup_) markerGroup_->setVisible(markerArmed);
+            // While placing a splice / termination, show only its preferences — hide the
+            // Modify and DRC groups so the ribbon stays focused on the marker.
+            if (schemModifyGroup_) schemModifyGroup_->setVisible(!markerArmed);
+            if (schemModifyRule_) schemModifyRule_->setVisible(!markerArmed);
+            if (schemDrcGroup_) schemDrcGroup_->setVisible(!markerArmed);
+            if (schemDrcRule_) schemDrcRule_->setVisible(!markerArmed);
+            if (markerArmed && markerSpin_) {
                 QSignalBlocker b(markerSpin_);
                 markerLabel_->setText(splice ? QStringLiteral("Splice ⌀") : QStringLiteral("X size"));
                 markerSpin_->setValue(splice ? editor_->spliceSize() : editor_->ncSize());
@@ -2343,7 +2391,18 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(twistAlignBtn, 0, 3);
-        addGroup(lay, QStringLiteral("Modify"), modW);
+        modG->addWidget(makeMatchBtn(modW), 0, 4);
+        // Built manually (not via addGroup) so the group + its separator rule can be
+        // captured and hidden while the Splice / Termination tool is armed.
+        schemModifyGroup_ = ribbonGroup(QStringLiteral("Modify"), modW);
+        lay->addWidget(schemModifyGroup_);
+        {
+            auto* rule = new QFrame(page);
+            rule->setFrameShape(QFrame::VLine);
+            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+            lay->addWidget(rule);
+            schemModifyRule_ = rule;
+        }
 
         // ---- DRC (design-rule check) group: Validate / Bypass table / Rules ----
         auto* drcW = new QWidget(page);
@@ -2428,7 +2487,17 @@ void MainWindow::buildRibbon() {
         }
         connect(rulesBtn, &QToolButton::clicked, this, [this] { showValidationRules(); });
         drcG->addWidget(rulesBtn, 0, 2);
-        addGroup(lay, QStringLiteral("DRC"), drcW);
+        // Built manually (see Modify above) so the group + rule can be hidden while the
+        // Splice / Termination tool is armed.
+        schemDrcGroup_ = ribbonGroup(QStringLiteral("DRC"), drcW);
+        lay->addWidget(schemDrcGroup_);
+        {
+            auto* rule = new QFrame(page);
+            rule->setFrameShape(QFrame::VLine);
+            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+            lay->addWidget(rule);
+            schemDrcRule_ = rule;
+        }
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
     }
