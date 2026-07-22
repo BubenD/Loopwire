@@ -2399,7 +2399,10 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
 
 void Editor::beginTwist(const QString& type) {
     if (!doc_) return;
-    setTool(ToolId::Wire); // stay in the Wire tool/ribbon (Esc exits)
+    // Use the Select tool (NOT Wire) so the Wire ribbon does not pop open — the twist
+    // crossing-line pick is dispatched from twistArmType_ before any tool handling, so
+    // it works regardless of the active tool. setTool clears twistArmType_, so arm AFTER.
+    setTool(ToolId::Select);
     twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
@@ -2473,13 +2476,13 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         }
         cx /= crossings.size();
         const double cyMid = (yMin + yMax) / 2.0;
-        const double ryActual = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-        // Small radius auto-scales with the number of wires caught (ratio to the large
-        // radius adjusts instead of staying fixed), capped so it never exceeds/flattens
-        // the ellipse.
-        const double rxAuto = std::min(screenRx_ * shieldRxScale(static_cast<int>(crossings.size())),
-                                       ryActual * 0.85);
-        const double rxActual = rxAuto;
+        // Small radius auto-scales with the number of wires caught, capped so it never
+        // flattens the ellipse.
+        double ryActual = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
+        const double rxActual =
+            std::min(screenRx_ * shieldRxScale(static_cast<int>(crossings.size())), ryActual * 0.85);
+        // When the ratio is locked, honour it: the large radius follows Small * ratio.
+        if (screenRatioLock_) ryActual = std::max(ryActual, rxActual * screenRatio_);
         Vec2 drain;
         if (screenLegDir_ == QLatin1String("top")) drain = {cx, cyMid + ryActual + screenLeg_};
         else if (screenLegDir_ == QLatin1String("left")) drain = {cx - rxActual - screenLeg_, cyMid};
@@ -2487,23 +2490,40 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         else drain = {cx, cyMid - ryActual - screenLeg_}; // "bottom" (default)
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
-        Entity e;
-        e.type = EntityType::Screen;
-        e.layer = QStringLiteral("Wires");
-        e.points = crossings;   // the caught wires (connection joints)
-        e.points.push_back(drain);
-        e.meta.insert("catch", static_cast<int>(crossings.size()));
-        e.meta.insert("wires", ids);
-        e.meta.insert("rx", rxAuto);
-        if (!screenRyLocked_) e.meta.insert("ry", screenRy_); // else auto-fit on render
-        e.meta.insert("legDir", screenLegDir_);
-        e.meta.insert("showS", screenShowS_);
-        e.meta.insert("entNum", assignEntityNumber());
-        addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
+        const bool storeRy = screenRyLocked_ ? screenRatioLock_ : true;
+        // Place `amount` shields side by side (task): the first catches the real wires;
+        // extra copies are shifted right by an ellipse width + a gap.
+        const int amount = std::clamp(screenAmount_, 1, 5);
+        const double spacing = 2.0 * rxActual + rxActual; // ellipse width + one-radius gap
+        for (int k = 0; k < amount; ++k) {
+            const Vec2 shift{k * spacing, 0.0};
+            Entity e;
+            e.type = EntityType::Screen;
+            e.layer = QStringLiteral("Wires");
+            e.points.reserve(crossings.size() + 1);
+            for (const Vec2& c : crossings) e.points.push_back({c.x + shift.x, c.y + shift.y});
+            e.points.push_back({drain.x + shift.x, drain.y + shift.y});
+            e.meta.insert("catch", static_cast<int>(crossings.size()));
+            e.meta.insert("wires", k == 0 ? ids : QJsonArray()); // only the first truly catches
+            e.meta.insert("rx", rxActual);
+            if (storeRy) e.meta.insert("ry", ryActual); // else auto-fit on render
+            e.meta.insert("legDir", screenLegDir_);
+            e.meta.insert("showS", screenShowS_);
+            e.meta.insert("entNum", assignEntityNumber());
+            addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
+        }
         screenArm_ = false;
         screenFrozen_ = false;
-        emit message(QStringLiteral("Shield added over %1 wires").arg(wireIds.size()));
+        emit message(amount > 1
+                         ? QStringLiteral("Placed %1 shields").arg(amount)
+                         : QStringLiteral("Shield added over %1 wires").arg(wireIds.size()));
         emit screenArmedChanged();
+        doc_->setDirty(true);
+        emit changed();
+        // Finished placing: return to the Select tool (region select). setTool(Select)
+        // drops the Wire ribbon, which sends the tab back to Schematic build.
+        setTool(ToolId::Select);
+        return;
     }
     doc_->setDirty(true);
     emit changed();

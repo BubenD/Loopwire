@@ -319,9 +319,14 @@ public:
     // default is edited; typing a new ratio instead derives Large = Small * ratio
     // (unlocking Large radius). Purely a ribbon convenience for the NEXT shield placed.
     double& screenRatio() { return screenRatio_; }
-    // "Primary" ratio lock: when set, the ratio is held FIXED — editing one radius drives
-    // the other to keep Large/Small == ratio, instead of the ratio re-deriving.
-    bool& screenRatioLock() { return screenRatioLock_; }
+    // Per-field locks. Three quantities (small radius, large radius, ratio) with only two
+    // degrees of freedom (ratio == large/small); each lock disables direct editing of that
+    // field and marks it as the dependent that the others drive. Ratio lock takes priority:
+    // with the ratio held, editing a radius drives the OTHER radius (even a locked one).
+    bool& screenRxLock() { return screenRxLock_; }        // small radius lock
+    bool& screenRatioLock() { return screenRatioLock_; }  // ratio lock ("Primary")
+    // How many shields to place per crossing-line drag (1-5), laid out side by side.
+    int& screenAmount() { return screenAmount_; }
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
@@ -755,7 +760,9 @@ private:
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 20.0;      // large radius when unlocked
     double screenRatio_ = 20.0 / 12.0; // large:small ratio (kept in sync with the radii above)
-    bool screenRatioLock_ = false;     // "primary": hold the ratio fixed while editing a radius
+    bool screenRatioLock_ = false;     // hold the ratio fixed while editing a radius
+    bool screenRxLock_ = false;        // small-radius field locked (dependent, not editable)
+    int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;

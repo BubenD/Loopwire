@@ -849,16 +849,18 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
-    // Wire session: Esc while a wire function is in progress ENDS the function and
-    // returns straight to the Select tool (region-select), not back to Wire.
+    // Twist arms without opening the Wire tool/ribbon (it uses Select); its crossing-line
+    // pick still works, and Esc cancels it, staying in Select.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d);
         ed.setTool(ToolId::Wire);
         ed.beginTwist(QStringLiteral("cross"));
-        check(ed.tool() == ToolId::Wire, "wire-session: a wire function keeps the Wire tool");
+        check(ed.tool() == ToolId::Select, "twist-no-wire: Twist arms on Select, not Wire");
+        check(ed.awaitingWireBand(), "twist-no-wire: the twist band pick is armed");
         ed.onKey(Qt::Key_Escape, Qt::NoModifier);
-        check(ed.tool() == ToolId::Select, "wire-session: Esc ends the function, back to Select");
+        check(ed.tool() == ToolId::Select && !ed.awaitingWireBand(),
+              "twist-no-wire: Esc cancels the twist, stays in Select");
     }
 
     // Esc while actively drawing a wire commits what was already placed (>=2 confirmed
@@ -1049,6 +1051,33 @@ int run_harness_tests() {
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
               "screen-leg-snap: a nearby point snaps onto the drain-leg termination");
+        // Placing a shield returns to the Select tool (region-select), not Wire.
+        check(ed.tool() == ToolId::Select, "shield-return-select: back to Select after placing");
+    }
+
+    // Shield "amount": placing with amount=3 drops 3 shields in one drag, side by side.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenAmount() = 3;
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        std::vector<const Entity*> shields;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) shields.push_back(&e);
+        check(shields.size() == 3, "shield-amount: three shields placed for amount=3");
+        // Only the first carries the caught-wire references; the copies are decorative.
+        int withWires = 0;
+        for (const Entity* s : shields)
+            if (!s->meta.value("wires").toArray().isEmpty()) ++withWires;
+        check(withWires == 1, "shield-amount: only the first shield references the wires");
+        // The copies are shifted to the right (distinct centre x's).
+        check(shields[0]->points.front().x < shields[2]->points.front().x,
+              "shield-amount: the copies are offset side by side");
     }
 
     // Shield small radius auto-scales (widens) with the number of wires caught, instead
