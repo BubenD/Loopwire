@@ -6071,19 +6071,53 @@ void MainWindow::buildWireRibbonTab() {
     scRatio->setToolTip(QStringLiteral(
         "Large ÷ Small radius. Stays in sync when either radius is edited; type a new "
         "ratio to derive Large radius from it (unlocks Large radius)."));
+    // "Primary" ratio lock: when checked, the ratio is held fixed — editing one radius
+    // drives the other so Large/Small stays equal to the ratio.
+    auto* scRatioLock = new QCheckBox(QStringLiteral("Primary"), scW);
+    scRatioLock->setToolTip(QStringLiteral(
+        "Keep this ratio fixed: changing one radius adjusts the other to match the ratio"));
+    connect(scRatioLock, &QCheckBox::toggled, this, [this, scRy, scRyUnlock](bool on) {
+        editor_->screenRatioLock() = on;
+        if (on) { // a driven Large radius must be editable/visible, so unlock it
+            editor_->screenRyLocked() = false;
+            QSignalBlocker b(scRyUnlock);
+            scRyUnlock->setChecked(true);
+            scRy->setEnabled(true);
+        }
+    });
     connect(scRx, &QDoubleSpinBox::editingFinished, this, [this, scRx, scRy, scRatio] {
         editor_->screenRx() = scRx->value();
-        const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value() : editor_->screenRatio();
-        editor_->screenRatio() = ratio;
-        QSignalBlocker b(scRatio);
-        scRatio->setValue(ratio);
+        if (editor_->screenRatioLock()) {
+            // Ratio fixed: drive the Large radius from the new Small radius.
+            const double newRy = std::max(1.0, scRx->value() * editor_->screenRatio());
+            editor_->screenRy() = newRy;
+            QSignalBlocker b(scRy);
+            scRy->setValue(newRy);
+        } else {
+            // Free: recompute and show the current ratio.
+            const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value()
+                                                      : editor_->screenRatio();
+            editor_->screenRatio() = ratio;
+            QSignalBlocker b(scRatio);
+            scRatio->setValue(ratio);
+        }
     });
     connect(scRy, &QDoubleSpinBox::editingFinished, this, [this, scRx, scRy, scRatio] {
         editor_->screenRy() = scRy->value();
-        const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value() : editor_->screenRatio();
-        editor_->screenRatio() = ratio;
-        QSignalBlocker b(scRatio);
-        scRatio->setValue(ratio);
+        if (editor_->screenRatioLock()) {
+            // Ratio fixed: drive the Small radius from the new Large radius.
+            const double ratio = editor_->screenRatio();
+            const double newRx = std::max(1.0, ratio > 1e-6 ? scRy->value() / ratio : scRx->value());
+            editor_->screenRx() = newRx;
+            QSignalBlocker b(scRx);
+            scRx->setValue(newRx);
+        } else {
+            const double ratio = scRx->value() > 1e-6 ? scRy->value() / scRx->value()
+                                                      : editor_->screenRatio();
+            editor_->screenRatio() = ratio;
+            QSignalBlocker b(scRatio);
+            scRatio->setValue(ratio);
+        }
     });
     connect(scRyUnlock, &QCheckBox::toggled, this, [this, scRy](bool unlocked) {
         editor_->screenRyLocked() = !unlocked;
@@ -6126,6 +6160,7 @@ void MainWindow::buildWireRibbonTab() {
     scg->addWidget(scRyUnlock, 1, 2);
     scg->addWidget(scLabel(QStringLiteral("Ratio (L÷S)")), 2, 0);
     scg->addWidget(scRatio, 2, 1);
+    scg->addWidget(scRatioLock, 2, 2);
     // Right column-group: leg + display (3 rows)
     scg->addWidget(scLabel(QStringLiteral("Leg side")), 0, 4);
     scg->addWidget(scLegDir, 0, 5);
@@ -6178,20 +6213,21 @@ void MainWindow::buildWireRibbonTab() {
     // Show/hide the Screen panel + (re)load its fields from the Editor's current
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
-    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRatio, scRyUnlock,
-                           scLegDir, scLeg, otherWireGroups] {
+    auto syncScreenGroup = [this, scGroup, scShowS, scRx, scRy, scRatio, scRatioLock,
+                           scRyUnlock, scLegDir, scLeg, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
         for (QWidget* g : otherWireGroups) g->setVisible(!armed);
         if (!armed) return;
         QSignalBlocker b1(scShowS), b2(scRx), b3(scRy), b4(scRatio), b5(scRyUnlock),
-            b6(scLegDir), b7(scLeg);
+            b6(scLegDir), b7(scLeg), b8(scRatioLock);
         scShowS->setChecked(editor_->screenShowS());
         scRx->setValue(editor_->screenRx());
         scRyUnlock->setChecked(!editor_->screenRyLocked());
         scRy->setEnabled(!editor_->screenRyLocked());
         scRy->setValue(editor_->screenRy());
         scRatio->setValue(editor_->screenRatio());
+        scRatioLock->setChecked(editor_->screenRatioLock());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
                                                : dir.left(1).toUpper() + dir.mid(1));

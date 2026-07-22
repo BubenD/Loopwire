@@ -319,6 +319,9 @@ public:
     // default is edited; typing a new ratio instead derives Large = Small * ratio
     // (unlocking Large radius). Purely a ribbon convenience for the NEXT shield placed.
     double& screenRatio() { return screenRatio_; }
+    // "Primary" ratio lock: when set, the ratio is held FIXED — editing one radius drives
+    // the other to keep Large/Small == ratio, instead of the ratio re-deriving.
+    bool& screenRatioLock() { return screenRatioLock_; }
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
@@ -752,6 +755,7 @@ private:
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 20.0;      // large radius when unlocked
     double screenRatio_ = 20.0 / 12.0; // large:small ratio (kept in sync with the radii above)
+    bool screenRatioLock_ = false;     // "primary": hold the ratio fixed while editing a radius
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;
