@@ -327,6 +327,9 @@ public:
     bool& screenRatioLock() { return screenRatioLock_; }  // ratio lock ("Primary")
     // How many shields to place per crossing-line drag (1-5), laid out side by side.
     int& screenAmount() { return screenAmount_; }
+    // Shield outline shape: "ellipse" or "capsule" (a vertical stadium — two semicircle
+    // caps joined by straight sides, built from arcs + straight lines).
+    QString& screenShape() { return screenShape_; }
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
@@ -769,6 +772,7 @@ private:
     bool screenRatioLock_ = true;      // hold the ratio fixed while editing a radius
     bool screenRxLock_ = true;         // small-radius field locked (dependent, not editable)
     int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
+    QString screenShape_ = QStringLiteral("ellipse"); // "ellipse" | "capsule"
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;

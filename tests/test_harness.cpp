@@ -562,6 +562,12 @@ int run_harness_tests() {
               "scale-conn: body/pitch/pin length scale with the factor");
         check(near(s2.pinSize, s.pinSize * 2) && near(c.a.x, 20.0),
               "scale-conn: text scales and the anchor scales about the base");
+        // The pin "cup" glyph scales with the connector (cupScale accumulates the factor).
+        check(near(c.meta.value("cupScale").toDouble(1.0), 2.0),
+              "scale-conn: the pin cup scales with the connector");
+        scaleEntity(c, {0, 0}, 1.5); // scaling again compounds
+        check(near(c.meta.value("cupScale").toDouble(1.0), 3.0),
+              "scale-conn: repeated scaling compounds the cup factor");
     }
 
     // Scaling a connector keeps a (non-selected) attached wire wired to its pin.
@@ -1044,9 +1050,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
         const Vec2 drain = sc->points.back();
-        // Default is all-locked: ry = span*1.15 = 30*1.15 = 34.5, cyMid=15, so the bottom
-        // edge is at y=15-34.5=-19.5 and the drain sits 15 (leg) below it, at y=-34.5.
-        check(near(drain.y, -34.5), "shield-default-leg: the default leg length is 15");
+        // Default is all-locked: full height = span*1.15, so ry = 30*1.15/2 = 17.25,
+        // cyMid=15, bottom edge = 15-17.25 = -2.25, drain sits 15 (leg) below at y=-17.25.
+        check(near(drain.y, -17.25), "shield-default-leg: the default leg length is 15");
         SnapSettings s; // objectSnap + endpoint on by default
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
@@ -1080,8 +1086,27 @@ int run_harness_tests() {
               "shield-amount: the copies are offset side by side");
     }
 
+    // Shield shape: choosing "capsule" is recorded on the placed shield's meta.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenShape() = QStringLiteral("capsule");
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("shape").toString() == "capsule",
+              "shield-shape: the capsule shape is stored on the placed shield");
+    }
+
     // Shield small radius auto-scales (widens) with the number of wires caught, instead
-    // of staying fixed — catching 4 wires gives a visibly larger rx than catching 2.
+    // of staying fixed — catching 4 wires gives a visibly larger rx than the base 12.
+    // (Uses the non-all-locked path where shieldRxScale applies, so unlock the ratio.)
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
@@ -1090,6 +1115,7 @@ int run_harness_tests() {
             w.points = {{0, i * 10.0}, {200, i * 10.0}};
             d.entities().push_back(w);
         }
+        ed.screenRatioLock() = false; // not all-locked -> rx = base * shieldRxScale(n)
         ed.beginScreen();
         ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);

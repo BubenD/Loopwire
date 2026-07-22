@@ -1259,11 +1259,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPointF lo = vt.toScreen(g.rectMin), hi = vt.toScreen(g.rectMax);
         p.drawRect(QRectF(lo, hi).normalized());
         // Pins: a small ">" fork ("cup") at the body edge, then the wire stub. The cup
-        // keeps a FIXED default size — it does NOT grow with the pin pitch or when the
-        // connector / harness is scaled, so the contact symbol stays a constant glyph.
+        // stays a FIXED default size when the pin pitch changes, but DOES grow when the
+        // connector is scaled (cupScale, accumulated by the Scale tool; 1.0 = default).
         const double xDir = spec.mirrorX ? -1.0 : 1.0;
-        constexpr double fork = 8.0;   // cup depth  (world units, default geometry)
-        constexpr double forkY = 5.4;  // cup half-height (world units, default geometry)
+        const double cupScale = e.meta.value(QStringLiteral("cupScale")).toDouble(1.0);
+        const double fork = 8.0 * cupScale;   // cup depth  (world units)
+        const double forkY = 5.4 * cupScale;  // cup half-height (world units)
         for (int i = 0; i < spec.pinCount; ++i) {
             const Vec2 tip = g.pinTip[i];
             const Vec2 root{tip.x - xDir * fork, tip.y};
@@ -1396,7 +1397,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
                                                 : (yMax - yMin) / 2.0 + pad;
         const QPointF c = vt.toScreen({cx, cyMid});
-        p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
+        // Outline: an ellipse, or a capsule (vertical stadium — a rounded rect whose
+        // corner radius equals the small radius, so the caps become semicircles).
+        if (e.meta.value("shape").toString(QStringLiteral("ellipse")) == QLatin1String("capsule")) {
+            const double rxs = rx * vt.scale(), rys = ry * vt.scale();
+            p.drawRoundedRect(QRectF(c.x() - rxs, c.y() - rys, 2 * rxs, 2 * rys), rxs, rxs);
+        } else {
+            p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
+        }
         // Drain lead + endpoint (the point after the k caught wires); the lead exits
         // the ellipse edge on the meta "legDir" side (default "bottom", matching the
         // original behavior before left/right were supported).

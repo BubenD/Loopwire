@@ -29,6 +29,22 @@ constexpr qint64 kLassoDelayMs = 200;
 // k=2 -> the user's base radius unchanged; each pair beyond that widens it ~18%.
 double shieldRxScale(int k) { return 1.0 + 0.18 * std::max(0, k - 2); }
 
+// Horizontal half-width of a shield outline at a vertical offset dy from its centre.
+// For a capsule the sides are straight (== rx) through the middle and round off in the
+// semicircle caps; for an ellipse it's the usual rx*sqrt(1-(dy/ry)^2). Used to seat the
+// per-wire joints exactly on the drawn outline for either shape.
+double shieldEdgeHalfWidth(const QString& shape, double rx, double ry, double dy) {
+    const double ay = std::abs(dy);
+    if (shape == QLatin1String("capsule")) {
+        const double straight = std::max(0.0, ry - rx); // half-length of the straight side
+        if (ay <= straight) return rx;
+        const double t = (ay - straight) / std::max(1e-9, rx);
+        return rx * std::sqrt(std::max(0.0, 1.0 - t * t));
+    }
+    const double t = ry > 1e-9 ? std::clamp(dy / ry, -1.0, 1.0) : 0.0;
+    return rx * std::sqrt(std::max(0.0, 1.0 - t * t));
+}
+
 // Circle through three points (circumcircle). Returns false if collinear.
 bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, double& radius) {
     const double d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
@@ -365,11 +381,9 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             const double rx = e.meta.value("rx").toDouble(12.0);
             const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
                                                     : (yMax - yMin) / 2.0 + 6.0;
+            const QString shape = e.meta.value("shape").toString(QStringLiteral("ellipse"));
             for (int i = 0; i < k; ++i) {
-                const double t = ry > 1e-9
-                                     ? std::clamp((e.points[i].y - cyMid) / ry, -1.0, 1.0)
-                                     : 0.0;
-                const double dx = rx * std::sqrt(std::max(0.0, 1.0 - t * t));
+                const double dx = shieldEdgeHalfWidth(shape, rx, ry, e.points[i].y - cyMid);
                 g.push_back({{cx - dx, e.points[i].y}, GripRole::Vertex, i});
                 g.push_back({{cx + dx, e.points[i].y}, GripRole::Vertex, i});
             }
@@ -2430,9 +2444,10 @@ void Editor::freezeScreenPreview() {
 void Editor::shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const {
     const bool allLocked = screenRxLock_ && screenRyLocked_ && screenRatioLock_;
     if (allLocked) {
-        // Fully-automatic default: the large radius sits 15% beyond the distance from the
-        // first to the last caught wire, and the small radius follows the locked ratio.
-        ryOut = std::max(span * 1.15, 12.0); // floor so a single wire isn't degenerate
+        // Fully-automatic default: the shield's full height is 15% beyond the distance
+        // between the first and last caught wire (so the large radius / semi-axis is
+        // span*1.15/2), and the small radius follows the locked ratio.
+        ryOut = std::max(span * 1.15 / 2.0, 12.0); // floor so a single wire isn't degenerate
         rxOut = ryOut / std::max(0.2, screenRatio_);
     } else {
         // Large radius: auto-fit the wire span (locked) or the manual value (unlocked).
@@ -2517,6 +2532,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("wires", k == 0 ? ids : QJsonArray()); // only the first truly catches
             e.meta.insert("rx", rxActual);
             e.meta.insert("ry", ryActual); // store the exact size so render matches placement
+            e.meta.insert("shape", screenShape_);
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
             e.meta.insert("entNum", assignEntityNumber());
@@ -7068,9 +7084,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 // Preview every shield that will be placed (Amount), side by side.
                 const int amount = std::clamp(screenAmount_, 1, 5);
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap
+                const bool capsule = screenShape_ == QLatin1String("capsule");
                 for (int k = 0; k < amount; ++k) {
                     const double ox = cx + k * spacing;
-                    p.drawEllipse(vt.toScreen({ox, cyMid}), rx * vt.scale(), ry * vt.scale());
+                    const QPointF cc = vt.toScreen({ox, cyMid});
+                    const double rxs = rx * vt.scale(), rys = ry * vt.scale();
+                    if (capsule) // stadium: rounded rect, corner radius = rx => semicircle caps
+                        p.drawRoundedRect(QRectF(cc.x() - rxs, cc.y() - rys, 2 * rxs, 2 * rys),
+                                          rxs, rxs);
+                    else
+                        p.drawEllipse(cc, rxs, rys);
                     Vec2 edge, drain;
                     if (screenLegDir_ == QLatin1String("top")) {
                         edge = {ox, cyMid + ry}; drain = {ox, cyMid + ry + screenLeg_};

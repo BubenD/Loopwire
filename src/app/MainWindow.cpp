@@ -6192,13 +6192,26 @@ void MainWindow::buildWireRibbonTab() {
         editor_->screenShowS() = on;
         if (canvas_) canvas_->update();
     });
+    // Shield outline shape: ellipse or a capsule ("Semi circle" — two semicircle caps
+    // joined by straight sides).
+    auto* scShape = new QComboBox(rightW);
+    scShape->addItems({QStringLiteral("Ellipse"), QStringLiteral("Semi circle")});
+    scShape->setMinimumWidth(96);
+    scShape->setToolTip(QStringLiteral("Shield outline shape"));
+    connect(scShape, &QComboBox::currentTextChanged, this, [this](const QString& t) {
+        editor_->screenShape() =
+            t.startsWith(QLatin1String("Semi")) ? QStringLiteral("capsule") : QStringLiteral("ellipse");
+        if (canvas_) canvas_->update();
+    });
     rightG->addWidget(scLabel(rightW, QStringLiteral("Leg side")), 0, 0);
     rightG->addWidget(scLegDir, 0, 1);
+    rightG->addWidget(scLabel(rightW, QStringLiteral("Type")), 0, 2);
+    rightG->addWidget(scShape, 0, 3);
     rightG->addWidget(scLabel(rightW, QStringLiteral("Leg length")), 1, 0);
     rightG->addWidget(scLeg, 1, 1);
     rightG->addWidget(scLabel(rightW, QStringLiteral("Amount")), 2, 0);
     rightG->addWidget(scAmount, 2, 1);
-    rightG->addWidget(scShowS, 2, 2);
+    rightG->addWidget(scShowS, 2, 2, 1, 2);
     scOuter->addWidget(rightW);
 
     auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
@@ -6250,19 +6263,22 @@ void MainWindow::buildWireRibbonTab() {
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
     auto syncScreenGroup = [this, scGroup, scShowS, refreshShieldRadii, scLegDir, scLeg,
-                           scAmount, otherWireGroups] {
+                           scAmount, scShape, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
         for (QWidget* g : otherWireGroups) g->setVisible(!armed);
         if (!armed) return;
         refreshShieldRadii(); // radii + ratio values, enable states, lock checkboxes
-        QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount);
+        QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount), b5(scShape);
         scShowS->setChecked(editor_->screenShowS());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
                                                : dir.left(1).toUpper() + dir.mid(1));
         scLeg->setValue(editor_->screenLeg());
         scAmount->setCurrentText(QString::number(std::max(1, editor_->screenAmount())));
+        scShape->setCurrentText(editor_->screenShape() == QLatin1String("capsule")
+                                    ? QStringLiteral("Semi circle")
+                                    : QStringLiteral("Ellipse"));
     };
     connect(editor_, &Editor::screenArmedChanged, this, [syncScreenGroup] { syncScreenGroup(); });
 

@@ -124,6 +124,10 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
                               "pnTextDY"})
             if (e.meta.contains(QLatin1String(k)))
                 e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
+        // Scaling the connector scales the pin "cup" glyph too (unlike a pitch change,
+        // which leaves it at the default size). Accumulate the factor in cupScale.
+        e.meta.insert(QStringLiteral("cupScale"),
+                      e.meta.value(QStringLiteral("cupScale")).toDouble(1.0) * s);
         // Bake the effective body into a custom W/H scaled by the same factor so the
         // WIDTH scales too — dynamic mode otherwise pins the width at 40, which would
         // stretch the connector out of proportion.
