@@ -585,6 +585,12 @@ private:
     // Second click of the twist/screen crossing line: gather the wires it crosses and
     // create the Twist or Screen annotation.
     void finishWireBand(const Vec2& fenceEnd);
+    // Compute the shield ellipse radii for a set of caught wires (span = distance from the
+    // first to the last wire, nWires = how many). Shared by finishWireBand and the live
+    // preview so what you drag is exactly what gets placed. When all three lock flags are
+    // set (the fully-automatic default) the large radius sits 15% beyond the wire span and
+    // the small radius follows the locked ratio.
+    void shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const;
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -760,8 +766,8 @@ private:
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 20.0;      // large radius when unlocked
     double screenRatio_ = 20.0 / 12.0; // large:small ratio (kept in sync with the radii above)
-    bool screenRatioLock_ = false;     // hold the ratio fixed while editing a radius
-    bool screenRxLock_ = false;        // small-radius field locked (dependent, not editable)
+    bool screenRatioLock_ = true;      // hold the ratio fixed while editing a radius
+    bool screenRxLock_ = true;         // small-radius field locked (dependent, not editable)
     int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely

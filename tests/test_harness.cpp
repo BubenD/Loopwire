@@ -1044,9 +1044,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
         const Vec2 drain = sc->points.back();
-        // Default leg length is 15: with ry auto-fit=(30-0)/2+6=21, cyMid=15, the
-        // bottom edge is at y=-6, so the drain sits at y=-6-15=-21.
-        check(near(drain.y, -21.0), "shield-default-leg: the default leg length is 15");
+        // Default is all-locked: ry = span*1.15 = 30*1.15 = 34.5, cyMid=15, so the bottom
+        // edge is at y=15-34.5=-19.5 and the drain sits 15 (leg) below it, at y=-34.5.
+        check(near(drain.y, -34.5), "shield-default-leg: the default leg length is 15");
         SnapSettings s; // objectSnap + endpoint on by default
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
@@ -1141,6 +1141,11 @@ int run_harness_tests() {
         d.entities().push_back(w1);
         d.entities().push_back(w2);
         ed.screenLegDir() = QStringLiteral("bottom"); // leg goes down, away from this box
+        // Unlock rx + ratio so the large radius auto-fits (ry=21, rx=12) — the compact
+        // geometry this bbox-corner test was written against (the all-locked default is
+        // deliberately larger, which would put this corner inside the ellipse).
+        ed.screenRxLock() = false;
+        ed.screenRatioLock() = false;
         ed.beginScreen();
         ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);

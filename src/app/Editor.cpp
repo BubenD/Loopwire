@@ -2427,6 +2427,22 @@ void Editor::freezeScreenPreview() {
     emit overlayChanged();
 }
 
+void Editor::shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const {
+    const bool allLocked = screenRxLock_ && screenRyLocked_ && screenRatioLock_;
+    if (allLocked) {
+        // Fully-automatic default: the large radius sits 15% beyond the distance from the
+        // first to the last caught wire, and the small radius follows the locked ratio.
+        ryOut = std::max(span * 1.15, 12.0); // floor so a single wire isn't degenerate
+        rxOut = ryOut / std::max(0.2, screenRatio_);
+    } else {
+        // Large radius: auto-fit the wire span (locked) or the manual value (unlocked).
+        ryOut = screenRyLocked_ ? (span / 2.0 + 6.0) : screenRy_;
+        rxOut = std::min(screenRx_ * shieldRxScale(nWires), ryOut * 0.85);
+        // A locked ratio then drives the large radius so Large/Small stays fixed.
+        if (screenRatioLock_) ryOut = std::max(ryOut, rxOut * screenRatio_);
+    }
+}
+
 void Editor::finishWireBand(const Vec2& fenceEnd) {
     const Vec2 f0 = wireBandStart_, f1 = fenceEnd;
     std::vector<Vec2> crossings;
@@ -2476,13 +2492,8 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         }
         cx /= crossings.size();
         const double cyMid = (yMin + yMax) / 2.0;
-        // Small radius auto-scales with the number of wires caught, capped so it never
-        // flattens the ellipse.
-        double ryActual = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-        const double rxActual =
-            std::min(screenRx_ * shieldRxScale(static_cast<int>(crossings.size())), ryActual * 0.85);
-        // When the ratio is locked, honour it: the large radius follows Small * ratio.
-        if (screenRatioLock_) ryActual = std::max(ryActual, rxActual * screenRatio_);
+        double rxActual, ryActual;
+        shieldAutoSize(yMax - yMin, static_cast<int>(crossings.size()), rxActual, ryActual);
         Vec2 drain;
         if (screenLegDir_ == QLatin1String("top")) drain = {cx, cyMid + ryActual + screenLeg_};
         else if (screenLegDir_ == QLatin1String("left")) drain = {cx - rxActual - screenLeg_, cyMid};
@@ -2490,7 +2501,6 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         else drain = {cx, cyMid - ryActual - screenLeg_}; // "bottom" (default)
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
-        const bool storeRy = screenRyLocked_ ? screenRatioLock_ : true;
         // Place `amount` shields side by side (task): the first catches the real wires;
         // extra copies are shifted right by an ellipse width + a gap.
         const int amount = std::clamp(screenAmount_, 1, 5);
@@ -2506,7 +2516,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("catch", static_cast<int>(crossings.size()));
             e.meta.insert("wires", k == 0 ? ids : QJsonArray()); // only the first truly catches
             e.meta.insert("rx", rxActual);
-            if (storeRy) e.meta.insert("ry", ryActual); // else auto-fit on render
+            e.meta.insert("ry", ryActual); // store the exact size so render matches placement
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
             e.meta.insert("entNum", assignEntityNumber());
@@ -7051,14 +7061,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const Vec2& v : xs) { cx += v.x; yMin = std::min(yMin, v.y); yMax = std::max(yMax, v.y); }
                 cx /= xs.size();
                 const double cyMid = (yMin + yMax) / 2.0;
-                // Size EXACTLY as finishWireBand will: large radius auto-fits the caught
-                // wires (or the manual value), small radius auto-scales with wire count,
-                // and a locked ratio then drives the large radius. So the ghost grows /
+                // Size EXACTLY as finishWireBand will (shared helper) so the ghost grows /
                 // shrinks live as the crossing line catches more or fewer wires.
-                double ry = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-                const double rx = std::min(screenRx_ * shieldRxScale(static_cast<int>(xs.size())),
-                                           ry * 0.85);
-                if (screenRatioLock_) ry = std::max(ry, rx * screenRatio_);
+                double rx, ry;
+                shieldAutoSize(yMax - yMin, static_cast<int>(xs.size()), rx, ry);
                 // Preview every shield that will be placed (Amount), side by side.
                 const int amount = std::clamp(screenAmount_, 1, 5);
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap

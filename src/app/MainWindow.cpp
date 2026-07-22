@@ -6104,6 +6104,7 @@ void MainWindow::buildWireRibbonTab() {
         scRx->setEnabled(!editor_->screenRxLock());
         scRy->setEnabled(!editor_->screenRyLocked());
         scRatio->setEnabled(!editor_->screenRatioLock());
+        if (canvas_) canvas_->update(); // repaint so the shield preview reflects the change
     };
 
     connect(scRx, &QDoubleSpinBox::editingFinished, this, [this, refreshShieldRadii, scRx] {
@@ -6164,25 +6165,33 @@ void MainWindow::buildWireRibbonTab() {
     scLegDir->setMinimumWidth(90);
     scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
                         QStringLiteral("Left"), QStringLiteral("Right")});
-    connect(scLegDir, &QComboBox::currentTextChanged, this,
-            [this](const QString& t) { editor_->screenLegDir() = t.toLower(); });
+    connect(scLegDir, &QComboBox::currentTextChanged, this, [this](const QString& t) {
+        editor_->screenLegDir() = t.toLower();
+        if (canvas_) canvas_->update();
+    });
     auto* scLeg = new QDoubleSpinBox(rightW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
     scLeg->setMinimumWidth(70);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    connect(scLeg, &QDoubleSpinBox::editingFinished, this,
-            [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
+    connect(scLeg, &QDoubleSpinBox::editingFinished, this, [this, scLeg] {
+        editor_->screenLeg() = scLeg->value();
+        if (canvas_) canvas_->update();
+    });
     // Amount: how many shields to place per drag (1-5), laid side by side.
     auto* scAmount = new QComboBox(rightW);
     for (int n = 1; n <= 5; ++n) scAmount->addItem(QString::number(n));
     scAmount->setMinimumWidth(52);
     scAmount->setToolTip(QStringLiteral("Place this many shields at once, side by side"));
-    connect(scAmount, &QComboBox::currentTextChanged, this,
-            [this](const QString& t) { editor_->screenAmount() = std::max(1, t.toInt()); });
+    connect(scAmount, &QComboBox::currentTextChanged, this, [this](const QString& t) {
+        editor_->screenAmount() = std::max(1, t.toInt());
+        if (canvas_) canvas_->update();
+    });
     auto* scShowS = new QCheckBox(QStringLiteral("Show S"), rightW);
-    connect(scShowS, &QCheckBox::toggled, this,
-            [this](bool on) { editor_->screenShowS() = on; });
+    connect(scShowS, &QCheckBox::toggled, this, [this](bool on) {
+        editor_->screenShowS() = on;
+        if (canvas_) canvas_->update();
+    });
     rightG->addWidget(scLabel(rightW, QStringLiteral("Leg side")), 0, 0);
     rightG->addWidget(scLegDir, 0, 1);
     rightG->addWidget(scLabel(rightW, QStringLiteral("Leg length")), 1, 0);
