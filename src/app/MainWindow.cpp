@@ -1965,10 +1965,14 @@ void MainWindow::buildRibbon() {
             auto* mh = new QHBoxLayout(modW);
             mh->setContentsMargins(0, 0, 0, 0);
             mh->setSpacing(2);
-            mh->addWidget(toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                                   ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
-                                   ToolId::Chamfer}));
-            mh->addWidget(makeMatchBtn(modW, /*iconOnly=*/true));
+            // 9 modify tools lay out 5 + 4, leaving the bottom-right grid cell empty;
+            // drop the Match icon into it so it lines up with the other icons in the row.
+            auto* modRow = toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
+                                    ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
+                                    ToolId::Chamfer});
+            if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
+                g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
+            mh->addWidget(modRow);
             mh->addWidget(clipboardRow());
             addGroup(lay, QStringLiteral("Modify"), modW);
         }
