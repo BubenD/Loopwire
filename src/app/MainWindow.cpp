@@ -6047,25 +6047,32 @@ void MainWindow::buildWireRibbonTab() {
     lay->addWidget(twistGroup);
 
     // ---- Shield fields: appear only WHILE placing a shield (armed via the Shield
-    // button). Grouped for comfortable scanning: radii together (small, then large +
-    // its Unlock right beside it), then the leg (side + length) together, then the
-    // Show-S display toggle last (a cosmetic option, not part of the geometry). ----
+    // button). Laid out roomier than the other Wire-ribbon groups (wider labels/fields,
+    // generous spacing, and a blank spacer row between each logical section) so the
+    // three sections — radii, leg, display — read as distinct at a glance:
+    // Small radius, Large radius + its Unlock beside it, [gap], Leg side + length,
+    // [gap], Show S last (a cosmetic option, not part of the geometry).
     auto* scW = new QWidget(wireTab_);
     auto* scg = new QGridLayout(scW);
-    scg->setContentsMargins(0, 0, 0, 0);
-    scg->setHorizontalSpacing(6);
-    scg->setVerticalSpacing(3);
+    scg->setContentsMargins(4, 2, 4, 2);
+    scg->setHorizontalSpacing(10);
+    scg->setVerticalSpacing(5);
+    auto scLabel = [&](const QString& text) {
+        auto* l = new QLabel(text, scW);
+        l->setMinimumWidth(76);
+        return l;
+    };
     auto* scRx = new QDoubleSpinBox(scW);
     scRx->setRange(1.0, 500.0);
     scRx->setDecimals(1);
-    scRx->setMinimumWidth(58);
+    scRx->setMinimumWidth(72);
     scRx->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scRx, &QDoubleSpinBox::editingFinished, this,
             [this, scRx] { editor_->screenRx() = scRx->value(); });
     auto* scRy = new QDoubleSpinBox(scW);
     scRy->setRange(1.0, 500.0);
     scRy->setDecimals(1);
-    scRy->setMinimumWidth(58);
+    scRy->setMinimumWidth(72);
     scRy->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRy->setEnabled(false); // locked (auto-fit) until "Unlock" is checked
     connect(scRy, &QDoubleSpinBox::editingFinished, this,
@@ -6078,6 +6085,7 @@ void MainWindow::buildWireRibbonTab() {
         scRy->setEnabled(unlocked);
     });
     auto* scLegDir = new QComboBox(scW);
+    scLegDir->setMinimumWidth(90);
     scLegDir->addItems({QStringLiteral("Bottom"), QStringLiteral("Top"),
                         QStringLiteral("Left"), QStringLiteral("Right")});
     connect(scLegDir, &QComboBox::currentTextChanged, this,
@@ -6085,7 +6093,7 @@ void MainWindow::buildWireRibbonTab() {
     auto* scLeg = new QDoubleSpinBox(scW);
     scLeg->setRange(0.0, 5000.0);
     scLeg->setDecimals(1);
-    scLeg->setMinimumWidth(58);
+    scLeg->setMinimumWidth(72);
     scLeg->setButtonSymbols(QAbstractSpinBox::NoButtons);
     connect(scLeg, &QDoubleSpinBox::editingFinished, this,
             [this, scLeg] { editor_->screenLeg() = scLeg->value(); });
@@ -6093,15 +6101,17 @@ void MainWindow::buildWireRibbonTab() {
     connect(scShowS, &QCheckBox::toggled, this,
             [this](bool on) { editor_->screenShowS() = on; });
     int r = 0;
-    scg->addWidget(new QLabel(QStringLiteral("Small radius"), scW), r, 0);
+    scg->addWidget(scLabel(QStringLiteral("Small radius")), r, 0);
     scg->addWidget(scRx, r++, 1);
-    scg->addWidget(new QLabel(QStringLiteral("Large radius"), scW), r, 0);
+    scg->addWidget(scLabel(QStringLiteral("Large radius")), r, 0);
     scg->addWidget(scRy, r, 1);
     scg->addWidget(scRyUnlock, r++, 2);
-    scg->addWidget(new QLabel(QStringLiteral("Leg side"), scW), r, 0);
+    scg->setRowMinimumHeight(r++, 10); // gap: radii -> leg
+    scg->addWidget(scLabel(QStringLiteral("Leg side")), r, 0);
     scg->addWidget(scLegDir, r++, 1, 1, 2);
-    scg->addWidget(new QLabel(QStringLiteral("Leg length"), scW), r, 0);
+    scg->addWidget(scLabel(QStringLiteral("Leg length")), r, 0);
     scg->addWidget(scLeg, r++, 1);
+    scg->setRowMinimumHeight(r++, 10); // gap: leg -> display option
     scg->addWidget(scShowS, r++, 0, 1, 3);
     auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
     scGroup->setVisible(false); // shown only while a shield is being placed

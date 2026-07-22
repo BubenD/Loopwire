@@ -1053,6 +1053,90 @@ int run_harness_tests() {
               "screen-leg-snap: a nearby point snaps onto the drain-leg termination");
     }
 
+    // Shield small radius auto-scales (widens) with the number of wires caught, instead
+    // of staying fixed — catching 4 wires gives a visibly larger rx than catching 2.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        for (int i = 0; i < 4; ++i) {
+            Entity w; w.id = QStringLiteral("w%1").arg(i); w.type = EntityType::Wire;
+            w.points = {{0, i * 10.0}, {200, i * 10.0}};
+            d.entities().push_back(w);
+        }
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("catch").toInt() == 4, "shield-rx-scale: caught all 4 wires");
+        check(sc && sc->meta.value("rx").toDouble() > 12.0 + 1e-6,
+              "shield-rx-scale: small radius widened beyond the base default for 4 wires");
+    }
+
+    // Shield joints sit ON the ellipse boundary (not at the raw, possibly-centred wire
+    // crossing point) — grabbing the joint at its projected position works, while the
+    // old raw centre-line position no longer has a grip there.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        QString scId; const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) { scId = e.id; sc = &e; }
+        check(sc, "shield-joint-ellipse: the shield was placed");
+        const double rx = sc->meta.value("rx").toDouble();
+        // Both wires cross at x=100 == cx, so the raw points sit on the ellipse's centre
+        // line; the projected joint for pin 0 (y=0) should be at (cx+rx, 0) (tie-break
+        // right since raw.x is not STRICTLY less than cx).
+        ed.setTool(ToolId::Select);
+        ed.selectById(scId);
+        ed.onPointerPress({100.0 + rx, 0.0}, Qt::LeftButton, Qt::NoModifier); // grab projected joint
+        ed.onPointerPress({100.0 + rx, 60.0}, Qt::LeftButton, Qt::NoModifier); // drag it
+        const Entity* sc2 = nullptr;
+        for (const auto& e : d.entities()) if (e.id == scId) sc2 = &e;
+        check(sc2 && near(sc2->points[0].y, 60.0),
+              "shield-joint-ellipse: the joint at the projected ellipse position was grabbed");
+    }
+
+    // Touch-select must reach the ACTUAL ellipse/leg, not the loose bounding box: a box
+    // only over a bbox corner (outside the true ellipse curve and away from the leg)
+    // must NOT select the shield.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenLegDir() = QStringLiteral("bottom"); // leg goes down, away from this box
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        QString scId;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) scId = e.id;
+        check(!scId.isEmpty(), "shield-touch-precise: the shield was placed");
+        // Start the drag from a point FAR from anything (so the first click can't
+        // accidentally direct-hit the shield/wires and skip the region-select path —
+        // once RectPending, the 2nd click's position is used purely as the opposite
+        // corner and is never hit-tested). The resulting box's near corner sits right
+        // at the shield's bbox top-right corner (~112,36) — inside the loose bounding
+        // box but outside the true ellipse curve (checked: the curve only reaches
+        // y≈30.6 at x=108, well under this box's y0=33).
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({300, 45}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({300, 45}, Qt::LeftButton);
+        ed.onPointerMove({108, 33});
+        ed.onPointerPress({108, 33}, Qt::LeftButton, Qt::NoModifier);
+        const auto& sel = ed.selection();
+        check(std::find(sel.begin(), sel.end(), scId) == sel.end(),
+              "shield-touch-precise: a box over only the bbox corner does NOT select the shield");
+    }
+
     // Screen: a crossing line over wires creates a Screen annotation enclosing them.
     {
         Document d; d.entities().clear();

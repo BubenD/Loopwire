@@ -23,6 +23,12 @@ namespace {
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
+// Shield ellipse small-radius auto-scale: as more wires are caught (and the ellipse
+// grows taller to fit them), widen the small radius proportionally too so it never
+// reads as a thin needle — the ratio adjusts with wire count instead of staying fixed.
+// k=2 -> the user's base radius unchanged; each pair beyond that widens it ~18%.
+double shieldRxScale(int k) { return 1.0 + 0.18 * std::max(0, k - 2); }
+
 // Circle through three points (circumcircle). Returns false if collinear.
 bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, double& radius) {
     const double d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
@@ -338,12 +344,13 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::Screen: {
-        // A joint at each caught wire + the drain endpoint (all draggable), plus a Move
-        // handle at the ellipse centre to relocate the whole shield.
+        // A joint at each caught wire, shown ON the ellipse boundary (projected from
+        // its actual y-level and which side of centre it approaches from) — NOT at the
+        // raw, possibly scattered wire-crossing point — so joints always read as clean
+        // connections into the drawn outline. Plus the drain endpoint (at its own raw
+        // position, outside the ellipse) and a Move handle at the centre.
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
-        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
-            g.push_back({e.points[i], GripRole::Vertex, i});
         if (k >= 1) {
             double cx = 0.0, yMin = 1e18, yMax = -1e18;
             for (int i = 0; i < k; ++i) {
@@ -351,8 +358,23 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                 yMin = std::min(yMin, e.points[i].y);
                 yMax = std::max(yMax, e.points[i].y);
             }
-            g.push_back({{cx / k, (yMin + yMax) / 2.0}, GripRole::Move, 0});
+            cx /= k;
+            const double cyMid = (yMin + yMax) / 2.0;
+            const double rx = e.meta.value("rx").toDouble(12.0);
+            const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                    : (yMax - yMin) / 2.0 + 6.0;
+            for (int i = 0; i < k; ++i) {
+                const double t = ry > 1e-9
+                                     ? std::clamp((e.points[i].y - cyMid) / ry, -1.0, 1.0)
+                                     : 0.0;
+                const double dx = rx * std::sqrt(std::max(0.0, 1.0 - t * t));
+                const double side = e.points[i].x < cx ? -1.0 : 1.0;
+                g.push_back({{cx + side * dx, e.points[i].y}, GripRole::Vertex, i});
+            }
+            g.push_back({{cx, cyMid}, GripRole::Move, 0});
         }
+        for (int i = k; i < static_cast<int>(e.points.size()); ++i)
+            g.push_back({e.points[i], GripRole::Vertex, i}); // drain endpoint
         break;
     }
     case EntityType::Polygon:
@@ -1467,14 +1489,35 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         for (const auto& pt : g.pinTip) pts.push_back(pt);
         break;
     }
-    case EntityType::Twist:
-    case EntityType::Screen: {
+    case EntityType::Twist: {
         // The rendered glyph's bounding box (wider than the raw stored points — see
         // Entity::bounds()), all 4 corners, so a crossing box that merely touches the
-        // drawn braid/ellipse/leg (not just the narrow crossing points) selects it.
+        // drawn braid selects it.
         const Bounds b = e.bounds();
         if (b.valid) pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}};
         else pts = {e.a};
+        break;
+    }
+    case EntityType::Screen: {
+        // Cardinal points on the ACTUAL ellipse + the drain point (not the loose
+        // bounding box) — a region must touch the real drawn shape, not just the
+        // rectangle around it.
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        if (k < 1) { pts = {e.a}; break; }
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (int i = 0; i < k; ++i) {
+            cx += e.points[i].x;
+            yMin = std::min(yMin, e.points[i].y);
+            yMax = std::max(yMax, e.points[i].y);
+        }
+        cx /= k;
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double rx = e.meta.value("rx").toDouble(12.0);
+        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                : (yMax - yMin) / 2.0 + 6.0;
+        pts = {{cx - rx, cyMid}, {cx + rx, cyMid}, {cx, cyMid - ry}, {cx, cyMid + ry}};
+        if (static_cast<int>(e.points.size()) > k) pts.push_back(e.points.back()); // drain
         break;
     }
     default: {
@@ -1608,11 +1651,47 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         break;
     }
     case EntityType::Twist:
-    case EntityType::Screen:
         // The bounding-box edges (from the corners above) so a crossing box touching
         // any edge of the glyph's actual footprint registers as a hit.
         for (size_t i = 0; i < pts.size(); ++i) segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
         break;
+    case EntityType::Screen: {
+        // Tessellate the ACTUAL ellipse outline + the drain leg — a crossing box must
+        // touch the real drawn curve/line (not just the loose bounding box) to select it.
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        if (k < 1) break;
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (int i = 0; i < k; ++i) {
+            cx += e.points[i].x;
+            yMin = std::min(yMin, e.points[i].y);
+            yMax = std::max(yMax, e.points[i].y);
+        }
+        cx /= k;
+        const double cyMid = (yMin + yMax) / 2.0;
+        const double rx = e.meta.value("rx").toDouble(12.0);
+        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                : (yMax - yMin) / 2.0 + 6.0;
+        const int n = 48;
+        Vec2 prev{cx + rx, cyMid};
+        for (int i = 1; i <= n; ++i) {
+            const double a = 2.0 * M_PI * i / n;
+            const Vec2 cur{cx + rx * std::cos(a), cyMid + ry * std::sin(a)};
+            segs.emplace_back(prev, cur);
+            prev = cur;
+        }
+        if (static_cast<int>(e.points.size()) > k) {
+            const Vec2 drain = e.points.back();
+            const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
+            Vec2 edge;
+            if (legDir == QLatin1String("top")) edge = {cx, cyMid + ry};
+            else if (legDir == QLatin1String("left")) edge = {cx - rx, cyMid};
+            else if (legDir == QLatin1String("right")) edge = {cx + rx, cyMid};
+            else edge = {cx, cyMid - ry};
+            segs.emplace_back(edge, drain);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -2325,7 +2404,12 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         cx /= crossings.size();
         const double cyMid = (yMin + yMax) / 2.0;
         const double ryActual = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-        const double rxActual = screenRx_;
+        // Small radius auto-scales with the number of wires caught (ratio to the large
+        // radius adjusts instead of staying fixed), capped so it never exceeds/flattens
+        // the ellipse.
+        const double rxAuto = std::min(screenRx_ * shieldRxScale(static_cast<int>(crossings.size())),
+                                       ryActual * 0.85);
+        const double rxActual = rxAuto;
         Vec2 drain;
         if (screenLegDir_ == QLatin1String("top")) drain = {cx, cyMid + ryActual + screenLeg_};
         else if (screenLegDir_ == QLatin1String("left")) drain = {cx - rxActual - screenLeg_, cyMid};
@@ -2340,7 +2424,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         e.points.push_back(drain);
         e.meta.insert("catch", static_cast<int>(crossings.size()));
         e.meta.insert("wires", ids);
-        e.meta.insert("rx", screenRx_);
+        e.meta.insert("rx", rxAuto);
         if (!screenRyLocked_) e.meta.insert("ry", screenRy_); // else auto-fit on render
         e.meta.insert("legDir", screenLegDir_);
         e.meta.insert("showS", screenShowS_);
@@ -6878,7 +6962,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 cx /= xs.size();
                 const double cyMid = (yMin + yMax) / 2.0;
                 const double ry = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-                const double rx = screenRx_;
+                // Match finishWireBand's auto-scale so the preview matches the result.
+                const double rx = std::min(screenRx_ * shieldRxScale(static_cast<int>(xs.size())),
+                                           ry * 0.85);
                 p.drawEllipse(vt.toScreen({cx, cyMid}), rx * vt.scale(), ry * vt.scale());
                 // Drain leg preview, from the ellipse edge on the chosen side.
                 Vec2 edge, drain;
