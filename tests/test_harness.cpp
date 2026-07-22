@@ -601,6 +601,29 @@ int run_harness_tests() {
         check(onPin == 4, "wire-fanout: every fanned wire starts on a distinct pin end");
     }
 
+    // Wiring from a pin, a number sets the fan-out count: setWireFan(3) from pin 0 wires
+    // 3 pins (the digit key in the UI routes to setWireFan the same way).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress(g.pinEnd[0], Qt::LeftButton, Qt::NoModifier); // plain start on pin 0
+        check(ed.wireFanArmed(), "wire-fan-count: fan is armed after starting on a pin");
+        ed.setWireFan(3);                                              // number key "3"
+        ed.onPointerPress({g.pinEnd[0].x + 200, g.pinEnd[0].y}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        int wires = 0;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Wire) ++wires;
+        check(wires == 3, "wire-fan-count: pressing 3 wires exactly three pins");
+    }
+
     // Scaling a connector keeps a (non-selected) attached wire wired to its pin.
     {
         Document d; d.entities().clear();

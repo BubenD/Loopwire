@@ -685,6 +685,13 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
         const bool isLetter = !t.isEmpty() && t[0].isLetter();
         const bool isValueChar =
             !t.isEmpty() && (t[0].isDigit() || t == "." || t == "-" || t == "@" || t == ",");
+        // Wiring from a connector pin: a digit sets how many pins the wire fans out to
+        // (1 = single), instead of opening the distance-entry field.
+        if (editor_->wireFanArmed() && !t.isEmpty() && t[0].isDigit() && t[0] != QLatin1Char('0')) {
+            editor_->setWireFan(t[0].digitValue());
+            e->accept();
+            return;
+        }
         const bool drafting = editor_->wantsTextInput();
         bool open = false;
         if (drafting) {

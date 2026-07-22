@@ -333,6 +333,13 @@ public:
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
+    // Wire fan-out: true while drafting a wire that started on a connector pin (so a number
+    // key can pick how many pins to wire). setWireFan(n) fans n wires from the anchor pin
+    // downward (clamped to the last pin); n<=1 reverts to a single wire.
+    bool wireFanArmed() const {
+        return drafting_ && tool_ == ToolId::Wire && wireFanAnchor_ >= 0 && !wireFanPins_.empty();
+    }
+    void setWireFan(int n);
     // Freeze the in-progress screen preview (Tab) so its ribbon fields can be edited
     // without the crossing-line drag changing the caught wires; a click then places it
     // at the frozen end point regardless of where the click lands.
@@ -594,9 +601,9 @@ private:
     // set (the fully-automatic default) the large radius sits 15% beyond the wire span and
     // the small radius follows the locked ratio.
     void shieldAutoSize(double span, int nWires, double& rxOut, double& ryOut) const;
-    // If p sits on a connector pin end, fill offsetsOut with (pinEnd[i] - p) for EVERY pin
-    // of that connector (so the anchor pin's own offset is ~{0,0}) and return true.
-    bool connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) const;
+    // If p sits on a connector pin end, fill pinEndsOut with that connector's ordered pin
+    // ends and anchorOut with the index of the matched pin; returns true.
+    bool connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const;
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -764,11 +771,14 @@ private:
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
     bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
-    // Shift-drag a wire from a connector pin: the same wire is drawn from EVERY pin of that
-    // connector at once. wireArrayOffsets_ holds each pin's offset from the anchor pin
-    // (offset[anchor] == {0,0}); active only while such a wire is being drafted.
+    // Wiring from a connector pin: the same route can fan out to several pins at once.
+    // Shift at the first click fans to the last pin; pressing a number key sets the count.
+    // wireArrayOffsets_ holds each fanned wire's offset from the anchor pin (anchor=={0,0});
+    // wireFanPins_ / wireFanAnchor_ remember the connector so the count can be re-picked live.
     bool wireArray_ = false;
     std::vector<Vec2> wireArrayOffsets_;
+    std::vector<Vec2> wireFanPins_;   // all pin ends of the connector the wire started on
+    int wireFanAnchor_ = -1;          // index (in wireFanPins_) of the pin the wire started on
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
     double screenRx_ = 12.0;      // screen ellipse small radius

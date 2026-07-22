@@ -2446,7 +2446,7 @@ void Editor::shieldAutoSize(double span, int /*nWires*/, double& rxOut, double& 
     rxOut = ryOut / ratio;
 }
 
-bool Editor::connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) const {
+bool Editor::connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const {
     if (!doc_) return false;
     const double tol = std::max(worldTolerance(), 1e-3);
     for (const auto& e : doc_->entities()) {
@@ -2456,11 +2456,28 @@ bool Editor::connectorPinFanout(const Vec2& p, std::vector<Vec2>& offsetsOut) co
         for (int i = 0; i < static_cast<int>(g.pinEnd.size()); ++i)
             if (distance(p, g.pinEnd[i]) <= tol) { anchor = i; break; }
         if (anchor < 0) continue;
-        offsetsOut.clear();
-        for (const Vec2& pe : g.pinEnd) offsetsOut.push_back(pe - g.pinEnd[anchor]);
+        pinEndsOut = g.pinEnd;
+        anchorOut = anchor;
         return true;
     }
     return false;
+}
+
+void Editor::setWireFan(int n) {
+    if (wireFanAnchor_ < 0 || wireFanPins_.empty()) return;
+    n = std::max(1, n);
+    const int total = static_cast<int>(wireFanPins_.size());
+    const int last = std::min(total, wireFanAnchor_ + n); // fan downward from the clicked pin
+    const Vec2 anchorPin = wireFanPins_[wireFanAnchor_];
+    wireArrayOffsets_.clear();
+    for (int i = wireFanAnchor_; i < last; ++i)
+        wireArrayOffsets_.push_back(wireFanPins_[i] - anchorPin);
+    wireArray_ = wireArrayOffsets_.size() > 1;
+    const int count = static_cast<int>(wireArrayOffsets_.size());
+    emit message(count > 1
+                     ? QStringLiteral("Wiring %1 pins — click the route; Esc to finish").arg(count)
+                     : QStringLiteral("Single wire — press a number to wire more pins"));
+    emit overlayChanged();
 }
 
 void Editor::finishWireBand(const Vec2& fenceEnd) {
@@ -3266,14 +3283,20 @@ void Editor::handleDrawPress(const Vec2& p) {
             if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
             drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
         }
-        // Shift-start a wire on a connector pin: fan the wire out to EVERY pin at once.
-        if (tool_ == ToolId::Wire && draftPts_.empty() && (pressMods_ & Qt::ShiftModifier)) {
-            std::vector<Vec2> offs;
-            if (connectorPinFanout(p, offs) && offs.size() > 1) {
-                wireArray_ = true;
-                wireArrayOffsets_ = std::move(offs);
-                emit message(QStringLiteral("Wiring all %1 pins — click the route; Esc to finish")
-                                 .arg(wireArrayOffsets_.size()));
+        // Starting a wire on a connector pin: remember the connector's pins so the fan-out
+        // count can be set (Shift = all pins from here down; a number key = that many).
+        if (tool_ == ToolId::Wire && draftPts_.empty()) {
+            wireFanPins_.clear();
+            wireFanAnchor_ = -1;
+            wireArray_ = false;
+            wireArrayOffsets_.clear();
+            std::vector<Vec2> pins;
+            int anchor = -1;
+            if (connectorPinsAt(p, pins, anchor)) {
+                wireFanPins_ = std::move(pins);
+                wireFanAnchor_ = anchor;
+                if (pressMods_ & Qt::ShiftModifier)
+                    setWireFan(static_cast<int>(wireFanPins_.size())); // Shift = fan to the last pin
             }
         }
         draftPts_.push_back(p);
@@ -4121,6 +4144,8 @@ void Editor::finishDraw() {
             }
             wireArray_ = false;
             wireArrayOffsets_.clear();
+            wireFanPins_.clear();
+            wireFanAnchor_ = -1;
             draftPts_.clear();
             draftBulges_.clear();
             draftCornerRadii_.clear();
@@ -4202,8 +4227,10 @@ void Editor::cancelDraw() {
     tanPickIds_.clear();
     tanPickPts_.clear();
     tanAwaitRadius_ = false;
-    wireArray_ = false; // end any Shift-fanout wire session
+    wireArray_ = false; // end any wire fan-out session
     wireArrayOffsets_.clear();
+    wireFanPins_.clear();
+    wireFanAnchor_ = -1;
 }
 
 void Editor::toggleArcMirror() {
