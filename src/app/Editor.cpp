@@ -6840,14 +6840,13 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
         // Wire session: while a wire function is in progress (drawing / twist / screen /
-        // cross-switch), Esc cancels just that and STAYS in the Wire tool + ribbon; a
-        // second Esc with nothing in progress exits to Select.
+        // cross-switch), Esc ends that function and RETURNS TO SELECT. A wire draft with
+        // at least 2 confirmed points is COMMITTED as-is (keeping whatever was already
+        // placed) rather than thrown away; Esc only cancels the pending next segment.
+        // Fewer points (nothing to keep yet) cancels outright, as does an in-progress
+        // Twist/Screen/Cross-switch pick.
         if (tool_ == ToolId::Wire &&
             (drafting_ || !twistArmType_.isEmpty() || screenArm_ || awaitCrossSwitch_)) {
-            // A wire draft with at least 2 confirmed points is COMMITTED as-is (keeping
-            // whatever was already placed) instead of being thrown away; Esc only cancels
-            // the pending next point / segment. Fewer points (nothing to keep yet) still
-            // cancels outright, as does an in-progress Twist/Screen/Cross-switch pick.
             if (drafting_ && draftPts_.size() >= 2) finishDraw();
             else cancelDraw();
             twistArmType_.clear();
@@ -6861,7 +6860,8 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             editMoved_ = false;
             modifyPts_.clear();
             clearSelection();
-            emit message(QStringLiteral("Wire: click to draw, or pick a tool; Esc again to finish"));
+            setTool(ToolId::Select); // leave the Wire function, back to region-select
+            emit message(QStringLiteral("Select"));
             emit changed();
             if (wasScreenArmed) emit screenArmedChanged();
             return true;

@@ -849,8 +849,8 @@ int run_harness_tests() {
               "wire-endref: a point off any pin is open (empty)");
     }
 
-    // Wire session: a wire function keeps the Wire tool active; the first Esc cancels the
-    // in-progress function but stays in Wire, and a second Esc exits to Select.
+    // Wire session: Esc while a wire function is in progress ENDS the function and
+    // returns straight to the Select tool (region-select), not back to Wire.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d);
@@ -858,14 +858,12 @@ int run_harness_tests() {
         ed.beginTwist(QStringLiteral("cross"));
         check(ed.tool() == ToolId::Wire, "wire-session: a wire function keeps the Wire tool");
         ed.onKey(Qt::Key_Escape, Qt::NoModifier);
-        check(ed.tool() == ToolId::Wire, "wire-session: first Esc cancels the function, stays in Wire");
-        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
-        check(ed.tool() == ToolId::Select, "wire-session: second Esc exits to Select");
+        check(ed.tool() == ToolId::Select, "wire-session: Esc ends the function, back to Select");
     }
 
     // Esc while actively drawing a wire commits what was already placed (>=2 confirmed
     // points) instead of discarding the whole draft — only the pending next segment is
-    // cancelled.
+    // cancelled — then returns to the Select tool.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d);
@@ -879,11 +877,8 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Wire) { ++wires; w = &e; }
         check(wires == 1, "wire-esc-commit: Esc commits the wire with the points already placed");
         check(w && w->points.size() == 3, "wire-esc-commit: exactly the 3 confirmed points are kept");
-        check(ed.tool() == ToolId::Wire,
-              "wire-esc-commit: stays in the Wire tool for continuous drawing");
-        ed.onKey(Qt::Key_Escape, Qt::NoModifier); // nothing pending now -> exits
         check(ed.tool() == ToolId::Select,
-              "wire-esc-commit: a further Esc (nothing pending) exits to Select");
+              "wire-esc-commit: Esc returns to the Select tool");
     }
 
     // Splice / X size: the typed/ribbon size is written onto the placed marker's meta.

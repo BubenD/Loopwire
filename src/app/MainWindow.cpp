@@ -5955,96 +5955,8 @@ void MainWindow::buildWireRibbonTab() {
     otherWireGroups.push_back(resGroup);
     lay->addWidget(resGroup);
 
-    // ---- Crossings: per-crossing bridge switch ----
-    auto* crossBtn = new QToolButton(wireTab_);
-    crossBtn->setText(QStringLiteral("Cross\nswitch"));
-    crossBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    crossBtn->setIconSize(QSize(26, 26));
-    crossBtn->setMinimumWidth(66);
-    crossBtn->setToolTip(QStringLiteral(
-        "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(2.0);
-        ip.setPen(pen);
-        ip.drawLine(3, 20, 9, 20); // wire in
-        QPainterPath hop;
-        hop.moveTo(9, 20);
-        hop.arcTo(9, 12, 10, 16, 180, -180); // the hop arc
-        ip.drawPath(hop);
-        ip.drawLine(19, 20, 25, 20);          // wire out
-        ip.drawLine(14, 6, 14, 26);           // the crossing wire (straight through)
-        ip.end();
-        crossBtn->setIcon(QIcon(pm));
-    }
-    connect(crossBtn, &QToolButton::clicked, this, [this] {
-        editor_->beginCrossSwitch();
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    auto* crossGroup = ribbonGroup(QStringLiteral("Crossings"), crossBtn);
-    otherWireGroups.push_back(crossGroup);
-    lay->addWidget(crossGroup);
-
-    // ---- Twist: split-button with a type menu ----
-    auto* bundleW = new QWidget(wireTab_);
-    auto* bg = new QGridLayout(bundleW);
-    bg->setContentsMargins(0, 0, 0, 0);
-    bg->setSpacing(2);
-    // Twist: a split-button; click = braided twist, the ▾ menu picks the type.
-    auto* twistBtn = new QToolButton(bundleW);
-    twistBtn->setText(QStringLiteral("Twist\ntype"));
-    twistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    twistBtn->setIconSize(QSize(26, 26));
-    twistBtn->setMinimumWidth(66);
-    twistBtn->setPopupMode(QToolButton::MenuButtonPopup);
-    twistBtn->setToolTip(QStringLiteral(
-        "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(1.8);
-        ip.setPen(pen);
-        // a small braid (two zigzags crossing three times)
-        QPolygonF a, b;
-        for (int k = 0; k <= 3; ++k) {
-            const double x = 4 + k * 6.7;
-            a << QPointF(x, (k % 2 == 0) ? 9 : 19);
-            b << QPointF(x, (k % 2 == 0) ? 19 : 9);
-        }
-        ip.drawPolyline(a);
-        ip.drawPolyline(b);
-        ip.end();
-        twistBtn->setIcon(QIcon(pm));
-    }
-    auto* tm = new QMenu(twistBtn);
-    tm->addAction(QStringLiteral("Type 1 (crossed braid)"), this, [this] {
-        editor_->beginTwist(QStringLiteral("cross"));
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    tm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
-        editor_->beginTwist(QStringLiteral("jog"));
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    tm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
-        editor_->beginTwist(QStringLiteral("type3"));
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    twistBtn->setMenu(tm);
-    connect(twistBtn, &QToolButton::clicked, this, [this] {
-        editor_->beginTwist(QStringLiteral("cross"));
-        canvas_->setFocus(Qt::OtherFocusReason);
-    });
-    bg->addWidget(twistBtn, 0, 0);
-    auto* twistGroup = ribbonGroup(QStringLiteral("Twist"), bundleW);
-    otherWireGroups.push_back(twistGroup);
-    lay->addWidget(twistGroup);
+    // Cross switch and Twist type live in the Modify ribbon group, not here — the Wire
+    // ribbon stays focused on drawing/insulation/routing.
 
     // ---- Shield fields: appear only WHILE placing a shield (armed via the Shield
     // button). A ribbon panel is only ~3 rows tall, so a tall vertical stack gets
@@ -6168,6 +6080,10 @@ void MainWindow::buildWireRibbonTab() {
     gapVal->setRange(0.5, 1000.0);
     gapVal->setDecimals(2);
     gapVal->setValue(editor_->wireGapCustom());
+    gapVal->setButtonSymbols(QAbstractSpinBox::NoButtons); // plain field, no +/- steppers
+    gapVal->setMinimumWidth(70);
+    // The custom pitch field only makes sense when "Custom" is chosen, so it sits to
+    // the SIDE of the fall-menu and is enabled only then.
     gapVal->setEnabled(editor_->wireGapRule() == QLatin1String("custom"));
     connect(gapRule, &QComboBox::currentTextChanged, this, [this, gapVal](const QString& t) {
         const bool custom = t == QLatin1String("Custom");
@@ -6180,10 +6096,12 @@ void MainWindow::buildWireRibbonTab() {
     ortho90->setChecked(editor_->wireOrtho());
     ortho90->setToolTip(QStringLiteral("Constrain wire drawing to horizontal / vertical segments"));
     connect(ortho90, &QCheckBox::toggled, this, [this](bool on) { editor_->wireOrtho() = on; });
-    rgl->addWidget(ortho90, 0, 0, 1, 2);
-    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 1, 0, 1, 2);
-    rgl->addWidget(gapRule, 2, 0);
-    rgl->addWidget(gapVal, 2, 1);
+    rgl->setHorizontalSpacing(8);
+    rgl->addWidget(ortho90, 0, 0, 1, 3);
+    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 1, 0);
+    // Fall-menu + its value on the SAME row, value to the side of the dropdown.
+    rgl->addWidget(gapRule, 1, 1);
+    rgl->addWidget(gapVal, 1, 2);
     auto* routeGroup = ribbonGroup(QStringLiteral("Routing"), routeW);
     otherWireGroups.push_back(routeGroup);
     lay->addWidget(routeGroup);
