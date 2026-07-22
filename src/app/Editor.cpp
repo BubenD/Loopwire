@@ -7051,23 +7051,32 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const Vec2& v : xs) { cx += v.x; yMin = std::min(yMin, v.y); yMax = std::max(yMax, v.y); }
                 cx /= xs.size();
                 const double cyMid = (yMin + yMax) / 2.0;
-                const double ry = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
-                // Match finishWireBand's auto-scale so the preview matches the result.
+                // Size EXACTLY as finishWireBand will: large radius auto-fits the caught
+                // wires (or the manual value), small radius auto-scales with wire count,
+                // and a locked ratio then drives the large radius. So the ghost grows /
+                // shrinks live as the crossing line catches more or fewer wires.
+                double ry = screenRyLocked_ ? (yMax - yMin) / 2.0 + 6.0 : screenRy_;
                 const double rx = std::min(screenRx_ * shieldRxScale(static_cast<int>(xs.size())),
                                            ry * 0.85);
-                p.drawEllipse(vt.toScreen({cx, cyMid}), rx * vt.scale(), ry * vt.scale());
-                // Drain leg preview, from the ellipse edge on the chosen side.
-                Vec2 edge, drain;
-                if (screenLegDir_ == QLatin1String("top")) {
-                    edge = {cx, cyMid + ry}; drain = {cx, cyMid + ry + screenLeg_};
-                } else if (screenLegDir_ == QLatin1String("left")) {
-                    edge = {cx - rx, cyMid}; drain = {cx - rx - screenLeg_, cyMid};
-                } else if (screenLegDir_ == QLatin1String("right")) {
-                    edge = {cx + rx, cyMid}; drain = {cx + rx + screenLeg_, cyMid};
-                } else {
-                    edge = {cx, cyMid - ry}; drain = {cx, cyMid - ry - screenLeg_};
+                if (screenRatioLock_) ry = std::max(ry, rx * screenRatio_);
+                // Preview every shield that will be placed (Amount), side by side.
+                const int amount = std::clamp(screenAmount_, 1, 5);
+                const double spacing = 3.0 * rx; // ellipse width + one-radius gap
+                for (int k = 0; k < amount; ++k) {
+                    const double ox = cx + k * spacing;
+                    p.drawEllipse(vt.toScreen({ox, cyMid}), rx * vt.scale(), ry * vt.scale());
+                    Vec2 edge, drain;
+                    if (screenLegDir_ == QLatin1String("top")) {
+                        edge = {ox, cyMid + ry}; drain = {ox, cyMid + ry + screenLeg_};
+                    } else if (screenLegDir_ == QLatin1String("left")) {
+                        edge = {ox - rx, cyMid}; drain = {ox - rx - screenLeg_, cyMid};
+                    } else if (screenLegDir_ == QLatin1String("right")) {
+                        edge = {ox + rx, cyMid}; drain = {ox + rx + screenLeg_, cyMid};
+                    } else {
+                        edge = {ox, cyMid - ry}; drain = {ox, cyMid - ry - screenLeg_};
+                    }
+                    p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
                 }
-                p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
             }
         }
         p.restore();
