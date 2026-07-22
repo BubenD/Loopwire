@@ -2463,21 +2463,40 @@ bool Editor::connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& 
     return false;
 }
 
-void Editor::setWireFan(int n) {
+void Editor::rebuildWireFanOffsets() {
+    // Turn the selected pin indices into per-wire offsets from the anchor pin.
     if (wireFanAnchor_ < 0 || wireFanPins_.empty()) return;
-    n = std::max(1, n);
-    const int total = static_cast<int>(wireFanPins_.size());
-    const int last = std::min(total, wireFanAnchor_ + n); // fan downward from the clicked pin
+    std::sort(wireFanSel_.begin(), wireFanSel_.end());
+    wireFanSel_.erase(std::unique(wireFanSel_.begin(), wireFanSel_.end()), wireFanSel_.end());
     const Vec2 anchorPin = wireFanPins_[wireFanAnchor_];
     wireArrayOffsets_.clear();
-    for (int i = wireFanAnchor_; i < last; ++i)
-        wireArrayOffsets_.push_back(wireFanPins_[i] - anchorPin);
+    for (int i : wireFanSel_)
+        if (i >= 0 && i < static_cast<int>(wireFanPins_.size()))
+            wireArrayOffsets_.push_back(wireFanPins_[i] - anchorPin);
     wireArray_ = wireArrayOffsets_.size() > 1;
     const int count = static_cast<int>(wireArrayOffsets_.size());
     emit message(count > 1
                      ? QStringLiteral("Wiring %1 pins — click the route; Esc to finish").arg(count)
-                     : QStringLiteral("Single wire — press a number to wire more pins"));
+                     : QStringLiteral("Single wire — Shift+<pin no.> adds/removes that pin"));
     emit overlayChanged();
+}
+
+void Editor::toggleWireFanPin(int pinNumber) {
+    if (wireFanAnchor_ < 0 || wireFanPins_.empty()) return;
+    const int idx = pinNumber - 1; // pin numbers are 1-based (the displayed number)
+    if (idx < 0 || idx >= static_cast<int>(wireFanPins_.size())) return;
+    if (idx == wireFanAnchor_) return; // the drawn wire's own pin is always kept
+    auto it = std::find(wireFanSel_.begin(), wireFanSel_.end(), idx);
+    if (it != wireFanSel_.end()) wireFanSel_.erase(it); // remove that pin's wire
+    else wireFanSel_.push_back(idx);                    // add that pin's wire
+    rebuildWireFanOffsets();
+}
+
+void Editor::setWireFanAll() {
+    if (wireFanAnchor_ < 0 || wireFanPins_.empty()) return;
+    wireFanSel_.clear();
+    for (int i = 0; i < static_cast<int>(wireFanPins_.size()); ++i) wireFanSel_.push_back(i);
+    rebuildWireFanOffsets();
 }
 
 void Editor::finishWireBand(const Vec2& fenceEnd) {
@@ -3288,6 +3307,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (tool_ == ToolId::Wire && draftPts_.empty()) {
             wireFanPins_.clear();
             wireFanAnchor_ = -1;
+            wireFanSel_.clear();
             wireArray_ = false;
             wireArrayOffsets_.clear();
             std::vector<Vec2> pins;
@@ -3295,8 +3315,8 @@ void Editor::handleDrawPress(const Vec2& p) {
             if (connectorPinsAt(p, pins, anchor)) {
                 wireFanPins_ = std::move(pins);
                 wireFanAnchor_ = anchor;
-                if (pressMods_ & Qt::ShiftModifier)
-                    setWireFan(static_cast<int>(wireFanPins_.size())); // Shift = fan to the last pin
+                wireFanSel_ = {anchor};                       // just the drawn wire, to start
+                if (pressMods_ & Qt::ShiftModifier) setWireFanAll(); // Shift-click = add all pins
             }
         }
         draftPts_.push_back(p);
@@ -4146,6 +4166,7 @@ void Editor::finishDraw() {
             wireArrayOffsets_.clear();
             wireFanPins_.clear();
             wireFanAnchor_ = -1;
+            wireFanSel_.clear();
             draftPts_.clear();
             draftBulges_.clear();
             draftCornerRadii_.clear();
@@ -4231,6 +4252,7 @@ void Editor::cancelDraw() {
     wireArrayOffsets_.clear();
     wireFanPins_.clear();
     wireFanAnchor_ = -1;
+    wireFanSel_.clear();
 }
 
 void Editor::toggleArcMirror() {

@@ -601,8 +601,9 @@ int run_harness_tests() {
         check(onPin == 4, "wire-fanout: every fanned wire starts on a distinct pin end");
     }
 
-    // Wiring from a pin, a number sets the fan-out count: setWireFan(3) from pin 0 wires
-    // 3 pins (the digit key in the UI routes to setWireFan the same way).
+    // Wiring from a pin, Shift+<pin number> toggles that ONE pin in/out of the fan. Start
+    // on pin 1, toggle pin 3 and pin 4 in => wires on pins 1,3,4 (pin 2 skipped); toggling
+    // pin 3 again removes it.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d);
@@ -614,14 +615,25 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
         const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
         ed.setTool(ToolId::Wire);
-        ed.onPointerPress(g.pinEnd[0], Qt::LeftButton, Qt::NoModifier); // plain start on pin 0
-        check(ed.wireFanArmed(), "wire-fan-count: fan is armed after starting on a pin");
-        ed.setWireFan(3);                                              // number key "3"
+        ed.onPointerPress(g.pinEnd[0], Qt::LeftButton, Qt::NoModifier); // start on pin 1
+        check(ed.wireFanArmed(), "wire-fan-toggle: fan is armed after starting on a pin");
+        ed.toggleWireFanPin(3); // add wire 3
+        ed.toggleWireFanPin(4); // add wire 4
+        ed.toggleWireFanPin(2); // add wire 2
+        ed.toggleWireFanPin(2); // ...then remove wire 2 again
         ed.onPointerPress({g.pinEnd[0].x + 200, g.pinEnd[0].y}, Qt::LeftButton, Qt::NoModifier);
         ed.onKey(Qt::Key_Return, Qt::NoModifier);
-        int wires = 0;
-        for (const auto& e : d.entities()) if (e.type == EntityType::Wire) ++wires;
-        check(wires == 3, "wire-fan-count: pressing 3 wires exactly three pins");
+        std::vector<double> ys;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Wire) ys.push_back(e.points.front().y);
+        check(ys.size() == 3, "wire-fan-toggle: pins 1,3,4 wired (pin 2 toggled back off)");
+        auto wiredAt = [&](const Vec2& pe) {
+            for (double y : ys) if (near(y, pe.y)) return true;
+            return false;
+        };
+        check(wiredAt(g.pinEnd[0]) && wiredAt(g.pinEnd[2]) && wiredAt(g.pinEnd[3]) &&
+                  !wiredAt(g.pinEnd[1]),
+              "wire-fan-toggle: exactly pins 1,3,4 have wires");
     }
 
     // Termination: Shift + click a connector pin X-terminates every UNCONNECTED pin at

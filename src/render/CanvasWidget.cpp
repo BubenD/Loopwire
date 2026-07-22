@@ -681,9 +681,9 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
-        // Wiring from a connector pin: Shift + a number key sets how many pins the wire
-        // fans out to (Shift+1 = single). Shift+digit is reported either as Key_1..Key_9
-        // OR (US layout) as the shifted symbol key (!,@,#,...), so map both to a digit.
+        // Wiring from a connector pin: Shift + a pin number toggles that ONE pin's wire in
+        // or out of the fan (Shift+3 adds/removes wire 3). Shift+digit is reported either as
+        // Key_1..Key_9 OR (US layout) as the shifted symbol key (!,@,#,...), so map both.
         if (editor_->wireFanArmed() && (e->modifiers() & Qt::ShiftModifier)) {
             int dgt = 0;
             switch (e->key()) {
@@ -699,7 +699,7 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             default: break;
             }
             if (dgt > 0) {
-                editor_->setWireFan(dgt);
+                editor_->toggleWireFanPin(dgt);
                 e->accept();
                 return;
             }

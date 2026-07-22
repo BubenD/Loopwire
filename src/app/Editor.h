@@ -334,12 +334,14 @@ public:
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
     // Wire fan-out: true while drafting a wire that started on a connector pin (so a number
-    // key can pick how many pins to wire). setWireFan(n) fans n wires from the anchor pin
-    // downward (clamped to the last pin); n<=1 reverts to a single wire.
+    // key can toggle individual pins). Shift+<pin number> toggles that one pin's wire in/out
+    // of the fan (the anchor pin — the one being drawn — is always kept); Shift at the first
+    // click adds all pins.
     bool wireFanArmed() const {
         return drafting_ && tool_ == ToolId::Wire && wireFanAnchor_ >= 0 && !wireFanPins_.empty();
     }
-    void setWireFan(int n);
+    void toggleWireFanPin(int pinNumber); // pinNumber is 1-based (the pin's displayed number)
+    void setWireFanAll();                 // add every pin of the connector to the fan
     // Freeze the in-progress screen preview (Tab) so its ribbon fields can be edited
     // without the crossing-line drag changing the caught wires; a click then places it
     // at the frozen end point regardless of where the click lands.
@@ -604,6 +606,7 @@ private:
     // If p sits on a connector pin end, fill pinEndsOut with that connector's ordered pin
     // ends and anchorOut with the index of the matched pin; returns true.
     bool connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const;
+    void rebuildWireFanOffsets(); // wireFanSel_ -> wireArrayOffsets_ (relative to the anchor pin)
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -779,6 +782,7 @@ private:
     std::vector<Vec2> wireArrayOffsets_;
     std::vector<Vec2> wireFanPins_;   // all pin ends of the connector the wire started on
     int wireFanAnchor_ = -1;          // index (in wireFanPins_) of the pin the wire started on
+    std::vector<int> wireFanSel_;     // selected pin indices in the fan (always incl. the anchor)
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
     double screenRx_ = 12.0;      // screen ellipse small radius
