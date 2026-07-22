@@ -102,8 +102,9 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
     e.radius *= s;
     e.radiusY *= s;
     // Scale every length-valued meta so the shape scales uniformly: the double-line
-    // gap, trim-cap radii, and the uniform corner radius.
-    for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius", "landing"})
+    // gap, trim-cap radii, the uniform corner radius, and the shield ellipse radii (rx/ry)
+    // — so a shield resizes with the wires/harness when they are scaled together.
+    for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius", "landing", "rx", "ry"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.

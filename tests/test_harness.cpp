@@ -1104,6 +1104,28 @@ int run_harness_tests() {
               "shield-shape: the capsule shape is stored on the placed shield");
     }
 
+    // Scaling a shield resizes its ellipse (rx/ry meta), not just its joint positions —
+    // so a shield scales with the wires/harness when they are scaled together.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        Entity* sc = nullptr;
+        for (auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        const double rx0 = sc->meta.value("rx").toDouble();
+        const double ry0 = sc->meta.value("ry").toDouble();
+        scaleEntity(*sc, {100, 15}, 2.0);
+        check(near(sc->meta.value("rx").toDouble(), rx0 * 2) &&
+                  near(sc->meta.value("ry").toDouble(), ry0 * 2),
+              "shield-scale: scaling the shield doubles its ellipse radii");
+    }
+
     // Shield small radius auto-scales (widens) with the number of wires caught, instead
     // of staying fixed — catching 4 wires gives a visibly larger rx than the base 12.
     // (Uses the non-all-locked path where shieldRxScale applies, so unlock the ratio.)
