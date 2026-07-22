@@ -344,11 +344,13 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::Screen: {
-        // A joint at each caught wire, shown ON the ellipse boundary (projected from
-        // its actual y-level and which side of centre it approaches from) — NOT at the
-        // raw, possibly scattered wire-crossing point — so joints always read as clean
-        // connections into the drawn outline. Plus the drain endpoint (at its own raw
-        // position, outside the ellipse) and a Move handle at the centre.
+        // TWO joints per caught wire — one at EACH side where that wire's height
+        // actually crosses the ellipse boundary (left AND right), since a wire drawn
+        // through the shield truly pierces the outline at both points. Both grips for
+        // a wire share its index (dragging either just moves that wire's connection
+        // point/height; the side is re-derived automatically next time grips are drawn).
+        // Plus the drain endpoint (at its own raw position, outside the ellipse) and a
+        // Move handle at the centre.
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
         if (k >= 1) {
@@ -368,8 +370,8 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                                      ? std::clamp((e.points[i].y - cyMid) / ry, -1.0, 1.0)
                                      : 0.0;
                 const double dx = rx * std::sqrt(std::max(0.0, 1.0 - t * t));
-                const double side = e.points[i].x < cx ? -1.0 : 1.0;
-                g.push_back({{cx + side * dx, e.points[i].y}, GripRole::Vertex, i});
+                g.push_back({{cx - dx, e.points[i].y}, GripRole::Vertex, i});
+                g.push_back({{cx + dx, e.points[i].y}, GripRole::Vertex, i});
             }
             g.push_back({{cx, cyMid}, GripRole::Move, 0});
         }

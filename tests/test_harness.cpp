@@ -1093,17 +1093,17 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) { scId = e.id; sc = &e; }
         check(sc, "shield-joint-ellipse: the shield was placed");
         const double rx = sc->meta.value("rx").toDouble();
-        // Both wires cross at x=100 == cx, so the raw points sit on the ellipse's centre
-        // line; the projected joint for pin 0 (y=0) should be at (cx+rx, 0) (tie-break
-        // right since raw.x is not STRICTLY less than cx).
+        // Each wire now shows TWO joints, on both ellipse edges at its height: pin 0
+        // (y=0, on the centre line) has joints at (cx-rx, 0) and (cx+rx, 0). Grabbing
+        // either one drags that wire's connection point; here we grab the LEFT one.
         ed.setTool(ToolId::Select);
         ed.selectById(scId);
-        ed.onPointerPress({100.0 + rx, 0.0}, Qt::LeftButton, Qt::NoModifier); // grab projected joint
-        ed.onPointerPress({100.0 + rx, 60.0}, Qt::LeftButton, Qt::NoModifier); // drag it
+        ed.onPointerPress({100.0 - rx, 0.0}, Qt::LeftButton, Qt::NoModifier); // grab left joint
+        ed.onPointerPress({100.0 - rx, 60.0}, Qt::LeftButton, Qt::NoModifier); // drag it
         const Entity* sc2 = nullptr;
         for (const auto& e : d.entities()) if (e.id == scId) sc2 = &e;
         check(sc2 && near(sc2->points[0].y, 60.0),
-              "shield-joint-ellipse: the joint at the projected ellipse position was grabbed");
+              "shield-joint-ellipse: grabbing the left ellipse-edge joint moves the wire");
     }
 
     // Touch-select must reach the ACTUAL ellipse/leg, not the loose bounding box: a box
