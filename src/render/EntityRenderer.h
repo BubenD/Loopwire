@@ -39,6 +39,15 @@ public:
     // Resolve the effective stroke color for an entity (explicit or ByLayer).
     static QColor resolveColor(const Entity& e, const Document& doc);
 
+    // Shield helpers (shared by the renderer and the live placement preview so they match):
+    //   shieldRotation  - angle of the shield's major (ry) axis from the caught-wire spread
+    //                     (first->last crossing); vertical when the wires are level.
+    //   shieldOutline   - world-space points of the outline (ellipse or capsule) rotated by
+    //                     `rot` about `center`, ready to map through a ViewTransform.
+    static double shieldRotation(const std::vector<Vec2>& crossings);
+    static std::vector<Vec2> shieldOutline(const Vec2& center, double rx, double ry, double rot,
+                                           bool capsule);
+
     // Number of decimals shown on dimension labels (Options dialog).
     static void setDimensionDecimals(int d);
     static int dimensionDecimals();

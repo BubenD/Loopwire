@@ -330,6 +330,11 @@ public:
     // Shield outline shape: "ellipse" or "capsule" (a vertical stadium — two semicircle
     // caps joined by straight sides, built from arcs + straight lines).
     QString& screenShape() { return screenShape_; }
+    // Shield outline style: colour (empty = ByLayer, else explicit hex), line type
+    // ("solid"|"dashed") and the dash pattern scale.
+    QString& screenColor() { return screenColor_; }
+    QString& screenLineType() { return screenLineType_; }
+    double& screenDashScale() { return screenDashScale_; }
     // Which side of the ellipse the drain leg exits from.
     QString& screenLegDir() { return screenLegDir_; } // "top" | "bottom" | "left" | "right"
     bool screenArmed() const { return screenArm_; }
@@ -795,6 +800,9 @@ private:
     bool screenRxLock_ = true;         // small-radius field locked (dependent, not editable)
     int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
     QString screenShape_ = QStringLiteral("ellipse"); // "ellipse" | "capsule"
+    QString screenColor_;                             // outline colour ("" = ByLayer)
+    QString screenLineType_ = QStringLiteral("solid"); // "solid" | "dashed"
+    double screenDashScale_ = 1.0;                    // dash pattern scale
     QString screenLegDir_ = QStringLiteral("bottom"); // drain leg exit side
     bool screenFrozen_ = false;   // Tab pressed: preview end pinned, edit fields freely
     Vec2 screenFrozenEnd_;

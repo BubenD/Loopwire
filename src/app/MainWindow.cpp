@@ -6214,6 +6214,79 @@ void MainWindow::buildWireRibbonTab() {
     rightG->addWidget(scShowS, 2, 2, 1, 2);
     scOuter->addWidget(rightW);
 
+    // ---- Style: line type / dash scale / colour ----
+    auto* styleW = new QWidget(scW);
+    auto* styleG = new QGridLayout(styleW);
+    styleG->setContentsMargins(0, 0, 0, 0);
+    styleG->setHorizontalSpacing(8);
+    styleG->setVerticalSpacing(6);
+    auto* scLineType = new QComboBox(styleW);
+    scLineType->addItems({QStringLiteral("Solid"), QStringLiteral("Dashed")});
+    scLineType->setMinimumWidth(84);
+    connect(scLineType, &QComboBox::currentTextChanged, this, [this](const QString& t) {
+        editor_->screenLineType() =
+            (t == QLatin1String("Dashed")) ? QStringLiteral("dashed") : QStringLiteral("solid");
+        if (canvas_) canvas_->update();
+    });
+    auto* scDash = new QDoubleSpinBox(styleW);
+    scDash->setRange(0.1, 20.0);
+    scDash->setDecimals(1);
+    scDash->setSingleStep(0.5);
+    scDash->setMinimumWidth(60);
+    scDash->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    connect(scDash, &QDoubleSpinBox::editingFinished, this, [this, scDash] {
+        editor_->screenDashScale() = scDash->value();
+        if (canvas_) canvas_->update();
+    });
+    // Colour: a swatch button with a By-Layer / standard-colours / Custom menu.
+    auto swatch = [](const QColor& c) {
+        QPixmap pm(16, 16);
+        pm.fill(c.isValid() ? c : QColor(110, 116, 124));
+        QPainter ip(&pm);
+        ip.setPen(QColor(30, 34, 40));
+        ip.drawRect(0, 0, 15, 15);
+        ip.end();
+        return QIcon(pm);
+    };
+    auto* scColorBtn = new QToolButton(styleW);
+    scColorBtn->setPopupMode(QToolButton::InstantPopup);
+    scColorBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    scColorBtn->setMinimumWidth(96);
+    auto* colorMenu = new QMenu(scColorBtn);
+    auto setShieldColor = [this, scColorBtn, swatch](const QString& hex, const QString& label) {
+        editor_->screenColor() = hex; // "" = ByLayer
+        scColorBtn->setText(label);
+        scColorBtn->setIcon(swatch(hex.isEmpty() ? QColor() : QColor(hex)));
+        if (canvas_) canvas_->update();
+    };
+    colorMenu->addAction(QStringLiteral("By Layer"), this,
+                         [setShieldColor] { setShieldColor(QString(), QStringLiteral("By Layer")); });
+    const std::pair<const char*, const char*> stdCols[] = {
+        {"Red", "#ff0000"},  {"Yellow", "#ffff00"}, {"Green", "#00c000"}, {"Cyan", "#00c8c8"},
+        {"Blue", "#4060ff"}, {"Magenta", "#ff00ff"}, {"White", "#ffffff"}};
+    for (const auto& c : stdCols) {
+        const QString hex = QString::fromLatin1(c.second), name = QString::fromLatin1(c.first);
+        colorMenu->addAction(swatch(QColor(hex)), name, this,
+                             [setShieldColor, hex, name] { setShieldColor(hex, name); });
+    }
+    colorMenu->addSeparator();
+    colorMenu->addAction(QStringLiteral("Custom…"), this, [this, setShieldColor] {
+        const QColor c = QColorDialog::getColor(QColor(editor_->screenColor().isEmpty()
+                                                           ? QStringLiteral("#ffffff")
+                                                           : editor_->screenColor()),
+                                                this, QStringLiteral("Shield colour"));
+        if (c.isValid()) setShieldColor(c.name(), QStringLiteral("Custom"));
+    });
+    scColorBtn->setMenu(colorMenu);
+    setShieldColor(QString(), QStringLiteral("By Layer")); // initial = ByLayer
+    styleG->addWidget(scLabel(styleW, QStringLiteral("Line")), 0, 0);
+    styleG->addWidget(scLineType, 0, 1);
+    styleG->addWidget(scLabel(styleW, QStringLiteral("Dash scale")), 1, 0);
+    styleG->addWidget(scDash, 1, 1);
+    styleG->addWidget(scLabel(styleW, QStringLiteral("Color")), 2, 0);
+    styleG->addWidget(scColorBtn, 2, 1);
+    scOuter->addWidget(styleW);
+
     auto* scGroup = ribbonGroup(QStringLiteral("Shield"), scW);
     scGroup->setVisible(false); // shown only while a shield is being placed
     lay->addWidget(scGroup);
@@ -6263,13 +6336,14 @@ void MainWindow::buildWireRibbonTab() {
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
     auto syncScreenGroup = [this, scGroup, scShowS, refreshShieldRadii, scLegDir, scLeg,
-                           scAmount, scShape, otherWireGroups] {
+                           scAmount, scShape, scLineType, scDash, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
         for (QWidget* g : otherWireGroups) g->setVisible(!armed);
         if (!armed) return;
         refreshShieldRadii(); // radii + ratio values, enable states, lock checkboxes
-        QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount), b5(scShape);
+        QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount), b5(scShape),
+            b6(scLineType), b7(scDash);
         scShowS->setChecked(editor_->screenShowS());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
@@ -6279,6 +6353,10 @@ void MainWindow::buildWireRibbonTab() {
         scShape->setCurrentText(editor_->screenShape() == QLatin1String("capsule")
                                     ? QStringLiteral("Semi circle")
                                     : QStringLiteral("Ellipse"));
+        scLineType->setCurrentText(editor_->screenLineType() == QLatin1String("dashed")
+                                       ? QStringLiteral("Dashed")
+                                       : QStringLiteral("Solid"));
+        scDash->setValue(editor_->screenDashScale());
     };
     connect(editor_, &Editor::screenArmedChanged, this, [syncScreenGroup] { syncScreenGroup(); });
 

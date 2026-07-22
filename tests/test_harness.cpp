@@ -1177,8 +1177,9 @@ int run_harness_tests() {
         for (const Entity* s : shields)
             if (!s->meta.value("wires").toArray().isEmpty()) ++withWires;
         check(withWires == 1, "shield-amount: only the first shield references the wires");
-        // The copies are shifted to the right (distinct centre x's).
-        check(shields[0]->points.front().x < shields[2]->points.front().x,
+        // The copies are offset side by side (distinct centre x's; direction follows the
+        // minor axis, which is horizontal for these level wires).
+        check(std::abs(shields[0]->points.front().x - shields[2]->points.front().x) > 1.0,
               "shield-amount: the copies are offset side by side");
     }
 
@@ -1198,6 +1199,47 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && sc->meta.value("shape").toString() == "capsule",
               "shield-shape: the capsule shape is stored on the placed shield");
+    }
+
+    // Angled shield: wires that slope give a shield whose major axis runs first->last wire.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        // Two sloping wires so their crossing points aren't vertically aligned.
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 40}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 40}, {200, 80}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({80, 200}, Qt::LeftButton, Qt::NoModifier);   // crossing line...
+        ed.onPointerPress({120, -50}, Qt::LeftButton, Qt::NoModifier);  // ...across both wires
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("catch").toInt() == 2, "shield-angled: caught both sloping wires");
+        // The two crossing joints differ in BOTH x and y (the shield is tilted, not vertical).
+        const double dx = std::abs(sc->points[0].x - sc->points[1].x);
+        check(sc && dx > 1.0, "shield-angled: the crossing joints are offset in x (tilted)");
+    }
+
+    // Shield line style: dashed + colour are stored on the placed shield.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenLineType() = QStringLiteral("dashed");
+        ed.screenDashScale() = 2.0;
+        ed.screenColor() = QStringLiteral("#ff0000");
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("lineType").toString() == "dashed" &&
+                  near(sc->meta.value("dashScale").toDouble(), 2.0) && sc->color == "#ff0000",
+              "shield-style: dashed line, dash scale and colour are stored");
     }
 
     // Scaling a shield resizes its ellipse (rx/ry meta), not just its joint positions —

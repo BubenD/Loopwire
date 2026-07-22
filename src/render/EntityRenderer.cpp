@@ -23,6 +23,50 @@ bool g_dualUnits = false;    // append the other unit in parentheses
 }
 void EntityRenderer::setDimensionDecimals(int d) { g_dimDecimals = std::clamp(d, 0, 6); }
 int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
+
+double EntityRenderer::shieldRotation(const std::vector<Vec2>& crossings) {
+    // Major (ry) axis runs from the first to the last caught wire. Level wires give a
+    // vertical shield (rot = +90 deg); angled wires tilt it to match.
+    if (crossings.size() < 2) return M_PI / 2.0;
+    const Vec2 d = crossings.back() - crossings.front();
+    if (d.x * d.x + d.y * d.y < 1e-12) return M_PI / 2.0;
+    return std::atan2(d.y, d.x);
+}
+
+std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, double ry,
+                                                double rot, bool capsule) {
+    // major = along ry (the wire-spread direction), minor = along rx (perpendicular).
+    const Vec2 major{std::cos(rot), std::sin(rot)};
+    const Vec2 minor{-std::sin(rot), std::cos(rot)};
+    std::vector<Vec2> out;
+    if (!capsule) {
+        constexpr int kN = 48;
+        out.reserve(kN + 1);
+        for (int i = 0; i <= kN; ++i) {
+            const double t = 2.0 * M_PI * i / kN;
+            const double u = rx * std::cos(t), v = ry * std::sin(t);
+            out.push_back({center.x + u * minor.x + v * major.x,
+                           center.y + u * minor.y + v * major.y});
+        }
+        return out;
+    }
+    // Capsule (stadium): straight sides of half-length (ry-rx) capped by rx semicircles.
+    const double straight = std::max(0.0, ry - rx);
+    const Vec2 cTop{center.x + straight * major.x, center.y + straight * major.y};
+    const Vec2 cBot{center.x - straight * major.x, center.y - straight * major.y};
+    constexpr int kCap = 16;
+    auto arc = [&](const Vec2& c, double a0, double a1) {
+        for (int i = 0; i <= kCap; ++i) {
+            const double a = a0 + (a1 - a0) * i / kCap;
+            const double u = rx * std::cos(a), v = rx * std::sin(a);
+            out.push_back({c.x + u * minor.x + v * major.x, c.y + u * minor.y + v * major.y});
+        }
+    };
+    arc(cTop, 0.0, M_PI);            // top cap: +minor -> +major -> -minor
+    arc(cBot, M_PI, 2.0 * M_PI);     // bottom cap: -minor -> -major -> +minor
+    out.push_back(out.front());      // close
+    return out;
+}
 void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
 void EntityRenderer::setLengthUnitInch(bool inch) { g_lengthInch = inch; }
@@ -1396,26 +1440,40 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Large radius: explicit override (Properties) or auto-fit to the caught wires.
         const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
                                                 : (yMax - yMin) / 2.0 + pad;
-        const QPointF c = vt.toScreen({cx, cyMid});
-        // Outline: an ellipse, or a capsule (vertical stadium — a rounded rect whose
-        // corner radius equals the small radius, so the caps become semicircles).
-        if (e.meta.value("shape").toString(QStringLiteral("ellipse")) == QLatin1String("capsule")) {
-            const double rxs = rx * vt.scale(), rys = ry * vt.scale();
-            p.drawRoundedRect(QRectF(c.x() - rxs, c.y() - rys, 2 * rxs, 2 * rys), rxs, rxs);
-        } else {
-            p.drawEllipse(c, rx * vt.scale(), ry * vt.scale());
+        const Vec2 center{cx, cyMid};
+        const QPointF c = vt.toScreen(center);
+        // Angle: the shield tilts so its major axis runs from the first to the last wire.
+        std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
+        const double rot = shieldRotation(crossings);
+        const Vec2 major{std::cos(rot), std::sin(rot)};
+        const Vec2 minor{-std::sin(rot), std::cos(rot)};
+        // Line type: solid (default) or dashed, with a scalable dash pattern; the color
+        // comes from the resolved `color` (entity color / ByLayer).
+        QPen shieldPen = p.pen();
+        if (e.meta.value("lineType").toString(QStringLiteral("solid")) == QLatin1String("dashed")) {
+            const double ds = std::max(0.1, e.meta.value("dashScale").toDouble(1.0));
+            QVector<qreal> dashes{6.0 * ds, 4.0 * ds};
+            shieldPen.setDashPattern(dashes);
         }
-        // Drain lead + endpoint (the point after the k caught wires); the lead exits
-        // the ellipse edge on the meta "legDir" side (default "bottom", matching the
-        // original behavior before left/right were supported).
+        p.setPen(shieldPen);
+        // Outline: rotated ellipse or capsule (stadium), sampled in world then mapped.
+        const bool capsule =
+            e.meta.value("shape").toString(QStringLiteral("ellipse")) == QLatin1String("capsule");
+        {
+            QPolygonF poly;
+            for (const Vec2& w : shieldOutline(center, rx, ry, rot, capsule)) poly << vt.toScreen(w);
+            p.drawPolyline(poly);
+        }
+        // Drain lead + endpoint (the point after the k caught wires); the lead exits the
+        // outline edge on the meta "legDir" side (relative to the tilted axes).
         if (static_cast<int>(e.points.size()) > k) {
             const Vec2 drain = e.points.back();
             const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
             Vec2 edge;
-            if (legDir == QLatin1String("top")) edge = {cx, cyMid + ry};
-            else if (legDir == QLatin1String("left")) edge = {cx - rx, cyMid};
-            else if (legDir == QLatin1String("right")) edge = {cx + rx, cyMid};
-            else edge = {cx, cyMid - ry};
+            if (legDir == QLatin1String("top")) edge = {cx + ry * major.x, cyMid + ry * major.y};
+            else if (legDir == QLatin1String("left")) edge = {cx - rx * minor.x, cyMid - rx * minor.y};
+            else if (legDir == QLatin1String("right")) edge = {cx + rx * minor.x, cyMid + rx * minor.y};
+            else edge = {cx - ry * major.x, cyMid - ry * major.y}; // "bottom"
             p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
             // The small "unterminated" end tick only shows while the leg is actually
             // open — once a wire's endpoint connects here, the tick disappears (the
@@ -1437,9 +1495,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
             }
         }
-        if (e.meta.value("showS").toBool(true))
-            drawWorldText(p, c + QPointF(rx * vt.scale() + 3, 0), QStringLiteral("S"), 4.0,
-                          vt.scale(), color);
+        if (e.meta.value("showS").toBool(true)) {
+            const Vec2 sPos{center.x + (rx + 4.0) * minor.x, center.y + (rx + 4.0) * minor.y};
+            drawWorldText(p, vt.toScreen(sPos), QStringLiteral("S"), 4.0, vt.scale(), color);
+        }
         break;
     }
 

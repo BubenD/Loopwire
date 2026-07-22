@@ -23,6 +23,13 @@ namespace {
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
+// Snap a point to a horizontal or vertical segment from `prev` (the wire "90° only"
+// projection): keep whichever axis the cursor moved furthest along, zero the other.
+Vec2 orthoWirePoint(const Vec2& prev, const Vec2& p) {
+    if (std::abs(p.x - prev.x) >= std::abs(p.y - prev.y)) return {p.x, prev.y}; // horizontal
+    return {prev.x, p.y};                                                        // vertical
+}
+
 // Horizontal half-width of a shield outline at a vertical offset dy from its centre.
 // For a capsule the sides are straight (== rx) through the middle and round off in the
 // semicircle caps; for an ellipse it's the usual rx*sqrt(1-(dy/ry)^2). Used to seat the
@@ -364,24 +371,34 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
         if (k >= 1) {
-            double cx = 0.0, yMin = 1e18, yMax = -1e18;
+            double cx = 0.0, cy = 0.0, yMin = 1e18, yMax = -1e18;
             for (int i = 0; i < k; ++i) {
                 cx += e.points[i].x;
+                cy += e.points[i].y;
                 yMin = std::min(yMin, e.points[i].y);
                 yMax = std::max(yMax, e.points[i].y);
             }
             cx /= k;
-            const double cyMid = (yMin + yMax) / 2.0;
+            cy /= k;
             const double rx = e.meta.value("rx").toDouble(12.0);
             const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
                                                     : (yMax - yMin) / 2.0 + 6.0;
             const QString shape = e.meta.value("shape").toString(QStringLiteral("ellipse"));
+            // Tilted frame: major axis runs first->last wire, minor perpendicular.
+            std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
+            const double rot = EntityRenderer::shieldRotation(crossings);
+            const Vec2 major{std::cos(rot), std::sin(rot)};
+            const Vec2 minor{-std::sin(rot), std::cos(rot)};
+            const Vec2 center{cx, cy};
             for (int i = 0; i < k; ++i) {
-                const double dx = shieldEdgeHalfWidth(shape, rx, ry, e.points[i].y - cyMid);
-                g.push_back({{cx - dx, e.points[i].y}, GripRole::Vertex, i});
-                g.push_back({{cx + dx, e.points[i].y}, GripRole::Vertex, i});
+                const Vec2 rel = e.points[i] - center;
+                const double along = rel.x * major.x + rel.y * major.y; // offset up the major axis
+                const double half = shieldEdgeHalfWidth(shape, rx, ry, along);
+                const Vec2 base{center.x + along * major.x, center.y + along * major.y};
+                g.push_back({{base.x - half * minor.x, base.y - half * minor.y}, GripRole::Vertex, i});
+                g.push_back({{base.x + half * minor.x, base.y + half * minor.y}, GripRole::Vertex, i});
             }
-            g.push_back({{cx, cyMid}, GripRole::Move, 0});
+            g.push_back({center, GripRole::Move, 0});
         }
         for (int i = k; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i}); // drain endpoint
@@ -1118,8 +1135,9 @@ void Editor::onPointerMove(const Vec2& raw) {
     // and grid snapping still apply so you can snap to real points.
     SnapSettings snap = snap_;
     if (tool_ == ToolId::Dimension) { snap.polar = false; snap.ortho = false; }
-    // Wire "90° only": force orthogonal segments while drawing a wire.
-    if (tool_ == ToolId::Wire && wireOrtho_) snap.ortho = true;
+    // Wire "90° only" does NOT clamp the cursor (it moves freely); instead each wire
+    // segment is snapped to the nearest axis when it is drawn (see orthoWirePoint), so
+    // the crosshair tracks the mouse while the wire keeps 90° corners.
     // Holding Ctrl temporarily suspends ALL snapping (object/grid/polar/ortho) so a
     // point can be placed freely — e.g. picking a hatch location. Snap resumes when
     // Ctrl is released.
@@ -2436,13 +2454,13 @@ void Editor::freezeScreenPreview() {
 }
 
 void Editor::shieldAutoSize(double span, int /*nWires*/, double& rxOut, double& ryOut) const {
-    // ALWAYS scale the shield's exact structure to fit the crossed wires: the full height
-    // sits 15% beyond the distance from the first to the last wire, and the small radius
-    // follows the ratio — so the shield uniformly grows/shrinks to wrap whatever wires the
-    // crossing line catches, keeping its shape/aspect. The Small/Large radius fields define
-    // that aspect (via the ratio); the placed size is driven by the wires, not the fields.
+    // Large radius (semi-axis): when it is AUTO (Lock checked — the default) the shield
+    // scales to fit the crossed wires (full height 15% beyond the first..last wire span);
+    // when the user UNLOCKS it, the typed value is used verbatim so editing it is reflected
+    // live in the preview. The small radius always follows the ratio, so the shape/aspect
+    // is preserved either way.
     const double ratio = std::max(0.2, screenRatio_);
-    ryOut = std::max(span * 1.15 / 2.0, 12.0); // floor so a single wire isn't degenerate
+    ryOut = screenRyLocked_ ? std::max(span * 1.15 / 2.0, 12.0) : std::max(1.0, screenRy_);
     rxOut = ryOut / ratio;
 }
 
@@ -2549,20 +2567,30 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         cx /= crossings.size();
         const double cyMid = (yMin + yMax) / 2.0;
         double rxActual, ryActual;
-        shieldAutoSize(yMax - yMin, static_cast<int>(crossings.size()), rxActual, ryActual);
+        // Span = distance from the first to the last caught wire (works when angled too).
+        const double span = distance(crossings.front(), crossings.back());
+        shieldAutoSize(span, static_cast<int>(crossings.size()), rxActual, ryActual);
+        // The shield tilts with the wires: its major axis runs first->last crossing.
+        const double rot = EntityRenderer::shieldRotation(crossings);
+        const Vec2 major{std::cos(rot), std::sin(rot)};
+        const Vec2 minor{-std::sin(rot), std::cos(rot)};
         Vec2 drain;
-        if (screenLegDir_ == QLatin1String("top")) drain = {cx, cyMid + ryActual + screenLeg_};
-        else if (screenLegDir_ == QLatin1String("left")) drain = {cx - rxActual - screenLeg_, cyMid};
-        else if (screenLegDir_ == QLatin1String("right")) drain = {cx + rxActual + screenLeg_, cyMid};
-        else drain = {cx, cyMid - ryActual - screenLeg_}; // "bottom" (default)
+        if (screenLegDir_ == QLatin1String("top"))
+            drain = {cx + (ryActual + screenLeg_) * major.x, cyMid + (ryActual + screenLeg_) * major.y};
+        else if (screenLegDir_ == QLatin1String("left"))
+            drain = {cx - (rxActual + screenLeg_) * minor.x, cyMid - (rxActual + screenLeg_) * minor.y};
+        else if (screenLegDir_ == QLatin1String("right"))
+            drain = {cx + (rxActual + screenLeg_) * minor.x, cyMid + (rxActual + screenLeg_) * minor.y};
+        else // "bottom" (default)
+            drain = {cx - (ryActual + screenLeg_) * major.x, cyMid - (ryActual + screenLeg_) * major.y};
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
         // Place `amount` shields side by side (task): the first catches the real wires;
-        // extra copies are shifted right by an ellipse width + a gap.
+        // extra copies are shifted along the minor axis by an ellipse width + a gap.
         const int amount = std::clamp(screenAmount_, 1, 5);
-        const double spacing = 2.0 * rxActual + rxActual; // ellipse width + one-radius gap
+        const double spacing = 3.0 * rxActual; // ellipse width + one-radius gap
         for (int k = 0; k < amount; ++k) {
-            const Vec2 shift{k * spacing, 0.0};
+            const Vec2 shift{k * spacing * minor.x, k * spacing * minor.y};
             Entity e;
             e.type = EntityType::Screen;
             e.layer = QStringLiteral("Wires");
@@ -2576,6 +2604,9 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("shape", screenShape_);
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
+            if (!screenColor_.isEmpty()) e.color = screenColor_; // else ByLayer
+            e.meta.insert("lineType", screenLineType_);
+            e.meta.insert("dashScale", screenDashScale_);
             e.meta.insert("entNum", assignEntityNumber());
             addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         }
@@ -3289,6 +3320,11 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::DoublePolyline:
     case ToolId::Spline:
     case ToolId::Wire: {
+        // Wire "90° only": snap this vertex to a horizontal/vertical run from the previous
+        // one (the cursor itself stayed free). The first point (on a pin, etc.) is kept as-is.
+        Vec2 wp = p;
+        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
+            wp = orthoWirePoint(draftPts_.back(), p);
         // In Arc mode each new vertex makes an arc segment tangent to the previous
         // one; draftBulges_ stays aligned with draftPts_ (bulge of the segment that
         // ENDS at this vertex; the very first segment is always straight).
@@ -3319,7 +3355,7 @@ void Editor::handleDrawPress(const Vec2& p) {
                 if (pressMods_ & Qt::ShiftModifier) setWireFanAll(); // Shift-click = add all pins
             }
         }
-        draftPts_.push_back(p);
+        draftPts_.push_back(wp);
         draftBulges_.push_back(bulge);
         draftCornerRadii_.push_back(0.0); // this new vertex is an endpoint for now
         // Placing this point completes the corner at the PREVIOUS vertex; stamp it
@@ -7203,36 +7239,41 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     }
             }
             if (!xs.empty()) {
-                double cx = 0, yMin = 1e18, yMax = -1e18;
-                for (const Vec2& v : xs) { cx += v.x; yMin = std::min(yMin, v.y); yMax = std::max(yMax, v.y); }
+                double cx = 0, cyMid = 0;
+                for (const Vec2& v : xs) { cx += v.x; cyMid += v.y; }
                 cx /= xs.size();
-                const double cyMid = (yMin + yMax) / 2.0;
+                cyMid /= xs.size();
                 // Size EXACTLY as finishWireBand will (shared helper) so the ghost grows /
                 // shrinks live as the crossing line catches more or fewer wires.
                 double rx, ry;
-                shieldAutoSize(yMax - yMin, static_cast<int>(xs.size()), rx, ry);
-                // Preview every shield that will be placed (Amount), side by side.
+                const double span = distance(xs.front(), xs.back());
+                shieldAutoSize(span, static_cast<int>(xs.size()), rx, ry);
+                // Tilt to match the wires (major axis = first->last crossing).
+                const double rot = EntityRenderer::shieldRotation(xs);
+                const Vec2 major{std::cos(rot), std::sin(rot)};
+                const Vec2 minor{-std::sin(rot), std::cos(rot)};
+                const bool capsule = screenShape_ == QLatin1String("capsule");
                 const int amount = std::clamp(screenAmount_, 1, 5);
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap
-                const bool capsule = screenShape_ == QLatin1String("capsule");
                 for (int k = 0; k < amount; ++k) {
-                    const double ox = cx + k * spacing;
-                    const QPointF cc = vt.toScreen({ox, cyMid});
-                    const double rxs = rx * vt.scale(), rys = ry * vt.scale();
-                    if (capsule) // stadium: rounded rect, corner radius = rx => semicircle caps
-                        p.drawRoundedRect(QRectF(cc.x() - rxs, cc.y() - rys, 2 * rxs, 2 * rys),
-                                          rxs, rxs);
-                    else
-                        p.drawEllipse(cc, rxs, rys);
+                    const Vec2 ctr{cx + k * spacing * minor.x, cyMid + k * spacing * minor.y};
+                    QPolygonF poly;
+                    for (const Vec2& w : EntityRenderer::shieldOutline(ctr, rx, ry, rot, capsule))
+                        poly << vt.toScreen(w);
+                    p.drawPolyline(poly);
                     Vec2 edge, drain;
                     if (screenLegDir_ == QLatin1String("top")) {
-                        edge = {ox, cyMid + ry}; drain = {ox, cyMid + ry + screenLeg_};
+                        edge = {ctr.x + ry * major.x, ctr.y + ry * major.y};
+                        drain = {ctr.x + (ry + screenLeg_) * major.x, ctr.y + (ry + screenLeg_) * major.y};
                     } else if (screenLegDir_ == QLatin1String("left")) {
-                        edge = {ox - rx, cyMid}; drain = {ox - rx - screenLeg_, cyMid};
+                        edge = {ctr.x - rx * minor.x, ctr.y - rx * minor.y};
+                        drain = {ctr.x - (rx + screenLeg_) * minor.x, ctr.y - (rx + screenLeg_) * minor.y};
                     } else if (screenLegDir_ == QLatin1String("right")) {
-                        edge = {ox + rx, cyMid}; drain = {ox + rx + screenLeg_, cyMid};
+                        edge = {ctr.x + rx * minor.x, ctr.y + rx * minor.y};
+                        drain = {ctr.x + (rx + screenLeg_) * minor.x, ctr.y + (rx + screenLeg_) * minor.y};
                     } else {
-                        edge = {ox, cyMid - ry}; drain = {ox, cyMid - ry - screenLeg_};
+                        edge = {ctr.x - ry * major.x, ctr.y - ry * major.y};
+                        drain = {ctr.x - (ry + screenLeg_) * major.x, ctr.y - (ry + screenLeg_) * major.y};
                     }
                     p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
                 }
@@ -7462,7 +7503,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         p.setBrush(Qt::NoBrush);
 
         std::vector<Vec2> pts = draftPts_;
-        pts.push_back(cursor_);
+        // Wire "90° only": the previewed segment snaps to a horizontal/vertical run even
+        // though the crosshair (cursor_) tracks the mouse freely.
+        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
+            pts.push_back(orthoWirePoint(draftPts_.back(), cursor_));
+        else
+            pts.push_back(cursor_);
         // Per-corner fillet radii for the live preview: placed corners keep their
         // stored radius; the corner now forming under the cursor previews with the
         // current (pending) radius. Parallels `pts`.
