@@ -2330,33 +2330,39 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
         }
     }
     // (g)/(h) Shields and twist signs come in PAIRS: a shielded / twisted run is marked at
-    // both ends, so any wire carrying exactly ONE shield (or ONE twist sign) is incomplete
-    // — it must have at least 2, or none.
+    // both ends, so a marker whose wires are covered only ONCE is incomplete (needs a
+    // second marker, or none). A single unpaired marker over several wires is reported as
+    // ONE discrepancy row listing all the pins/wires it covers (not one row per wire).
     auto pairCheck = [&](EntityType type, const char* rule, const char* what) {
         if (!ruleEnabled(QString::fromLatin1(rule))) return;
-        QHash<QString, int> countOnWire;   // wire id -> number of markers of this type
-        QHash<QString, Vec2> posOnWire;    // a representative marker position per wire
+        QHash<QString, int> countOnWire; // wire id -> number of markers of this type on it
         for (const auto& e : doc_->entities()) {
             if (e.type != type) continue;
-            Vec2 at = e.points.empty() ? e.a : e.points.front();
+            for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray())
+                if (!v.toString().isEmpty()) countOnWire[v.toString()] += 1;
+        }
+        auto wireNum = [&](const QString& id) {
+            for (const auto& w : doc_->entities())
+                if (w.id == id) return w.meta.value(QStringLiteral("entNum")).toInt();
+            return 0;
+        };
+        for (const auto& e : doc_->entities()) {
+            if (e.type != type) continue;
+            // Collect the covered wires that lack a pair (only this marker sits on them).
+            QStringList pins;
             for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray()) {
                 const QString wid = v.toString();
-                if (wid.isEmpty()) continue;
-                countOnWire[wid] += 1;
-                if (!posOnWire.contains(wid)) posOnWire.insert(wid, at);
+                if (!wid.isEmpty() && countOnWire.value(wid) == 1)
+                    pins << QStringLiteral("#%1").arg(wireNum(wid));
             }
-        }
-        for (auto it = countOnWire.begin(); it != countOnWire.end(); ++it) {
-            if (it.value() != 1) continue; // 0 = fine, >=2 = fine, exactly 1 = incomplete
-            int num = 0;
-            for (const auto& w : doc_->entities())
-                if (w.id == it.key()) { num = w.meta.value(QStringLiteral("entNum")).toInt(); break; }
-            issues.push_back({QStringLiteral("%1:%2").arg(QString::fromLatin1(rule), it.key()),
-                              QStringLiteral("Wire #%1 has a single %2 — it needs at least two "
-                                             "(one at each end) or none")
-                                  .arg(num)
-                                  .arg(QString::fromLatin1(what)),
-                              it.key(), posOnWire.value(it.key())});
+            if (pins.isEmpty()) continue; // fully paired (or none) — fine
+            const Vec2 at = e.points.empty() ? e.a : e.points.front();
+            issues.push_back(
+                {QStringLiteral("%1:%2").arg(QString::fromLatin1(rule), e.id),
+                 QStringLiteral("Single %1 on wire(s) %2 — needs a second %1 (one at each end) "
+                                "or none")
+                     .arg(QString::fromLatin1(what), pins.join(QStringLiteral(", "))),
+                 e.id, at});
         }
     };
     pairCheck(EntityType::Screen, "shieldpair", "shield");
@@ -2500,14 +2506,13 @@ void Editor::freezeScreenPreview() {
 }
 
 void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const {
-    // Large radius (semi-axis): when it is AUTO (Lock checked — the default) the shield
-    // fits the crossed wires and extends beyond the first/last wire by 20% of the gap
-    // between the closest connected pins (≈ the wire spacing), so it clearly encloses the
-    // bundle. When the user UNLOCKS it, the typed value is used verbatim so editing it is
-    // reflected live in the preview. The small radius always follows the ratio.
+    // The shield ALWAYS fits the crossed wires: its half-height is the half-span plus a
+    // margin of 20% of the gap between the closest wires, so it clearly clears the first
+    // and last wire. The small radius follows the ratio (which the Small/Large radius
+    // fields set), so editing those still re-shapes the preview width.
     const double ratio = std::max(0.2, screenRatio_);
     const double margin = 0.20 * std::max(0.0, pinGap);
-    ryOut = screenRyLocked_ ? std::max(span / 2.0 + margin, 12.0) : std::max(1.0, screenRy_);
+    ryOut = std::max(span / 2.0 + margin, 12.0);
     rxOut = ryOut / ratio;
 }
 

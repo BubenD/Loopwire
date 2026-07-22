@@ -1242,34 +1242,46 @@ int run_harness_tests() {
               "shield-style: dashed line, dash scale and colour are stored");
     }
 
-    // Validation: a wire with a SINGLE shield (or single twist sign) is flagged; two on
-    // the same wire, or none, is fine.
+    // Validation: a SINGLE shield covering several wires is reported as ONE row listing
+    // all its pins; two shields on the same wires clear the flag.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d);
-        Entity w; w.id = "w1"; w.type = EntityType::Wire; w.points = {{0, 0}, {200, 0}};
-        w.meta.insert("entNum", 7);
-        d.entities().push_back(w);
-        QJsonArray wref; wref.append(QStringLiteral("w1"));
-        Entity s1; s1.id = "s1"; s1.type = EntityType::Screen; s1.points = {{50, 0}, {50, -20}};
-        s1.meta.insert("catch", 1); s1.meta.insert("wires", wref);
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        w1.meta.insert("entNum", 7);
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        w2.meta.insert("entNum", 8);
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        QJsonArray wref; wref.append(QStringLiteral("w1")); wref.append(QStringLiteral("w2"));
+        Entity s1; s1.id = "s1"; s1.type = EntityType::Screen; s1.points = {{50, 0}, {50, 30}, {50, -20}};
+        s1.meta.insert("catch", 2); s1.meta.insert("wires", wref);
         d.entities().push_back(s1);
-        auto hasKey = [&](const char* k) {
+        auto countKey = [&](const char* k) {
+            int n = 0;
             for (const auto& is : ed.validateSchematic())
-                if (is.key.startsWith(QLatin1String(k))) return true;
-            return false;
+                if (is.key.startsWith(QLatin1String(k))) ++n;
+            return n;
         };
-        check(hasKey("shieldpair"), "validate: a single shield on a wire is flagged");
-        // Add a second shield on the same wire -> the pair is complete, no flag.
-        Entity s2; s2.id = "s2"; s2.type = EntityType::Screen; s2.points = {{150, 0}, {150, -20}};
-        s2.meta.insert("catch", 1); s2.meta.insert("wires", wref);
+        auto msgFor = [&](const char* k) {
+            for (const auto& is : ed.validateSchematic())
+                if (is.key.startsWith(QLatin1String(k))) return is.message;
+            return QString();
+        };
+        check(countKey("shieldpair") == 1,
+              "validate: a single shield over 2 wires is ONE row, not one per wire");
+        check(msgFor("shieldpair").contains("#7") && msgFor("shieldpair").contains("#8"),
+              "validate: the single-shield row lists all the pins it covers");
+        // A second shield on the same wires clears the flag.
+        Entity s2; s2.id = "s2"; s2.type = EntityType::Screen; s2.points = {{150, 0}, {150, 30}, {150, -20}};
+        s2.meta.insert("catch", 2); s2.meta.insert("wires", wref);
         d.entities().push_back(s2);
-        check(!hasKey("shieldpair"), "validate: two shields on the wire clears the flag");
-        // One twist sign on the wire -> flagged; two -> fine.
-        Entity t1; t1.id = "t1"; t1.type = EntityType::Twist; t1.points = {{80, 0}};
+        check(countKey("shieldpair") == 0, "validate: two shields on the wires clear the flag");
+        // One twist sign over both wires -> one flagged row.
+        Entity t1; t1.id = "t1"; t1.type = EntityType::Twist; t1.points = {{80, 0}, {80, 30}};
         t1.meta.insert("wires", wref);
         d.entities().push_back(t1);
-        check(hasKey("twistpair"), "validate: a single twist sign on a wire is flagged");
+        check(countKey("twistpair") == 1, "validate: a single twist sign is one flagged row");
     }
 
     // Bundle twist: type "bundle" is stored (a twist sign suitable for 2+ wires).
