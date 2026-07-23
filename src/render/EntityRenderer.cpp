@@ -1445,26 +1445,28 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
         if (k < 1) break;
-        double cx = 0.0, yMin = 1e18, yMax = -1e18;
-        for (int i = 0; i < k; ++i) {
-            cx += e.points[i].x;
-            yMin = std::min(yMin, e.points[i].y);
-            yMax = std::max(yMax, e.points[i].y);
-        }
-        cx /= k;
         const double pad = 6.0;
         const double rx = e.meta.value("rx").toDouble(12.0);
-        const double cyMid = (yMin + yMax) / 2.0;
-        // Large radius: explicit override (Properties) or auto-fit to the caught wires.
-        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
-                                                : (yMax - yMin) / 2.0 + pad;
-        const Vec2 center{cx, cyMid};
-        const QPointF c = vt.toScreen(center);
         // Angle: the shield tilts so its major axis runs from the first to the last wire.
         std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
         const double rot = shieldRotation(crossings);
         const Vec2 major{std::cos(rot), std::sin(rot)};
         const Vec2 minor{-std::sin(rot), std::cos(rot)};
+        // Centre = midpoint of the OUTERMOST caught wires along the major axis, so the
+        // outline spans every wire regardless of the order they were caught in.
+        double tMin = 1e18, tMax = -1e18;
+        Vec2 pMin{}, pMax{};
+        for (int i = 0; i < k; ++i) {
+            const double t = e.points[i].x * major.x + e.points[i].y * major.y;
+            if (t < tMin) { tMin = t; pMin = e.points[i]; }
+            if (t > tMax) { tMax = t; pMax = e.points[i]; }
+        }
+        const Vec2 center{(pMin.x + pMax.x) * 0.5, (pMin.y + pMax.y) * 0.5};
+        const double cx = center.x, cyMid = center.y;
+        // Large radius: explicit override (Properties) or auto-fit to the caught-wire span.
+        const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                : (tMax - tMin) / 2.0 + pad;
+        const QPointF c = vt.toScreen(center);
         // Line type: solid (default) or dashed, with a scalable dash pattern; the color
         // comes from the resolved `color` (entity color / ByLayer).
         QPen shieldPen = p.pen();

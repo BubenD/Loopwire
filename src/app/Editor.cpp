@@ -37,6 +37,22 @@ double shieldWireGap(const std::vector<Vec2>& crossings, const Vec2& major) {
     return g < 1e17 ? g : 0.0;
 }
 
+// The caught wires lie on the (collinear) crossing line. Find the shield centre and full
+// span from the two OUTERMOST crossings along the major axis — robust to the order the
+// wires were caught in and to uneven spacing, so the shield always spans every caught wire.
+void shieldExtent(const std::vector<Vec2>& crossings, const Vec2& major, Vec2& centerOut,
+                  double& spanOut) {
+    double tMin = 1e18, tMax = -1e18;
+    Vec2 pMin{}, pMax{};
+    for (const Vec2& c : crossings) {
+        const double t = c.x * major.x + c.y * major.y;
+        if (t < tMin) { tMin = t; pMin = c; }
+        if (t > tMax) { tMax = t; pMax = c; }
+    }
+    centerOut = {(pMin.x + pMax.x) * 0.5, (pMin.y + pMax.y) * 0.5};
+    spanOut = tMax - tMin;
+}
+
 // Snap a point to a horizontal or vertical segment from `prev` (the wire "90° only"
 // projection): keep whichever axis the cursor moved furthest along, zero the other.
 Vec2 orthoWirePoint(const Vec2& prev, const Vec2& p) {
@@ -385,25 +401,24 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
         if (k >= 1) {
-            double cx = 0.0, cy = 0.0, yMin = 1e18, yMax = -1e18;
-            for (int i = 0; i < k; ++i) {
-                cx += e.points[i].x;
-                cy += e.points[i].y;
-                yMin = std::min(yMin, e.points[i].y);
-                yMax = std::max(yMax, e.points[i].y);
-            }
-            cx /= k;
-            cy /= k;
             const double rx = e.meta.value("rx").toDouble(12.0);
-            const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
-                                                    : (yMax - yMin) / 2.0 + 6.0;
             const QString shape = e.meta.value("shape").toString(QStringLiteral("ellipse"));
             // Tilted frame: major axis runs first->last wire, minor perpendicular.
             std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
             const double rot = EntityRenderer::shieldRotation(crossings);
             const Vec2 major{std::cos(rot), std::sin(rot)};
             const Vec2 minor{-std::sin(rot), std::cos(rot)};
-            const Vec2 center{cx, cy};
+            // Centre = midpoint of the outermost caught wires (matches the renderer).
+            double tMin = 1e18, tMax = -1e18;
+            Vec2 pMin{}, pMax{};
+            for (int i = 0; i < k; ++i) {
+                const double t = e.points[i].x * major.x + e.points[i].y * major.y;
+                if (t < tMin) { tMin = t; pMin = e.points[i]; }
+                if (t > tMax) { tMax = t; pMax = e.points[i]; }
+            }
+            const Vec2 center{(pMin.x + pMax.x) * 0.5, (pMin.y + pMax.y) * 0.5};
+            const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
+                                                    : (tMax - tMin) / 2.0 + 6.0;
             for (int i = 0; i < k; ++i) {
                 const Vec2 rel = e.points[i] - center;
                 const double along = rel.x * major.x + rel.y * major.y; // offset up the major axis
@@ -2610,21 +2625,16 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     } else {
         // Shield: an ellipse catching the crossed wires (a joint on each), plus a drain
         // lead exiting the chosen side of the ellipse to a terminable endpoint.
-        double cx = 0.0, yMin = 1e18, yMax = -1e18;
-        for (const Vec2& c : crossings) {
-            cx += c.x;
-            yMin = std::min(yMin, c.y);
-            yMax = std::max(yMax, c.y);
-        }
-        cx /= crossings.size();
-        const double cyMid = (yMin + yMax) / 2.0;
-        double rxActual, ryActual;
-        // Span = distance from the first to the last caught wire (works when angled too).
-        const double span = distance(crossings.front(), crossings.back());
-        // The shield tilts with the wires: its major axis runs first->last crossing.
+        // The shield tilts with the wires; its centre + span come from the OUTERMOST caught
+        // wires along that axis so it always spans every wire (robust to catch order).
         const double rot = EntityRenderer::shieldRotation(crossings);
         const Vec2 major{std::cos(rot), std::sin(rot)};
         const Vec2 minor{-std::sin(rot), std::cos(rot)};
+        Vec2 center;
+        double span;
+        shieldExtent(crossings, major, center, span);
+        const double cx = center.x, cyMid = center.y;
+        double rxActual, ryActual;
         shieldAutoSize(span, shieldWireGap(crossings, major), rxActual, ryActual);
         Vec2 drain;
         if (screenLegDir_ == QLatin1String("top"))
@@ -7291,18 +7301,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     }
             }
             if (!xs.empty()) {
-                double cx = 0, cyMid = 0;
-                for (const Vec2& v : xs) { cx += v.x; cyMid += v.y; }
-                cx /= xs.size();
-                cyMid /= xs.size();
-                // Size EXACTLY as finishWireBand will (shared helper) so the ghost grows /
-                // shrinks live as the crossing line catches more or fewer wires.
-                double rx, ry;
-                const double span = distance(xs.front(), xs.back());
-                // Tilt to match the wires (major axis = first->last crossing).
+                // Tilt to match the wires; centre + span from the outermost crossings so the
+                // ghost always spans EVERY caught wire (robust to catch order / spacing).
                 const double rot = EntityRenderer::shieldRotation(xs);
                 const Vec2 major{std::cos(rot), std::sin(rot)};
                 const Vec2 minor{-std::sin(rot), std::cos(rot)};
+                Vec2 center;
+                double span;
+                shieldExtent(xs, major, center, span);
+                const double cx = center.x, cyMid = center.y;
+                double rx, ry;
                 shieldAutoSize(span, shieldWireGap(xs, major), rx, ry);
                 const bool capsule = screenShape_ == QLatin1String("capsule");
                 const int amount = std::clamp(screenAmount_, 1, 5);

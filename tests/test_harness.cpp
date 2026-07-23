@@ -1183,6 +1183,31 @@ int run_harness_tests() {
               "shield-amount: the copies are offset side by side");
     }
 
+    // Shield covers ALL caught wires even when they're caught out of spatial order (the
+    // size/centre come from the outermost wires, not the first/last entity).
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        // Wires added in scrambled y-order (0, 90, 30, 60) — extent is 0..90.
+        const double ys[] = {0, 90, 30, 60};
+        int i = 0;
+        for (double y : ys) {
+            Entity w; w.id = QStringLiteral("w%1").arg(i++); w.type = EntityType::Wire;
+            w.points = {{0, y}, {200, y}};
+            d.entities().push_back(w);
+        }
+        ed.beginScreen();
+        ed.onPointerPress({100, -20}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 110}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("catch").toInt() == 4, "shield-covers-all: caught all 4 wires");
+        // The ellipse (centre = midpoint of extent = y=45, semi-axis ry) must enclose the
+        // outermost joints at y=0 and y=90 — i.e. ry >= 45.
+        const double ry = sc->meta.value("ry").toDouble();
+        check(ry >= 45.0, "shield-covers-all: ry spans the full extent of the caught wires");
+    }
+
     // Shield shape: choosing "capsule" is recorded on the placed shield's meta.
     {
         Document d; d.entities().clear();
