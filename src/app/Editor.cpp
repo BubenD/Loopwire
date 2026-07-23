@@ -37,6 +37,26 @@ double shieldWireGap(const std::vector<Vec2>& crossings, const Vec2& major) {
     return g < 1e17 ? g : 0.0;
 }
 
+// Shield angle: perpendicular to the caught wires, so the shield crosses them at 90° no
+// matter how the crossing line was drawn. Averages the wire segment directions (folded to
+// one half-plane so opposite senses don't cancel), takes the perpendicular, points it up.
+double bundlePerpRot(const std::vector<Vec2>& segDirs) {
+    Vec2 acc{0, 0};
+    for (const Vec2& d : segDirs) {
+        const double len = std::hypot(d.x, d.y);
+        if (len < 1e-9) continue;
+        Vec2 u{d.x / len, d.y / len};
+        if (u.x < 0 || (std::abs(u.x) < 1e-9 && u.y < 0)) u = {-u.x, -u.y}; // consistent half
+        acc.x += u.x;
+        acc.y += u.y;
+    }
+    const double al = std::hypot(acc.x, acc.y);
+    if (al < 1e-9) return M_PI / 2.0; // no usable direction -> vertical
+    Vec2 major{-acc.y / al, acc.x / al}; // perpendicular to the mean wire direction
+    if (major.y < 0) major = {-major.x, -major.y};
+    return std::atan2(major.y, major.x);
+}
+
 // The caught wires lie on the (collinear) crossing line. Find the shield centre and full
 // span from the two OUTERMOST crossings along the major axis — robust to the order the
 // wires were caught in and to uneven spacing, so the shield always spans every caught wire.
@@ -403,9 +423,12 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         if (k >= 1) {
             const double rx = e.meta.value("rx").toDouble(12.0);
             const QString shape = e.meta.value("shape").toString(QStringLiteral("ellipse"));
-            // Tilted frame: major axis runs first->last wire, minor perpendicular.
+            // Tilted frame: perpendicular-to-wires angle stored at placement (older shields
+            // fall back to the first->last-wire direction).
             std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
-            const double rot = EntityRenderer::shieldRotation(crossings);
+            const double rot = e.meta.contains("rot")
+                                   ? e.meta.value("rot").toDouble()
+                                   : EntityRenderer::shieldRotation(crossings);
             const Vec2 major{std::cos(rot), std::sin(rot)};
             const Vec2 minor{-std::sin(rot), std::cos(rot)};
             // Centre = midpoint of the outermost caught wires (matches the renderer).
@@ -2607,12 +2630,14 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     const Vec2 f0 = wireBandStart_, f1 = fenceEnd;
     std::vector<Vec2> crossings;
     std::vector<QString> wireIds;
+    std::vector<Vec2> segDirs; // direction of each crossed wire segment (for the shield angle)
     for (const auto& w : doc_->entities()) {
         if (w.type != EntityType::Wire || w.points.size() < 2) continue;
         for (size_t i = 1; i < w.points.size(); ++i)
             if (auto x = segmentSegmentIntersection(f0, f1, w.points[i - 1], w.points[i])) {
                 crossings.push_back(*x);
                 wireIds.push_back(w.id);
+                segDirs.push_back(w.points[i] - w.points[i - 1]);
                 break; // one crossing per wire
             }
     }
@@ -2644,9 +2669,10 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     } else {
         // Shield: an ellipse catching the crossed wires (a joint on each), plus a drain
         // lead exiting the chosen side of the ellipse to a terminable endpoint.
-        // The shield tilts with the wires; its centre + span come from the OUTERMOST caught
-        // wires along that axis so it always spans every wire (robust to catch order).
-        const double rot = EntityRenderer::shieldRotation(crossings);
+        // The shield's major axis is PERPENDICULAR to the wires (so it crosses them at 90°
+        // regardless of how the crossing line was slanted); centre + span come from the
+        // OUTERMOST caught wires along that axis so it always spans every wire.
+        const double rot = bundlePerpRot(segDirs);
         const Vec2 major{std::cos(rot), std::sin(rot)};
         const Vec2 minor{-std::sin(rot), std::cos(rot)};
         Vec2 center;
@@ -2682,6 +2708,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("wires", k == 0 ? ids : QJsonArray()); // only the first truly catches
             e.meta.insert("rx", rxActual);
             e.meta.insert("ry", ryActual); // store the exact size so render matches placement
+            e.meta.insert("rot", rot);     // perpendicular-to-wires angle (render/grips reuse it)
             e.meta.insert("shape", screenShape_);
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
@@ -7346,19 +7373,21 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(bandEnd));
         if (screenArm_) {
             std::vector<Vec2> xs;
+            std::vector<Vec2> segDirs;
             for (const auto& w : doc_->entities()) {
                 if (w.type != EntityType::Wire || w.points.size() < 2) continue;
                 for (size_t i = 1; i < w.points.size(); ++i)
                     if (auto x = segmentSegmentIntersection(wireBandStart_, bandEnd,
                                                             w.points[i - 1], w.points[i])) {
                         xs.push_back(*x);
+                        segDirs.push_back(w.points[i] - w.points[i - 1]);
                         break;
                     }
             }
             if (!xs.empty()) {
-                // Tilt to match the wires; centre + span from the outermost crossings so the
-                // ghost always spans EVERY caught wire (robust to catch order / spacing).
-                const double rot = EntityRenderer::shieldRotation(xs);
+                // Orient PERPENDICULAR to the wires (crosses them at 90°); centre + span
+                // from the outermost crossings so the ghost spans EVERY caught wire.
+                const double rot = bundlePerpRot(segDirs);
                 const Vec2 major{std::cos(rot), std::sin(rot)};
                 const Vec2 minor{-std::sin(rot), std::cos(rot)};
                 Vec2 center;

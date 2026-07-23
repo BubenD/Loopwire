@@ -1233,6 +1233,25 @@ int run_harness_tests() {
         check(ry >= 45.0, "shield-covers-all: ry spans the full extent of the caught wires");
     }
 
+    // Shield auto-perpendicular: a SLANTED crossing line over level (0°) wires still makes
+    // a shield perpendicular to them (rot = 90°), crossing all wires at 90°.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 60}, {200, 60}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({80, 100}, Qt::LeftButton, Qt::NoModifier);   // deliberately slanted
+        ed.onPointerPress({120, -40}, Qt::LeftButton, Qt::NoModifier);  // crossing line
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && sc->meta.value("catch").toInt() == 2, "shield-perp: caught both level wires");
+        check(sc && near(sc->meta.value("rot").toDouble(), 1.5707963267948966), // pi/2
+              "shield-perp: the shield is perpendicular (90°) to the level wires");
+    }
+
     // Shield shape: choosing "capsule" is recorded on the placed shield's meta.
     {
         Document d; d.entities().clear();

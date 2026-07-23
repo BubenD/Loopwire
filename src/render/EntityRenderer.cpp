@@ -1447,9 +1447,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         if (k < 1) break;
         const double pad = 6.0;
         const double rx = e.meta.value("rx").toDouble(12.0);
-        // Angle: the shield tilts so its major axis runs from the first to the last wire.
+        // Angle: perpendicular to the wires (stored at placement); older shields fall back
+        // to the first->last-wire direction.
         std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
-        const double rot = shieldRotation(crossings);
+        const double rot = e.meta.contains(QStringLiteral("rot"))
+                               ? e.meta.value(QStringLiteral("rot")).toDouble()
+                               : shieldRotation(crossings);
         const Vec2 major{std::cos(rot), std::sin(rot)};
         const Vec2 minor{-std::sin(rot), std::cos(rot)};
         // Centre = midpoint of the OUTERMOST caught wires along the major axis, so the
