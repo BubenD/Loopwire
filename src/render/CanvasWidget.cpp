@@ -704,6 +704,13 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
                 return;
             }
         }
+        // Pressing Shift on its own while a fan-out is armed routes a wire from EVERY pin of
+        // the connector (including the ones ABOVE the pin the wire started on).
+        if (editor_->wireFanArmed() && e->key() == Qt::Key_Shift && !e->isAutoRepeat()) {
+            editor_->setWireFanAll();
+            e->accept();
+            return;
+        }
         const QString t = e->text();
         const bool isLetter = !t.isEmpty() && t[0].isLetter();
         const bool isValueChar =

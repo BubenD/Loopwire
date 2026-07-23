@@ -601,6 +601,31 @@ int run_harness_tests() {
         check(onPin == 4, "wire-fanout: every fanned wire starts on a distinct pin end");
     }
 
+    // Shift-fanout from a MIDDLE pin must include the pins ABOVE it too (pin 3 -> pins 1..4),
+    // each wire starting exactly on its own pin.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false; ed.snapSettings().gridSnap = false;
+        ed.connectorSpec() = defaultConnectorSpec(4);
+        ed.setTool(ToolId::Connector); ed.armConnectorPlacement();
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* conn = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Connector) conn = &e;
+        const ConnectorGeometry g = connectorGeometry(conn->a, connectorSpecFromMeta(conn->meta));
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress(g.pinEnd[2], Qt::LeftButton, Qt::ShiftModifier); // start on pin 3
+        ed.onPointerPress({g.pinEnd[2].x + 200, g.pinEnd[2].y}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        int onPin = 0;
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Wire) continue;
+            for (const Vec2& pe : g.pinEnd)
+                if (near(e.points.front().x, pe.x) && near(e.points.front().y, pe.y)) ++onPin;
+        }
+        check(onPin == 4, "wire-fanout-mid: starting on pin 3 fans all pins incl. 1 and 2");
+    }
+
     // Wiring from a pin, Shift+<pin number> toggles that ONE pin in/out of the fan. Start
     // on pin 1, toggle pin 3 and pin 4 in => wires on pins 1,3,4 (pin 2 skipped); toggling
     // pin 3 again removes it.
