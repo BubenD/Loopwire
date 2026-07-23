@@ -2507,11 +2507,11 @@ void Editor::freezeScreenPreview() {
 
 void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const {
     // The shield ALWAYS fits the crossed wires: its half-height is the half-span plus a
-    // margin of 20% of the gap between the closest wires, so it clearly clears the first
+    // margin of 30% of the gap between the closest wires, so it clearly clears the first
     // and last wire. The small radius follows the ratio (which the Small/Large radius
     // fields set), so editing those still re-shapes the preview width.
     const double ratio = std::max(0.2, screenRatio_);
-    const double margin = 0.20 * std::max(0.0, pinGap);
+    const double margin = 0.30 * std::max(0.0, pinGap);
     ryOut = std::max(span / 2.0 + margin, 12.0);
     rxOut = ryOut / ratio;
 }

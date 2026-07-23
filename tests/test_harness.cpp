@@ -1146,9 +1146,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && !sc->points.empty(), "screen-leg-snap: the screen was placed");
         const Vec2 drain = sc->points.back();
-        // Default (auto): ry = span/2 + 20% of the wire gap = 15 + 0.2*30 = 21, cyMid=15,
-        // bottom edge = 15-21 = -6, drain sits 15 (leg) below it at y = -6-15 = -21.
-        check(near(drain.y, -21.0), "shield-default-leg: the default leg length is 15");
+        // Default (auto): ry = span/2 + 30% of the wire gap = 15 + 0.3*30 = 24, cyMid=15,
+        // bottom edge = 15-24 = -9, drain sits 15 (leg) below it at y = -9-15 = -24.
+        check(near(drain.y, -24.0), "shield-default-leg: the default leg length is 15");
         SnapSettings s; // objectSnap + endpoint on by default
         auto r = resolveSnap(d, {drain.x + 1, drain.y + 1}, std::nullopt, 5.0, s, {});
         check(r.snapped && near(r.point.x, drain.x) && near(r.point.y, drain.y),
@@ -1342,10 +1342,10 @@ int run_harness_tests() {
         const Entity* sc = nullptr;
         for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         check(sc && sc->meta.value("catch").toInt() == 4, "shield-uniform: caught all 4 wires");
-        // ry = span/2 + 20% of the wire gap = 15 + 0.2*10 = 17; rx follows the ratio.
+        // ry = span/2 + 30% of the wire gap = 15 + 0.3*10 = 18; rx follows the ratio.
         const double rx = sc->meta.value("rx").toDouble();
         const double ry = sc->meta.value("ry").toDouble();
-        check(near(ry, 17.0) && near(ry / rx, ed.screenRatio()),
+        check(near(ry, 18.0) && near(ry / rx, ed.screenRatio()),
               "shield-uniform: fit scales uniformly, keeping ry/rx == ratio");
     }
 
@@ -1411,8 +1411,8 @@ int run_harness_tests() {
         ed.setTool(ToolId::Select);
         ed.onPointerPress({300, 45}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerRelease({300, 45}, Qt::LeftButton);
-        ed.onPointerMove({108, 33});
-        ed.onPointerPress({108, 33}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({112, 36});   // bbox top-right corner, outside the ellipse curve
+        ed.onPointerPress({112, 36}, Qt::LeftButton, Qt::NoModifier);
         const auto& sel = ed.selection();
         check(std::find(sel.begin(), sel.end(), scId) == sel.end(),
               "shield-touch-precise: a box over only the bbox corner does NOT select the shield");

@@ -4661,6 +4661,10 @@ void MainWindow::refreshProperties() {
             return;
     }
     refreshing_ = true;
+    // Suppress intermediate repaints while the table is torn down and rebuilt row by row
+    // (each insertRow/setCellWidget would otherwise paint), which is what made the fields
+    // flicker/jitter when changed() fires repeatedly (e.g. dragging a selected object).
+    propsTable_->setUpdatesEnabled(false);
     const auto& sel = editor_->selection();
     propsTable_->setRowCount(0);
 
@@ -5331,6 +5335,7 @@ void MainWindow::refreshProperties() {
         else measured = std::hypot(e->b.x - e->a.x, e->b.y - e->a.y);
         addRow(QStringLiteral("Measurement"), QString::number(measured, 'f', dec));
     }
+    propsTable_->setUpdatesEnabled(true); // one coalesced repaint of the finished table
     refreshing_ = false;
 }
 

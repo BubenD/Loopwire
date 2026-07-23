@@ -26,11 +26,15 @@ int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
 
 double EntityRenderer::shieldRotation(const std::vector<Vec2>& crossings) {
     // Major (ry) axis runs from the first to the last caught wire. Level wires give a
-    // vertical shield (rot = +90 deg); angled wires tilt it to match.
+    // vertical shield (rot = +90 deg); angled wires tilt it to match. The axis is
+    // normalized to point "up" (world +y) so the leg's top/bottom stay absolute
+    // regardless of the order the wires were caught in.
     if (crossings.size() < 2) return M_PI / 2.0;
     const Vec2 d = crossings.back() - crossings.front();
     if (d.x * d.x + d.y * d.y < 1e-12) return M_PI / 2.0;
-    return std::atan2(d.y, d.x);
+    double rot = std::atan2(d.y, d.x);
+    if (std::sin(rot) < 0.0) rot += M_PI; // flip so the major axis points upward
+    return rot;
 }
 
 std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, double ry,
