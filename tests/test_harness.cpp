@@ -1309,6 +1309,29 @@ int run_harness_tests() {
         check(countKey("twistpair") == 1, "validate: a single twist sign is one flagged row");
     }
 
+    // Validation: a shield whose drain is neither on a wire nor terminated is flagged;
+    // dropping an X (termination) on the drain clears it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d);
+        Entity w; w.id = "w1"; w.type = EntityType::Wire; w.points = {{0, 0}, {200, 0}};
+        d.entities().push_back(w);
+        Entity s; s.id = "s1"; s.type = EntityType::Screen;
+        s.points = {{50, 0}, {50, -40}}; // one joint + a free drain at (50,-40)
+        s.meta.insert("catch", 1);
+        s.meta.insert("entNum", 5);
+        d.entities().push_back(s);
+        auto has = [&](const char* k) {
+            for (const auto& is : ed.validateSchematic())
+                if (is.key.startsWith(QLatin1String(k))) return true;
+            return false;
+        };
+        check(has("shielddrain"), "validate: a floating shield drain is flagged");
+        Entity x; x.id = "x1"; x.type = EntityType::NotConnected; x.a = {50, -40};
+        d.entities().push_back(x);
+        check(!has("shielddrain"), "validate: terminating the drain clears the flag");
+    }
+
     // Bundle twist: type "bundle" is stored (a twist sign suitable for 2+ wires).
     {
         Document d; d.entities().clear();
@@ -1344,10 +1367,19 @@ int run_harness_tests() {
         for (auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
         const double rx0 = sc->meta.value("rx").toDouble();
         const double ry0 = sc->meta.value("ry").toDouble();
+        // Drain distance from the shield centre (= ry + leg) before scaling.
+        const Vec2 c0{(sc->points.front().x + sc->points[1].x) / 2.0,
+                      (sc->points.front().y + sc->points[1].y) / 2.0};
+        const double legDist0 = distance(sc->points.back(), c0);
         scaleEntity(*sc, {100, 15}, 2.0);
         check(near(sc->meta.value("rx").toDouble(), rx0 * 2) &&
                   near(sc->meta.value("ry").toDouble(), ry0 * 2),
               "shield-scale: scaling the shield doubles its ellipse radii");
+        const Vec2 c1{(sc->points.front().x + sc->points[1].x) / 2.0,
+                      (sc->points.front().y + sc->points[1].y) / 2.0};
+        const double legDist1 = distance(sc->points.back(), c1);
+        check(near(legDist1, legDist0 * 2),
+              "shield-scale: the drain leg scales with the shield");
     }
 
     // Fitting to the crossed wires UNIFORMLY scales the shield: it grows to span the

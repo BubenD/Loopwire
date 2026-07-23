@@ -2382,6 +2382,25 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
     };
     pairCheck(EntityType::Screen, "shieldpair", "shield");
     pairCheck(EntityType::Twist, "twistpair", "twist sign");
+    // (i) A shield's drain lead must end on a wire, splice, X marker, or pin — otherwise
+    // the shield is floating (its drain neither connected nor terminated).
+    if (ruleEnabled("shielddrain")) {
+        for (const auto& e : doc_->entities()) {
+            if (e.type != EntityType::Screen) continue;
+            const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                                   static_cast<int>(e.points.size()));
+            if (static_cast<int>(e.points.size()) <= k) continue; // no drain point
+            const Vec2 drain = e.points.back();
+            if (nearAny(drain, wireEnds) || nearAny(drain, ncMarks) ||
+                nearAny(drain, splices) || nearAny(drain, pinEnds))
+                continue;
+            issues.push_back({QStringLiteral("shielddrain:%1").arg(e.id),
+                              QStringLiteral("Shield #%1 drain is not connected to a wire or "
+                                             "terminated")
+                                  .arg(e.meta.value("entNum").toInt()),
+                              e.id, drain});
+        }
+    }
     return issues;
 }
 
@@ -6837,6 +6856,42 @@ void Editor::setSelectionMetaNumber(const QString& key, double value) {
     if (sel.empty()) return;
     pushUndo();
     for (Entity* e : sel) e->meta[key] = value;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::resizeSelectedShield(const QString& key, double value) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    value = std::max(1.0, value);
+    pushUndo();
+    for (Entity* e : sel) {
+        if (e->type != EntityType::Screen) { e->meta[key] = value; continue; }
+        const int k = std::min(e->meta.value("catch").toInt(static_cast<int>(e->points.size())),
+                               static_cast<int>(e->points.size()));
+        if (k < 1) { e->meta[key] = value; continue; }
+        std::vector<Vec2> crossings(e->points.begin(), e->points.begin() + k);
+        const double rot = EntityRenderer::shieldRotation(crossings);
+        const Vec2 major{std::cos(rot), std::sin(rot)};
+        Vec2 center;
+        double span;
+        shieldExtent(crossings, major, center, span);
+        // Old value of the radius being changed (auto-fit for ry when absent).
+        double oldR = e->meta.value(key).toDouble(0.0);
+        if (oldR <= 0.0) oldR = (key == QLatin1String("ry")) ? span / 2.0 + 6.0 : 12.0;
+        const double f = oldR > 1e-6 ? value / oldR : 1.0;
+        e->meta[key] = value;
+        // Scale the drain about the centre by the same factor, but only when the leg runs
+        // along the axis that changed (ry -> top/bottom legs, rx -> left/right legs).
+        const QString legDir = e->meta.value("legDir").toString(QStringLiteral("bottom"));
+        const bool alongMajor = legDir == QLatin1String("top") || legDir == QLatin1String("bottom");
+        const bool relevant = (key == QLatin1String("ry") && alongMajor) ||
+                              (key == QLatin1String("rx") && !alongMajor);
+        if (relevant && static_cast<int>(e->points.size()) > k) {
+            Vec2& drain = e->points.back();
+            drain = center + (drain - center) * f;
+        }
+    }
     doc_->setDirty(true);
     emit changed();
 }

@@ -5085,7 +5085,7 @@ void MainWindow::refreshProperties() {
         const QJsonObject& m = e->meta;
         addNum(QStringLiteral("Small radius"), m.value(QStringLiteral("rx")).toDouble(12.0),
                [this](double v) {
-                   editor_->setSelectionMetaNumber(QStringLiteral("rx"), std::max(1.0, v));
+                   editor_->resizeSelectedShield(QStringLiteral("rx"), std::max(1.0, v));
                });
         // Current large radius: explicit override, else auto-fit to the caught wires.
         double ry = m.value(QStringLiteral("ry")).toDouble(0.0);
@@ -5101,7 +5101,7 @@ void MainWindow::refreshProperties() {
             ry = (yMax - yMin) / 2.0 + 6.0;
         }
         addNum(QStringLiteral("Large radius"), ry, [this](double v) {
-            editor_->setSelectionMetaNumber(QStringLiteral("ry"), std::max(1.0, v));
+            editor_->resizeSelectedShield(QStringLiteral("ry"), std::max(1.0, v));
         });
         addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
                  m.value(QStringLiteral("showS")).toBool(true) ? QStringLiteral("Yes")
@@ -6674,6 +6674,8 @@ static const std::vector<std::pair<QString, QString>>& validationRuleDefs() {
          QStringLiteral("Wire shielded by a single shield (needs at least 2, or none)")},
         {QStringLiteral("twistpair"),
          QStringLiteral("Wire with a single twist sign (needs at least 2, or none)")},
+        {QStringLiteral("shielddrain"),
+         QStringLiteral("Shield drain not connected to a wire or terminated")},
     };
     return defs;
 }
