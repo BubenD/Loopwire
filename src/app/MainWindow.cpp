@@ -2318,8 +2318,8 @@ void MainWindow::buildRibbon() {
             modTwistBtn->setIcon(QIcon(pm));
         }
         auto* modTm = new QMenu(modTwistBtn);
-        modTm->addAction(QStringLiteral("Type 1 (crossed braid)"), this, [this] {
-            editor_->beginTwist(QStringLiteral("cross"));
+        modTm->addAction(QStringLiteral("Type 1 (crossed)"), this, [this] {
+            editor_->beginTwist(QStringLiteral("crossed"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modTm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
@@ -2330,10 +2330,6 @@ void MainWindow::buildRibbon() {
             editor_->beginTwist(QStringLiteral("type3"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
-        modTm->addAction(QStringLiteral("Crossed"), this, [this] {
-            editor_->beginTwist(QStringLiteral("crossed"));
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
         modTm->addSeparator();
         modTm->addAction(QStringLiteral("Remove twist…"), this, [this] {
             editor_->beginTwistRemove();
@@ -2341,7 +2337,7 @@ void MainWindow::buildRibbon() {
         });
         modTwistBtn->setMenu(modTm);
         connect(modTwistBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginTwist(QStringLiteral("cross"));
+            editor_->beginTwist(QStringLiteral("crossed")); // Type 1 = crossed
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(modTwistBtn, 0, 1);
@@ -2448,6 +2444,17 @@ void MainWindow::buildRibbon() {
             tpG->addWidget(lLbl, 1, 0);
             tpG->addWidget(twLen, 1, 1);
             modG->addWidget(tpW, 0, 5);
+            // Only visible while the Crossed twist is armed (Type 1).
+            tpW->setVisible(false);
+            connect(editor_, &Editor::twistArmChanged, this, [this, tpW, twAng, twLen] {
+                const bool crossed = editor_->twistArmType() == QLatin1String("crossed");
+                tpW->setVisible(crossed);
+                if (crossed) {
+                    QSignalBlocker b1(twAng), b2(twLen);
+                    twAng->setValue(editor_->twistDiagAngle());
+                    twLen->setValue(editor_->twistCapLen());
+                }
+            });
         }
         // Built manually (not via addGroup) so the group + its separator rule can be
         // captured and hidden while the Splice / Termination tool is armed.

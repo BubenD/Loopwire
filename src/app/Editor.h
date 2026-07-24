@@ -385,6 +385,7 @@ public:
     void beginTwist(const QString& type);
     void beginScreen();
     bool awaitingWireBand() const { return !twistArmType_.isEmpty() || screenArm_; }
+    QString twistArmType() const { return twistArmType_; } // "" when no twist armed
     // Remove-twist mode: click a twist sign to delete it (stays armed until Esc).
     void beginTwistRemove();
     bool awaitingTwistRemove() const { return awaitTwistRemove_; }
@@ -506,6 +507,7 @@ signals:
     void connectorArmedChanged();
     void markerSizeChanged(); // splice/X default size changed (ribbon field re-syncs)
     void screenArmedChanged(); // screen placement armed/disarmed/frozen (ribbon group re-syncs)
+    void twistArmChanged();    // twist type armed/cleared (ribbon shows crossed params when crossed)
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,

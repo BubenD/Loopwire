@@ -1492,6 +1492,32 @@ int run_harness_tests() {
         check(twists == 0, "twist-remove: clicking the twist sign deletes it");
     }
 
+    // A green crossing region that TOUCHES the crossed twist's line selects it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("crossed"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        QString twId;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) twId = e.id;
+        check(!twId.isEmpty(), "twist-touch-crossed: the crossed twist was placed");
+        // Region box from a far-away empty point to a corner past the diagonal (crosses the
+        // diagonal ~ (100,15)); the crossing must select the twist.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({300, 45}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({300, 45}, Qt::LeftButton);
+        ed.onPointerMove({95, 10});
+        ed.onPointerPress({95, 10}, Qt::LeftButton, Qt::NoModifier);
+        const auto& sel = ed.selection();
+        check(std::find(sel.begin(), sel.end(), twId) != sel.end(),
+              "twist-touch-crossed: touching the twist line selects it");
+    }
+
     // Frozen shield + Enter places it.
     {
         Document d; d.entities().clear();

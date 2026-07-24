@@ -635,7 +635,9 @@ void Editor::setTool(ToolId t) {
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
     awaitMatchProps_ = false;  // ...and match-properties mode
     matchSourceId_.clear();
+    const bool wasTwistArmed = !twistArmType_.isEmpty();
     twistArmType_.clear();    // ...and the twist / screen band modes
+    if (wasTwistArmed) emit twistArmChanged();
     const bool wasScreenArmed = screenArm_;
     screenArm_ = false;
     screenFrozen_ = false;
@@ -1767,11 +1769,40 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(g.pinTip[i], g.pinEnd[i]);
         break;
     }
-    case EntityType::Twist:
-        // The bounding-box edges (from the corners above) so a crossing box touching
-        // any edge of the glyph's actual footprint registers as a hit.
-        for (size_t i = 0; i < pts.size(); ++i) segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
+    case EntityType::Twist: {
+        // The ACTUAL drawn twist line, so a crossing box only has to touch the line (not
+        // the loose bounding box). For "crossed" this is the Z jog (matching the render);
+        // other types fall back to the glyph's bounding-box edges.
+        const QString ty = e.meta.value("twistType").toString();
+        double cx = 0.0, yMin = 1e18, yMax = -1e18;
+        for (const Vec2& pt : e.points) {
+            cx += pt.x;
+            yMin = std::min(yMin, pt.y);
+            yMax = std::max(yMax, pt.y);
+        }
+        if (!e.points.empty()) cx /= static_cast<double>(e.points.size());
+        if (ty == QLatin1String("crossed") && yMax > yMin + 1e-9) {
+            std::vector<double> ys;
+            for (const Vec2& pt : e.points) ys.push_back(pt.y);
+            std::sort(ys.begin(), ys.end());
+            double gap = 1e18;
+            for (size_t i = 1; i < ys.size(); ++i) gap = std::min(gap, ys[i] - ys[i - 1]);
+            if (gap >= 1e17) gap = yMax - yMin;
+            const double ext = 0.30 * gap;
+            const double yb = yMin - ext, yt = yMax + ext;
+            const double ang = e.meta.value("diagAngle").toDouble(15.0) * M_PI / 180.0;
+            const double capLen = e.meta.value("capLen").toDouble(8.0);
+            const double off = ((yt - yb) / 2.0) * std::tan(ang);
+            const Vec2 diagBot{cx - off, yb}, diagTop{cx + off, yt};
+            segs.emplace_back(Vec2{diagBot.x - capLen, yb}, diagBot);
+            segs.emplace_back(diagBot, diagTop);
+            segs.emplace_back(diagTop, Vec2{diagTop.x + capLen, yt});
+        } else {
+            for (size_t i = 0; i < pts.size(); ++i)
+                segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
+        }
         break;
+    }
     case EntityType::Screen: {
         // Tessellate the ACTUAL ellipse outline + the drain leg — a crossing box must
         // touch the real drawn curve/line (not just the loose bounding box) to select it.
@@ -2570,6 +2601,7 @@ void Editor::beginTwist(const QString& type) {
     twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
+    emit twistArmChanged();
 }
 
 void Editor::beginTwistRemove() {
@@ -2691,6 +2723,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         screenFrozen_ = false;
         emit overlayChanged();
         emit screenArmedChanged();
+        emit twistArmChanged();
         return;
     }
     pushUndo();
@@ -2710,6 +2743,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         e.meta.insert("entNum", assignEntityNumber());
         addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         twistArmType_.clear();
+        emit twistArmChanged();
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
     } else {
         // Shield: an ellipse catching the crossed wires (a joint on each), plus a drain
@@ -7486,6 +7520,30 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     }
                     p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
                 }
+            }
+        } else if (!twistArmType_.isEmpty()) {
+            // Twist preview: the actual twist symbol over the wires the crossing line
+            // currently catches, so it can be judged before committing.
+            std::vector<Vec2> xs;
+            for (const auto& w : doc_->entities()) {
+                if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                for (size_t i = 1; i < w.points.size(); ++i)
+                    if (auto x = segmentSegmentIntersection(wireBandStart_, bandEnd,
+                                                            w.points[i - 1], w.points[i])) {
+                        xs.push_back(*x);
+                        break;
+                    }
+            }
+            if (xs.size() >= 2) {
+                Entity temp;
+                temp.type = EntityType::Twist;
+                temp.points = xs;
+                temp.meta.insert("twistType", twistArmType_);
+                if (twistArmType_ == QLatin1String("crossed")) {
+                    temp.meta.insert("diagAngle", twistDiagAngle_);
+                    temp.meta.insert("capLen", twistCapLen_);
+                }
+                EntityRenderer::draw(p, temp, *doc_, vt, QColor(120, 200, 255, 220));
             }
         }
         p.restore();
