@@ -1389,10 +1389,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        // "crossed": a jogged line crossing the wires — a short lead along the wires, a
-        // steep diagonal across them, then another short lead (the Z / step sign). Spans
-        // from the first to the last caught wire; the wires stay continuous under it (see
-        // twistBandsForWire, which does not clip for "crossed").
+        // "crossed": a Z / step sign crossing the wires. A short horizontal cap sits 30%
+        // (of the wire span) BEYOND the first crossed wire, another 30% beyond the last,
+        // and a steep diagonal joins them through the bundle. The wires stay continuous
+        // under it (twistBandsForWire does not clip "crossed").
         if (ty == QLatin1String("crossed")) {
             const Vec2 a = e.points.front(), b = e.points.back();
             const double dx = b.x - a.x, dy = b.y - a.y;
@@ -1402,12 +1402,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             } else {
                 const Vec2 across{dx / len, dy / len};   // across the wires (first->last)
                 const Vec2 along{-across.y, across.x};   // along the wires
-                const double L = std::min(len * 0.3, 12.0); // lead length
+                const double ext = 0.30 * len;           // caps sit 30% beyond each end wire
+                const double L = std::min(len * 0.35, 14.0); // short horizontal cap length
+                const Vec2 pa{a.x - across.x * ext, a.y - across.y * ext}; // 30% beyond `a`
+                const Vec2 pb{b.x + across.x * ext, b.y + across.y * ext}; // 30% beyond `b`
                 QPolygonF z;
-                z << vt.toScreen(a)
-                  << vt.toScreen({a.x + along.x * L, a.y + along.y * L})
-                  << vt.toScreen({b.x - along.x * L, b.y - along.y * L})
-                  << vt.toScreen(b);
+                z << vt.toScreen(pa)                                          // a-side cap
+                  << vt.toScreen({pa.x + along.x * L, pa.y + along.y * L})
+                  << vt.toScreen({pb.x - along.x * L, pb.y - along.y * L})    // diagonal
+                  << vt.toScreen(pb);                                         // b-side cap
                 p.drawPolyline(z);
             }
             break;
