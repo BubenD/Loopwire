@@ -4753,6 +4753,7 @@ void MainWindow::refreshProperties() {
         auto* sp = new QDoubleSpinBox(propsTable_);
         sp->setRange(-1e9, 1e9);
         sp->setDecimals(2);
+        sp->setKeyboardTracking(false); // don't reformat/emit while typing (avoids jitter)
         sp->setValue(value);
         sp->setButtonSymbols(QAbstractSpinBox::NoButtons);
         connect(sp, &QDoubleSpinBox::editingFinished, this, [this, sp, apply] {

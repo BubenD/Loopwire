@@ -800,8 +800,8 @@ private:
     bool screenShowS_ = false;    // draw the "S" shield label (off by default)
     double screenSSize_ = 4.0;    // "S" label text size (world units)
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
-    double screenRy_ = 20.0;      // large radius when unlocked
-    double screenRatio_ = 20.0 / 10.0; // large:small ratio (kept in sync with the radii above)
+    double screenRy_ = 30.0;      // large radius when unlocked (default 30)
+    double screenRatio_ = 30.0 / 10.0; // large:small ratio (kept in sync with the radii above)
     bool screenRatioLock_ = true;      // hold the ratio fixed while editing a radius
     bool screenRxLock_ = true;         // small-radius field locked (dependent, not editable)
     int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
