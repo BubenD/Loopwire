@@ -1470,6 +1470,8 @@ int run_harness_tests() {
         Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
         d.entities().push_back(w1);
         d.entities().push_back(w2);
+        ed.twistDiagAngle() = 20.0;
+        ed.twistCapLen() = 12.0;
         ed.beginTwist(QStringLiteral("crossed"));
         ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
@@ -1477,6 +1479,9 @@ int run_harness_tests() {
         for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
         check(tw && tw->meta.value("twistType").toString() == "crossed",
               "twist-crossed: a crossed twist is placed");
+        check(tw && near(tw->meta.value("diagAngle").toDouble(), 20.0) &&
+                  near(tw->meta.value("capLen").toDouble(), 12.0),
+              "twist-crossed: diagonal angle and line length are stored");
         const QString twId = tw->id;
         // Remove-twist: clicking the twist sign deletes it.
         ed.beginTwistRemove();

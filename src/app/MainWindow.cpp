@@ -2413,6 +2413,42 @@ void MainWindow::buildRibbon() {
         });
         modG->addWidget(twistAlignBtn, 0, 3);
         modG->addWidget(makeMatchBtn(modW, /*iconOnly=*/false), 0, 4);
+        // "Crossed" twist parameters (apply to the next Crossed twist placed): the diagonal
+        // angle and the horizontal cap length.
+        {
+            auto* tpW = new QWidget(modW);
+            auto* tpG = new QGridLayout(tpW);
+            tpG->setContentsMargins(0, 0, 0, 0);
+            tpG->setHorizontalSpacing(4);
+            tpG->setVerticalSpacing(3);
+            auto mk = [&](double val, double lo, double hi) {
+                auto* s = new QDoubleSpinBox(tpW);
+                s->setRange(lo, hi);
+                s->setDecimals(1);
+                s->setKeyboardTracking(false);
+                s->setButtonSymbols(QAbstractSpinBox::NoButtons);
+                s->setMinimumWidth(52);
+                s->setValue(val);
+                return s;
+            };
+            auto* twAng = mk(editor_->twistDiagAngle(), 0.0, 89.0);
+            twAng->setToolTip(QStringLiteral("Crossed twist: diagonal angle (deg)"));
+            connect(twAng, &QDoubleSpinBox::editingFinished, this,
+                    [this, twAng] { editor_->twistDiagAngle() = twAng->value(); });
+            auto* twLen = mk(editor_->twistCapLen(), 0.0, 500.0);
+            twLen->setToolTip(QStringLiteral("Crossed twist: horizontal line length"));
+            connect(twLen, &QDoubleSpinBox::editingFinished, this,
+                    [this, twLen] { editor_->twistCapLen() = twLen->value(); });
+            auto* aLbl = new QLabel(QStringLiteral("Diag°"), tpW);
+            auto* lLbl = new QLabel(QStringLiteral("H len"), tpW);
+            aLbl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            lLbl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            tpG->addWidget(aLbl, 0, 0);
+            tpG->addWidget(twAng, 0, 1);
+            tpG->addWidget(lLbl, 1, 0);
+            tpG->addWidget(twLen, 1, 1);
+            modG->addWidget(tpW, 0, 5);
+        }
         // Built manually (not via addGroup) so the group + its separator rule can be
         // captured and hidden while the Splice / Termination tool is armed.
         schemModifyGroup_ = ribbonGroup(QStringLiteral("Modify"), modW);
@@ -5119,6 +5155,21 @@ void MainWindow::refreshProperties() {
         addNum(QStringLiteral("S size"), m.value(QStringLiteral("sSize")).toDouble(4.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("sSize"), std::max(1.0, v));
+               });
+    }
+
+    // A selected "Crossed" twist: edit its diagonal angle + horizontal line length.
+    if (e && e->type == EntityType::Twist &&
+        e->meta.value(QStringLiteral("twistType")).toString() == QLatin1String("crossed")) {
+        addHeader(QStringLiteral("Twist (crossed)"));
+        addNum(QStringLiteral("Diagonal angle"),
+               e->meta.value(QStringLiteral("diagAngle")).toDouble(15.0), [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("diagAngle"),
+                                                    std::clamp(v, 0.0, 89.0));
+               });
+        addNum(QStringLiteral("H line length"),
+               e->meta.value(QStringLiteral("capLen")).toDouble(8.0), [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("capLen"), std::max(0.0, v));
                });
     }
 

@@ -1389,10 +1389,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        // "crossed": a Z / step sign crossing the wires. A short horizontal cap sits 30%
-        // (of the wire span) BEYOND the first crossed wire, another 30% beyond the last,
-        // and a steep diagonal joins them through the bundle. The wires stay continuous
-        // under it (twistBandsForWire does not clip "crossed").
+        // "crossed": a Z / step sign — a steep diagonal (default 15° off the across axis)
+        // spanning the crossed wires, with a short HORIZONTAL cap at each end: the top cap
+        // runs to the right, the bottom cap to the left. The diagonal angle and the cap
+        // length are editable (meta "diagAngle" degrees, "capLen" world units). The wires
+        // stay continuous under it (twistBandsForWire does not clip "crossed").
         if (ty == QLatin1String("crossed")) {
             const Vec2 a = e.points.front(), b = e.points.back();
             const double dx = b.x - a.x, dy = b.y - a.y;
@@ -1400,17 +1401,24 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             if (len < 1e-9) {
                 p.drawLine(vt.toScreen(a), vt.toScreen(b));
             } else {
-                const Vec2 across{dx / len, dy / len};   // across the wires (first->last)
-                const Vec2 along{-across.y, across.x};   // along the wires
-                const double ext = 0.30 * len;           // caps sit 30% beyond each end wire
-                const double L = std::min(len * 0.35, 14.0); // short horizontal cap length
-                const Vec2 pa{a.x - across.x * ext, a.y - across.y * ext}; // 30% beyond `a`
-                const Vec2 pb{b.x + across.x * ext, b.y + across.y * ext}; // 30% beyond `b`
+                Vec2 across{dx / len, dy / len};
+                if (across.y < 0) across = {-across.x, -across.y}; // point "up"
+                Vec2 along{-across.y, across.x};                   // along the wires
+                if (along.x < 0) along = {-along.x, -along.y};     // point "right" (+x)
+                const Vec2 mid{(a.x + b.x) / 2.0, (a.y + b.y) / 2.0};
+                const double ang = e.meta.value("diagAngle").toDouble(15.0) * M_PI / 180.0;
+                const double capLen = e.meta.value("capLen").toDouble(8.0);
+                const double half = len / 2.0;
+                const double off = half * std::tan(ang); // along-offset over the half span
+                const Vec2 diagTop{mid.x + across.x * half + along.x * off,
+                                   mid.y + across.y * half + along.y * off};
+                const Vec2 diagBot{mid.x - across.x * half - along.x * off,
+                                   mid.y - across.y * half - along.y * off};
                 QPolygonF z;
-                z << vt.toScreen(pa)                                          // a-side cap
-                  << vt.toScreen({pa.x + along.x * L, pa.y + along.y * L})
-                  << vt.toScreen({pb.x - along.x * L, pb.y - along.y * L})    // diagonal
-                  << vt.toScreen(pb);                                         // b-side cap
+                z << vt.toScreen({diagBot.x - along.x * capLen, diagBot.y - along.y * capLen}) // bottom cap (left)
+                  << vt.toScreen(diagBot)
+                  << vt.toScreen(diagTop)                                                       // diagonal
+                  << vt.toScreen({diagTop.x + along.x * capLen, diagTop.y + along.y * capLen}); // top cap (right)
                 p.drawPolyline(z);
             }
             break;

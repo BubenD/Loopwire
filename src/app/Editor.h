@@ -388,6 +388,9 @@ public:
     // Remove-twist mode: click a twist sign to delete it (stays armed until Esc).
     void beginTwistRemove();
     bool awaitingTwistRemove() const { return awaitTwistRemove_; }
+    // "Crossed" twist parameters (diagonal angle in degrees, horizontal cap length).
+    double& twistDiagAngle() { return twistDiagAngle_; }
+    double& twistCapLen() { return twistCapLen_; }
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
@@ -821,6 +824,8 @@ private:
     bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
     QString matchSourceId_;         // source object id once picked (empty until the first click)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
+    double twistDiagAngle_ = 15.0;  // "Crossed" twist: diagonal angle (deg from perpendicular)
+    double twistCapLen_ = 8.0;      // "Crossed" twist: horizontal cap length (world units)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
     bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken
     Vec2 wireBandStart_;

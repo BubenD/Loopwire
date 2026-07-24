@@ -2703,6 +2703,10 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         e.points = crossings; // the per-wire crossing points (parallel to "wires" below)
         e.meta.insert("twistType", twistArmType_);
         e.meta.insert("wires", ids); // which wire each points[i] belongs to
+        if (twistArmType_ == QLatin1String("crossed")) {
+            e.meta.insert("diagAngle", twistDiagAngle_);
+            e.meta.insert("capLen", twistCapLen_);
+        }
         e.meta.insert("entNum", assignEntityNumber());
         addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         twistArmType_.clear();
