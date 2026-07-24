@@ -1401,6 +1401,13 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             break;
         }
+        // "crossline": a single crossed-line mark (one X) spanning the bundle.
+        if (ty == QLatin1String("crossline")) {
+            const auto [bx0, bx1] = twistBandX(e);
+            p.drawLine(vt.toScreen({bx0, yMin}), vt.toScreen({bx1, yMax}));
+            p.drawLine(vt.toScreen({bx0, yMax}), vt.toScreen({bx1, yMin}));
+            break;
+        }
         // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
         // (2 crossings); both now REST FLAT between crossings (a short level run at each
         // peak/trough) instead of meeting at a sharp point, mirrored top/bottom. Type 3
@@ -1490,8 +1497,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawPolyline(poly);
         }
         // Drain lead + endpoint (the point after the k caught wires); the lead exits the
-        // outline edge on the meta "legDir" side (relative to the tilted axes).
+        // outline edge on the meta "legDir" side (relative to the tilted axes). The leg is
+        // always SOLID even when the outline is dashed (a dashed drain reads badly).
         if (static_cast<int>(e.points.size()) > k) {
+            QPen legPen = shieldPen;
+            legPen.setStyle(Qt::SolidLine);
+            p.setPen(legPen);
             const Vec2 drain = e.points.back();
             const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
             Vec2 edge;

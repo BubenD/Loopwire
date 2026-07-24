@@ -2334,6 +2334,15 @@ void MainWindow::buildRibbon() {
             editor_->beginTwist(QStringLiteral("bundle"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
+        modTm->addAction(QStringLiteral("Crossed line"), this, [this] {
+            editor_->beginTwist(QStringLiteral("crossline"));
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        modTm->addSeparator();
+        modTm->addAction(QStringLiteral("Remove twist…"), this, [this] {
+            editor_->beginTwistRemove();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
         modTwistBtn->setMenu(modTm);
         connect(modTwistBtn, &QToolButton::clicked, this, [this] {
             editor_->beginTwist(QStringLiteral("cross"));
@@ -6309,7 +6318,7 @@ void MainWindow::buildWireRibbonTab() {
     setShieldColor(QString(), QStringLiteral("By Layer")); // initial = ByLayer
     styleG->addWidget(scLabel(styleW, QStringLiteral("Line")), 0, 0);
     styleG->addWidget(scLineType, 0, 1);
-    styleG->addWidget(scLabel(styleW, QStringLiteral("Dash scale")), 1, 0);
+    styleG->addWidget(scLabel(styleW, QStringLiteral("LT scale")), 1, 0);
     styleG->addWidget(scDash, 1, 1);
     styleG->addWidget(scLabel(styleW, QStringLiteral("Color")), 2, 0);
     styleG->addWidget(scColorBtn, 2, 1);

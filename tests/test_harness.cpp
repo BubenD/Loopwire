@@ -1438,6 +1438,49 @@ int run_harness_tests() {
               "twist-bundle: a bundle twist over 3 wires is placed");
     }
 
+    // Crossed-line twist type + Remove-twist mode.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginTwist(QStringLiteral("crossline"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* tw = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
+        check(tw && tw->meta.value("twistType").toString() == "crossline",
+              "twist-crossline: a crossed-line twist is placed");
+        const QString twId = tw->id;
+        // Remove-twist: clicking the twist sign deletes it.
+        ed.beginTwistRemove();
+        check(ed.awaitingTwistRemove(), "twist-remove: armed after beginTwistRemove");
+        ed.onPointerPress(tw->points.front(), Qt::LeftButton, Qt::NoModifier); // click the twist
+        int twists = 0;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) ++twists;
+        check(twists == 0, "twist-remove: clicking the twist sign deletes it");
+    }
+
+    // Frozen shield + Enter places it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier); // first crossing point
+        ed.onPointerMove({100, 40});                                   // hover across the wires
+        ed.freezeScreenPreview();                                      // Tab
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);                      // Enter places it
+        int shields = 0;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) ++shields;
+        check(shields == 1, "shield-freeze-enter: Enter places the frozen shield");
+    }
+
     // Scaling a shield resizes its ellipse (rx/ry meta), not just its joint positions —
     // so a shield scales with the wires/harness when they are scaled together.
     {

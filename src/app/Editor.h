@@ -385,6 +385,9 @@ public:
     void beginTwist(const QString& type);
     void beginScreen();
     bool awaitingWireBand() const { return !twistArmType_.isEmpty() || screenArm_; }
+    // Remove-twist mode: click a twist sign to delete it (stays armed until Esc).
+    void beginTwistRemove();
+    bool awaitingTwistRemove() const { return awaitTwistRemove_; }
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
@@ -814,6 +817,7 @@ private:
     Vec2 screenFrozenEnd_;
     bool awaitCrossSwitch_ = false; // Cross-switch tool armed (click crossings to toggle hops)
     bool awaitTwistAlign_ = false;  // Twist Align armed (next click = destination point)
+    bool awaitTwistRemove_ = false; // Remove-twist armed (click a twist sign to delete it)
     bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
     QString matchSourceId_;         // source object id once picked (empty until the first click)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)

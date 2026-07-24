@@ -631,6 +631,7 @@ void Editor::setTool(ToolId t) {
     mirrorPending_ = false;
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
     awaitTwistAlign_ = false; // ...and twist-align pick mode
+    awaitTwistRemove_ = false; // ...and remove-twist mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
     awaitMatchProps_ = false;  // ...and match-properties mode
     matchSourceId_.clear();
@@ -1348,6 +1349,34 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // object under the cursor (stays armed until Esc).
     if (awaitMatchProps_) {
         matchPropsClick(p);
+        return;
+    }
+    // Remove twist: click a twist sign to delete it (stays armed until Esc). A twist sign
+    // sits on top of the wires, so pick the TWIST whose glyph bounds cover the click rather
+    // than hit-testing (which would return the wire underneath).
+    if (awaitTwistRemove_) {
+        const double tol = worldTolerance();
+        QString target;
+        for (const auto& e : doc_->entities()) {
+            if (e.type != EntityType::Twist) continue;
+            const Bounds b = e.bounds();
+            if (b.valid && p.x >= b.min.x - tol && p.x <= b.max.x + tol &&
+                p.y >= b.min.y - tol && p.y <= b.max.y + tol) {
+                target = e.id;
+                break;
+            }
+        }
+        if (!target.isEmpty()) {
+            pushUndo();
+            auto& ents = doc_->entities();
+            ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                      [&](const Entity& x) { return x.id == target; }),
+                       ents.end());
+            doc_->setDirty(true);
+            emit selectionChanged();
+            emit changed();
+            emit message(QStringLiteral("Twist removed — click another, or Esc to finish"));
+        }
         return;
     }
     // Twist / Screen: two clicks define a crossing line across the wires to select them.
@@ -2541,6 +2570,13 @@ void Editor::beginTwist(const QString& type) {
     twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
+}
+
+void Editor::beginTwistRemove() {
+    if (!doc_) return;
+    setTool(ToolId::Select); // clears the other await flags first...
+    awaitTwistRemove_ = true; // ...so arm AFTER
+    emit message(QStringLiteral("Remove twist: click a twist sign to delete it; Esc to finish"));
 }
 
 void Editor::beginScreen() {
@@ -7324,6 +7360,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // While a value is being awaited (fillet radius / gap), a stray Enter must
         // NOT finish the draft — just consume it.
         if (filletInputMode_ || gapInputMode_) return true;
+        // A frozen shield preview (Tab): Enter places it at the frozen crossing line.
+        if (screenArm_ && screenFrozen_ && wireBandHasStart_) {
+            wireBandHasStart_ = false;
+            finishWireBand(screenFrozenEnd_);
+            return true;
+        }
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
         if (drafting_) {
             // Line commits each segment as it goes, so Enter just ends the current
@@ -7405,12 +7447,25 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 const bool capsule = screenShape_ == QLatin1String("capsule");
                 const int amount = std::clamp(screenAmount_, 1, 5);
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap
+                // Preview the actual outline style: dashed (with the dash scale) or solid,
+                // so a dashed shield reads as dashed before it's placed. The leg stays solid.
+                QPen outlinePen(QColor(120, 200, 255, 220));
+                outlinePen.setCosmetic(true);
+                outlinePen.setWidthF(1.6);
+                if (screenLineType_ == QLatin1String("dashed")) {
+                    const double ds = std::max(0.1, screenDashScale_);
+                    outlinePen.setDashPattern({6.0 * ds / 1.6, 4.0 * ds / 1.6});
+                }
+                QPen legPen(outlinePen);
+                legPen.setStyle(Qt::SolidLine);
                 for (int k = 0; k < amount; ++k) {
                     const Vec2 ctr{cx + k * spacing * minor.x, cyMid + k * spacing * minor.y};
                     QPolygonF poly;
                     for (const Vec2& w : EntityRenderer::shieldOutline(ctr, rx, ry, rot, capsule))
                         poly << vt.toScreen(w);
+                    p.setPen(outlinePen);
                     p.drawPolyline(poly);
+                    p.setPen(legPen);
                     Vec2 edge, drain;
                     if (screenLegDir_ == QLatin1String("top")) {
                         edge = {ctr.x + ry * major.x, ctr.y + ry * major.y};
