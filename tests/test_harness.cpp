@@ -1252,6 +1252,28 @@ int run_harness_tests() {
               "shield-perp: the shield is perpendicular (90°) to the level wires");
     }
 
+    // Unlocking the radii makes the shield use the TYPED radii (so editing the large radius
+    // shows in the preview / placed shield) instead of auto-fitting the wires.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.screenRxLock() = false; ed.screenRyLocked() = false; // unlock the radii = manual
+        ed.screenRx() = 20.0;
+        ed.screenRy() = 50.0;
+        ed.beginScreen();
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* sc = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Screen) sc = &e;
+        check(sc && near(sc->meta.value("ry").toDouble(), 50.0) &&
+                  near(sc->meta.value("rx").toDouble(), 20.0),
+              "shield-manual: unlocked radii use the typed values (not auto-fit)");
+    }
+
     // Shield "S" mark: off by default, with an editable size stored on the shield.
     {
         Document d; d.entities().clear();

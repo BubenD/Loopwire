@@ -2563,14 +2563,19 @@ void Editor::freezeScreenPreview() {
 }
 
 void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const {
-    // The shield ALWAYS fits the crossed wires: its half-height is the half-span plus a
-    // margin of 30% of the gap between the closest wires, so it clearly clears the first
-    // and last wire. The small radius follows the ratio (which the Small/Large radius
-    // fields set), so editing those still re-shapes the preview width.
+    // Radii LOCKED (default): auto-fit the crossed wires — half-height = half-span plus a
+    // margin of 30% of the gap between the closest wires (so it clearly clears the first and
+    // last wire); the small radius follows the ratio. Radii UNLOCKED: use the typed Small /
+    // Large radius verbatim, so editing them (incl. the large radius) shows in the preview.
     const double ratio = std::max(0.2, screenRatio_);
-    const double margin = 0.30 * std::max(0.0, pinGap);
-    ryOut = std::max(span / 2.0 + margin, 12.0);
-    rxOut = ryOut / ratio;
+    if (screenRyLocked_) {
+        const double margin = 0.30 * std::max(0.0, pinGap);
+        ryOut = std::max(span / 2.0 + margin, 12.0);
+        rxOut = ryOut / ratio;
+    } else {
+        ryOut = std::max(1.0, screenRy_);
+        rxOut = std::max(1.0, screenRx_);
+    }
 }
 
 bool Editor::connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const {
