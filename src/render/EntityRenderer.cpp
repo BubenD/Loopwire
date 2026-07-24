@@ -1400,16 +1400,26 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             if (span < 1e-9) {
                 p.drawLine(vt.toScreen(e.points.front()), vt.toScreen(e.points.back()));
             } else {
+                // The diagonal starts/ends 30% of the closest wire pitch BEYOND the top and
+                // bottom crossed wires (pitch = smallest spacing between adjacent wires).
+                std::vector<double> ys;
+                for (const Vec2& pt : e.points) ys.push_back(pt.y);
+                std::sort(ys.begin(), ys.end());
+                double gap = 1e18;
+                for (size_t i = 1; i < ys.size(); ++i) gap = std::min(gap, ys[i] - ys[i - 1]);
+                if (gap >= 1e17) gap = span; // fallback (single spacing)
+                const double ext = 0.30 * gap;
+                const double yb = yMin - ext, yt = yMax + ext;    // diagonal ends, extended
                 const double ang = e.meta.value("diagAngle").toDouble(15.0) * M_PI / 180.0;
                 const double capLen = e.meta.value("capLen").toDouble(8.0);
-                const double off = (span / 2.0) * std::tan(ang); // horizontal run over half span
-                const Vec2 diagBot{cx - off, yMin}; // bottom (lower wire), left of centre
-                const Vec2 diagTop{cx + off, yMax}; // top (upper wire), right of centre
+                const double off = ((yt - yb) / 2.0) * std::tan(ang); // horiz run over half height
+                const Vec2 diagBot{cx - off, yb}; // bottom end (30% below), left of centre
+                const Vec2 diagTop{cx + off, yt}; // top end (30% above), right of centre
                 QPolygonF z;
-                z << vt.toScreen({diagBot.x - capLen, yMin}) // bottom cap: horizontal, to the left
+                z << vt.toScreen({diagBot.x - capLen, yb}) // bottom cap: horizontal, to the left
                   << vt.toScreen(diagBot)
-                  << vt.toScreen(diagTop)                     // steep diagonal
-                  << vt.toScreen({diagTop.x + capLen, yMax}); // top cap: horizontal, to the right
+                  << vt.toScreen(diagTop)                   // steep diagonal
+                  << vt.toScreen({diagTop.x + capLen, yt}); // top cap: horizontal, to the right
                 p.drawPolyline(z);
             }
             break;
