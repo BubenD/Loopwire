@@ -1389,11 +1389,27 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        // "crossed": a single straight line crossing the wires — from the first to the last
-        // caught wire (perpendicular-ish to them). The wires are NOT clipped for this type
-        // (see twistBandsForWire), so they run continuously with the line crossing them.
+        // "crossed": a jogged line crossing the wires — a short lead along the wires, a
+        // steep diagonal across them, then another short lead (the Z / step sign). Spans
+        // from the first to the last caught wire; the wires stay continuous under it (see
+        // twistBandsForWire, which does not clip for "crossed").
         if (ty == QLatin1String("crossed")) {
-            p.drawLine(vt.toScreen(e.points.front()), vt.toScreen(e.points.back()));
+            const Vec2 a = e.points.front(), b = e.points.back();
+            const double dx = b.x - a.x, dy = b.y - a.y;
+            const double len = std::hypot(dx, dy);
+            if (len < 1e-9) {
+                p.drawLine(vt.toScreen(a), vt.toScreen(b));
+            } else {
+                const Vec2 across{dx / len, dy / len};   // across the wires (first->last)
+                const Vec2 along{-across.y, across.x};   // along the wires
+                const double L = std::min(len * 0.3, 12.0); // lead length
+                QPolygonF z;
+                z << vt.toScreen(a)
+                  << vt.toScreen({a.x + along.x * L, a.y + along.y * L})
+                  << vt.toScreen({b.x - along.x * L, b.y - along.y * L})
+                  << vt.toScreen(b);
+                p.drawPolyline(z);
+            }
             break;
         }
         // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
