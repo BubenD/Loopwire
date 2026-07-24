@@ -2730,18 +2730,35 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     if (twist) {
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
-        Entity e;
-        e.type = EntityType::Twist;
-        e.layer = QStringLiteral("Wires");
-        e.points = crossings; // the per-wire crossing points (parallel to "wires" below)
-        e.meta.insert("twistType", twistArmType_);
-        e.meta.insert("wires", ids); // which wire each points[i] belongs to
-        if (twistArmType_ == QLatin1String("crossed")) {
-            e.meta.insert("diagAngle", twistDiagAngle_);
-            e.meta.insert("capLen", twistCapLen_);
+        // Place `amount` twist marks side by side (shifted along the wires); the first
+        // carries the caught-wire references, the copies are decorative like the shield's.
+        const int amount = std::clamp(twistAmount_, 1, 9);
+        double xMin = 1e18, xMax = -1e18, yMin = 1e18, yMax = -1e18;
+        for (const Vec2& c : crossings) {
+            xMin = std::min(xMin, c.x); xMax = std::max(xMax, c.x);
+            yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y);
         }
-        e.meta.insert("entNum", assignEntityNumber());
-        addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
+        const double band = std::max(1.0, yMax - yMin);
+        const double spacing = std::max(28.0, band * 1.4) * 1.3; // gap between side-by-side marks
+        for (int k = 0; k < amount; ++k) {
+            Entity e;
+            e.type = EntityType::Twist;
+            e.layer = QStringLiteral("Wires");
+            e.points.reserve(crossings.size());
+            for (const Vec2& c : crossings) e.points.push_back({c.x + k * spacing, c.y});
+            e.meta.insert("twistType", twistArmType_);
+            e.meta.insert("wires", k == 0 ? ids : QJsonArray());
+            if (twistArmType_ == QLatin1String("crossed")) {
+                e.meta.insert("diagAngle", twistDiagAngle_);
+                e.meta.insert("capLen", twistCapLen_);
+            } else { // Type 2 (jog) / Type 3 braid
+                e.meta.insert("repeats", twistRepeats_);
+                if (twistArmType_ != QLatin1String("type3"))
+                    e.meta.insert("flatLen", twistFlatLen_);
+            }
+            e.meta.insert("entNum", assignEntityNumber());
+            addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
+        }
         twistArmType_.clear();
         emit twistArmChanged();
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
@@ -7542,6 +7559,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (twistArmType_ == QLatin1String("crossed")) {
                     temp.meta.insert("diagAngle", twistDiagAngle_);
                     temp.meta.insert("capLen", twistCapLen_);
+                } else {
+                    temp.meta.insert("repeats", twistRepeats_);
+                    if (twistArmType_ != QLatin1String("type3"))
+                        temp.meta.insert("flatLen", twistFlatLen_);
                 }
                 EntityRenderer::draw(p, temp, *doc_, vt, QColor(120, 200, 255, 220));
             }

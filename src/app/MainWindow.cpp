@@ -2412,49 +2412,81 @@ void MainWindow::buildRibbon() {
         // "Crossed" twist parameters (apply to the next Crossed twist placed): the diagonal
         // angle and the horizontal cap length.
         {
+            // Contextual twist parameters — shown while a twist is armed, with only the
+            // fields relevant to the chosen type:
+            //   Type 1 (crossed): Diag°, H len, Amount
+            //   Type 2 (jog):     H len, Repeats, Amount
+            //   Type 3 (diamond): Repeats, Amount
             auto* tpW = new QWidget(modW);
             auto* tpG = new QGridLayout(tpW);
             tpG->setContentsMargins(0, 0, 0, 0);
             tpG->setHorizontalSpacing(4);
             tpG->setVerticalSpacing(3);
-            auto mk = [&](double val, double lo, double hi) {
+            auto lbl = [&](const QString& t) {
+                auto* l = new QLabel(t, tpW);
+                l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                return l;
+            };
+            auto spin = [&](double lo, double hi, int dec) {
                 auto* s = new QDoubleSpinBox(tpW);
                 s->setRange(lo, hi);
-                s->setDecimals(1);
+                s->setDecimals(dec);
                 s->setKeyboardTracking(false);
                 s->setButtonSymbols(QAbstractSpinBox::NoButtons);
-                s->setMinimumWidth(52);
-                s->setValue(val);
+                s->setMinimumWidth(48);
                 return s;
             };
-            auto* twAng = mk(editor_->twistDiagAngle(), 0.0, 89.0);
-            twAng->setToolTip(QStringLiteral("Crossed twist: diagonal angle (deg)"));
+            auto* twAng = spin(0.0, 89.0, 1);
+            twAng->setToolTip(QStringLiteral("Type 1: diagonal angle (deg)"));
             connect(twAng, &QDoubleSpinBox::editingFinished, this,
                     [this, twAng] { editor_->twistDiagAngle() = twAng->value(); });
-            auto* twLen = mk(editor_->twistCapLen(), 0.0, 500.0);
-            twLen->setToolTip(QStringLiteral("Crossed twist: horizontal line length"));
-            connect(twLen, &QDoubleSpinBox::editingFinished, this,
-                    [this, twLen] { editor_->twistCapLen() = twLen->value(); });
-            auto* aLbl = new QLabel(QStringLiteral("Diag°"), tpW);
-            auto* lLbl = new QLabel(QStringLiteral("H len"), tpW);
-            aLbl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
-            lLbl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
-            tpG->addWidget(aLbl, 0, 0);
-            tpG->addWidget(twAng, 0, 1);
-            tpG->addWidget(lLbl, 1, 0);
-            tpG->addWidget(twLen, 1, 1);
-            modG->addWidget(tpW, 0, 5);
-            // Only visible while the Crossed twist is armed (Type 1).
-            tpW->setVisible(false);
-            connect(editor_, &Editor::twistArmChanged, this, [this, tpW, twAng, twLen] {
-                const bool crossed = editor_->twistArmType() == QLatin1String("crossed");
-                tpW->setVisible(crossed);
-                if (crossed) {
-                    QSignalBlocker b1(twAng), b2(twLen);
-                    twAng->setValue(editor_->twistDiagAngle());
-                    twLen->setValue(editor_->twistCapLen());
-                }
+            auto* twLen = spin(0.0, 500.0, 1);
+            twLen->setToolTip(QStringLiteral("Horizontal length (Type 1 cap / Type 2 flat)"));
+            connect(twLen, &QDoubleSpinBox::editingFinished, this, [this, twLen] {
+                if (editor_->twistArmType() == QLatin1String("jog"))
+                    editor_->twistFlatLen() = twLen->value();
+                else
+                    editor_->twistCapLen() = twLen->value();
             });
+            auto* twRep = spin(1.0, 20.0, 0);
+            twRep->setToolTip(QStringLiteral("Type 2/3: number of twists (repeats)"));
+            connect(twRep, &QDoubleSpinBox::editingFinished, this, [this, twRep] {
+                editor_->twistRepeats() = std::max(1, static_cast<int>(twRep->value()));
+            });
+            auto* twAmt = spin(1.0, 9.0, 0);
+            twAmt->setToolTip(QStringLiteral("How many twist marks to place side by side"));
+            connect(twAmt, &QDoubleSpinBox::editingFinished, this, [this, twAmt] {
+                editor_->twistAmount() = std::max(1, static_cast<int>(twAmt->value()));
+            });
+            auto* angLbl = lbl(QStringLiteral("Diag°"));
+            auto* lenLbl = lbl(QStringLiteral("H len"));
+            auto* repLbl = lbl(QStringLiteral("Twists"));
+            auto* amtLbl = lbl(QStringLiteral("Amount"));
+            // Two columns: (label,field) at cols 0-1 and 2-3; rows fill per type.
+            tpG->addWidget(angLbl, 0, 0); tpG->addWidget(twAng, 0, 1);
+            tpG->addWidget(lenLbl, 1, 0); tpG->addWidget(twLen, 1, 1);
+            tpG->addWidget(repLbl, 0, 2); tpG->addWidget(twRep, 0, 3);
+            tpG->addWidget(amtLbl, 1, 2); tpG->addWidget(twAmt, 1, 3);
+            modG->addWidget(tpW, 0, 5);
+            tpW->setVisible(false);
+            connect(editor_, &Editor::twistArmChanged, this,
+                    [this, tpW, twAng, twLen, twRep, twAmt, angLbl, lenLbl, repLbl] {
+                        const QString ty = editor_->twistArmType();
+                        const bool armed = !ty.isEmpty();
+                        tpW->setVisible(armed);
+                        if (!armed) return;
+                        const bool crossed = ty == QLatin1String("crossed");
+                        const bool jog = ty == QLatin1String("jog");
+                        const bool type3 = ty == QLatin1String("type3");
+                        angLbl->setVisible(crossed); twAng->setVisible(crossed);
+                        lenLbl->setVisible(crossed || jog); twLen->setVisible(crossed || jog);
+                        repLbl->setVisible(jog || type3); twRep->setVisible(jog || type3);
+                        QSignalBlocker b1(twAng), b2(twLen), b3(twRep), b4(twAmt);
+                        twAng->setValue(editor_->twistDiagAngle());
+                        twLen->setValue(jog ? editor_->twistFlatLen() : editor_->twistCapLen());
+                        twRep->setValue(editor_->twistRepeats());
+                        twAmt->setValue(editor_->twistAmount());
+                    });
         }
         // Built manually (not via addGroup) so the group + its separator rule can be
         // captured and hidden while the Splice / Termination tool is armed.
@@ -5165,19 +5197,39 @@ void MainWindow::refreshProperties() {
                });
     }
 
-    // A selected "Crossed" twist: edit its diagonal angle + horizontal line length.
-    if (e && e->type == EntityType::Twist &&
-        e->meta.value(QStringLiteral("twistType")).toString() == QLatin1String("crossed")) {
-        addHeader(QStringLiteral("Twist (crossed)"));
-        addNum(QStringLiteral("Diagonal angle"),
-               e->meta.value(QStringLiteral("diagAngle")).toDouble(15.0), [this](double v) {
-                   editor_->setSelectionMetaNumber(QStringLiteral("diagAngle"),
-                                                    std::clamp(v, 0.0, 89.0));
-               });
-        addNum(QStringLiteral("H line length"),
-               e->meta.value(QStringLiteral("capLen")).toDouble(8.0), [this](double v) {
-                   editor_->setSelectionMetaNumber(QStringLiteral("capLen"), std::max(0.0, v));
-               });
+    // A selected twist: edit the parameters for its type.
+    if (e && e->type == EntityType::Twist) {
+        const QString ty = e->meta.value(QStringLiteral("twistType")).toString();
+        if (ty == QLatin1String("crossed")) {
+            addHeader(QStringLiteral("Twist (Type 1)"));
+            addNum(QStringLiteral("Diagonal angle"),
+                   e->meta.value(QStringLiteral("diagAngle")).toDouble(15.0), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("diagAngle"),
+                                                        std::clamp(v, 0.0, 89.0));
+                   });
+            addNum(QStringLiteral("H line length"),
+                   e->meta.value(QStringLiteral("capLen")).toDouble(8.0), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("capLen"), std::max(0.0, v));
+                   });
+        } else if (ty == QLatin1String("type3")) {
+            addHeader(QStringLiteral("Twist (Type 3)"));
+            addNum(QStringLiteral("Twists"), e->meta.value(QStringLiteral("repeats")).toDouble(2.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
+                                                       std::max(1.0, std::round(v)));
+                   });
+        } else { // Type 2 (jog) and any legacy braid
+            addHeader(QStringLiteral("Twist (Type 2)"));
+            addNum(QStringLiteral("H line length"),
+                   e->meta.value(QStringLiteral("flatLen")).toDouble(6.0), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("flatLen"), std::max(0.0, v));
+                   });
+            addNum(QStringLiteral("Twists"), e->meta.value(QStringLiteral("repeats")).toDouble(2.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
+                                                       std::max(1.0, std::round(v)));
+                   });
+        }
     }
 
     // A selected Splice / X termination: edit its marker size.

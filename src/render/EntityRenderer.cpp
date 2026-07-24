@@ -666,7 +666,11 @@ std::pair<double, double> twistBandX(const Entity& twist) {
     }
     if (!twist.points.empty()) cx /= twist.points.size();
     const double band = std::max(1.0, yMax - yMin);
-    const double w = std::max(28.0, band * 1.4);
+    // Width grows with the number of crossings (repeats) and the flat length between them,
+    // so the braid isn't cramped when more twists / longer flats are requested.
+    const int repeats = std::max(1, twist.meta.value("repeats").toInt(2));
+    const double flat = twist.meta.value("flatLen").toDouble(6.0);
+    const double w = std::max(28.0, repeats * (band * 0.6 + flat) + 16.0);
     return {cx - w / 2.0, cx + w / 2.0};
 }
 
@@ -1424,18 +1428,19 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             break;
         }
-        // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
-        // (2 crossings); both now REST FLAT between crossings (a short level run at each
-        // peak/trough) instead of meeting at a sharp point, mirrored top/bottom. Type 3
-        // ("type3") keeps the original sharp diamond point between 2 crossings.
+        // Type 2 ("jog") = a braid that RESTS FLAT between crossings (a short level run at
+        // each peak/trough), Type 3 ("type3") = the same but meeting at a sharp diamond
+        // point (no flat). The number of crossings ("repeats") and, for Type 2, the flat
+        // length between them are editable (meta "repeats", "flatLen").
         const bool type3 = (ty == QLatin1String("type3"));
-        const int n = type3 ? 2 : (ty == QLatin1String("jog") || ty == QLatin1String("single")) ? 2 : 3;
+        const int n = std::max(1, e.meta.value("repeats").toInt(2));
         const bool flatten = !type3;
         const auto [x0, x1] = twistBandX(e);
         const double lead = std::min((x1 - x0) * 0.18, 8.0); // short horizontal lead lines
         const double mx0 = x0 + lead, mx1 = x1 - lead;       // crossing span
         const double pitch = (mx1 - mx0) / n;
-        const double flatHalf = flatten ? std::min(pitch * 0.25, 6.0) : 0.0;
+        const double flatHalf =
+            flatten ? std::min(e.meta.value("flatLen").toDouble(6.0) / 2.0, pitch * 0.4) : 0.0;
         // Two conductors: horizontal lead, n diagonal crossings (resting flat between them
         // at each intermediate peak/trough), horizontal lead out.
         QPolygonF A, B;

@@ -1482,8 +1482,60 @@ int run_harness_tests() {
         check(tw && near(tw->meta.value("diagAngle").toDouble(), 20.0) &&
                   near(tw->meta.value("capLen").toDouble(), 12.0),
               "twist-crossed: diagonal angle and line length are stored");
-        const QString twId = tw->id;
-        // Remove-twist: clicking the twist sign deletes it.
+    }
+
+    // Type 2 (jog): repeats + flat length stored, and Amount places several side by side.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {400, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {400, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.twistRepeats() = 4;
+        ed.twistFlatLen() = 10.0;
+        ed.twistAmount() = 3;
+        ed.beginTwist(QStringLiteral("jog"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        int twists = 0; const Entity* first = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Twist) { ++twists; if (!first) first = &e; }
+        check(twists == 3, "twist-jog: Amount=3 places three twist marks");
+        check(first && first->meta.value("repeats").toInt() == 4 &&
+                  near(first->meta.value("flatLen").toDouble(), 10.0),
+              "twist-jog: repeats and flat length are stored");
+        // Type 3 stores repeats but no flat length.
+        Document d2; d2.entities().clear();
+        Editor e2; e2.setDocument(&d2); e2.snapSettings().objectSnap = false;
+        Entity a; a.id = "a"; a.type = EntityType::Wire; a.points = {{0, 0}, {200, 0}};
+        Entity b; b.id = "b"; b.type = EntityType::Wire; b.points = {{0, 30}, {200, 30}};
+        d2.entities().push_back(a); d2.entities().push_back(b);
+        e2.twistRepeats() = 3;
+        e2.beginTwist(QStringLiteral("type3"));
+        e2.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* t3 = nullptr;
+        for (const auto& e : d2.entities()) if (e.type == EntityType::Twist) t3 = &e;
+        check(t3 && t3->meta.value("repeats").toInt() == 3 && !t3->meta.contains("flatLen"),
+              "twist-type3: repeats stored, no flat length");
+    }
+
+    // Remove-twist: clicking the twist sign deletes it.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.twistAmount() = 1;
+        ed.beginTwist(QStringLiteral("crossed"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* tw = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Twist) tw = &e;
+        check(tw != nullptr, "twist-remove: a twist was placed to remove");
         ed.beginTwistRemove();
         check(ed.awaitingTwistRemove(), "twist-remove: armed after beginTwistRemove");
         ed.onPointerPress(tw->points.front(), Qt::LeftButton, Qt::NoModifier); // click the twist

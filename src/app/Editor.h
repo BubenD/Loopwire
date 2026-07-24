@@ -389,9 +389,13 @@ public:
     // Remove-twist mode: click a twist sign to delete it (stays armed until Esc).
     void beginTwistRemove();
     bool awaitingTwistRemove() const { return awaitTwistRemove_; }
-    // "Crossed" twist parameters (diagonal angle in degrees, horizontal cap length).
+    // Twist parameters: Type 1 (crossed) uses diagonal angle + horizontal cap length;
+    // Type 2 (jog) uses flat length + repeats; Type 3 uses repeats; all use amount.
     double& twistDiagAngle() { return twistDiagAngle_; }
     double& twistCapLen() { return twistCapLen_; }
+    int& twistRepeats() { return twistRepeats_; }
+    double& twistFlatLen() { return twistFlatLen_; }
+    int& twistAmount() { return twistAmount_; }
     double& doubleLineGap() { return doubleLineGap_; } // spacing for the double-line tool
     void setShowAngles(bool v) { showAngles_ = v; emit overlayChanged(); }
     bool showAngles() const { return showAngles_; }
@@ -826,8 +830,11 @@ private:
     bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
     QString matchSourceId_;         // source object id once picked (empty until the first click)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
-    double twistDiagAngle_ = 15.0;  // "Crossed" twist: diagonal angle (deg from perpendicular)
-    double twistCapLen_ = 8.0;      // "Crossed" twist: horizontal cap length (world units)
+    double twistDiagAngle_ = 15.0;  // Type 1 (crossed): diagonal angle (deg from perpendicular)
+    double twistCapLen_ = 8.0;      // Type 1 (crossed): horizontal cap length (world units)
+    int twistRepeats_ = 2;          // Type 2/3: number of crossings ("how many twists")
+    double twistFlatLen_ = 6.0;     // Type 2: horizontal flat length between crossings
+    int twistAmount_ = 1;           // twists placed per crossing-line drag (side by side)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
     bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken
     Vec2 wireBandStart_;
