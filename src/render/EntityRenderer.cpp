@@ -1507,8 +1507,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             const QString legDir = e.meta.value("legDir").toString(QStringLiteral("bottom"));
             Vec2 edge;
             if (legDir == QLatin1String("top")) edge = {cx + ry * major.x, cyMid + ry * major.y};
-            else if (legDir == QLatin1String("left")) edge = {cx - rx * minor.x, cyMid - rx * minor.y};
-            else if (legDir == QLatin1String("right")) edge = {cx + rx * minor.x, cyMid + rx * minor.y};
+            else if (legDir == QLatin1String("left")) edge = {cx + rx * minor.x, cyMid + rx * minor.y};
+            else if (legDir == QLatin1String("right")) edge = {cx - rx * minor.x, cyMid - rx * minor.y};
             else edge = {cx - ry * major.x, cyMid - ry * major.y}; // "bottom"
             p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
             // The small "unterminated" end tick only shows while the leg is actually

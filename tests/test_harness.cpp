@@ -1182,6 +1182,30 @@ int run_harness_tests() {
         check(ed.tool() == ToolId::Select, "shield-return-select: back to Select after placing");
     }
 
+    // Shield leg "left" exits to the LEFT (negative x), "right" to the right — for a
+    // vertical shield over level wires.
+    {
+        auto legDrainX = [](const QString& dir) {
+            Document d; d.entities().clear();
+            Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+            Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {200, 0}};
+            Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {200, 30}};
+            d.entities().push_back(w1);
+            d.entities().push_back(w2);
+            ed.screenLegDir() = dir;
+            ed.beginScreen();
+            ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Screen) return e.points.back().x;
+            return 0.0;
+        };
+        check(legDrainX(QStringLiteral("left")) < 100.0,
+              "shield-leg-lr: the left leg exits to the left of centre");
+        check(legDrainX(QStringLiteral("right")) > 100.0,
+              "shield-leg-lr: the right leg exits to the right of centre");
+    }
+
     // Shield "amount": placing with amount=3 drops 3 shields in one drag, side by side.
     {
         Document d; d.entities().clear();

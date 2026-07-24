@@ -2726,9 +2726,9 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         if (screenLegDir_ == QLatin1String("top"))
             drain = {cx + (ryActual + screenLeg_) * major.x, cyMid + (ryActual + screenLeg_) * major.y};
         else if (screenLegDir_ == QLatin1String("left"))
-            drain = {cx - (rxActual + screenLeg_) * minor.x, cyMid - (rxActual + screenLeg_) * minor.y};
-        else if (screenLegDir_ == QLatin1String("right"))
             drain = {cx + (rxActual + screenLeg_) * minor.x, cyMid + (rxActual + screenLeg_) * minor.y};
+        else if (screenLegDir_ == QLatin1String("right"))
+            drain = {cx - (rxActual + screenLeg_) * minor.x, cyMid - (rxActual + screenLeg_) * minor.y};
         else // "bottom" (default)
             drain = {cx - (ryActual + screenLeg_) * major.x, cyMid - (ryActual + screenLeg_) * major.y};
         QJsonArray ids;
@@ -7471,11 +7471,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                         edge = {ctr.x + ry * major.x, ctr.y + ry * major.y};
                         drain = {ctr.x + (ry + screenLeg_) * major.x, ctr.y + (ry + screenLeg_) * major.y};
                     } else if (screenLegDir_ == QLatin1String("left")) {
-                        edge = {ctr.x - rx * minor.x, ctr.y - rx * minor.y};
-                        drain = {ctr.x - (rx + screenLeg_) * minor.x, ctr.y - (rx + screenLeg_) * minor.y};
-                    } else if (screenLegDir_ == QLatin1String("right")) {
                         edge = {ctr.x + rx * minor.x, ctr.y + rx * minor.y};
                         drain = {ctr.x + (rx + screenLeg_) * minor.x, ctr.y + (rx + screenLeg_) * minor.y};
+                    } else if (screenLegDir_ == QLatin1String("right")) {
+                        edge = {ctr.x - rx * minor.x, ctr.y - rx * minor.y};
+                        drain = {ctr.x - (rx + screenLeg_) * minor.x, ctr.y - (rx + screenLeg_) * minor.y};
                     } else {
                         edge = {ctr.x - ry * major.x, ctr.y - ry * major.y};
                         drain = {ctr.x - (ry + screenLeg_) * major.x, ctr.y - (ry + screenLeg_) * major.y};
