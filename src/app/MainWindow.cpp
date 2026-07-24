@@ -2330,12 +2330,8 @@ void MainWindow::buildRibbon() {
             editor_->beginTwist(QStringLiteral("type3"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
-        modTm->addAction(QStringLiteral("Bundle (2+ wires)"), this, [this] {
-            editor_->beginTwist(QStringLiteral("bundle"));
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modTm->addAction(QStringLiteral("Crossed line"), this, [this] {
-            editor_->beginTwist(QStringLiteral("crossline"));
+        modTm->addAction(QStringLiteral("Crossed"), this, [this] {
+            editor_->beginTwist(QStringLiteral("crossed"));
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modTm->addSeparator();

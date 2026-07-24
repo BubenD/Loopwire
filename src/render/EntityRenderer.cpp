@@ -677,6 +677,8 @@ std::vector<std::pair<double, double>> twistBandsForWire(const QString& wireId,
     std::vector<std::pair<double, double>> bands;
     for (const auto& t : doc.entities()) {
         if (t.type != EntityType::Twist) continue;
+        // "crossed" just overlays a line across the wires — the wires stay continuous.
+        if (t.meta.value("twistType").toString() == QLatin1String("crossed")) continue;
         const QJsonArray ids = t.meta.value("wires").toArray();
         bool refs = false;
         for (const auto& v : ids)
@@ -1387,25 +1389,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         cx /= e.points.size();
         const QString ty = e.meta.value("twistType").toString();
-        // "bundle": a twisted-bundle sign for 2+ wires — parallel diagonal strokes across
-        // the WHOLE bundle height (every caught wire), rather than a two-conductor braid.
-        if (ty == QLatin1String("bundle")) {
-            const auto [bx0, bx1] = twistBandX(e);
-            const double w = bx1 - bx0;
-            const int n = std::max(3, static_cast<int>(w / 7.0));
-            const double step = w / n;
-            const double diag = std::min(step * 1.7, w); // diagonal run per stroke
-            for (int i = 0; i <= n; ++i) {
-                const double x = bx0 + step * i;
-                p.drawLine(vt.toScreen({x, yMin}), vt.toScreen({std::min(x + diag, bx1), yMax}));
-            }
-            break;
-        }
-        // "crossline": a single crossed-line mark (one X) spanning the bundle.
-        if (ty == QLatin1String("crossline")) {
-            const auto [bx0, bx1] = twistBandX(e);
-            p.drawLine(vt.toScreen({bx0, yMin}), vt.toScreen({bx1, yMax}));
-            p.drawLine(vt.toScreen({bx0, yMax}), vt.toScreen({bx1, yMin}));
+        // "crossed": a single straight line crossing the wires — from the first to the last
+        // caught wire (perpendicular-ish to them). The wires are NOT clipped for this type
+        // (see twistBandsForWire), so they run continuously with the line crossing them.
+        if (ty == QLatin1String("crossed")) {
+            p.drawLine(vt.toScreen(e.points.front()), vt.toScreen(e.points.back()));
             break;
         }
         // Type 1 ("cross") = a 3-crossing braid; Type 2 ("jog"/"single") = twice twisted
