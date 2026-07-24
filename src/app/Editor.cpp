@@ -2712,6 +2712,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("shape", screenShape_);
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
+            e.meta.insert("sSize", screenSSize_);
             if (!screenColor_.isEmpty()) e.color = screenColor_; // else ByLayer
             e.meta.insert("lineType", screenLineType_);
             e.meta.insert("dashScale", screenDashScale_);

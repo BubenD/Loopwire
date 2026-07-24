@@ -5104,12 +5104,16 @@ void MainWindow::refreshProperties() {
             editor_->resizeSelectedShield(QStringLiteral("ry"), std::max(1.0, v));
         });
         addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
-                 m.value(QStringLiteral("showS")).toBool(true) ? QStringLiteral("Yes")
-                                                               : QStringLiteral("No"),
+                 m.value(QStringLiteral("showS")).toBool(false) ? QStringLiteral("Yes")
+                                                                : QStringLiteral("No"),
                  false, [this](const QString& t) {
                      editor_->setSelectionMetaBool(QStringLiteral("showS"),
                                                    t == QLatin1String("Yes"));
                  });
+        addNum(QStringLiteral("S size"), m.value(QStringLiteral("sSize")).toDouble(4.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("sSize"), std::max(1.0, v));
+               });
     }
 
     // A selected Splice / X termination: edit its marker size.
@@ -6091,25 +6095,25 @@ void MainWindow::buildWireRibbonTab() {
     scRatio->setMinimumWidth(70);
     scRatio->setButtonSymbols(QAbstractSpinBox::NoButtons);
     scRatio->setToolTip(QStringLiteral("Large ÷ Small radius"));
-    // Three "Lock" checkboxes — one per quantity. A checked lock disables that field.
-    auto* scRxLock = new QCheckBox(QStringLiteral("Lock"), radiiFrame);
-    auto* scRyLock = new QCheckBox(QStringLiteral("Lock"), radiiFrame);
+    // Two "Lock" checkboxes: one locks BOTH radii together, one locks the ratio. With the
+    // ratio locked and the radii unlocked, editing one radius drives the other to keep the
+    // ratio; a checked lock disables the field(s) it covers.
+    auto* scRadiiLock = new QCheckBox(QStringLiteral("Lock"), radiiFrame);
     auto* scRatioLock = new QCheckBox(QStringLiteral("Lock"), radiiFrame);
-    scRxLock->setToolTip(QStringLiteral("Lock the small radius (it becomes the driven value)"));
-    scRyLock->setToolTip(QStringLiteral("Lock the large radius (auto-fits / is driven)"));
+    scRadiiLock->setToolTip(QStringLiteral("Lock the small AND large radius together"));
     scRatioLock->setToolTip(QStringLiteral(
-        "Lock the ratio: changing one radius adjusts the other to keep Large ÷ Small fixed"));
+        "Lock the ratio: with the radii unlocked, changing one radius adjusts the other to "
+        "keep Large ÷ Small fixed"));
 
     // Push the current Editor state into every field (values + enabled + checkboxes).
-    auto refreshShieldRadii = [this, scRx, scRy, scRatio, scRxLock, scRyLock, scRatioLock] {
-        QSignalBlocker b1(scRx), b2(scRy), b3(scRatio), b4(scRxLock), b5(scRyLock), b6(scRatioLock);
+    auto refreshShieldRadii = [this, scRx, scRy, scRatio, scRadiiLock, scRatioLock] {
+        QSignalBlocker b1(scRx), b2(scRy), b3(scRatio), b4(scRadiiLock), b5(scRatioLock);
         scRx->setValue(editor_->screenRx());
         scRy->setValue(editor_->screenRy());
         scRatio->setValue(editor_->screenRatio());
-        scRxLock->setChecked(editor_->screenRxLock());
-        scRyLock->setChecked(editor_->screenRyLocked());
+        scRadiiLock->setChecked(editor_->screenRxLock()); // rx/ry locks move together
         scRatioLock->setChecked(editor_->screenRatioLock());
-        // A locked field can't be edited directly (task 7: all locked => nothing editable).
+        // A locked field can't be edited directly.
         scRx->setEnabled(!editor_->screenRxLock());
         scRy->setEnabled(!editor_->screenRyLocked());
         scRatio->setEnabled(!editor_->screenRatioLock());
@@ -6146,19 +6150,20 @@ void MainWindow::buildWireRibbonTab() {
             editor_->screenRy() = std::max(1.0, editor_->screenRx() * scRatio->value());
         refreshShieldRadii();
     });
-    connect(scRxLock, &QCheckBox::toggled, this,
-            [this, refreshShieldRadii](bool on) { editor_->screenRxLock() = on; refreshShieldRadii(); });
-    connect(scRyLock, &QCheckBox::toggled, this,
-            [this, refreshShieldRadii](bool on) { editor_->screenRyLocked() = on; refreshShieldRadii(); });
+    connect(scRadiiLock, &QCheckBox::toggled, this, [this, refreshShieldRadii](bool on) {
+        editor_->screenRxLock() = on;      // both radius locks move together
+        editor_->screenRyLocked() = on;
+        refreshShieldRadii();
+    });
     connect(scRatioLock, &QCheckBox::toggled, this,
             [this, refreshShieldRadii](bool on) { editor_->screenRatioLock() = on; refreshShieldRadii(); });
 
     radiiG->addWidget(scLabel(radiiFrame, QStringLiteral("Small radius")), 0, 0);
     radiiG->addWidget(scRx, 0, 1);
-    radiiG->addWidget(scRxLock, 0, 2);
+    // One "Lock" for both radii, on the small-radius row spanning both radius rows.
+    radiiG->addWidget(scRadiiLock, 0, 2, 2, 1, Qt::AlignVCenter);
     radiiG->addWidget(scLabel(radiiFrame, QStringLiteral("Large radius")), 1, 0);
     radiiG->addWidget(scRy, 1, 1);
-    radiiG->addWidget(scRyLock, 1, 2);
     radiiG->addWidget(scLabel(radiiFrame, QStringLiteral("Ratio (L÷S)")), 2, 0);
     radiiG->addWidget(scRatio, 2, 1);
     radiiG->addWidget(scRatioLock, 2, 2);
@@ -6201,6 +6206,17 @@ void MainWindow::buildWireRibbonTab() {
         editor_->screenShowS() = on;
         if (canvas_) canvas_->update();
     });
+    // "S" label text size.
+    auto* scSSize = new QDoubleSpinBox(rightW);
+    scSSize->setRange(1.0, 100.0);
+    scSSize->setDecimals(1);
+    scSSize->setMinimumWidth(60);
+    scSSize->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scSSize->setToolTip(QStringLiteral("Size of the \"S\" shield label"));
+    connect(scSSize, &QDoubleSpinBox::editingFinished, this, [this, scSSize] {
+        editor_->screenSSize() = scSSize->value();
+        if (canvas_) canvas_->update();
+    });
     // Shield outline shape: ellipse or a capsule ("Semi circle" — two semicircle caps
     // joined by straight sides).
     auto* scShape = new QComboBox(rightW);
@@ -6218,6 +6234,8 @@ void MainWindow::buildWireRibbonTab() {
     rightG->addWidget(scShape, 0, 3);
     rightG->addWidget(scLabel(rightW, QStringLiteral("Leg length")), 1, 0);
     rightG->addWidget(scLeg, 1, 1);
+    rightG->addWidget(scLabel(rightW, QStringLiteral("S size")), 1, 2);
+    rightG->addWidget(scSSize, 1, 3);
     rightG->addWidget(scLabel(rightW, QStringLiteral("Amount")), 2, 0);
     rightG->addWidget(scAmount, 2, 1);
     rightG->addWidget(scShowS, 2, 2, 1, 2);
@@ -6344,7 +6362,7 @@ void MainWindow::buildWireRibbonTab() {
     // Show/hide the Screen panel + (re)load its fields from the Editor's current
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
-    auto syncScreenGroup = [this, scGroup, scShowS, refreshShieldRadii, scLegDir, scLeg,
+    auto syncScreenGroup = [this, scGroup, scShowS, scSSize, refreshShieldRadii, scLegDir, scLeg,
                            scAmount, scShape, scLineType, scDash, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
@@ -6352,8 +6370,9 @@ void MainWindow::buildWireRibbonTab() {
         if (!armed) return;
         refreshShieldRadii(); // radii + ratio values, enable states, lock checkboxes
         QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount), b5(scShape),
-            b6(scLineType), b7(scDash);
+            b6(scLineType), b7(scDash), b8(scSSize);
         scShowS->setChecked(editor_->screenShowS());
+        scSSize->setValue(editor_->screenSSize());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
                                                : dir.left(1).toUpper() + dir.mid(1));

@@ -1470,13 +1470,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
                                                 : (tMax - tMin) / 2.0 + pad;
         const QPointF c = vt.toScreen(center);
-        // Line type: solid (default) or dashed, with a scalable dash pattern; the color
-        // comes from the resolved `color` (entity color / ByLayer).
+        // Line type: solid (default) or dashed. Qt measures the dash pattern in units of
+        // the pen WIDTH, and the shield's width comes from the (often ~0) line weight — so a
+        // raw {6,4} pattern collapses and "dash scale" does almost nothing. Normalise by the
+        // effective width so the dash is ~ (6*ds) DEVICE PIXELS and ds scales it directly.
         QPen shieldPen = p.pen();
         if (e.meta.value("lineType").toString(QStringLiteral("solid")) == QLatin1String("dashed")) {
             const double ds = std::max(0.1, e.meta.value("dashScale").toDouble(1.0));
-            QVector<qreal> dashes{6.0 * ds, 4.0 * ds};
-            shieldPen.setDashPattern(dashes);
+            const double we = shieldPen.widthF() > 0.0 ? shieldPen.widthF() : 1.0;
+            shieldPen.setDashPattern({6.0 * ds / we, 4.0 * ds / we});
         }
         p.setPen(shieldPen);
         // Outline: rotated ellipse or capsule (stadium), sampled in world then mapped.
@@ -1518,9 +1520,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
             }
         }
-        if (e.meta.value("showS").toBool(true)) {
-            const Vec2 sPos{center.x + (rx + 4.0) * minor.x, center.y + (rx + 4.0) * minor.y};
-            drawWorldText(p, vt.toScreen(sPos), QStringLiteral("S"), 4.0, vt.scale(), color);
+        if (e.meta.value("showS").toBool(false)) {
+            const double sSize = e.meta.value("sSize").toDouble(4.0);
+            const Vec2 sPos{center.x + (rx + sSize) * minor.x, center.y + (rx + sSize) * minor.y};
+            drawWorldText(p, vt.toScreen(sPos), QStringLiteral("S"), sSize, vt.scale(), color);
         }
         break;
     }

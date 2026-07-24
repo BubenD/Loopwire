@@ -316,6 +316,7 @@ public:
     double& screenRx() { return screenRx_; }
     double& screenLeg() { return screenLeg_; }
     bool& screenShowS() { return screenShowS_; }
+    double& screenSSize() { return screenSSize_; } // "S" label text size
     // Large radius: locked (auto-fit to the caught wires) unless explicitly unlocked.
     bool& screenRyLocked() { return screenRyLocked_; }
     double& screenRy() { return screenRy_; }
@@ -794,12 +795,13 @@ private:
     std::vector<int> wireFanSel_;     // selected pin indices in the fan (always incl. the anchor)
     double spliceSize_ = 4.0;     // splice dot radius (world units)
     double ncSize_ = 6.0;         // X termination half-size (world units)
-    double screenRx_ = 12.0;      // screen ellipse small radius
+    double screenRx_ = 10.0;      // screen ellipse small radius (default 10)
     double screenLeg_ = 15.0;     // screen drain-leg length (default 15mm)
-    bool screenShowS_ = true;     // draw the "S" shield label
+    bool screenShowS_ = false;    // draw the "S" shield label (off by default)
+    double screenSSize_ = 4.0;    // "S" label text size (world units)
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 20.0;      // large radius when unlocked
-    double screenRatio_ = 20.0 / 12.0; // large:small ratio (kept in sync with the radii above)
+    double screenRatio_ = 20.0 / 10.0; // large:small ratio (kept in sync with the radii above)
     bool screenRatioLock_ = true;      // hold the ratio fixed while editing a radius
     bool screenRxLock_ = true;         // small-radius field locked (dependent, not editable)
     int screenAmount_ = 1;             // shields placed per drag (1-5), laid side by side
