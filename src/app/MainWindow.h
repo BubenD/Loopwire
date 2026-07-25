@@ -54,6 +54,9 @@ protected:
 
 private:
     void buildRibbon();
+    // Show/hide the Schematic-build ribbon groups by context: while a twist is armed only
+    // the Twist group shows; while a Splice/X marker tool is armed the Modify/DRC groups hide.
+    void updateSchematicRibbonGroups();
     void buildHatchRibbonTab();        // build the contextual "Hatch Creation" tab (hidden)
     void showHatchRibbon(bool on);     // add/select or remove the contextual tab
     void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
@@ -210,6 +213,13 @@ private:
     QWidget* schemModifyRule_ = nullptr;
     QWidget* schemDrcGroup_ = nullptr;
     QWidget* schemDrcRule_ = nullptr;
+    // Schematic-build "Place" group (+ rule) and the contextual "Twist" parameter group
+    // (+ rule): while a twist is armed the ribbon shows ONLY the Twist group; otherwise the
+    // Twist group is hidden and the Place / Modify / DRC groups show.
+    QWidget* schemPlaceGroup_ = nullptr;
+    QWidget* schemPlaceRule_ = nullptr;
+    QWidget* schemTwistGroup_ = nullptr;
+    QWidget* schemTwistRule_ = nullptr;
     QStringList customWireColors_;               // user-added wire colours (persisted)
     QStringList insulationMaterials_;            // insulation material menu (persisted, editable)
     QToolButton* connectorPlaceBtn_ = nullptr;  // "Place connector" — checked while armed

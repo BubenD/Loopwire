@@ -2200,6 +2200,60 @@ void MainWindow::buildRibbon() {
             editor_->beginScreen();
             canvas_->setFocus(Qt::OtherFocusReason);
         });
+        // Twist: split-button + per-type menu. Lives in the Place group (it places a twist
+        // symbol); the same handlers as before.
+        auto* modTwistBtn = new QToolButton(page);
+        modTwistBtn->setText(QStringLiteral("Twist\ntype"));
+        modTwistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        modTwistBtn->setIconSize(QSize(26, 26));
+        modTwistBtn->setMinimumWidth(66);
+        modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
+        modTwistBtn->setToolTip(QStringLiteral(
+            "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
+        {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(QColor("#cfe3ff"));
+            pen.setWidthF(1.8);
+            ip.setPen(pen);
+            QPolygonF a, b;
+            for (int k = 0; k <= 3; ++k) {
+                const double x = 4 + k * 6.7;
+                a << QPointF(x, (k % 2 == 0) ? 9 : 19);
+                b << QPointF(x, (k % 2 == 0) ? 19 : 9);
+            }
+            ip.drawPolyline(a);
+            ip.drawPolyline(b);
+            ip.end();
+            modTwistBtn->setIcon(QIcon(pm));
+        }
+        {
+            auto* modTm = new QMenu(modTwistBtn);
+            modTm->addAction(QStringLiteral("Type 1 (crossed)"), this, [this] {
+                editor_->beginTwist(QStringLiteral("crossed"));
+                canvas_->setFocus(Qt::OtherFocusReason);
+            });
+            modTm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
+                editor_->beginTwist(QStringLiteral("jog"));
+                canvas_->setFocus(Qt::OtherFocusReason);
+            });
+            modTm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
+                editor_->beginTwist(QStringLiteral("type3"));
+                canvas_->setFocus(Qt::OtherFocusReason);
+            });
+            modTm->addSeparator();
+            modTm->addAction(QStringLiteral("Remove twist…"), this, [this] {
+                editor_->beginTwistRemove();
+                canvas_->setFocus(Qt::OtherFocusReason);
+            });
+            modTwistBtn->setMenu(modTm);
+        }
+        connect(modTwistBtn, &QToolButton::clicked, this, [this] {
+            editor_->beginTwist(QStringLiteral("crossed")); // Type 1 = crossed
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
         auto* placeW = new QWidget(page);
         auto* placeLay = new QHBoxLayout(placeW);
         placeLay->setContentsMargins(0, 0, 0, 0);
@@ -2207,7 +2261,16 @@ void MainWindow::buildRibbon() {
         placeLay->addWidget(toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice,
                                      ToolId::NetLabel, ToolId::NotConnected}));
         placeLay->addWidget(screenBtn);
-        addGroup(lay, QStringLiteral("Place"), placeW);
+        placeLay->addWidget(modTwistBtn);
+        schemPlaceGroup_ = ribbonGroup(QStringLiteral("Place"), placeW);
+        lay->addWidget(schemPlaceGroup_);
+        {
+            auto* rule = new QFrame(page);
+            rule->setFrameShape(QFrame::VLine);
+            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+            lay->addWidget(rule);
+            schemPlaceRule_ = rule;
+        }
         // Marker size — appears ONLY while the Splice or X (termination) tool is active,
         // editing that tool's size; also typeable in the flying command field.
         auto* mkW = new QWidget(page);
@@ -2233,18 +2296,13 @@ void MainWindow::buildRibbon() {
         markerGroup_ = mkGroup;
         lay->addWidget(mkGroup);
         // Show + relabel the marker size for the active tool (Splice / X), hide otherwise.
+        // The group show/hide (marker vs twist vs the rest) is centralised in
+        // updateSchematicRibbonGroups(); this lambda only sets the marker label/value.
         auto syncMarker = [this] {
             const ToolId t = editor_->tool();
             const bool splice = t == ToolId::Splice, x = t == ToolId::NotConnected;
-            const bool markerArmed = splice || x;
-            if (markerGroup_) markerGroup_->setVisible(markerArmed);
-            // While placing a splice / termination, show only its preferences — hide the
-            // Modify and DRC groups so the ribbon stays focused on the marker.
-            if (schemModifyGroup_) schemModifyGroup_->setVisible(!markerArmed);
-            if (schemModifyRule_) schemModifyRule_->setVisible(!markerArmed);
-            if (schemDrcGroup_) schemDrcGroup_->setVisible(!markerArmed);
-            if (schemDrcRule_) schemDrcRule_->setVisible(!markerArmed);
-            if (markerArmed && markerSpin_) {
+            updateSchematicRibbonGroups();
+            if ((splice || x) && markerSpin_) {
                 QSignalBlocker b(markerSpin_);
                 markerLabel_->setText(splice ? QStringLiteral("Splice ⌀") : QStringLiteral("X size"));
                 markerSpin_->setValue(splice ? editor_->spliceSize() : editor_->ncSize());
@@ -2289,58 +2347,6 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(alignBtn, 0, 0);
-        // Twist: same split-button/type-menu as the Wire ribbon, available here too.
-        auto* modTwistBtn = new QToolButton(modW);
-        modTwistBtn->setText(QStringLiteral("Twist\ntype"));
-        modTwistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        modTwistBtn->setIconSize(QSize(26, 26));
-        modTwistBtn->setMinimumWidth(66);
-        modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
-        modTwistBtn->setToolTip(QStringLiteral(
-            "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(1.8);
-            ip.setPen(pen);
-            QPolygonF a, b;
-            for (int k = 0; k <= 3; ++k) {
-                const double x = 4 + k * 6.7;
-                a << QPointF(x, (k % 2 == 0) ? 9 : 19);
-                b << QPointF(x, (k % 2 == 0) ? 19 : 9);
-            }
-            ip.drawPolyline(a);
-            ip.drawPolyline(b);
-            ip.end();
-            modTwistBtn->setIcon(QIcon(pm));
-        }
-        auto* modTm = new QMenu(modTwistBtn);
-        modTm->addAction(QStringLiteral("Type 1 (crossed)"), this, [this] {
-            editor_->beginTwist(QStringLiteral("crossed"));
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modTm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
-            editor_->beginTwist(QStringLiteral("jog"));
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modTm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
-            editor_->beginTwist(QStringLiteral("type3"));
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modTm->addSeparator();
-        modTm->addAction(QStringLiteral("Remove twist…"), this, [this] {
-            editor_->beginTwistRemove();
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modTwistBtn->setMenu(modTm);
-        connect(modTwistBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginTwist(QStringLiteral("crossed")); // Type 1 = crossed
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modG->addWidget(modTwistBtn, 0, 1);
         // Cross switch: toggle a wire crossing between a bridge (hop) and a plain cross.
         auto* modCrossBtn = new QToolButton(modW);
         modCrossBtn->setText(QStringLiteral("Cross\nswitch"));
@@ -2371,7 +2377,7 @@ void MainWindow::buildRibbon() {
             editor_->beginCrossSwitch();
             canvas_->setFocus(Qt::OtherFocusReason);
         });
-        modG->addWidget(modCrossBtn, 0, 2);
+        modG->addWidget(modCrossBtn, 0, 1);
         // Twist align: select one or more twist marks first, click this, then click a
         // destination point on a wire — every selected twist slides to that position.
         auto* twistAlignBtn = new QToolButton(modW);
@@ -2407,8 +2413,8 @@ void MainWindow::buildRibbon() {
             editor_->beginTwistAlign();
             canvas_->setFocus(Qt::OtherFocusReason);
         });
-        modG->addWidget(twistAlignBtn, 0, 3);
-        modG->addWidget(makeMatchBtn(modW, /*iconOnly=*/false), 0, 4);
+        modG->addWidget(twistAlignBtn, 0, 2);
+        modG->addWidget(makeMatchBtn(modW, /*iconOnly=*/false), 0, 3);
         // "Crossed" twist parameters (apply to the next Crossed twist placed): the diagonal
         // angle and the horizontal cap length.
         {
@@ -2417,7 +2423,7 @@ void MainWindow::buildRibbon() {
             //   Type 1 (crossed): Diag°, H len, Amount
             //   Type 2 (jog):     H len, Repeats, Amount
             //   Type 3 (diamond): Repeats, Amount
-            auto* tpW = new QWidget(modW);
+            auto* tpW = new QWidget(page);
             auto* tpG = new QGridLayout(tpW);
             tpG->setContentsMargins(0, 0, 0, 0);
             tpG->setHorizontalSpacing(4);
@@ -2467,14 +2473,26 @@ void MainWindow::buildRibbon() {
             tpG->addWidget(lenLbl, 1, 0); tpG->addWidget(twLen, 1, 1);
             tpG->addWidget(repLbl, 0, 2); tpG->addWidget(twRep, 0, 3);
             tpG->addWidget(amtLbl, 1, 2); tpG->addWidget(twAmt, 1, 3);
-            modG->addWidget(tpW, 0, 5);
-            tpW->setVisible(false);
+            // The twist parameters live in their OWN ribbon group. While a twist is armed the
+            // Schematic-build ribbon shows ONLY this group (see updateSchematicRibbonGroups);
+            // otherwise it is hidden and the Place / Modify / DRC groups show.
+            schemTwistGroup_ = ribbonGroup(QStringLiteral("Twist"), tpW);
+            lay->addWidget(schemTwistGroup_);
+            {
+                auto* rule = new QFrame(page);
+                rule->setFrameShape(QFrame::VLine);
+                rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+                lay->addWidget(rule);
+                schemTwistRule_ = rule;
+            }
+            schemTwistGroup_->setVisible(false);
+            schemTwistRule_->setVisible(false);
             connect(editor_, &Editor::twistArmChanged, this,
-                    [this, tpW, twAng, twLen, twRep, twAmt, angLbl, lenLbl, repLbl] {
+                    [this, twAng, twLen, twRep, twAmt, angLbl, lenLbl, repLbl] {
                         const QString ty = editor_->twistArmType();
-                        const bool armed = !ty.isEmpty();
-                        tpW->setVisible(armed);
-                        if (!armed) return;
+                        // Show only the twist menu in the ribbon (or restore the rest).
+                        updateSchematicRibbonGroups();
+                        if (ty.isEmpty()) return;
                         const bool crossed = ty == QLatin1String("crossed");
                         const bool jog = ty == QLatin1String("jog");
                         const bool type3 = ty == QLatin1String("type3");
@@ -2610,6 +2628,28 @@ void MainWindow::buildRibbon() {
     buildWireRibbonTab();      // built once, added only while the Wire tool is active
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
+}
+
+// Context-driven visibility of the Schematic-build ribbon groups:
+//   • a twist is armed  -> show ONLY the Twist group (the twist menu takes over the ribbon)
+//   • a Splice/X marker -> show the Marker group, hide Modify / DRC
+//   • otherwise         -> show Place / Modify / DRC, hide Marker and Twist
+void MainWindow::updateSchematicRibbonGroups() {
+    if (!editor_) return;
+    const bool twistArmed = !editor_->twistArmType().isEmpty();
+    const ToolId t = editor_->tool();
+    const bool markerArmed = (t == ToolId::Splice || t == ToolId::NotConnected);
+    // Twist takes over the whole ribbon while armed.
+    if (schemTwistGroup_) schemTwistGroup_->setVisible(twistArmed);
+    if (schemTwistRule_) schemTwistRule_->setVisible(twistArmed);
+    if (schemPlaceGroup_) schemPlaceGroup_->setVisible(!twistArmed);
+    if (schemPlaceRule_) schemPlaceRule_->setVisible(!twistArmed);
+    if (markerGroup_) markerGroup_->setVisible(markerArmed && !twistArmed);
+    const bool showModDrc = !twistArmed && !markerArmed;
+    if (schemModifyGroup_) schemModifyGroup_->setVisible(showModDrc);
+    if (schemModifyRule_) schemModifyRule_->setVisible(showModDrc);
+    if (schemDrcGroup_) schemDrcGroup_->setVisible(showModDrc);
+    if (schemDrcRule_) schemDrcRule_->setVisible(showModDrc);
 }
 
 // The contextual "Hatch Creation" ribbon tab (AutoCAD-style): Boundaries | Pattern
