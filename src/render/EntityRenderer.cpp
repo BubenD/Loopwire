@@ -1385,6 +1385,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // no mask is painted here — the wire's actual structure is simply not routed
         // straight through the twist; this case only draws the twist motif itself.
         if (e.points.empty()) break;
+        // Draw the braid at the crossed WIRE's thickness (stored gauge), so it reads as part
+        // of the wire rather than a thin overlay. Falls back to the default pen if no gauge.
+        if (e.meta.contains(QStringLiteral("wireGauge"))) {
+            const double ww = wireGaugeWeight(e.meta.value("wireGauge").toString());
+            QPen tp = p.pen();
+            tp.setWidthF(overrideColor.isValid() ? ww + 1.4 : ww);
+            p.setPen(tp);
+        }
         double cx = 0.0, yMin = 1e18, yMax = -1e18;
         for (const Vec2& pt : e.points) {
             cx += pt.x;

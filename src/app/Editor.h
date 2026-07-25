@@ -387,6 +387,7 @@ public:
     void beginScreen();
     bool awaitingWireBand() const { return !twistArmType_.isEmpty() || screenArm_; }
     QString twistArmType() const { return twistArmType_; } // "" when no twist armed
+    QString lastTwistType() const { return lastTwistType_; } // last chosen type (default next time)
     // Remove-twist mode: click a twist sign to delete it (stays armed until Esc).
     void beginTwistRemove();
     bool awaitingTwistRemove() const { return awaitTwistRemove_; }
@@ -613,6 +614,10 @@ private:
     // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
     // (0 if single). Writes cornerRadii/cornerChamfers and clears the other on that knee.
     void applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corner, double gap);
+    // Distance between consecutive twist marks placed in one drag (Amount > 1): one mark's
+    // own width for the armed type + a clear gap, so marks never touch. `band` = crossed-wire
+    // height. Used by both placement (finishWireBand) and the drag preview (drawOverlay).
+    double twistMarkSpacing(double band) const;
     // Balloons Ctrl+coupled into a batch share meta["chain"]; returns the OTHER
     // balloons in e's batch (empty if e has no chain). The batch moves as one unit.
     std::vector<Entity*> chainMatesOf(const Entity& e);
@@ -831,6 +836,7 @@ private:
     bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
     QString matchSourceId_;         // source object id once picked (empty until the first click)
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
+    QString lastTwistType_ = QStringLiteral("crossed"); // last chosen type (the default next time)
     double twistDiagAngle_ = 15.0;  // Type 1 (crossed): diagonal angle (deg from perpendicular)
     double twistCapLen_ = 8.0;      // Type 1 (crossed): horizontal cap length (world units)
     int twistRepeats_ = 2;          // Type 2/3: number of crossings ("how many twists")

@@ -2179,21 +2179,33 @@ void MainWindow::buildRibbon() {
         screenBtn->setToolTip(QStringLiteral(
             "Shield: click, then drag a crossing line across the wires to shield them"));
         {
+            // Braided-shield cable: a cable body with a criss-cross braid mesh in the middle
+            // section (matching the reference picture of a braid shield over a wire).
             QPixmap pm(28, 28);
             pm.fill(Qt::transparent);
             QPainter ip(&pm);
             ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen wp(QColor("#cfe3ff"));
-            wp.setWidthF(1.6);
-            ip.setPen(wp);
-            ip.drawLine(4, 11, 24, 11); // two wires
-            ip.drawLine(4, 17, 24, 17);
-            QPen dp(QColor("#8fb7ff"));
-            dp.setWidthF(1.4);
-            dp.setStyle(Qt::DashLine);
-            ip.setPen(dp);
-            ip.setBrush(Qt::NoBrush);
-            ip.drawRect(3, 6, 22, 16); // the shield outline
+            // Cable body: top + bottom edges running the full width.
+            QPen body(QColor("#cfe3ff"));
+            body.setWidthF(1.6);
+            ip.setPen(body);
+            ip.drawLine(2, 9, 26, 9);
+            ip.drawLine(2, 19, 26, 19);
+            // Braid mesh: criss-cross diagonals clipped to the middle section of the cable.
+            ip.save();
+            ip.setClipRect(8, 9, 12, 11);
+            QPen mesh(QColor("#8fb7ff"));
+            mesh.setWidthF(1.1);
+            ip.setPen(mesh);
+            for (int x = 0; x <= 26; x += 4) {
+                ip.drawLine(x, 8, x + 11, 20); // "\" strands
+                ip.drawLine(x, 20, x + 11, 8); // "/" strands
+            }
+            ip.restore();
+            // Ticks where the braided section starts / ends.
+            ip.setPen(body);
+            ip.drawLine(8, 8, 8, 20);
+            ip.drawLine(20, 8, 20, 20);
             ip.end();
             screenBtn->setIcon(QIcon(pm));
         }
@@ -2254,7 +2266,8 @@ void MainWindow::buildRibbon() {
             modTwistBtn->setMenu(modTm);
         }
         connect(modTwistBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginTwist(QStringLiteral("crossed")); // Type 1 = crossed
+            // Re-arm the LAST chosen type (defaults to crossed), so the picked type sticks.
+            editor_->beginTwist(editor_->lastTwistType());
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         auto* placeW = new QWidget(page);

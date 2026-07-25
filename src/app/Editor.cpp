@@ -2599,6 +2599,7 @@ void Editor::beginTwist(const QString& type) {
     // it works regardless of the active tool. setTool clears twistArmType_, so arm AFTER.
     setTool(ToolId::Select);
     twistArmType_ = type.isEmpty() ? QStringLiteral("cross") : type;
+    lastTwistType_ = twistArmType_; // the chosen type becomes the default for next time
     wireBandHasStart_ = false;
     emit message(QStringLiteral("Twist: draw a crossing line across the wires to twist"));
     emit twistArmChanged();
@@ -2699,6 +2700,17 @@ void Editor::setWireFanAll() {
     rebuildWireFanOffsets();
 }
 
+double Editor::twistMarkSpacing(double band) const {
+    band = std::max(1.0, band);
+    const bool crossed = twistArmType_ == QLatin1String("crossed");
+    const int reps = std::max(1, twistRepeats_);
+    const double flat = (twistArmType_ == QLatin1String("jog")) ? twistFlatLen_ : 0.0;
+    // One mark's own drawn width (mirrors twistBandX for braids; a fixed estimate for crossed).
+    const double markW = crossed ? std::max(28.0, band * 1.2)
+                                 : std::max(28.0, reps * (band * 0.6 + flat) + 16.0);
+    return markW + std::max(24.0, band * 0.7); // + a clear gap so marks never touch
+}
+
 void Editor::finishWireBand(const Vec2& fenceEnd) {
     const Vec2 f0 = wireBandStart_, f1 = fenceEnd;
     std::vector<Vec2> crossings;
@@ -2730,6 +2742,11 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
     if (twist) {
         QJsonArray ids;
         for (const QString& id : wireIds) ids.append(id);
+        // The braid is drawn at the crossed wire's thickness, so it reads as part of the
+        // wire — capture that wire's gauge and stamp it on every mark (incl. decorative copies).
+        QString twistGauge;
+        for (const auto& w : doc_->entities())
+            if (w.id == wireIds.front()) { twistGauge = w.meta.value("wireGauge").toString(); break; }
         // Place `amount` twist marks side by side (shifted along the wires); the first
         // carries the caught-wire references, the copies are decorative like the shield's.
         const int amount = std::clamp(twistAmount_, 1, 9);
@@ -2739,12 +2756,14 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y);
         }
         const double band = std::max(1.0, yMax - yMin);
-        const double spacing = std::max(28.0, band * 1.4) * 1.3; // gap between side-by-side marks
         // "crossed" overlays a line and leaves the wires continuous, so only the first mark
         // needs the wire references (for validation); the copies are decorative. Type 2/3
         // braids REPLACE the wire within their band — so EVERY copy must reference the wires
         // it crosses, so the wire stops and restarts at each braid's ends, not just the first.
         const bool crossedType = twistArmType_ == QLatin1String("crossed");
+        // Spacing = one mark's own width + a clear gap, so consecutive marks never touch
+        // (wider braids — more repeats / longer flats — get proportionally more room).
+        const double spacing = twistMarkSpacing(band);
         for (int k = 0; k < amount; ++k) {
             Entity e;
             e.type = EntityType::Twist;
@@ -2753,6 +2772,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             for (const Vec2& c : crossings) e.points.push_back({c.x + k * spacing, c.y});
             e.meta.insert("twistType", twistArmType_);
             e.meta.insert("wires", (k == 0 || !crossedType) ? ids : QJsonArray());
+            e.meta.insert("wireGauge", twistGauge); // draw at the wire's thickness
             if (twistArmType_ == QLatin1String("crossed")) {
                 e.meta.insert("diagAngle", twistDiagAngle_);
                 e.meta.insert("capLen", twistCapLen_);
@@ -7547,12 +7567,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Twist preview: the actual twist symbol over the wires the crossing line
             // currently catches, so it can be judged before committing.
             std::vector<Vec2> xs;
+            QString previewGauge;
             for (const auto& w : doc_->entities()) {
                 if (w.type != EntityType::Wire || w.points.size() < 2) continue;
                 for (size_t i = 1; i < w.points.size(); ++i)
                     if (auto x = segmentSegmentIntersection(wireBandStart_, bandEnd,
                                                             w.points[i - 1], w.points[i])) {
                         xs.push_back(*x);
+                        if (previewGauge.isEmpty())
+                            previewGauge = w.meta.value("wireGauge").toString();
                         break;
                     }
             }
@@ -7563,13 +7586,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 double yMin = 1e18, yMax = -1e18;
                 for (const Vec2& c : xs) { yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y); }
                 const double band = std::max(1.0, yMax - yMin);
-                const double spacing = std::max(28.0, band * 1.4) * 1.3;
+                const double spacing = twistMarkSpacing(band);
                 for (int k = 0; k < amount; ++k) {
                     Entity temp;
                     temp.type = EntityType::Twist;
                     temp.points.reserve(xs.size());
                     for (const Vec2& c : xs) temp.points.push_back({c.x + k * spacing, c.y});
                     temp.meta.insert("twistType", twistArmType_);
+                    temp.meta.insert("wireGauge", previewGauge); // preview at wire thickness
                     if (twistArmType_ == QLatin1String("crossed")) {
                         temp.meta.insert("diagAngle", twistDiagAngle_);
                         temp.meta.insert("capLen", twistCapLen_);
