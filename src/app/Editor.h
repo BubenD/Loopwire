@@ -303,8 +303,9 @@ public:
     QString& wireType() { return wireType_; }
     double& wireRes() { return wireRes_; }          // default resistance for new wires
     QString& wireResUnit() { return wireResUnit_; } // "m" | "ft"
-    // Gap between the parallel wire lanes after a knee (align routing): "pitch" uses the
-    // reference connector's pitch, "custom" uses wireGapCustom().
+    // Pitch rule (align routing): a wire's knee is spaced one pitch from its neighbour
+    // wire's knee — "pitch" uses the reference connector's pitch, "custom" uses
+    // wireGapCustom().
     QString& wireGapRule() { return wireGapRule_; }
     double& wireGapCustom() { return wireGapCustom_; }
     // Constrain wire drawing to horizontal/vertical (90°) segments only.

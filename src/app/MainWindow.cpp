@@ -2171,10 +2171,11 @@ void MainWindow::buildRibbon() {
         auto [page, lay] = makeTabPage();
         // Screen / shield button (joins the Place group below).
         auto* screenBtn = new QToolButton(page);
-        screenBtn->setText(QStringLiteral("Shield"));
-        screenBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        screenBtn->setIconSize(QSize(26, 26));
-        screenBtn->setMinimumWidth(66);
+        // Icon-only: the name shows on hover (tooltip), not as a label.
+        screenBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        screenBtn->setIconSize(QSize(28, 28));
+        screenBtn->setAutoRaise(true);
+        screenBtn->setFocusPolicy(Qt::NoFocus);
         screenBtn->setToolTip(QStringLiteral(
             "Shield: click, then drag a crossing line across the wires to shield them"));
         {
@@ -2203,10 +2204,12 @@ void MainWindow::buildRibbon() {
         // Twist: split-button + per-type menu. Lives in the Place group (it places a twist
         // symbol); the same handlers as before.
         auto* modTwistBtn = new QToolButton(page);
-        modTwistBtn->setText(QStringLiteral("Twist\ntype"));
-        modTwistBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        modTwistBtn->setIconSize(QSize(26, 26));
-        modTwistBtn->setMinimumWidth(66);
+        // Icon-only: the name shows on hover (tooltip). The MenuButtonPopup arrow stays as
+        // the fall-menu (type) affordance.
+        modTwistBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        modTwistBtn->setIconSize(QSize(28, 28));
+        modTwistBtn->setAutoRaise(true);
+        modTwistBtn->setFocusPolicy(Qt::NoFocus);
         modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
         modTwistBtn->setToolTip(QStringLiteral(
             "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
@@ -2459,11 +2462,13 @@ void MainWindow::buildRibbon() {
             connect(twRep, &QDoubleSpinBox::editingFinished, this, [this, twRep] {
                 editor_->twistRepeats() = std::max(1, static_cast<int>(twRep->value()));
             });
-            auto* twAmt = spin(1.0, 9.0, 0);
+            // Amount is a fall-menu (dropdown), matching the Shield "Amount" control.
+            auto* twAmt = new QComboBox(tpW);
+            for (int n = 1; n <= 9; ++n) twAmt->addItem(QString::number(n));
+            twAmt->setMinimumWidth(52);
             twAmt->setToolTip(QStringLiteral("How many twist marks to place side by side"));
-            connect(twAmt, &QDoubleSpinBox::editingFinished, this, [this, twAmt] {
-                editor_->twistAmount() = std::max(1, static_cast<int>(twAmt->value()));
-            });
+            connect(twAmt, &QComboBox::currentTextChanged, this,
+                    [this](const QString& t) { editor_->twistAmount() = std::max(1, t.toInt()); });
             auto* angLbl = lbl(QStringLiteral("Diag°"));
             auto* lenLbl = lbl(QStringLiteral("H len"));
             auto* repLbl = lbl(QStringLiteral("Twists"));
@@ -2503,7 +2508,7 @@ void MainWindow::buildRibbon() {
                         twAng->setValue(editor_->twistDiagAngle());
                         twLen->setValue(jog ? editor_->twistFlatLen() : editor_->twistCapLen());
                         twRep->setValue(editor_->twistRepeats());
-                        twAmt->setValue(editor_->twistAmount());
+                        twAmt->setCurrentText(QString::number(std::max(1, editor_->twistAmount())));
                     });
         }
         // Built manually (not via addGroup) so the group + its separator rule can be
@@ -6482,6 +6487,9 @@ void MainWindow::buildWireRibbonTab() {
     auto* gapRule = new QComboBox(routeW);
     gapRule->addItems({QStringLiteral("Connector pitch"), QStringLiteral("Custom")});
     gapRule->setCurrentIndex(editor_->wireGapRule() == QLatin1String("custom") ? 1 : 0);
+    gapRule->setToolTip(QStringLiteral(
+        "Pitch rule: a wire's knee sits one pitch from its neighbour wire's knee — the "
+        "defined/connected connector pitch (Connector pitch) or a Custom value"));
     auto* gapVal = new QDoubleSpinBox(routeW);
     gapVal->setRange(0.5, 1000.0);
     gapVal->setDecimals(2);
@@ -6504,7 +6512,7 @@ void MainWindow::buildWireRibbonTab() {
     connect(ortho90, &QCheckBox::toggled, this, [this](bool on) { editor_->wireOrtho() = on; });
     rgl->setHorizontalSpacing(8);
     rgl->addWidget(ortho90, 0, 0, 1, 3);
-    rgl->addWidget(new QLabel(QStringLiteral("Gap after knee"), routeW), 1, 0);
+    rgl->addWidget(new QLabel(QStringLiteral("Pitch rule"), routeW), 1, 0);
     // Fall-menu + its value on the SAME row, value to the side of the dropdown.
     rgl->addWidget(gapRule, 1, 1);
     rgl->addWidget(gapVal, 1, 2);
