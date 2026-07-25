@@ -2740,6 +2740,11 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         }
         const double band = std::max(1.0, yMax - yMin);
         const double spacing = std::max(28.0, band * 1.4) * 1.3; // gap between side-by-side marks
+        // "crossed" overlays a line and leaves the wires continuous, so only the first mark
+        // needs the wire references (for validation); the copies are decorative. Type 2/3
+        // braids REPLACE the wire within their band — so EVERY copy must reference the wires
+        // it crosses, so the wire stops and restarts at each braid's ends, not just the first.
+        const bool crossedType = twistArmType_ == QLatin1String("crossed");
         for (int k = 0; k < amount; ++k) {
             Entity e;
             e.type = EntityType::Twist;
@@ -2747,7 +2752,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.points.reserve(crossings.size());
             for (const Vec2& c : crossings) e.points.push_back({c.x + k * spacing, c.y});
             e.meta.insert("twistType", twistArmType_);
-            e.meta.insert("wires", k == 0 ? ids : QJsonArray());
+            e.meta.insert("wires", (k == 0 || !crossedType) ? ids : QJsonArray());
             if (twistArmType_ == QLatin1String("crossed")) {
                 e.meta.insert("diagAngle", twistDiagAngle_);
                 e.meta.insert("capLen", twistCapLen_);
@@ -7552,19 +7557,29 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     }
             }
             if (xs.size() >= 2) {
-                Entity temp;
-                temp.type = EntityType::Twist;
-                temp.points = xs;
-                temp.meta.insert("twistType", twistArmType_);
-                if (twistArmType_ == QLatin1String("crossed")) {
-                    temp.meta.insert("diagAngle", twistDiagAngle_);
-                    temp.meta.insert("capLen", twistCapLen_);
-                } else {
-                    temp.meta.insert("repeats", twistRepeats_);
-                    if (twistArmType_ != QLatin1String("type3"))
-                        temp.meta.insert("flatLen", twistFlatLen_);
+                // Preview `amount` marks side by side, exactly as finishWireBand will place
+                // them (same band-derived spacing), so a multi-twist choice reads correctly.
+                const int amount = std::clamp(twistAmount_, 1, 9);
+                double yMin = 1e18, yMax = -1e18;
+                for (const Vec2& c : xs) { yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y); }
+                const double band = std::max(1.0, yMax - yMin);
+                const double spacing = std::max(28.0, band * 1.4) * 1.3;
+                for (int k = 0; k < amount; ++k) {
+                    Entity temp;
+                    temp.type = EntityType::Twist;
+                    temp.points.reserve(xs.size());
+                    for (const Vec2& c : xs) temp.points.push_back({c.x + k * spacing, c.y});
+                    temp.meta.insert("twistType", twistArmType_);
+                    if (twistArmType_ == QLatin1String("crossed")) {
+                        temp.meta.insert("diagAngle", twistDiagAngle_);
+                        temp.meta.insert("capLen", twistCapLen_);
+                    } else {
+                        temp.meta.insert("repeats", twistRepeats_);
+                        if (twistArmType_ != QLatin1String("type3"))
+                            temp.meta.insert("flatLen", twistFlatLen_);
+                    }
+                    EntityRenderer::draw(p, temp, *doc_, vt, QColor(120, 200, 255, 220));
                 }
-                EntityRenderer::draw(p, temp, *doc_, vt, QColor(120, 200, 255, 220));
             }
         }
         p.restore();

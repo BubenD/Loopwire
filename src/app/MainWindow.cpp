@@ -2263,8 +2263,15 @@ void MainWindow::buildRibbon() {
         placeLay->setSpacing(4);
         placeLay->addWidget(toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice,
                                      ToolId::NetLabel, ToolId::NotConnected}));
-        placeLay->addWidget(screenBtn);
-        placeLay->addWidget(modTwistBtn);
+        // Shield + Twist share one 2-row icon column (same small-icon style as the tool row),
+        // with Twist directly UNDER Shield.
+        auto* stW = new QWidget(page);
+        auto* stG = new QGridLayout(stW);
+        stG->setContentsMargins(0, 0, 0, 0);
+        stG->setSpacing(1);
+        stG->addWidget(screenBtn, 0, 0);
+        stG->addWidget(modTwistBtn, 1, 0);
+        placeLay->addWidget(stW);
         schemPlaceGroup_ = ribbonGroup(QStringLiteral("Place"), placeW);
         lay->addWidget(schemPlaceGroup_);
         {

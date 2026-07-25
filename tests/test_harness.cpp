@@ -1484,6 +1484,26 @@ int run_harness_tests() {
               "twist-crossed: diagonal angle and line length are stored");
     }
 
+    // Crossed leaves wires continuous, so only the FIRST of several copies references the
+    // wires (the rest are decorative) — unlike jog/type3 where every copy interrupts them.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); ed.snapSettings().objectSnap = false;
+        Entity w1; w1.id = "w1"; w1.type = EntityType::Wire; w1.points = {{0, 0}, {400, 0}};
+        Entity w2; w2.id = "w2"; w2.type = EntityType::Wire; w2.points = {{0, 30}, {400, 30}};
+        d.entities().push_back(w1);
+        d.entities().push_back(w2);
+        ed.twistAmount() = 3;
+        ed.beginTwist(QStringLiteral("crossed"));
+        ed.onPointerPress({100, -10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100, 40}, Qt::LeftButton, Qt::NoModifier);
+        int crossedWithWires = 0;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Twist && e.meta.value("wires").toArray().size() == 2)
+                ++crossedWithWires;
+        check(crossedWithWires == 1, "twist-crossed: only the first copy references the wires");
+    }
+
     // Type 2 (jog): repeats + flat length stored, and Amount places several side by side.
     {
         Document d; d.entities().clear();
@@ -1505,6 +1525,13 @@ int run_harness_tests() {
         check(first && first->meta.value("repeats").toInt() == 4 &&
                   near(first->meta.value("flatLen").toDouble(), 10.0),
               "twist-jog: repeats and flat length are stored");
+        // Every jog copy must reference the wires it crosses, so the wire stops/restarts at
+        // each braid's ends (not just the first). Each mark carries both wire ids.
+        int jogWithWires = 0;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Twist && e.meta.value("wires").toArray().size() == 2)
+                ++jogWithWires;
+        check(jogWithWires == 3, "twist-jog: every copy references its crossed wires");
         // Type 3 stores repeats but no flat length.
         Document d2; d2.entities().clear();
         Editor e2; e2.setDocument(&d2); e2.snapSettings().objectSnap = false;
