@@ -4,8 +4,11 @@
 #include "geometry/Snap.h"
 #include "geometry/Vec2.h"
 #include "harness/Harness.h"
+#include "harness/HarnessBuilder.h" // HarnessDef used by insertHarness
 #include "model/Document.h"
 #include "render/EntityRenderer.h"
+#include "tools/ModifyOps.h" // ArraySpec / ArrayKind used by the array session
+#include "tools/QuickSelect.h" // QuickSelectQuery used by the Quick Select command
 #include "tools/ToolId.h"
 
 #include <QElapsedTimer>
@@ -180,6 +183,18 @@ public:
     // "P3/5"), or empty if the point is not on any connector pin (i.e. "open").
     QString pinRefAt(const Vec2& p) const;
 
+    // ---- Wire status (shown in the wire's properties) -----------------------
+    // A Screen (shield) or Twist annotation records the wires it covers in its "wires"
+    // meta, so a wire's shielded / twisted status is read back from them.
+    bool wireIsShielded(const QString& wireId) const;
+    bool wireIsTwisted(const QString& wireId) const;
+    // What one END of a wire is connected to:
+    //   "P1/3"        on that connector pin
+    //   "splice"      on a splice dot (joined to other wires)
+    //   "open"        deliberately terminated by an X (not-connected) marker
+    //   "unconnected" landing on nothing at all
+    QString wireEndRef(const Entity& wire, bool firstEnd) const;
+
     // A unique sequential number for a new connector/wire (stored in meta["entNum"]),
     // one greater than the largest already in the document.
     int assignEntityNumber() const;
@@ -227,7 +242,38 @@ public:
     // factor (so the leg grows/shrinks with the shield when edited in Properties, matching
     // the Scale tool). Only the leg on the axis that changed is scaled.
     void resizeSelectedShield(const QString& key, double value);
+    // The drain-leg length of the selected shield: how far the leg reaches from the outline
+    // edge to its end. Reading it measures the geometry (the leg IS the last point), and
+    // setting it slides that end along the leg's own direction.
+    double selectedShieldLegLength() const;
+    void setSelectedShieldLegLength(double length);
+    // Is the selected shield's drain leg landing on a wire? A leg that is genuinely wired
+    // must not also carry a "not connected" X.
+    bool shieldLegIsWired(const Entity& shield) const;
+    // Slide a Screen (shield) along the wires it catches to world-x `x`, re-deriving each
+    // crossing from its own wire and carrying the drain leg along — a shield is pinned to
+    // its wires and never translates off them. False for a decorative copy with no wire
+    // references (the caller then translates freely).
+    bool repositionScreenAtX(Entity& screen, double x);
+    // The wires a shield of half-height `ry` would enclose (crossings + wire ids, parallel
+    // arrays), measured along its major axis through its centre.
+    bool shieldCatchAt(const Entity& screen, double ry, std::vector<Vec2>& crossings,
+                       std::vector<QString>& wireIds) const;
     void setSelectionMetaBool(const QString& key, bool value);       // showS, ...
+    // ---- Wire label & marking ----------------------------------------------
+    // Set the selected wire(s) label, carrying the new text onto any Wire label
+    // (NetLabel) entity attached to them so the drawing and the property agree.
+    void setSelectionWireLabel(const QString& text);
+    // Set how many colour/gauge markings run along the selected wire(s), keeping the
+    // positions of the instances that already exist.
+    void setSelectionWireAnnotCount(int count);
+    // Re-point an attached Wire label's text, writing it back to its wire as well.
+    void setWireLabelText(const QString& labelId, const QString& text);
+    // Switch the selected wires' resistance unit between Ω/m and Ω/ft, converting EACH
+    // wire's own value from its own current unit (1 ft = 0.3048 m).
+    void convertSelectionResistanceUnit(bool toFeet);
+    // The wire under `p` within pick tolerance (nearest wins), or empty.
+    QString wireAt(const Vec2& p) const;
     void setSelectionTextMeta(const QString& key, const QJsonValue& value); // text font/size/bold/...
     void setSelectionHatchMeta(const QString& key, const QJsonValue& value); // hatch pattern/angle/...
     void setSelectionDimMeta(const QString& key, const QJsonValue& value); // dimension props
@@ -263,8 +309,43 @@ public:
     void undo();
     void redo();
 
+    // ---- Array (AutoCAD ARRAY: rectangular / polar / path) -----------------
+    // beginArray arms an array session on the current selection: the items are
+    // previewed live as ghosts and every parameter stays editable in the contextual
+    // "Array Creation" ribbon until Enter / Close Array commits (Esc cancels), so
+    // nothing is written to the drawing until the layout looks right.
+    //   Rectangular - previews immediately from the seeded spacings.
+    //   Polar       - the centre follows the cursor until a click sets it.
+    //   Path        - the next click picks the object the items track along.
+    void beginArray(ArrayKind kind);
+    bool arrayActive() const { return arrayActive_; }
+    // Switch kind mid-session (the ribbon's Type buttons), keeping the selection.
+    void setArrayKind(ArrayKind kind);
+    ArraySpec& arraySpec() { return arraySpec_; }
+    const ArraySpec& arraySpec() const { return arraySpec_; }
+    // Called after the ribbon edits arraySpec() so the preview repaints.
+    void arrayParamsChanged();
+    void commitArray();
+    void cancelArray();
+    // Drop the polar centre / the picked path so the next canvas click supplies it
+    // again (the ribbon's "Pick centre" / "Pick path" button).
+    void arrayRepick();
+    // A polar array with no centre yet / a path array with no path yet: the next
+    // canvas click supplies it, and there is nothing to preview meanwhile.
+    bool arrayAwaitingCenter() const;
+    bool arrayAwaitingPath() const;
+    bool arrayReady() const { return arrayActive_ && !arrayAwaitingPath(); }
+    // How many items the current spec actually produces (a path array drops the
+    // items that would fall off the end of an open path).
+    int arrayItemCount() const;
+    // Length of the picked path, and the distance actually stepped between items
+    // along it — so the ribbon can show what "Divide" derives. Both 0 unless a path
+    // array has its path.
+    double arrayPathLength() const;
+    double arrayItemStep() const;
+    ArrayKind lastArrayKind() const { return lastArrayKind_; } // default for the next Array click
+
     // Advanced modify (selection-based actions invoked from the UI).
-    void arraySelected(int rows, int cols, double dx, double dy);
     void explodeSelected();    // break compound objects into their drawn primitives
     void purgeUnused();        // AutoCAD PURGE: drop empty layers + stray/degenerate objects
     // Add a coupled numbered circle to balloon `id`'s batch, on the side OPPOSITE its
@@ -308,6 +389,35 @@ public:
     // wireGapCustom().
     QString& wireGapRule() { return wireGapRule_; }
     double& wireGapCustom() { return wireGapCustom_; }
+    // The same pitch rule applied while ROUTING: a wire being drawn keeps one PITCH of
+    // clearance from the wire runs already on the drawing, so parallel runs can never
+    // land on top of each other. Applies to a single wire too, not just a fan-out.
+    bool& wireClearanceOn() { return wireClearanceOn_; }
+    // The clearance actually used, decided by the Pitch rule: the pitch of the connector
+    // the run was started from ("Connector pitch"), or wireGapCustom() ("Custom").
+    double routingClearance() const;
+    // Marking defaults stamped onto newly drawn wires (Wire ribbon "Marking" group):
+    // whether the colour and the cross-section are written along the wire, whether the
+    // colour is the 2-letter code or the full name, how many times they repeat, and the
+    // text size. Each is independent of the others.
+    bool& wireShowColorName() { return wireShowColorName_; }
+    bool& wireShowGaugeName() { return wireShowGaugeName_; }
+    QString& wireColorNameMode() { return wireColorNameMode_; } // "code" | "full"
+    int& wireAnnotCountDefault() { return wireAnnotCount_; }
+    double& wireAnnotSize() { return wireAnnotSize_; }
+    // Apply the current marking defaults to the selected wire(s) too, so the ribbon acts
+    // on what is selected as well as on what is drawn next (as the other ribbon
+    // property controls do).
+    void applyWireMarkingToSelection();
+    // Push the next wire vertex `p` (coming from `prev`) out of any parallel run that is
+    // closer than the clearance, moving only across the run so an ortho route stays ortho.
+    Vec2 applyWireClearance(const Vec2& prev, const Vec2& p) const;
+    // The route one fanned wire follows when several pins are wired at once: the drafted
+    // route shifted sideways into its own lane (offset parallel, corners mitred) so the
+    // pin pitch is carried THROUGH every turn instead of every wire turning at the same
+    // point and overlapping after it. Shared by the live preview and the commit, so what
+    // is previewed is what gets placed.
+    static std::vector<Vec2> fanRoute(const std::vector<Vec2>& route, const Vec2& pinOffset);
     // Constrain wire drawing to horizontal/vertical (90°) segments only.
     bool& wireOrtho() { return wireOrtho_; }
     // Default marker sizes for newly placed splices / X (not-connected) terminations.
@@ -318,6 +428,13 @@ public:
     double& screenLeg() { return screenLeg_; }
     bool& screenShowS() { return screenShowS_; }
     double& screenSSize() { return screenSSize_; } // "S" label text size
+    // "Not Connected": marks the drain leg as deliberately unterminated, drawing an "X"
+    // at its end regardless of whether a wire happens to land there. Sticky default for
+    // the next shield placed (off by default), like screenShowS_.
+    bool& screenNotConnected() { return screenNotConnected_; }
+    // Half-size of that "X" (world units), for the NEXT shield placed. Per-shield the
+    // value lives in meta["ncSize"] and is editable from Properties.
+    double& screenNcSize() { return screenNcSize_; }
     // Large radius: locked (auto-fit to the caught wires) unless explicitly unlocked.
     bool& screenRyLocked() { return screenRyLocked_; }
     double& screenRy() { return screenRy_; }
@@ -358,6 +475,12 @@ public:
     // at the frozen end point regardless of where the click lands.
     void freezeScreenPreview();
     bool screenFrozen() const { return screenFrozen_; }
+    // Same for a twist: Tab mid-drag pins the crossing-line end so the ribbon twist
+    // parameters can be tuned. Unlike the shield, only ENTER places a frozen twist — a
+    // canvas click releases the freeze and goes back to placing the crossing line, so a
+    // stray click while editing the fields can never commit a twist by accident.
+    void freezeTwistPreview();
+    bool twistFrozen() const { return twistFrozen_; }
 
     // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
     // (bridge) and a plain cross. Armed until Esc.
@@ -372,13 +495,46 @@ public:
     void twistAlignTo(const Vec2& dest);
     bool awaitingTwistAlign() const { return awaitTwistAlign_; }
 
-    // Match properties (AutoCAD MATCHPROP): click a source object, then click similar
-    // objects to copy the source's style + technical properties (color, layer, weight,
-    // and geometry/font/meta) onto them. Armed until Esc; the first click captures the
-    // source, every later click applies to a compatible target under the cursor.
+    // Pull a whole selected wire bundle. During a wire run/knee drag, holding Shift moves
+    // every OTHER selected wire's matching run/knee by the held wire's TOTAL travel since
+    // the drag began — so a fan-out keeps its pitch and shape — and releasing Shift puts
+    // them all straight back where they started, leaving only the held wire moving. Both
+    // directions come out of the one absolute rule, so the release lands exactly.
+    // `shiftHeld` is passed in (read live at the call site) because Shift cannot START a
+    // grab — that is selection — so it only ever acts as a mid-drag modifier.
+    void pullSelectedWireBundle(bool shiftHeld);
+
+    // Match properties (AutoCAD MATCHPROP): the source object's style + technical
+    // properties (color, layer, weight, and geometry/font/meta) are painted onto every
+    // object clicked afterwards. Armed until Esc. Either order works: with ONE object
+    // already selected that becomes the source straight away, otherwise the first click
+    // captures it.
     void beginMatchProps();
     void matchPropsClick(const Vec2& p);
     bool awaitingMatchProps() const { return awaitMatchProps_; }
+    // The source object once captured (empty while still waiting for it).
+    const QString& matchSource() const { return matchSourceId_; }
+
+    // ---- Quick Select (AutoCAD QSELECT) ------------------------------------
+    // Build a selection from a property filter. Either order works, matching the way
+    // the other pick commands here behave: with objects already selected the host opens
+    // the dialog at once, otherwise Quick Select stays armed so objects can be picked
+    // on the canvas and Enter opens it. The sample object seeds which properties are
+    // offered and their starting values.
+    void beginQuickSelect();
+    bool awaitingQuickSelect() const { return awaitQuickSelect_; }
+    void cancelQuickSelect();
+    // Ask the host for the dialog now (Enter while armed, or a ready selection).
+    void openQuickSelect();
+    // Apply a filter and select what it matches. Returns how many objects ended up
+    // selected. `q.wholeDrawing` false filters the CURRENT selection instead.
+    int applyQuickSelect(const QuickSelectQuery& q);
+    // Every distinct value of `key` present in the drawing (for the value dropdown).
+    std::vector<QString> quickSelectValueChoices(const QString& key) const;
+    // The entity types actually present in the drawing, as type names.
+    std::vector<QString> presentEntityTypes() const;
+    // A copy of the entity with this id (for building the dialog), or nullopt.
+    std::optional<Entity> entityCopy(const QString& id) const;
 
     // Twist / Screen: click the button, then draw a crossing line across the wires to
     // select them. Twist adds a twisted-pair/bundle symbol of the given type ("cross"
@@ -451,6 +607,11 @@ public:
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
+    // Change ONE aspect of every selected connector's own spec. Used by the Properties
+    // panel so editing a field with several connectors selected changes just that field on
+    // each of them, instead of stamping the first connector's whole spec (and so its
+    // designator / part number / pin labels) onto all the others.
+    void editSelectedConnectorSpecs(const std::function<void(ConnectorSpec&)>& mut);
     // Set one pin's label on a connector (from the inline pin-label editor); a
     // non-empty font applies to the connector's pin font (the whole label set).
     void applyConnectorPinLabel(const QString& id, int pin, const QString& text,
@@ -471,6 +632,24 @@ public:
     void freezeConnectorPreview();
     bool connectorFrozen() const { return connectorFrozen_; }
 
+    // Draw a whole harness definition into the document in one undoable step (the Harness
+    // builder's Generate): the connectors, the routed wires, the shields, the twist symbols
+    // and the unconnected-pin markers. Wire ids are stamped here and the shield/twist
+    // "wires" references are re-pointed at them, so the placed annotations really do own
+    // the wires they cover. Returns how many objects were added; the result is left
+    // selected. `issuesOut`, if given, receives whatever the definition failed to validate.
+    int insertHarness(const HarnessDef& def, std::vector<HarnessIssue>* issuesOut = nullptr);
+
+    // ---- Harness placement ---------------------------------------------------
+    // Build the harness and hand it to the cursor instead of dropping it at its designed
+    // coordinates: the whole thing ghosts under the crosshair, a click places it, and Esc
+    // abandons it. The builder uses this so Generate becomes "now put it where you want it".
+    void beginHarnessPlacement(const HarnessDef& def);
+    bool harnessPlacing() const { return harnessPlacing_; }
+    void cancelHarnessPlacement();
+    // Drop the ghosted harness so the corner it is held by lands at `at`.
+    void placeHarnessAt(const Vec2& at);
+
     // Bill of materials row (connector or wire).
     struct BomRow {
         QString kind;     // "Connector" | "Wire"
@@ -486,6 +665,10 @@ public:
 
     // True while a region (rectangle or lasso) selection is being defined.
     bool hasSelectionBox() const { return regionMode_ != RegionMode::None; }
+
+    // The faint "where it came from" snapshot drawn during a move / joint drag: the
+    // dragged objects plus the wires attached to any dragged connector.
+    const std::vector<Entity>& dragGhost() const { return editGhost_; }
 
     // Overlay painting (after entities are drawn).
     void drawOverlay(QPainter& p, const ViewTransform& vt) const;
@@ -514,6 +697,17 @@ signals:
     void markerSizeChanged(); // splice/X default size changed (ribbon field re-syncs)
     void screenArmedChanged(); // screen placement armed/disarmed/frozen (ribbon group re-syncs)
     void twistArmChanged();    // twist type armed/cleared (ribbon shows crossed params when crossed)
+    // An array session started/ended, changed kind, or had its centre/path picked —
+    // the host opens, syncs or closes the contextual "Array Creation" tab.
+    void arrayChanged();
+    // Match-properties was armed or ended — the ribbon's Match button latches with it.
+    void matchPropsChanged();
+    // Quick Select wants its dialog, seeded from `sampleId` (empty = no sample: the
+    // filter starts on the general properties every object has).
+    void quickSelectRequested(const QString& sampleId);
+    // A harness placement finished: `placed` is true if it landed, false if Esc abandoned
+    // it. The Harness Builder hides itself while placing and comes back on this.
+    void harnessPlacementFinished(bool placed);
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
@@ -610,6 +804,20 @@ private:
     // re-snapped to the connector's new pin end so the harness stays wired.
     void scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, double sf);
     void handlePickModifyPress(const Vec2& p);
+    // Is `wireId` named in the "wires" list of any entity of that type (Screen/Twist)?
+    bool wireCoveredBy(const QString& wireId, EntityType type) const;
+    // Give a freshly generated harness its entity ids and re-point the shield/twist wire
+    // references at them (the generator names wires by their DEFINITION id).
+    void stampHarnessIds(std::vector<Entity>& ents, const HarnessDef& def);
+    // Array session helpers: the live placements for the current spec (empty while a
+    // pick is outstanding), the polar centre in force (the cursor until one is picked),
+    // and the click handler that takes the centre / path pick.
+    std::vector<ArrayPlacement> arrayPreview() const;
+    Vec2 arrayCenterInUse() const;
+    void handleArrayPress(const Vec2& p);
+    // Seed spacings / counts from the selection's size when a kind is armed, so the
+    // first preview is already sensible (AutoCAD-style clear-of-each-other defaults).
+    void seedArrayDefaults();
     // Apply the active corner modifier (Fillet radius or Chamfer distance) to vertex
     // `knee` of `e`; `corner` is the three-point corner and `gap` the double-line gap
     // (0 if single). Writes cornerRadii/cornerChamfers and clears the other on that knee.
@@ -633,8 +841,17 @@ private:
     void shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const;
     // If p sits on a connector pin end, fill pinEndsOut with that connector's ordered pin
     // ends and anchorOut with the index of the matched pin; returns true.
-    bool connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const;
+    // `pitchOut`, when given, receives that connector's pin pitch — the routing clearance
+    // for a run pulled off it.
+    bool connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut,
+                         double* pitchOut = nullptr) const;
     void rebuildWireFanOffsets(); // wireFanSel_ -> wireArrayOffsets_ (relative to the anchor pin)
+    // A wire drawn from (or onto) the FREE end of an existing wire CONTINUES that wire: the
+    // drafted run is appended to it so the result is one whole wire, keeping the original's
+    // number, colour and gauge — it is the same conductor carried further, not a second one.
+    // An end sitting on a connector pin or a splice is a real termination and is never
+    // joined onto. Returns true if the run was absorbed (so nothing new is created).
+    bool extendExistingWire(const std::vector<Vec2>& pts);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
@@ -654,6 +871,9 @@ private:
     // each referenced wire's own extent and interpolated along it. Shared by the twist's
     // constrained move grip and Twist Align.
     void repositionTwistAtX(Entity& twist, double x);
+    // Settle a large-radius grip drag: adopt the newly enclosed wire set, or restore the
+    // pre-drag shield from editGhost_ when the drag reached no different set of wires.
+    void commitShieldResize(const QString& id);
     // For the connector placement preview: if any feature of the ghost (a body corner
     // or a pin end) at `rawAnchor` lands within snap tolerance of an existing schematic
     // point (another connector's corner/pin end, a wire end, splice, or X marker),
@@ -776,6 +996,21 @@ private:
     std::vector<Vec2> offsetDistPts_;     // the 2-click distance definition, transient
     QString offsetSourceId_;              // object picked to offset (empty = awaiting pick)
 
+    // Array session state (ARRAYRECT / ARRAYPOLAR / ARRAYPATH). arraySrc_ is the
+    // snapshot of the selected objects being arrayed; arrayBase_ their bounding-box
+    // centre (the base point every placement is measured from). While the session is
+    // live nothing is written to the document — the items are ghost-previewed only.
+    bool arrayActive_ = false;
+    ArraySpec arraySpec_;
+    ArrayKind lastArrayKind_ = ArrayKind::Rect; // kind the Array button repeats
+    std::vector<Entity> arraySrc_;
+    std::vector<QString> arraySrcIds_;
+    Vec2 arrayBase_{0.0, 0.0};
+    bool arrayHasCenter_ = false;   // polar: a centre has been clicked (else the cursor)
+    QString arrayPathId_;           // path: the picked object (empty = awaiting the pick)
+    std::vector<Vec2> arrayPathPts_;// its drawn centreline
+    bool arrayPathClosed_ = false;
+
     // Pick-modify state (trim/extend/fillet/chamfer).
     std::vector<QString> pickIds_;
     std::vector<Vec2> pickPts_;
@@ -801,6 +1036,16 @@ private:
     QString wireResUnit_ = QStringLiteral("m");
     QString wireGapRule_ = QStringLiteral("pitch"); // "pitch" | "custom"
     double wireGapCustom_ = 15.0;
+    bool wireClearanceOn_ = true;  // hold a clearance from neighbouring wires while routing
+    // Pitch of the connector the run being drawn started from (0 = it didn't start on
+    // one). The Pitch rule's "Connector pitch" clearance comes from this, so a run pulled
+    // off a connector keeps exactly one pin pitch from its neighbours.
+    double wireRoutePitch_ = 0.0;
+    bool wireShowColorName_ = false; // write the colour along new wires
+    bool wireShowGaugeName_ = false; // write the cross-section along new wires
+    QString wireColorNameMode_ = QStringLiteral("code"); // "code" (WH) | "full" (White)
+    int wireAnnotCount_ = 1;         // how many times the marking repeats along the wire
+    double wireAnnotSize_ = 3.5;     // marking text height (world units)
     bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
     // Wiring from a connector pin: the same route can fan out to several pins at once.
     // Shift at the first click fans to the last pin; pressing a number key sets the count.
@@ -816,6 +1061,8 @@ private:
     double screenRx_ = 10.0;      // screen ellipse small radius (default 10)
     double screenLeg_ = 15.0;     // screen drain-leg length (default 15mm)
     bool screenShowS_ = false;    // draw the "S" shield label (off by default)
+    bool screenNotConnected_ = false; // "X" the drain leg's end (off by default)
+    double screenNcSize_ = 3.0;       // that "X"'s half-size (world units)
     double screenSSize_ = 4.0;    // "S" label text size (world units)
     bool screenRyLocked_ = true;  // large radius auto-fits the caught wires unless unlocked
     double screenRy_ = 30.0;      // large radius when unlocked (default 30)
@@ -835,6 +1082,8 @@ private:
     bool awaitTwistRemove_ = false; // Remove-twist armed (click a twist sign to delete it)
     bool awaitMatchProps_ = false;  // Match-properties armed (first click = source, then targets)
     QString matchSourceId_;         // source object id once picked (empty until the first click)
+    int matchCount_ = 0;            // objects painted so far in this match session
+    bool awaitQuickSelect_ = false; // Quick Select armed: pick objects, Enter opens the dialog
     QString twistArmType_;          // non-empty while the Twist tool is armed (its type)
     QString lastTwistType_ = QStringLiteral("crossed"); // last chosen type (the default next time)
     double twistDiagAngle_ = 15.0;  // Type 1 (crossed): diagonal angle (deg from perpendicular)
@@ -843,6 +1092,8 @@ private:
     double twistFlatLen_ = 6.0;     // Type 2: horizontal flat length between crossings
     int twistAmount_ = 1;           // twists placed per crossing-line drag (side by side)
     bool screenArm_ = false;        // Screen tool armed (draw a crossing line to enclose wires)
+    bool twistFrozen_ = false;      // Tab while placing a twist: preview end pinned, edit fields
+    Vec2 twistFrozenEnd_;
     bool wireBandHasStart_ = false; // first click of the twist/screen crossing line taken
     Vec2 wireBandStart_;
     double doubleLineGap_ = 10.0;
@@ -894,6 +1145,13 @@ private:
     // Cut originals stay visible until the paste lands; these ids are removed when
     // the contents are finally placed (so a cut object isn't gone mid-move).
     std::vector<QString> cutPending_;
+
+    // Harness placement: the generated harness ghosts under the cursor until a click drops
+    // it (Esc abandons it and hands control back to the builder). harnessBase_ is the point
+    // the ghost is held by, so the whole harness moves as one rigid piece.
+    bool harnessPlacing_ = false;
+    std::vector<Entity> harnessGhost_;
+    Vec2 harnessBase_{0.0, 0.0};
 };
 
 } // namespace Edraw_Desktop

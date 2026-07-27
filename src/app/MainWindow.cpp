@@ -1,5 +1,7 @@
 #include "app/MainWindow.h"
 
+#include "app/HarnessBuilderDialog.h"
+
 #include "app/Editor.h"
 #include "app/FontLibrary.h"
 #include "harness/Harness.h"
@@ -328,6 +330,33 @@ QIcon makeOpIcon(const QString& op, const QColor& ink = QColor("#d6dae1")) {
         for (int r = 0; r < 2; ++r)
             for (int c = 0; c < 3; ++c)
                 p.drawRect(4 + c * 6, 6 + r * 7, 4, 4);
+    } else if (op == QLatin1String("arraypolar")) {
+        // Small squares ringed around a centre mark (polar array).
+        p.drawLine(10, 12, 14, 12);
+        p.drawLine(12, 10, 12, 14);
+        for (int k = 0; k < 6; ++k) {
+            const double an = k * M_PI / 3.0;
+            p.drawRect(QRectF(12 + 8 * std::cos(an) - 2.0, 12 + 8 * std::sin(an) - 2.0, 4, 4));
+        }
+    } else if (op == QLatin1String("arraypath")) {
+        // Squares marching along a curve (path / tracking array).
+        QPainterPath curve;
+        curve.moveTo(3, 19);
+        curve.cubicTo(8, 3, 16, 21, 21, 5);
+        p.drawPath(curve);
+        for (double t : {0.08, 0.5, 0.92}) {
+            const QPointF at = curve.pointAtPercent(t);
+            p.drawRect(QRectF(at.x() - 2.0, at.y() - 2.0, 4, 4));
+        }
+    } else if (op == QLatin1String("qselect")) {
+        // A filter funnel with a cursor arrow: pick objects by their properties.
+        QPolygonF funnel({{4, 4}, {17, 4}, {12, 12}, {12, 19}, {9, 16}, {9, 12}});
+        p.drawPolygon(funnel);
+        p.drawLine(6, 8, 15, 8); // the sieve line across it
+        QPolygonF cur({{15, 13}, {15, 22}, {17, 20}, {19, 23}, {21, 22}, {19, 19}, {22, 19}});
+        p.setBrush(ink);
+        p.drawPolygon(cur);
+        p.setBrush(Qt::NoBrush);
     } else if (op == QLatin1String("explode")) {
         // Small central box with four diagonal arrows flying outward.
         p.drawRect(10, 10, 4, 4);
@@ -997,10 +1026,13 @@ private:
     QString title_;
 };
 
-// A dock that can auto-hide: when "pinned" it stays open; when unpinned it
-// collapses to a VerticalStrip whenever the cursor isn't over it, expanding on
-// hover and re-collapsing 500 ms after the cursor leaves. Only ONE side may be
-// pinned at a time across the whole app — pinning one auto-hides every other.
+// A dock that can auto-hide. Pinning is per SIDE, not per panel: every panel docked
+// on the same side (the left column, the right column, ...) pins, folds and expands
+// as one unit, and the left and right sides are completely independent of each other.
+// A side that is unpinned folds away AT ONCE and completely, leaving only a
+// VerticalStrip per panel; hovering a strip brings the whole side back until the
+// cursor leaves. The side groups are worked out from where the panels actually are, so
+// dragging a panel from one side to the other re-forms both groups.
 class AutoHideDock : public QDockWidget {
 public:
     AutoHideDock(const QString& title, QMainWindow* mw)
@@ -1017,6 +1049,13 @@ public:
             if (!pinned_)
                 for (auto* d : group()) d->collapse();
         });
+        // Landing on a different side means joining that side's group: the panel takes
+        // on that side's pin state, and the single pin moves to whichever panel is now
+        // on top. Both sides are re-checked because one of them just lost a member.
+        QObject::connect(this, &QDockWidget::dockLocationChanged, this,
+                         [this](Qt::DockWidgetArea) { adoptArea(); });
+        QObject::connect(this, &QDockWidget::topLevelChanged, this,
+                         [this](bool) { adoptArea(); });
     }
 
     // Provide the custom title bar + the real content widget.
@@ -1026,7 +1065,7 @@ public:
         strip_ = new VerticalStrip(title_, this);
         // Hovering any strip on this side expands the whole side group.
         strip_->onEnter = [this] {
-            if (pinned_) return;
+            if (pinned_ || awaitExit_) return;
             for (auto* d : group()) d->expandIfCollapsed();
         };
         strip_->hide();
@@ -1036,82 +1075,212 @@ public:
         setWidget(content_);
     }
 
-    // Register the title bar's pin button so the group can keep them in sync.
+    // Register the title bar's pin button, so the side can keep it in sync and show
+    // it on the top panel only.
     void setPinButton(QToolButton* b) { pinBtn_ = b; }
-    // The docks pinned/auto-hidden together as one side (left or right).
-    void setGroup(const QVector<AutoHideDock*>& peers) { peers_ = peers; }
 
-    QMainWindow* mainWin() const { return mw_; }
+    // Where a drag would land. The test is deliberately generous: ANY overlap between
+    // the dragged panel's own rectangle and a docked panel — or the edge band of a
+    // side — attaches it there, so the panel never has to be dropped precisely. When
+    // it touches more than one target the largest overlap wins.
+    struct DropTarget {
+        Qt::DockWidgetArea area = Qt::NoDockWidgetArea;
+        QDockWidget* onto = nullptr; // existing panel to stack with (null = the bare side)
+        bool above = false;          // stack above `onto`, else below it
+        QRect indicator;             // where it lands, in global coordinates
+    };
+    DropTarget dropTarget() const {
+        DropTarget best;
+        if (!mw_) return best;
+        const QRect panel(mapToGlobal(QPoint(0, 0)), size());
+        const QRect win(mw_->mapToGlobal(QPoint(0, 0)), mw_->size());
+        if (!panel.intersects(win)) return best; // clear of the window: stay floating
+        int bestOverlap = 0;
+        auto consider = [&](const QRect& target, Qt::DockWidgetArea area, QDockWidget* onto) {
+            const QRect hit = target.intersected(panel);
+            const int overlap = hit.width() * hit.height();
+            if (overlap <= bestOverlap) return;
+            bestOverlap = overlap;
+            best.area = area;
+            best.onto = onto;
+            best.above = onto && panel.center().y() < target.center().y();
+            best.indicator = target;
+        };
 
-    // Re-dock to the area nearest the given global point, or stay floating.
-    void redockNear(const QPoint& global) {
-        if (!mw_) return;
-
-        // 1) Dropped onto an existing docked panel: snap into that column and push
-        //    the existing panel down (drop on the top half -> above it; bottom half
-        //    -> below it).
+        // 1) Touching a docked panel stacks into its column (above it if the dragged
+        //    panel sits higher, else below).
         for (QDockWidget* d : mw_->findChildren<QDockWidget*>()) {
             if (d == this || d->isFloating() || !d->isVisible()) continue;
-            const QRect g(d->mapToGlobal(QPoint(0, 0)), d->size());
-            if (!g.contains(global)) continue;
             const Qt::DockWidgetArea da = mw_->dockWidgetArea(d);
             if (da == Qt::NoDockWidgetArea) continue;
-            const bool dropTopHalf = global.y() < g.center().y();
-            setFloating(false);
-            mw_->addDockWidget(da, this);
-            // splitDockWidget(first, second, Vertical): first on top, second below.
-            if (dropTopHalf)
-                mw_->splitDockWidget(this, d, Qt::Vertical);  // new panel on top
-            else
-                mw_->splitDockWidget(d, this, Qt::Vertical);  // new panel below
-            return;
+            consider(QRect(d->mapToGlobal(QPoint(0, 0)), d->size()), da, d);
         }
+        if (bestOverlap > 0) return best;
 
-        // 2) Otherwise snap to the nearest main-window edge, or stay floating.
-        const QRect area(mw_->mapToGlobal(QPoint(0, 0)), mw_->size());
-        constexpr int kEdge = 70; // snap margin near a main-window edge
-        if (!area.adjusted(-30, -30, 30, 30).contains(global)) return; // keep floating
-        Qt::DockWidgetArea dwa = Qt::NoDockWidgetArea;
-        const int dl = global.x() - area.left(), dr = area.right() - global.x();
-        const int dt = global.y() - area.top(), db = area.bottom() - global.y();
-        const int m = std::min(std::min(dl, dr), std::min(dt, db));
-        if (m > kEdge) return; // dropped in the middle -> leave floating
-        if (m == dl) dwa = Qt::LeftDockWidgetArea;
-        else if (m == dr) dwa = Qt::RightDockWidgetArea;
-        else if (m == dt) dwa = Qt::TopDockWidgetArea;
-        else dwa = Qt::BottomDockWidgetArea;
-        setFloating(false);
-        mw_->addDockWidget(dwa, this);
+        // 2) Otherwise the edge band of whichever side it is touching. The bands are
+        //    wide enough that nudging the panel toward a side is enough to catch it.
+        const int bandW = std::max(90, win.width() / 6);
+        const int bandH = std::max(70, win.height() / 6);
+        consider(QRect(win.left(), win.top(), bandW, win.height()), Qt::LeftDockWidgetArea, nullptr);
+        consider(QRect(win.right() - bandW, win.top(), bandW, win.height()),
+                 Qt::RightDockWidgetArea, nullptr);
+        consider(QRect(win.left(), win.top(), win.width(), bandH), Qt::TopDockWidgetArea, nullptr);
+        consider(QRect(win.left(), win.bottom() - bandH, win.width(), bandH),
+                 Qt::BottomDockWidgetArea, nullptr);
+        return best;
     }
 
-    bool pinned() const { return pinned_; }
+    // Attach the panel wherever it is currently touching (nothing = stay floating).
+    void redockHere() {
+        if (!mw_) return;
+        hideDropHint();
+        const DropTarget t = dropTarget();
+        if (t.area == Qt::NoDockWidgetArea) return;
+        setFloating(false);
+        mw_->addDockWidget(t.area, this);
+        // splitDockWidget(first, second, Vertical): first on top, second below.
+        if (t.onto) {
+            if (t.above) mw_->splitDockWidget(this, t.onto, Qt::Vertical);
+            else mw_->splitDockWidget(t.onto, this, Qt::Vertical);
+        }
+    }
 
-    // Toggling the pin on one panel pins/unpins the whole side group. Only one
-    // side stays pinned at a time: pinning this side auto-hides every other.
+    // Translucent highlight of where the drag will land, so it is obvious that the
+    // panel is already touching a side and will jump there when released.
+    void showDropHint() {
+        if (!mw_) return;
+        const DropTarget t = dropTarget();
+        if (t.area == Qt::NoDockWidgetArea) { hideDropHint(); return; }
+        if (!hint_) {
+            hint_ = new QWidget(mw_);
+            hint_->setAttribute(Qt::WA_TransparentForMouseEvents);
+            hint_->setStyleSheet(QStringLiteral(
+                "background:rgba(90,150,230,60);border:2px solid #7fb2ff;"));
+        }
+        hint_->setGeometry(
+            QRect(mw_->mapFromGlobal(t.indicator.topLeft()), t.indicator.size()));
+        hint_->show();
+        hint_->raise();
+    }
+    void hideDropHint() {
+        if (hint_) hint_->hide();
+    }
+
+    // Pin / unpin THIS SIDE. The other sides are left exactly as they are — the left
+    // and right columns are independent.
     void setPinned(bool v) {
-        if (v)
-            for (auto* d : allDocks_)
-                if (d && !group().contains(d) && d->pinned_) d->setPinned(false);
+        areaPinned_[areaKey()] = v;
         for (auto* d : group()) {
             d->applyPinned(v);
-            if (d->pinBtn_ && d->pinBtn_->isChecked() != v) {
-                QSignalBlocker block(d->pinBtn_);
-                d->pinBtn_->setChecked(v);
-                d->pinBtn_->setIcon(makePinIcon(v));
-            }
+            d->syncPinButton(v);
         }
+        refreshPinButtons();
     }
 
     void expandIfCollapsed() { if (collapsed_) expand(); }
 
-private:
-    QVector<AutoHideDock*> group() {
-        return peers_.isEmpty() ? QVector<AutoHideDock*>{this} : peers_;
+    // One pin per side, on the panel at the top of it: a side made of several panels
+    // (Properties + Layers, say) is pinned as a whole, so it needs a single control.
+    // Floating palettes keep their own.
+    static void refreshPinButtons() {
+        QHash<int, AutoHideDock*> topOfSide;
+        for (AutoHideDock* d : allDocks_) {
+            if (!d || !d->pinBtn_) continue;
+            if (d->isFloating() || !d->isVisible()) {
+                d->pinBtn_->setVisible(true);
+                continue;
+            }
+            const int key = d->areaKey();
+            if (key == static_cast<int>(Qt::NoDockWidgetArea)) {
+                d->pinBtn_->setVisible(true);
+                continue;
+            }
+            AutoHideDock* cur = topOfSide.value(key, nullptr);
+            if (!cur) {
+                topOfSide.insert(key, d);
+                continue;
+            }
+            // "Top" is up the column on the left/right sides, leftmost across the
+            // top/bottom ones.
+            const bool vertical = key == static_cast<int>(Qt::LeftDockWidgetArea) ||
+                                  key == static_cast<int>(Qt::RightDockWidgetArea);
+            const QPoint a = d->mapToGlobal(QPoint(0, 0));
+            const QPoint b = cur->mapToGlobal(QPoint(0, 0));
+            if (vertical ? a.y() < b.y() : a.x() < b.x()) topOfSide.insert(key, d);
+        }
+        for (AutoHideDock* d : allDocks_) {
+            if (!d || !d->pinBtn_ || d->isFloating() || !d->isVisible()) continue;
+            const int key = d->areaKey();
+            if (key == static_cast<int>(Qt::NoDockWidgetArea)) continue;
+            d->pinBtn_->setVisible(topOfSide.value(key, nullptr) == d);
+        }
     }
+
+private:
+    int areaKey() {
+        if (!mw_ || isFloating()) return static_cast<int>(Qt::NoDockWidgetArea);
+        return static_cast<int>(mw_->dockWidgetArea(this));
+    }
+    // Sides start out pinned; the state is remembered per side, so a panel dragged
+    // onto a folded side folds with it.
+    static bool areaPinnedState(int key) { return areaPinned_.value(key, true); }
+
+    // Every panel currently docked on the same side as this one — the unit that pins,
+    // folds and expands together. Derived from the live layout rather than fixed at
+    // start-up, so moving a panel between sides re-forms the groups.
+    QVector<AutoHideDock*> group() {
+        QVector<AutoHideDock*> out;
+        const int key = areaKey();
+        if (key != static_cast<int>(Qt::NoDockWidgetArea))
+            for (AutoHideDock* d : allDocks_)
+                if (d && !d->isFloating() && d->isVisible() && d->areaKey() == key)
+                    out.push_back(d);
+        if (out.isEmpty()) out.push_back(this);
+        return out;
+    }
+
+    void syncPinButton(bool v) {
+        if (!pinBtn_ || pinBtn_->isChecked() == v) return;
+        QSignalBlocker block(pinBtn_);
+        pinBtn_->setChecked(v);
+        pinBtn_->setIcon(makePinIcon(v));
+    }
+
+    // Joining a side (or being torn off it): adopt that side's pin state.
+    void adoptArea() {
+        if (!titleBar_ || !strip_) return; // still being built
+        if (isFloating()) {
+            pinned_ = true; // a floating palette is always shown in full
+            poll_->stop();
+            resizeTimer_->stop();
+            awaitExit_ = false;
+            syncPinButton(true);
+        } else {
+            const bool v = areaPinnedState(areaKey());
+            applyPinned(v);
+            syncPinButton(v);
+        }
+        // The panel's place inside its new side is not settled yet, so decide which
+        // one carries the pin once the layout has caught up.
+        QTimer::singleShot(0, this, [] { refreshPinButtons(); });
+    }
+
     void applyPinned(bool v) {
         pinned_ = v;
-        if (pinned_) { poll_->stop(); expand(); }
-        else { poll_->start(); } // onPoll collapses once the cursor is away
+        resizeTimer_->stop();
+        if (pinned_) {
+            poll_->stop();
+            awaitExit_ = false;
+            expand();
+        } else {
+            // Unpinning folds the side away at once and completely — not whenever the
+            // cursor happens to wander off. The cursor is still on the panel (the pin
+            // button is part of it), so hover-expand is held back until it leaves once,
+            // otherwise the side would spring straight back open.
+            awaitExit_ = true;
+            collapse();
+            poll_->start();
+        }
     }
 
     bool horizontalArea() {
@@ -1137,7 +1306,17 @@ private:
             outside_.invalidate();
             return;
         }
-        if (groupInside()) {
+        const bool inside = groupInside();
+        // Straight after an unpin the cursor is still on the panel; wait for it to
+        // leave before hover-expand becomes live again.
+        if (awaitExit_) {
+            if (inside) {
+                outside_.invalidate();
+                return;
+            }
+            awaitExit_ = false;
+        }
+        if (inside) {
             outside_.invalidate();
             if (collapsed_) expand();
         } else if (!collapsed_) {
@@ -1149,7 +1328,7 @@ private:
     }
 
     void expand() {
-        if (!collapsed_) return;
+        if (!collapsed_ || !titleBar_) return;
         collapsed_ = false;
         suppressResize_ = true; // ignore the programmatic resize below
         setTitleBarWidget(titleBar_);
@@ -1165,7 +1344,7 @@ private:
     }
 
     void collapse() {
-        if (collapsed_ || isFloating()) return;
+        if (collapsed_ || isFloating() || !strip_) return;
         horizontalExtent_ = horizontalArea();
         expandedExtent_ = horizontalExtent_ ? width() : height();
         collapsed_ = true;
@@ -1208,16 +1387,19 @@ private:
     bool collapsed_ = false;
     bool horizontalExtent_ = true;
     bool suppressResize_ = false;      // ignore our own (programmatic) resizes
+    bool awaitExit_ = false;           // just unpinned: hold hover-expand until the cursor leaves
     int expandedExtent_ = 0;
-    QToolButton* pinBtn_ = nullptr;   // the title bar's pin toggle (for group sync)
-    QVector<AutoHideDock*> peers_;     // docks on the same side (pinned as a unit)
-    static QVector<AutoHideDock*> allDocks_; // every auto-hide dock (single-pin rule)
+    QToolButton* pinBtn_ = nullptr;    // the title bar's pin toggle (synced across the side)
+    QWidget* hint_ = nullptr;          // drop highlight shown while dragging
+    static QVector<AutoHideDock*> allDocks_;  // every auto-hide dock (to find side groups)
+    static QHash<int, bool> areaPinned_;      // Qt::DockWidgetArea -> pinned, per side
 
 public:
     ~AutoHideDock() override { allDocks_.removeAll(this); }
 };
 
 QVector<AutoHideDock*> AutoHideDock::allDocks_;
+QHash<int, bool> AutoHideDock::areaPinned_;
 
 // Custom panel title bar: a dots grip (the only drag handle), the title, a
 // pin/auto-hide toggle, and a close button.
@@ -1248,12 +1430,14 @@ public:
         pin->setAutoRaise(true);
         pin->setFocusPolicy(Qt::NoFocus);
         pin->setIcon(makePinIcon(true));
-        pin->setToolTip(QStringLiteral("Pin / auto-hide this side"));
+        pin->setToolTip(QStringLiteral(
+            "Pinned — click to fold this whole side away (this side only; the other side "
+            "keeps its own pin)"));
         dock->setPinButton(pin);
         QObject::connect(pin, &QToolButton::toggled, dock, [pin, dock](bool on) {
             pin->setIcon(makePinIcon(on));
-            pin->setToolTip(on ? QStringLiteral("Pinned — click to auto-hide this side")
-                               : QStringLiteral("Auto-hide — click to pin this side"));
+            pin->setToolTip(on ? QStringLiteral("Pinned — click to fold this whole side away")
+                               : QStringLiteral("Folded away — click to pin this side open"));
             dock->setPinned(on);
         });
         lay->addWidget(pin);
@@ -1291,6 +1475,8 @@ protected:
             // Keep the grip roughly under the cursor (fixed offset is predictable
             // across the dock->float transition).
             dock_->move(g - QPoint(14, 12));
+            // Highlight the side the panel is now touching — releasing lands it there.
+            dock_->showDropHint();
             e->accept();
             return;
         }
@@ -1301,8 +1487,9 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override {
         if (dragging_) {
             dragging_ = false;
-            if (dock_->isFloating())
-                dock_->redockNear(e->globalPosition().toPoint());
+            dock_->hideDropHint();
+            // Attach wherever the panel is touching — anywhere along a side will do.
+            if (dock_->isFloating()) dock_->redockHere();
         }
         e->accept();
     }
@@ -1388,6 +1575,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
     // Clicking a table cell opens the contextual "Table Cell" tab (row/col + align ops).
     connect(editor_, &Editor::cellSelectionChanged, this, [this] { updateTableCellContext(); });
+    // An array session opening/closing (or its centre/path landing) drives the
+    // contextual "Array Creation" tab and keeps its fields in step with the preview.
+    connect(editor_, &Editor::arrayChanged, this, [this] { updateArrayContext(); });
+    // Match properties latches its ribbon button(s) while it waits for clicks.
+    connect(editor_, &Editor::matchPropsChanged, this, [this] {
+        const bool armed = editor_->awaitingMatchProps();
+        for (QToolButton* b : matchBtns_) {
+            QSignalBlocker block(b);
+            b->setChecked(armed);
+        }
+    });
+    // Quick Select asks for its filter dialog once it has a sample object.
+    connect(editor_, &Editor::quickSelectRequested, this,
+            [this](const QString& sampleId) { showQuickSelectDialog(sampleId); });
     // Mirror line picked: offer Copy / Move / Cancel (AutoCAD "erase source? No/Yes").
     connect(editor_, &Editor::mirrorChoiceRequested, this, [this] {
         // Keys: C = Copy, M = Move, A = Cancel (underlined mnemonics); Esc cancels.
@@ -1727,7 +1928,17 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
 QWidget* MainWindow::operationsRow() {
     struct Op { const char* key; QString tip; std::function<void()> fn; };
     const QList<Op> ops = {
-        {"array", QStringLiteral("Array"), [this] { arrayDialog(); }},
+        {"array",
+         QStringLiteral("Array — rectangular, polar or path (use the arrow to choose the type)"),
+         [this] { beginArrayCommand(editor_->lastArrayKind()); }},
+        {"qselect",
+         QStringLiteral("Quick Select — build a selection from an object's properties.\n"
+                        "Either order works: select an object then click this, or click this, "
+                        "pick objects on the drawing and press Enter."),
+         [this] {
+             editor_->beginQuickSelect();
+             canvas_->setFocus(Qt::OtherFocusReason);
+         }},
         {"explode", QStringLiteral("Explode"), [this] { editor_->explodeSelected(); }},
         {"purge", QStringLiteral("Purge (remove empty layers / stray objects)"),
          [this] { editor_->purgeUnused(); }},
@@ -1749,6 +1960,30 @@ QWidget* MainWindow::operationsRow() {
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus);
         connect(b, &QToolButton::clicked, this, op.fn);
+        if (key == QLatin1String("array")) {
+            // AutoCAD-style flyout of the three array laws. The chosen one becomes the
+            // button's icon and what a plain click repeats — so the icon on the ribbon
+            // always says which array you get.
+            struct Kind { const char* icon; QString label; ArrayKind kind; };
+            const QList<Kind> kinds = {
+                {"array", QStringLiteral("Rectangular array (linear)"), ArrayKind::Rect},
+                {"arraypolar", QStringLiteral("Polar array"), ArrayKind::Polar},
+                {"arraypath", QStringLiteral("Path array (tracking)"), ArrayKind::Path},
+            };
+            auto* menu = new QMenu(b);
+            for (const Kind& k : kinds) {
+                const QString iconKey = QString::fromLatin1(k.icon);
+                menu->addAction(makeOpIcon(iconKey), k.label, this, [this, b, iconKey, k] {
+                    b->setIcon(makeOpIcon(iconKey));
+                    // Keep the theme re-tint table pointing at the icon now shown.
+                    for (auto& entry : opButtons_)
+                        if (entry.second == b) entry.first = iconKey;
+                    beginArrayCommand(k.kind);
+                });
+            }
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        }
         grid->addWidget(b, i / perRow, i % perRow);
         opButtons_.append({key, b});
         ++i;
@@ -1801,7 +2036,7 @@ void MainWindow::insertTableCommand() {
     statusBar()->showMessage(QStringLiteral("Insert Table — click the insertion point"));
 }
 
-QWidget* MainWindow::clipboardRow() {
+QWidget* MainWindow::clipboardRow(bool iconOnly) {
     auto* w = new QWidget(ribbon_);
     auto* lay = new QVBoxLayout(w);
     lay->setContentsMargins(0, 0, 0, 0);
@@ -1813,7 +2048,9 @@ QWidget* MainWindow::clipboardRow() {
     // from the menu makes the ribbon button become Cut (and vice-versa).
     auto* btn = new QToolButton(w);
     btn->setIconSize(QSize(28, 28));
-    btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    // Icon-only leans on the tooltip for the name (which is what the icon buttons beside
+    // it do); the fall-menu still spells both actions out.
+    btn->setToolButtonStyle(iconOnly ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
     btn->setAutoRaise(true);
     btn->setFocusPolicy(Qt::NoFocus);
     btn->setPopupMode(QToolButton::MenuButtonPopup); // click = current action; arrow = menu
@@ -1918,8 +2155,14 @@ void MainWindow::buildRibbon() {
             b->setMinimumWidth(66);
         }
         b->setToolTip(QStringLiteral(
-            "Match properties: click a source object, then click similar objects to copy "
-            "its geometry, color, font and technical properties onto them (Esc to end)"));
+            "Match properties — either order works:\n"
+            "  select an object, click this, then click the objects to paint, or\n"
+            "  click this, click the source object, then click the objects to paint.\n"
+            "Copies layer / colour / lineweight always, and geometry, font and technical "
+            "properties between objects of the same type (Esc to end)"));
+        // Latches while the command is armed, so it is clear it is waiting for clicks.
+        b->setCheckable(true);
+        matchBtns_.append(b);
         {
             QPixmap pm(28, 28);
             pm.fill(Qt::transparent);
@@ -1942,7 +2185,12 @@ void MainWindow::buildRibbon() {
             ip.end();
             b->setIcon(QIcon(pm));
         }
-        connect(b, &QToolButton::clicked, this, [this] {
+        connect(b, &QToolButton::clicked, this, [this, b] {
+            // Clicking it while armed ends the command (a toggle, like the pin buttons).
+            if (!b->isChecked()) {
+                editor_->setTool(ToolId::Select); // clears match mode + un-latches
+                return;
+            }
             editor_->beginMatchProps();
             canvas_->setFocus(Qt::OtherFocusReason);
         });
@@ -1973,7 +2221,8 @@ void MainWindow::buildRibbon() {
             if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
                 g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
             mh->addWidget(modRow);
-            mh->addWidget(clipboardRow());
+            // Icon only here, matching the tool icons it sits beside; the name is on hover.
+            mh->addWidget(clipboardRow(/*iconOnly=*/true));
             addGroup(lay, QStringLiteral("Modify"), modW);
         }
         addGroup(lay, QStringLiteral("Operations"), operationsRow());
@@ -2158,12 +2407,6 @@ void MainWindow::buildRibbon() {
         ribbon_->addTab(page, QStringLiteral("Annotation"));
     }
 
-    // ---- HARNESS BUILD ---- (intentionally empty tab; groups removed per request) ----
-    {
-        auto [page, lay] = makeTabPage();
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Harness build"));
-    }
 
     // ---- SCHEMATIC BUILD: placement tools; the "Connector build" groups live in a
     //      contextual tab that opens only when a connector is being placed / edited. ----
@@ -2637,8 +2880,100 @@ void MainWindow::buildRibbon() {
             lay->addWidget(rule);
             schemDrcRule_ = rule;
         }
+        // ---- The Harness Builder: describe the whole harness, then generate it. It lives
+        //      here, with the rest of the schematic-building tools, rather than on a tab of
+        //      its own. ----
+        {
+            auto* hbW = new QWidget(page);
+            auto* hbg = new QGridLayout(hbW);
+            hbg->setContentsMargins(0, 0, 0, 0);
+            hbg->setSpacing(2);
+            auto* hbBtn = new QToolButton(hbW);
+            hbBtn->setText(QStringLiteral("Schematic harness\nbuilder"));
+            hbBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            hbBtn->setIconSize(QSize(30, 30));
+            hbBtn->setMinimumWidth(112);
+            hbBtn->setAutoRaise(true);
+            hbBtn->setToolTip(QStringLiteral(
+                "Describe the whole harness - connectors, their order and side, the pinout, "
+                "every pin-to-pin wire, shields and twisted pairs - then generate the schematic"));
+            {
+                // A connector on each side joined by three wires: the harness-in-one-picture.
+                QPixmap pm(32, 32);
+                pm.fill(Qt::transparent);
+                QPainter ip(&pm);
+                ip.setRenderHint(QPainter::Antialiasing, true);
+                QPen pen(QColor("#8fb7ff"));
+                pen.setWidthF(1.7);
+                ip.setPen(pen);
+                ip.drawRect(3, 8, 6, 16);
+                ip.drawRect(23, 8, 6, 16);
+                ip.setPen(QPen(QColor("#7ee0a0"), 1.5));
+                for (int i = 0; i < 3; ++i) {
+                    const int y = 12 + i * 4;
+                    ip.drawLine(9, y, 23, y);
+                }
+                ip.end();
+                hbBtn->setIcon(QIcon(pm));
+            }
+            connect(hbBtn, &QToolButton::clicked, this, [this] { showHarnessBuilder(); });
+            hbg->addWidget(hbBtn, 0, 0);
+            addGroup(lay, QStringLiteral("Harness"), hbW);
+        }
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Schematic build"));
+    }
+
+    // ---- HARNESS MECHANICAL ---- the physical side of the harness: the bundle and its
+    //      branches drawn to shape, their lengths dimensioned, and the parts called out.
+    //      (The schematic side lives on Schematic build.) ----
+    {
+        auto [page, lay] = makeTabPage();
+        // Bundle + branches: a double polyline is the bundle body, a plain one a centreline,
+        // Offset walks a parallel edge out and Fillet rounds a branch off the trunk.
+        addGroup(lay, QStringLiteral("Bundle"),
+                 toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
+                          ToolId::Fillet}));
+        // Cut lengths and branch lengths.
+        addGroup(lay, QStringLiteral("Length"), toolRow({ToolId::Dimension, ToolId::Line}));
+        // Calling the parts out on the board.
+        addGroup(lay, QStringLiteral("Callouts"),
+                 toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note, ToolId::Table}));
+        {
+            // The parts behind the drawing: the same bill of materials the "bom" command opens.
+            auto* dataW = new QWidget(page);
+            auto* dg = new QGridLayout(dataW);
+            dg->setContentsMargins(0, 0, 0, 0);
+            dg->setSpacing(2);
+            auto* bomBtn = new QToolButton(dataW);
+            bomBtn->setText(QStringLiteral("Bill of\nmaterials"));
+            bomBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            bomBtn->setIconSize(QSize(26, 26));
+            bomBtn->setMinimumWidth(84);
+            bomBtn->setAutoRaise(true);
+            bomBtn->setFocusPolicy(Qt::NoFocus);
+            bomBtn->setToolTip(QStringLiteral(
+                "Every connector, wire and accessory in the drawing, counted"));
+            {
+                // A short parts list: a heading rule and three rows.
+                QPixmap pm(28, 28);
+                pm.fill(Qt::transparent);
+                QPainter ip(&pm);
+                ip.setRenderHint(QPainter::Antialiasing, true);
+                ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+                ip.drawRect(4, 4, 20, 20);
+                ip.drawLine(4, 10, 24, 10);
+                ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
+                for (int i = 0; i < 3; ++i) ip.drawLine(7, 14 + i * 4, 21, 14 + i * 4);
+                ip.end();
+                bomBtn->setIcon(QIcon(pm));
+            }
+            connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
+            dg->addWidget(bomBtn, 0, 0);
+            addGroup(lay, QStringLiteral("Data"), dataW);
+        }
+        lay->addStretch(1);
+        ribbon_->addTab(page, QStringLiteral("Harness mechanical"));
     }
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
@@ -2651,6 +2986,7 @@ void MainWindow::buildRibbon() {
     buildTableCellRibbonTab(); // built once, added only while a table cell is selected
     buildConnectorRibbonTab(); // built once, added only while placing/editing a connector
     buildWireRibbonTab();      // built once, added only while the Wire tool is active
+    buildArrayRibbonTab();     // built once, added only while an array is being laid out
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
 }
@@ -3288,6 +3624,487 @@ void MainWindow::showTableCellRibbon(bool on) {
     }
 }
 
+// The contextual "Array Creation" ribbon tab (AutoCAD-style): Type | Columns/Items |
+// Rows | Properties | Close. Built once and parented to the ribbon, inserted as a
+// visible tab only while an array session is live (showArrayRibbon). Groups carry the
+// kinds they belong to, so switching Type swaps the parameters in place.
+void MainWindow::buildArrayRibbonTab() {
+    arrayTab_ = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(arrayTab_);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+    arrayGroups_.clear();
+
+    // A group plus its separator rule, remembered with the kinds it applies to.
+    auto addGroup = [&](const QString& title, QWidget* content, bool rect, bool polar, bool path) {
+        auto* group = ribbonGroup(title, content);
+        lay->addWidget(group);
+        auto* rule = new QFrame(arrayTab_);
+        rule->setFrameShape(QFrame::VLine);
+        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        lay->addWidget(rule);
+        arrayGroups_.append({group, rule, rect, polar, path});
+    };
+    auto label = [&](QWidget* parent, const QString& t) {
+        auto* l = new QLabel(t, parent);
+        l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+        return l;
+    };
+    // Value fields commit on Enter / focus-out / arrows (not per keystroke), so a
+    // half-typed number never re-previews the array.
+    auto spin = [&](QWidget* parent, double lo, double hi, int dec) {
+        auto* s = new QDoubleSpinBox(parent);
+        s->setRange(lo, hi);
+        s->setDecimals(dec);
+        s->setKeyboardTracking(false);
+        s->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        s->setMinimumWidth(62);
+        return s;
+    };
+    auto countSpin = [&](QWidget* parent) {
+        auto* s = new QSpinBox(parent);
+        s->setRange(1, 1000);
+        s->setKeyboardTracking(false);
+        s->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+        s->setMinimumWidth(56);
+        return s;
+    };
+    auto bigButton = [&](QWidget* parent, const QString& text) {
+        auto* b = new QToolButton(parent);
+        b->setText(text);
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setIconSize(QSize(26, 26));
+        b->setMinimumWidth(64);
+        b->setAutoRaise(true);
+        return b;
+    };
+    // Every control edits editor_->arraySpec() then asks for a repaint. The guard stops
+    // syncArrayRibbon_ (which writes the widgets) from being taken for a user edit.
+    auto apply = [this](const std::function<void(ArraySpec&)>& fn) {
+        if (arraySyncing_ || !editor_->arrayActive()) return;
+        fn(editor_->arraySpec());
+        editor_->arrayParamsChanged();
+        if (syncArrayRibbon_) syncArrayRibbon_(); // derived fields (Total / Between) re-read
+    };
+
+    // ---- Type: the three array laws ----
+    auto* typeRect = static_cast<QToolButton*>(nullptr);
+    auto* typePolar = static_cast<QToolButton*>(nullptr);
+    auto* typePath = static_cast<QToolButton*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto typeBtn = [&](const QString& text, const QString& icon, const QString& tip,
+                           ArrayKind kind) {
+            auto* b = bigButton(w, text);
+            b->setIcon(makeOpIcon(icon));
+            b->setCheckable(true);
+            b->setToolTip(tip);
+            connect(b, &QToolButton::clicked, this, [this, kind] {
+                if (arraySyncing_) return;
+                editor_->setArrayKind(kind); // re-seeds that kind's defaults, re-previews
+                canvas_->setFocus(Qt::OtherFocusReason);
+            });
+            return b;
+        };
+        typeRect = typeBtn(QStringLiteral("Rect"), QStringLiteral("array"),
+                           QStringLiteral("Rectangular (linear) array: columns x rows"),
+                           ArrayKind::Rect);
+        typePolar = typeBtn(QStringLiteral("Polar"), QStringLiteral("arraypolar"),
+                            QStringLiteral("Polar array: items swept around a centre point"),
+                            ArrayKind::Polar);
+        typePath = typeBtn(QStringLiteral("Path"), QStringLiteral("arraypath"),
+                           QStringLiteral("Path array: items track along a picked object"),
+                           ArrayKind::Path);
+        g->addWidget(typeRect, 0, 0);
+        g->addWidget(typePolar, 0, 1);
+        g->addWidget(typePath, 0, 2);
+        addGroup(QStringLiteral("Type"), w, true, true, true);
+    }
+
+    // ---- Columns (rectangular): count + spacing, with the derived total ----
+    auto* colCount = static_cast<QSpinBox*>(nullptr);
+    auto* colBetween = static_cast<QDoubleSpinBox*>(nullptr);
+    auto* colTotal = static_cast<QDoubleSpinBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        colCount = countSpin(w);
+        colCount->setToolTip(QStringLiteral("Number of columns"));
+        colBetween = spin(w, -1e6, 1e6, 2);
+        colBetween->setToolTip(QStringLiteral("Distance between columns (negative goes left)"));
+        colTotal = spin(w, -1e6, 1e6, 2);
+        colTotal->setToolTip(QStringLiteral("Distance from the first to the last column"));
+        connect(colCount, &QSpinBox::valueChanged, this,
+                [apply](int v) { apply([v](ArraySpec& s) { s.count = v; }); });
+        connect(colBetween, &QDoubleSpinBox::valueChanged, this,
+                [apply](double v) { apply([v](ArraySpec& s) { s.colSpacing = v; }); });
+        // Total spans first-to-last, so it divides by the gaps, not the items.
+        connect(colTotal, &QDoubleSpinBox::valueChanged, this, [apply](double v) {
+            apply([v](ArraySpec& s) {
+                if (s.count > 1) s.colSpacing = v / (s.count - 1);
+            });
+        });
+        g->addWidget(label(w, QStringLiteral("Columns")), 0, 0);
+        g->addWidget(colCount, 0, 1);
+        g->addWidget(label(w, QStringLiteral("Between")), 1, 0);
+        g->addWidget(colBetween, 1, 1);
+        g->addWidget(label(w, QStringLiteral("Total")), 2, 0);
+        g->addWidget(colTotal, 2, 1);
+        addGroup(QStringLiteral("Columns"), w, true, false, false);
+    }
+
+    // ---- Items (polar): count + angles ----
+    auto* polCount = static_cast<QSpinBox*>(nullptr);
+    auto* polBetween = static_cast<QDoubleSpinBox*>(nullptr);
+    auto* polFill = static_cast<QDoubleSpinBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        polCount = countSpin(w);
+        polCount->setToolTip(QStringLiteral("Number of items around the centre"));
+        polBetween = spin(w, -360.0, 360.0, 2);
+        polBetween->setToolTip(QStringLiteral("Angle between two neighbouring items"));
+        polFill = spin(w, -360.0, 360.0, 2);
+        polFill->setToolTip(QStringLiteral("Total angle the items are swept through "
+                                           "(360 = all the way round)"));
+        connect(polCount, &QSpinBox::valueChanged, this,
+                [apply](int v) { apply([v](ArraySpec& s) { s.count = v; }); });
+        // Typing an angle BETWEEN items sets the fill angle that produces it. A full
+        // circle divides by the item count (no item doubled at 0/360) and a partial
+        // sweep spans it end to end, so the fill needed differs — and past 360 the
+        // sweep simply saturates at a full circle.
+        connect(polBetween, &QDoubleSpinBox::valueChanged, this, [apply](double v) {
+            apply([v](ArraySpec& s) {
+                const double span = v * std::max(0, s.count - 1);
+                s.fillAngle = (std::abs(span) >= 360.0) ? (span < 0 ? -360.0 : 360.0) : span;
+            });
+        });
+        connect(polFill, &QDoubleSpinBox::valueChanged, this,
+                [apply](double v) { apply([v](ArraySpec& s) { s.fillAngle = v; }); });
+        g->addWidget(label(w, QStringLiteral("Items")), 0, 0);
+        g->addWidget(polCount, 0, 1);
+        g->addWidget(label(w, QStringLiteral("Between°")), 1, 0);
+        g->addWidget(polBetween, 1, 1);
+        g->addWidget(label(w, QStringLiteral("Fill°")), 2, 0);
+        g->addWidget(polFill, 2, 1);
+        addGroup(QStringLiteral("Items"), w, false, true, false);
+    }
+
+    // ---- Items (path): method + count + spacing ----
+    auto* pathMethod = static_cast<QComboBox*>(nullptr);
+    auto* pathCount = static_cast<QSpinBox*>(nullptr);
+    auto* pathBetween = static_cast<QDoubleSpinBox*>(nullptr);
+    auto* pathTotal = static_cast<QDoubleSpinBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        pathMethod = new QComboBox(w);
+        pathMethod->addItems({QStringLiteral("Divide"), QStringLiteral("Measure")});
+        pathMethod->setMinimumWidth(78);
+        pathMethod->setToolTip(QStringLiteral(
+            "Divide: spread the items evenly over the whole path.\n"
+            "Measure: step along the path by a fixed distance."));
+        pathCount = countSpin(w);
+        pathCount->setToolTip(QStringLiteral("Number of items along the path"));
+        pathBetween = spin(w, -1e6, 1e6, 2);
+        pathBetween->setToolTip(QStringLiteral("Distance along the path between two items. In "
+                                              "Divide mode this shows what the path length "
+                                              "gives; typing a value switches to Measure."));
+        pathTotal = spin(w, -1e6, 1e6, 2);
+        pathTotal->setToolTip(QStringLiteral("Distance along the path from the first to the "
+                                             "last item"));
+        connect(pathMethod, &QComboBox::currentIndexChanged, this, [apply](int idx) {
+            apply([idx](ArraySpec& s) { s.divide = (idx == 0); });
+        });
+        connect(pathCount, &QSpinBox::valueChanged, this,
+                [apply](int v) { apply([v](ArraySpec& s) { s.count = v; }); });
+        // Setting a distance is the Measure method by definition, so it switches over.
+        connect(pathBetween, &QDoubleSpinBox::valueChanged, this, [apply](double v) {
+            apply([v](ArraySpec& s) {
+                s.pathSpacing = v;
+                s.divide = false;
+            });
+        });
+        connect(pathTotal, &QDoubleSpinBox::valueChanged, this, [apply](double v) {
+            apply([v](ArraySpec& s) {
+                if (s.count > 1) {
+                    s.pathSpacing = v / (s.count - 1);
+                    s.divide = false;
+                }
+            });
+        });
+        g->addWidget(label(w, QStringLiteral("Method")), 0, 0);
+        g->addWidget(pathMethod, 0, 1);
+        g->addWidget(label(w, QStringLiteral("Items")), 1, 0);
+        g->addWidget(pathCount, 1, 1);
+        g->addWidget(label(w, QStringLiteral("Between")), 2, 0);
+        g->addWidget(pathBetween, 2, 1);
+        g->addWidget(label(w, QStringLiteral("Total")), 3, 0);
+        g->addWidget(pathTotal, 3, 1);
+        addGroup(QStringLiteral("Items"), w, false, false, true);
+    }
+
+    // ---- Rows: shared by all three kinds (rectangular grid rows, polar rings,
+    //      rows running alongside a path) ----
+    auto* rowCount = static_cast<QSpinBox*>(nullptr);
+    auto* rowBetween = static_cast<QDoubleSpinBox*>(nullptr);
+    auto* rowTotal = static_cast<QDoubleSpinBox*>(nullptr);
+    auto* rowLabel = static_cast<QLabel*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        rowCount = countSpin(w);
+        rowCount->setToolTip(QStringLiteral("Number of rows"));
+        rowBetween = spin(w, -1e6, 1e6, 2);
+        rowTotal = spin(w, -1e6, 1e6, 2);
+        rowTotal->setToolTip(QStringLiteral("Distance from the first to the last row"));
+        connect(rowCount, &QSpinBox::valueChanged, this,
+                [apply](int v) { apply([v](ArraySpec& s) { s.rows = v; }); });
+        connect(rowBetween, &QDoubleSpinBox::valueChanged, this,
+                [apply](double v) { apply([v](ArraySpec& s) { s.rowSpacing = v; }); });
+        connect(rowTotal, &QDoubleSpinBox::valueChanged, this, [apply](double v) {
+            apply([v](ArraySpec& s) {
+                if (s.rows > 1) s.rowSpacing = v / (s.rows - 1);
+            });
+        });
+        rowLabel = label(w, QStringLiteral("Between"));
+        g->addWidget(label(w, QStringLiteral("Rows")), 0, 0);
+        g->addWidget(rowCount, 0, 1);
+        g->addWidget(rowLabel, 1, 0);
+        g->addWidget(rowBetween, 1, 1);
+        g->addWidget(label(w, QStringLiteral("Total")), 2, 0);
+        g->addWidget(rowTotal, 2, 1);
+        addGroup(QStringLiteral("Rows"), w, true, true, true);
+    }
+
+    // ---- Properties (rectangular): the angle both grid axes are turned by ----
+    auto* axisAngle = static_cast<QDoubleSpinBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        axisAngle = spin(w, -360.0, 360.0, 2);
+        axisAngle->setToolTip(QStringLiteral("Angle of the column axis (the row axis stays "
+                                             "perpendicular to it)"));
+        connect(axisAngle, &QDoubleSpinBox::valueChanged, this,
+                [apply](double v) { apply([v](ArraySpec& s) { s.axisAngle = v; }); });
+        g->addWidget(label(w, QStringLiteral("Axis°")), 0, 0);
+        g->addWidget(axisAngle, 0, 1);
+        addGroup(QStringLiteral("Properties"), w, true, false, false);
+    }
+
+    // ---- Properties (polar): rotate items + sweep direction ----
+    auto* rotateItems = static_cast<QCheckBox*>(nullptr);
+    auto* direction = static_cast<QComboBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        rotateItems = new QCheckBox(QStringLiteral("Rotate items"), w);
+        rotateItems->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+        rotateItems->setToolTip(QStringLiteral("On: each item turns with its place on the ring. "
+                                               "Off: every item keeps the original's angle."));
+        direction = new QComboBox(w);
+        direction->addItems({QStringLiteral("CCW"), QStringLiteral("CW")});
+        direction->setMinimumWidth(70);
+        direction->setToolTip(QStringLiteral("Direction the items are swept in"));
+        connect(rotateItems, &QCheckBox::toggled, this,
+                [apply](bool on) { apply([on](ArraySpec& s) { s.rotateItems = on; }); });
+        connect(direction, &QComboBox::currentIndexChanged, this, [apply](int idx) {
+            apply([idx](ArraySpec& s) { s.ccw = (idx == 0); });
+        });
+        g->addWidget(rotateItems, 0, 0, 1, 2);
+        g->addWidget(label(w, QStringLiteral("Direction")), 1, 0);
+        g->addWidget(direction, 1, 1);
+        addGroup(QStringLiteral("Properties"), w, false, true, false);
+    }
+
+    // ---- Properties (path): align to the tangent + where the run starts ----
+    auto* alignPath = static_cast<QCheckBox*>(nullptr);
+    auto* startOffset = static_cast<QDoubleSpinBox*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(3);
+        alignPath = new QCheckBox(QStringLiteral("Align items"), w);
+        alignPath->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+        alignPath->setToolTip(QStringLiteral("On: each item turns to follow the path. "
+                                             "Off: every item keeps the original's angle."));
+        startOffset = spin(w, -1e6, 1e6, 2);
+        startOffset->setToolTip(QStringLiteral("Distance along the path before the first item"));
+        connect(alignPath, &QCheckBox::toggled, this,
+                [apply](bool on) { apply([on](ArraySpec& s) { s.alignToPath = on; }); });
+        connect(startOffset, &QDoubleSpinBox::valueChanged, this,
+                [apply](double v) { apply([v](ArraySpec& s) { s.startOffset = v; }); });
+        g->addWidget(alignPath, 0, 0, 1, 2);
+        g->addWidget(label(w, QStringLiteral("Start at")), 1, 0);
+        g->addWidget(startOffset, 1, 1);
+        addGroup(QStringLiteral("Properties"), w, false, false, true);
+    }
+
+    // ---- Close: the item count, re-picking the centre/path, place or cancel ----
+    auto* itemsLabel = static_cast<QLabel*>(nullptr);
+    auto* repickBtn = static_cast<QToolButton*>(nullptr);
+    {
+        auto* w = new QWidget(arrayTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(2);
+        itemsLabel = label(w, QString());
+        repickBtn = bigButton(w, QStringLiteral("Pick\ncentre"));
+        repickBtn->setToolTip(QStringLiteral("Pick the reference again on the canvas"));
+        connect(repickBtn, &QToolButton::clicked, this, [this] {
+            editor_->arrayRepick();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        auto* placeBtn = bigButton(w, QStringLiteral("Close\narray"));
+        placeBtn->setToolTip(QStringLiteral("Place the array (same as pressing Enter)"));
+        connect(placeBtn, &QToolButton::clicked, this, [this] {
+            editor_->commitArray();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        auto* cancelBtn = bigButton(w, QStringLiteral("Cancel"));
+        cancelBtn->setToolTip(QStringLiteral("Discard the array (same as pressing Esc)"));
+        connect(cancelBtn, &QToolButton::clicked, this, [this] {
+            editor_->cancelArray();
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
+        g->addWidget(itemsLabel, 0, 0, 1, 3);
+        g->addWidget(repickBtn, 1, 0);
+        g->addWidget(placeBtn, 1, 1);
+        g->addWidget(cancelBtn, 1, 2);
+        addGroup(QStringLiteral("Close"), w, true, true, true);
+    }
+
+    // Reload every control from the live spec and show only the groups that belong to
+    // the current kind. Called whenever the session changes (kind switch, a pick
+    // landing, a value edit deriving another field).
+    syncArrayRibbon_ = [this, typeRect, typePolar, typePath, colCount, colBetween, colTotal,
+                        polCount, polBetween, polFill, pathMethod, pathCount, pathBetween,
+                        pathTotal, rowCount, rowBetween, rowTotal, rowLabel, axisAngle,
+                        rotateItems, direction, alignPath, startOffset, itemsLabel, repickBtn] {
+        if (!editor_->arrayActive()) return;
+        const ArraySpec& s = editor_->arraySpec();
+        arraySyncing_ = true;
+        for (const ArrayGroupVis& gv : arrayGroups_) {
+            const bool show = s.kind == ArrayKind::Rect    ? gv.rect
+                              : s.kind == ArrayKind::Polar ? gv.polar
+                                                           : gv.path;
+            if (gv.group) gv.group->setVisible(show);
+            if (gv.rule) gv.rule->setVisible(show);
+        }
+        typeRect->setChecked(s.kind == ArrayKind::Rect);
+        typePolar->setChecked(s.kind == ArrayKind::Polar);
+        typePath->setChecked(s.kind == ArrayKind::Path);
+
+        colCount->setValue(s.count);
+        colBetween->setValue(s.colSpacing);
+        colTotal->setValue(s.colSpacing * std::max(0, s.count - 1));
+
+        polCount->setValue(s.count);
+        // Between is derived: a full sweep divides by the item count, a partial one by
+        // the gaps between them — exactly how the items are laid out.
+        const bool fullCircle = std::abs(s.fillAngle) >= 360.0 - 1e-9;
+        const int divisor = fullCircle ? std::max(1, s.count) : std::max(1, s.count - 1);
+        polBetween->setValue(s.fillAngle / divisor);
+        polFill->setValue(s.fillAngle);
+
+        pathMethod->setCurrentIndex(s.divide ? 0 : 1);
+        pathCount->setValue(s.count);
+        // In Divide mode the spacing is derived from the path length — show the value
+        // actually being used, not the stored Measure spacing. Typing over it switches
+        // the method to Measure, so the fields stay live either way.
+        const double step = s.divide && editor_->arrayItemStep() > 0.0 ? editor_->arrayItemStep()
+                                                                      : s.pathSpacing;
+        pathBetween->setValue(step);
+        pathTotal->setValue(step * std::max(0, s.count - 1));
+
+        rowCount->setValue(s.rows);
+        rowBetween->setValue(s.rowSpacing);
+        rowTotal->setValue(s.rowSpacing * std::max(0, s.rows - 1));
+        // What "between rows" means depends on the kind.
+        rowLabel->setText(s.kind == ArrayKind::Polar ? QStringLiteral("Radial")
+                                                     : QStringLiteral("Between"));
+        rowBetween->setToolTip(s.kind == ArrayKind::Polar
+                                   ? QStringLiteral("Radial distance between rings")
+                                   : s.kind == ArrayKind::Path
+                                         ? QStringLiteral("Distance between rows, measured "
+                                                          "across the path")
+                                         : QStringLiteral("Distance between rows"));
+
+        axisAngle->setValue(s.axisAngle);
+        rotateItems->setChecked(s.rotateItems);
+        direction->setCurrentIndex(s.ccw ? 0 : 1);
+        alignPath->setChecked(s.alignToPath);
+        startOffset->setValue(s.startOffset);
+
+        // Live feedback on what will actually be placed, plus what is still needed.
+        if (editor_->arrayAwaitingPath())
+            itemsLabel->setText(QStringLiteral("Click the path on the drawing"));
+        else if (editor_->arrayAwaitingCenter())
+            itemsLabel->setText(QStringLiteral("Click the centre (%1 items)")
+                                    .arg(editor_->arrayItemCount()));
+        else
+            itemsLabel->setText(QStringLiteral("%1 items").arg(editor_->arrayItemCount()));
+        repickBtn->setText(s.kind == ArrayKind::Path ? QStringLiteral("Pick\npath")
+                                                     : QStringLiteral("Pick\ncentre"));
+        repickBtn->setEnabled(s.kind != ArrayKind::Rect); // nothing to pick for a grid
+        arraySyncing_ = false;
+    };
+
+    lay->addStretch(1);
+    arrayTab_->hide();
+}
+
+void MainWindow::updateArrayContext() {
+    if (editor_->arrayActive() && syncArrayRibbon_) syncArrayRibbon_();
+    showArrayRibbon(editor_->arrayActive());
+}
+
+void MainWindow::showArrayRibbon(bool on) {
+    if (!arrayTab_ || !ribbon_) return;
+    const int idx = ribbon_->indexOf(arrayTab_);
+    if (on) {
+        if (idx < 0) {
+            const int at = ribbon_->addTab(arrayTab_, QStringLiteral("Array Creation"));
+            ribbon_->setCurrentIndex(at);
+        } else {
+            ribbon_->setCurrentIndex(idx);
+        }
+        arrayTab_->show();
+    } else if (idx >= 0) {
+        ribbon_->removeTab(idx); // detaches but does not delete arrayTab_
+        ribbon_->setCurrentIndex(0); // back to Home, where Array was launched from
+    }
+}
+
+void MainWindow::beginArrayCommand(ArrayKind kind) {
+    editor_->beginArray(kind);
+    canvas_->setFocus(Qt::OtherFocusReason);
+}
+
 void MainWindow::buildStatusControls() {
     // "Repeat last command" button: re-activates the last draw/modify function (the
     // app returns to Select after each object; this button — like Space/Enter — starts
@@ -3661,17 +4478,13 @@ void MainWindow::buildPanels() {
         editor_->selectById(id, additive);
     });
 
-    // Pin / auto-hide acts on a whole side: the left column (Properties + Layers)
-    // and the right column (Entities) each pin and fold as one unit.
-    const QVector<AutoHideDock*> leftGroup{propsDock, layersDock};
-    propsDock->setGroup(leftGroup);
-    layersDock->setGroup(leftGroup);
-    const QVector<AutoHideDock*> rightGroup{listDock};
-    listDock->setGroup(rightGroup);
-
-    // Only one side may be pinned at a time — start with the left column pinned
-    // and the right (Entities) auto-hidden.
-    listDock->setPinned(false);
+    // Pin / auto-hide acts on a whole side, and each side is independent: the left
+    // column (Properties + Layers) and the right column (Entities) each carry ONE pin
+    // — on the panel at the top of the side — and folding one leaves the other alone.
+    // The sides themselves are worked out from the live layout, so dragging a panel
+    // across re-forms both.
+    listDock->setPinned(false); // the right column starts folded away, freeing canvas
+    AutoHideDock::refreshPinButtons();
 }
 
 void MainWindow::buildCommandBar() {
@@ -4345,6 +5158,18 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     cut->setEnabled(hasSel);
     connect(cut, &QAction::triggered, this, [this] { editor_->copyWithBase(true); });
 
+    // Quick Select / Match properties, where AutoCAD puts them (right-click menu).
+    QAction* qsel = menu.addAction(QStringLiteral("Quick Select..."));
+    connect(qsel, &QAction::triggered, this, [this] { editor_->beginQuickSelect(); });
+
+    QAction* matchProp = menu.addAction(QStringLiteral("Match properties"));
+    matchProp->setEnabled(hasSel);
+    matchProp->setToolTip(QStringLiteral("Paint this object's properties onto others"));
+    connect(matchProp, &QAction::triggered, this, [this] {
+        editor_->beginMatchProps();
+        canvas_->setFocus(Qt::OtherFocusReason);
+    });
+
     QAction* cancel = menu.addAction(QStringLiteral("Cancel"));
     connect(cancel, &QAction::triggered, this,
             [this] { editor_->onKey(Qt::Key_Escape, Qt::NoModifier); });
@@ -4874,10 +5699,17 @@ void MainWindow::refreshProperties() {
         propsTable_->setItem(r, 0, key);
         auto* cb = new QComboBox(propsTable_);
         cb->setIconSize(QSize(72, 14));
-        int idx = 0;
+        int idx = -1;
         for (int i = 0; i < items.size(); ++i) {
             cb->addItem(items[i].icon, items[i].text, items[i].data);
             if (items[i].data == currentData) idx = i;
+        }
+        // A value not among the entries — including the "#Value" marker of a
+        // multi-selection that disagrees — is shown as its own leading entry, so the row
+        // never silently displays the first item instead.
+        if (idx < 0) {
+            cb->insertItem(0, QIcon(), currentData, currentData);
+            idx = 0;
         }
         cb->setCurrentIndex(idx);
         connect(cb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -4895,6 +5727,21 @@ void MainWindow::refreshProperties() {
         auto* key = new QTableWidgetItem(k);
         key->setFlags(Qt::ItemIsEnabled);
         propsTable_->setItem(r, 0, key);
+        // A number that VARIES across a multi-selection arrives as NaN: there is no single
+        // number to show, so the row shows the "#Value" marker in a plain field. Typing a
+        // number over it applies that number to every selected object.
+        if (std::isnan(value)) {
+            auto* le = new QLineEdit(propsTable_);
+            le->setText(QStringLiteral("#Value"));
+            connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
+                if (refreshing_) return;
+                bool ok = false;
+                const double v = le->text().trimmed().toDouble(&ok);
+                if (ok) deferredPropApply([apply, v] { apply(v); });
+            });
+            propsTable_->setCellWidget(r, 1, le);
+            return;
+        }
         auto* sp = new QDoubleSpinBox(propsTable_);
         sp->setRange(-1e9, 1e9);
         sp->setDecimals(2);
@@ -4940,15 +5787,82 @@ void MainWindow::refreshProperties() {
         propsTable_->setCellWidget(r, 1, btn);
     };
 
-    const Entity* e = nullptr;
-    if (sel.size() == 1)
+    // The selected objects, and whether they are all the same kind. SEVERAL objects of the
+    // same type show that type's full property panel, built from the first of them: every
+    // row where they agree shows the shared value, and every row where they disagree shows
+    // the "#Value" marker rather than pretending one object's value speaks for all. A
+    // mixed-type selection has no common panel, so only the General summary shows.
+    std::vector<const Entity*> selEnts;
+    for (const auto& id : sel)
         for (const auto& ent : doc_->entities())
-            if (ent.id == sel.front()) { e = &ent; break; }
+            if (ent.id == id) { selEnts.push_back(&ent); break; }
+    bool sameType = !selEnts.empty();
+    for (const Entity* se : selEnts)
+        if (se->type != selEnts.front()->type) { sameType = false; break; }
+    const Entity* e = sameType ? selEnts.front() : nullptr;
+    const bool multi = sameType && selEnts.size() > 1;
+
+    // Reading one property ACROSS the selection. With a single object it is simply that
+    // object's value; with several it is the shared value, or "varies" when they differ.
+    // Each row renders that as "#Value" — numbers carry it as NaN, since a number field has
+    // no spare value that could mean "several different ones".
+    struct SelValue {
+        QJsonValue v;
+        bool varies = false;
+        QString toString(const QString& def = QString()) const {
+            return varies ? QStringLiteral("#Value") : v.toString(def);
+        }
+        double toDouble(double def = 0.0) const {
+            return varies ? std::numeric_limits<double>::quiet_NaN() : v.toDouble(def);
+        }
+        int toInt(int def = 0) const { return varies ? 0 : v.toInt(def); }
+        bool toBool(bool def = false) const { return v.toBool(def); }
+        QJsonArray toArray() const { return v.toArray(); }
+        bool contains() const { return !v.isUndefined(); }
+        bool isVaries() const { return varies; }
+    };
+    auto mv = [&selEnts, multi](const QString& key) {
+        SelValue out;
+        if (selEnts.empty()) return out;
+        out.v = selEnts.front()->meta.value(key);
+        if (multi)
+            for (const Entity* se : selEnts)
+                if (se->meta.value(key) != out.v) { out.varies = true; break; }
+        return out;
+    };
+    // The same for values that live on the entity itself (or are derived from its
+    // geometry) rather than in its meta bag: `sv` for text, `nv` for numbers.
+    auto sv = [&selEnts, multi](const std::function<QString(const Entity&)>& read) -> QString {
+        if (selEnts.empty()) return QString();
+        const QString out = read(*selEnts.front());
+        if (multi)
+            for (const Entity* se : selEnts)
+                if (read(*se) != out) return QStringLiteral("#Value");
+        return out;
+    };
+    auto nv = [&selEnts, multi](const std::function<double(const Entity&)>& read) -> double {
+        if (selEnts.empty()) return 0.0;
+        const double out = read(*selEnts.front());
+        if (multi)
+            for (const Entity* se : selEnts)
+                if (std::abs(read(*se) - out) > 1e-9)
+                    return std::numeric_limits<double>::quiet_NaN();
+        return out;
+    };
+    // A boolean property shown as Yes/No — or "#Value" when the selection disagrees.
+    auto yesNo = [](const SelValue& val, bool def = false) -> QString {
+        return val.isVaries() ? QStringLiteral("#Value")
+                              : (val.toBool(def) ? QStringLiteral("Yes") : QStringLiteral("No"));
+    };
 
     addHeader(QStringLiteral("General"));
-    addRow(QStringLiteral("Type"), e ? entityTypeToString(e->type)
-                                     : (sel.empty() ? QStringLiteral("No selection")
-                                                    : QStringLiteral("%1 objects").arg(sel.size())));
+    addRow(QStringLiteral("Type"),
+           sel.empty() ? QStringLiteral("No selection")
+                       : (multi ? QStringLiteral("%1 x %2")
+                                      .arg(sel.size())
+                                      .arg(entityTypeToString(e->type))
+                                : (e ? entityTypeToString(e->type)
+                                     : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
     if (e) {
         QStringList layerNames;
         for (const auto& l : doc_->layers()) layerNames << l.name;
@@ -4958,9 +5872,10 @@ void MainWindow::refreshProperties() {
             {"#ff00ff", "Magenta"}};
 
         // --- Color (swatch preview + Select Color...) ---
-        const QString curColor = e->hasExplicitColor()
-                                     ? hexToColor.value(e->color.toLower(), e->color)
-                                     : QStringLiteral("ByLayer");
+        const QString curColor = sv([](const Entity& x) { // hexToColor is static: no capture
+            return x.hasExplicitColor() ? hexToColor.value(x.color.toLower(), x.color)
+                                        : QStringLiteral("ByLayer");
+        });
         QVector<ComboEntry> colorItems;
         auto addColor = [&](const QString& name, const QColor& c) {
             colorItems.push_back({name, colorSwatchIcon(c), name});
@@ -4994,13 +5909,14 @@ void MainWindow::refreshProperties() {
             editor_->setSelectionColor(m.contains(d) ? m.value(d) : d);
         });
 
-        addCombo(QStringLiteral("Layer"), layerNames, e->layer, false,
+        addCombo(QStringLiteral("Layer"), layerNames,
+                 sv([](const Entity& x) { return x.layer; }), false,
                  [this](const QString& t) { editor_->setSelectionLayer(t); });
 
         // --- Linetype (dash-pattern preview) ---
         const QStringList ltNames = {"ByLayer",    "ByBlock", "CENTER", "CENTERX2",
                                      "Continuous", "DOT2",    "HIDDEN", "PHANTOM"};
-        const QString curLt = e->meta.value("linetype").toString("ByLayer");
+        const QString curLt = mv("linetype").toString("ByLayer");
         QVector<ComboEntry> ltItems;
         for (const auto& n : ltNames) ltItems.push_back({n, linetypeIcon(n), n});
         if (!ltNames.contains(curLt))
@@ -5010,10 +5926,10 @@ void MainWindow::refreshProperties() {
         });
 
         addCombo(QStringLiteral("Linetype scale"), {"0.25", "0.5", "1.0", "2.0", "5.0"},
-                 e->meta.value("ltscale").toString("1.0"), true,
+                 mv("ltscale").toString("1.0"), true,
                  [this](const QString& t) { editor_->setSelectionMeta("ltscale", t); });
         addCombo(QStringLiteral("Plot style"), {"ByColor", "Normal", "Screening"},
-                 e->meta.value("plotStyle").toString("ByColor"), false,
+                 mv("plotStyle").toString("ByColor"), false,
                  [this](const QString& t) { editor_->setSelectionMeta("plotStyle", t); });
 
         // --- Lineweight (thickness preview, in mm) ---
@@ -5030,8 +5946,9 @@ void MainWindow::refreshProperties() {
         for (const auto& w : weights)
             lwItems.push_back(
                 {w.first, lineweightIcon(w.second, false), QString::number(w.second, 'f', 2)});
-        const QString curLw =
-            e->weight > 0 ? QString::number(e->weight, 'f', 2) : QStringLiteral("ByLayer");
+        const QString curLw = sv([](const Entity& x) {
+            return x.weight > 0 ? QString::number(x.weight, 'f', 2) : QStringLiteral("ByLayer");
+        });
         addIconCombo(QStringLiteral("Lineweight"), lwItems, curLw, [this](const QString& d) {
             editor_->setSelectionWeight(d == QLatin1String("ByLayer") ? 0.0 : d.toDouble());
         });
@@ -5050,70 +5967,95 @@ void MainWindow::refreshProperties() {
     // without opening the Connector build ribbon).
     if (e && e->type == EntityType::Connector) {
         addHeader(QStringLiteral("Connector"));
-        // Change one field of the selected connector's spec and apply it in place.
+        // Change one field of every selected connector's spec, in place. Editing a field
+        // with several connectors selected changes just that field on each of them.
         auto edit = [this](std::function<void(ConnectorSpec&)> mut) {
-            const QString id = editor_->selectedConnectorId();
-            if (id.isEmpty()) return;
-            ConnectorSpec s;
-            for (const auto& en : doc_->entities())
-                if (en.id == id) { s = connectorSpecFromMeta(en.meta); break; }
-            mut(s);
-            s.textSize = std::max({s.pinSize, s.desSize, s.pnSize});
-            regenPinLabels(s);
-            editor_->applyConnectorSpecToSelection(s);
+            editor_->editSelectedConnectorSpecs(mut);
             if (canvas_) canvas_->update();
         };
         const ConnectorSpec cs = connectorSpecFromMeta(e->meta);
+        // Every spec field is stored in meta under its own name, so variance across a
+        // multi-selection is read straight from there: csText/csNum hand back the shared
+        // value or the "#Value" marker (NaN for numbers), and csPick does the same for the
+        // fields shown through a friendly label.
+        auto csText = [&mv, multi](const char* key, const QString& own) {
+            return multi ? mv(QString::fromLatin1(key)).toString(own) : own;
+        };
+        auto csNum = [&mv, multi](const char* key, double own) {
+            return multi ? mv(QString::fromLatin1(key)).toDouble(own) : own;
+        };
+        auto csPick = [&mv, multi](const char* key, const QString& label) {
+            return (multi && mv(QString::fromLatin1(key)).isVaries()) ? QStringLiteral("#Value")
+                                                                     : label;
+        };
         const QStringList fonts = FontLibrary::families();
         // With no designator, show the validation fallback name (#<entNum>) as a
         // semi-transparent placeholder so it matches what Validate reports.
-        const QString refdesHint = QStringLiteral("#%1").arg(e->meta.value("entNum").toInt());
-        addText(QStringLiteral("Designator"), cs.designator,
+        const QString refdesHint = QStringLiteral("#%1").arg(mv("entNum").toInt());
+        addText(QStringLiteral("Designator"), csText("designator", cs.designator),
                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); },
                 refdesHint);
-        addText(QStringLiteral("Part number"), cs.partNumber,
+        addText(QStringLiteral("Part number"), csText("partNumber", cs.partNumber),
                 [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); });
-        // Per-pin wire cross-section (AWG/mm²) + ampere editor.
-        addButton(QStringLiteral("Pin wiring"), QStringLiteral("Pin table…"),
-                  [this] { showPinTable(editor_->selectedConnectorId()); });
-        addNum(QStringLiteral("Pins"), cs.pinCount, [edit](double v) {
+        // Per-pin wire cross-section (AWG/mm²) + ampere editor. It edits one connector's
+        // own pin list, so with several selected there is no single table to open.
+        if (multi)
+            addRow(QStringLiteral("Pin wiring"), QStringLiteral("select one connector"));
+        else
+            addButton(QStringLiteral("Pin wiring"), QStringLiteral("Pin table…"),
+                      [this] { showPinTable(editor_->selectedConnectorId()); });
+        addNum(QStringLiteral("Pins"), csNum("pinCount", cs.pinCount), [edit](double v) {
             edit([v](ConnectorSpec& s) { s.pinCount = std::clamp(int(v + 0.5), 1, 128); });
         });
-        addCombo(QStringLiteral("Labels"), {QStringLiteral("Numbers"), QStringLiteral("Letters")},
-                 cs.annotation == QLatin1String("letters") ? QStringLiteral("Letters")
-                                                           : QStringLiteral("Numbers"),
-                 false, [edit](const QString& t) {
-                     edit([t](ConnectorSpec& s) {
-                         s.annotation = t == QLatin1String("Letters") ? QStringLiteral("letters")
-                                                                     : QStringLiteral("numbers");
+        {
+            // "Mixed" names the pins A1..A10, B1..B10 - a letter per block of ten.
+            auto annName = [](const QString& mode) {
+                if (mode == QLatin1String("letters")) return QStringLiteral("Letters");
+                if (mode == QLatin1String("mixed")) return QStringLiteral("Mixed");
+                return QStringLiteral("Numbers");
+            };
+            addCombo(QStringLiteral("Labels"),
+                     {QStringLiteral("Numbers"), QStringLiteral("Letters"),
+                      QStringLiteral("Mixed")},
+                     csPick("annotation", annName(cs.annotation)), false,
+                     [edit](const QString& t) {
+                         edit([t](ConnectorSpec& s) {
+                             s.annotation = t == QLatin1String("Letters")
+                                                ? QStringLiteral("letters")
+                                                : (t == QLatin1String("Mixed")
+                                                       ? QStringLiteral("mixed")
+                                                       : QStringLiteral("numbers"));
+                         });
                      });
-                 });
+        }
         addCombo(QStringLiteral("Order"), {QStringLiteral("Top"), QStringLiteral("Bottom")},
-                 cs.pinOrder == QLatin1String("bottom") ? QStringLiteral("Bottom")
-                                                       : QStringLiteral("Top"),
+                 csPick("pinOrder", cs.pinOrder == QLatin1String("bottom")
+                                        ? QStringLiteral("Bottom")
+                                        : QStringLiteral("Top")),
                  false, [edit](const QString& t) {
                      edit([t](ConnectorSpec& s) {
                          s.pinOrder = t == QLatin1String("Bottom") ? QStringLiteral("bottom")
                                                                   : QStringLiteral("top");
                      });
                  });
-        addNum(QStringLiteral("Pitch"), cs.pitch,
+        addNum(QStringLiteral("Pitch"), csNum("pitch", cs.pitch),
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pitch = std::max(1.0, v); }); });
-        addNum(QStringLiteral("Pin length"), cs.pinLength,
+        addNum(QStringLiteral("Pin length"), csNum("pinLength", cs.pinLength),
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pinLength = std::max(1.0, v); }); });
         addCombo(QStringLiteral("Body"), {QStringLiteral("Dynamic"), QStringLiteral("Custom")},
-                 cs.rectMode == QLatin1String("custom") ? QStringLiteral("Custom")
-                                                       : QStringLiteral("Dynamic"),
+                 csPick("rectMode", cs.rectMode == QLatin1String("custom")
+                                        ? QStringLiteral("Custom")
+                                        : QStringLiteral("Dynamic")),
                  false, [edit](const QString& t) {
                      edit([t](ConnectorSpec& s) {
                          s.rectMode = t == QLatin1String("Custom") ? QStringLiteral("custom")
                                                                   : QStringLiteral("dynamic");
                      });
                  });
-        addNum(QStringLiteral("Width"), cs.rectWidth, [edit](double v) {
+        addNum(QStringLiteral("Width"), csNum("rectWidth", cs.rectWidth), [edit](double v) {
             edit([v](ConnectorSpec& s) { s.rectMode = QStringLiteral("custom"); s.rectWidth = std::max(1.0, v); });
         });
-        addNum(QStringLiteral("Height"), cs.rectHeight, [edit](double v) {
+        addNum(QStringLiteral("Height"), csNum("rectHeight", cs.rectHeight), [edit](double v) {
             edit([v](ConnectorSpec& s) { s.rectMode = QStringLiteral("custom"); s.rectHeight = std::max(1.0, v); });
         });
         addCombo(QStringLiteral("Associative"), {QStringLiteral("Yes"), QStringLiteral("No")},
@@ -5121,17 +6063,17 @@ void MainWindow::refreshProperties() {
                  [edit](const QString& t) {
                      edit([t](ConnectorSpec& s) { s.associative = (t == QLatin1String("Yes")); });
                  });
-        addCombo(QStringLiteral("Pin font"), fonts, cs.pinFont, false,
+        addCombo(QStringLiteral("Pin font"), fonts, csText("pinFont", cs.pinFont), false,
                  [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.pinFont = t; }); });
-        addNum(QStringLiteral("Pin size"), cs.pinSize,
+        addNum(QStringLiteral("Pin size"), csNum("pinSize", cs.pinSize),
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pinSize = std::max(1.0, v); }); });
-        addCombo(QStringLiteral("Des. font"), fonts, cs.desFont, false,
+        addCombo(QStringLiteral("Des. font"), fonts, csText("desFont", cs.desFont), false,
                  [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.desFont = t; }); });
-        addNum(QStringLiteral("Des. size"), cs.desSize,
+        addNum(QStringLiteral("Des. size"), csNum("desSize", cs.desSize),
                [edit](double v) { edit([v](ConnectorSpec& s) { s.desSize = std::max(1.0, v); }); });
-        addCombo(QStringLiteral("P/N font"), fonts, cs.pnFont, false,
+        addCombo(QStringLiteral("P/N font"), fonts, csText("pnFont", cs.pnFont), false,
                  [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.pnFont = t; }); });
-        addNum(QStringLiteral("P/N size"), cs.pnSize,
+        addNum(QStringLiteral("P/N size"), csNum("pnSize", cs.pnSize),
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pnSize = std::max(1.0, v); }); });
     }
 
@@ -5139,28 +6081,43 @@ void MainWindow::refreshProperties() {
     // conductor type/strand) plus its endpoints' connections.
     if (e && e->type == EntityType::Wire) {
         addHeader(QStringLiteral("Wire"));
-        const QJsonObject& m = e->meta;
-        addRow(QStringLiteral("Number"),
-               QStringLiteral("#%1").arg(m.value(QStringLiteral("entNum")).toInt()));
-        // From / To: the connector pin each end lands on, else "open".
-        auto endLabel = [this, e](bool first) -> QString {
-            if (e->points.size() < 2) return QStringLiteral("open");
-            const Vec2 p = first ? e->points.front() : e->points.back();
-            const QString ref = editor_->pinRefAt(p);
-            return ref.isEmpty() ? QStringLiteral("open") : ref;
-        };
-        addRow(QStringLiteral("From"), endLabel(true));
-        addRow(QStringLiteral("To"), endLabel(false));
+        addRow(QStringLiteral("Number"), sv([](const Entity& x) {
+                   return QStringLiteral("#%1").arg(x.meta.value(QStringLiteral("entNum")).toInt());
+               }));
+        // From / To: the connector pin each end lands on; a splice it joins; "open" for
+        // an end deliberately terminated with an X marker; "unconnected" for an end that
+        // touches nothing at all.
+        addRow(QStringLiteral("From"),
+               sv([this](const Entity& x) { return editor_->wireEndRef(x, true); }));
+        addRow(QStringLiteral("To"),
+               sv([this](const Entity& x) { return editor_->wireEndRef(x, false); }));
+        // Shielded / twisted: read back from the Screen / Twist annotations covering
+        // this wire (they are what actually make it shielded or twisted, so these are
+        // reported, not edited here).
+        addRow(QStringLiteral("Shielded"), sv([this](const Entity& x) {
+                   return editor_->wireIsShielded(x.id) ? QStringLiteral("Yes")
+                                                        : QStringLiteral("No");
+               }));
+        addRow(QStringLiteral("Twisted"), sv([this](const Entity& x) {
+                   return editor_->wireIsTwisted(x.id) ? QStringLiteral("Yes")
+                                                       : QStringLiteral("No");
+               }));
+        // Wire label: free text identifying the wire. Placing a Wire label with the
+        // ribbon tool onto this wire writes the same field, and editing it here updates
+        // any label already attached.
+        addText(QStringLiteral("Wire label"), mv(QStringLiteral("wireLabel")).toString(),
+                [this](const QString& t) { editor_->setSelectionWireLabel(t); },
+                QStringLiteral("e.g. W12 / PWR-A"));
         // AWG cross-section, 4 (thick) … 32 (thin).
         QStringList awgList;
         for (int g = 4; g <= 32; g += 2) awgList << QStringLiteral("%1 AWG").arg(g);
-        const QString curAwg = m.value(QStringLiteral("awg")).toString();
+        const QString curAwg = mv(QStringLiteral("awg")).toString();
         addCombo(QStringLiteral("AWG"), awgList, curAwg, false, [this](const QString& t) {
             editor_->setSelectionMeta(QStringLiteral("awg"), t);
         });
         // Wire colour code (WH, BK, …).
         addCombo(QStringLiteral("Wire color"), wireColorCodes(),
-                 m.value(QStringLiteral("wireColor")).toString(QStringLiteral("WH")), false,
+                 mv(QStringLiteral("wireColor")).toString(QStringLiteral("WH")), false,
                  [this](const QString& t) {
                      editor_->setSelectionMeta(QStringLiteral("wireColor"), t);
                      if (canvas_) canvas_->update();
@@ -5168,75 +6125,131 @@ void MainWindow::refreshProperties() {
         // Insulation type (editable — user may enter any material).
         addCombo(QStringLiteral("Insulation"),
                  {"PVC", "XLPE", "PTFE", "FEP", "Silicone", "Rubber", "Polyethylene"},
-                 m.value(QStringLiteral("insulation")).toString(), true, [this](const QString& t) {
+                 mv(QStringLiteral("insulation")).toString(), true, [this](const QString& t) {
                      editor_->setSelectionMeta(QStringLiteral("insulation"), t);
                  });
         // Insulation voltage rating.
         addCombo(QStringLiteral("Voltage"), {"30V", "60V", "150V", "300V", "600V", "1000V"},
-                 m.value(QStringLiteral("insulationVoltage")).toString(), true,
+                 mv(QStringLiteral("insulationVoltage")).toString(), true,
                  [this](const QString& t) {
                      editor_->setSelectionMeta(QStringLiteral("insulationVoltage"), t);
                  });
         // Conductor type: solid / stranded.
         addCombo(QStringLiteral("Type"), {QStringLiteral("Solid"), QStringLiteral("Stranded")},
-                 m.value(QStringLiteral("conductorType")).toString(QStringLiteral("Stranded")),
+                 mv(QStringLiteral("conductorType")).toString(QStringLiteral("Stranded")),
                  false, [this](const QString& t) {
                      editor_->setSelectionMeta(QStringLiteral("conductorType"), t);
                  });
         // Strand definition, e.g. "7/0.20" (strands / strand-diameter).
-        addText(QStringLiteral("Strands"), m.value(QStringLiteral("strandDef")).toString(),
+        addText(QStringLiteral("Strands"), mv(QStringLiteral("strandDef")).toString(),
                 [this](const QString& t) {
                     editor_->setSelectionMeta(QStringLiteral("strandDef"), t);
                 },
                 QStringLiteral("e.g. 7/0.20"));
         // Outer diameter of the finished (insulated) wire, in the working length unit.
-        addNum(QStringLiteral("OD (outer dia.)"), m.value(QStringLiteral("od")).toDouble(),
+        addNum(QStringLiteral("OD (outer dia.)"), mv(QStringLiteral("od")).toDouble(),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("od"), std::max(0.0, v));
                });
         // Conductor resistance with a per-metre / per-foot unit; switching the unit
         // converts the value (1 ft = 0.3048 m, so Ω/ft = Ω/m × 0.3048).
-        const QString rUnit = m.value(QStringLiteral("resUnit")).toString(QStringLiteral("m"));
+        const SelValue rUnitVal = mv(QStringLiteral("resUnit"));
+        const QString rUnit = rUnitVal.isVaries() ? QStringLiteral("m")
+                                                  : rUnitVal.toString(QStringLiteral("m"));
         addCombo(QStringLiteral("R unit"),
                  {QString::fromUtf8("Ω/m"), QString::fromUtf8("Ω/ft")},
-                 rUnit == QLatin1String("ft") ? QString::fromUtf8("Ω/ft") : QString::fromUtf8("Ω/m"),
+                 rUnitVal.isVaries()
+                     ? QStringLiteral("#Value")
+                     : (rUnit == QLatin1String("ft") ? QString::fromUtf8("Ω/ft")
+                                                     : QString::fromUtf8("Ω/m")),
                  false, [this](const QString& t) {
-                     const bool toFt = t.contains(QLatin1String("ft"));
-                     double val = 0.0;
-                     QString cur = QStringLiteral("m");
-                     if (doc_ && editor_->selection().size() == 1)
-                         for (const auto& en : doc_->entities())
-                             if (en.id == editor_->selection().front()) {
-                                 val = en.meta.value(QStringLiteral("resistance")).toDouble();
-                                 cur = en.meta.value(QStringLiteral("resUnit")).toString(QStringLiteral("m"));
-                                 break;
-                             }
-                     if ((cur == QLatin1String("ft")) != toFt && val != 0.0)
-                         val = toFt ? val * 0.3048 : val / 0.3048;
-                     editor_->setSelectionMeta(QStringLiteral("resUnit"),
-                                               toFt ? QStringLiteral("ft") : QStringLiteral("m"));
-                     editor_->setSelectionMetaNumber(QStringLiteral("resistance"), val);
+                     // Each wire's OWN value is converted from its OWN current unit, so
+                     // switching the unit with several wires selected converts them all
+                     // correctly instead of stamping one number over the rest.
+                     if (t == QLatin1String("#Value")) return;
+                     editor_->convertSelectionResistanceUnit(t.contains(QLatin1String("ft")));
                  });
         addNum(QString::fromUtf8("Resistance (Ω/%1)").arg(rUnit == QLatin1String("ft")
                                                               ? QStringLiteral("ft")
                                                               : QStringLiteral("m")),
-               m.value(QStringLiteral("resistance")).toDouble(), [this](double v) {
+               mv(QStringLiteral("resistance")).toDouble(), [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("resistance"), v);
+               });
+        // Marking on the drawing: the colour and the cross-section are switched on
+        // independently and repeated `Show count` times along the wire. Each instance
+        // can then be dragged along the run by its grip.
+        addHeader(QStringLiteral("Wire marking"));
+        addCombo(QStringLiteral("Show colour"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 wireShowsColorName(*e) ? QStringLiteral("Yes") : QStringLiteral("No"), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("showColorName"),
+                                                   t == QLatin1String("Yes"));
+                 });
+        addCombo(QStringLiteral("Colour as"),
+                 {QStringLiteral("2 letters"), QStringLiteral("Full name")},
+                 mv(QStringLiteral("colorNameMode")).toString() == QLatin1String("full")
+                     ? QStringLiteral("Full name")
+                     : QStringLiteral("2 letters"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("colorNameMode"),
+                                               t.startsWith(QLatin1String("Full"))
+                                                   ? QStringLiteral("full")
+                                                   : QStringLiteral("code"));
+                 });
+        addCombo(QStringLiteral("Show gauge"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                 wireShowsGaugeName(*e) ? QStringLiteral("Yes") : QStringLiteral("No"), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("showGaugeName"),
+                                                   t == QLatin1String("Yes"));
+                 });
+        addNum(QStringLiteral("Show count"),
+               std::max(1, mv(QStringLiteral("annCount")).toInt(1)), [this](double v) {
+                   editor_->setSelectionWireAnnotCount(static_cast<int>(v));
+               });
+        addNum(QStringLiteral("Marking size"), mv(QStringLiteral("annSize")).toDouble(3.5),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("annSize"),
+                                                   std::clamp(v, 1.0, 50.0));
+               });
+    }
+
+    // A selected Wire label: its text, and which wire it rides. Editing the text here
+    // also updates the wire's own "Wire label" property — an attached label and the wire
+    // property are the same thing.
+    if (e && e->type == EntityType::NetLabel) {
+        addHeader(QStringLiteral("Wire label"));
+        const QString wid = mv(QStringLiteral("wireId")).toString();
+        const QString labId = e->id;
+        addText(QStringLiteral("Text"), mv(QStringLiteral("text")).toString(),
+                [this, labId](const QString& t) { editor_->setWireLabelText(labId, t); },
+                QStringLiteral("wire label"));
+        QString onWire = QStringLiteral("not attached");
+        if (!wid.isEmpty() && doc_)
+            for (const auto& w : doc_->entities())
+                if (w.id == wid && w.type == EntityType::Wire) {
+                    onWire = QStringLiteral("wire #%1")
+                                 .arg(w.meta.value(QStringLiteral("entNum")).toInt());
+                    break;
+                }
+        addRow(QStringLiteral("Attached to"), onWire);
+        addNum(QStringLiteral("Text size"), mv(QStringLiteral("textSize")).toDouble(4.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("textSize"),
+                                                   std::clamp(v, 1.0, 50.0));
                });
     }
 
     // A selected Shield: edit its ellipse radii and whether the "S" shows.
     if (e && e->type == EntityType::Screen) {
         addHeader(QStringLiteral("Shield"));
-        const QJsonObject& m = e->meta;
-        addNum(QStringLiteral("Small radius"), m.value(QStringLiteral("rx")).toDouble(12.0),
+        addNum(QStringLiteral("Small radius"), mv(QStringLiteral("rx")).toDouble(12.0),
                [this](double v) {
                    editor_->resizeSelectedShield(QStringLiteral("rx"), std::max(1.0, v));
                });
         // Current large radius: explicit override, else auto-fit to the caught wires.
-        double ry = m.value(QStringLiteral("ry")).toDouble(0.0);
+        double ry = mv(QStringLiteral("ry")).toDouble(0.0);
         if (ry <= 0.0) {
-            const int kc = std::min(m.value(QStringLiteral("catch"))
+            const int kc = std::min(mv(QStringLiteral("catch"))
                                         .toInt(static_cast<int>(e->points.size())),
                                     static_cast<int>(e->points.size()));
             double yMin = 1e18, yMax = -1e18;
@@ -5250,35 +6263,56 @@ void MainWindow::refreshProperties() {
             editor_->resizeSelectedShield(QStringLiteral("ry"), std::max(1.0, v));
         });
         addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
-                 m.value(QStringLiteral("showS")).toBool(false) ? QStringLiteral("Yes")
-                                                                : QStringLiteral("No"),
+                 yesNo(mv(QStringLiteral("showS")), false),
                  false, [this](const QString& t) {
                      editor_->setSelectionMetaBool(QStringLiteral("showS"),
                                                    t == QLatin1String("Yes"));
                  });
-        addNum(QStringLiteral("S size"), m.value(QStringLiteral("sSize")).toDouble(4.0),
+        addNum(QStringLiteral("S size"), mv(QStringLiteral("sSize")).toDouble(4.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("sSize"), std::max(1.0, v));
                });
+        // Drain-leg length: how far the leg reaches from the outline edge. Measured from the
+        // geometry (the leg end IS the shield's last point) rather than a stored number, so
+        // it always agrees with what is drawn, including after the leg was dragged.
+        addNum(QStringLiteral("Leg length"), editor_->selectedShieldLegLength(),
+               [this](double v) { editor_->setSelectedShieldLegLength(std::max(0.0, v)); });
+        // A leg that actually lands on a wire IS connected, so the X is not offered at all —
+        // the drawing says what the geometry says.
+        const bool legWired = editor_->shieldLegIsWired(*e);
+        if (legWired) {
+            addRow(QStringLiteral("Not Connected"), QStringLiteral("no — leg is wired"));
+        } else {
+            addCombo(QStringLiteral("Not Connected"), {QStringLiteral("Yes"), QStringLiteral("No")},
+                     yesNo(mv(QStringLiteral("notConnected")), false),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("notConnected"),
+                                                       t == QLatin1String("Yes"));
+                     });
+            addNum(QStringLiteral("X size"), mv(QStringLiteral("ncSize")).toDouble(3.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("ncSize"), std::max(0.5, v));
+                   });
+        }
     }
 
     // A selected twist: edit the parameters for its type.
     if (e && e->type == EntityType::Twist) {
-        const QString ty = e->meta.value(QStringLiteral("twistType")).toString();
+        const QString ty = mv(QStringLiteral("twistType")).toString();
         if (ty == QLatin1String("crossed")) {
             addHeader(QStringLiteral("Twist (Type 1)"));
             addNum(QStringLiteral("Diagonal angle"),
-                   e->meta.value(QStringLiteral("diagAngle")).toDouble(15.0), [this](double v) {
+                   mv(QStringLiteral("diagAngle")).toDouble(15.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("diagAngle"),
                                                         std::clamp(v, 0.0, 89.0));
                    });
             addNum(QStringLiteral("H line length"),
-                   e->meta.value(QStringLiteral("capLen")).toDouble(8.0), [this](double v) {
+                   mv(QStringLiteral("capLen")).toDouble(8.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("capLen"), std::max(0.0, v));
                    });
         } else if (ty == QLatin1String("type3")) {
             addHeader(QStringLiteral("Twist (Type 3)"));
-            addNum(QStringLiteral("Twists"), e->meta.value(QStringLiteral("repeats")).toDouble(2.0),
+            addNum(QStringLiteral("Twists"), mv(QStringLiteral("repeats")).toDouble(2.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
                                                        std::max(1.0, std::round(v)));
@@ -5286,10 +6320,10 @@ void MainWindow::refreshProperties() {
         } else { // Type 2 (jog) and any legacy braid
             addHeader(QStringLiteral("Twist (Type 2)"));
             addNum(QStringLiteral("H line length"),
-                   e->meta.value(QStringLiteral("flatLen")).toDouble(6.0), [this](double v) {
+                   mv(QStringLiteral("flatLen")).toDouble(6.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("flatLen"), std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Twists"), e->meta.value(QStringLiteral("repeats")).toDouble(2.0),
+            addNum(QStringLiteral("Twists"), mv(QStringLiteral("repeats")).toDouble(2.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
                                                        std::max(1.0, std::round(v)));
@@ -5300,14 +6334,14 @@ void MainWindow::refreshProperties() {
     // A selected Splice / X termination: edit its marker size.
     if (e && e->type == EntityType::Splice) {
         addHeader(QStringLiteral("Splice"));
-        addNum(QStringLiteral("Size"), e->meta.value(QStringLiteral("size")).toDouble(4.0),
+        addNum(QStringLiteral("Size"), mv(QStringLiteral("size")).toDouble(4.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("size"), std::max(0.5, v));
                });
     }
     if (e && e->type == EntityType::NotConnected) {
         addHeader(QStringLiteral("Termination"));
-        addNum(QStringLiteral("Size"), e->meta.value(QStringLiteral("ncSize")).toDouble(6.0),
+        addNum(QStringLiteral("Size"), mv(QStringLiteral("ncSize")).toDouble(6.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("ncSize"), std::max(0.5, v));
                });
@@ -5315,36 +6349,48 @@ void MainWindow::refreshProperties() {
 
     addHeader(QStringLiteral("Geometry"));
     if (e) {
-        const Bounds b = e->bounds();
-        const Vec2 c = b.valid ? b.center() : Vec2{0, 0};
-        addNum(QStringLiteral("Center X"), c.x,
+        // Read through nv so a multi-selection whose objects sit at different places (or
+        // are different sizes) reports "#Value" instead of the first one's numbers.
+        addNum(QStringLiteral("Center X"), nv([](const Entity& x) {
+                   const Bounds bb = x.bounds();
+                   return bb.valid ? bb.center().x : 0.0;
+               }),
                [this](double v) { editor_->setGeometryValue("Center X", v); });
-        addNum(QStringLiteral("Center Y"), c.y,
+        addNum(QStringLiteral("Center Y"), nv([](const Entity& x) {
+                   const Bounds bb = x.bounds();
+                   return bb.valid ? bb.center().y : 0.0;
+               }),
                [this](double v) { editor_->setGeometryValue("Center Y", v); });
-        addNum(QStringLiteral("Width"), b.valid ? b.width() : 0.0,
+        addNum(QStringLiteral("Width"), nv([](const Entity& x) {
+                   const Bounds bb = x.bounds();
+                   return bb.valid ? bb.width() : 0.0;
+               }),
                [this](double v) { editor_->setGeometryValue("Width", v); });
-        addNum(QStringLiteral("Height"), b.valid ? b.height() : 0.0,
+        addNum(QStringLiteral("Height"), nv([](const Entity& x) {
+                   const Bounds bb = x.bounds();
+                   return bb.valid ? bb.height() : 0.0;
+               }),
                [this](double v) { editor_->setGeometryValue("Height", v); });
         if (e->type == EntityType::Circle || e->type == EntityType::Arc)
-            addNum(QStringLiteral("Radius"), e->radius,
+            addNum(QStringLiteral("Radius"), nv([](const Entity& x) { return x.radius; }),
                    [this](double v) { editor_->setGeometryValue("Radius", v); });
         // Double line / double polyline: the parallel spacing between the two runs.
         const bool isDoubleLine = e->type == EntityType::DoubleLine;
         const bool isDoublePoly =
-            e->type == EntityType::Polyline && e->meta.value(QStringLiteral("double")).toBool();
+            e->type == EntityType::Polyline && mv(QStringLiteral("double")).toBool();
         if (isDoubleLine || isDoublePoly)
-            addNum(QStringLiteral("Gap"), e->meta.value(QStringLiteral("gap")).toDouble(10.0),
+            addNum(QStringLiteral("Gap"), mv(QStringLiteral("gap")).toDouble(10.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("gap"), std::max(0.1, v));
                    });
         // Balloon callout: arrowhead type/size, leader landing length + the number.
-        if (e->meta.value(QStringLiteral("balloon")).toBool()) {
+        if (mv(QStringLiteral("balloon")).toBool()) {
             // Arrowhead type (fall menu). Canonical values map to friendly labels.
             static const QVector<QPair<QString, QString>> arrowTypes = {
                 {"Closed filled", "closed"}, {"Closed blank", "blank"}, {"Dot", "dot"},
                 {"Architectural tick", "tick"}, {"Oblique", "tick"}, {"Open", "open"},
                 {"None", "none"}};
-            const QString curAh = e->meta.value(QStringLiteral("arrowhead")).toString("closed");
+            const QString curAh = mv(QStringLiteral("arrowhead")).toString("closed");
             QVector<ComboEntry> ahItems;
             for (const auto& a : arrowTypes)
                 ahItems.push_back({a.first, makeArrowheadIcon(a.second), a.second});
@@ -5352,14 +6398,14 @@ void MainWindow::refreshProperties() {
                 editor_->setSelectionMeta(QStringLiteral("arrowhead"), d);
             });
             addNum(QStringLiteral("Arrowhead size"),
-                   e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3), [this](double v) {
+                   mv(QStringLiteral("arrowSize")).toDouble(3.3), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), std::max(0.1, v));
                    });
             addNum(QStringLiteral("Landing distance"),
-                   e->meta.value(QStringLiteral("landing")).toDouble(8.0), [this](double v) {
+                   mv(QStringLiteral("landing")).toDouble(8.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("landing"), std::max(0.0, v));
                    });
-            addCombo(QStringLiteral("Number"), {}, e->meta.value(QStringLiteral("text")).toString(),
+            addCombo(QStringLiteral("Number"), {}, mv(QStringLiteral("text")).toString(),
                      true, [this](const QString& t) {
                          editor_->setSelectionMeta(QStringLiteral("text"), t);
                      });
@@ -5377,7 +6423,7 @@ void MainWindow::refreshProperties() {
         addHeader(QStringLiteral("Text"));
 
         // Contents — single-line preview; an "Edit..." button opens the full editor.
-        const QString content = e->meta.value(QStringLiteral("text")).toString();
+        const QString content = mv(QStringLiteral("text")).toString();
         {
             const int r = propsTable_->rowCount();
             propsTable_->insertRow(r);
@@ -5396,7 +6442,7 @@ void MainWindow::refreshProperties() {
 
         // Font — all system families.
         QStringList fonts = QFontDatabase::families();
-        const QString curFont = e->meta.value(QStringLiteral("font")).toString();
+        const QString curFont = mv(QStringLiteral("font")).toString();
         addCombo(QStringLiteral("Font"), fonts, curFont.isEmpty() ? QStringLiteral("Default") : curFont,
                  true, [this](const QString& f) {
                      editor_->setSelectionTextMeta(QStringLiteral("font"),
@@ -5405,31 +6451,27 @@ void MainWindow::refreshProperties() {
                  });
 
         // Height.
-        addNum(QStringLiteral("Height"), e->meta.value(QStringLiteral("size")).toDouble(5.0),
+        addNum(QStringLiteral("Height"), mv(QStringLiteral("size")).toDouble(5.0),
                [this](double v) { editor_->setSelectionTextMeta(QStringLiteral("size"), v); });
 
         // Bold / Italic / Justify dropdowns.
         addCombo(QStringLiteral("Bold"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 e->meta.value(QStringLiteral("bold")).toBool() ? QStringLiteral("Yes")
-                                                                : QStringLiteral("No"),
+                 yesNo(mv(QStringLiteral("bold"))),
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("bold"), v == QLatin1String("Yes"));
                  });
         addCombo(QStringLiteral("Italic"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 e->meta.value(QStringLiteral("italic")).toBool() ? QStringLiteral("Yes")
-                                                                  : QStringLiteral("No"),
+                 yesNo(mv(QStringLiteral("italic"))),
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("italic"), v == QLatin1String("Yes"));
                  });
         addCombo(QStringLiteral("Underline"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 e->meta.value(QStringLiteral("underline")).toBool() ? QStringLiteral("Yes")
-                                                                     : QStringLiteral("No"),
+                 yesNo(mv(QStringLiteral("underline"))),
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("underline"), v == QLatin1String("Yes"));
                  });
         addCombo(QStringLiteral("Strikethrough"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 e->meta.value(QStringLiteral("strike")).toBool() ? QStringLiteral("Yes")
-                                                                  : QStringLiteral("No"),
+                 yesNo(mv(QStringLiteral("strike"))),
                  false, [this](const QString& v) {
                      editor_->setSelectionTextMeta(QStringLiteral("strike"), v == QLatin1String("Yes"));
                  });
@@ -5440,7 +6482,7 @@ void MainWindow::refreshProperties() {
             {"Bottom Left", "BL"}, {"Bottom Center", "BC"}, {"Bottom Right", "BR"}};
         QStringList justLabels;
         for (const auto& j : justNames) justLabels << j.first;
-        QString curJust = e->meta.value(QStringLiteral("justify")).toString();
+        QString curJust = mv(QStringLiteral("justify")).toString();
         if (curJust.isEmpty()) curJust = QStringLiteral("TL");
         QString curJustName = QStringLiteral("Top Left");
         for (const auto& j : justNames) if (j.second == curJust) curJustName = j.first;
@@ -5453,7 +6495,7 @@ void MainWindow::refreshProperties() {
                          }
                  });
         // Bullets / numbering.
-        const QString curList = e->meta.value(QStringLiteral("list")).toString();
+        const QString curList = mv(QStringLiteral("list")).toString();
         addCombo(QStringLiteral("List"),
                  {QStringLiteral("No list"), QStringLiteral("Bullets"), QStringLiteral("Numbered")},
                  curList == QLatin1String("bullet")   ? QStringLiteral("Bullets")
@@ -5468,18 +6510,18 @@ void MainWindow::refreshProperties() {
                  });
         // Line spacing factor.
         addNum(QStringLiteral("Line spacing"),
-               e->meta.value(QStringLiteral("lineSpacing")).toDouble(1.0),
+               mv(QStringLiteral("lineSpacing")).toDouble(1.0),
                [this](double v) {
                    editor_->setSelectionTextMeta(QStringLiteral("lineSpacing"),
                                                  v > 0 ? v : 1.0);
                });
         // Container wrap width (0 = no wrapping / single column). Also draggable
         // via the right-edge grip on the object.
-        addNum(QStringLiteral("Box width"), e->meta.value(QStringLiteral("boxWidth")).toDouble(0.0),
+        addNum(QStringLiteral("Box width"), mv(QStringLiteral("boxWidth")).toDouble(0.0),
                [this](double v) {
                    editor_->setSelectionTextMeta(QStringLiteral("boxWidth"), std::max(0.0, v));
                });
-        addNum(QStringLiteral("Box height"), e->meta.value(QStringLiteral("boxHeight")).toDouble(0.0),
+        addNum(QStringLiteral("Box height"), mv(QStringLiteral("boxHeight")).toDouble(0.0),
                [this](double v) {
                    editor_->setSelectionTextMeta(QStringLiteral("boxHeight"), std::max(0.0, v));
                });
@@ -5488,20 +6530,20 @@ void MainWindow::refreshProperties() {
     // ---- Dimension properties (AutoCAD-style) ----
     if (e && e->type == EntityType::Dimension) {
         const int dec = e->meta.contains(QStringLiteral("decimals"))
-                            ? e->meta.value(QStringLiteral("decimals")).toInt()
+                            ? mv(QStringLiteral("decimals")).toInt()
                             : 2;
         addHeader(QStringLiteral("Lines & Arrows"));
-        addNum(QStringLiteral("Arrow size"), e->meta.value(QStringLiteral("arrowSize")).toDouble(3.3),
+        addNum(QStringLiteral("Arrow size"), mv(QStringLiteral("arrowSize")).toDouble(3.3),
                [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("arrowSize"), std::max(0.1, v));
                });
         addNum(QStringLiteral("Ext line offset"),
-               e->meta.value(QStringLiteral("extOffset")).toDouble(2.0), [this](double v) {
+               mv(QStringLiteral("extOffset")).toDouble(2.0), [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("extOffset"), std::max(0.0, v));
                });
 
         addHeader(QStringLiteral("Text"));
-        addNum(QStringLiteral("Text height"), e->meta.value(QStringLiteral("textHeight")).toDouble(5.0),
+        addNum(QStringLiteral("Text height"), mv(QStringLiteral("textHeight")).toDouble(5.0),
                [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("textHeight"), std::max(0.1, v));
                });
@@ -5514,7 +6556,7 @@ void MainWindow::refreshProperties() {
                  });
         // Read-only measured value, like AutoCAD's "Measurement".
         double measured = 0.0;
-        const QString ty = e->meta.value(QStringLiteral("dimType")).toString(QStringLiteral("linear"));
+        const QString ty = mv(QStringLiteral("dimType")).toString(QStringLiteral("linear"));
         if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) measured = e->radius;
         else if (ty == QLatin1String("diameter")) measured = e->radius * 2.0;
         else measured = std::hypot(e->b.x - e->a.x, e->b.y - e->a.y);
@@ -5566,7 +6608,11 @@ void MainWindow::buildCommands() {
         {{"connector", "con"}, "Harness", "Connector", tool(ToolId::Connector)},
         {{"splice"}, "Harness", "Splice marker", tool(ToolId::Splice)},
         {{"notconnected", "nc"}, "Harness", "Not-connected marker", tool(ToolId::NotConnected)},
-        {{"netlabel", "nl"}, "Harness", "Net label", tool(ToolId::NetLabel)},
+        {{"wirelabel", "wl", "netlabel", "nl"}, "Harness", "Wire label",
+         tool(ToolId::NetLabel)},
+        {{"harness", "hb", "shb"}, "Harness",
+         "Schematic harness builder: define the harness and generate it",
+         [this] { showHarnessBuilder(); }},
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
         {{"alignrouting", "align", "ar2"}, "Harness",
          "Align routing to a reference connector", [this] { editor_->beginAlignRouting(); }},
@@ -5582,7 +6628,21 @@ void MainWindow::buildCommands() {
         {{"extend", "ex"}, "Modify", "Extend to a boundary", tool(ToolId::Extend)},
         {{"fillet", "fi", "f"}, "Modify", "Fillet two lines (set radius: r <value>)", tool(ToolId::Fillet)},
         {{"chamfer", "ch", "cha"}, "Modify", "Chamfer two lines", tool(ToolId::Chamfer)},
-        {{"array", "ar"}, "Modify", "Rectangular array", [this] { arrayDialog(); }},
+        // ARRAY repeats the last type chosen (like the ribbon button); the three
+        // explicit names arm that type directly, as in AutoCAD.
+        {{"array", "ar"}, "Modify", "Array the selection (last type used)",
+         [this] { beginArrayCommand(editor_->lastArrayKind()); }},
+        {{"arrayrect", "arrect", "arr"}, "Modify", "Rectangular (linear) array",
+         [this] { beginArrayCommand(ArrayKind::Rect); }},
+        {{"arraypolar", "arpolar", "arpol"}, "Modify", "Polar array around a centre point",
+         [this] { beginArrayCommand(ArrayKind::Polar); }},
+        {{"arraypath", "arpath", "artrack"}, "Modify", "Path array tracking along an object",
+         [this] { beginArrayCommand(ArrayKind::Path); }},
+        {{"matchprop", "ma", "match"}, "Modify",
+         "Match properties: paint one object's properties onto others",
+         [this] { editor_->beginMatchProps(); }},
+        {{"qselect", "qs"}, "Edit", "Quick Select: select objects by property",
+         [this] { editor_->beginQuickSelect(); }},
         {{"explode", "x"}, "Modify", "Explode into primitives", [this] { editor_->explodeSelected(); }},
         {{"purge", "pu"}, "Modify", "Purge unused layers / stray objects", [this] { editor_->purgeUnused(); }},
         {{"erase", "e", "delete", "del"}, "Modify", "Delete the selection", [this] { editor_->deleteSelected(); }},
@@ -5711,17 +6771,151 @@ void MainWindow::showHelp() {
     dlg.exec();
 }
 
-void MainWindow::arrayDialog() {
-    bool ok = false;
-    const int rows = QInputDialog::getInt(this, QStringLiteral("Array"), QStringLiteral("Rows:"), 2, 1, 200, 1, &ok);
-    if (!ok) return;
-    const int cols = QInputDialog::getInt(this, QStringLiteral("Array"), QStringLiteral("Columns:"), 2, 1, 200, 1, &ok);
-    if (!ok) return;
-    const double dy = QInputDialog::getDouble(this, QStringLiteral("Array"), QStringLiteral("Row spacing:"), 20, -1e6, 1e6, 3, &ok);
-    if (!ok) return;
-    const double dx = QInputDialog::getDouble(this, QStringLiteral("Array"), QStringLiteral("Column spacing:"), 20, -1e6, 1e6, 3, &ok);
-    if (!ok) return;
-    editor_->arraySelected(rows, cols, dx, dy);
+// Quick Select (AutoCAD QSELECT): pick objects by property. The property list is the
+// one that applies to the sampled object's type — a circle offers Radius / Diameter /
+// Area, a wire its gauge / colour / net — plus the properties every object has. The
+// value dropdown is filled with the values actually present in the drawing, starting on
+// the sampled object's own, so the common case (find everything like this one) is one
+// click away.
+void MainWindow::showQuickSelectDialog(const QString& sampleId) {
+    if (!doc_) return;
+    const std::optional<Entity> picked = editor_->entityCopy(sampleId);
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Quick Select"));
+    auto* form = new QFormLayout(&dlg);
+
+    const bool haveSelection = !editor_->selection().empty();
+    auto* applyTo = new QComboBox(&dlg);
+    applyTo->addItem(QStringLiteral("Entire drawing"));
+    if (haveSelection) applyTo->addItem(QStringLiteral("Current selection"));
+    applyTo->setToolTip(QStringLiteral("Search the whole drawing, or only what is selected now"));
+
+    // Object type: every type present in the drawing, opened on the sampled object's.
+    auto pretty = [](const QString& t) {
+        return t.isEmpty() ? t : t.left(1).toUpper() + t.mid(1);
+    };
+    auto* typeCombo = new QComboBox(&dlg);
+    typeCombo->addItem(QStringLiteral("Any type"), QString());
+    for (const QString& t : editor_->presentEntityTypes()) typeCombo->addItem(pretty(t), t);
+    if (picked) {
+        const int at = typeCombo->findData(entityTypeToString(picked->type));
+        if (at >= 0) typeCombo->setCurrentIndex(at);
+    }
+
+    auto* propList = new QListWidget(&dlg);
+    propList->setMinimumHeight(160);
+    auto* opCombo = new QComboBox(&dlg);
+    auto* valueCombo = new QComboBox(&dlg);
+    valueCombo->setEditable(true); // any value can be typed, not just ones in the drawing
+    valueCombo->setMinimumWidth(180);
+    auto* howCombo = new QComboBox(&dlg);
+    howCombo->addItem(QStringLiteral("Include in new selection set"));
+    howCombo->addItem(QStringLiteral("Exclude from new selection set"));
+    auto* appendCb = new QCheckBox(QStringLiteral("Append to current selection set"), &dlg);
+    auto* countLbl = new QLabel(&dlg);
+    countLbl->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+
+    form->addRow(QStringLiteral("Apply to:"), applyTo);
+    form->addRow(QStringLiteral("Object type:"), typeCombo);
+    form->addRow(QStringLiteral("Properties:"), propList);
+    form->addRow(QStringLiteral("Operator:"), opCombo);
+    form->addRow(QStringLiteral("Value:"), valueCombo);
+    form->addRow(QStringLiteral("How to apply:"), howCombo);
+    form->addRow(appendCb);
+    form->addRow(countLbl);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    form->addRow(bb);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    // The object the property list is derived from: the picked one while its type is
+    // chosen, otherwise the first object of the chosen type in the drawing.
+    std::vector<QuickSelectProp> props;
+    auto sampleForType = [this, &picked](const QString& type) -> std::optional<Entity> {
+        if (type.isEmpty()) return picked;
+        if (picked && entityTypeToString(picked->type) == type) return picked;
+        for (const auto& e : doc_->entities())
+            if (entityTypeToString(e.type) == type) return e;
+        return std::nullopt;
+    };
+    auto currentQuery = [&]() {
+        QuickSelectQuery q;
+        q.wholeDrawing = applyTo->currentIndex() == 0;
+        q.type = typeCombo->currentData().toString();
+        const int row = propList->currentRow();
+        if (row >= 0 && row < static_cast<int>(props.size())) q.key = props[row].key;
+        q.op = static_cast<QsOp>(opCombo->currentData().toInt());
+        q.value = valueCombo->currentText().trimmed();
+        q.exclude = howCombo->currentIndex() == 1;
+        q.append = appendCb->isChecked();
+        return q;
+    };
+    // Live count of what the filter would select, so the filter can be judged before
+    // committing to it.
+    auto updateCount = [&] {
+        const auto ids = quickSelectMatchIds(doc_->entities(), currentQuery(),
+                                             editor_->selection());
+        countLbl->setText(QStringLiteral("%1 object(s) match").arg(ids.size()));
+    };
+    // Operators offered follow the property: numbers can be compared, text can be
+    // searched. "Select All" ignores the value and matches on object type alone.
+    auto rebuildOps = [&](bool numeric) {
+        const QString keep = opCombo->currentText();
+        QSignalBlocker block(opCombo);
+        opCombo->clear();
+        opCombo->addItem(QStringLiteral("="), static_cast<int>(QsOp::Equal));
+        opCombo->addItem(QStringLiteral("<>"), static_cast<int>(QsOp::NotEqual));
+        if (numeric) {
+            opCombo->addItem(QStringLiteral(">"), static_cast<int>(QsOp::Greater));
+            opCombo->addItem(QStringLiteral("<"), static_cast<int>(QsOp::Less));
+            opCombo->addItem(QStringLiteral(">="), static_cast<int>(QsOp::GreaterEqual));
+            opCombo->addItem(QStringLiteral("<="), static_cast<int>(QsOp::LessEqual));
+        } else {
+            opCombo->addItem(QStringLiteral("contains"), static_cast<int>(QsOp::Contains));
+        }
+        opCombo->addItem(QStringLiteral("Select All"), static_cast<int>(QsOp::All));
+        const int at = opCombo->findText(keep);
+        opCombo->setCurrentIndex(at >= 0 ? at : 0);
+    };
+    auto syncProperty = [&] {
+        const int row = propList->currentRow();
+        if (row < 0 || row >= static_cast<int>(props.size())) return;
+        const QuickSelectProp& p = props[row];
+        rebuildOps(p.numeric);
+        QSignalBlocker block(valueCombo);
+        valueCombo->clear();
+        for (const QString& v : editor_->quickSelectValueChoices(p.key)) valueCombo->addItem(v);
+        if (const auto s = sampleForType(typeCombo->currentData().toString()))
+            valueCombo->setCurrentText(quickSelectValue(*s, p.key)); // start on this object's own
+        valueCombo->setEnabled(opCombo->currentData().toInt() != static_cast<int>(QsOp::All));
+        updateCount();
+    };
+    auto rebuildProps = [&] {
+        const auto s = sampleForType(typeCombo->currentData().toString());
+        props = s ? quickSelectProps(*s) : quickSelectGeneralProps();
+        QSignalBlocker block(propList);
+        propList->clear();
+        for (const QuickSelectProp& p : props) propList->addItem(p.label);
+        if (propList->count()) propList->setCurrentRow(0);
+        syncProperty();
+    };
+
+    connect(typeCombo, &QComboBox::currentIndexChanged, &dlg, [&](int) { rebuildProps(); });
+    connect(propList, &QListWidget::currentRowChanged, &dlg, [&](int) { syncProperty(); });
+    connect(opCombo, &QComboBox::currentIndexChanged, &dlg, [&](int) {
+        valueCombo->setEnabled(opCombo->currentData().toInt() != static_cast<int>(QsOp::All));
+        updateCount();
+    });
+    connect(valueCombo, &QComboBox::currentTextChanged, &dlg, [&](const QString&) { updateCount(); });
+    connect(applyTo, &QComboBox::currentIndexChanged, &dlg, [&](int) { updateCount(); });
+    connect(howCombo, &QComboBox::currentIndexChanged, &dlg, [&](int) { updateCount(); });
+    connect(appendCb, &QCheckBox::toggled, &dlg, [&](bool) { updateCount(); });
+
+    rebuildProps();
+    if (dlg.exec() != QDialog::Accepted) return;
+    editor_->applyQuickSelect(currentQuery());
+    canvas_->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::promptFilletRadius() {
@@ -5778,6 +6972,8 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
     auto* lblCombo = new QComboBox(page);
     lblCombo->addItem(QStringLiteral("Numbers"), QStringLiteral("numbers"));
     lblCombo->addItem(QStringLiteral("Letters"), QStringLiteral("letters"));
+    lblCombo->addItem(QStringLiteral("Mixed"), QStringLiteral("mixed")); // A1..A10, B1..B10
+
     lblCombo->setCurrentIndex(std::max(0, lblCombo->findData(init.annotation)));
     auto* ordCombo = new QComboBox(page);
     ordCombo->addItem(QStringLiteral("Top"), QStringLiteral("top"));
@@ -6131,7 +7327,7 @@ void MainWindow::buildWireRibbonTab() {
     wg->addWidget(colorBox, 0, 1, 1, 2);
     wg->addWidget(new QLabel(QStringLiteral("AWG"), wireW), 1, 0);
     wg->addWidget(awgBox, 1, 1, 1, 2);
-    wg->addWidget(new QLabel(QStringLiteral("Net"), wireW), 2, 0);
+    wg->addWidget(new QLabel(QStringLiteral("Label"), wireW), 2, 0);
     wg->addWidget(netEdit, 2, 1, 1, 2);
     auto* wireGroup = ribbonGroup(QStringLiteral("Wire"), wireW);
     otherWireGroups.push_back(wireGroup);
@@ -6387,6 +7583,28 @@ void MainWindow::buildWireRibbonTab() {
         editor_->screenShowS() = on;
         if (canvas_) canvas_->update();
     });
+    // "Not Connected": marks the drain leg's end with an "X" (deliberately unterminated).
+    // Sticky default for the next shield placed, like "Show S"; unchecked by default.
+    auto* scNotConnected = new QCheckBox(QStringLiteral("Not Connected"), rightW);
+    connect(scNotConnected, &QCheckBox::toggled, this, [this](bool on) {
+        editor_->screenNotConnected() = on;
+        if (canvas_) canvas_->update();
+    });
+    // Size of that "X" (half-size, world units). Only meaningful with the box ticked, so
+    // the field enables/disables with it.
+    auto* scNcSize = new QDoubleSpinBox(rightW);
+    scNcSize->setRange(0.5, 100.0);
+    scNcSize->setDecimals(1);
+    scNcSize->setMinimumWidth(60);
+    scNcSize->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    scNcSize->setToolTip(QStringLiteral("Size of the \"X\" terminating the drain leg"));
+    connect(scNcSize, &QDoubleSpinBox::editingFinished, this, [this, scNcSize] {
+        editor_->screenNcSize() = scNcSize->value();
+        if (canvas_) canvas_->update();
+    });
+    auto* scNcSizeLabel = scLabel(rightW, QStringLiteral("X size"));
+    scNcSize->setEnabled(editor_->screenNotConnected());
+    connect(scNotConnected, &QCheckBox::toggled, scNcSize, &QWidget::setEnabled);
     // "S" label text size.
     auto* scSSize = new QDoubleSpinBox(rightW);
     scSSize->setRange(1.0, 100.0);
@@ -6420,6 +7638,9 @@ void MainWindow::buildWireRibbonTab() {
     rightG->addWidget(scLabel(rightW, QStringLiteral("Amount")), 2, 0);
     rightG->addWidget(scAmount, 2, 1);
     rightG->addWidget(scShowS, 2, 2, 1, 2);
+    rightG->addWidget(scNotConnected, 3, 0, 1, 2);
+    rightG->addWidget(scNcSizeLabel, 3, 2);
+    rightG->addWidget(scNcSize, 3, 3);
     scOuter->addWidget(rightW);
 
     // ---- Style: line type / dash scale / colour ----
@@ -6530,33 +7751,125 @@ void MainWindow::buildWireRibbonTab() {
     ortho90->setChecked(editor_->wireOrtho());
     ortho90->setToolTip(QStringLiteral("Constrain wire drawing to horizontal / vertical segments"));
     connect(ortho90, &QCheckBox::toggled, this, [this](bool on) { editor_->wireOrtho() = on; });
+    // The pitch rule ALSO governs live routing: the wire being drawn is held one pitch
+    // clear of the runs already on the drawing, so parallel runs can never end up on top
+    // of each other. It uses the very same rule above (connector pitch / custom), which is
+    // why there is no separate distance here — a wire pulled off a connector lines up with
+    // the pins it came from. Applies to a single wire too, not only a fan-out.
+    auto* clearOn = new QCheckBox(QStringLiteral("Keep clearance while routing"), routeW);
+    clearOn->setChecked(editor_->wireClearanceOn());
+    clearOn->setToolTip(QStringLiteral(
+        "While routing, hold one pitch clear of neighbouring wire runs — the same Pitch "
+        "rule as above (the connector's pin pitch, or the custom value). Applies to a "
+        "single wire as well as a fan-out."));
+    connect(clearOn, &QCheckBox::toggled, this,
+            [this](bool on) { editor_->wireClearanceOn() = on; });
     rgl->setHorizontalSpacing(8);
     rgl->addWidget(ortho90, 0, 0, 1, 3);
     rgl->addWidget(new QLabel(QStringLiteral("Pitch rule"), routeW), 1, 0);
     // Fall-menu + its value on the SAME row, value to the side of the dropdown.
     rgl->addWidget(gapRule, 1, 1);
     rgl->addWidget(gapVal, 1, 2);
+    rgl->addWidget(clearOn, 2, 0, 1, 3);
     auto* routeGroup = ribbonGroup(QStringLiteral("Routing"), routeW);
     otherWireGroups.push_back(routeGroup);
-    // Logical order: Place | Routing (drawing geometry) | Wire | Insulation | Resistance.
-    // Routing is created last but inserted right after Place so the geometry/behaviour
-    // groups lead and the electrical-property groups follow.
+
+    // ---- Marking: what is written along the wire itself ----
+    // The colour and the cross-section are switched on independently and repeated
+    // `Count` times along the run. These are the defaults for wires drawn next, and they
+    // are applied to any wires currently selected as well.
+    auto* markW = new QWidget(wireTab_);
+    auto* mkg = new QGridLayout(markW);
+    mkg->setContentsMargins(0, 0, 0, 0);
+    mkg->setSpacing(2);
+    mkg->setHorizontalSpacing(8);
+    auto* showCol = new QCheckBox(QStringLiteral("Colour"), markW);
+    showCol->setChecked(editor_->wireShowColorName());
+    showCol->setToolTip(QStringLiteral("Write the wire colour along the wire"));
+    auto* colMode = new QComboBox(markW);
+    colMode->addItems({QStringLiteral("2 letters"), QStringLiteral("Full name")});
+    colMode->setCurrentIndex(editor_->wireColorNameMode() == QLatin1String("full") ? 1 : 0);
+    colMode->setToolTip(QStringLiteral("Show the colour as its 2-letter code (WH) or its "
+                                      "full name (White)"));
+    colMode->setEnabled(editor_->wireShowColorName());
+    auto* showGauge = new QCheckBox(QStringLiteral("Gauge"), markW);
+    showGauge->setChecked(editor_->wireShowGaugeName());
+    showGauge->setToolTip(QStringLiteral("Write the cross-section along the wire"));
+    auto* markCount = new QSpinBox(markW);
+    markCount->setRange(1, 20);
+    markCount->setValue(editor_->wireAnnotCountDefault());
+    markCount->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+    markCount->setMinimumWidth(56);
+    markCount->setToolTip(QStringLiteral("How many times the marking repeats along the wire "
+                                        "(each one can then be dragged along it)"));
+    auto* markSize = new QDoubleSpinBox(markW);
+    markSize->setRange(1.0, 50.0);
+    markSize->setDecimals(2);
+    markSize->setValue(editor_->wireAnnotSize());
+    markSize->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    markSize->setMinimumWidth(60);
+    markSize->setToolTip(QStringLiteral("Marking text height (world units)"));
+    // Every control writes the default AND paints the current selection, so the group
+    // works both before drawing and on wires already on the sheet.
+    auto pushMarking = [this] { editor_->applyWireMarkingToSelection(); };
+    connect(showCol, &QCheckBox::toggled, this, [this, colMode, pushMarking](bool on) {
+        editor_->wireShowColorName() = on;
+        colMode->setEnabled(on);
+        pushMarking();
+    });
+    connect(colMode, &QComboBox::currentTextChanged, this,
+            [this, pushMarking](const QString& t) {
+                editor_->wireColorNameMode() = t.startsWith(QLatin1String("Full"))
+                                                   ? QStringLiteral("full")
+                                                   : QStringLiteral("code");
+                pushMarking();
+            });
+    connect(showGauge, &QCheckBox::toggled, this, [this, pushMarking](bool on) {
+        editor_->wireShowGaugeName() = on;
+        pushMarking();
+    });
+    connect(markCount, &QSpinBox::valueChanged, this, [this, pushMarking](int v) {
+        editor_->wireAnnotCountDefault() = v;
+        pushMarking();
+    });
+    connect(markSize, &QDoubleSpinBox::editingFinished, this,
+            [this, markSize, pushMarking] {
+                editor_->wireAnnotSize() = markSize->value();
+                pushMarking();
+            });
+    mkg->addWidget(showCol, 0, 0);
+    mkg->addWidget(colMode, 0, 1, 1, 2);
+    mkg->addWidget(showGauge, 1, 0);
+    mkg->addWidget(new QLabel(QStringLiteral("Count"), markW), 1, 1);
+    mkg->addWidget(markCount, 1, 2);
+    mkg->addWidget(new QLabel(QStringLiteral("Size"), markW), 2, 1);
+    mkg->addWidget(markSize, 2, 2);
+    auto* markGroup = ribbonGroup(QStringLiteral("Marking"), markW);
+    otherWireGroups.push_back(markGroup);
+    // Logical order: Place | Routing (drawing geometry) | Marking | Wire | Insulation |
+    // Resistance. Routing/Marking are created last but inserted right after Place so the
+    // geometry/behaviour groups lead and the electrical-property groups follow.
     lay->insertWidget(1, routeGroup);
+    lay->insertWidget(2, markGroup);
 
     // Show/hide the Screen panel + (re)load its fields from the Editor's current
     // defaults whenever placement arms, is cancelled, is placed, or is frozen (Tab).
     // While armed, every OTHER Wire-ribbon group is hidden so only Screen shows.
-    auto syncScreenGroup = [this, scGroup, scShowS, scSSize, refreshShieldRadii, scLegDir, scLeg,
-                           scAmount, scShape, scLineType, scDash, otherWireGroups] {
+    auto syncScreenGroup = [this, scGroup, scShowS, scSSize, scNotConnected, scNcSize,
+                           refreshShieldRadii, scLegDir, scLeg, scAmount, scShape, scLineType,
+                           scDash, otherWireGroups] {
         const bool armed = editor_->screenArmed();
         scGroup->setVisible(armed);
         for (QWidget* g : otherWireGroups) g->setVisible(!armed);
         if (!armed) return;
         refreshShieldRadii(); // radii + ratio values, enable states, lock checkboxes
         QSignalBlocker b1(scShowS), b2(scLegDir), b3(scLeg), b4(scAmount), b5(scShape),
-            b6(scLineType), b7(scDash), b8(scSSize);
+            b6(scLineType), b7(scDash), b8(scSSize), b9(scNotConnected), b10(scNcSize);
         scShowS->setChecked(editor_->screenShowS());
         scSSize->setValue(editor_->screenSSize());
+        scNotConnected->setChecked(editor_->screenNotConnected());
+        scNcSize->setValue(editor_->screenNcSize());
+        scNcSize->setEnabled(editor_->screenNotConnected());
         const QString dir = editor_->screenLegDir();
         scLegDir->setCurrentText(dir.isEmpty() ? QStringLiteral("Bottom")
                                                : dir.left(1).toUpper() + dir.mid(1));
@@ -6595,6 +7908,15 @@ void MainWindow::showWireRibbon(bool on) {
             if (ribbon_->tabText(i) == QStringLiteral("Schematic build")) { sb = i; break; }
         ribbon_->setCurrentIndex(sb);
     }
+}
+
+void MainWindow::showHarnessBuilder() {
+    // Modeless and kept alive: the drawing stays usable while a harness is described, and a
+    // part-built definition survives Close.
+    if (!harnessDlg_) harnessDlg_ = new HarnessBuilderDialog(editor_, this);
+    harnessDlg_->show();
+    harnessDlg_->raise();
+    harnessDlg_->activateWindow();
 }
 
 void MainWindow::showConnectorDialog() {
@@ -6868,7 +8190,8 @@ void MainWindow::showBypassTable() {
 static const std::vector<std::pair<QString, QString>>& validationRuleDefs() {
     static const std::vector<std::pair<QString, QString>> defs = {
         {QStringLiteral("nc"), QStringLiteral("Pin not connected (no wire and no X marker)")},
-        {QStringLiteral("openwire"), QStringLiteral("Wire with an open (unconnected) end")},
+        {QStringLiteral("openwire"), QStringLiteral("Wire with an unconnected end (an "
+                                                   "X-terminated end counts as open)")},
         {QStringLiteral("dup"), QStringLiteral("Duplicate pin labels in a connector")},
         {QStringLiteral("mixedpins"), QStringLiteral("Connector mixes numeric and letter pins")},
         {QStringLiteral("norefdes"), QStringLiteral("Connector has no reference designator")},

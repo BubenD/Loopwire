@@ -114,7 +114,11 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
                       ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
                       DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
-                      ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove, TwistMove };
+                      ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove, TwistMove,
+                      ShieldRy,
+                      // A wire's colour/gauge marking, and a Wire label attached to a wire:
+                      // both are constrained to slide ALONG the wire and nowhere else.
+                      WireMark, WireLabelSlide };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -274,7 +278,73 @@ std::vector<Vec2> collectPinEnds(const Document* doc) {
     return out;
 }
 
-std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}) {
+// A shield's local frame, derived exactly the way the renderer derives it so grips,
+// hit-testing and resizing all agree: the perpendicular-to-wires rotation, the centre
+// (midpoint of the OUTERMOST caught wires along the major axis), both radii, and how
+// many leading points are caught wires (anything after them is the drain).
+struct ShieldFrame {
+    Vec2 center{}, major{}, minor{};
+    double rot = 0.0, rx = 12.0, ry = 12.0;
+    int k = 0;
+    bool valid = false;
+};
+
+ShieldFrame shieldFrameOf(const Entity& e) {
+    ShieldFrame f;
+    f.k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                   static_cast<int>(e.points.size()));
+    if (f.k < 1) return f;
+    const std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + f.k);
+    f.rot = e.meta.contains("rot") ? e.meta.value("rot").toDouble()
+                                   : EntityRenderer::shieldRotation(crossings);
+    f.major = {std::cos(f.rot), std::sin(f.rot)};
+    f.minor = {-std::sin(f.rot), std::cos(f.rot)};
+    double tMin = 1e18, tMax = -1e18;
+    Vec2 pMin{}, pMax{};
+    for (const Vec2& c : crossings) {
+        const double t = c.x * f.major.x + c.y * f.major.y;
+        if (t < tMin) { tMin = t; pMin = c; }
+        if (t > tMax) { tMax = t; pMax = c; }
+    }
+    f.center = {(pMin.x + pMax.x) * 0.5, (pMin.y + pMax.y) * 0.5};
+    f.rx = e.meta.value("rx").toDouble(12.0);
+    f.ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble() : (tMax - tMin) / 2.0 + 6.0;
+    f.valid = true;
+    return f;
+}
+
+// Where the drain leg leaves the outline, for the leg side stored in meta["legDir"].
+Vec2 shieldLegEdge(const ShieldFrame& f, const QString& legDir) {
+    if (legDir == QLatin1String("top"))
+        return {f.center.x + f.ry * f.major.x, f.center.y + f.ry * f.major.y};
+    if (legDir == QLatin1String("left"))
+        return {f.center.x + f.rx * f.minor.x, f.center.y + f.rx * f.minor.y};
+    if (legDir == QLatin1String("right"))
+        return {f.center.x - f.rx * f.minor.x, f.center.y - f.rx * f.minor.y};
+    return {f.center.x - f.ry * f.major.x, f.center.y - f.ry * f.major.y}; // "bottom"
+}
+
+// The point a wire's run / knee handle sits on (nullopt for every other role). Used to
+// measure how far the HELD wire actually moved, so the rest of a selected bundle can be
+// pulled by exactly that — snapping, ortho and clearance included.
+std::optional<Vec2> wireGripPoint(const Entity& w, GripRole role, int index) {
+    if (w.type != EntityType::Wire) return std::nullopt;
+    const int n = static_cast<int>(w.points.size());
+    if (role == GripRole::Vertex) {
+        if (index < 0 || index >= n) return std::nullopt;
+        return w.points[index];
+    }
+    if (role == GripRole::WireSegMove) {
+        if (index < 0 || index + 1 >= n) return std::nullopt;
+        return lerp(w.points[index], w.points[index + 1], 0.5);
+    }
+    return std::nullopt;
+}
+
+// `doc` is only needed for entities whose handle position is defined by ANOTHER entity
+// (a Wire label attached to a wire sits wherever that wire's fraction lands).
+std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {},
+                          const Document* doc = nullptr) {
     std::vector<Grip> g;
     switch (e.type) {
     case EntityType::Line:
@@ -398,6 +468,27 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             for (int i = 1; i <= n - 3; ++i)
                 g.push_back({lerp(e.points[i], e.points[i + 1], 0.5), GripRole::WireSegMove, i});
         }
+        // One grip per colour/gauge marking, so each can be slid along the run (and
+        // nowhere else — the marking belongs to the wire).
+        {
+            const auto marks = wireAnnots(e);
+            for (int i = 0; i < static_cast<int>(marks.size()); ++i)
+                g.push_back({marks[i].pos, GripRole::WireMark, i});
+        }
+        break;
+    }
+    case EntityType::NetLabel: {
+        // An attached Wire label slides along its wire; a free one moves normally. Its
+        // handle sits where the wire actually puts it, not at the original click point.
+        const QString wid = e.meta.value("wireId").toString();
+        if (wid.isEmpty() || !doc) break;
+        for (const auto& w : doc->entities()) {
+            if (w.id != wid || w.type != EntityType::Wire) continue;
+            Vec2 at, dir;
+            if (wirePointAtFraction(w, e.meta.value("annT").toDouble(0.5), at, dir))
+                g.push_back({at, GripRole::WireLabelSlide, 0});
+            break;
+        }
         break;
     }
     case EntityType::Twist: {
@@ -418,39 +509,30 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         // point/height; the side is re-derived automatically next time grips are drawn).
         // Plus the drain endpoint (at its own raw position, outside the ellipse) and a
         // Move handle at the centre.
-        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
-                               static_cast<int>(e.points.size()));
-        if (k >= 1) {
-            const double rx = e.meta.value("rx").toDouble(12.0);
+        const ShieldFrame f = shieldFrameOf(e);
+        const int k = f.valid ? f.k
+                             : std::min(e.meta.value("catch").toInt(
+                                            static_cast<int>(e.points.size())),
+                                        static_cast<int>(e.points.size()));
+        if (f.valid) {
             const QString shape = e.meta.value("shape").toString(QStringLiteral("ellipse"));
-            // Tilted frame: perpendicular-to-wires angle stored at placement (older shields
-            // fall back to the first->last-wire direction).
-            std::vector<Vec2> crossings(e.points.begin(), e.points.begin() + k);
-            const double rot = e.meta.contains("rot")
-                                   ? e.meta.value("rot").toDouble()
-                                   : EntityRenderer::shieldRotation(crossings);
-            const Vec2 major{std::cos(rot), std::sin(rot)};
-            const Vec2 minor{-std::sin(rot), std::cos(rot)};
-            // Centre = midpoint of the outermost caught wires (matches the renderer).
-            double tMin = 1e18, tMax = -1e18;
-            Vec2 pMin{}, pMax{};
-            for (int i = 0; i < k; ++i) {
-                const double t = e.points[i].x * major.x + e.points[i].y * major.y;
-                if (t < tMin) { tMin = t; pMin = e.points[i]; }
-                if (t > tMax) { tMax = t; pMax = e.points[i]; }
+            for (int i = 0; i < f.k; ++i) {
+                const Vec2 rel = e.points[i] - f.center;
+                const double along = rel.x * f.major.x + rel.y * f.major.y; // up the major axis
+                const double half = shieldEdgeHalfWidth(shape, f.rx, f.ry, along);
+                const Vec2 base{f.center.x + along * f.major.x, f.center.y + along * f.major.y};
+                g.push_back({{base.x - half * f.minor.x, base.y - half * f.minor.y},
+                             GripRole::Vertex, i});
+                g.push_back({{base.x + half * f.minor.x, base.y + half * f.minor.y},
+                             GripRole::Vertex, i});
             }
-            const Vec2 center{(pMin.x + pMax.x) * 0.5, (pMin.y + pMax.y) * 0.5};
-            const double ry = e.meta.contains("ry") ? e.meta.value("ry").toDouble()
-                                                    : (tMax - tMin) / 2.0 + 6.0;
-            for (int i = 0; i < k; ++i) {
-                const Vec2 rel = e.points[i] - center;
-                const double along = rel.x * major.x + rel.y * major.y; // offset up the major axis
-                const double half = shieldEdgeHalfWidth(shape, rx, ry, along);
-                const Vec2 base{center.x + along * major.x, center.y + along * major.y};
-                g.push_back({{base.x - half * minor.x, base.y - half * minor.y}, GripRole::Vertex, i});
-                g.push_back({{base.x + half * minor.x, base.y + half * minor.y}, GripRole::Vertex, i});
-            }
-            g.push_back({center, GripRole::Move, 0});
+            // The two LARGE-RADIUS extremes (the outline's major-axis tips). Dragging
+            // either resizes the shield's half-height so it can reach further wires.
+            g.push_back({{f.center.x + f.ry * f.major.x, f.center.y + f.ry * f.major.y},
+                         GripRole::ShieldRy, 0});
+            g.push_back({{f.center.x - f.ry * f.major.x, f.center.y - f.ry * f.major.y},
+                         GripRole::ShieldRy, 1});
+            g.push_back({f.center, GripRole::Move, 0});
         }
         for (int i = k; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i}); // drain endpoint
@@ -633,10 +715,14 @@ void Editor::setTool(ToolId t) {
     awaitTwistAlign_ = false; // ...and twist-align pick mode
     awaitTwistRemove_ = false; // ...and remove-twist mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
+    awaitQuickSelect_ = false; // ...and a Quick Select waiting for its sample objects
+    const bool wasMatching = awaitMatchProps_;
     awaitMatchProps_ = false;  // ...and match-properties mode
     matchSourceId_.clear();
+    if (wasMatching) emit matchPropsChanged(); // un-latch the ribbon's Match button
     const bool wasTwistArmed = !twistArmType_.isEmpty();
     twistArmType_.clear();    // ...and the twist / screen band modes
+    twistFrozen_ = false;
     if (wasTwistArmed) emit twistArmChanged();
     const bool wasScreenArmed = screenArm_;
     screenArm_ = false;
@@ -645,6 +731,7 @@ void Editor::setTool(ToolId t) {
     if (wasScreenArmed) emit screenArmedChanged();
     connectorArmed_ = false; // selecting/leaving the Connector tool hides the preview
     connectorFrozen_ = false;
+    if (arrayActive_) cancelArray(); // ...and an un-placed array (its ribbon closes with it)
     editing_ = false;
     gripGrab_ = false;
     pressed_ = false;
@@ -1054,6 +1141,10 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
             return;
         }
         applyEditDrag(p);
+        // A shield's large-radius joint: settle the new size against the wires it now
+        // encloses (or snap back if it reached none). Must run while editGhost_ still
+        // holds the pre-drag shield, which is what the revert restores.
+        if (editRole_ == static_cast<int>(GripRole::ShieldRy)) commitShieldResize(editEntityId_);
         // Shift while placing a double line/polyline END onto another line: cap BOTH
         // physical runs flush to that line (they miter to touch it) rather than ending
         // square at the centreline. Cap the MOVED end to whatever cutter passes through
@@ -1253,6 +1344,8 @@ void Editor::onPointerMove(const Vec2& raw) {
     // rebuild, so the preview tracks the cursor without lag.
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
         trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_) ||
+        arrayAwaitingCenter() || // a polar array's centre tracks the cursor until clicked
+        harnessPlacing_ ||       // the generated harness ghosts under the cursor
         ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
         emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
 }
@@ -1385,7 +1478,18 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // For Screen, once frozen (Tab), ANY click commits at the frozen end point — the
     // click no longer redefines the line, so ribbon fields can be tuned beforehand.
     if (!twistArmType_.isEmpty() || screenArm_) {
-        if (!wireBandHasStart_) {
+        // A FROZEN twist is checked before the "no start yet" case: a click must not
+        // commit it. Only Enter places a frozen twist; a click discards the frozen
+        // preview and goes back to placing, taking the click as the new first end.
+        if (!twistArmType_.isEmpty() && twistFrozen_) {
+            twistFrozen_ = false;
+            wireBandStart_ = raw;
+            wireBandHasStart_ = true;
+            emit message(QStringLiteral(
+                "Twist preview released — click the other end of the crossing line"));
+            emit twistArmChanged();
+            emit overlayChanged();
+        } else if (!wireBandHasStart_) {
             wireBandStart_ = raw;
             wireBandHasStart_ = true;
             emit message(QStringLiteral("Click the other end of the crossing line"));
@@ -1397,6 +1501,20 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             wireBandHasStart_ = false;
             finishWireBand(raw);
         }
+        return;
+    }
+
+    // Placing a generated harness: this click drops it where the ghost sits.
+    if (harnessPlacing_) {
+        placeHarnessAt(p);
+        return;
+    }
+
+    // A live array owns the canvas: the click supplies the polar centre or picks the
+    // path object, and never falls through to selection (which would drop the very
+    // objects being arrayed).
+    if (arrayActive_) {
+        handleArrayPress(p);
         return;
     }
 
@@ -1940,6 +2058,51 @@ void Editor::finishRegionSelect(bool subtract) {
                         add.push_back(m->id);
         for (const auto& id : add) selected_.push_back(id);
     }
+    // A green region drawn tightly over a twist also catches the wires running under it.
+    // If a selected wire's ONLY contact with the region falls inside a selected twist's
+    // glyph band, the user meant just the twist — drop that wire from the selection. (A
+    // wider region that also crosses the wire beyond the twist keeps the wire.)
+    if (!subtract) {
+        std::vector<Bounds> twistBands;
+        for (const QString& id : selected_)
+            if (Entity* t = entityById(id); t && t->type == EntityType::Twist) {
+                const Bounds b = t->bounds();
+                if (b.valid) twistBands.push_back(b);
+            }
+        if (!twistBands.empty()) {
+            const double tol = worldTolerance();
+            auto insideAnyBand = [&](const Vec2& q) {
+                for (const Bounds& b : twistBands)
+                    if (q.x >= b.min.x - tol && q.x <= b.max.x + tol && q.y >= b.min.y - tol &&
+                        q.y <= b.max.y + tol)
+                        return true;
+                return false;
+            };
+            std::vector<QString> drop;
+            for (const QString& id : selected_) {
+                Entity* w = entityById(id);
+                if (!w || w->type != EntityType::Wire) continue;
+                bool anyContact = false, contactOutside = false;
+                for (const auto& s : entitySelectSegments(*w)) {
+                    for (const Vec2& q : {s.first, s.second})
+                        if (pointInPolygon(region, q)) {
+                            anyContact = true;
+                            if (!insideAnyBand(q)) contactOutside = true;
+                        }
+                    for (const auto& re : regionEdges)
+                        if (auto x = segmentSegmentIntersection(s.first, s.second, re.first,
+                                                                re.second)) {
+                            anyContact = true;
+                            if (!insideAnyBand(*x)) contactOutside = true;
+                        }
+                }
+                if (anyContact && !contactOutside) drop.push_back(id);
+            }
+            for (const QString& id : drop)
+                selected_.erase(std::remove(selected_.begin(), selected_.end(), id),
+                                selected_.end());
+        }
+    }
     emit selectionChanged();
 }
 
@@ -1959,7 +2122,7 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
             p.drawRect(QRectF(tl, br).normalized());
         }
     }
-    for (const auto& g : gripsOf(e, collectPinEnds(doc_))) {
+    for (const auto& g : gripsOf(e, collectPinEnds(doc_), doc_)) {
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
@@ -1995,7 +2158,7 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     for (const auto& id : selected_) {
         Entity* e = entityById(id);
         if (!e) continue;
-        for (const auto& gr : gripsOf(*e, pinEnds)) {
+        for (const auto& gr : gripsOf(*e, pinEnds, doc_)) {
             const double d = distance(at, gr.pos);
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
         }
@@ -2028,6 +2191,30 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
             editGhost_.clear();
             for (const auto& sid : selected_)
                 if (Entity* se = entityById(sid)) editGhost_.push_back(*se);
+            // Moving a connector drags its wires along, so they belong in the preview
+            // too: ghost each attached wire at its original shape, and the live re-routed
+            // wire is drawn over it — the wires' movement previews just like the
+            // connector's. (They also become the "original" a Shift release restores to.)
+            for (const auto& sid : selected_) {
+                Entity* se = entityById(sid);
+                if (!se || se->type != EntityType::Connector) continue;
+                const ConnectorGeometry cg =
+                    connectorGeometry(se->a, connectorSpecFromMeta(se->meta));
+                for (const auto& w : doc_->entities()) {
+                    if (w.type != EntityType::Wire || w.points.empty()) continue;
+                    bool already = false;
+                    for (const Entity& gh : editGhost_)
+                        if (gh.id == w.id) { already = true; break; }
+                    if (already) continue;
+                    bool attached = false;
+                    for (const Vec2& pt : w.points) {
+                        for (const Vec2& pe : cg.pinEnd)
+                            if (distance(pt, pe) < 1e-6) { attached = true; break; }
+                        if (attached) break;
+                    }
+                    if (attached) editGhost_.push_back(w);
+                }
+            }
 
             // Collect every coincident point-joint across the SELECTED entities so
             // a shared joint moves on all of them at once. Non-point joints
@@ -2074,10 +2261,21 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
                        gr.role == GripRole::ArcMid || gr.role == GripRole::EllipseMajor ||
                        gr.role == GripRole::EllipseMinor)
                 editAnchor_ = e->center;
-            emit message(editGrips_.size() > 1
-                             ? QStringLiteral("Shared joint grabbed (%1 objects) — click to place")
-                                   .arg(editGrips_.size())
-                             : QStringLiteral("Joint grabbed — move and click to place, Esc to cancel"));
+            // A wire run/knee with several wires selected can pull the whole bundle —
+            // say so, since Shift is a live modifier the drag only reveals if you try it.
+            const bool bundlePull =
+                e->type == EntityType::Wire && selected_.size() > 1 &&
+                (gr.role == GripRole::WireSegMove || gr.role == GripRole::Vertex);
+            if (bundlePull)
+                emit message(QStringLiteral("Joint grabbed — hold Shift to pull all %1 selected "
+                                            "wires as a batch; release and the others return "
+                                            "to where they were")
+                                 .arg(selected_.size()));
+            else
+                emit message(editGrips_.size() > 1
+                                 ? QStringLiteral("Shared joint grabbed (%1 objects) — click to place")
+                                       .arg(editGrips_.size())
+                                 : QStringLiteral("Joint grabbed — move and click to place, Esc to cancel"));
             return true;
         }
     }
@@ -2090,15 +2288,31 @@ void Editor::dragAttachedWires(const Entity& conn, const Vec2& delta,
     if (QApplication::keyboardModifiers() & Qt::ControlModifier) return;
     if (!doc_ || conn.type != EntityType::Connector) return;
     const ConnectorGeometry g = connectorGeometry(conn.a, connectorSpecFromMeta(conn.meta));
+    constexpr double kOn = 1e-6; // "sits exactly on the pin end"
+    auto onPin = [&](const Vec2& pt) {
+        for (const Vec2& pe : g.pinEnd)
+            if (distance(pt, pe) < kOn) return true;
+        return false;
+    };
     for (auto& w : doc_->entities()) {
         if (w.type != EntityType::Wire || w.points.empty()) continue;
         if (std::find(movingIds.begin(), movingIds.end(), w.id) != movingIds.end()) continue;
-        for (auto& pt : w.points)
-            for (const Vec2& pe : g.pinEnd)
-                if (distance(pt, pe) < 1e-6) {
-                    pt = pt + delta;
-                    break;
-                }
+        const int n = static_cast<int>(w.points.size());
+        // Which ends sit on this connector's pins, decided BEFORE anything moves — squaring
+        // a run can insert a knee, which shifts the later indices.
+        const bool firstOnPin = n >= 1 && onPin(w.points.front());
+        const bool lastOnPin = n >= 2 && onPin(w.points.back());
+        // Interior vertices first, while the original indices still hold: one parked on a pin
+        // follows it (there is no angle to keep in the middle of a run).
+        for (int i = 1; i + 1 < n; ++i)
+            if (onPin(w.points[i])) w.points[i] = w.points[i] + delta;
+        // Then the ends, LAST one first: squaring the first end may insert points and renumber
+        // everything after it, so the far end is dealt with while its index is still valid.
+        // Each end's knee is re-squared (or given one) so the run keeps its right angle
+        // instead of going diagonal the moment the connector moves off-axis.
+        if (lastOnPin)
+            dragWireEndKeepingRightAngle(w, static_cast<int>(w.points.size()) - 1, delta);
+        if (firstOnPin) dragWireEndKeepingRightAngle(w, 0, delta);
     }
 }
 
@@ -2128,6 +2342,140 @@ void Editor::repositionTwistAtX(Entity& twist, double x) {
         }
         twist.points[i] = {xc, y};
     }
+}
+
+// Slide a shield ALONG the wires it catches: each caught crossing point is re-derived
+// from its own wire at the new x (clamped to that wire's extent, so the shield can never
+// leave the wires), and the drain leg follows by the centre's actual movement so the leg
+// stays attached. A decorative copy with no wire references is left alone (the caller
+// then falls back to a free translate).
+bool Editor::repositionScreenAtX(Entity& screen, double x) {
+    if (!doc_) return false;
+    const QJsonArray ids = screen.meta.value("wires").toArray();
+    const int k = std::min(screen.meta.value("catch").toInt(static_cast<int>(screen.points.size())),
+                           static_cast<int>(screen.points.size()));
+    if (k < 1 || ids.isEmpty()) return false;
+    auto meanOfCaught = [&] {
+        Vec2 c{0, 0};
+        for (int i = 0; i < k; ++i) c = c + screen.points[i];
+        return c * (1.0 / static_cast<double>(k));
+    };
+    const Vec2 before = meanOfCaught();
+    bool moved = false;
+    for (int i = 0; i < k && i < ids.size(); ++i) {
+        Entity* w = entityById(ids[i].toString());
+        if (!w || w->points.size() < 2) continue;
+        double xMin = 1e18, xMax = -1e18;
+        for (const Vec2& pt : w->points) {
+            xMin = std::min(xMin, pt.x);
+            xMax = std::max(xMax, pt.x);
+        }
+        const double xc = std::clamp(x, xMin, xMax);
+        double y = w->points[0].y;
+        for (size_t s = 1; s < w->points.size(); ++s) {
+            const Vec2 a = w->points[s - 1], b = w->points[s];
+            const double lo = std::min(a.x, b.x), hi = std::max(a.x, b.x);
+            if (xc >= lo - 1e-9 && xc <= hi + 1e-9) {
+                const double t = (b.x != a.x) ? (xc - a.x) / (b.x - a.x) : 0.0;
+                y = a.y + (b.y - a.y) * t;
+                break;
+            }
+        }
+        screen.points[i] = {xc, y};
+        moved = true;
+    }
+    if (!moved) return false;
+    const Vec2 shift = meanOfCaught() - before;
+    for (int i = k; i < static_cast<int>(screen.points.size()); ++i)
+        screen.points[i] = screen.points[i] + shift; // drain leg rides along
+    return true;
+}
+
+bool Editor::shieldCatchAt(const Entity& screen, double ry, std::vector<Vec2>& crossings,
+                           std::vector<QString>& wireIds) const {
+    crossings.clear();
+    wireIds.clear();
+    const ShieldFrame f = shieldFrameOf(screen);
+    if (!doc_ || !f.valid) return false;
+    // The wires the outline spans = those crossing a segment along the major axis, from
+    // one large-radius tip to the other. Exactly the geometry the placement fence used.
+    const Vec2 a{f.center.x - ry * f.major.x, f.center.y - ry * f.major.y};
+    const Vec2 b{f.center.x + ry * f.major.x, f.center.y + ry * f.major.y};
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (size_t i = 1; i < w.points.size(); ++i)
+            if (auto x = segmentSegmentIntersection(a, b, w.points[i - 1], w.points[i])) {
+                crossings.push_back(*x);
+                wireIds.push_back(w.id);
+                break; // one crossing per wire
+            }
+    }
+    return true;
+}
+
+void Editor::commitShieldResize(const QString& id) {
+    Entity* e = entityById(id);
+    if (!e || e->type != EntityType::Screen) return;
+    const Entity* orig = nullptr;
+    for (const Entity& g : editGhost_)
+        if (g.id == id) orig = &g;
+    if (!orig) return;
+
+    const double draggedRy = e->meta.value("ry").toDouble();
+    std::vector<Vec2> xs;
+    std::vector<QString> ids;
+    shieldCatchAt(*orig, draggedRy, xs, ids);
+
+    std::vector<QString> prevIds;
+    for (const auto v : orig->meta.value("wires").toArray()) prevIds.push_back(v.toString());
+    auto keyOf = [](std::vector<QString> v) {
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    // The resize only sticks if it actually changed which wires are enclosed. A drag that
+    // stops short of the next wire (or that would enclose none) snaps back, so a shield's
+    // size always corresponds to a real set of caught wires.
+    if (xs.empty() || keyOf(ids) == keyOf(prevIds)) {
+        *e = *orig;
+        emit message(QStringLiteral("Shield size unchanged — no other wire reached"));
+        return;
+    }
+
+    // Adopt the new wire set. The leg keeps its LENGTH, re-anchored to the new outline.
+    const QString legDir = orig->meta.value("legDir").toString(QStringLiteral("bottom"));
+    const ShieldFrame oldF = shieldFrameOf(*orig);
+    double legLen = screenLeg_;
+    if (static_cast<int>(orig->points.size()) > oldF.k && oldF.valid)
+        legLen = distance(orig->points.back(), shieldLegEdge(oldF, legDir));
+
+    Entity next = *orig;
+    next.points.assign(xs.begin(), xs.end());
+    QJsonArray idArr;
+    for (const QString& wid : ids) idArr.append(wid);
+    next.meta.insert("wires", idArr);
+    next.meta.insert("catch", static_cast<int>(xs.size()));
+    // Re-centre on the new set, then keep the dragged half-height — but never smaller than
+    // what it takes to actually enclose that set.
+    ShieldFrame probe = shieldFrameOf(next);
+    double span = 0.0;
+    if (probe.valid) {
+        double tMin = 1e18, tMax = -1e18;
+        for (const Vec2& c : xs) {
+            const double t = c.x * probe.major.x + c.y * probe.major.y;
+            tMin = std::min(tMin, t);
+            tMax = std::max(tMax, t);
+        }
+        span = tMax - tMin;
+    }
+    next.meta.insert("ry", std::max(draggedRy, span / 2.0 + 3.0));
+    const ShieldFrame newF = shieldFrameOf(next);
+    if (newF.valid) {
+        const Vec2 edge = shieldLegEdge(newF, legDir);
+        const Vec2 dir = (edge - newF.center).normalized();
+        next.points.push_back({edge.x + dir.x * legLen, edge.y + dir.y * legLen});
+    }
+    *e = next;
+    emit message(QStringLiteral("Shield resized over %1 wires").arg(xs.size()));
 }
 
 void Editor::beginTwistAlign() {
@@ -2161,10 +2509,25 @@ void Editor::twistAlignTo(const Vec2& dest) {
 
 void Editor::beginMatchProps() {
     if (!doc_) return;
+    // An object already selected IS the source: "click the object, then Match" has to
+    // work just as well as "Match, then click the source" — otherwise the first click
+    // after arming silently re-picks a source and the command looks like it does
+    // nothing. Several objects selected is ambiguous, so that still asks for a pick.
+    const QString preselected = (selected_.size() == 1) ? selected_.front() : QString();
     setTool(ToolId::Select); // uses the pick cursor; setTool clears the flags first...
-    awaitMatchProps_ = true;  // ...so arm AFTER it
-    matchSourceId_.clear();
-    emit message(QStringLiteral("Match properties: click the source object to copy from"));
+    awaitMatchProps_ = true; // ...so arm AFTER it
+    matchSourceId_ = preselected;
+    matchCount_ = 0;
+    if (!matchSourceId_.isEmpty()) {
+        selected_ = {matchSourceId_};
+        emit selectionChanged();
+        emit message(QStringLiteral("Match properties from the selected object — click objects to "
+                                    "paint them (Esc to finish)"));
+    } else {
+        emit message(QStringLiteral("Match properties: click the source object to copy from"));
+    }
+    emit matchPropsChanged();
+    emit changed();
 }
 
 void Editor::matchPropsClick(const Vec2& p) {
@@ -2174,7 +2537,8 @@ void Editor::matchPropsClick(const Vec2& p) {
         // Clicking empty space just re-prompts; the mode stays armed (Esc ends it).
         emit message(matchSourceId_.isEmpty()
                          ? QStringLiteral("Match properties: click the source object")
-                         : QStringLiteral("Match properties: click a target object (Esc to finish)"));
+                         : QStringLiteral("Match properties: click an object to paint it "
+                                          "(Esc to finish)"));
         return;
     }
     // First click captures the source.
@@ -2188,7 +2552,10 @@ void Editor::matchPropsClick(const Vec2& p) {
         return;
     }
     // Later clicks apply to the target under the cursor.
-    if (*hit == matchSourceId_) return; // clicking the source again is a no-op
+    if (*hit == matchSourceId_) {
+        emit message(QStringLiteral("That is the source object — click a different one to paint it"));
+        return;
+    }
     const Entity* src = entityById(matchSourceId_);
     Entity* dst = entityById(*hit);
     if (!src || !dst) return;
@@ -2215,8 +2582,80 @@ void Editor::matchPropsClick(const Vec2& p) {
         dst->meta = merged;
     }
     doc_->setDirty(true);
+    ++matchCount_;
     emit changed();
-    emit message(QStringLiteral("Matched properties onto 1 object — click more, or Esc to finish"));
+    // Say what actually travelled: between different types only the style can, which
+    // otherwise looks like a half-working command.
+    const bool sameType = dst->type == src->type;
+    emit message(QStringLiteral("Matched %1 onto %2 object(s) — click more, or Esc to finish")
+                     .arg(sameType ? QStringLiteral("properties")
+                                   : QStringLiteral("layer / colour / lineweight"))
+                     .arg(matchCount_));
+}
+
+// ---- Quick Select (AutoCAD QSELECT) ----------------------------------------
+// Both orders work, like the other pick commands here: objects already selected open
+// the dialog straight away, otherwise the command stays armed so objects can be picked
+// on the canvas and Enter opens it. The first selected object is the "sample" the
+// dialog reads its property list and starting values from.
+
+void Editor::beginQuickSelect() {
+    if (!doc_) return;
+    if (!selected_.empty()) {
+        openQuickSelect();
+        return;
+    }
+    setTool(ToolId::Select); // so canvas clicks pick objects; setTool clears the flags...
+    awaitQuickSelect_ = true; // ...so arm AFTER it
+    emit message(QStringLiteral("Quick Select: click the objects to sample, then press Enter "
+                                "(Esc cancels)"));
+}
+
+void Editor::openQuickSelect() {
+    if (!doc_) return;
+    awaitQuickSelect_ = false;
+    // No sample: the dialog still opens, offering the properties every object has.
+    emit quickSelectRequested(selected_.empty() ? QString() : selected_.front());
+}
+
+void Editor::cancelQuickSelect() {
+    if (!awaitQuickSelect_) return;
+    awaitQuickSelect_ = false;
+    emit message(QStringLiteral("Quick Select cancelled"));
+}
+
+int Editor::applyQuickSelect(const QuickSelectQuery& q) {
+    if (!doc_) return 0;
+    selected_ = quickSelectMatchIds(doc_->entities(), q, selected_);
+    emit selectionChanged();
+    emit changed();
+    emit message(selected_.empty()
+                     ? QStringLiteral("Quick Select: nothing matched the filter")
+                     : QStringLiteral("Quick Select: %1 object(s) selected").arg(selected_.size()));
+    return static_cast<int>(selected_.size());
+}
+
+std::vector<QString> Editor::quickSelectValueChoices(const QString& key) const {
+    if (!doc_) return {};
+    return quickSelectDistinctValues(doc_->entities(), key);
+}
+
+std::vector<QString> Editor::presentEntityTypes() const {
+    std::vector<QString> out;
+    if (!doc_) return out;
+    for (const auto& e : doc_->entities()) {
+        const QString name = entityTypeToString(e.type);
+        if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::optional<Entity> Editor::entityCopy(const QString& id) const {
+    if (!doc_) return std::nullopt;
+    for (const auto& e : doc_->entities())
+        if (e.id == id) return e;
+    return std::nullopt;
 }
 
 std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* catchOut) const {
@@ -2299,6 +2738,157 @@ std::optional<Vec2> Editor::frozenGrabFeature(const Vec2& p) const {
         if (d < best) { best = d; hit = f; }
     }
     return hit;
+}
+
+// ---- Wire label & marking --------------------------------------------------
+
+QString Editor::wireAt(const Vec2& p) const {
+    if (!doc_) return {};
+    const double tol = std::max(worldTolerance(), 1e-3);
+    QString best;
+    double bestDist = tol;
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Wire || e.points.size() < 2) continue;
+        for (size_t i = 1; i < e.points.size(); ++i) {
+            const double d = closestPointOnSegment(p, e.points[i - 1], e.points[i]).distance;
+            if (d <= bestDist) { bestDist = d; best = e.id; }
+        }
+    }
+    return best;
+}
+
+void Editor::setSelectionWireLabel(const QString& text) {
+    if (!doc_) return;
+    pushUndo();
+    int n = 0;
+    for (const QString& id : selected_) {
+        Entity* w = entityById(id);
+        if (!w || w->type != EntityType::Wire) continue;
+        w->meta.insert(QStringLiteral("wireLabel"), text);
+        ++n;
+        // Any Wire label placed on this wire shows the same text.
+        for (auto& lab : doc_->entities())
+            if (lab.type == EntityType::NetLabel &&
+                lab.meta.value(QStringLiteral("wireId")).toString() == id)
+                lab.meta.insert(QStringLiteral("text"), text);
+    }
+    if (n == 0) return;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::applyWireMarkingToSelection() {
+    if (!doc_ || selected_.empty()) return;
+    bool any = false;
+    for (const QString& id : selected_) {
+        Entity* w = entityById(id);
+        if (!w || w->type != EntityType::Wire) continue;
+        if (!any) { pushUndo(); any = true; }
+        w->meta.insert(QStringLiteral("showColorName"), wireShowColorName_);
+        w->meta.insert(QStringLiteral("showGaugeName"), wireShowGaugeName_);
+        w->meta.insert(QStringLiteral("colorNameMode"), wireColorNameMode_);
+        const std::vector<double> ts = wireAnnotFractions(*w, std::clamp(wireAnnotCount_, 1, 20));
+        w->meta.insert(QStringLiteral("annCount"), std::clamp(wireAnnotCount_, 1, 20));
+        setWireAnnotFractions(*w, ts);
+        w->meta.insert(QStringLiteral("annSize"), wireAnnotSize_);
+    }
+    if (!any) return;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionWireAnnotCount(int count) {
+    if (!doc_) return;
+    count = std::clamp(count, 1, 20);
+    pushUndo();
+    int n = 0;
+    for (const QString& id : selected_) {
+        Entity* w = entityById(id);
+        if (!w || w->type != EntityType::Wire) continue;
+        // Keep the fractions already set by dragging; new instances spread evenly.
+        const std::vector<double> ts = wireAnnotFractions(*w, count);
+        w->meta.insert(QStringLiteral("annCount"), count);
+        setWireAnnotFractions(*w, ts);
+        ++n;
+    }
+    if (n == 0) return;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::convertSelectionResistanceUnit(bool toFeet) {
+    if (!doc_) return;
+    bool any = false;
+    for (const QString& id : selected_) {
+        Entity* w = entityById(id);
+        if (!w || w->type != EntityType::Wire) continue;
+        if (!any) { pushUndo(); any = true; }
+        const bool wasFeet =
+            w->meta.value(QStringLiteral("resUnit")).toString(QStringLiteral("m")) ==
+            QLatin1String("ft");
+        double val = w->meta.value(QStringLiteral("resistance")).toDouble();
+        // Only a real change of unit converts, and 0 stays 0.
+        if (wasFeet != toFeet && val != 0.0) val = toFeet ? val * 0.3048 : val / 0.3048;
+        w->meta.insert(QStringLiteral("resUnit"),
+                       toFeet ? QStringLiteral("ft") : QStringLiteral("m"));
+        w->meta.insert(QStringLiteral("resistance"), val);
+    }
+    if (!any) return;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setWireLabelText(const QString& labelId, const QString& text) {
+    if (!doc_) return;
+    Entity* lab = entityById(labelId);
+    if (!lab || lab->type != EntityType::NetLabel) return;
+    pushUndo();
+    lab->meta.insert(QStringLiteral("text"), text);
+    // An attached label IS the wire's label, so the wire's property follows it.
+    const QString wid = lab->meta.value(QStringLiteral("wireId")).toString();
+    if (Entity* w = entityById(wid))
+        if (w->type == EntityType::Wire) w->meta.insert(QStringLiteral("wireLabel"), text);
+    doc_->setDirty(true);
+    emit changed();
+}
+
+// A Screen / Twist annotation lists the wires it covers, so the wire's own status is
+// simply "is this wire named by one of them".
+bool Editor::wireCoveredBy(const QString& wireId, EntityType type) const {
+    if (!doc_ || wireId.isEmpty()) return false;
+    for (const auto& e : doc_->entities()) {
+        if (e.type != type) continue;
+        for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray())
+            if (v.toString() == wireId) return true;
+    }
+    return false;
+}
+
+bool Editor::wireIsShielded(const QString& wireId) const {
+    return wireCoveredBy(wireId, EntityType::Screen);
+}
+
+bool Editor::wireIsTwisted(const QString& wireId) const {
+    return wireCoveredBy(wireId, EntityType::Twist);
+}
+
+QString Editor::wireEndRef(const Entity& wire, bool firstEnd) const {
+    if (!doc_ || wire.points.size() < 2) return QStringLiteral("unconnected");
+    const Vec2 p = firstEnd ? wire.points.front() : wire.points.back();
+    // A pin is the strongest answer — name it.
+    const QString pin = pinRefAt(p);
+    if (!pin.isEmpty()) return pin;
+    // Otherwise look for a termination sitting on the end. A splice joins this wire to
+    // others; an X marks the end as deliberately open. Anything else is simply not
+    // connected to anything.
+    const double tol = std::max(worldTolerance(), 1e-3);
+    for (const auto& e : doc_->entities()) {
+        if (e.type == EntityType::Splice && distance(e.a, p) <= tol)
+            return QStringLiteral("splice");
+        if (e.type == EntityType::NotConnected && distance(e.a, p) <= tol)
+            return QStringLiteral("open");
+    }
+    return QStringLiteral("unconnected");
 }
 
 QString Editor::pinRefAt(const Vec2& p) const {
@@ -2408,9 +2998,19 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
                 }
             }
     }
-    // (c) wires with an open end — an endpoint not on a pin, splice, X marker, or another
-    // wire endpoint.
+    // (c) UNCONNECTED wire ends: an endpoint that is neither connected to anything (pin,
+    // splice, shield drain, another wire) nor terminated by an X. An X-terminated end is
+    // deliberately OPEN, which is a finished state — it is not reported.
     std::vector<Vec2> pinEnds = collectPinEnds(doc_);
+    // A shield's drain point is a real connection target (a wire may run from it), so an
+    // end landing there is connected, not dangling.
+    std::vector<Vec2> shieldDrains;
+    for (const auto& e : doc_->entities()) {
+        if (e.type != EntityType::Screen) continue;
+        const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
+                               static_cast<int>(e.points.size()));
+        if (static_cast<int>(e.points.size()) > k) shieldDrains.push_back(e.points.back());
+    }
     for (const auto& w : doc_->entities()) {
         if (!ruleEnabled("openwire")) break;
         if (w.type != EntityType::Wire || w.points.size() < 2) continue;
@@ -2418,11 +3018,13 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
             const Vec2 p = end == 0 ? w.points.front() : w.points.back();
             int shares = 0; // how many wire endpoints sit here (this one + any others)
             for (const Vec2& q : wireEnds) if (distance(p, q) < tol) ++shares;
-            const bool joined = nearAny(p, pinEnds) || nearAny(p, ncMarks) ||
-                                nearAny(p, splices) || shares > 1;
-            if (!joined)
+            const bool connected = nearAny(p, pinEnds) || nearAny(p, splices) ||
+                                   nearAny(p, shieldDrains) || shares > 1;
+            const bool terminated = nearAny(p, ncMarks); // an X = deliberately open
+            if (!connected && !terminated)
                 issues.push_back({QStringLiteral("openwire:%1:%2").arg(w.id).arg(end),
-                                  QStringLiteral("Wire #%1 has an open (unconnected) end")
+                                  QStringLiteral("Wire #%1 has an unconnected end (no wire, pin, "
+                                                 "splice or X termination)")
                                       .arg(w.meta.value("entNum").toInt()),
                                   w.id, p});
         }
@@ -2473,6 +3075,10 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
             const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                    static_cast<int>(e.points.size()));
             if (static_cast<int>(e.points.size()) <= k) continue; // no drain point
+            // A shield carrying its own "Not Connected" X IS terminated — the X is drawn
+            // by the shield itself rather than as a separate NotConnected entity, so the
+            // coincidence tests below would never see it.
+            if (e.meta.value("notConnected").toBool()) continue;
             const Vec2 drain = e.points.back();
             if (nearAny(drain, wireEnds) || nearAny(drain, ncMarks) ||
                 nearAny(drain, splices) || nearAny(drain, pinEnds))
@@ -2631,6 +3237,17 @@ void Editor::freezeScreenPreview() {
     emit overlayChanged();
 }
 
+void Editor::freezeTwistPreview() {
+    if (twistArmType_.isEmpty() || !wireBandHasStart_ || twistFrozen_) return;
+    twistFrozen_ = true;
+    twistFrozenEnd_ = cursor_;
+    emit message(
+        QStringLiteral("Twist preview frozen — edit the fields, then Enter to place (a click "
+                       "goes back to placing)"));
+    emit twistArmChanged();
+    emit overlayChanged();
+}
+
 void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& ryOut) const {
     // Radii LOCKED (default): auto-fit the crossed wires — half-height = half-span plus a
     // margin of 30% of the gap between the closest wires (so it clearly clears the first and
@@ -2647,19 +3264,189 @@ void Editor::shieldAutoSize(double span, double pinGap, double& rxOut, double& r
     }
 }
 
-bool Editor::connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut) const {
+bool Editor::connectorPinsAt(const Vec2& p, std::vector<Vec2>& pinEndsOut, int& anchorOut,
+                            double* pitchOut) const {
     if (!doc_) return false;
     const double tol = std::max(worldTolerance(), 1e-3);
     for (const auto& e : doc_->entities()) {
         if (e.type != EntityType::Connector) continue;
-        const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
         int anchor = -1;
         for (int i = 0; i < static_cast<int>(g.pinEnd.size()); ++i)
             if (distance(p, g.pinEnd[i]) <= tol) { anchor = i; break; }
         if (anchor < 0) continue;
         pinEndsOut = g.pinEnd;
         anchorOut = anchor;
+        if (pitchOut) *pitchOut = spec.pitch;
         return true;
+    }
+    return false;
+}
+
+double Editor::routingClearance() const {
+    // The Pitch rule decides the clearance — the same rule that spaces the lanes after a
+    // knee. "Custom" is an explicit distance; otherwise it is one pin pitch of the
+    // connector this run was pulled from (falling back to the connector default when the
+    // run did not start on a connector at all).
+    if (wireGapRule_ == QLatin1String("custom")) return std::max(0.0, wireGapCustom_);
+    if (wireRoutePitch_ > 0.0) return wireRoutePitch_;
+    return std::max(0.0, connectorSpec_.pitch);
+}
+
+Vec2 Editor::applyWireClearance(const Vec2& prev, const Vec2& p) const {
+    if (!doc_ || !wireClearanceOn_) return p;
+    const double clear = routingClearance();
+    if (clear <= 0.0) return p;
+    const Vec2 d = p - prev;
+    if (d.lengthSq() < 1e-12) return p;
+    // Landing ON something is a deliberate connection and must never be nudged aside: a
+    // point placed on a pin end, a wire end or a junction marker is where the user said the
+    // wire goes. Without this the clearance rule pushed the click off the very feature it
+    // was aimed at, so a wire could not be run onto a pin or carried on from another wire's
+    // end at all.
+    {
+        const double snapTol = std::max(worldTolerance() * 0.5, 1e-6);
+        for (const auto& e : doc_->entities()) {
+            switch (e.type) {
+            case EntityType::Connector: {
+                const ConnectorGeometry g =
+                    connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+                for (const Vec2& pe : g.pinEnd)
+                    if (distance(p, pe) <= snapTol) return p;
+                break;
+            }
+            case EntityType::Wire:
+                if (!e.points.empty() && (distance(p, e.points.front()) <= snapTol ||
+                                          distance(p, e.points.back()) <= snapTol))
+                    return p;
+                break;
+            case EntityType::Splice:
+            case EntityType::NotConnected:
+            case EntityType::NetLabel:
+                if (distance(p, e.a) <= snapTol) return p;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    // The run's own axis. Only its LATERAL position is adjusted, so a 90° route stays
+    // 90° and the length the user dragged is untouched.
+    const bool horiz = std::abs(d.x) >= std::abs(d.y);
+    const double lo = horiz ? std::min(prev.x, p.x) : std::min(prev.y, p.y);
+    const double hi = horiz ? std::max(prev.x, p.x) : std::max(prev.y, p.y);
+
+    // Lateral positions of the existing runs parallel to this one that actually overlap
+    // it lengthwise — those are the neighbours a clearance has to be kept from.
+    std::vector<double> lanes;
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (size_t i = 1; i < w.points.size(); ++i) {
+            const Vec2 a = w.points[i - 1], b = w.points[i];
+            const Vec2 wd = b - a;
+            if (wd.lengthSq() < 1e-12) continue;
+            if ((std::abs(wd.x) >= std::abs(wd.y)) != horiz) continue; // not parallel
+            const double wLo = horiz ? std::min(a.x, b.x) : std::min(a.y, b.y);
+            const double wHi = horiz ? std::max(a.x, b.x) : std::max(a.y, b.y);
+            if (wHi < lo - 1e-9 || wLo > hi + 1e-9) continue; // side by side, no overlap
+            lanes.push_back(horiz ? a.y : a.x);
+        }
+    }
+    if (lanes.empty()) return p;
+
+    // Step out of the nearest occupied lane, away from it, until nothing is inside the
+    // clearance. The loop is bounded so a dense bundle can never spin here.
+    double coord = horiz ? p.y : p.x;
+    for (int guard = 0; guard < 64; ++guard) {
+        bool clash = false;
+        double nearest = 0.0, nearestGap = 0.0;
+        for (double lane : lanes) {
+            const double gap = std::abs(coord - lane);
+            if (gap >= clear - 1e-9) continue;
+            if (!clash || gap < nearestGap) { clash = true; nearestGap = gap; nearest = lane; }
+        }
+        if (!clash) break;
+        // Push to whichever side of that neighbour the cursor is already on (ties go out
+        // along the direction the user is heading).
+        const double side = (coord > nearest) ? 1.0 : (coord < nearest ? -1.0 : 1.0);
+        coord = nearest + side * clear;
+    }
+    return horiz ? Vec2{p.x, coord} : Vec2{coord, p.y};
+}
+
+std::vector<Vec2> Editor::fanRoute(const std::vector<Vec2>& route, const Vec2& pinOffset) {
+    if (route.size() < 2) return route;
+    // Split the pin offset into "across the run" — which becomes this wire's own lane —
+    // and "along the run", kept as a plain shift so the wire still starts on its own pin
+    // even when the pins are not square to the first segment.
+    const Vec2 perp0 = (route[1] - route[0]).normalized().perp();
+    const double lateral = dot(pinOffset, perp0);
+    const Vec2 alongPart = pinOffset - perp0 * lateral;
+    std::vector<Vec2> lane = route;
+    if (std::abs(lateral) > 1e-9) {
+        // Offsetting parallel (rather than translating) is what pitches the turns: the
+        // corners are mitred, so the lanes stay a constant pitch apart through a bend
+        // instead of every wire turning at the same point and overlapping afterwards.
+        std::vector<Vec2> parallel = offsetPolyline(route, lateral);
+        if (parallel.size() == route.size()) lane = std::move(parallel);
+    }
+    std::vector<Vec2> out;
+    out.reserve(lane.size());
+    for (const Vec2& pt : lane) out.push_back(pt + alongPart);
+    // Land exactly on this wire's own pin end, whatever the mitring produced.
+    out.front() = route.front() + pinOffset;
+    return out;
+}
+
+bool Editor::extendExistingWire(const std::vector<Vec2>& pts) {
+    if (!doc_ || pts.size() < 2) return false;
+    // The run has to genuinely touch the end, not merely pass near it, or wires drawn
+    // alongside each other would silently fuse.
+    const double tol = std::max(worldTolerance() * 0.5, 1e-6);
+    const std::vector<Vec2> pinEnds = collectPinEnds(doc_);
+    auto terminated = [&](const Vec2& p) {
+        // A pin end or a splice/X marker is a real termination: joining THROUGH one would
+        // quietly turn two conductors into a single wire.
+        for (const Vec2& pe : pinEnds)
+            if (distance(p, pe) < 1e-6) return true;
+        for (const auto& m : doc_->entities())
+            if ((m.type == EntityType::Splice || m.type == EntityType::NotConnected) &&
+                distance(m.a, p) <= tol)
+                return true;
+        return false;
+    };
+    for (auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        for (int end = 0; end < 2; ++end) {
+            const bool atBack = (end == 0);
+            const Vec2 tip = atBack ? w.points.back() : w.points.front();
+            if (terminated(tip)) continue;
+            // The run may have been drawn away from the tip, or toward it.
+            std::vector<Vec2> add;
+            if (distance(pts.front(), tip) <= tol) {
+                add.assign(pts.begin() + 1, pts.end());
+            } else if (distance(pts.back(), tip) <= tol) {
+                add.assign(pts.rbegin() + 1, pts.rend());
+            } else {
+                continue;
+            }
+            if (add.empty()) continue;
+            pushUndo();
+            if (atBack) {
+                for (const Vec2& p : add) w.points.push_back(p);
+            } else {
+                // Inserting each point at the front reverses them as it goes, which is what
+                // makes the joined run read continuously from its new far end.
+                for (const Vec2& p : add) w.points.insert(w.points.begin(), p);
+            }
+            selected_ = {w.id};
+            doc_->setDirty(true);
+            emit message(QStringLiteral("Wire extended — now one wire of %1 points")
+                             .arg(w.points.size()));
+            emit selectionChanged();
+            return true;
+        }
     }
     return false;
 }
@@ -2731,6 +3518,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         emit message(QStringLiteral("Draw the line across the wires you want to %1")
                          .arg(twist ? QStringLiteral("twist") : QStringLiteral("screen")));
         twistArmType_.clear();
+        twistFrozen_ = false;
         screenArm_ = false;
         screenFrozen_ = false;
         emit overlayChanged();
@@ -2785,6 +3573,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             addEntity(std::move(e)); // assigns a unique id (a raw push_back left it empty)
         }
         twistArmType_.clear();
+        twistFrozen_ = false;
         emit twistArmChanged();
         emit message(QStringLiteral("Twisted %1 wires").arg(crossings.size()));
     } else {
@@ -2834,6 +3623,8 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
             e.meta.insert("legDir", screenLegDir_);
             e.meta.insert("showS", screenShowS_);
             e.meta.insert("sSize", screenSSize_);
+            e.meta.insert("notConnected", screenNotConnected_);
+            e.meta.insert("ncSize", screenNcSize_); // leg-end X half-size (default 3)
             if (!screenColor_.isEmpty()) e.color = screenColor_; // else ByLayer
             e.meta.insert("lineType", screenLineType_);
             e.meta.insert("dashScale", screenDashScale_);
@@ -3087,6 +3878,24 @@ void Editor::applyEditDrag(const Vec2& target) {
             // per-wire crossing point is re-interpolated from its own wire at that x.
             repositionTwistAtX(*e, target.x);
             break;
+        case GripRole::WireMark: {
+            // A marking belongs to its wire: the drag only changes how far ALONG the run
+            // it sits (the cursor is projected onto the wire), never its distance from it.
+            const int count = wireAnnotCount(*e);
+            if (index < 0 || index >= count) break;
+            std::vector<double> ts = wireAnnotFractions(*e, count);
+            ts[index] = wireFractionNearest(*e, target);
+            setWireAnnotFractions(*e, ts);
+            break;
+        }
+        case GripRole::WireLabelSlide: {
+            // Same for an attached Wire label — it slides up and down its own wire.
+            const QString wid = e->meta.value(QStringLiteral("wireId")).toString();
+            if (const Entity* w = entityById(wid))
+                if (w->type == EntityType::Wire)
+                    e->meta.insert(QStringLiteral("annT"), wireFractionNearest(*w, target));
+            break;
+        }
         case GripRole::Vertex:
             if (index >= 0 && index < static_cast<int>(e->points.size())) {
                 if (e->type == EntityType::Polygon && e->points.size() >= 3)
@@ -3185,8 +3994,21 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::Move:
             // Moving a connector drags the wires attached to its pin ends along.
             if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
+            // A shield's centre handle slides it ALONG its wires only (same constraint as
+            // a whole-selection move); a decorative copy falls through to a free translate.
+            if (e->type == EntityType::Screen && repositionScreenAtX(*e, target.x)) break;
             translateEntity(*e, delta);
             break;
+        case GripRole::ShieldRy: {
+            // Large-radius joint: the half-height follows the cursor's projection onto the
+            // shield's major axis. WHICH wires that new size catches is settled on release
+            // (commitShieldResize), so the drag itself is a free live preview.
+            const ShieldFrame f = shieldFrameOf(*e);
+            if (!f.valid) break;
+            const Vec2 rel = target - f.center;
+            e->meta["ry"] = std::max(1.0, std::abs(rel.x * f.major.x + rel.y * f.major.y));
+            break;
+        }
         case GripRole::DimText: // reposition the dimension's measurement text
             e->meta["textPosX"] = target.x;
             e->meta["textPosY"] = target.y;
@@ -3306,6 +4128,27 @@ void Editor::applyEditDrag(const Vec2& target) {
 
     if (editMode_ == 0) {
         for (Entity* e : selectedEntities()) {
+            // Twist marks are constrained to their wires: a whole-selection move slides each
+            // one ALONG its wires by the drag's x-component (y re-derived from the wire), so
+            // several selected twists move together yet stay on the wires. A decorative copy
+            // with no wire references falls back to a free translate.
+            if (e->type == EntityType::Twist && !e->meta.value("wires").toArray().isEmpty()) {
+                double cx = 0.0;
+                for (const Vec2& pt : e->points) cx += pt.x;
+                if (!e->points.empty()) cx /= e->points.size();
+                repositionTwistAtX(*e, cx + delta.x);
+                continue;
+            }
+            // A shield is likewise pinned to the wires it catches: it slides along them
+            // rather than translating freely off them.
+            if (e->type == EntityType::Screen) {
+                const int k = std::min(e->meta.value("catch").toInt(
+                                          static_cast<int>(e->points.size())),
+                                      static_cast<int>(e->points.size()));
+                double cx = 0.0;
+                for (int i = 0; i < k; ++i) cx += e->points[i].x;
+                if (k > 0 && repositionScreenAtX(*e, cx / k + delta.x)) continue;
+            }
             if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
             translateEntity(*e, delta);
         }
@@ -3324,9 +4167,64 @@ void Editor::applyEditDrag(const Vec2& target) {
                     e->meta.remove(QLatin1String(k));
                 applyOne(e, static_cast<GripRole>(eg.role), eg.index, eg.offset);
             }
+        // With Shift held the rest of the selected wires travel with this one; the moment
+        // it is released they all go back where they started. Read live, so pressing and
+        // releasing Shift part-way through the drag works either way.
+        pullSelectedWireBundle((QApplication::keyboardModifiers() & Qt::ShiftModifier) != 0);
     }
     editLast_ = target;
     doc_->setDirty(true);
+}
+
+void Editor::pullSelectedWireBundle(bool shiftHeld) {
+    if (!doc_ || selected_.size() < 2) return;
+    const GripRole role = static_cast<GripRole>(editRole_);
+    if (role != GripRole::WireSegMove && role != GripRole::Vertex) return;
+    Entity* held = entityById(editEntityId_);
+    if (!held || held->type != EntityType::Wire) return;
+    auto ghostOf = [this](const QString& id) -> const Entity* {
+        for (const Entity& g : editGhost_)
+            if (g.id == id) return &g;
+        return nullptr;
+    };
+    // Measure against the geometry snapshotted when the drag STARTED, not against the
+    // last step: the whole displacement so far is what the bundle follows, and it is what
+    // has to be undone the moment Shift is let go.
+    const Entity* heldStart = ghostOf(editEntityId_);
+    if (!heldStart) return;
+    const auto from = wireGripPoint(*heldStart, role, editIndex_);
+    const auto to = wireGripPoint(*held, role, editIndex_);
+    if (!from || !to) return;
+    // Shift held: the bundle sits at its start position plus the held wire's total travel.
+    // Shift released: the same code with no travel — every other wire snaps back exactly
+    // where it began and only the held wire keeps moving.
+    const Vec2 travel = shiftHeld ? (*to - *from) : Vec2{0.0, 0.0};
+
+    for (const QString& id : selected_) {
+        if (id == editEntityId_) continue;
+        // A wire whose joint was already moved as a shared/coincident joint is driven by
+        // that joint, not by the bundle.
+        bool alreadyMoved = false;
+        for (const auto& eg : editGrips_)
+            if (eg.id == id) { alreadyMoved = true; break; }
+        if (alreadyMoved) continue;
+        Entity* w = entityById(id);
+        const Entity* start = ghostOf(id);
+        if (!w || !start || w->type != EntityType::Wire) continue;
+        const int n = static_cast<int>(w->points.size());
+        if (static_cast<int>(start->points.size()) != n) continue;
+        // Matching run / knee = the SAME index: the wires of a fan-out are lane copies of
+        // one route, so index correspondence is what keeps the bundle in step. Wires
+        // shaped differently (no such index) are simply left alone. Setting an ABSOLUTE
+        // position (start + travel) rather than nudging is what makes the release exact.
+        if (role == GripRole::Vertex) {
+            if (editIndex_ >= 0 && editIndex_ < n)
+                w->points[editIndex_] = start->points[editIndex_] + travel;
+        } else if (editIndex_ >= 0 && editIndex_ + 1 < n) {
+            w->points[editIndex_] = start->points[editIndex_] + travel;
+            w->points[editIndex_ + 1] = start->points[editIndex_ + 1] + travel;
+        }
+    }
 }
 
 void Editor::onDoubleClick(const Vec2& world) {
@@ -3555,6 +4453,10 @@ void Editor::handleDrawPress(const Vec2& p) {
         Vec2 wp = p;
         if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
             wp = orthoWirePoint(draftPts_.back(), p);
+        // Pitch rule while routing: hold a clearance from the runs already on the drawing
+        // so this run can never land on top of a neighbour (single wire included).
+        if (tool_ == ToolId::Wire && !draftPts_.empty())
+            wp = applyWireClearance(draftPts_.back(), wp);
         // In Arc mode each new vertex makes an arc segment tangent to the previous
         // one; draftBulges_ stays aligned with draftPts_ (bulge of the segment that
         // ENDS at this vertex; the very first segment is always straight).
@@ -3578,10 +4480,16 @@ void Editor::handleDrawPress(const Vec2& p) {
             wireArrayOffsets_.clear();
             std::vector<Vec2> pins;
             int anchor = -1;
-            if (connectorPinsAt(p, pins, anchor)) {
+            double pitch = 0.0;
+            wireRoutePitch_ = 0.0;
+            if (connectorPinsAt(p, pins, anchor, &pitch)) {
                 wireFanPins_ = std::move(pins);
                 wireFanAnchor_ = anchor;
                 wireFanSel_ = {anchor};                       // just the drawn wire, to start
+                // This connector's pin pitch is the clearance the run holds from its
+                // neighbours (the Pitch rule), so a wire pulled off a connector lines up
+                // with the pins it came from instead of using some unrelated distance.
+                wireRoutePitch_ = pitch;
                 if (pressMods_ & Qt::ShiftModifier) setWireFanAll(); // Shift-click = add all pins
             }
         }
@@ -4403,6 +5311,10 @@ void Editor::finishDraw() {
         e.meta.insert("wireColor", wireColor_);
         e.meta.insert("wireGauge", wireGauge_);
         e.meta.insert("netName", wireNet_);
+        // Seed the wire's own colour from the code it was drawn with: the colour property is
+        // what gets drawn, so the two must agree to begin with.
+        if (!e.hasExplicitColor() && !wireColor_.isEmpty())
+            e.color = wireColorHex(wireColor_);
         // Wire ribbon defaults carried onto the new wire (blank ones are simply absent).
         if (!wireAwg_.isEmpty()) e.meta.insert("awg", wireAwg_);
         if (!wireInsulation_.isEmpty()) e.meta.insert("insulation", wireInsulation_);
@@ -4413,6 +5325,13 @@ void Editor::finishDraw() {
             e.meta.insert("resUnit", wireResUnit_);
         }
         e.meta.insert("showLabel", true);
+        // Marking defaults from the Wire ribbon: colour / cross-section written along the
+        // wire, independently switched, repeated `annCount` times.
+        e.meta.insert("showColorName", wireShowColorName_);
+        e.meta.insert("showGaugeName", wireShowGaugeName_);
+        e.meta.insert("colorNameMode", wireColorNameMode_);
+        e.meta.insert("annCount", std::clamp(wireAnnotCount_, 1, 20));
+        e.meta.insert("annSize", wireAnnotSize_);
         e.meta.insert("entNum", assignEntityNumber()); // unique entity number
         // Shift-fanout: one wire per connector pin, each the drafted route offset by that
         // pin's distance from the anchor pin. Commits them all as one undo step.
@@ -4422,9 +5341,7 @@ void Editor::finishDraw() {
             for (const Vec2& off : wireArrayOffsets_) {
                 Entity w = e; // same wire properties (color/awg/net/...)
                 w.id.clear();
-                w.points.clear();
-                for (const Vec2& pt : draftPts_)
-                    w.points.push_back({pt.x + off.x, pt.y + off.y});
+                w.points = fanRoute(draftPts_, off);
                 w.meta.insert("entNum", assignEntityNumber());
                 addEntity(std::move(w));
             }
@@ -4440,6 +5357,18 @@ void Editor::finishDraw() {
             emit changed();
             emit message(
                 QStringLiteral("Wired %1 pins — click to draw another; Esc to finish").arg(n));
+            return;
+        }
+        // Drawn from (or onto) an existing wire's free end: carry that wire on instead of
+        // leaving two objects lying end to end. The run becomes one whole wire, so it keeps
+        // one number, one colour and one gauge — and reads as one conductor everywhere it
+        // matters (properties, From/To, the BOM, shields and twists).
+        if (extendExistingWire(draftPts_)) {
+            draftPts_.clear();
+            draftBulges_.clear();
+            draftCornerRadii_.clear();
+            drafting_ = false;
+            emit changed();
             return;
         }
         break;
@@ -6132,19 +7061,282 @@ void Editor::handlePickModifyPress(const Vec2& p) {
     emit changed();
 }
 
-void Editor::arraySelected(int rows, int cols, double dx, double dy) {
+// ---- Array (AutoCAD ARRAYRECT / ARRAYPOLAR / ARRAYPATH) --------------------
+// An array is a live SESSION, not a one-shot dialog: arming it snapshots the
+// selection, everything is ghost-previewed against the current spec, and the
+// document is only touched when the session is committed. That way counts,
+// spacings, the polar centre and the path can all be re-tuned while watching the
+// result — the way AutoCAD's "Array Creation" ribbon works.
+
+void Editor::beginArray(ArrayKind kind) {
+    if (!doc_) return;
     auto sel = selectedEntities();
-    if (sel.empty()) { emit message(QStringLiteral("Select objects to array.")); return; }
-    pushUndo();
-    std::vector<Entity> clones;
-    for (const Entity* e : sel) {
-        auto part = rectArray(*e, rows, cols, dx, dy);
-        clones.insert(clones.end(), part.begin(), part.end());
+    if (sel.empty()) {
+        emit message(QStringLiteral("Select objects to array."));
+        return;
     }
-    for (auto& c : clones) doc_->entities().push_back(std::move(c));
+    arraySrc_.clear();
+    arraySrcIds_.clear();
+    Bounds b;
+    for (const Entity* e : sel) {
+        arraySrc_.push_back(*e);
+        arraySrcIds_.push_back(e->id);
+        b.expand(e->bounds());
+    }
+    // The base point: everything (rect offsets, the polar radius, where the source
+    // lands on a path) is measured from the selection's centre.
+    arrayBase_ = b.valid ? b.center() : Vec2{0.0, 0.0};
+    arrayActive_ = true;
+    arrayHasCenter_ = false;
+    arrayPathId_.clear();
+    arrayPathPts_.clear();
+    arrayPathClosed_ = false;
+    setArrayKind(kind);
+}
+
+void Editor::setArrayKind(ArrayKind kind) {
+    if (!arrayActive_) return;
+    arraySpec_.kind = kind;
+    lastArrayKind_ = kind;
+    seedArrayDefaults();
+    switch (kind) {
+    case ArrayKind::Rect:
+        emit message(QStringLiteral("Rectangular array — set columns / rows in the Array ribbon, "
+                                    "then Enter to place (Esc cancels)"));
+        break;
+    case ArrayKind::Polar:
+        emit message(arrayHasCenter_
+                         ? QStringLiteral("Polar array — click to move the centre, Enter to place")
+                         : QStringLiteral("Polar array — click the centre point of the array"));
+        break;
+    case ArrayKind::Path:
+        emit message(arrayPathPts_.size() >= 2
+                         ? QStringLiteral("Path array — set the items in the Array ribbon, "
+                                          "then Enter to place")
+                         : QStringLiteral("Path array — click the path the items should track along"));
+        break;
+    }
+    emit arrayChanged();
+    emit overlayChanged();
+}
+
+void Editor::seedArrayDefaults() {
+    Bounds b;
+    for (const Entity& e : arraySrc_) b.expand(e.bounds());
+    const double w = (b.valid && b.width() > 1e-6) ? b.width() : 20.0;
+    const double h = (b.valid && b.height() > 1e-6) ? b.height() : 20.0;
+    // One and a half object widths apart, so the very first preview shows copies
+    // standing clear of each other instead of overlapping.
+    const double stepX = w * 1.5;
+    const double stepY = h * 1.5;
+    switch (arraySpec_.kind) {
+    case ArrayKind::Rect:
+        arraySpec_.count = 4;
+        arraySpec_.rows = 3;
+        arraySpec_.colSpacing = stepX;
+        arraySpec_.rowSpacing = stepY;
+        arraySpec_.axisAngle = 0.0;
+        break;
+    case ArrayKind::Polar:
+        arraySpec_.count = 6;
+        arraySpec_.rows = 1;
+        arraySpec_.rowSpacing = std::max(stepX, stepY); // radial ring spacing
+        arraySpec_.fillAngle = 360.0;
+        arraySpec_.rotateItems = true;
+        arraySpec_.ccw = true;
+        break;
+    case ArrayKind::Path:
+        arraySpec_.count = 6;
+        arraySpec_.rows = 1;
+        arraySpec_.rowSpacing = stepY; // rows run perpendicular to the path
+        arraySpec_.pathSpacing = stepX;
+        arraySpec_.divide = true;
+        arraySpec_.startOffset = 0.0;
+        arraySpec_.alignToPath = true;
+        break;
+    }
+}
+
+bool Editor::arrayAwaitingCenter() const {
+    return arrayActive_ && arraySpec_.kind == ArrayKind::Polar && !arrayHasCenter_;
+}
+
+bool Editor::arrayAwaitingPath() const {
+    return arrayActive_ && arraySpec_.kind == ArrayKind::Path && arrayPathPts_.size() < 2;
+}
+
+// Until the centre is clicked it tracks the cursor, so the ring of items sweeps
+// around live and can be judged before being pinned.
+Vec2 Editor::arrayCenterInUse() const {
+    return arrayHasCenter_ ? arraySpec_.center : cursor_;
+}
+
+std::vector<ArrayPlacement> Editor::arrayPreview() const {
+    if (!arrayActive_ || arraySrc_.empty()) return {};
+    ArraySpec s = arraySpec_;
+    if (s.kind == ArrayKind::Polar) s.center = arrayCenterInUse();
+    if (s.kind == ArrayKind::Path && arrayPathPts_.size() < 2) return {};
+    return arrayPlacements(s, arrayBase_, arrayPathPts_, arrayPathClosed_);
+}
+
+int Editor::arrayItemCount() const {
+    return static_cast<int>(arrayPreview().size());
+}
+
+double Editor::arrayPathLength() const {
+    if (!arrayActive_ || arraySpec_.kind != ArrayKind::Path || arrayPathPts_.size() < 2) return 0.0;
+    return polylineLength(arrayPathPts_);
+}
+
+double Editor::arrayItemStep() const {
+    const double len = arrayPathLength();
+    if (len <= 0.0) return 0.0;
+    return arrayPathStep(arraySpec_, len, arrayPathClosed_);
+}
+
+void Editor::arrayParamsChanged() {
+    if (arrayActive_) emit overlayChanged();
+}
+
+void Editor::handleArrayPress(const Vec2& p) {
+    if (arraySpec_.kind == ArrayKind::Polar) {
+        // Every click (re)pins the centre — the ring can be re-aimed as often as needed.
+        arraySpec_.center = p;
+        arrayHasCenter_ = true;
+        emit message(QStringLiteral("Centre set (%1 items) — tune the Array ribbon, Enter to place")
+                         .arg(arrayItemCount()));
+        emit arrayChanged();
+        emit overlayChanged();
+        return;
+    }
+    if (arraySpec_.kind == ArrayKind::Path) {
+        auto hit = hitTest(p);
+        if (!hit) {
+            emit message(QStringLiteral("Click the path object the items should track along"));
+            return;
+        }
+        // An object being arrayed cannot also be its own path.
+        if (std::find(arraySrcIds_.begin(), arraySrcIds_.end(), *hit) != arraySrcIds_.end()) {
+            emit message(QStringLiteral("That object is part of the array — pick another path"));
+            return;
+        }
+        const Entity* pathEnt = nullptr;
+        for (const auto& e : doc_->entities())
+            if (e.id == *hit) { pathEnt = &e; break; }
+        bool closed = false;
+        std::vector<Vec2> pts;
+        if (pathEnt) pts = arrayPathPoints(*pathEnt, &closed);
+        if (pts.size() < 2) {
+            emit message(QStringLiteral("That object can't be a path — pick a line, polyline, arc, "
+                                        "circle, ellipse or spline"));
+            return;
+        }
+        arrayPathId_ = *hit;
+        arrayPathPts_ = std::move(pts);
+        arrayPathClosed_ = closed;
+        emit message(QStringLiteral("Path set (%1 items) — tune the Array ribbon, Enter to place")
+                         .arg(arrayItemCount()));
+        emit arrayChanged();
+        emit overlayChanged();
+        return;
+    }
+    // Rectangular: the grid is entirely ribbon-driven, so a stray canvas click must
+    // neither move nor commit it.
+    emit message(QStringLiteral("Rectangular array — set columns / rows in the Array ribbon, "
+                                "then Enter to place"));
+}
+
+void Editor::commitArray() {
+    if (!arrayActive_) return;
+    if (arrayAwaitingPath()) {
+        emit message(QStringLiteral("Pick the path first, or press Esc to cancel"));
+        return;
+    }
+    ArraySpec s = arraySpec_;
+    if (s.kind == ArrayKind::Polar) {
+        s.center = arrayCenterInUse(); // Enter with no click yet pins the cursor's centre
+        arraySpec_.center = s.center;
+        arrayHasCenter_ = true;
+    }
+    const auto places = arrayPlacements(s, arrayBase_, arrayPathPts_, arrayPathClosed_);
+    if (places.empty()) {
+        emit message(QStringLiteral("Array produced no items — check the count and spacing"));
+        return;
+    }
+    // The source objects can have gone (an undo, or a delete from another path) while
+    // the session was open — there is then nothing to array.
+    bool anySourceLeft = false;
+    for (const QString& id : arraySrcIds_)
+        if (entityById(id)) { anySourceLeft = true; break; }
+    if (!anySourceLeft) {
+        emit message(QStringLiteral("The objects being arrayed are gone — array cancelled"));
+        cancelArray();
+        return;
+    }
+    pushUndo();
+    const Vec2 pivot = arrayPivot(s, arrayBase_);
+    // Item 0 IS the source selection: identity for a rect/polar array, and for a path
+    // array the move that drops the originals onto the path (as ARRAYPATH does), so the
+    // objects keep their ids and stay attached to whatever referenced them.
+    for (const QString& id : arraySrcIds_)
+        if (Entity* e = entityById(id)) {
+            if (std::abs(places[0].rotate) > 1e-12) rotateEntity(*e, pivot, places[0].rotate);
+            if (places[0].delta.lengthSq() > 1e-24) translateEntity(*e, places[0].delta);
+        }
+    std::vector<QString> ids = arraySrcIds_;
+    for (size_t i = 1; i < places.size(); ++i)
+        for (const Entity& src : arraySrc_) {
+            Entity clone = arrayItem(src, places[i], pivot);
+            clone.id = uid();
+            ids.push_back(clone.id);
+            doc_->entities().push_back(std::move(clone));
+        }
+    const int items = static_cast<int>(places.size());
+    const QString kindName = s.kind == ArrayKind::Rect    ? QStringLiteral("Rectangular")
+                             : s.kind == ArrayKind::Polar ? QStringLiteral("Polar")
+                                                          : QStringLiteral("Path");
+    arrayActive_ = false;
+    arraySrc_.clear();
+    arraySrcIds_.clear();
+    arrayPathId_.clear();
+    arrayPathPts_.clear();
+    arrayHasCenter_ = false;
+    selected_ = ids; // the finished array is left selected, ready to move/copy
     doc_->setDirty(true);
-    emit message(QStringLiteral("Array: %1 copies").arg(clones.size()));
+    emit message(QStringLiteral("%1 array: %2 items").arg(kindName).arg(items));
+    emit arrayChanged();
+    emit selectionChanged();
     emit changed();
+}
+
+void Editor::arrayRepick() {
+    if (!arrayActive_) return;
+    if (arraySpec_.kind == ArrayKind::Polar) {
+        arrayHasCenter_ = false; // the centre tracks the cursor again until clicked
+        emit message(QStringLiteral("Click the centre point of the array"));
+    } else if (arraySpec_.kind == ArrayKind::Path) {
+        arrayPathId_.clear();
+        arrayPathPts_.clear();
+        arrayPathClosed_ = false;
+        emit message(QStringLiteral("Click the path the items should track along"));
+    } else {
+        return; // a rectangular grid has nothing to pick
+    }
+    emit arrayChanged();
+    emit overlayChanged();
+}
+
+void Editor::cancelArray() {
+    if (!arrayActive_) return;
+    arrayActive_ = false;
+    arraySrc_.clear();
+    arraySrcIds_.clear();
+    arrayPathId_.clear();
+    arrayPathPts_.clear();
+    arrayHasCenter_ = false;
+    emit message(QStringLiteral("Array cancelled"));
+    emit arrayChanged();
+    emit overlayChanged();
 }
 
 void Editor::explodeSelected() {
@@ -6788,11 +7980,33 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.meta.insert("ncSize", ncSize_); // X half-size (world units)
         break;
     }
-    case ToolId::NetLabel:
+    case ToolId::NetLabel: {
+        // A Wire label placed ON a wire ATTACHES to it: the label is stored as a
+        // position along that wire (so it follows the wire when the wire is edited or
+        // moved) and the wire's own "Wire label" property is set to the same text —
+        // the label on the drawing and the property are one and the same thing.
         e.type = EntityType::NetLabel;
         e.a = p;
-        e.meta.insert("text", wireNet_.isEmpty() ? QStringLiteral("NET") : wireNet_);
+        e.layer = QStringLiteral("Wires");
+        const QString wid = wireAt(p);
+        QString text = wireNet_;
+        if (!wid.isEmpty()) {
+            if (const Entity* w = entityById(wid)) {
+                // Keep the wire's existing label if it has one; otherwise the ribbon's
+                // net/label text seeds it.
+                const QString existing = w->meta.value(QStringLiteral("wireLabel")).toString();
+                if (!existing.isEmpty()) text = existing;
+                e.meta.insert("wireId", wid);
+                e.meta.insert("annT", wireFractionNearest(*w, p));
+            }
+        }
+        if (text.isEmpty()) text = QStringLiteral("NET");
+        e.meta.insert("text", text);
+        // Write the label onto the wire so its properties show it straight away.
+        if (!wid.isEmpty())
+            if (Entity* w = entityById(wid)) w->meta.insert(QStringLiteral("wireLabel"), text);
         break;
+    }
     case ToolId::Table: {
         // Insert Table at the picked insertion point (top-left). Built from the spec
         // (Insert Table dialog): a Title row (merged), a Header row, then data rows.
@@ -6857,6 +8071,144 @@ void Editor::applyConnectorSpecToSelection(const ConnectorSpec& spec) {
     pushUndo();
     if (Entity* e = entityById(id)) writeConnectorSpec(e->meta, spec);
     connectorSpec_ = spec;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::stampHarnessIds(std::vector<Entity>& ents, const HarnessDef& def) {
+    // The generator refers to wires by their DEFINITION id, which is not an entity id, so map
+    // definition id -> real entity id as the wires are stamped and then re-point every
+    // shield/twist "wires" list at the entities. Without this the annotations would name ids
+    // that do not exist and would not follow their wires.
+    QHash<QString, QString> wireIdMap;
+    for (Entity& e : ents) {
+        if (e.type != EntityType::Wire) continue;
+        e.id = uid();
+        const QString label = e.meta.value(QStringLiteral("wireLabel")).toString();
+        QString match;
+        for (const auto& dw : def.wires)
+            if (!wireIdMap.contains(dw.id) && dw.label == label &&
+                dw.color == e.meta.value(QStringLiteral("wireColor")).toString() &&
+                dw.gauge == e.meta.value(QStringLiteral("wireGauge")).toString()) {
+                match = dw.id;
+                break;
+            }
+        if (match.isEmpty())
+            for (const auto& dw : def.wires)
+                if (!wireIdMap.contains(dw.id)) { match = dw.id; break; }
+        if (!match.isEmpty()) wireIdMap.insert(match, e.id);
+    }
+    for (Entity& e : ents) {
+        if (e.type != EntityType::Screen && e.type != EntityType::Twist) continue;
+        QJsonArray mapped;
+        for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray()) {
+            const QString real = wireIdMap.value(v.toString());
+            if (!real.isEmpty()) mapped.append(real);
+        }
+        e.meta.insert(QStringLiteral("wires"), mapped);
+    }
+    for (Entity& e : ents)
+        if (e.id.isEmpty()) e.id = uid();
+}
+
+void Editor::beginHarnessPlacement(const HarnessDef& def) {
+    if (!doc_) return;
+    HarnessBuild built = buildHarness(def);
+    if (built.entities.empty()) return;
+    setTool(ToolId::Select); // a click must place, not draw
+    harnessGhost_ = std::move(built.entities);
+    // Ids and the shield/twist cross-references are settled now, while the definition is
+    // still to hand; placing then only has to move the finished objects into the drawing.
+    stampHarnessIds(harnessGhost_, def);
+    // Held by the top-left of its own extent, so the crosshair sits on the corner of the
+    // harness and the whole thing follows as one rigid piece.
+    Bounds b;
+    for (const Entity& e : harnessGhost_) b.expand(e.bounds());
+    harnessBase_ = b.valid ? Vec2{b.min.x, b.max.y} : Vec2{0.0, 0.0};
+    harnessPlacing_ = true;
+    emit message(QStringLiteral("Harness ready — click to place it, Esc to go back to the builder"));
+    emit overlayChanged();
+}
+
+void Editor::cancelHarnessPlacement() {
+    if (!harnessPlacing_) return;
+    harnessPlacing_ = false;
+    harnessGhost_.clear();
+    emit message(QStringLiteral("Harness placement cancelled"));
+    emit harnessPlacementFinished(false);
+    emit overlayChanged();
+}
+
+// Drop the ghosted harness so its held corner lands at `at`.
+void Editor::placeHarnessAt(const Vec2& at) {
+    if (!doc_ || !harnessPlacing_ || harnessGhost_.empty()) return;
+    const Vec2 shift = at - harnessBase_;
+    pushUndo();
+    std::vector<QString> ids;
+    for (Entity e : harnessGhost_) {
+        translateEntity(e, shift);
+        if (e.id.isEmpty()) e.id = uid();
+        if (e.type == EntityType::Connector || e.type == EntityType::Wire)
+            e.meta.insert(QStringLiteral("entNum"), assignEntityNumber());
+        ids.push_back(e.id);
+        doc_->entities().push_back(std::move(e));
+    }
+    const int n = static_cast<int>(ids.size());
+    harnessPlacing_ = false;
+    harnessGhost_.clear();
+    selected_ = ids;
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Harness placed: %1 object(s)").arg(n));
+    emit harnessPlacementFinished(true);
+    emit selectionChanged();
+    emit changed();
+}
+
+int Editor::insertHarness(const HarnessDef& def, std::vector<HarnessIssue>* issuesOut) {
+    if (!doc_) return 0;
+    HarnessBuild built = buildHarness(def);
+    if (issuesOut) *issuesOut = built.issues;
+    if (built.entities.empty()) return 0;
+    pushUndo();
+    std::vector<QString> added;
+    stampHarnessIds(built.entities, def);
+    for (Entity& e : built.entities) {
+        if (e.type == EntityType::Connector || e.type == EntityType::Wire)
+            e.meta.insert(QStringLiteral("entNum"), assignEntityNumber());
+        added.push_back(e.id);
+        doc_->entities().push_back(std::move(e));
+    }
+    selected_ = added;
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Harness generated: %1 object(s)%2")
+                     .arg(added.size())
+                     .arg(built.issues.empty()
+                              ? QString()
+                              : QStringLiteral(" — %1 issue(s) to review").arg(built.issues.size())));
+    emit selectionChanged();
+    emit changed();
+    return static_cast<int>(added.size());
+}
+
+void Editor::editSelectedConnectorSpecs(const std::function<void(ConnectorSpec&)>& mut) {
+    if (!doc_ || !mut) return;
+    // Each connector's OWN spec is changed in place, so setting one field across several
+    // connectors edits just that field on each — their designators, part numbers and pin
+    // labels are left alone. (Writing one whole spec onto all of them would copy the first
+    // connector's identity over the rest.)
+    bool any = false;
+    for (const QString& id : selected_) {
+        Entity* e = entityById(id);
+        if (!e || e->type != EntityType::Connector) continue;
+        if (!any) { pushUndo(); any = true; }
+        ConnectorSpec s = connectorSpecFromMeta(e->meta);
+        mut(s);
+        s.textSize = std::max({s.pinSize, s.desSize, s.pnSize});
+        regenPinLabels(s);
+        writeConnectorSpec(e->meta, s);
+        connectorSpec_ = s; // the last one edited becomes the default for the next placed
+    }
+    if (!any) return;
     doc_->setDirty(true);
     emit changed();
 }
@@ -7041,6 +8393,69 @@ void Editor::resizeSelectedShield(const QString& key, double value) {
             drain = center + (drain - center) * f;
         }
     }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+bool Editor::shieldLegIsWired(const Entity& shield) const {
+    if (!doc_ || shield.type != EntityType::Screen) return false;
+    const int k = std::min(shield.meta.value("catch").toInt(static_cast<int>(shield.points.size())),
+                           static_cast<int>(shield.points.size()));
+    if (k < 1 || static_cast<int>(shield.points.size()) <= k) return false;
+    const Vec2 drain = shield.points.back();
+    // A wire counts as landing on the leg if any of its vertices sits on the drain end, or
+    // the drain end sits on one of its runs (a leg dropped onto the middle of a wire is
+    // just as connected as one dropped on its end).
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.empty()) continue;
+        for (const Vec2& pt : w.points)
+            if (distance(pt, drain) < 1e-6) return true;
+        for (size_t i = 1; i < w.points.size(); ++i)
+            if (closestPointOnSegment(drain, w.points[i - 1], w.points[i]).distance < 1e-6)
+                return true;
+    }
+    return false;
+}
+
+double Editor::selectedShieldLegLength() const {
+    if (!doc_ || selected_.size() != 1) return 0.0;
+    for (const auto& e : doc_->entities()) {
+        if (e.id != selected_.front() || e.type != EntityType::Screen) continue;
+        const ShieldFrame f = shieldFrameOf(e);
+        if (!f.valid || static_cast<int>(e.points.size()) <= f.k) return 0.0;
+        // The leg IS the last point, so its length is simply how far that point sits from
+        // where the leg leaves the outline.
+        const Vec2 edge = shieldLegEdge(f, e.meta.value("legDir").toString(QStringLiteral("bottom")));
+        return distance(edge, e.points.back());
+    }
+    return 0.0;
+}
+
+void Editor::setSelectedShieldLegLength(double length) {
+    if (!doc_) return;
+    length = std::max(0.0, length);
+    bool any = false;
+    for (const QString& id : selected_) {
+        Entity* e = entityById(id);
+        if (!e || e->type != EntityType::Screen) continue;
+        const ShieldFrame f = shieldFrameOf(*e);
+        if (!f.valid || static_cast<int>(e->points.size()) <= f.k) continue;
+        if (!any) { pushUndo(); any = true; }
+        // Slide the leg end along the leg's OWN direction, so changing the length never
+        // swings the leg to a different side.
+        const Vec2 edge = shieldLegEdge(f, e->meta.value("legDir").toString(QStringLiteral("bottom")));
+        Vec2 dir = e->points.back() - edge;
+        if (dir.lengthSq() < 1e-12) {
+            // A leg of zero length has no direction of its own; take the one its side implies.
+            const QString legDir = e->meta.value("legDir").toString(QStringLiteral("bottom"));
+            if (legDir == QLatin1String("top")) dir = f.major;
+            else if (legDir == QLatin1String("left")) dir = f.minor;
+            else if (legDir == QLatin1String("right")) dir = f.minor * -1.0;
+            else dir = f.major * -1.0;
+        }
+        e->points.back() = edge + dir.normalized() * length;
+    }
+    if (!any) return;
     doc_->setDirty(true);
     emit changed();
 }
@@ -7278,6 +8693,8 @@ void Editor::setGeometryValue(const QString& key, double v) {
 
 void Editor::deleteSelected() {
     if (!doc_ || selected_.empty()) return;
+    // Deleting the objects an un-placed array is built from ends that array.
+    if (arrayActive_) cancelArray();
     pushUndo();
     auto& ents = doc_->entities();
     ents.erase(std::remove_if(ents.begin(), ents.end(),
@@ -7385,6 +8802,34 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // line, so Esc ends the trim command.)
         // A grabbed joint that already moved is restored via undo.
         if (editing_ && editMoved_) undo();
+        // A harness waiting to be placed is abandoned, and the builder comes back so the
+        // definition is never lost.
+        if (harnessPlacing_) {
+            cancelHarnessPlacement();
+            return true;
+        }
+        // An un-placed array is abandoned, keeping the selection so it can be re-armed.
+        if (arrayActive_) {
+            cancelArray();
+            return true;
+        }
+        // Quick Select waiting for its sample objects: drop the command, keep the pick.
+        if (awaitQuickSelect_) {
+            cancelQuickSelect();
+            return true;
+        }
+        // A twist in progress (armed / live preview / frozen): Esc CANCELS the twist function
+        // and returns to Select — the Schematic ribbon menu comes back (setTool clears
+        // twistArmType_ and emits twistArmChanged, which restores the hidden ribbon groups).
+        if (!twistArmType_.isEmpty()) {
+            wireBandHasStart_ = false;
+            twistFrozen_ = false;
+            clearSelection();
+            setTool(ToolId::Select);
+            emit message(QStringLiteral("Twist cancelled"));
+            emit changed();
+            return true;
+        }
         // Wire session: while a wire function is in progress (drawing / twist / screen /
         // cross-switch), Esc ends that function and RETURNS TO SELECT. A wire draft with
         // at least 2 confirmed points is COMMITTED as-is (keeping whatever was already
@@ -7440,10 +8885,32 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // While a value is being awaited (fillet radius / gap), a stray Enter must
         // NOT finish the draft — just consume it.
         if (filletInputMode_ || gapInputMode_) return true;
+        // Enter places the previewed array (AutoCAD's "Close Array").
+        if (arrayActive_) {
+            commitArray();
+            return true;
+        }
+        // Quick Select armed: Enter finishes picking the sample objects and opens the
+        // filter dialog on them.
+        if (awaitQuickSelect_) {
+            if (selected_.empty()) {
+                emit message(QStringLiteral("Quick Select: pick at least one object first, "
+                                            "or Esc to cancel"));
+                return true;
+            }
+            openQuickSelect();
+            return true;
+        }
         // A frozen shield preview (Tab): Enter places it at the frozen crossing line.
         if (screenArm_ && screenFrozen_ && wireBandHasStart_) {
             wireBandHasStart_ = false;
             finishWireBand(screenFrozenEnd_);
+            return true;
+        }
+        // A frozen twist preview (Tab): Enter places it at the frozen crossing line.
+        if (!twistArmType_.isEmpty() && twistFrozen_ && wireBandHasStart_) {
+            wireBandHasStart_ = false;
+            finishWireBand(twistFrozenEnd_);
             return true;
         }
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
@@ -7490,7 +8957,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // committing. Once frozen (Tab), the END is pinned (screenFrozenEnd_) so ribbon
     // fields can be tuned without the drag changing which wires are caught.
     if ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_) {
-        const Vec2 bandEnd = (screenArm_ && screenFrozen_) ? screenFrozenEnd_ : cursor_;
+        const Vec2 bandEnd = (screenArm_ && screenFrozen_)          ? screenFrozenEnd_
+                             : (!twistArmType_.isEmpty() && twistFrozen_) ? twistFrozenEnd_
+                                                                          : cursor_;
         p.save();
         QPen pv(QColor(120, 200, 255, 200));
         pv.setCosmetic(true);
@@ -7682,6 +9151,97 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         p.drawLine(QPointF(c.x(), c.y() - 7), QPointF(c.x(), c.y() + 7));
     }
 
+    // A generated harness waiting to be placed: ghost the whole thing under the cursor so it
+    // can be positioned before it lands, with a marker on the corner it is held by.
+    if (harnessPlacing_ && !harnessGhost_.empty()) {
+        const Vec2 shift = cursor_ - harnessBase_;
+        const QColor ghost(120, 200, 255, 170);
+        for (Entity e : harnessGhost_) {
+            translateEntity(e, shift);
+            EntityRenderer::draw(p, e, *doc_, vt, ghost);
+        }
+        const QPointF c = vt.toScreen(cursor_);
+        QPen mp(QColor("#ffd166"));
+        mp.setCosmetic(true);
+        p.setPen(mp);
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()));
+        p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8));
+    }
+
+    // Array session: ghost every item of the current spec, plus the construction
+    // helpers for the active kind (the grid axes, the polar centre + orbit, or the
+    // picked path), so the whole layout can be judged before it is placed.
+    if (arrayActive_ && !arraySrc_.empty()) {
+        const QColor ghost(120, 200, 255, 150);
+        const QColor guide(255, 209, 102, 190);
+        const auto places = arrayPreview();
+        ArraySpec s = arraySpec_;
+        if (s.kind == ArrayKind::Polar) s.center = arrayCenterInUse();
+        const Vec2 pivot = arrayPivot(s, arrayBase_);
+
+        p.save();
+        QPen gp(guide);
+        gp.setCosmetic(true);
+        gp.setWidthF(1.2);
+        gp.setStyle(Qt::DashLine);
+        p.setPen(gp);
+        p.setBrush(Qt::NoBrush);
+        if (s.kind == ArrayKind::Rect) {
+            // The two grid axes out of the base point (they show the array angle).
+            const double a = s.axisAngle * M_PI / 180.0;
+            const Vec2 colAxis{std::cos(a), std::sin(a)};
+            const Vec2 rowAxis = colAxis.perp();
+            const double colLen = s.colSpacing * std::max(0, s.count - 1);
+            const double rowLen = s.rowSpacing * std::max(0, s.rows - 1);
+            p.drawLine(vt.toScreen(arrayBase_), vt.toScreen(arrayBase_ + colAxis * colLen));
+            p.drawLine(vt.toScreen(arrayBase_), vt.toScreen(arrayBase_ + rowAxis * rowLen));
+        } else if (s.kind == ArrayKind::Polar) {
+            // The orbit the items ride on, and a spoke out to the source item.
+            const double r = distance(arrayBase_, s.center);
+            const QPointF c = vt.toScreen(s.center);
+            if (r > 1e-9) {
+                const double rs = r * vt.scale();
+                p.drawEllipse(c, rs, rs);
+                p.drawLine(c, vt.toScreen(arrayBase_));
+            }
+            QPen cp(guide);
+            cp.setCosmetic(true);
+            cp.setWidthF(1.6);
+            p.setPen(cp);
+            p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()));
+            p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8));
+        } else if (arrayPathPts_.size() >= 2) {
+            QPolygonF poly;
+            for (const Vec2& v : arrayPathPts_) poly << vt.toScreen(v);
+            p.drawPolyline(poly);
+        }
+
+        // Ghost the items. A very large array would cost more to preview than to
+        // place, so past a cap the remaining items are marked with a dot instead.
+        constexpr int kMaxGhostEntities = 1500;
+        const int perItem = std::max(1, static_cast<int>(arraySrc_.size()));
+        const int ghostItems = std::max(1, kMaxGhostEntities / perItem);
+        for (size_t i = 0; i < places.size(); ++i) {
+            if (static_cast<int>(i) < ghostItems) {
+                for (const Entity& src : arraySrc_) {
+                    Entity item = arrayItem(src, places[i], pivot);
+                    EntityRenderer::draw(p, item, *doc_, vt, ghost);
+                }
+            } else {
+                // Where this item's base point lands (rotation about the pivot, then
+                // the offset) — the same transform the item itself would get.
+                const double cs = std::cos(places[i].rotate), sn = std::sin(places[i].rotate);
+                const Vec2 d = arrayBase_ - pivot;
+                const Vec2 at{pivot.x + d.x * cs - d.y * sn + places[i].delta.x,
+                              pivot.y + d.x * sn + d.y * cs + places[i].delta.y};
+                p.setPen(QPen(ghost));
+                p.drawEllipse(vt.toScreen(at), 2.0, 2.0);
+            }
+        }
+        p.restore();
+    }
+
     // Region select: rectangle (Deciding / RectPending) or freeform lasso, with
     // Edraw's exact colors. Window (left->right): blue, solid, fully enclose.
     // Crossing (right->left): green, dashed, touch.
@@ -7836,6 +9396,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             pts.push_back(orthoWirePoint(draftPts_.back(), cursor_));
         else
             pts.push_back(cursor_);
+        // Preview the routing clearance too, so the run is shown exactly where it will be
+        // placed rather than jumping aside on the click.
+        if (tool_ == ToolId::Wire && draftPts_.size() >= 1 && pts.size() >= 2)
+            pts.back() = applyWireClearance(pts[pts.size() - 2], pts.back());
         // Per-corner fillet radii for the live preview: placed corners keep their
         // stored radius; the corner now forming under the cursor previews with the
         // current (pending) radius. Parallels `pts`.
@@ -8186,7 +9750,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& off : wireArrayOffsets_) {
                 if (std::abs(off.x) < 1e-9 && std::abs(off.y) < 1e-9) continue; // anchor drawn above
                 QPolygonF poly;
-                for (const Vec2& v : pts) poly << vt.toScreen({v.x + off.x, v.y + off.y});
+                // Same lane routing as the commit, so a turn previews pitched.
+                for (const Vec2& v : fanRoute(pts, off)) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
         }

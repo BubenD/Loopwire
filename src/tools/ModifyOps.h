@@ -84,6 +84,78 @@ bool extendLineTo(Entity& line, const Vec2& pick,
 // ellipses tessellated). Returns true if modified.
 bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& others);
 
+// ---- Array (AutoCAD ARRAYRECT / ARRAYPOLAR / ARRAYPATH) --------------------
+
+// Which array law lays the items out. Path is AutoCAD's ARRAYPATH — the items
+// track along a picked object.
+enum class ArrayKind { Rect, Polar, Path };
+
+// Every parameter of an array, matching the fields of AutoCAD's "Array Creation"
+// ribbon. `count` and the row block apply to all three kinds; the rest is
+// per-kind. Elevation/levels (3D) have no meaning in a 2D drawing and are absent.
+struct ArraySpec {
+    ArrayKind kind = ArrayKind::Rect;
+
+    // Shared: the item count along the array's main direction (Rect = columns,
+    // Polar = items around the centre, Path = items along the path), plus the
+    // parallel rows every kind can have.
+    int count = 4;
+    int rows = 1;
+    double rowSpacing = 30.0; // Rect: along the row axis; Polar: radial; Path: perpendicular
+
+    // Rectangular.
+    double colSpacing = 30.0; // along the column axis (negative = leftward)
+    double axisAngle = 0.0;   // degrees CCW; rotates BOTH grid axes
+
+    // Polar.
+    Vec2 center{0.0, 0.0};
+    double fillAngle = 360.0; // total sweep in degrees
+    bool rotateItems = true;  // items spin with their orbit (AutoCAD "Rotate items")
+    bool ccw = true;          // sweep direction
+
+    // Path.
+    bool divide = true;        // spread `count` evenly over the path ("Divide"); else "Measure"
+    double pathSpacing = 40.0; // distance between items when !divide
+    double startOffset = 0.0;  // arclength before the first item
+    bool alignToPath = true;   // items rotate to follow the tangent
+};
+
+// One array item, as a transform of the source: rotate by `rotate` radians about
+// the array pivot (arrayPivot), THEN translate by `delta`. Item 0 is the source
+// item itself — identity for Rect/Polar, and for Path the move that drops the
+// source onto the path (as AutoCAD's ARRAYPATH does).
+struct ArrayPlacement {
+    double rotate = 0.0;
+    Vec2 delta{0.0, 0.0};
+};
+
+// The point every placement's rotation turns about: the polar centre for a polar
+// array, otherwise the array's base point.
+Vec2 arrayPivot(const ArraySpec& s, const Vec2& base);
+
+// The transforms of every item of the array. `base` is the base point of the
+// source selection (its bounding-box centre); `path`/`pathClosed` are only read
+// for ArrayKind::Path (see arrayPathPoints). Items that would fall off the end of
+// an open path are omitted, so the result can be shorter than count*rows.
+std::vector<ArrayPlacement> arrayPlacements(const ArraySpec& s, const Vec2& base,
+                                            const std::vector<Vec2>& path = {},
+                                            bool pathClosed = false);
+
+// A fresh clone of `src` with one placement applied (rotation about `pivot`).
+Entity arrayItem(const Entity& src, const ArrayPlacement& pl, const Vec2& pivot);
+
+// The distance stepped along the path between consecutive items of a path array:
+// "Divide" derives it from the path length (a closed path divides by the item
+// count, an open one by the gaps), "Measure" uses the spec's own spacing. Shared by
+// arrayPlacements and the ribbon, so the number shown is the number used.
+double arrayPathStep(const ArraySpec& s, double pathLength, bool pathClosed);
+
+// The drawn centreline of `e` as an ordered polyline, for use as a path-array
+// path: curves are tessellated, bulged/filleted polylines follow their real
+// outline, and closed shapes repeat their first point at the end (with
+// `*closedOut` set). Empty for entity types that are not a usable path.
+std::vector<Vec2> arrayPathPoints(const Entity& e, bool* closedOut = nullptr);
+
 // Rectangular array: returns clones (excluding the original at row0/col0).
 std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
                               double dx, double dy);

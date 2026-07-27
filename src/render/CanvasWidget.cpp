@@ -759,6 +759,12 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
         editor_->freezeScreenPreview();
         return true;
     }
+    // Tab mid-drag while placing a Twist: freeze the crossing-line end so the ribbon's
+    // twist parameters can be tuned without the drag changing the caught wires.
+    if (editor_ && next && !editor_->twistArmType().isEmpty()) {
+        editor_->freezeTwistPreview();
+        return true;
+    }
     return QWidget::focusNextPrevChild(next);
 }
 

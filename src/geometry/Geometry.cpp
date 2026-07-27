@@ -73,6 +73,44 @@ double shortAngleDelta(double current, double target) {
     return d;
 }
 
+double polylineLength(const std::vector<Vec2>& pts) {
+    double len = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i) len += distance(pts[i - 1], pts[i]);
+    return len;
+}
+
+bool samplePolyline(const std::vector<Vec2>& pts, double dist, bool closed,
+                    Vec2& pt, Vec2& tangent) {
+    if (pts.size() < 2) return false;
+    const double total = polylineLength(pts);
+    if (total < 1e-12) return false;
+    if (closed) {
+        dist = std::fmod(dist, total);
+        if (dist < 0.0) dist += total;
+    } else {
+        dist = std::clamp(dist, 0.0, total);
+    }
+    double walked = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const double seg = distance(pts[i - 1], pts[i]);
+        if (seg < 1e-12) continue;
+        if (walked + seg >= dist - 1e-12) {
+            pt = lerp(pts[i - 1], pts[i], (dist - walked) / seg);
+            tangent = (pts[i] - pts[i - 1]).normalized();
+            return true;
+        }
+        walked += seg;
+    }
+    // Rounding overshoot: land on the final vertex along the last real segment.
+    for (size_t i = pts.size(); i-- > 1;) {
+        if (distance(pts[i - 1], pts[i]) < 1e-12) continue;
+        pt = pts[i];
+        tangent = (pts[i] - pts[i - 1]).normalized();
+        return true;
+    }
+    return false;
+}
+
 std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist) {
     const int n = static_cast<int>(pts.size());
     if (n < 2) return pts;

@@ -94,12 +94,19 @@ QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     if (const Layer* layer = doc.findLayer(e.layer); layer && QColor(layer->color).isValid())
         layerHex = layer->color;
 
-    // Wires take their color from the wire color code (WH/BK/RD/...).
+    // A wire is drawn in its ordinary COLOUR property, like every other entity: that is the
+    // one the Properties panel and the ribbon set, so changing it must change the drawing. The
+    // harness colour CODE (WH/BK/RD/...) is information about the wire, and only stands in as
+    // the colour when no colour of its own has been set - which is what keeps wires drawn
+    // before this, and wires whose code was set but never painted, looking as they did.
     if (e.type == EntityType::Wire) {
-        const QString mode = e.meta.value("wireColorMode").toString();
-        if (mode != "bylayer")
-            return QColor(wireColorHex(e.meta.value("wireColor").toString(), layerHex));
-        return QColor(layerHex);
+        if (e.hasExplicitColor()) {
+            const QColor own(e.color);
+            if (own.isValid()) return own;
+        }
+        if (e.meta.value("wireColorMode").toString() == QLatin1String("bylayer"))
+            return QColor(layerHex);
+        return QColor(wireColorHex(e.meta.value("wireColor").toString(), layerHex));
     }
     if (e.hasExplicitColor()) {
         QColor c(e.color);
@@ -136,6 +143,29 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
         if (align & Qt::AlignVCenter) pos.setY(at.y() + (fm.ascent() - fm.descent()) / 2.0);
     }
     p.drawText(pos, text);
+}
+
+// Text that reads ALONG a wire: centred on `at`, rotated to the wire's direction, and
+// lifted clear of the line (above it, or below when `below`). Screen y runs downward, so
+// the world direction's y is negated to get the on-screen angle. This is what makes a
+// vertical wire's marking turn with the wire instead of staying horizontal.
+void drawTextAlongWire(QPainter& p, const ViewTransform& vt, const Vec2& at, const Vec2& dir,
+                       const QString& text, double worldHeight, const QColor& color,
+                       bool below, double lift = 0.0) {
+    if (text.isEmpty()) return;
+    QFont f = p.font();
+    f.setPixelSize(std::max(1, static_cast<int>(worldHeight * vt.scale())));
+    const QFontMetricsF fm(f);
+    const double gap = std::max(2.0, worldHeight * vt.scale() * 0.35) + lift * vt.scale();
+    p.save();
+    p.setFont(f);
+    p.setPen(color);
+    p.translate(vt.toScreen(at));
+    p.rotate(std::atan2(-dir.y, dir.x) * 180.0 / M_PI);
+    p.drawText(QPointF(-fm.horizontalAdvance(text) / 2.0,
+                       below ? gap + fm.ascent() : -gap),
+               text);
+    p.restore();
 }
 
 // "ls" line-start: read the stored reference line, if any.
@@ -905,7 +935,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 const double L = std::hypot(d.x(), d.y());
                 if (L < 1e-6) { path.lineTo(a1); continue; }
                 const QPointF dir(d.x() / L, d.y() / L);
-                const QPointF perp(-dir.y(), dir.x());
+                QPointF perp(-dir.y(), dir.x());
+                // The hop always arcs UPWARD on the sheet (screen y grows downward, so the
+                // bulge side is the one with negative y). Taking the segment's own
+                // perpendicular made the arc flip with the direction the wire happened to be
+                // drawn in, so some bridges bulged down and read as a dip rather than a hop.
+                if (perp.y() > 0.0) perp = -perp;
                 std::vector<double> ts; // hop centres as distance along this segment
                 for (const Vec2& h : hops) {
                     const QPointF hs = vt.toScreen(h);
@@ -934,6 +969,31 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                   e.points[e.points.size() / 2], 0.5);
             drawWorldText(p, vt.toScreen(mid) - QPointF(0, 4), net, 3.0, vt.scale(),
                           color.lighter(140));
+        }
+        // Wire markings: the colour code / name and the cross-section, each switched on
+        // independently and repeated along the run. They read along the wire (colour
+        // above it, gauge below) and sit wherever their grip was dragged to.
+        const QString markColor = wireAnnotColorText(e);
+        const QString markGauge = wireAnnotGaugeText(e);
+        const double annSize = e.meta.value("annSize").toDouble(3.5);
+        if (!markColor.isEmpty() || !markGauge.isEmpty()) {
+            for (const WireAnnot& a : wireAnnots(e)) {
+                drawTextAlongWire(p, vt, a.pos, a.dir, markColor, annSize, color.lighter(150),
+                                  /*below=*/false);
+                drawTextAlongWire(p, vt, a.pos, a.dir, markGauge, annSize, color.lighter(130),
+                                  /*below=*/true);
+            }
+        }
+        // The wire's own label sits ABOVE the run, mid-span, reading along it. When a colour
+        // marking is switched on it already occupies the space just above the line, so the
+        // label is lifted clear of it instead of printing on top.
+        const QString wireLbl = e.meta.value("wireLabel").toString();
+        if (!wireLbl.isEmpty() && e.meta.value("showWireLabel").toBool(true)) {
+            Vec2 at, dir;
+            if (wirePointAtFraction(e, 0.5, at, dir))
+                drawTextAlongWire(p, vt, at, dir, wireLbl, annSize, color.lighter(160),
+                                  /*below=*/false,
+                                  /*lift=*/markColor.isEmpty() ? 0.0 : annSize * 1.15);
         }
         break;
     }
@@ -1374,7 +1434,26 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::NetLabel: {
         const QString txt = e.meta.value("text").toString(e.meta.value("netName").toString());
-        drawWorldText(p, vt.toScreen(e.a), txt, 4.0, vt.scale(), color);
+        // A Wire label ATTACHED to a wire is defined by that wire plus a position along
+        // it, so it rides the wire: it follows every edit of the wire, reads along the
+        // run, and can only be slid up and down it.
+        const QString wid = e.meta.value("wireId").toString();
+        if (!wid.isEmpty()) {
+            for (const auto& w : doc.entities()) {
+                if (w.id != wid || w.type != EntityType::Wire) continue;
+                Vec2 at, dir;
+                if (wirePointAtFraction(w, e.meta.value("annT").toDouble(0.5), at, dir)) {
+                    if (dir.x < -1e-9 || (std::abs(dir.x) <= 1e-9 && dir.y < 0.0)) dir = dir * -1.0;
+                    drawTextAlongWire(p, vt, at, dir, txt,
+                                      e.meta.value("textSize").toDouble(4.0), color,
+                                      /*below=*/false);
+                    return;
+                }
+                break;
+            }
+        }
+        drawWorldText(p, vt.toScreen(e.a), txt, e.meta.value("textSize").toDouble(4.0),
+                      vt.scale(), color);
         break;
     }
 
@@ -1540,24 +1619,44 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             else if (legDir == QLatin1String("right")) edge = {cx - rx * minor.x, cyMid - rx * minor.y};
             else edge = {cx - ry * major.x, cyMid - ry * major.y}; // "bottom"
             p.drawLine(vt.toScreen(edge), vt.toScreen(drain));
-            // The small "unterminated" end tick only shows while the leg is actually
-            // open — once a wire's endpoint connects here, the tick disappears (the
-            // wire itself now visibly continues from this point).
-            bool connected = false;
+            // The "X" end tick. A wire actually landing on the leg end means the leg IS
+            // connected, so the X goes — what is visibly wired outranks any stored flag,
+            // otherwise a leg with a wire on it would still be marked not-connected. With
+            // nothing on the leg the explicit "Not Connected" choice decides, and shields
+            // saved before that flag existed fall back to the same geometric test.
+            // Judged with a small WORLD tolerance rather than exact equality: a leg dragged
+            // onto a run without a snap lands a hair off it, and a leg that visibly touches a
+            // wire must read as connected either way.
+            constexpr double kLegTol = 1.0;
+            bool wired = false;
             for (const auto& w : doc.entities()) {
                 if (w.type != EntityType::Wire || w.points.empty()) continue;
-                const Vec2& a = w.points.front();
-                const Vec2& b = w.points.back();
-                if (std::hypot(a.x - drain.x, a.y - drain.y) < 1e-6 ||
-                    std::hypot(b.x - drain.x, b.y - drain.y) < 1e-6) {
-                    connected = true;
-                    break;
-                }
+                for (const Vec2& pt : w.points)
+                    if (std::hypot(pt.x - drain.x, pt.y - drain.y) < kLegTol) { wired = true; break; }
+                if (wired) break;
+                // A leg dropped onto the middle of a run is connected just as much as one
+                // dropped on its end.
+                for (size_t i = 1; i < w.points.size(); ++i)
+                    if (closestPointOnSegment(drain, w.points[i - 1], w.points[i]).distance
+                        < kLegTol) {
+                        wired = true;
+                        break;
+                    }
+                if (wired) break;
             }
-            if (!connected) {
+            const bool notConnected =
+                !wired && (!e.meta.contains("notConnected") ||
+                           e.meta.value("notConnected").toBool());
+            if (notConnected) {
+                // The SAME X as a standalone NotConnected terminator: world-sized off
+                // "ncSize", so it scales with the drawing and reads as the standard
+                // not-connected symbol rather than a fixed-pixel tick. A shield's X is
+                // half-size 3 (also the fallback for shields saved before it was stored).
+                const double halfWorld = e.meta.value("ncSize").toDouble(3.0);
+                const double s = std::max(3.0, halfWorld * vt.scale());
                 const QPointF d = vt.toScreen(drain);
-                p.drawLine(d + QPointF(-3, -3), d + QPointF(3, 3)); // small end tick
-                p.drawLine(d + QPointF(3, -3), d + QPointF(-3, 3));
+                p.drawLine(d + QPointF(-s, -s), d + QPointF(s, s));
+                p.drawLine(d + QPointF(s, -s), d + QPointF(-s, s));
             }
         }
         if (e.meta.value("showS").toBool(false)) {

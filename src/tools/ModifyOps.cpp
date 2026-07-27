@@ -746,20 +746,254 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
     return false;
 }
 
+// ---- Array (ARRAYRECT / ARRAYPOLAR / ARRAYPATH) ----------------------------
+
+namespace {
+
+constexpr double kArrPi = 3.14159265358979323846;
+// Ceiling on generated items, so a mistyped count (or a tiny "Between" on a long
+// path) can never lock the app up building millions of clones.
+constexpr int kMaxArrayItems = 4096;
+
+Vec2 rotatedAbout(const Vec2& p, const Vec2& pivot, double angle) {
+    const double cs = std::cos(angle), sn = std::sin(angle);
+    const Vec2 d = p - pivot;
+    return {pivot.x + d.x * cs - d.y * sn, pivot.y + d.x * sn + d.y * cs};
+}
+
+// Per-corner fillet radii / chamfer setbacks of a polyline, as the renderer reads
+// them — so a path array follows the outline actually drawn.
+void cornerMods(const Entity& e, std::vector<double>& radii, std::vector<double>& chamIn,
+                std::vector<double>& chamOut, bool& any) {
+    const size_t n = e.points.size();
+    radii.assign(n, 0.0);
+    chamIn.assign(n, 0.0);
+    chamOut.assign(n, 0.0);
+    any = false;
+    const QJsonArray rArr = e.meta.value("cornerRadii").toArray();
+    for (size_t i = 0; i < n && i < static_cast<size_t>(rArr.size()); ++i) {
+        radii[i] = rArr[static_cast<int>(i)].toDouble();
+        if (radii[i] > 0.0) any = true;
+    }
+    const QJsonArray cArr = e.meta.value("cornerChamfers").toArray();
+    const QJsonArray cArr2 = e.meta.value("cornerChamfers2").toArray();
+    for (size_t i = 0; i < n && i < static_cast<size_t>(cArr.size()); ++i) {
+        chamIn[i] = cArr[static_cast<int>(i)].toDouble();
+        chamOut[i] = (i < static_cast<size_t>(cArr2.size()))
+                         ? cArr2[static_cast<int>(i)].toDouble()
+                         : chamIn[i];
+        if (chamIn[i] > 0.0 && chamOut[i] > 0.0) any = true;
+    }
+}
+
+} // namespace
+
+Vec2 arrayPivot(const ArraySpec& s, const Vec2& base) {
+    return s.kind == ArrayKind::Polar ? s.center : base;
+}
+
+std::vector<Vec2> arrayPathPoints(const Entity& e, bool* closedOut) {
+    std::vector<Vec2> pts;
+    bool closed = false;
+    auto onCircle = [&](double a) {
+        return Vec2{e.center.x + e.radius * std::cos(a), e.center.y + e.radius * std::sin(a)};
+    };
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine: // its centreline
+        pts = {e.a, e.b};
+        break;
+    case EntityType::Polyline:
+    case EntityType::Wire: {
+        if (e.points.size() < 2) break;
+        const QJsonArray bulgeArr = e.meta.value("bulges").toArray();
+        std::vector<double> radii, chamIn, chamOut;
+        bool anyMod = false;
+        cornerMods(e, radii, chamIn, chamOut, anyMod);
+        if (!bulgeArr.isEmpty()) {
+            std::vector<double> bulges;
+            for (const auto& v : bulgeArr) bulges.push_back(v.toDouble());
+            pts = expandBulgePolyline(e.points, bulges);
+        } else if (anyMod) {
+            pts = filletChamferPolyline(e.points, radii, chamIn, chamOut, false);
+        } else {
+            pts = e.points;
+        }
+        break;
+    }
+    case EntityType::Spline:
+        if (e.points.size() < 2) break;
+        pts = e.meta.value("splineMode").toString() == QLatin1String("cv")
+                  ? bsplinePoints(e.points)
+                  : splinePoints(e.points);
+        break;
+    case EntityType::Rect:
+    case EntityType::Polygon: {
+        if (e.points.size() < 3) break;
+        std::vector<double> radii, chamIn, chamOut;
+        bool anyMod = false;
+        cornerMods(e, radii, chamIn, chamOut, anyMod);
+        pts = anyMod ? filletChamferPolyline(e.points, radii, chamIn, chamOut, true) : e.points;
+        pts.push_back(pts.front()); // close the loop so the last edge carries items too
+        closed = true;
+        break;
+    }
+    case EntityType::Circle: {
+        if (e.radius <= 0.0) break;
+        const int n = 180;
+        for (int i = 0; i <= n; ++i) pts.push_back(onCircle(2.0 * kArrPi * i / n));
+        closed = true;
+        break;
+    }
+    case EntityType::Arc: {
+        if (e.radius <= 0.0) break;
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * kArrPi;
+        const int n = std::max(16, static_cast<int>(std::ceil(sweep / (kArrPi / 90.0))));
+        for (int i = 0; i <= n; ++i) pts.push_back(onCircle(e.startAngle + sweep * i / n));
+        break;
+    }
+    case EntityType::Ellipse: {
+        if (e.radius <= 0.0 || e.radiusY <= 0.0) break;
+        const double cs = std::cos(e.rotation), sn = std::sin(e.rotation);
+        auto ept = [&](double t) {
+            const double lx = e.radius * std::cos(t), ly = e.radiusY * std::sin(t);
+            return Vec2{e.center.x + lx * cs - ly * sn, e.center.y + lx * sn + ly * cs};
+        };
+        double sa = 0.0, ea = 2.0 * kArrPi;
+        const bool arc = e.meta.value("ellipticalArc").toBool();
+        if (arc) {
+            sa = e.startAngle;
+            ea = e.endAngle;
+            while (ea <= sa) ea += 2.0 * kArrPi;
+        }
+        const int n = 180;
+        for (int i = 0; i <= n; ++i) pts.push_back(ept(sa + (ea - sa) * i / n));
+        closed = !arc;
+        break;
+    }
+    default:
+        break;
+    }
+    if (pts.size() < 2 || polylineLength(pts) < 1e-9) pts.clear();
+    if (closedOut) *closedOut = closed && !pts.empty();
+    return pts;
+}
+
+double arrayPathStep(const ArraySpec& s, double pathLength, bool pathClosed) {
+    if (!s.divide) return s.pathSpacing;
+    const int count = std::max(1, s.count);
+    if (count < 2) return 0.0;
+    // A closed path rejoins itself, so the last gap is the one back to the first item.
+    return pathClosed ? pathLength / count : pathLength / (count - 1);
+}
+
+std::vector<ArrayPlacement> arrayPlacements(const ArraySpec& s, const Vec2& base,
+                                            const std::vector<Vec2>& path, bool pathClosed) {
+    std::vector<ArrayPlacement> out;
+    const int count = std::max(1, s.count);
+    const int rows = std::max(1, s.rows);
+
+    switch (s.kind) {
+    case ArrayKind::Rect: {
+        // Both axes turn together with the array angle, so a rotated grid stays
+        // rectangular (AutoCAD's "Axis angle").
+        const double a = s.axisAngle * kArrPi / 180.0;
+        const Vec2 colAxis{std::cos(a), std::sin(a)};
+        const Vec2 rowAxis = colAxis.perp();
+        for (int r = 0; r < rows; ++r)
+            for (int c = 0; c < count; ++c) {
+                ArrayPlacement pl;
+                pl.delta = colAxis * (c * s.colSpacing) + rowAxis * (r * s.rowSpacing);
+                out.push_back(pl);
+                if (static_cast<int>(out.size()) >= kMaxArrayItems) return out;
+            }
+        break;
+    }
+    case ArrayKind::Polar: {
+        // A full sweep divides by the item count (no duplicate item on top of the
+        // first); a partial sweep spans it end to end, dividing by count-1.
+        const bool full = std::abs(s.fillAngle) >= 360.0 - 1e-9;
+        double stepDeg = 0.0;
+        if (count > 1) stepDeg = full ? s.fillAngle / count : s.fillAngle / (count - 1);
+        const double dir = s.ccw ? 1.0 : -1.0;
+        const double baseRadius = (base - s.center).length();
+        for (int ring = 0; ring < rows; ++ring) {
+            const double ringOff = ring * s.rowSpacing;
+            for (int i = 0; i < count; ++i) {
+                const double th = dir * stepDeg * i * kArrPi / 180.0;
+                const Vec2 orbit = rotatedAbout(base, s.center, th);
+                // Rings step outward along the item's OWN radius, so each ring is a
+                // concentric copy of the first.
+                const Vec2 outward = baseRadius > 1e-9 ? (orbit - s.center).normalized()
+                                                       : Vec2{1.0, 0.0};
+                ArrayPlacement pl;
+                if (s.rotateItems) {
+                    // Turning the source about the centre both orbits and spins it —
+                    // exactly AutoCAD's "Rotate items".
+                    pl.rotate = th;
+                    pl.delta = outward * ringOff;
+                } else {
+                    pl.delta = orbit + outward * ringOff - base;
+                }
+                out.push_back(pl);
+                if (static_cast<int>(out.size()) >= kMaxArrayItems) return out;
+            }
+        }
+        break;
+    }
+    case ArrayKind::Path: {
+        if (path.size() < 2) break;
+        const double total = polylineLength(path);
+        if (total < 1e-9) break;
+        const double step = arrayPathStep(s, total, pathClosed);
+        Vec2 firstPt, firstTan;
+        if (!samplePolyline(path, s.startOffset, pathClosed, firstPt, firstTan)) break;
+        const double refAngle = angleOf(firstTan);
+        for (int row = 0; row < rows; ++row) {
+            for (int i = 0; i < count; ++i) {
+                const double d = s.startOffset + i * step;
+                // Items that run past the end of an open path simply don't exist
+                // (AutoCAD stops rather than piling them on the last point).
+                if (!pathClosed && (d < -1e-9 || d > total + 1e-9)) continue;
+                Vec2 pt, tan;
+                if (!samplePolyline(path, d, pathClosed, pt, tan)) continue;
+                ArrayPlacement pl;
+                // Aligned items turn by the tangent's change from the first item, so
+                // item 0 keeps the source's own orientation.
+                if (s.alignToPath) pl.rotate = angleOf(tan) - refAngle;
+                pl.delta = pt + tan.perp() * (row * s.rowSpacing) - base;
+                out.push_back(pl);
+                if (static_cast<int>(out.size()) >= kMaxArrayItems) return out;
+            }
+        }
+        break;
+    }
+    }
+    return out;
+}
+
+Entity arrayItem(const Entity& src, const ArrayPlacement& pl, const Vec2& pivot) {
+    Entity clone = src;
+    clone.id = newId();
+    if (std::abs(pl.rotate) > 1e-12) rotateEntity(clone, pivot, pl.rotate);
+    if (pl.delta.lengthSq() > 1e-24) translateEntity(clone, pl.delta);
+    return clone;
+}
+
 std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
                               double dx, double dy) {
+    ArraySpec spec;
+    spec.kind = ArrayKind::Rect;
+    spec.rows = rows;
+    spec.count = cols;
+    spec.colSpacing = dx;
+    spec.rowSpacing = dy;
+    const auto places = arrayPlacements(spec, {0.0, 0.0});
     std::vector<Entity> out;
-    rows = std::max(1, rows);
-    cols = std::max(1, cols);
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            if (r == 0 && c == 0) continue;
-            Entity clone = src;
-            clone.id = newId();
-            translateEntity(clone, {dx * c, dy * r});
-            out.push_back(std::move(clone));
-        }
-    }
+    out.reserve(places.empty() ? 0 : places.size() - 1);
+    for (size_t i = 1; i < places.size(); ++i) // [0] is the source itself, left in place
+        out.push_back(arrayItem(src, places[i], {0.0, 0.0}));
     return out;
 }
 

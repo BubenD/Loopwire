@@ -115,7 +115,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Connector: return QStringLiteral("Connector");
     case ToolId::Splice: return QStringLiteral("Splice");
     case ToolId::NotConnected: return QStringLiteral("Not connected");
-    case ToolId::NetLabel: return QStringLiteral("Net label");
+    // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
+    // is a wire label, and that is what it is called.
+    case ToolId::NetLabel: return QStringLiteral("Wire label");
     case ToolId::Move: return QStringLiteral("Move");
     case ToolId::Rotate: return QStringLiteral("Rotate");
     case ToolId::Mirror: return QStringLiteral("Mirror");

@@ -106,6 +106,15 @@ std::optional<std::vector<Vec2>> traceEnclosingLoop(
 // lengths) at every interior corner of the polyline. radius <= 0 always fits.
 bool filletRadiusFits(const std::vector<Vec2>& pts, double radius);
 
+// Total length of an open polyline (sum of its segments).
+double polylineLength(const std::vector<Vec2>& pts);
+
+// Point and unit tangent at arclength `dist` along `pts`. `closed` wraps the
+// distance around the total length (the caller must have appended the closing
+// point); otherwise `dist` is clamped to the ends. False for a degenerate path.
+bool samplePolyline(const std::vector<Vec2>& pts, double dist, bool closed,
+                    Vec2& pt, Vec2& tangent);
+
 // Point on a circle/arc at the given angle (radians).
 inline Vec2 pointOnCircle(const Vec2& center, double radius, double angle) {
     return {center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};

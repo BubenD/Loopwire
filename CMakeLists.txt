@@ -45,8 +45,12 @@ add_library(edraw_core STATIC
     src/tools/EntityTransforms.cpp
     src/tools/ModifyOps.h
     src/tools/ModifyOps.cpp
+    src/tools/QuickSelect.h
+    src/tools/QuickSelect.cpp
     src/harness/Harness.h
     src/harness/Harness.cpp
+    src/harness/HarnessBuilder.h
+    src/harness/HarnessBuilder.cpp
     src/render/CanvasWidget.h
     src/render/CanvasWidget.cpp
     src/render/EntityRenderer.h
@@ -57,6 +61,8 @@ add_library(edraw_core STATIC
     src/app/Editor.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
+    src/app/HarnessBuilderDialog.h
+    src/app/HarnessBuilderDialog.cpp
 )
 
 target_include_directories(edraw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -85,6 +91,12 @@ set_target_properties(Edraw PROPERTIES
 if(WIN32)
     set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/resources/edraw.rc
                  PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/edraw.ico)
+endif()
+
+# --- Scratch GUI smoke target (only when a source is pointed at it) ----------
+if(EDRAW_SMOKE_SRC)
+    qt_add_executable(hb_smoke ${EDRAW_SMOKE_SRC})
+    target_link_libraries(hb_smoke PRIVATE edraw_core)
 endif()
 
 # --- Tests (optional) --------------------------------------------------------

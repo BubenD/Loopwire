@@ -1,6 +1,7 @@
 #pragma once
 
 #include "geometry/Vec2.h"
+#include "model/Entity.h" // wire annotations are read straight off the wire entity
 
 #include <QJsonObject>
 #include <QString>
@@ -16,8 +17,63 @@ QString wireColorHex(const QString& code, const QString& fallback = "#e8e8e8");
 QString wireColorName(const QString& code);
 QStringList wireColorCodes();
 
+// ---- Custom wire colours ---------------------------------------------------
+// Colours the user has added on top of the standard harness codes, each with its own name
+// and hex. Once registered a custom code behaves exactly like a built-in one everywhere:
+// wireColorHex()/wireColorName() resolve it and wireColorCodes() offers it.
+void registerCustomWireColor(const QString& code, const QString& name, const QString& hex);
+// The custom codes in the order they were added.
+QStringList customWireColorCodes();
+
 // Stroke weight (px) for a wire cross-section gauge (mm^2), e.g. "0.5", "2.5".
 double wireGaugeWeight(const QString& gauge);
+
+// ---- Wire annotations (colour / gauge marked along the wire) ----------------
+// A wire can carry its colour and its cross-section as text along its own run, each
+// switched on independently, repeated as many times as wanted. The text reads along
+// the wire (so a vertical wire's text turns with it) and can only be slid ALONG the
+// run — never off it. Stored on the wire as:
+//   showColorName : bool   draw the colour
+//   colorNameMode : "code" (2-letter, e.g. WH) | "full" (e.g. White)
+//   showGaugeName : bool   draw the cross-section
+//   annCount      : int    how many times to repeat them along the wire
+//   annT          : [n]    each instance's position as a fraction of the wire's length
+//                          (absent / short => evenly spaced)
+
+// One annotation instance's placement on the wire.
+struct WireAnnot {
+    Vec2 pos;              // anchor on the wire centreline
+    Vec2 dir{1.0, 0.0};    // unit direction of the wire there (text runs along it)
+    Vec2 normal{0.0, 1.0}; // unit perpendicular (colour one side, gauge the other)
+    double t = 0.0;        // position along the wire, 0..1
+};
+
+bool wireShowsColorName(const Entity& wire);
+bool wireShowsGaugeName(const Entity& wire);
+// How many annotation instances the wire is set to show (>= 1; 0 if none are on).
+int wireAnnotCount(const Entity& wire);
+// The text of each part for this wire ("" when switched off / not set).
+QString wireAnnotColorText(const Entity& wire);
+QString wireAnnotGaugeText(const Entity& wire);
+// Placement of every annotation instance, in order. Empty when neither part is shown
+// or the wire is degenerate.
+std::vector<WireAnnot> wireAnnots(const Entity& wire);
+// Where fraction `t` along the wire lands, with the local direction. False if the wire
+// has no length.
+bool wirePointAtFraction(const Entity& wire, double t, Vec2& pos, Vec2& dir);
+// Fraction along the wire nearest world point `p` (0..1). 0 for a degenerate wire.
+double wireFractionNearest(const Entity& wire, const Vec2& p);
+// Read / write the stored per-instance fractions (padded to `count`, evenly spaced).
+std::vector<double> wireAnnotFractions(const Entity& wire, int count);
+void setWireAnnotFractions(Entity& wire, const std::vector<double>& ts);
+
+// Move the wire END at `endIdx` (0 or the last index) by `delta` — because the connector
+// pin it is attached to moved — KEEPING the right angle at the knee beside it: the part of
+// the move ALONG that run is absorbed by the run's length, the part ACROSS it shifts the
+// knee, which simply lengthens or shortens the next run. A diagonal run has no right angle
+// to preserve and is left alone, as is a wire with no knee. Returns the index of the knee
+// that was adjusted, or -1 if none was.
+int dragWireEndKeepingRightAngle(Entity& wire, int endIdx, const Vec2& delta);
 
 // ---- Connector ------------------------------------------------------------
 

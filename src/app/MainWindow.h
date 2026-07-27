@@ -36,6 +36,7 @@ namespace Edraw_Desktop {
 
 class CanvasWidget;
 class Editor;
+class HarnessBuilderDialog;
 
 // Top-level application window: ribbon, dockable panels (layers / properties /
 // entity list), command bar, coordinate readout, and view/edit actions.
@@ -72,6 +73,10 @@ private:
     void updateConnectorContext();     // open/close: Connector tool active OR a connector selected
     void buildWireRibbonTab();         // build the contextual "Wire" tab (hidden)
     void showWireRibbon(bool on);      // add/select or remove the contextual Wire tab
+    void buildArrayRibbonTab();        // build the contextual "Array Creation" tab (hidden)
+    void showArrayRibbon(bool on);     // add/select or remove the contextual Array tab
+    void updateArrayContext();         // open/sync/close it with the array session
+    void beginArrayCommand(ArrayKind kind); // arm an array of that kind on the selection
     void buildPanels();
     void buildStatusControls();
     void buildCommandBar();
@@ -95,7 +100,9 @@ private:
     // Purge, Delete). Reused on both the Home and Modify tabs.
     QWidget* operationsRow();
     // Clipboard group: a Copy button (copies the selection) whose fall-menu holds Cut.
-    QWidget* clipboardRow();
+    // iconOnly drops the "Copy"/"Cut" caption so the button matches the plain icon
+    // buttons it sits with (Home); the name then shows on hover instead.
+    QWidget* clipboardRow(bool iconOnly = false);
     // AutoCAD-style Insert Table dialog → sets the table spec + arms the Table tool.
     void insertTableCommand();
 
@@ -123,9 +130,16 @@ private:
     void buildCommands();
     void showHelp();
     QVector<Command> commands_;
-    void arrayDialog();
+    // Quick Select (AutoCAD QSELECT): the filter dialog, seeded from `sampleId` so the
+    // property list is the one that applies to that object.
+    void showQuickSelectDialog(const QString& sampleId);
     void promptFilletRadius();
     void promptChamferDistance();
+
+    // The Harness Builder (modeless, one instance): describe a harness, then Generate draws
+    // it. Kept alive between openings so a part-built definition is not lost on Close.
+    void showHarnessBuilder();
+    HarnessBuilderDialog* harnessDlg_ = nullptr;
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
@@ -192,6 +206,9 @@ private:
     QVector<QAction*> allToolActions_; // every tool button instance (for theme re-tint)
     // Modify "Operations" icon buttons (key + button) for theme re-tinting.
     QVector<QPair<QString, QToolButton*>> opButtons_;
+    // Every "Match properties" button instance (Home + Schematic build): they latch
+    // together while the command is armed, so it is obvious it is waiting for clicks.
+    QVector<QToolButton*> matchBtns_;
 
     // Status-bar drafting toggles (re-tinted/re-styled on theme change).
     QVector<QToolButton*> statusToggleBtns_;
@@ -204,6 +221,21 @@ private:
     QWidget* tableCellTab_ = nullptr;
     QWidget* connectorTab_ = nullptr;
     QWidget* wireTab_ = nullptr;                 // contextual "Wire" ribbon (Wire tool active)
+    // Contextual "Array Creation" ribbon (shown while an array is being laid out). Each
+    // group is remembered with its separator rule and the array kinds it belongs to, so
+    // switching Type swaps the visible parameters. syncArrayRibbon_ reloads every control
+    // from the live spec; arraySyncing_ guards against that being read as a user edit.
+    QWidget* arrayTab_ = nullptr;
+    struct ArrayGroupVis {
+        QWidget* group = nullptr;
+        QWidget* rule = nullptr;
+        bool rect = false;
+        bool polar = false;
+        bool path = false;
+    };
+    QVector<ArrayGroupVis> arrayGroups_;
+    std::function<void()> syncArrayRibbon_;
+    bool arraySyncing_ = false;
     QWidget* markerGroup_ = nullptr;             // Schematic-build "Marker" size group (contextual)
     QLabel* markerLabel_ = nullptr;              // its label ("Splice ⌀" / "X size")
     QDoubleSpinBox* markerSpin_ = nullptr;       // its size spin (edits the active marker tool)

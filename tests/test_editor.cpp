@@ -4,6 +4,7 @@
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
+#include "tools/QuickSelect.h"
 
 #include <QJsonArray>
 #include <QtMath>
@@ -1640,11 +1641,473 @@ int run_editor_tests() {
         check(keptSharp, "perCorner: un-filleted corner stays sharp");
     }
 
+    // --- Match properties: click a source, then paint targets with its properties.
+    {
+        Document doc;
+        doc.entities().clear();
+        Entity src;
+        src.id = "src";
+        src.type = EntityType::Line;
+        src.a = {0, 0};
+        src.b = {10, 0};
+        src.layer = "trim";
+        src.color = "#ff0000";
+        src.weight = 1.4;
+        Entity dst;
+        dst.id = "dst";
+        dst.type = EntityType::Line;
+        dst.a = {0, 20};
+        dst.b = {10, 20};
+        doc.entities().push_back(src);
+        doc.entities().push_back(dst);
+        Editor ed;
+        ed.setDocument(&doc);
+        noSnap(ed);
+        ed.beginMatchProps();
+        check(ed.awaitingMatchProps(), "match: armed by beginMatchProps");
+        ed.onPointerPress({5, 0}, Qt::LeftButton, Qt::NoModifier); // pick the source
+        check(ed.awaitingMatchProps() && ed.selection().size() == 1 &&
+                  ed.selection().front() == QLatin1String("src"),
+              "match: the first click captures the source and stays armed");
+        ed.onPointerPress({5, 20}, Qt::LeftButton, Qt::NoModifier); // paint the target
+        const Entity* t = nullptr;
+        for (const auto& e : doc.entities())
+            if (e.id == QLatin1String("dst")) t = &e;
+        check(t && t->color == QLatin1String("#ff0000") && t->layer == QLatin1String("trim") &&
+                  near(t->weight, 1.4),
+              "match: colour / layer / lineweight copied onto the target");
+        check(ed.awaitingMatchProps(), "match: stays armed for more targets");
+    }
+
+    // --- Match properties the other way round: select the object, THEN press Match.
+    // The pre-selected object must become the source, so the very next click paints.
+    {
+        Document doc;
+        doc.entities().clear();
+        Entity src;
+        src.id = "src";
+        src.type = EntityType::Circle;
+        src.center = {0, 0};
+        src.radius = 5;
+        src.color = "#00ff00";
+        src.weight = 0.7;
+        Entity dst;
+        dst.id = "dst";
+        dst.type = EntityType::Circle;
+        dst.center = {40, 0};
+        dst.radius = 12;
+        doc.entities().push_back(src);
+        doc.entities().push_back(dst);
+        Editor ed;
+        ed.setDocument(&doc);
+        noSnap(ed);
+        ed.selectById("src");
+        ed.beginMatchProps();
+        check(ed.awaitingMatchProps() && ed.matchSource() == QLatin1String("src"),
+              "match: a pre-selected object is taken as the source");
+        ed.onPointerPress({45, 0}, Qt::LeftButton, Qt::NoModifier); // one click paints
+        const Entity* t = nullptr;
+        for (const auto& e : doc.entities())
+            if (e.id == QLatin1String("dst")) t = &e;
+        check(t && t->color == QLatin1String("#00ff00") && near(t->weight, 0.7),
+              "match: the first click after arming paints, it does not re-pick the source");
+        check(t && near(t->radius, 5.0),
+              "match: same-type objects also take the source's geometry");
+    }
+
+    // --- Quick Select: the property list offered follows the object's type.
+    {
+        Entity c;
+        c.type = EntityType::Circle;
+        c.center = {0, 0};
+        c.radius = 4;
+        const auto cp = quickSelectProps(c);
+        auto hasKey = [](const std::vector<QuickSelectProp>& ps, const char* k) {
+            for (const auto& p : ps)
+                if (p.key == QLatin1String(k)) return true;
+            return false;
+        };
+        check(hasKey(cp, "layer") && hasKey(cp, "color") && hasKey(cp, "weight"),
+              "qselect: the general properties are always offered");
+        check(hasKey(cp, "radius") && hasKey(cp, "diameter") && hasKey(cp, "area"),
+              "qselect: a circle offers radius / diameter / area");
+        check(!hasKey(cp, "meta:wireGauge"), "qselect: a circle does not offer wire properties");
+
+        Entity w;
+        w.type = EntityType::Wire;
+        w.points = {{0, 0}, {30, 0}};
+        w.meta.insert("wireGauge", QStringLiteral("0.75"));
+        w.meta.insert("netName", QStringLiteral("GND"));
+        const auto wp = quickSelectProps(w);
+        check(hasKey(wp, "meta:wireGauge") && hasKey(wp, "meta:netName") && hasKey(wp, "length"),
+              "qselect: a wire offers its gauge / net / length");
+        check(!hasKey(wp, "radius"), "qselect: a wire does not offer a radius");
+
+        // Values read back as the text the dialog compares against.
+        check(quickSelectValue(c, QStringLiteral("radius")) == QLatin1String("4"),
+              "qselect: numeric values format without trailing zeros");
+        check(quickSelectValue(c, QStringLiteral("diameter")) == QLatin1String("8"),
+              "qselect: diameter is derived from the radius");
+        check(quickSelectValue(c, QStringLiteral("color")) == QLatin1String("ByLayer"),
+              "qselect: an unset colour reads as ByLayer");
+        check(quickSelectValue(w, QStringLiteral("meta:netName")) == QLatin1String("GND"),
+              "qselect: meta values read through");
+        check(near(quickSelectValue(w, QStringLiteral("length")).toDouble(), 30.0),
+              "qselect: a wire's length is its run length");
+    }
+
+    // --- Quick Select: filtering, operators, type restriction, exclude and append.
+    {
+        std::vector<Entity> pool;
+        auto circle = [&pool](const char* id, double r, const char* layer) {
+            Entity e;
+            e.id = QString::fromLatin1(id);
+            e.type = EntityType::Circle;
+            e.radius = r;
+            e.layer = QString::fromLatin1(layer);
+            pool.push_back(e);
+        };
+        circle("c1", 5, "0");
+        circle("c2", 10, "0");
+        circle("c3", 10, "trim");
+        Entity ln;
+        ln.id = "l1";
+        ln.type = EntityType::Line;
+        ln.a = {0, 0};
+        ln.b = {10, 0};
+        ln.layer = "0";
+        pool.push_back(ln);
+
+        QuickSelectQuery q;
+        q.key = QStringLiteral("layer");
+        q.op = QsOp::Equal;
+        q.value = QStringLiteral("0");
+        auto ids = quickSelectMatchIds(pool, q, {});
+        check(ids.size() == 3, "qselect: layer = 0 matches every type on that layer");
+
+        q.type = QStringLiteral("circle");
+        ids = quickSelectMatchIds(pool, q, {});
+        check(ids.size() == 2, "qselect: the object type narrows the filter");
+
+        q.type.clear();
+        q.key = QStringLiteral("radius");
+        q.op = QsOp::Greater;
+        q.value = QStringLiteral("6");
+        ids = quickSelectMatchIds(pool, q, {});
+        check(ids.size() == 2 && ids[0] == QLatin1String("c2"),
+              "qselect: numeric operators compare as numbers");
+
+        q.exclude = true;
+        ids = quickSelectMatchIds(pool, q, {});
+        check(ids.size() == 2, "qselect: exclude selects what does not match");
+
+        // Select All ignores the property and matches on type alone.
+        q.exclude = false;
+        q.op = QsOp::All;
+        q.type = QStringLiteral("line");
+        ids = quickSelectMatchIds(pool, q, {});
+        check(ids.size() == 1 && ids[0] == QLatin1String("l1"),
+              "qselect: Select All matches every object of the type");
+
+        // Applying to the current selection filters within it; append keeps it.
+        q.op = QsOp::Equal;
+        q.type.clear();
+        q.key = QStringLiteral("layer");
+        q.value = QStringLiteral("0");
+        q.wholeDrawing = false;
+        ids = quickSelectMatchIds(pool, q, {QStringLiteral("c1"), QStringLiteral("c3")});
+        check(ids.size() == 1 && ids[0] == QLatin1String("c1"),
+              "qselect: applying to the current selection filters within it");
+        q.wholeDrawing = true;
+        q.append = true;
+        ids = quickSelectMatchIds(pool, q, {QStringLiteral("c3")});
+        check(ids.size() == 4 && ids[0] == QLatin1String("c3"),
+              "qselect: append keeps the current selection and adds the matches once each");
+
+        const auto vals = quickSelectDistinctValues(pool, QStringLiteral("radius"));
+        check(vals.size() == 3 && vals.front() == QLatin1String("0"),
+              "qselect: distinct values are collected and sorted numerically");
+    }
+
+    // --- Quick Select session: armed, Enter opens it, and the filter applies.
+    {
+        Document doc;
+        doc.entities().clear();
+        for (int i = 0; i < 3; ++i) {
+            Entity e;
+            e.id = QStringLiteral("c%1").arg(i);
+            e.type = EntityType::Circle;
+            e.center = {i * 30.0, 0};
+            e.radius = (i == 2) ? 9 : 4;
+            doc.entities().push_back(e);
+        }
+        Editor ed;
+        ed.setDocument(&doc);
+        noSnap(ed);
+        int opened = 0;
+        QString sampleSeen;
+        QObject::connect(&ed, &Editor::quickSelectRequested, &ed,
+                         [&opened, &sampleSeen](const QString& id) {
+                             ++opened;
+                             sampleSeen = id;
+                         });
+        ed.beginQuickSelect();
+        check(ed.awaitingQuickSelect() && opened == 0,
+              "qselect session: with nothing selected it waits for the pick");
+        ed.onPointerPress({0, 4}, Qt::LeftButton, Qt::NoModifier); // click the first circle
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(opened == 1 && sampleSeen == QLatin1String("c0"),
+              "qselect session: Enter opens the dialog on the picked object");
+        check(!ed.awaitingQuickSelect(), "qselect session: opening ends the pick phase");
+
+        // The other order: something already selected opens it straight away.
+        ed.selectById("c2");
+        ed.beginQuickSelect();
+        check(opened == 2 && sampleSeen == QLatin1String("c2"),
+              "qselect session: a pre-selected object opens the dialog at once");
+
+        QuickSelectQuery q;
+        q.key = QStringLiteral("radius");
+        q.op = QsOp::Equal;
+        q.value = QStringLiteral("4");
+        check(ed.applyQuickSelect(q) == 2 && ed.selection().size() == 2,
+              "qselect session: applying the filter selects the matches");
+    }
+
     // --- Rectangular array count.
     {
         Entity c; c.type = EntityType::Circle; c.center = {0, 0}; c.radius = 1;
         auto clones = rectArray(c, 2, 3, 10, 10);
         check(clones.size() == 5, "array: 2x3 minus origin = 5");
+    }
+
+    // --- Rectangular array placements: order, spacing, and the axis angle.
+    {
+        ArraySpec s;
+        s.kind = ArrayKind::Rect;
+        s.count = 3; // columns
+        s.rows = 2;
+        s.colSpacing = 10;
+        s.rowSpacing = 5;
+        auto pl = arrayPlacements(s, {0, 0});
+        check(pl.size() == 6, "arrayrect: 3 cols x 2 rows = 6 items");
+        check(near(pl[0].delta.x, 0) && near(pl[0].delta.y, 0) && near(pl[0].rotate, 0),
+              "arrayrect: item 0 is the source, untouched");
+        check(near(pl[2].delta.x, 20) && near(pl[2].delta.y, 0), "arrayrect: columns step in X");
+        check(near(pl[3].delta.x, 0) && near(pl[3].delta.y, 5), "arrayrect: rows step in Y");
+        s.axisAngle = 90.0; // the whole grid turns, staying rectangular
+        pl = arrayPlacements(s, {0, 0});
+        check(near(pl[1].delta.x, 0) && near(pl[1].delta.y, 10),
+              "arrayrect: axis angle turns the column axis");
+        check(near(pl[3].delta.x, -5) && near(pl[3].delta.y, 0),
+              "arrayrect: the row axis stays perpendicular to it");
+        s.axisAngle = 0.0;
+        s.colSpacing = -10; // negative spacing arrays the other way
+        pl = arrayPlacements(s, {0, 0});
+        check(near(pl[1].delta.x, -10), "arrayrect: negative spacing goes leftward");
+    }
+
+    // --- Polar array: how the sweep divides, direction, rotation and rings.
+    {
+        ArraySpec s;
+        s.kind = ArrayKind::Polar;
+        s.center = {0, 0};
+        s.count = 4;
+        s.fillAngle = 360.0;
+        auto pl = arrayPlacements(s, {10, 0});
+        check(pl.size() == 4, "arraypolar: 4 items");
+        check(near(pl[0].rotate, 0) && near(pl[0].delta.x, 0) && near(pl[0].delta.y, 0),
+              "arraypolar: item 0 is the source, untouched");
+        check(near(pl[1].rotate, M_PI / 2),
+              "arraypolar: a full sweep divides by the item count");
+        s.count = 3;
+        s.fillAngle = 180.0;
+        pl = arrayPlacements(s, {10, 0});
+        check(near(pl[1].rotate, M_PI / 2), "arraypolar: a partial sweep divides by the gaps");
+        s.ccw = false;
+        pl = arrayPlacements(s, {10, 0});
+        check(near(pl[1].rotate, -M_PI / 2), "arraypolar: CW sweeps the other way");
+        s.ccw = true;
+        s.rotateItems = false;
+        pl = arrayPlacements(s, {10, 0});
+        check(near(pl[1].rotate, 0) && near(pl[1].delta.x, -10) && near(pl[1].delta.y, 10),
+              "arraypolar: un-rotated items still orbit the centre");
+        // Rings: one item per ring, stepping outward along its own radius.
+        ArraySpec rings;
+        rings.kind = ArrayKind::Polar;
+        rings.center = {0, 0};
+        rings.count = 1;
+        rings.rows = 3;
+        rings.rowSpacing = 5;
+        pl = arrayPlacements(rings, {10, 0});
+        check(pl.size() == 3 && near(pl[1].delta.x, 5) && near(pl[1].delta.y, 0) &&
+                  near(pl[2].delta.x, 10),
+              "arraypolar: rows are concentric rings");
+    }
+
+    // --- Path array: Divide vs Measure, alignment, and closed paths.
+    {
+        const std::vector<Vec2> line = {{0, 0}, {100, 0}};
+        ArraySpec s;
+        s.kind = ArrayKind::Path;
+        s.count = 5;
+        s.divide = true;
+        auto pl = arrayPlacements(s, {0, 50}, line, false);
+        check(pl.size() == 5, "arraypath: 5 items");
+        check(near(pl[0].rotate, 0) && near(pl[0].delta.x, 0) && near(pl[0].delta.y, -50),
+              "arraypath: the source drops onto the start of the path");
+        check(near(pl[2].delta.x, 50) && near(pl[4].delta.x, 100),
+              "arraypath: Divide spreads the items over the whole path");
+        s.startOffset = 10;
+        pl = arrayPlacements(s, {0, 50}, line, false);
+        check(near(pl[0].delta.x, 10), "arraypath: the start offset shifts the whole run");
+        // Measure steps by a fixed distance; items past the end of an open path
+        // simply don't exist (0 / 40 / 80 fit in 100, 120 and 160 do not).
+        s.startOffset = 0;
+        s.divide = false;
+        s.pathSpacing = 40;
+        pl = arrayPlacements(s, {0, 0}, line, false);
+        check(pl.size() == 3, "arraypath: Measure stops at the end of an open path");
+        // Rows run across the path.
+        s.rows = 2;
+        s.rowSpacing = 7;
+        pl = arrayPlacements(s, {0, 0}, line, false);
+        check(pl.size() == 6 && near(pl[3].delta.y, 7),
+              "arraypath: rows offset perpendicular to the path");
+        // A closed path divides by the item count and wraps; aligned items follow
+        // the tangent, so turning a corner turns the item.
+        const std::vector<Vec2> loop = {{0, 0}, {10, 0}, {10, 10}, {0, 10}, {0, 0}};
+        ArraySpec cs;
+        cs.kind = ArrayKind::Path;
+        cs.count = 4;
+        cs.divide = true;
+        cs.alignToPath = true;
+        pl = arrayPlacements(cs, {0, 0}, loop, true);
+        check(pl.size() == 4, "arraypath: a closed path divides by the item count");
+        check(near(pl[2].rotate, M_PI / 2), "arraypath: aligned items follow the tangent");
+        cs.alignToPath = false;
+        pl = arrayPlacements(cs, {0, 0}, loop, true);
+        check(near(pl[2].rotate, 0), "arraypath: un-aligned items keep their angle");
+    }
+
+    // --- Path extraction: which objects can be a path, and their length.
+    {
+        Entity r;
+        r.type = EntityType::Rect;
+        r.points = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
+        bool closed = false;
+        const auto pts = arrayPathPoints(r, &closed);
+        check(closed && pts.size() == 5 && near(polylineLength(pts), 40.0),
+              "arrayPathPoints: a rect closes its loop");
+        Entity c;
+        c.type = EntityType::Circle;
+        c.center = {0, 0};
+        c.radius = 10;
+        bool circClosed = false;
+        const auto cpts = arrayPathPoints(c, &circClosed);
+        check(circClosed && near(polylineLength(cpts), 2.0 * M_PI * 10.0, 0.05),
+              "arrayPathPoints: a circle tessellates to its circumference");
+        Entity ln;
+        ln.type = EntityType::Line;
+        ln.a = {0, 0};
+        ln.b = {3, 4};
+        bool lineClosed = true;
+        check(near(polylineLength(arrayPathPoints(ln, &lineClosed)), 5.0) && !lineClosed,
+              "arrayPathPoints: a line is an open path");
+        Entity tx;
+        tx.type = EntityType::Text;
+        check(arrayPathPoints(tx).empty(), "arrayPathPoints: text is not a path");
+    }
+
+    // --- Array session: arming, the polar centre pick, commit and cancel.
+    {
+        Document doc;
+        doc.entities().clear();
+        Entity c;
+        c.id = "c1";
+        c.type = EntityType::Circle;
+        c.center = {10, 0};
+        c.radius = 2;
+        doc.entities().push_back(c);
+        Editor ed;
+        ed.setDocument(&doc);
+        noSnap(ed);
+
+        ed.beginArray(ArrayKind::Polar);
+        check(!ed.arrayActive(), "array session: nothing selected arms nothing");
+
+        ed.selectById("c1");
+        ed.beginArray(ArrayKind::Polar);
+        check(ed.arrayActive() && ed.arrayAwaitingCenter(),
+              "array session: a polar array first wants a centre");
+        ed.arraySpec().count = 4;
+        ed.arraySpec().fillAngle = 360.0;
+        ed.arraySpec().rows = 1;
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // the centre
+        check(!ed.arrayAwaitingCenter(), "array session: the click sets the centre");
+        check(ed.arrayItemCount() == 4, "array session: 4 items previewed");
+        check(doc.entities().size() == 1, "array session: nothing placed until committed");
+        ed.commitArray();
+        check(!ed.arrayActive(), "array session: committing ends the session");
+        check(doc.entities().size() == 4, "array session: 4 objects after the commit");
+        bool atTop = false, atLeft = false;
+        for (const auto& e : doc.entities()) {
+            if (near(e.center.x, 0, 1e-6) && near(e.center.y, 10, 1e-6)) atTop = true;
+            if (near(e.center.x, -10, 1e-6) && near(e.center.y, 0, 1e-6)) atLeft = true;
+        }
+        check(atTop && atLeft, "array session: items orbit the picked centre");
+        check(ed.selection().size() == 4, "array session: the finished array is left selected");
+
+        // Esc during a session throws the preview away and touches nothing.
+        ed.beginArray(ArrayKind::Rect);
+        check(ed.arrayActive(), "array session: rect arms straight away");
+        const size_t before = doc.entities().size();
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(!ed.arrayActive() && doc.entities().size() == before,
+              "array session: Esc cancels without placing anything");
+    }
+
+    // --- Path array session: pick the path by clicking it, then Enter places it.
+    {
+        Document doc;
+        doc.entities().clear();
+        Entity path;
+        path.id = "p1";
+        path.type = EntityType::Line;
+        path.a = {0, 0};
+        path.b = {100, 0};
+        doc.entities().push_back(path);
+        Entity item;
+        item.id = "s1";
+        item.type = EntityType::Circle;
+        item.center = {0, 50};
+        item.radius = 1;
+        doc.entities().push_back(item);
+        Editor ed;
+        ed.setDocument(&doc);
+        noSnap(ed);
+        ed.selectById("s1");
+        ed.beginArray(ArrayKind::Path);
+        check(ed.arrayAwaitingPath(), "path session: a path array first wants a path");
+        check(ed.arrayItemCount() == 0, "path session: nothing to preview without a path");
+        ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier); // click the line
+        check(!ed.arrayAwaitingPath(), "path session: the click picks the path");
+        ed.arraySpec().count = 5;
+        ed.arraySpec().divide = true;
+        ed.arraySpec().rows = 1;
+        check(ed.arrayItemCount() == 5, "path session: 5 items previewed");
+        ed.onKey(Qt::Key_Return, Qt::NoModifier); // Enter = Close Array
+        check(!ed.arrayActive(), "path session: Enter places the array");
+        check(doc.entities().size() == 6, "path session: the path plus 5 items");
+        const Entity* src = nullptr;
+        for (const auto& e : doc.entities())
+            if (e.id == QLatin1String("s1")) src = &e;
+        check(src && near(src->center.x, 0) && near(src->center.y, 0),
+              "path session: the original moves onto the path");
+        int onPath = 0;
+        for (const auto& e : doc.entities())
+            if (e.type == EntityType::Circle && near(e.center.y, 0)) ++onPath;
+        check(onPath == 5, "path session: every item sits on the path");
     }
 
     // --- Explode a rect into 4 lines.
