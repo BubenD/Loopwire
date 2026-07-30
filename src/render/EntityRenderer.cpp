@@ -1073,6 +1073,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 const int headerIdx = hasTitle ? 1 : 0;
                 const QFont normal = p.font();
                 const QJsonArray cellAlign = e.meta.value("cellAlign").toArray();
+                const QJsonArray cellText = e.meta.value("cellTextSize").toArray();
                 const double pad = th * 0.35;
                 // Place `s` in the cell [x0..x1]x[yTop..yBot] per a 2-char align code
                 // (T/M/B + L/C/R); default depends on the row type.
@@ -1110,7 +1111,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                         const QString s = idx < cells.size() ? cells[idx].toString() : QString();
                         QString code = idx < cellAlign.size() ? cellAlign[idx].toString() : QString();
                         if (code.isEmpty()) code = isHeader ? QStringLiteral("MC") : QStringLiteral("TL");
-                        placeCell(xb[c], xb[c + 1], yb[r], yb[r + 1], s, code, th, isHeader);
+                        // A cell may carry its own text height; the table's is the fallback.
+                        const double own = idx < cellText.size() ? cellText[idx].toDouble() : 0.0;
+                        placeCell(xb[c], xb[c + 1], yb[r], yb[r + 1], s, code,
+                                  own > 0.0 ? own : th, isHeader);
                     }
                 }
                 break;

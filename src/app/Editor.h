@@ -154,6 +154,15 @@ public:
     // that cell, enabling the row/column/alignment editing commands.
     QString selectedCellTable() const { return cellTableId_; }
     int selectedCellIndex() const { return cellIndex_; }
+    // Every cell currently picked, row-major. A zone dragged over a table picks the cells it
+    // covers rather than the table, so a block of them can be aligned in one go.
+    const std::vector<int>& selectedCells() const { return cellSel_; }
+    const QString& selectedCellTableId() const { return cellTableId_; }
+    // Pick the cells of `tableId` that `region` covers. True when it found any.
+    bool selectCellsInRegion(const QString& tableId, const std::vector<Vec2>& region);
+    // Start a balloon carrying `text` (the next click gives it what it points at, the one after
+    // that where the label sits). What a click on a bill of materials' "#" cell does.
+    void beginBalloonWithText(const QString& text);
     void setCellSelection(const QString& tableId, int cell);
     void clearCellSelection();
     // Cell editing ops (act on the selected cell / its row / its column).
@@ -162,6 +171,10 @@ public:
     void tableInsertColumn(bool right);
     void tableDeleteColumn();
     void setCellAlignment(const QString& align); // "TL","TC",...,"BR"
+    // The text height of one cell. A taller text needs a taller row and, when the words no longer
+    // fit across it, a wider column - so the row and the column are grown to hold it. Every other
+    // row / column keeps the size it had.
+    void setTableCellTextHeight(const QString& tableId, int cell, double height);
     // Endpoints of edge `seg` of a polyline/rect/polygon AS DRAWN — clipped inward at
     // each end by any existing fillet/chamfer setback, so a highlighted "wall" matches
     // the visible (already-modified) outline instead of overshooting to a sharp vertex.
@@ -1217,6 +1230,14 @@ private:
     TableSpec tableSpec_;         // spec for the next Table placed (Insert Table dialog)
     QString cellTableId_;         // table whose cell is selected (empty = none)
     int cellIndex_ = -1;          // selected cell (row-major), -1 = none
+    std::vector<int> cellSel_;    // every picked cell of cellTableId_ (cellIndex_ is the first)
+    // Dragging across cells: the cell the drag started on, and whether one is in progress. The
+    // block between that cell and the one under the cursor is what is picked.
+    int cellDragFrom_ = -1;
+    bool cellDragging_ = false;
+    // A balloon started from somewhere that already knows its number (a BOM line): the text the
+    // next balloon takes, instead of counting up from the ones in the drawing.
+    QString balloonTextNext_;
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

@@ -18,6 +18,11 @@
 
 namespace Edraw_Desktop {
 
+// Soft orange: the colour every piece of table editing chrome is drawn in - the table's own
+// highlight, its row / column headers, and the cells picked inside it. Table work is a different
+// job from selecting objects, so it does not borrow the selection's blue.
+static const QColor kTableChrome(230, 156, 74);
+
 namespace {
 // Hold this long during a drag before the rectangle becomes a lasso (Edraw's
 // LASSO_DELAY_MS).
@@ -1301,8 +1306,30 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
             Vec2 tl; double cw = 0, ch = 0;
             const int idx = tableCellAt(*he, p, tl, cw, ch);
             if (idx >= 0) {
+                // The "#" column of a bill of materials is a handle: clicking a line's number
+                // starts the balloon that calls that line out on the drawing.
+                const int cols = std::max(1, he->meta.value("cols").toInt(1));
+                const bool bom = he->meta.value("bomTable").toBool();
+                const int row = idx / cols, col = idx % cols;
+                if (bom && col == 0 && row > 0) {
+                    const QJsonArray cells = he->meta.value("cells").toArray();
+                    const QString line = idx < cells.size() ? cells[idx].toString() : QString();
+                    if (!line.isEmpty()) {
+                        selected_ = {he->id};
+                        setCellSelection(he->id, idx);
+                        emit selectionChanged();
+                        beginBalloonWithText(line);
+                        return;
+                    }
+                }
                 selected_ = {he->id};
                 setCellSelection(he->id, idx);
+                // Dragging from here picks the block of cells between this one and the one the
+                // cursor ends on - that is how several are picked and then aligned together.
+                cellDragFrom_ = idx;
+                cellDragging_ = true;
+                pressed_ = true;
+                pressMods_ = mods;
                 emit selectionChanged();
                 return;
             }
@@ -1397,6 +1424,33 @@ void Editor::onPointerMove(const Vec2& raw) {
     }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
     cursor_ = snapResult_.point;
+
+    // Dragging across a table's cells picks the block between the cell the drag started on and the
+    // one under the cursor now.
+    if (cellDragging_ && cellDragFrom_ >= 0) {
+        if (Entity* t = entityById(cellTableId_); t && t->meta.value("table").toBool()) {
+            Vec2 tl;
+            double cw = 0, ch = 0;
+            const int to = tableCellAt(*t, cursor_, tl, cw, ch);
+            const int cols = std::max(1, t->meta.value("cols").toInt(1));
+            if (to >= 0) {
+                const int r0 = std::min(cellDragFrom_ / cols, to / cols);
+                const int r1 = std::max(cellDragFrom_ / cols, to / cols);
+                const int c0 = std::min(cellDragFrom_ % cols, to % cols);
+                const int c1 = std::max(cellDragFrom_ % cols, to % cols);
+                std::vector<int> block;
+                for (int r = r0; r <= r1; ++r)
+                    for (int c = c0; c <= c1; ++c) block.push_back(r * cols + c);
+                if (block != cellSel_) {
+                    cellSel_ = block;
+                    cellIndex_ = cellDragFrom_;
+                    emit cellSelectionChanged();
+                    emit changed();
+                }
+            }
+        }
+        return;
+    }
 
     // A grabbed marking follows the cursor along its own wire. With Shift held at the grab, the
     // whole pick follows: each one lands on its own wire nearest the cursor, so they line up.
@@ -1719,6 +1773,16 @@ void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     // Trim's cut line is two clicks (handled in onPointerPress), so the release does
     // nothing for it.
     if (!selectionTool()) return;
+    // A drag across cells ends where the button was let go: the block stays picked.
+    if (cellDragging_) {
+        cellDragging_ = false;
+        cellDragFrom_ = -1;
+        pressed_ = false;
+        if (cellSel_.size() > 1)
+            emit message(QStringLiteral("%1 cell(s) picked").arg(cellSel_.size()));
+        return;
+    }
+
     // A marking dragged with the button down is placed where it was let go; one merely clicked
     // stays on the cursor and is placed by the next click, like a grabbed joint.
     if (markGrab_) {
@@ -2169,6 +2233,23 @@ void Editor::finishRegionSelect(bool subtract) {
             selected_.push_back(e.id); // accumulate
         }
     }
+    // A zone drawn INSIDE a table picks the cells it covers, not the table: that is how a block of
+    // them is aligned in one go. Nothing else in the zone is touched, and a zone that reaches
+    // outside the table selects objects the ordinary way.
+    {
+        Bounds rb;
+        for (const Vec2& q : region) rb.expand(q);
+        for (const auto& e : doc_->entities()) {
+            if (!e.meta.value("table").toBool()) continue;
+            const Bounds tb = boundsOf(e.points);
+            if (!tb.valid) continue;
+            const bool inside = rb.min.x >= tb.min.x - 1e-9 && rb.max.x <= tb.max.x + 1e-9 &&
+                                rb.min.y >= tb.min.y - 1e-9 && rb.max.y <= tb.max.y + 1e-9;
+            if (!inside) continue;
+            if (selectCellsInRegion(e.id, region)) return;
+        }
+    }
+
     // A zone that catches a wire's TEXT picks that marking on its own - the colour, the
     // cross-section or the label - so it can be slid along the wire without touching anything
     // else. A wire the zone already selected keeps its markings: they move with the wire.
@@ -5648,11 +5729,17 @@ void Editor::finishDraw() {
             e.meta.insert("textLeader", true);
             e.meta.insert("text", QStringLiteral("Text"));
         } else {
-            int next = 0;
-            for (const auto& x : doc_->entities())
-                if (x.meta.value("balloon").toBool())
-                    next = std::max(next, x.meta.value("text").toString().toInt());
-            e.meta.insert("text", QString::number(next + 1));
+            if (!balloonTextNext_.isEmpty()) {
+                // Started from a bill of materials line: it already knows its number.
+                e.meta.insert("text", balloonTextNext_);
+                balloonTextNext_.clear();
+            } else {
+                int next = 0;
+                for (const auto& x : doc_->entities())
+                    if (x.meta.value("balloon").toBool())
+                        next = std::max(next, x.meta.value("text").toString().toInt());
+                e.meta.insert("text", QString::number(next + 1));
+            }
         }
         e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
         e.meta.insert("landingSide", (tip.x >= c.x) ? 1.0 : -1.0); // exits toward the tip's side
@@ -7984,13 +8071,83 @@ void Editor::applyTableCellEdit(const QString& id, int cell, const QString& text
     }
 }
 
+void Editor::setTableCellTextHeight(const QString& tableId, int cell, double height) {
+    Entity* e = entityById(tableId);
+    if (!e || !e->meta.value("table").toBool() || cell < 0 || height <= 0.0) return;
+    const int cols = std::max(1, e->meta.value("cols").toInt(1));
+    const int rows = std::max(1, e->meta.value("rows").toInt(1));
+    if (cell >= rows * cols) return;
+    const int row = cell / cols, col = cell % cols;
+    pushUndo();
+    // The height is the cell's own, so one cell can read larger than the rest of its table.
+    QJsonArray sizes = e->meta.value("cellTextSize").toArray();
+    while (sizes.size() < rows * cols) sizes.append(0.0);
+    sizes[cell] = height;
+    e->meta.insert(QStringLiteral("cellTextSize"), sizes);
+
+    // What the text now needs: a row at least as tall as the tallest text in it, and a column wide
+    // enough for the longest text across it (the same character-count estimate the rest of the
+    // drawing uses for a proportional font).
+    const QJsonArray cells = e->meta.value("cells").toArray();
+    auto textHeightAt = [&](int idx) {
+        const double own = idx < sizes.size() ? sizes[idx].toDouble() : 0.0;
+        return own > 0.0 ? own : e->meta.value("textSize").toDouble(4.0);
+    };
+    double needH = 0.0, needW = 0.0;
+    for (int c = 0; c < cols; ++c) {
+        const int idx = row * cols + c;
+        needH = std::max(needH, textHeightAt(idx) * 1.6);
+    }
+    for (int r = 0; r < rows; ++r) {
+        const int idx = r * cols + col;
+        const QString text = idx < cells.size() ? cells[idx].toString() : QString();
+        needW = std::max(needW, textHeightAt(idx) * (1.6 + 0.62 * text.size()));
+    }
+
+    const Bounds b = boundsOf(e->points);
+    if (!b.valid) return;
+    QJsonArray rf = e->meta.value("rowFrac").toArray();
+    QJsonArray cf = e->meta.value("colFrac").toArray();
+    if (rf.size() != rows || cf.size() != cols) return;
+    // Grow the table by whatever that row / column is short of, and keep every OTHER row and
+    // column the size it already was - so widening one column does not squeeze the rest.
+    std::vector<double> rh, cw;
+    for (int r = 0; r < rows; ++r) rh.push_back(rf[r].toDouble() * b.height());
+    for (int c = 0; c < cols; ++c) cw.push_back(cf[c].toDouble() * b.width());
+    bool grew = false;
+    if (rh[static_cast<size_t>(row)] < needH) { rh[static_cast<size_t>(row)] = needH; grew = true; }
+    if (cw[static_cast<size_t>(col)] < needW) { cw[static_cast<size_t>(col)] = needW; grew = true; }
+    double totalH = 0.0, totalW = 0.0;
+    for (double v : rh) totalH += v;
+    for (double v : cw) totalW += v;
+    QJsonArray nrf, ncf;
+    for (double v : rh) nrf.append(v / totalH);
+    for (double v : cw) ncf.append(v / totalW);
+    e->meta.insert(QStringLiteral("rowFrac"), nrf);
+    e->meta.insert(QStringLiteral("colFrac"), ncf);
+    if (grew) {
+        // The table is anchored at its top-left, so it grows right and down.
+        const double x0 = b.min.x, y1 = b.max.y;
+        e->points = {{x0, y1 - totalH}, {x0 + totalW, y1 - totalH}, {x0 + totalW, y1}, {x0, y1}};
+        e->a = {x0, y1};
+    }
+    doc_->setDirty(true);
+    emit changed();
+    emit message(grew ? QStringLiteral("Cell text %1 — the row and column grew to hold it")
+                            .arg(height, 0, 'f', 2)
+                      : QStringLiteral("Cell text %1").arg(height, 0, 'f', 2));
+}
+
 void Editor::setCellSelection(const QString& id, int cell) {
     cellTableId_ = id;
     cellIndex_ = cell;
+    cellSel_.clear();
+    if (cell >= 0) cellSel_.push_back(cell);
     emit cellSelectionChanged();
 }
 
 void Editor::clearCellSelection() {
+    cellSel_.clear();
     if (cellTableId_.isEmpty() && cellIndex_ < 0) return;
     cellTableId_.clear();
     cellIndex_ = -1;
@@ -8178,11 +8335,61 @@ void Editor::setCellAlignment(const QString& align) {
     pushUndo();
     QJsonArray a = e->meta.value("cellAlign").toArray();
     while (a.size() < total) a.append(QString());
-    if (cellIndex_ < a.size()) a[cellIndex_] = align;
+    // Every cell picked, not just the one clicked: a zone over a block of them is how a column or
+    // a corner of a table is aligned in one go.
+    std::vector<int> which = cellSel_;
+    if (which.empty()) which.push_back(cellIndex_);
+    int n = 0;
+    for (int idx : which)
+        if (idx >= 0 && idx < a.size()) { a[idx] = align; ++n; }
     e->meta.insert("cellAlign", a);
     doc_->setDirty(true);
     emit changed();
-    emit message(QStringLiteral("Cell alignment: %1").arg(align));
+    emit message(n > 1 ? QStringLiteral("Cell alignment: %1 (%2 cells)").arg(align).arg(n)
+                       : QStringLiteral("Cell alignment: %1").arg(align));
+}
+
+bool Editor::selectCellsInRegion(const QString& tableId, const std::vector<Vec2>& region) {
+    Entity* e = entityById(tableId);
+    if (!e || !e->meta.value("table").toBool() || region.size() < 3) return false;
+    const Bounds b = boundsOf(e->points);
+    if (!b.valid) return false;
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const int cols = cf.size(), rows = rf.size();
+    if (cols == 0 || rows == 0) return false;
+    // A cell is picked when its own middle is inside the zone: dragging across a block of them
+    // takes exactly the block, and a zone that merely grazes an edge takes nothing.
+    std::vector<int> picked;
+    double top = b.max.y;
+    for (int r = 0; r < rows; ++r) {
+        const double h = rf[r].toDouble() * b.height();
+        double x = b.min.x;
+        for (int c = 0; c < cols; ++c) {
+            const double w = cf[c].toDouble() * b.width();
+            const Vec2 mid{x + w / 2.0, top - h / 2.0};
+            if (pointInPolygon(region, mid)) picked.push_back(r * cols + c);
+            x += w;
+        }
+        top -= h;
+    }
+    if (picked.empty()) return false;
+    cellTableId_ = tableId;
+    cellSel_ = picked;
+    cellIndex_ = picked.front();
+    selected_ = {tableId}; // the table is what the ribbon's cell tab hangs off
+    emit cellSelectionChanged();
+    emit selectionChanged();
+    emit changed();
+    emit message(QStringLiteral("%1 cell(s) picked").arg(picked.size()));
+    return true;
+}
+
+void Editor::beginBalloonWithText(const QString& text) {
+    balloonTextNext_ = text;
+    setTool(ToolId::Balloon);
+    emit message(QStringLiteral(
+                     "Balloon %1: click what it points at, then where the label sits").arg(text));
 }
 
 void Editor::addCoupledCircle(const QString& id) {
@@ -10165,6 +10372,44 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 EntityRenderer::draw(p, e, *doc_, vt, companion);
     }
 
+    // Table work is soft orange throughout - the table itself, its headers and the picked cells -
+    // so it reads as "editing a table" rather than as an ordinary selection.
+    // Cells picked in a table: a box round each. The table is selected too (the ribbon's cell tab
+    // hangs off it), so these are drawn on top of its own highlight.
+    if (!cellSel_.empty()) {
+        const Entity* t = nullptr;
+        for (const auto& x : doc_->entities())
+            if (x.id == cellTableId_) { t = &x; break; }
+        if (t) {
+            const Bounds b = boundsOf(t->points);
+            const QJsonArray cf = t->meta.value("colFrac").toArray();
+            const QJsonArray rf = t->meta.value("rowFrac").toArray();
+            const int cols = cf.size(), rows = rf.size();
+            if (b.valid && cols > 0 && rows > 0) {
+                p.save();
+                p.setPen(QPen(kTableChrome, 1.5));
+                p.setBrush(QColor(kTableChrome.red(), kTableChrome.green(), kTableChrome.blue(), 46));
+                double top = b.max.y;
+                for (int r = 0; r < rows; ++r) {
+                    const double h = rf[r].toDouble() * b.height();
+                    double x = b.min.x;
+                    for (int c = 0; c < cols; ++c) {
+                        const double w = cf[c].toDouble() * b.width();
+                        if (std::find(cellSel_.begin(), cellSel_.end(), r * cols + c) !=
+                            cellSel_.end()) {
+                            const QPointF a = vt.toScreen({x, top});
+                            const QPointF d = vt.toScreen({x + w, top - h});
+                            p.drawRect(QRectF(a, d));
+                        }
+                        x += w;
+                    }
+                    top -= h;
+                }
+                p.restore();
+            }
+        }
+    }
+
     // Markings picked on their own: a box round each, in the selection colour. The wire itself is
     // NOT selected, so nothing else can be edited by accident - only these can be slid along.
     if (!markSel_.empty()) {
@@ -10192,7 +10437,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         for (const auto& e : doc_->entities()) {
             if (std::find(selected_.begin(), selected_.end(), e.id) == selected_.end())
                 continue;
-            EntityRenderer::draw(p, e, *doc_, vt, hi); // re-stroke in highlight color
+            // A table is highlighted in the table colour, not the ordinary selection blue.
+            const bool isTable = e.meta.value("table").toBool();
+            EntityRenderer::draw(p, e, *doc_, vt, isTable ? kTableChrome : hi);
             drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.
@@ -10206,7 +10453,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 hf.setPixelSize(11);
                 hf.setBold(true);
                 p.setFont(hf);
-                p.setPen(QColor("#bfe6ff"));
+                p.setPen(kTableChrome.lighter(115));
                 // Column letters, centred above each column.
                 double x = tb.min.x;
                 for (int c = 0; c < colFrac.size(); ++c) {

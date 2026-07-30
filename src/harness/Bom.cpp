@@ -30,7 +30,9 @@ QString BomRow::qtyText() const {
 }
 
 QStringList bomDefaultHeaders() {
-    return {QStringLiteral("Line #"),      QStringLiteral("Description"),
+    // "#" rather than "Line #": the column is one character wide on a sheet, and the heading
+    // should not be the widest thing in it.
+    return {QStringLiteral("#"),           QStringLiteral("Description"),
             QStringLiteral("Internal P/N"), QStringLiteral("Mfr P/N"),
             QStringLiteral("Mfr name"),    QStringLiteral("Qty."),
             QStringLiteral("Units")};

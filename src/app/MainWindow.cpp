@@ -4759,7 +4759,7 @@ bool MainWindow::showTextDialog(bool multiline, QString& text, Editor::TextStyle
     sizeSpin->setRange(0.1, 1000.0);
     sizeSpin->setDecimals(2);
     sizeSpin->setValue(style.size > 0 ? style.size : 5.0);
-    sizeSpin->setPrefix(QStringLiteral("H "));
+    sizeSpin->setToolTip(QStringLiteral("Text height"));
     auto* boldBtn = new QToolButton(&dlg);
     boldBtn->setText(QStringLiteral("B"));
     boldBtn->setCheckable(true);
@@ -4947,7 +4947,6 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineSize_->setRange(0.1, 1000.0);
         inlineSize_->setDecimals(2);
         inlineSize_->setSingleStep(1.0);
-        inlineSize_->setPrefix(QStringLiteral("H "));
         inlineSize_->setToolTip(QStringLiteral("Text height"));
         QWidget* sizeBox = buildStepper(inlineSize_, sizePlus, sizeMinus);
         inlineBold_ = new QToolButton(inlineBar_);
@@ -5107,7 +5106,12 @@ void MainWindow::commitInlineText(bool apply) {
             editor_->applyConnectorPinLabel(inlineConnectorId_, inlineConnectorPin_, text,
                                             inlineStyle_.font); // font library -> pin font
 
-        else if (inlineCell_ >= 0) editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
+        else if (inlineCell_ >= 0) {
+            editor_->applyTableCellEdit(inlineEditId_, inlineCell_, text);
+            // The height typed into the editor is the cell's own text height, and a taller text
+            // needs a taller row (and a wider column, if the words no longer fit across it).
+            editor_->setTableCellTextHeight(inlineEditId_, inlineCell_, inlineStyle_.size);
+        }
         else if (inlineEditId_.isEmpty()) editor_->commitText(text, inlineStyle_);
         else editor_->applyTextEdit(inlineEditId_, text, inlineStyle_);
     } else if (inlineEditId_.isEmpty() && inlineCell_ < 0 && inlineConnectorPin_ < 0) {

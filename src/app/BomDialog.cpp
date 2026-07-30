@@ -356,16 +356,8 @@ void BomDialog::placeOnDrawing() {
     // placed by a click, like anything else that is inserted.
     const int cols = bomColumnCount();
     const int nRows = static_cast<int>(rows.size()) + 1;
-    const double colW = 40.0, rowH = 8.0;
-    Entity t;
-    t.type = EntityType::Rect;
-    t.layer = editor_->document() ? editor_->document()->activeLayer() : QStringLiteral("0");
-    const double W = cols * colW, H = nRows * rowH;
-    t.points = {{0, -H}, {W, -H}, {W, 0}, {0, 0}};
-    t.a = {0, 0};
-    QJsonArray colFrac, rowFrac, cells;
-    for (int i = 0; i < cols; ++i) colFrac.append(1.0 / cols);
-    for (int i = 0; i < nRows; ++i) rowFrac.append(1.0 / nRows);
+    const double rowH = 8.0, textH = rowH * 0.5;
+    QJsonArray cells;
     for (int i = 0; i < cols; ++i) cells.append(table_.header(i));
     for (const BomRow& r : rows) {
         cells.append(QString::number(static_cast<int>(cells.size()) / cols)); // line #
@@ -376,14 +368,47 @@ void BomDialog::placeOnDrawing() {
         cells.append(r.qtyText());
         cells.append(r.unit);
     }
+    // Each column is as wide as the widest thing in it - a description needs room, a line number
+    // does not - down to a floor so a short column is still a column. Anything that fits in the
+    // ordinary width keeps it; only a column whose text exceeds it grows.
+    const double pad = textH * 1.6, minW = 14.0, plainW = 30.0;
+    std::vector<double> colW(static_cast<size_t>(cols), minW);
+    for (int i = 0; i < cells.size(); ++i) {
+        const int c = i % cols;
+        // The same width estimate the wire markings use: a proportional font, judged by the
+        // character count, which is close enough to keep text off the cell edges.
+        const double need = pad + 0.62 * textH * cells[i].toString().size();
+        colW[static_cast<size_t>(c)] = std::max(colW[static_cast<size_t>(c)], need);
+    }
+    double W = 0.0;
+    for (int c = 0; c < cols; ++c) {
+        colW[static_cast<size_t>(c)] = std::max(colW[static_cast<size_t>(c)],
+                                               c == 1 ? plainW : minW);
+        W += colW[static_cast<size_t>(c)];
+    }
+    const double H = nRows * rowH;
+    Entity t;
+    t.type = EntityType::Rect;
+    t.layer = editor_->document() ? editor_->document()->activeLayer() : QStringLiteral("0");
+    t.points = {{0, -H}, {W, -H}, {W, 0}, {0, 0}};
+    t.a = {0, 0};
+    QJsonArray colFrac, rowFrac;
+    for (int c = 0; c < cols; ++c) colFrac.append(colW[static_cast<size_t>(c)] / W);
+    for (int i = 0; i < nRows; ++i) rowFrac.append(1.0 / nRows);
+    // Every cell reads middle-centre - a number, a part number and a unit all sit best that way -
+    // except the description, which is prose and so reads middle-left.
+    QJsonArray cellAlign;
+    for (int i = 0; i < cells.size(); ++i)
+        cellAlign.append((i % cols) == 1 ? QStringLiteral("ML") : QStringLiteral("MC"));
     t.meta.insert(QStringLiteral("table"), true);
     t.meta.insert(QStringLiteral("rows"), nRows);
     t.meta.insert(QStringLiteral("cols"), cols);
     t.meta.insert(QStringLiteral("colFrac"), colFrac);
     t.meta.insert(QStringLiteral("rowFrac"), rowFrac);
     t.meta.insert(QStringLiteral("cells"), cells);
+    t.meta.insert(QStringLiteral("cellAlign"), cellAlign);
     t.meta.insert(QStringLiteral("headerRow"), true);
-    t.meta.insert(QStringLiteral("textSize"), rowH * 0.5);
+    t.meta.insert(QStringLiteral("textSize"), textH);
     t.meta.insert(QStringLiteral("bomTable"), true); // so it can be found and refreshed later
     editor_->placeEntities({t});
     if (summary_) summary_->setText(QStringLiteral("Click the sheet to place the table"));

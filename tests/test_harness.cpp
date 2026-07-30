@@ -6002,7 +6002,7 @@ int run_harness_tests() {
         // The seven columns, and headings a drawing may rename.
         check(bomColumnCount() == 7, "bom: seven columns");
         BomTable t;
-        check(t.header(0) == QLatin1String("Line #") && t.header(6) == QLatin1String("Units"),
+        check(t.header(0) == QLatin1String("#") && t.header(6) == QLatin1String("Units"),
               "bom: the default headings");
         t.setHeader(2, QStringLiteral("Our P/N"));
         check(t.header(2) == QLatin1String("Our P/N") && t.header(1) == QLatin1String("Description"),
