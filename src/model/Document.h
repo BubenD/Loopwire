@@ -3,6 +3,7 @@
 #include "model/Entity.h"
 #include "model/Layer.h"
 
+#include <QJsonObject>
 #include <QString>
 #include <vector>
 
@@ -44,6 +45,12 @@ public:
     QString& unit() { return unit_; }
     const QString& unit() const { return unit_; }
 
+    // The drawing's bill of materials: the rows someone typed and the column headings they chose.
+    // The rows the drawing itself implies are not kept here - they are read off the entities every
+    // time, so they cannot go stale (see bomFromDrawing).
+    QJsonObject& bom() { return bom_; }
+    const QJsonObject& bom() const { return bom_; }
+
     bool dirty() const { return dirty_; }
     void setDirty(bool d) { dirty_ = d; }
 
@@ -61,6 +68,7 @@ private:
     double doubleLineGap_ = 10.0;
     int multiLineCount_ = 3;
     int polygonSides_ = 5;
+    QJsonObject bom_;
     bool dirty_ = false;
 };
 

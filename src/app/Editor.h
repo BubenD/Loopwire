@@ -250,6 +250,36 @@ public:
     // Is the selected shield's drain leg landing on a wire? A leg that is genuinely wired
     // must not also carry a "not connected" X.
     bool shieldLegIsWired(const Entity& shield) const;
+
+    // ---- Re-ordering the pinout of connectors already on the drawing ----
+    // What a re-order is asked to achieve. Crossings are always worth something; the rest say
+    // whether the wires should be pulled into one tight group, and whether that group should
+    // start at the top of the connector.
+    struct PinoutGoal {
+        bool group = false;   // the wires end up on neighbouring pins (least distance between them)
+        bool fromTop = false; // ...and the group starts at pin row 1
+    };
+    // Re-order the pins of every selected connector so the wires between them read better,
+    // moving the wires with their pin NAMES - the wiring is never changed, only where each pin
+    // sits. Returns how many connectors were re-ordered (0 if the selection has nothing to work
+    // on). Needs at least two selected connectors with wires running between them.
+    int reorderSelectedPinout(const PinoutGoal& goal);
+    // Whether that command has anything to act on, for enabling the menu entry.
+    bool canReorderSelectedPinout() const;
+    // Read the selected connectors and the wires between them into a definition the builder's
+    // optimiser understands. False when there is nothing to work on.
+    bool buildPinoutModel(std::vector<QString>& connIds, HarnessDef& def) const;
+    // How many wire ends land on a point (optionally ignoring one wire's own).
+    int wireEndsAt(const Vec2& at, const QString& except = QString()) const;
+    // Drop a joint marker at a point (unless one is already there).
+    void addSpliceAt(const Vec2& at);
+    // Join this wire to another whose free end has been brought onto one of its own: the two
+    // become a single run with a splice at the joint. True if a join was made.
+    bool mergeWireEnds(const QString& wireId);
+    // Note what a shield's drain leg has been dropped on, so the X goes and the shield can
+    // pull that wire; and bring that wire along after the leg has moved.
+    bool attachShieldLeg(Entity& screen);
+    void pullShieldLegWire(Entity& screen);
     // Slide a Screen (shield) along the wires it catches to world-x `x`, re-deriving each
     // crossing from its own wire and carrying the drain leg along — a shield is pinned to
     // its wires and never translates off them. False for a decorative copy with no wire
@@ -267,6 +297,13 @@ public:
     // Set how many colour/gauge markings run along the selected wire(s), keeping the
     // positions of the instances that already exist.
     void setSelectionWireAnnotCount(int count);
+    // How many times ONE marking is repeated along each selected wire ("color" | "gauge" |
+    // "label"); the places already dragged are kept and new instances spread evenly.
+    void setSelectionWireAnnotCountFor(const QString& part, int count);
+    // How far above the wire ONE marking sits ("color" | "gauge" | "label").
+    void setSelectionWireAnnotGap(const QString& part, double gap);
+    // The text height of ONE marking ("color" | "gauge" | "label").
+    void setSelectionWireAnnotSize(const QString& part, double height);
     // Re-point an attached Wire label's text, writing it back to its wire as well.
     void setWireLabelText(const QString& labelId, const QString& text);
     // Switch the selected wires' resistance unit between Ω/m and Ω/ft, converting EACH
@@ -302,6 +339,12 @@ public:
     void cutSelection();           // Ctrl+X: copy to clipboard + delete the originals
     void copyWithBase(bool cut);   // Ctrl+Shift+C: then pick a base point
     void paste();                  // Ctrl+V: then click to place (relative to base)
+    // Put a set of entities on the clipboard and start placing them: the parts library inserts a
+    // part's drawing this way, so it is dropped by a click like anything else that is pasted.
+    void placeEntities(const std::vector<Entity>& ents);
+    // Everything currently selected, copied out (the parts library captures a part's drawing from
+    // the sheet this way).
+    std::vector<Entity> copyOfSelection() const;
     bool isPastePlacing() const { return pastePlacing_; }
     // Flip the paste preview before placing: xAxis mirrors across a vertical line
     // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
@@ -493,6 +536,10 @@ public:
     // along its own wires (same constraint as the twist's move grip).
     void beginTwistAlign();
     void twistAlignTo(const Vec2& dest);
+    // Whether Align can line this up: it must be something that rides ON a wire.
+    bool isAlignable(const Entity& e) const;
+    // Where a column crosses a wire, as a fraction along it.
+    double wireFractionAtX(const Entity& wire, double x) const;
     bool awaitingTwistAlign() const { return awaitTwistAlign_; }
 
     // Pull a whole selected wire bundle. During a wire run/knee drag, holding Shift moves
@@ -672,6 +719,35 @@ public:
 
     // Overlay painting (after entities are drawn).
     void drawOverlay(QPainter& p, const ViewTransform& vt) const;
+    // The wires lit as the rest of the selection's bundle (read for tests / status).
+    const QSet<QString>& bundleCompanions() const { return bundleCompanions_; }
+
+    // ---- Wire markings picked on their own ----
+    // A selection zone that catches a marking's text picks THAT marking, not the wire it belongs
+    // to. A marking so picked can only be slid along its own wire: it names that wire, so it can
+    // never be pulled off it.
+    struct MarkPick {
+        QString wireId;
+        QString part; // "color" | "gauge" | "label"
+        int index = 0; // which instance of it
+        bool operator==(const MarkPick& o) const {
+            return wireId == o.wireId && part == o.part && index == o.index;
+        }
+    };
+    const std::vector<MarkPick>& markSelection() const { return markSel_; }
+    void clearMarkSelection();
+    // The four corners of the box a marking's text occupies, in world space.
+    bool markQuad(const Entity& wire, const QString& part, int index,
+                  std::vector<Vec2>& quad) const;
+    // Is a marking of the current pick under `p`? (Its index in markSel_, or -1.)
+    int markSelectionAt(const Vec2& p) const;
+    // Slide every picked marking to the place on ITS OWN wire nearest `to`, or just the one at
+    // `only` when `all` is false.
+    void dragPickedMarks(const Vec2& to, bool all, int only);
+    // Re-read which wires share a bundle with the selection.
+    void refreshBundleCompanions();
+    // Connect the refresh to selectionChanged (called once, from the constructor).
+    void hookSelectionCompanions();
 
     // Pixel tolerance (screen px) for snapping/hit testing.
     void setPixelTolerance(double px) { pixelTol_ = px; }
@@ -899,6 +975,15 @@ private:
     UndoStack undo_;
 
     std::vector<QString> selected_;
+    // The other wires of the bundle(s) the selection belongs to: lit for information, never
+    // selected, so an edit only ever reaches the wire that was clicked.
+    QSet<QString> bundleCompanions_;
+    // Markings picked on their own (see MarkPick), and the drag of one of them.
+    std::vector<MarkPick> markSel_;
+    bool markGrab_ = false;
+    int markGrabAt_ = -1;
+    bool markGrabAll_ = false; // Shift: the whole pick follows the cursor, wire by wire
+    bool markMoved_ = false;
     std::vector<Entity> clipboard_;
 
     // Cursor + snap.

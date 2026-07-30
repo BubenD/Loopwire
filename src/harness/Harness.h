@@ -25,6 +25,26 @@ void registerCustomWireColor(const QString& code, const QString& name, const QSt
 // The custom codes in the order they were added.
 QStringList customWireColorCodes();
 
+// ---- Cross-section notation -------------------------------------------------
+// Whether a cross-section is written in AWG or in mm2, set once in the general options and
+// followed everywhere a gauge is shown: the wire markings, the harness builder's gauge list
+// and the bill of materials. The stored value on a wire is always the mm2 figure, so switching
+// notation re-labels the drawing without touching it.
+void setWireGaugeNotationAwg(bool awg);
+bool wireGaugeNotationAwg();
+// The AWG size a mm2 cross-section is called (nearest standard size), and back again.
+QString wireGaugeAwg(const QString& mm2);
+// "0.5 mm2" or "20 AWG", following the current notation. `withUnit` false drops the unit.
+QString wireGaugeLabel(const QString& mm2, bool withUnit = true);
+// The cross-sections offered anywhere one is chosen: every standard size from 32 AWG up to
+// 4 AWG, as mm2 figures, thinnest first.
+QStringList wireGaugeChoices();
+
+// How wide a twist symbol reaches along the wires, in world units: the leads plus the
+// crossings. The generator needs the same number as the renderer, so a twist is never placed
+// where its own symbol would run off the straight part of the wires it braids.
+double twistBandWidth(int repeats, double wireBand, double flatLen);
+
 // Stroke weight (px) for a wire cross-section gauge (mm^2), e.g. "0.5", "2.5".
 double wireGaugeWeight(const QString& gauge);
 
@@ -40,12 +60,19 @@ double wireGaugeWeight(const QString& gauge);
 //   annT          : [n]    each instance's position as a fraction of the wire's length
 //                          (absent / short => evenly spaced)
 
+// The colour and the cross-section are drawn as ONE line of text above the run ("RD 0.5 mm2"),
+// not one above and one below: on a bundle of close-spaced wires two lines per wire collide
+// with the neighbours. `textGap` on the wire sets how far clear of the line they sit.
+
 // One annotation instance's placement on the wire.
 struct WireAnnot {
     Vec2 pos;              // anchor on the wire centreline
     Vec2 dir{1.0, 0.0};    // unit direction of the wire there (text runs along it)
     Vec2 normal{0.0, 1.0}; // unit perpendicular (colour one side, gauge the other)
     double t = 0.0;        // position along the wire, 0..1
+    // On a vertical run the text can sit either side; `flip` puts it on the other one (the lift is
+    // measured against dir.perp(), so flipping the lift's sign is what moves it across).
+    bool flip = false;
 };
 
 bool wireShowsColorName(const Entity& wire);
@@ -55,9 +82,52 @@ int wireAnnotCount(const Entity& wire);
 // The text of each part for this wire ("" when switched off / not set).
 QString wireAnnotColorText(const Entity& wire);
 QString wireAnnotGaugeText(const Entity& wire);
+// Both parts as the single line they are drawn as ("RD  0.5 mm2"); either half alone when
+// only one is switched on, empty when neither is.
+QString wireAnnotText(const Entity& wire);
+// Extra clearance between the run and the text above it, in world units ("textGap").
+double wireTextGap(const Entity& wire);
+// Where the wire's own label sits along it, 0..1 ("labelT"; mid-span when unset). Stored so the
+// label can be dragged along the run the way a marking can.
+double wireLabelFraction(const Entity& wire);
+void setWireLabelFraction(Entity& wire, double t);
 // Placement of every annotation instance, in order. Empty when neither part is shown
 // or the wire is degenerate.
 std::vector<WireAnnot> wireAnnots(const Entity& wire);
+
+// The three markings a wire carries are independent: each is switched on by itself, is drawn as
+// many times as IT is set to, and each instance sits where it was dragged to. `part` names one of
+// them: "color", "gauge" or "label".
+QStringList wireAnnotParts();          // the three, bottom row first
+QString wireAnnotPartText(const Entity& wire, const QString& part);
+int wireAnnotCountFor(const Entity& wire, const QString& part);
+std::vector<double> wireAnnotFractionsFor(const Entity& wire, const QString& part, int count);
+void setWireAnnotFractionsFor(Entity& wire, const QString& part, const std::vector<double>& ts);
+std::vector<WireAnnot> wireAnnotsFor(const Entity& wire, const QString& part);
+// How far above the wire that marking is drawn - an absolute height, not an offset from the one
+// below it: two markings given the same gap sit at the same height. Its own value if it has one,
+// else the wire's general text gap plus that marking's default place in the stack.
+double wireAnnotGapFor(const Entity& wire, const QString& part);
+// The default height of every marking above its wire. They share it: a harness whose pins are 15
+// apart has no room to stack them, so they are spread along the wire instead (see
+// wireAnnotDefaultOffset). What a generated harness writes, and what a wire with nothing set uses.
+double wireAnnotDefaultGap(const QString& part);
+// How far ALONG the wire a marking sits from the middle of its group, in world units. The three
+// read side by side in the order label, colour, cross-section, with kAnnotGroupGap of clear space
+// between them - measured from each one's own text and height, so none is ever drawn over another.
+double wireAnnotDefaultOffset(const Entity& wire, const QString& part);
+// The clear space between two markings of a group, in world units.
+inline constexpr double kAnnotGroupGap = 10.0;
+// A vertical run has two sides to put the text on and two ways to read it, and neither follows
+// from the geometry - so the drawing says. "left" / "right" is which side of the run the text sits
+// on, seen looking along it upwards; "up" / "down" is which way the text reads.
+QString wireAnnotVerticalSide(const Entity& wire);  // "left" (default) | "right"
+QString wireAnnotVerticalText(const Entity& wire);  // "up" (default) | "down"
+
+// The text height of one marking. Its own value if it has one, else the wire's marking size.
+double wireAnnotSizeFor(const Entity& wire, const QString& part);
+void setWireAnnotSizeFor(Entity& wire, const QString& part, double height);
+void setWireAnnotGapFor(Entity& wire, const QString& part, double gap);
 // Where fraction `t` along the wire lands, with the local direction. False if the wire
 // has no length.
 bool wirePointAtFraction(const Entity& wire, double t, Vec2& pos, Vec2& dir);

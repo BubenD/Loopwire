@@ -4,6 +4,7 @@
 #include "model/Entity.h"
 
 #include <QString>
+#include <QStringList>
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -27,6 +28,9 @@ struct HarnessConnector {
     HarnessSide side = HarnessSide::Left;
     QString designator; // refdes, e.g. "P1"
     QString partNumber;
+    // The library part this connector IS, when it comes from the library (its id). What lets the
+    // bill of materials order it by the manufacturer's number.
+    QString libPart;
     QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"
     int pinCount = 4;
     double pitch = 15.0;
@@ -54,12 +58,35 @@ struct HarnessConnector {
 
 struct HarnessWire {
     QString id;
+    // Each end names either a CONNECTOR (its id, with the pin below) or a SHIELD - a drain wire
+    // runs from a pin to the screen it drains. A shield end is written as a key rather than an
+    // id, because a shield is not an object in the definition: an overall one belongs to a
+    // connector and an end of the harness, an internal one is just a group name on the wires.
+    // See harnessOverallShieldKey() / harnessInternalShieldKey(). The pin is ignored on a
+    // shield end, and the wire is joined to the screen's drain leg with a splice.
     QString fromConn;
     int fromPin = 1;
     QString toConn;
     int toPin = 1;
     QString gauge = QStringLiteral("0.5");
     QString color = QStringLiteral("WH");
+    // What this row is: a plain wire, or one conductor of a COAX. A coax is a cable of two
+    // conductors given as TWO rows of one bundle - a Signal row and a Shield row - so a row on its
+    // own is half a cable and the validator says so. The signal runs pin to pin; the shield row is
+    // drawn as the braid: a screen symbol on the signal near each end with the shield's own
+    // conductor brought from its pin into it.
+    // "wire" | "coax" | "coax-splice" | "cable". A coax-splice is drawn exactly like a coax,
+    // except that the cable reaches the harness through a splice at each end: past that splice
+    // the conductors are separate wires, not the cable.
+    QString kind = QStringLiteral("wire");
+    // Rows sharing a non-empty bundle name are ONE cable (or one coax with several cores):
+    // drawn together and shown on a background of their own in the builder, so a bundle can be
+    // seen at a glance and re-formed by picking rows.
+    QString bundle;
+    // A coax's braid is terminated by the SHIELD row's own pins - that is what the row is for -
+    // so there is nothing else to say about where the screen goes. (It used to be bonded to the
+    // connector shell, and bonding it at both ends joined the two connector bodies through it;
+    // with the braid landing on a pin, that shape cannot be built at all.)
     QString label;
     // What is printed on the wire in the drawing: its colour code, its cross-section, and its
     // label (above the run). Each is independent, so a wire can be marked with as much or as
@@ -75,6 +102,9 @@ struct HarnessWire {
     // connector — is asked for on the connector itself (shieldLeft / shieldRight), not here.
     QString shieldGroup;
     QString twistGroup;
+    // The library part this conductor is made of - a discrete wire, a cable or a coax. What lets a
+    // bill of materials order it by the manufacturer's number, in the unit it is bought in.
+    QString libPart;
 };
 
 struct HarnessLayout {
@@ -85,12 +115,21 @@ struct HarnessLayout {
     double legGap = 60.0;   // extra space between Y-split legs
     bool bridgeCrossings = true;    // draw a hop where two wires cross
     bool terminateUnconnected = false; // X-mark every pin no wire reaches
+    // X-mark a WIRE end that lands on nothing - a wire drawn to a pin that does not exist, or
+    // left dangling by an edit. A pin with no wire and a wire with no pin are different faults,
+    // so they are marked separately.
+    bool terminateUnconnectedWires = false;
+    // Put a splice where two wires meet end to end, so a join always reads as a joint rather
+    // than as one line crossing another.
+    bool spliceAtJoins = true;
+    // How big the joint dot is drawn, in world units.
+    double spliceSize = 3.0;
     int twistCount = 2;   // crossings drawn per twisted group
     int twistAmount = 2;  // twist symbols placed per group
     // Which twist symbol the generated twists use: "crossed" (a Z across the wires), "jog"
     // (a braid of crossings) or "type3".
     QString twistType = QStringLiteral("jog");
-    int shieldAmount = 2; // OVERALL shield symbols placed per connector that asks for one
+    int shieldAmount = 1; // OVERALL shield symbols placed per connector that asks for one
     int wireShieldAmount = 2; // symbols placed per INTERNAL (wire) shield group
     double shieldLegLength = 20.0; // how far a generated shield's drain leg reaches
     // Outline of a generated screen: "ellipse" or "capsule" (a vertical stadium).
@@ -103,7 +142,19 @@ struct HarnessLayout {
     // leaves them all on the Wires layer colour (a single-colour drawing). Either way the
     // colour is written as the wire's ordinary colour property, which is what is drawn - the
     // harness colour CODE stays on the wire as information.
-    QString wireColorMode = QStringLiteral("actual");
+    QString wireColorMode = QStringLiteral("bylayer");
+    // How far the colour/gauge marking and the wire label sit above the run, and how tall that
+    // text is drawn.
+    double textGap = 0.0;
+    double textHeight = 3.5;
+    // Whether a colour reads as its two-letter code ("short", RD) or spelled out ("long", Red).
+    // A colour reads by its full name by default, matching what a wire's own properties default
+    // to: "White" reads on a sheet where "WH" has to be looked up.
+    QString colorNameMode = QStringLiteral("long");
+    // A generated drain - the conductor that carries a screen to the connector shell - is a
+    // wire like any other: drawn as one, counted as one, editable as one. It is given the
+    // "DRAIN" colour rather than a setting of its own, which is what that entry in the wire
+    // colour list is for.
 };
 
 struct HarnessDef {
@@ -113,6 +164,41 @@ struct HarnessDef {
 };
 
 const HarnessConnector* harnessConnById(const HarnessDef& def, const QString& id);
+
+// Which coax of its bundle this wire is, 1-based, in the order the wires are listed. One cable
+// can hold several coaxes and their conductors have to be told apart on the drawing, so the
+// signal and screen of the second coax in CABLE1 are marked SIGNAL2 / SHIELD2. Returns 0 when
+// the wire is not a coax, or is the only one in its bundle (then a plain SIGNAL / SHIELD says
+// all there is to say).
+// Both coax kinds are coax everywhere except at the transition itself.
+bool harnessIsCoaxKind(const QString& kind);
+// True when the rows of `bundle` describe a coax that reaches the harness through a splice.
+bool harnessCoaxSplices(const HarnessDef& def, const QString& bundle);
+
+int harnessCoaxIndex(const HarnessDef& def, const HarnessWire& wire);
+
+// ---- Shield endpoints ------------------------------------------------------
+// A wire end can land on a screen instead of a pin: that is what a drain wire is. These build
+// and read the keys that name one. They are deliberately prefixed so they can never collide
+// with a connector id.
+// An OPEN end: the wire runs out and stops, connected to nothing. A harness has flying leads,
+// and one has to be drawable without inventing a connector for it.
+QString harnessOpenEndpointKey();
+bool harnessIsOpenEndpoint(const QString& key);
+
+QString harnessOverallShieldKey(const QString& connId, HarnessSide side);
+QString harnessInternalShieldKey(const QString& group);
+bool harnessIsShieldEndpoint(const QString& key);
+// The internal group a key names, or "" when it names an overall shield.
+QString harnessShieldEndpointGroup(const QString& key);
+// The connector and side an overall-shield key names. False when the key is an internal one.
+bool harnessShieldEndpointConn(const QString& key, QString& connId, HarnessSide& side);
+// How the endpoint reads on screen: "P1 shield (left)", "Shield S1 (internal)", or the key
+// itself if it names something that is no longer in the harness.
+QString harnessShieldEndpointLabel(const HarnessDef& def, const QString& key);
+// Every shield endpoint the harness actually has: the overall screens its connectors ask for,
+// and the internal groups its wires name. In a stable order, for a drop-down.
+QStringList harnessShieldEndpoints(const HarnessDef& def);
 
 // The pins of `c` top-to-bottom: its pinOrder when set, otherwise 1..pinCount. Always
 // exactly pinCount entries, so the layout can never fall out of step with the pins.
@@ -147,6 +233,13 @@ int harnessCrossings(const HarnessDef& def);
 // twist can braid it. `shield` picks which kind of group is counted.
 int harnessBundleBreaks(const HarnessDef& def, bool shield);
 
+// How spread out the wired pins are: for each connector, the number of SPARE pins sitting
+// between its first and last wired pin. Zero means every wire is on a neighbouring pin, so the
+// bundle leaves the connector as one tight group with the least distance between its wires -
+// which is what "minimum wire pitch" asks for. It says nothing about WHERE the group sits;
+// harnessPinOrderPenalty() is what pulls it to the top.
+int harnessWireSpanPenalty(const HarnessDef& def);
+
 // How far a connector's pinout is from "everything that is wired first, the spare pins
 // after": the number of times an UNWIRED pin sits above a wired one. Zero means the
 // populated pins occupy a solid block at the top and the spares follow, which is how a
@@ -161,7 +254,8 @@ struct HarnessOptimizeWeights {
     int crossing = 1;
     int shieldBreak = 200;
     int twistBreak = 200;
-    int pinOrder = 20;
+    int pinOrder = 20;  // populated pins first, i.e. the group starts at the TOP
+    int wireSpan = 0;   // the wires sit on neighbouring pins, wherever the group starts
 };
 int harnessLayoutCost(const HarnessDef& def, const HarnessOptimizeWeights& w);
 

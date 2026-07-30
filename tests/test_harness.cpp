@@ -2,10 +2,14 @@
 #include "geometry/Snap.h"
 #include "harness/Harness.h"
 #include "harness/HarnessBuilder.h"
+#include "harness/Bom.h"
+#include "harness/PartsLibrary.h"
 #include "geometry/Geometry.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
 
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <algorithm>
 #include <array>
@@ -2242,8 +2246,12 @@ int run_harness_tests() {
 
         check(wireAnnots(w).empty(), "wire marking: nothing is drawn until switched on");
         w.meta.insert("showColorName", true);
+        check(wireAnnotColorText(w) == QLatin1String("Red"),
+              "wire marking: the colour reads by its full name unless told otherwise");
+        w.meta.insert("colorNameMode", QStringLiteral("code"));
         check(wireAnnotColorText(w) == QLatin1String("RD"),
-              "wire marking: the colour defaults to its 2-letter code");
+              "wire marking: asking for the code gives the 2 letters");
+        w.meta.remove(QStringLiteral("colorNameMode"));
         w.meta.insert("colorNameMode", QStringLiteral("full"));
         check(wireAnnotColorText(w) == QLatin1String("Red"),
               "wire marking: full mode spells the colour out");
@@ -2955,8 +2963,19 @@ int run_harness_tests() {
                 }
                 if (e.type == EntityType::Twist) ++twists;
             }
-            check(overall == 2, "harness: the overall shield is deployed with amount 2");
+            // One overall screen per shielded connector end is the default now: a second copy
+            // of the same screen further along the run said nothing extra.
+            check(overall == 1, "harness: one overall shield symbol per shielded end");
             check(internal == 2, "harness: the wire shield is deployed with its own amount 2");
+            // ...and asking for more still gives more.
+            {
+                HarnessDef more = d;
+                more.layout.shieldAmount = 3;
+                int n = 0;
+                for (const auto& e : buildHarness(more).entities)
+                    if (e.type == EntityType::Screen && e.meta.contains("overallShield")) ++n;
+                check(n == 3, "harness: the overall shield amount is still honoured");
+            }
             check(twists == 2, "harness: the twist is deployed with amount 2");
             // The right end means past the middle of the run.
             check(shieldX > (d.layout.leftX + d.layout.rightX) / 2.0,
@@ -3554,7 +3573,15 @@ int run_harness_tests() {
             ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier); // on the free end
             ed.onPointerPress({100, -60}, Qt::LeftButton, Qt::NoModifier);
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
-            check(d.entities().size() == 1, "wire extend: no second wire is created");
+            // Drawing ON from the wire's own free tip is one conductor carrying on, not two
+            // wires meeting, so there is no joint to mark: one wire and nothing else.
+            int wires = 0, splices = 0;
+            for (const auto& e : d.entities()) {
+                if (e.type == EntityType::Wire) ++wires;
+                if (e.type == EntityType::Splice) ++splices;
+            }
+            check(wires == 1, "wire extend: no second wire is created");
+            check(splices == 0, "wire extend: carrying a wire on is not a joint");
             const Entity& w = d.entities().front();
             check(w.points.size() == 3 && near(w.points.back().y, -60.0),
                   "wire extend: the run is appended to the existing wire");
@@ -3575,7 +3602,10 @@ int run_harness_tests() {
             ed.onPointerPress({160, -60}, Qt::LeftButton, Qt::NoModifier);
             ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier); // ends on the tip
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
-            check(d.entities().size() == 1 && d.entities().front().points.size() == 3,
+            int wires2 = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Wire) ++wires2;
+            check(wires2 == 1 && d.entities().front().points.size() == 3,
                   "wire extend: drawing toward the end joins it too");
             const Entity& w = d.entities().front();
             check(near(w.points.front().x, 0.0) && near(w.points.back().x, 160.0),
@@ -3592,7 +3622,10 @@ int run_harness_tests() {
             ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier); // the other free end
             ed.onPointerPress({-70, 0}, Qt::LeftButton, Qt::NoModifier);
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
-            check(d.entities().size() == 1, "wire extend: the front end joins too");
+            int wires3 = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Wire) ++wires3;
+            check(wires3 == 1, "wire extend: the front end joins too");
             const Entity& w = d.entities().front();
             check(w.points.size() == 3 && near(w.points.front().x, -70.0) &&
                       near(w.points.back().x, 100.0),
@@ -3892,6 +3925,1537 @@ int run_harness_tests() {
               "knee fan: the turns are in the clearest order the wiring allows");
     }
 
+    // ---- Cross-section notation follows the general option ----
+    {
+        setWireGaugeNotationAwg(false);
+        check(wireGaugeLabel(QStringLiteral("0.5")) == QString::fromUtf8("0.5 mm\xC2\xB2"),
+              "gauge notation: mm2 by default");
+        setWireGaugeNotationAwg(true);
+        check(wireGaugeLabel(QStringLiteral("0.5")) == QLatin1String("20 AWG"),
+              "gauge notation: the same wire reads as AWG when the option is set");
+        check(wireGaugeAwg(QStringLiteral("2.5")) == QLatin1String("14"),
+              "gauge notation: the standard pairing is used");
+        check(wireGaugeAwg(QStringLiteral("0.55")) == QLatin1String("20"),
+              "gauge notation: an off-standard figure takes the nearest size");
+
+        // A wire's marking reads as ONE line, and follows the notation.
+        Entity w;
+        w.type = EntityType::Wire;
+        w.points = {{0, 0}, {100, 0}};
+        w.meta.insert("wireColor", QStringLiteral("RD"));
+        w.meta.insert("wireGauge", QStringLiteral("0.5"));
+        w.meta.insert("showColorName", true);
+        w.meta.insert("showGaugeName", true);
+        w.meta.insert("colorNameMode", QStringLiteral("code")); // the 2-letter form, to keep short
+        check(wireAnnotText(w) == QStringLiteral("RD  20 AWG"),
+              "marking: the colour and the cross-section are one line of text");
+        setWireGaugeNotationAwg(false);
+        check(wireAnnotText(w) == QString::fromUtf8("RD  0.5 mm\xC2\xB2"),
+              "marking: switching notation re-labels it without touching the wire");
+        w.meta.insert("showGaugeName", false);
+        check(wireAnnotText(w) == QStringLiteral("RD"),
+              "marking: one part alone is the whole line");
+        w.meta.insert("showColorName", false);
+        check(wireAnnotText(w).isEmpty(), "marking: nothing shown, nothing drawn");
+        check(near(wireTextGap(w), 0.0), "marking: no gap over the line unless asked for");
+        w.meta.insert("textGap", 4.0);
+        check(near(wireTextGap(w), 4.0), "marking: the text gap is read off the wire");
+    }
+
+    // ---- The generated drawing's rules: wire terminations, splices, text gap ----
+    {
+        auto twoConn = []() {
+            HarnessDef d;
+            HarnessConnector a;
+            a.id = "p1"; a.side = HarnessSide::Left; a.designator = "P1"; a.pinCount = 4;
+            HarnessConnector b;
+            b.id = "p2"; b.side = HarnessSide::Right; b.designator = "P2"; b.pinCount = 4;
+            d.connectors = {a, b};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                d.wires.push_back(w);
+            }
+            return d;
+        };
+        // The text gap reaches the drawn wires.
+        HarnessDef gap = twoConn();
+        gap.layout.textGap = 5.0;
+        int gapped = 0;
+        for (const auto& e : buildHarness(gap).entities)
+            if (e.type == EntityType::Wire && near(e.meta.value("textGap").toDouble(), 5.0))
+                ++gapped;
+        check(gapped == 2, "rules: the text gap is carried onto every wire");
+        HarnessDef noGap = twoConn();
+        for (const auto& e : buildHarness(noGap).entities)
+            if (e.type == EntityType::Wire)
+                check(!e.meta.contains("textGap"), "rules: no gap set, nothing stored");
+
+        // A wire naming a pin that is not there lands on nothing: with the rule on, the drawing
+        // marks that end.
+        HarnessDef dangling = twoConn();
+        dangling.wires[0].toPin = 99; // out of range: routed to nowhere
+        auto crossCount = [](const HarnessBuild& b, EntityType t) {
+            int n = 0;
+            for (const auto& e : b.entities)
+                if (e.type == t) ++n;
+            return n;
+        };
+        dangling.layout.terminateUnconnectedWires = false;
+        const int without = crossCount(buildHarness(dangling), EntityType::NotConnected);
+        dangling.layout.terminateUnconnectedWires = true;
+        const int with = crossCount(buildHarness(dangling), EntityType::NotConnected);
+        check(with >= without, "rules: terminating unconnected wires only ever adds marks");
+
+        // Splices mark where wires MEET. Two wires on one PIN is not a joint - it is a wiring
+        // fault, which the validator reports; dotting it would say the drawing was fine.
+        HarnessDef onePin = twoConn();
+        onePin.wires[1].fromPin = 1; // both wires leave the same pin
+        onePin.layout.spliceAtJoins = true;
+        check(crossCount(buildHarness(onePin), EntityType::Splice) == 0,
+              "rules: two wires on one pin are not spliced");
+        bool pinFault = false;
+        for (const auto& iss : validateHarness(onePin))
+            if (iss.key.startsWith(QLatin1String("pinbusy"))) pinFault = true;
+        check(pinFault, "rules: ...the validator reports it instead");
+
+        // A drain brought onto a screen's leg IS a joint, and gets its dot.
+        HarnessDef drained = twoConn();
+        drained.connectors[0].shieldLeft = true;
+        drained.layout.shieldAmount = 1;
+        {
+            HarnessWire dr;
+            dr.id = "dr";
+            dr.fromConn = "p1";
+            dr.fromPin = 4;
+            dr.toConn = harnessOverallShieldKey(QStringLiteral("p1"), HarnessSide::Left);
+            drained.wires.push_back(dr);
+        }
+        drained.layout.spliceAtJoins = true;
+        const int spliced = crossCount(buildHarness(drained), EntityType::Splice);
+        check(spliced >= 1, "rules: a wire meeting a screen's leg is spliced");
+        drained.layout.spliceAtJoins = false;
+        check(crossCount(buildHarness(drained), EntityType::Splice) == 0,
+              "rules: with the rule off, no joint is drawn");
+        HarnessDef joined = drained;
+        joined.layout.spliceAtJoins = true;
+        check(HarnessLayout().spliceAtJoins,
+              "rules: a join is spliced unless told otherwise");
+        // An overall screen is drawn ONCE unless more are asked for.
+        check(HarnessLayout().shieldAmount == 1,
+              "rules: one overall shield symbol unless told otherwise");
+        // ...and one symbol really is what gets drawn.
+        {
+            HarnessDef one;
+            HarnessConnector a1;
+            a1.id = "p1"; a1.side = HarnessSide::Left; a1.designator = "P1"; a1.pinCount = 4;
+            a1.shieldLeft = true;
+            HarnessConnector b1;
+            b1.id = "p2"; b1.side = HarnessSide::Right; b1.designator = "P2"; b1.pinCount = 4;
+            one.connectors = {a1, b1};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                one.wires.push_back(w);
+            }
+            int overall = 0;
+            for (const auto& e : buildHarness(one).entities)
+                if (e.type == EntityType::Screen &&
+                    e.meta.value("overallShield").toString() == QLatin1String("P1"))
+                    ++overall;
+            check(overall == 1, "rules: exactly one overall screen is drawn by default");
+        }
+
+        // The joint dot is drawn at the size the Layout gives it.
+        check(near(HarnessLayout().spliceSize, 3.0), "rules: a joint dot is 3 by default");
+        HarnessDef sized = joined; // the drain-onto-a-leg case, which really has a joint
+        sized.layout.spliceSize = 7.5;
+        int sizedDots = 0;
+        for (const auto& e : buildHarness(sized).entities)
+            if (e.type == EntityType::Splice) {
+                ++sizedDots;
+                check(near(e.meta.value("size").toDouble(), 7.5),
+                      "rules: the joint is drawn at the size the layout sets");
+            }
+        check(sizedDots > 0, "rules: the sized case really produced a joint");
+        check(!HarnessLayout().terminateUnconnectedWires,
+              "rules: unconnected wire ends are not marked unless asked for");
+    }
+
+    // ---- Align lines up everything that rides on a wire ----
+    {
+        Document d;
+        d.entities().clear();
+        // Two horizontal wires, each carrying a colour marking, plus a twist across them and
+        // a shield catching them.
+        for (int i = 0; i < 2; ++i) {
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i + 1);
+            w.type = EntityType::Wire;
+            w.points = {{0, -20.0 * i}, {300, -20.0 * i}};
+            w.meta.insert("wireColor", QStringLiteral("RD"));
+            w.meta.insert("wireGauge", QStringLiteral("0.5"));
+            w.meta.insert("showColorName", true);
+            w.meta.insert("annCount", 1);
+            QJsonArray ts;
+            ts.append(0.2); // both markings start well left of the column
+            w.meta.insert("annT", ts);
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        ed.selectById(QStringLiteral("w1"));
+        ed.selectById(QStringLiteral("w2"), /*additive=*/true);
+        ed.beginTwistAlign();
+        ed.onPointerPress({210, 0}, Qt::LeftButton, Qt::NoModifier);
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Wire) continue;
+            const std::vector<double> ts = wireAnnotFractions(e, 1);
+            check(!ts.empty() && near(ts[0], 0.7, 1e-3),
+                  "align: each wire's marking lands on the clicked column");
+        }
+
+        // A wire label attached to a wire follows the same column.
+        Entity lab;
+        lab.id = "lab1";
+        lab.type = EntityType::NetLabel;
+        lab.a = {30, 0};
+        lab.meta.insert("wireId", QStringLiteral("w1"));
+        lab.meta.insert("annT", 0.1);
+        lab.meta.insert("text", QStringLiteral("PWR"));
+        d.entities().push_back(lab);
+        ed.selectById(QStringLiteral("lab1"));
+        ed.beginTwistAlign();
+        ed.onPointerPress({150, 0}, Qt::LeftButton, Qt::NoModifier);
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("lab1"))
+                check(near(e.meta.value("annT").toDouble(), 0.5, 1e-3),
+                      "align: an attached wire label slides to the column too");
+
+        // Something that rides on nothing cannot be aligned, and Align says so rather than
+        // moving it.
+        Entity rect;
+        rect.id = "r1";
+        rect.type = EntityType::Rect;
+        rect.points = {{0, 0}, {10, 10}};
+        d.entities().push_back(rect);
+        ed.selectById(QStringLiteral("r1"));
+        ed.beginTwistAlign();
+        ed.onPointerPress({150, 0}, Qt::LeftButton, Qt::NoModifier);
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("r1"))
+                check(near(e.points.front().x, 0.0),
+                      "align: an object that rides on no wire is left where it is");
+    }
+
+    // ---- The drain: a wire of its own, joined to the leg it terminates ----
+    {
+        HarnessDef d;
+        HarnessConnector a1;
+        a1.id = "p1"; a1.side = HarnessSide::Left; a1.designator = "P1"; a1.pinCount = 4;
+        a1.shieldLeft = true;
+        a1.bodyBondLeft = true;
+        HarnessConnector b1;
+        b1.id = "p2"; b1.side = HarnessSide::Right; b1.designator = "P2"; b1.pinCount = 4;
+        d.connectors = {a1, b1};
+        for (int i = 1; i <= 2; ++i) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+            w.label = QStringLiteral("L%1").arg(i);
+            d.wires.push_back(w);
+        }
+        d.layout.shieldAmount = 1;
+        d.layout.wireColorMode = QStringLiteral("actual");
+
+        // The definition's drain spec reaches the drawn drain.
+        HarnessBuild out = buildHarness(d);
+        const Entity* drain = nullptr;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire && e.meta.contains("shieldBond")) drain = &e;
+        check(drain != nullptr, "drain: it is drawn as a wire");
+        check(drain && drain->meta.value("wireColor").toString() == QLatin1String("DRAIN"),
+              "drain: it is given the Drain colour, not a setting of its own");
+        check(drain && drain->hasExplicitColor(),
+              "drain: in Actual mode it is painted its own colour, like any wire");
+        check(wireColorName(QStringLiteral("DRAIN")) == QLatin1String("Drain") &&
+                  wireColorCodes().contains(QStringLiteral("DRAIN")),
+              "drain: Drain is offered in the wire colour list");
+
+        // Stamping the harness into a document joins the screen to its drain, which is what
+        // takes the X off the leg and lets the shield pull the drain when it is moved.
+        Document doc;
+        doc.entities().clear();
+        Editor ed;
+        ed.setDocument(&doc);
+        ed.insertHarness(d);
+        const Entity* screen = nullptr;
+        const Entity* placed = nullptr;
+        int drains = 0;
+        for (const auto& e : doc.entities()) {
+            if (e.type == EntityType::Screen &&
+                e.meta.value("overallShield").toString() == QLatin1String("P1"))
+                screen = &e;
+            if (e.type == EntityType::Wire && e.meta.contains("shieldBond")) {
+                placed = &e;
+                ++drains;
+            }
+        }
+        check(drains == 1, "drain: exactly one is placed");
+        check(screen && placed &&
+                  screen->meta.value("legWireId").toString() == placed->id,
+              "drain: the screen is joined to it by id once both are in the document");
+        check(screen && !screen->meta.value("notConnected").toBool(),
+              "drain: the leg is terminated on it, so no X is drawn");
+        check(screen && screen->meta.contains("legWireEnd"),
+              "drain: which end of the drain is on the leg is recorded, so it can be pulled");
+
+        // And the drain must not have stolen a shield's wire references while ids were stamped.
+        check(screen && screen->meta.value("wires").toArray().size() == 2,
+              "drain: the screen still refers to the two wires it catches");
+        for (const auto& v : screen->meta.value("wires").toArray()) {
+            const QString wid = v.toString();
+            bool isCaughtWire = false;
+            for (const auto& e : doc.entities())
+                if (e.id == wid && e.type == EntityType::Wire && !e.meta.contains("shieldBond"))
+                    isCaughtWire = true;
+            check(isCaughtWire, "drain: a shield reference points at a conductor, not the drain");
+        }
+    }
+
+    // ---- Two wires meeting become one, with a splice at the joint ----
+    {
+        Document d;
+        d.entities().clear();
+        auto wire = [](const char* id, Vec2 a, Vec2 b) {
+            Entity w;
+            w.id = QString::fromLatin1(id);
+            w.type = EntityType::Wire;
+            w.points = {a, b};
+            w.meta.insert("wireColor", QStringLiteral("RD"));
+            return w;
+        };
+        d.entities().push_back(wire("w1", {0, 0}, {100, 0}));
+        d.entities().push_back(wire("w2", {100, 0}, {100, -80})); // its front meets w1's back
+        Editor ed;
+        ed.setDocument(&d);
+        check(ed.mergeWireEnds(QStringLiteral("w1")), "wire join: the meeting ends are joined");
+        int wires = 0, splices = 0;
+        const Entity* kept = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::Wire) { ++wires; kept = &e; }
+            if (e.type == EntityType::Splice) ++splices;
+        }
+        check(wires == 1, "wire join: one wire is left, not two");
+        check(splices == 1, "wire join: the joint is spliced");
+        check(kept && kept->points.size() == 3,
+              "wire join: the shared point is kept once, not duplicated");
+        check(kept && near(kept->points.front().x, 0.0) && near(kept->points.back().y, -80.0),
+              "wire join: the run reads continuously from one far end to the other");
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Splice)
+                check(near(e.a.x, 100.0) && near(e.a.y, 0.0),
+                      "wire join: the splice sits where they met");
+
+        // Joining a second time has nothing to join.
+        check(!ed.mergeWireEnds(kept->id), "wire join: nothing left to join");
+
+        // A tip that TERMINATES is a proper end: two conductors meeting on a pin stay two.
+        Document t;
+        t.entities().clear();
+        ConnectorSpec spec = defaultConnectorSpec(2);
+        Entity conn;
+        conn.id = "c1";
+        conn.type = EntityType::Connector;
+        conn.a = {0, 0};
+        writeConnectorSpec(conn.meta, spec);
+        const ConnectorGeometry cg = connectorGeometry(conn.a, spec);
+        t.entities().push_back(conn);
+        const Vec2 pin = cg.pinEnd.front();
+        t.entities().push_back(wire("t1", pin, {pin.x + 100, pin.y}));
+        t.entities().push_back(wire("t2", pin, {pin.x, pin.y - 90}));
+        Editor te;
+        te.setDocument(&t);
+        check(!te.mergeWireEnds(QStringLiteral("t1")),
+              "wire join: two wires meeting on a pin are left as two conductors");
+    }
+
+    // ---- The palette and the cross-section range ----
+    {
+        // Black was sharing a hex with grey, which is why it read as grey.
+        check(wireColorHex(QStringLiteral("BK")) == QLatin1String("#000000"),
+              "palette: black is black");
+        check(wireColorHex(QStringLiteral("BK")) != wireColorHex(QStringLiteral("GY")),
+              "palette: black and grey are no longer the same colour");
+        // A coax has no colour: it has a signal and a shield.
+        check(wireColorName(QStringLiteral("SIGNAL")) == QLatin1String("Signal") &&
+                  wireColorName(QStringLiteral("SHIELD")) == QLatin1String("Shield"),
+              "palette: Signal and Shield are named");
+        for (const QString& code : {QStringLiteral("SIGNAL"), QStringLiteral("SHIELD"),
+                                    QStringLiteral("DRAIN")})
+            check(wireColorCodes().contains(code),
+                  "palette: the conductor kinds are offered alongside the colours");
+
+        // Cross-sections: 4 AWG to 32 AWG, thin end first, and nothing outside that.
+        const QStringList sizes = wireGaugeChoices();
+        check(!sizes.isEmpty(), "gauge range: there are sizes to choose from");
+        check(sizes.front() == QLatin1String("0.03") && sizes.back() == QLatin1String("25.0"),
+              "gauge range: it runs from 32 AWG to 4 AWG");
+        for (const QString& mm2 : sizes) {
+            const int awg = wireGaugeAwg(mm2).toInt();
+            check(awg >= 4 && awg <= 32, "gauge range: every size is between 4 and 32 AWG");
+        }
+        setWireGaugeNotationAwg(true);
+        check(wireGaugeLabel(QStringLiteral("0.03")) == QLatin1String("32 AWG") &&
+                  wireGaugeLabel(QStringLiteral("25.0")) == QLatin1String("4 AWG"),
+              "gauge range: the ends of the range read as 32 and 4 AWG");
+        setWireGaugeNotationAwg(false);
+        // Ascending by area, so the list reads in order.
+        for (int i = 1; i < sizes.size(); ++i)
+            check(sizes[i].toDouble() > sizes[i - 1].toDouble(),
+                  "gauge range: the sizes are in order");
+    }
+
+    // ---- Text height, colour-name length, and the screen's clearance ----
+    {
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 4;
+        p1.pitch = 24.0; // a wide pitch, so a proportional clearance is obvious
+        p1.shieldLeft = true;
+        HarnessConnector p2;
+        p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 4;
+        p2.pitch = 24.0;
+        d.connectors = {p1, p2};
+        for (int i = 1; i <= 2; ++i) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+            w.showColor = true;
+            d.wires.push_back(w);
+        }
+        d.layout.shieldAmount = 1;
+        d.layout.pinPitch = 24.0;
+        d.layout.textHeight = 6.0;
+        d.layout.colorNameMode = QStringLiteral("long");
+
+        const HarnessBuild out = buildHarness(d);
+        int wires = 0;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire) {
+                ++wires;
+                check(near(e.meta.value("annSize").toDouble(), 6.0),
+                      "text: the height from the layout reaches the wire");
+                check(e.meta.value("colorNameMode").toString() == QLatin1String("full"),
+                      "text: Long spells the colour out");
+            }
+        check(wires > 0, "text: the wires were generated");
+        check(near(HarnessLayout().textHeight, 3.5) &&
+                  HarnessLayout().colorNameMode == QLatin1String("long"),
+              "text: 3.5 high and full colour names unless told otherwise");
+        // And the marking really reads as the full name.
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire && e.meta.value("showColorName").toBool()) {
+                check(wireAnnotColorText(e) == wireColorName(
+                                                  e.meta.value("wireColor").toString()),
+                      "text: the wire's marking is the spelled-out colour");
+                break;
+            }
+
+        // The screen clears the outermost wire by about a quarter of the pin pitch, so the
+        // clearance follows the harness instead of being a fixed number of units.
+        for (const auto& e : out.entities) {
+            if (e.type != EntityType::Screen) continue;
+            const int k = e.meta.value("catch").toInt(1);
+            if (k < 2) continue;
+            double lo = e.points.front().y, hi = e.points.front().y;
+            for (int i = 0; i < k; ++i) {
+                lo = std::min(lo, e.points[i].y);
+                hi = std::max(hi, e.points[i].y);
+            }
+            const double clear = e.meta.value("ry").toDouble() - (hi - lo) / 2.0;
+            std::printf("    (shield clearance at pitch 24: %.2f)\n", clear);
+            check(clear > 24.0 / 4.0 - 0.01 && clear < 24.0,
+                  "shield: the outline clears the last wire by about a quarter of the pitch");
+        }
+    }
+
+    // ---- An OPEN end: a flying lead that runs out and stops ----
+    {
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 4;
+        HarnessConnector p2;
+        p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 4;
+        d.connectors = {p1, p2};
+        HarnessWire joined;
+        joined.id = "w1";
+        joined.fromConn = "p1"; joined.fromPin = 1; joined.toConn = "p2"; joined.toPin = 1;
+        d.wires.push_back(joined);
+        HarnessWire lead;
+        lead.id = "lead";
+        lead.fromConn = "p1";
+        lead.fromPin = 2;
+        lead.toConn = harnessOpenEndpointKey();
+        lead.color = QStringLiteral("RD");
+        d.wires.push_back(lead);
+
+        check(harnessIsOpenEndpoint(harnessOpenEndpointKey()),
+              "open end: the key is recognised");
+        check(!harnessIsOpenEndpoint(QStringLiteral("p1")) &&
+                  !harnessIsShieldEndpoint(harnessOpenEndpointKey()),
+              "open end: it is not mistaken for a connector or a screen");
+        check(validateHarness(d).empty(), "open end: a flying lead validates");
+
+        const HarnessBuild out = buildHarness(d);
+        const Entity* drawn = nullptr;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire && e.meta.value("openEnd").toBool()) drawn = &e;
+        check(drawn != nullptr, "open end: the lead is drawn");
+        check(drawn && drawn->points.size() == 2, "open end: it runs straight out");
+        check(drawn && drawn->meta.value("wireColor").toString() == QLatin1String("RD"),
+              "open end: it keeps its own colour");
+        // It leaves the pin and heads INTO the harness, not backwards through the connector.
+        if (drawn)
+            check(drawn->points.back().x > drawn->points.front().x,
+                  "open end: a left-hand lead runs to the right, away from its connector");
+        // And it is marked as reaching nothing.
+        bool marked = false;
+        if (drawn)
+            for (const auto& e : out.entities)
+                if (e.type == EntityType::NotConnected &&
+                    near(e.a.x, drawn->points.back().x) && near(e.a.y, drawn->points.back().y))
+                    marked = true;
+        check(marked, "open end: the loose end carries the not-connected mark");
+
+        // Open at BOTH ends joins nothing, and the validator says so.
+        HarnessDef both = d;
+        both.wires[1].fromConn = harnessOpenEndpointKey();
+        bool reported = false;
+        for (const auto& iss : validateHarness(both))
+            if (iss.key.startsWith(QLatin1String("bothopen"))) reported = true;
+        check(reported, "open end: open at both ends is reported");
+        buildHarness(both); // and draws nothing for it rather than crashing
+
+        // The pin at the other end is still checked.
+        HarnessDef badPin = d;
+        badPin.wires[1].fromPin = 99;
+        bool pinReported = false;
+        for (const auto& iss : validateHarness(badPin))
+            if (iss.key.startsWith(QLatin1String("badpin"))) pinReported = true;
+        check(pinReported, "open end: the connector end of a lead is still checked");
+    }
+
+    // ---- The cross-section nudges the drawn width; it does not take it over ----
+    {
+        // The renderer starts from the layer's weight and shifts it by the cross-section, capped
+        // at both ends: a 10 AWG conductor must still look like a wire, and a net wire on a
+        // weight-1 layer must still be thin. The weights below are what that shift is read from,
+        // so they have to rise across the whole offered range and every size needs its own.
+        check(wireGaugeWeight(QStringLiteral("0.5")) < wireGaugeWeight(QStringLiteral("2.5")),
+              "gauge width: a bigger cross-section weighs more");
+        check(wireGaugeWeight(QStringLiteral("2.5")) < wireGaugeWeight(QStringLiteral("25.0")),
+              "gauge width: ...all the way up the range");
+        double last = -1.0;
+        bool rising = true, allKnown = true;
+        for (const QString& mm2 : wireGaugeChoices()) {
+            const double w = wireGaugeWeight(mm2);
+            if (near(w, 2.0) && mm2 != QLatin1String("1.0")) allKnown = false;
+            if (w < last) rising = false;
+            last = w;
+        }
+        check(rising, "gauge width: the offered sizes get heavier in order");
+        check(allKnown, "gauge width: every offered size has a weight of its own");
+        check(wireGaugeChoices().size() >= 15, "gauge width: the 4-32 AWG range is offered");
+        check(wireGaugeChoices().first() == QLatin1String("0.03") &&
+                  wireGaugeChoices().last() == QLatin1String("25.0"),
+              "gauge width: from 32 AWG up to 4 AWG");
+        // The shift the renderer applies is bounded: across the whole range it stays within
+        // about two pixels of the layer's own weight, which is what keeps a thick wire sane.
+        const double spread = 0.28 * (wireGaugeWeight(QStringLiteral("25.0")) -
+                                      wireGaugeWeight(QStringLiteral("0.03")));
+        check(spread > 0.5 && spread < 3.0,
+              "gauge width: the whole range spans a couple of pixels, not a bar");
+    }
+
+    // ---- A wire's own label slides along it ----
+    {
+        Entity w;
+        w.id = "w1";
+        w.type = EntityType::Wire;
+        w.points = {{0, 0}, {200, 0}};
+        w.meta.insert("wireLabel", QStringLiteral("PWR"));
+        check(near(wireLabelFraction(w), 0.5), "wire label: mid-span until it is moved");
+        setWireLabelFraction(w, 0.25);
+        check(near(wireLabelFraction(w), 0.25), "wire label: the position is kept on the wire");
+        setWireLabelFraction(w, 3.0);
+        check(near(wireLabelFraction(w), 1.0), "wire label: it cannot be pushed off the end");
+        setWireLabelFraction(w, -1.0);
+        check(near(wireLabelFraction(w), 0.0), "wire label: ...or off the start");
+
+        // Dragging its grip is what moves it: the wire is selected, the grip grabbed at where
+        // the label sits, and dropped further along.
+        Document d;
+        d.entities().clear();
+        setWireLabelFraction(w, 0.5);
+        w.meta.insert("showWireLabel", true);
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        ed.snapSettings().ortho = false;
+        ed.selectById(QStringLiteral("w1"));
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier); // grab the label's grip
+        ed.onPointerPress({160, 0}, Qt::LeftButton, Qt::NoModifier); // place it further along
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("w1"))
+                check(wireLabelFraction(e) > 0.6,
+                      "wire label: dragging its grip slides it along the run");
+    }
+
+    // ---- Coax: a signal and its braid, as two rows of one bundle ----
+    {
+        // A coax is a cable of two conductors: one row is the SIGNAL, the other the SHIELD, both
+        // in the same bundle. The signal runs pin to pin; the braid is drawn as a screen symbol on
+        // the signal near each end with the shield row's own conductor brought into it.
+        auto coaxCase = [](bool withShield) {
+            HarnessDef d;
+            HarnessConnector p1;
+            p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 6;
+            HarnessConnector p2;
+            p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 6;
+            d.connectors = {p1, p2};
+            HarnessWire sig;
+            sig.id = "sig";
+            sig.fromConn = "p1"; sig.fromPin = 1; sig.toConn = "p2"; sig.toPin = 1;
+            sig.kind = QStringLiteral("coax");
+            sig.bundle = QStringLiteral("COAX1");
+            sig.color = QStringLiteral("SIGNAL");
+            d.wires.push_back(sig);
+            if (withShield) {
+                HarnessWire sh;
+                sh.id = "shd";
+                sh.fromConn = "p1"; sh.fromPin = 2; sh.toConn = "p2"; sh.toPin = 2;
+                sh.kind = QStringLiteral("coax");
+                sh.bundle = QStringLiteral("COAX1");
+                sh.color = QStringLiteral("SHIELD");
+                d.wires.push_back(sh);
+            }
+            return d;
+        };
+
+        const HarnessDef whole = coaxCase(true);
+        check(validateHarness(whole).empty(), "coax: a signal and a shield row validate");
+        const HarnessBuild out = buildHarness(whole);
+
+        // The signal is one run, pin to pin.
+        const Entity* signal = nullptr;
+        int braids = 0, shieldStubs = 0;
+        for (const auto& e : out.entities) {
+            if (e.type == EntityType::Screen && !e.meta.value("coaxScreenOf").toString().isEmpty())
+                ++braids;
+            if (e.type != EntityType::Wire) continue;
+            if (e.meta.value("wireKind").toString() == QLatin1String("coax")) signal = &e;
+            if (e.meta.value("wireKind").toString() == QLatin1String("coaxShield")) ++shieldStubs;
+        }
+        check(signal != nullptr, "coax: the signal is drawn as a wire");
+        check(braids == 2, "coax: a braid symbol sits on the signal near each end");
+        check(shieldStubs == 2, "coax: the shield reaches each braid from its own pin");
+
+        // The braid really is ON the signal, and the stub really starts at the shield's pin.
+        for (const auto& e : out.entities) {
+            if (e.type != EntityType::Screen || e.meta.value("coaxScreenOf").toString().isEmpty())
+                continue;
+            const Vec2 at = e.points.front();
+            bool onSignal = false;
+            for (size_t i = 1; signal && i < signal->points.size(); ++i) {
+                const Vec2 a = signal->points[i - 1], b = signal->points[i];
+                if (at.x < std::min(a.x, b.x) - 1e-6 || at.x > std::max(a.x, b.x) + 1e-6) continue;
+                const double t = (std::abs(b.x - a.x) < 1e-9) ? 0.0 : (at.x - a.x) / (b.x - a.x);
+                if (std::abs(a.y + (b.y - a.y) * t - at.y) < 1e-6) onSignal = true;
+            }
+            check(onSignal, "coax: the braid is placed where the signal runs");
+            check(e.meta.value("catch").toInt() == 1, "coax: it catches the signal");
+            check(!e.meta.value("notConnected").toBool(),
+                  "coax: the braid is terminated by the shield, so it carries no X");
+        }
+        // A shield stub runs from a pin to a braid, at right angles.
+        for (const auto& e : out.entities) {
+            if (e.type != EntityType::Wire ||
+                e.meta.value("wireKind").toString() != QLatin1String("coaxShield"))
+                continue;
+            check(e.points.size() >= 2, "coax: the shield stub has a run");
+            for (size_t i = 1; i < e.points.size(); ++i)
+                check(near(e.points[i].x, e.points[i - 1].x) ||
+                          near(e.points[i].y, e.points[i - 1].y),
+                      "coax: every segment of the shield stub is level or upright");
+            check(e.meta.value("wireColor").toString().startsWith(QLatin1String("SHIELD")),
+                  "coax: the stub is marked as the shield");
+        }
+        // The shield row is NOT also routed pin to pin - that would draw the braid twice.
+        int plainRuns = 0;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire &&
+                e.meta.value("wireKind").toString().isEmpty())
+                ++plainRuns;
+        check(plainRuns == 0, "coax: neither row is drawn as an ordinary wire");
+
+        // Half a coax does not pass validation, and nothing is drawn for it.
+        const HarnessDef half = coaxCase(false);
+        bool reported = false;
+        for (const auto& iss : validateHarness(half))
+            if (iss.key.startsWith(QLatin1String("coaxhalf"))) reported = true;
+        check(reported, "coax: a bundle with only a signal is reported");
+        int halfBraids = 0;
+        for (const auto& e : buildHarness(half).entities)
+            if (e.type == EntityType::Screen && !e.meta.value("coaxScreenOf").toString().isEmpty())
+                ++halfBraids;
+        check(halfBraids == 0, "coax: ...and no braid is invented for it");
+        // A shield-only bundle is reported the same way.
+        HarnessDef shieldOnly = coaxCase(true);
+        shieldOnly.wires.erase(shieldOnly.wires.begin()); // drop the signal
+        bool reported2 = false;
+        for (const auto& iss : validateHarness(shieldOnly))
+            if (iss.key.startsWith(QLatin1String("coaxhalf"))) reported2 = true;
+        check(reported2, "coax: a bundle with only a shield is reported too");
+        // A coax row in no bundle cannot be paired at all.
+        HarnessDef loose = coaxCase(true);
+        loose.wires[0].bundle.clear();
+        loose.wires[1].bundle.clear();
+        bool reported3 = false;
+        for (const auto& iss : validateHarness(loose))
+            if (iss.key.startsWith(QLatin1String("coaxnobundle"))) reported3 = true;
+        check(reported3, "coax: a coax row in no bundle is reported");
+
+        // A plain wire row is untouched by any of this.
+        HarnessDef plain = coaxCase(true);
+        for (auto& w : plain.wires) {
+            w.kind = QStringLiteral("wire");
+            w.color = QStringLiteral("WH");
+            w.bundle.clear();
+        }
+        int braids2 = 0, wires2 = 0;
+        for (const auto& e : buildHarness(plain).entities) {
+            if (e.type == EntityType::Screen) ++braids2;
+            if (e.type == EntityType::Wire) ++wires2;
+        }
+        check(braids2 == 0 && wires2 == 2, "coax: plain rows are two plain wires");
+        check(HarnessWire().kind == QLatin1String("wire") && HarnessWire().bundle.isEmpty(),
+              "coax: a new row is a plain, unbundled wire");
+    }
+
+    // ---- A coax cannot join one connector's body to another's ----
+    {
+        // The reported drawing: P1 pins 8/9 to P3 pins 1/2 as a coax. Its screen used to be bonded
+        // to the connector SHELL at each end, and being one conductor that joined P1's body to
+        // P3's body. The braid now terminates on the shield row's own PINS, so no conductor
+        // reaches a connector body at all and the fault cannot be drawn.
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 15;
+        HarnessConnector p3;
+        p3.id = "p3"; p3.side = HarnessSide::Right; p3.designator = "P3"; p3.pinCount = 8;
+        d.connectors = {p1, p3};
+        const char* colors[] = {"SIGNAL", "SHIELD"};
+        for (int i = 0; i < 2; ++i) {
+            HarnessWire w;
+            w.id = QStringLiteral("cx%1").arg(i + 1);
+            w.fromConn = "p1"; w.fromPin = 8 + i; w.toConn = "p3"; w.toPin = 1 + i;
+            w.kind = QStringLiteral("coax");
+            w.bundle = QStringLiteral("COAX1");
+            w.color = QString::fromLatin1(colors[i]);
+            d.wires.push_back(w);
+        }
+        check(harnessCoaxIndex(d, d.wires[0]) == 1 && harnessCoaxIndex(d, d.wires[1]) == 1,
+              "coax bodies: both rows of COAX1 are coax 1");
+        check(validateHarness(d).empty(), "coax bodies: the pair validates");
+
+        // Nothing a coax draws may touch a connector's body rectangle.
+        const HarnessBuild out = buildHarness(d);
+        int touching = 0;
+        for (const auto& c : out.entities) {
+            if (c.type != EntityType::Connector) continue;
+            const ConnectorGeometry g = connectorGeometry(c.a, connectorSpecFromMeta(c.meta));
+            const double lo = std::min(g.rectMin.x, g.rectMax.x);
+            const double hi = std::max(g.rectMin.x, g.rectMax.x);
+            const double top = std::max(g.rectMin.y, g.rectMax.y);
+            const double bot = std::min(g.rectMin.y, g.rectMax.y);
+            for (const auto& e : out.entities) {
+                if (e.type != EntityType::Wire) continue;
+                const QString kind = e.meta.value("wireKind").toString();
+                if (kind != QLatin1String("coax") && kind != QLatin1String("coaxShield")) continue;
+                for (const Vec2& pt : e.points)
+                    if (pt.x > lo + 1e-6 && pt.x < hi - 1e-6 && pt.y > bot + 1e-6 &&
+                        pt.y < top - 1e-6) {
+                        ++touching;
+                        break;
+                    }
+            }
+        }
+        std::printf("    (coax bodies: coax conductors reaching inside a body: %d)\n",
+                    touching);
+        check(touching == 0, "coax bodies: no coax conductor reaches inside a connector body");
+    }
+
+    // ---- A wire whose end IS a shield: the drain, joined to the leg with a splice ----
+    {
+        auto base = []() {
+            HarnessDef d;
+            HarnessConnector p1;
+            p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 6;
+            p1.shieldLeft = true; // an overall screen at the left end
+            HarnessConnector p2;
+            p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 6;
+            d.connectors = {p1, p2};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                w.shieldGroup = QStringLiteral("S1"); // ...and an internal one around them
+                d.wires.push_back(w);
+            }
+            d.layout.shieldAmount = 1;
+            d.layout.wireShieldAmount = 1;
+            return d;
+        };
+
+        // The keys, and what the harness offers.
+        HarnessDef d = base();
+        const QString overallKey = harnessOverallShieldKey(QStringLiteral("p1"), HarnessSide::Left);
+        const QString internalKey = harnessInternalShieldKey(QStringLiteral("S1"));
+        check(harnessIsShieldEndpoint(overallKey) && harnessIsShieldEndpoint(internalKey),
+              "shield end: a shield key is told apart from a connector id");
+        check(!harnessIsShieldEndpoint(QStringLiteral("p1")),
+              "shield end: a connector id is not mistaken for one");
+        const QStringList offered = harnessShieldEndpoints(d);
+        check(offered.contains(overallKey) && offered.contains(internalKey),
+              "shield end: the screens the harness has are offered");
+        check(offered.size() == 2, "shield end: and only those - no screens it has not got");
+        check(harnessShieldEndpointLabel(d, overallKey) == QLatin1String("P1 shield (left)"),
+              "shield end: an overall screen reads as its connector and end");
+        check(harnessShieldEndpointLabel(d, internalKey) ==
+                  QLatin1String("Shield S1 (internal)"),
+              "shield end: an internal screen reads as its group");
+        {
+            QString conn;
+            HarnessSide side = HarnessSide::Right;
+            check(harnessShieldEndpointConn(overallKey, conn, side) && conn == QLatin1String("p1") &&
+                      side == HarnessSide::Left,
+                  "shield end: the key round-trips to its connector and side");
+            check(harnessShieldEndpointGroup(internalKey) == QLatin1String("S1"),
+                  "shield end: ...and an internal key to its group");
+        }
+
+        // A drain wire from a spare pin to the overall screen.
+        HarnessWire drain;
+        drain.id = "dr1";
+        drain.fromConn = "p1";
+        drain.fromPin = 6;
+        drain.toConn = overallKey;
+        drain.color = QStringLiteral("BK");
+        drain.gauge = QStringLiteral("0.5");
+        d.wires.push_back(drain);
+        check(validateHarness(d).empty(), "shield end: a drain to a screen validates");
+
+        const HarnessBuild out = buildHarness(d);
+        const Entity* drawn = nullptr;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Wire &&
+                e.meta.value("shieldLeg").toString() == overallKey)
+                drawn = &e;
+        check(drawn != nullptr, "shield end: the drain is drawn as a wire");
+        check(drawn && drawn->meta.value("drainWire").toBool(),
+              "shield end: it is marked as a drain");
+        // It runs from the pin to the screen's leg, and the leg has a splice on it.
+        Vec2 leg{0, 0};
+        bool haveLeg = false;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Screen &&
+                e.meta.value("overallShield").toString() == QLatin1String("P1")) {
+                leg = e.points.back();
+                haveLeg = true;
+                check(e.meta.contains("notConnected") && !e.meta.value("notConnected").toBool(),
+                      "shield end: the leg is terminated, so no X is drawn on it");
+            }
+        check(haveLeg, "shield end: the screen was generated");
+        check(drawn && haveLeg &&
+                  (near(drawn->points.back().x, leg.x) && near(drawn->points.back().y, leg.y)),
+              "shield end: the drain lands on the screen's leg");
+        int splicesOnLeg = 0;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Splice && near(e.a.x, leg.x) && near(e.a.y, leg.y))
+                ++splicesOnLeg;
+        check(splicesOnLeg == 1, "shield end: the joint on the leg is a splice");
+        // Right-angled, like every other wire.
+        check(drawn && drawn->points.size() >= 2, "shield end: the drain has a run");
+        if (drawn)
+            for (size_t i = 1; i < drawn->points.size(); ++i)
+                check(near(drawn->points[i].x, drawn->points[i - 1].x) ||
+                          near(drawn->points[i].y, drawn->points[i - 1].y),
+                      "shield end: every segment of the drain is level or upright");
+
+        // An internal screen can be drained the same way.
+        HarnessDef inner = base();
+        HarnessWire d2;
+        d2.id = "dr2";
+        d2.fromConn = internalKey; // the shield end can be either way round
+        d2.toConn = "p2";
+        d2.toPin = 6;
+        inner.wires.push_back(d2);
+        check(validateHarness(inner).empty(), "shield end: a drain from an internal screen validates");
+        bool drewInner = false;
+        for (const auto& e : buildHarness(inner).entities)
+            if (e.type == EntityType::Wire && e.meta.value("shieldLeg").toString() == internalKey)
+                drewInner = true;
+        check(drewInner, "shield end: an internal screen's drain is drawn too");
+
+        // A drain pointed at a screen the harness does not have is a fault, not a crash.
+        HarnessDef bad = base();
+        HarnessWire d3;
+        d3.id = "dr3";
+        d3.fromConn = "p1";
+        d3.fromPin = 5;
+        d3.toConn = harnessInternalShieldKey(QStringLiteral("NOPE"));
+        bad.wires.push_back(d3);
+        bool reported = false;
+        for (const auto& iss : validateHarness(bad))
+            if (iss.key.startsWith(QLatin1String("badshield"))) reported = true;
+        check(reported, "shield end: a drain to a screen that is not there is reported");
+        buildHarness(bad); // must not crash, and simply draws nothing for that wire
+
+        // A drain has no pin at its shield end, so the pin is not checked there - and a pin
+        // that IS out of range still is.
+        HarnessDef badPin = base();
+        HarnessWire d4;
+        d4.id = "dr4";
+        d4.fromConn = "p1";
+        d4.fromPin = 99;
+        d4.toConn = overallKey;
+        badPin.wires.push_back(d4);
+        bool pinReported = false;
+        for (const auto& iss : validateHarness(badPin))
+            if (iss.key.startsWith(QLatin1String("badpin"))) pinReported = true;
+        check(pinReported, "shield end: the pin end of a drain is still checked");
+    }
+
+    // ---- A junction where a bundle comes together: spliced, and one wire carries on ----
+    {
+        // The reported case: two wires routed up to the same point, and a single wire drawn on
+        // from there. The meeting is a splice, and the wire past it stays a wire of its own -
+        // it must not be swallowed into one of the two that arrived.
+        Document d;
+        d.entities().clear();
+        auto wire = [](const char* id, std::vector<Vec2> pts, const char* color) {
+            Entity w;
+            w.id = QString::fromLatin1(id);
+            w.type = EntityType::Wire;
+            w.points = std::move(pts);
+            w.meta.insert("wireColor", QString::fromLatin1(color));
+            return w;
+        };
+        const Vec2 join{600, 0};
+        d.entities().push_back(wire("rd", {{0, -40}, {400, -40}, {600, 0}}, "RD"));
+        d.entities().push_back(wire("bu", {{0, -80}, {500, -80}, {600, 0}}, "BU"));
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        ed.snapSettings().ortho = false;
+        ed.snapSettings().polar = false;
+
+        check(ed.wireEndsAt(join) == 2, "junction: both arriving wires are counted");
+        check(ed.wireEndsAt(join, QStringLiteral("rd")) == 1,
+              "junction: a wire does not count its own end");
+
+        // Draw the continuation from the junction.
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress(join, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({900, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+
+        int wires = 0, splices = 0;
+        const Entity* carriesOn = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::Wire) {
+                ++wires;
+                if (e.points.back().x > 800.0) carriesOn = &e;
+            }
+            if (e.type == EntityType::Splice) ++splices;
+        }
+        check(wires == 3, "junction: the wire past it is its own conductor, not a continuation");
+        check(splices == 1, "junction: a splice is generated where they meet");
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Splice)
+                check(near(e.a.x, 600.0) && near(e.a.y, 0.0),
+                      "junction: the splice sits on the meeting point");
+        check(carriesOn && carriesOn->points.size() == 2 &&
+                  near(carriesOn->points.front().x, 600.0),
+              "junction: the single wire runs from the splice onward");
+        // The two that arrived are untouched - neither grew through the junction.
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("rd") || e.id == QLatin1String("bu"))
+                check(e.points.size() == 3 && near(e.points.back().x, 600.0),
+                      "junction: an arriving wire still ends at the junction");
+
+        // Drawing a THIRD arrival at the same point splices once, not again.
+        ed.setTool(ToolId::Wire);
+        ed.onPointerPress({0, -120}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress(join, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        int splices2 = 0;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Splice) ++splices2;
+        check(splices2 == 1, "junction: the joint is marked once however many wires arrive");
+
+        // Two wires meeting with nothing else there is still a plain continuation: one run.
+        Document two;
+        two.entities().clear();
+        two.entities().push_back(wire("a", {{0, 0}, {100, 0}}, "RD"));
+        two.entities().push_back(wire("b", {{100, 0}, {100, -60}}, "RD"));
+        Editor te;
+        te.setDocument(&two);
+        check(te.mergeWireEnds(QStringLiteral("a")),
+              "junction: two ends alone still join into one run");
+        int twoWires = 0;
+        for (const auto& e : two.entities())
+            if (e.type == EntityType::Wire) ++twoWires;
+        check(twoWires == 1, "junction: ...and there is one wire left");
+    }
+
+    // ---- A shield drain joined to a wire: no X, and the wire is pulled along ----
+    {
+        Document d;
+        d.entities().clear();
+        // Two horizontal wires for the shield to catch, and a drain wire hanging below it.
+        for (int i = 0; i < 2; ++i) {
+            Entity w;
+            w.id = QStringLiteral("c%1").arg(i + 1);
+            w.type = EntityType::Wire;
+            w.points = {{0, -20.0 * i}, {400, -20.0 * i}};
+            d.entities().push_back(w);
+        }
+        Entity sc;
+        sc.id = "s1";
+        sc.type = EntityType::Screen;
+        sc.points = {{100, 0}, {100, -20}, {100, -70}}; // two caught wires + the drain end
+        sc.meta.insert("catch", 2);
+        QJsonArray refs;
+        refs.append(QStringLiteral("c1"));
+        refs.append(QStringLiteral("c2"));
+        sc.meta.insert("wires", refs);
+        sc.meta.insert("rx", 12.0);
+        sc.meta.insert("ry", 22.0);
+        sc.meta.insert("rot", 1.5707963267948966);
+        d.entities().push_back(sc);
+        Entity drain;
+        drain.id = "dw";
+        drain.type = EntityType::Wire;
+        drain.points = {{100, -70}, {100, -140}}; // its front sits on the drain end
+        d.entities().push_back(drain);
+
+        Editor ed;
+        ed.setDocument(&d);
+        Entity* screen = nullptr;
+        for (auto& e : d.entities())
+            if (e.id == QLatin1String("s1")) screen = &e;
+        check(screen != nullptr, "shield leg: the screen was found");
+        check(ed.attachShieldLeg(*screen), "shield leg: dropping it on a wire end connects it");
+        check(screen->meta.value("legWireId").toString() == QLatin1String("dw"),
+              "shield leg: the wire it was joined to is remembered");
+        check(screen->meta.contains("legWireEnd"),
+              "shield leg: which end of that wire is remembered, so it can be pulled");
+        check(!screen->meta.value("notConnected").toBool(),
+              "shield leg: a connected leg is no longer marked not-connected (no X)");
+
+        // Slide the shield along the harness with Align: the drain moves, and the wire joined
+        // to it is pulled with it - the wire changes length rather than coming adrift.
+        ed.selectById(QStringLiteral("s1"));
+        ed.beginTwistAlign();
+        ed.onPointerPress({260, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* movedScreen = nullptr;
+        const Entity* movedWire = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.id == QLatin1String("s1")) movedScreen = &e;
+            if (e.id == QLatin1String("dw")) movedWire = &e;
+        }
+        check(movedScreen && near(movedScreen->points.front().x, 260.0),
+              "shield leg: the shield slid to the column");
+        check(movedScreen && movedWire &&
+                  near(movedWire->points.front().x, movedScreen->points.back().x) &&
+                  near(movedWire->points.front().y, movedScreen->points.back().y),
+              "shield leg: the wire end stayed on the drain");
+        check(movedWire && near(movedWire->points.back().x, 100.0) &&
+                  near(movedWire->points.back().y, -140.0),
+              "shield leg: its far end stayed put, so the wire stretched");
+
+        // A leg dropped in free space is not connected to anything.
+        Entity* s2 = nullptr;
+        for (auto& e : d.entities())
+            if (e.id == QLatin1String("s1")) s2 = &e;
+        s2->points.back() = {2000, 2000};
+        check(!ed.attachShieldLeg(*s2), "shield leg: nothing under it, nothing connected");
+        check(!s2->meta.contains("legWireId"),
+              "shield leg: the old connection is dropped when it is moved away");
+    }
+
+    // ---- A splice sits on a wires MEETING point, and nowhere else ----
+    {
+        // The reported case: a harness with shields, twists and a bonded screen. Every dot the
+        // generator draws has to be a point where wires actually meet - not a connector pin, and
+        // not the tip of something that reaches nothing.
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 16;
+        p1.shieldLeft = true;
+        // NOT bonded to the body here: a bonded leg is already terminated, so the drain brought
+        // onto it carries no dot (that case has a test of its own). This one is about where the
+        // dots that ARE drawn end up.
+        HarnessConnector p2;
+        p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 4;
+        p2.shieldRight = true;
+        d.connectors = {p1, p2};
+        struct W { int from; int to; const char* twist; const char* shield; };
+        const W spec[] = {{7, 1, "T1", ""}, {1, 2, "T1", ""}, {2, 3, "", "S1"}, {3, 4, "", "S1"}};
+        int n = 0;
+        for (const W& sp : spec) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(++n);
+            w.fromConn = "p1";
+            w.fromPin = sp.from;
+            w.toConn = "p2";
+            w.toPin = sp.to;
+            w.twistGroup = QString::fromLatin1(sp.twist);
+            w.shieldGroup = QString::fromLatin1(sp.shield);
+            d.wires.push_back(w);
+        }
+        // A drain from a spare pin onto the left screen's leg: a real joint.
+        HarnessWire drain;
+        drain.id = "dr";
+        drain.fromConn = "p1";
+        drain.fromPin = 16;
+        drain.toConn = harnessOverallShieldKey(QStringLiteral("p1"), HarnessSide::Left);
+        d.wires.push_back(drain);
+        d.layout.shieldAmount = 1;
+        d.layout.wireShieldAmount = 1;
+        d.layout.spliceAtJoins = true;
+
+        const HarnessBuild out = buildHarness(d);
+        // Every pin end, and every point where two conductors really meet.
+        std::vector<Vec2> pins;
+        for (const auto& e : out.entities)
+            if (e.type == EntityType::Connector) {
+                const ConnectorGeometry g =
+                    connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+                for (const Vec2& pe : g.pinEnd) pins.push_back(pe);
+            }
+        auto same = [](const Vec2& a, const Vec2& b) {
+            return std::abs(a.x - b.x) < 1e-6 && std::abs(a.y - b.y) < 1e-6;
+        };
+        int dots = 0, onPin = 0, atNothing = 0;
+        for (const auto& sp : out.entities) {
+            if (sp.type != EntityType::Splice) continue;
+            ++dots;
+            for (const Vec2& pe : pins)
+                if (same(pe, sp.a)) ++onPin;
+            // Something has to MEET there: two conductor ends, or an end on another's run.
+            int ends = 0;
+            bool onRun = false;
+            for (const auto& w : out.entities) {
+                if (w.type == EntityType::Screen && !w.points.empty()) {
+                    const int k = std::min(w.meta.value("catch").toInt(
+                                               static_cast<int>(w.points.size())),
+                                           static_cast<int>(w.points.size()));
+                    if (static_cast<int>(w.points.size()) > k && same(w.points.back(), sp.a))
+                        ++ends;
+                    continue;
+                }
+                if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                if (same(w.points.front(), sp.a) || same(w.points.back(), sp.a)) ++ends;
+                for (size_t i = 1; i < w.points.size(); ++i) {
+                    const Vec2 a2 = w.points[i - 1], b2 = w.points[i];
+                    const double len = distance(a2, b2);
+                    if (len < 1e-9) continue;
+                    const double cross = std::abs((b2.x - a2.x) * (sp.a.y - a2.y) -
+                                                 (b2.y - a2.y) * (sp.a.x - a2.x));
+                    if (cross / len > 1e-6) continue;
+                    const double t = ((sp.a.x - a2.x) * (b2.x - a2.x) +
+                                      (sp.a.y - a2.y) * (b2.y - a2.y)) / (len * len);
+                    if (t > 1e-6 && t < 1.0 - 1e-6) onRun = true;
+                }
+            }
+            if (ends < 2 && !(ends >= 1 && onRun)) ++atNothing;
+        }
+        std::printf("    (splices: %d drawn, %d on a pin, %d with nothing meeting)\n", dots,
+                    onPin, atNothing);
+        check(dots >= 1, "splice: the drain onto the screen's leg is dotted");
+        check(onPin == 0, "splice: never on a connector pin");
+        check(atNothing == 0, "splice: every dot is a point where conductors meet");
+
+        // Switching the rule off leaves the drawing without any dots at all.
+        HarnessDef off = d;
+        off.layout.spliceAtJoins = false;
+        int none = 0;
+        for (const auto& e : buildHarness(off).entities)
+            if (e.type == EntityType::Splice) ++none;
+        check(none == 0, "splice: the rule switches every dot off");
+    }
+
+    // ---- Re-ordering the pinout of connectors already on the drawing ----
+    {
+        // Two connectors wired straight across but with the pins deliberately tangled, plus
+        // spare pins between the wired ones so there is something to group.
+        // P1 pin 1 -> P2 pin 4, P1 3 -> P2 2, P1 5 -> P2 1: crossings AND gaps.
+        struct Wiring { int from; int to; };
+        auto makeDoc = [](Document& d, std::vector<QString>& ids,
+                          const std::vector<Wiring>& wiring) {
+            d.entities().clear();
+            ConnectorSpec sa = defaultConnectorSpec(6);
+            sa.designator = QStringLiteral("P1");
+            Entity ca;
+            ca.id = "c1";
+            ca.type = EntityType::Connector;
+            ca.a = {0, 0};
+            writeConnectorSpec(ca.meta, sa);
+            ConnectorSpec sb = defaultConnectorSpec(6);
+            sb.designator = QStringLiteral("P2");
+            sb.mirrorX = true;
+            Entity cb;
+            cb.id = "c2";
+            cb.type = EntityType::Connector;
+            cb.a = {600, 0};
+            writeConnectorSpec(cb.meta, sb);
+            d.entities().push_back(ca);
+            d.entities().push_back(cb);
+            const ConnectorGeometry ga = connectorGeometry(ca.a, sa);
+            const ConnectorGeometry gb = connectorGeometry(cb.a, sb);
+            int n = 0;
+            for (const Wiring& w : wiring) {
+                Entity wire;
+                wire.id = QStringLiteral("w%1").arg(++n);
+                wire.type = EntityType::Wire;
+                wire.layer = QStringLiteral("Wires");
+                wire.points = {ga.pinEnd[w.from - 1],
+                               {(ga.pinEnd[w.from - 1].x + gb.pinEnd[w.to - 1].x) / 2.0,
+                                ga.pinEnd[w.from - 1].y},
+                               {(ga.pinEnd[w.from - 1].x + gb.pinEnd[w.to - 1].x) / 2.0,
+                                gb.pinEnd[w.to - 1].y},
+                               gb.pinEnd[w.to - 1]};
+                d.entities().push_back(wire);
+            }
+            ids = {QStringLiteral("c1"), QStringLiteral("c2")};
+        };
+        // How tangled / how spread the drawing is, read back off the entities.
+        auto measure = [](Document& d, Editor& ed, int& crossings, int& gaps) {
+            std::vector<QString> ids;
+            HarnessDef def;
+            ed.selectById(QStringLiteral("c1"));
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            const bool ok = ed.buildPinoutModel(ids, def);
+            crossings = ok ? harnessCrossings(def) : -1;
+            gaps = ok ? harnessWireSpanPenalty(def) : -1;
+            return ok;
+        };
+
+        const std::vector<Wiring> tangled = {{1, 4}, {3, 2}, {5, 1}};
+
+        // Nothing to work on: one connector selected.
+        {
+            Document d;
+            std::vector<QString> ids;
+            makeDoc(d, ids, tangled);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.selectById(QStringLiteral("c1"));
+            check(!ed.canReorderSelectedPinout(),
+                  "reorder: one connector alone is nothing to re-order");
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            check(ed.canReorderSelectedPinout(),
+                  "reorder: two connectors with wires between them can be re-ordered");
+        }
+
+        // (a) Crossings only.
+        {
+            Document d;
+            std::vector<QString> ids;
+            makeDoc(d, ids, tangled);
+            Editor ed;
+            ed.setDocument(&d);
+            int c0 = 0, g0 = 0;
+            measure(d, ed, c0, g0);
+            Editor::PinoutGoal goal; // neither grouped nor from the top
+            const int moved = ed.reorderSelectedPinout(goal);
+            int c1 = 0, g1 = 0;
+            measure(d, ed, c1, g1);
+            std::printf("    (reorder: crossings %d -> %d, gaps %d -> %d, %d connector(s))\n",
+                        c0, c1, g0, g1, moved);
+            check(c0 > 0, "reorder: the case really starts tangled");
+            check(c1 == 0, "reorder: minimize crossings untangles it");
+            // The WIRING is untouched: every wire still joins the same pin NAMES.
+            int wires = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Wire) ++wires;
+            check(wires == 3, "reorder: no wire is added or lost");
+        }
+
+        // (b) Grouped: the wires end up on neighbouring pins.
+        {
+            Document d;
+            std::vector<QString> ids;
+            makeDoc(d, ids, tangled);
+            Editor ed;
+            ed.setDocument(&d);
+            int c0 = 0, g0 = 0;
+            measure(d, ed, c0, g0);
+            Editor::PinoutGoal goal;
+            goal.group = true;
+            ed.reorderSelectedPinout(goal);
+            int c1 = 0, g1 = 0;
+            measure(d, ed, c1, g1);
+            std::printf("    (reorder grouped: gaps %d -> %d, crossings %d -> %d)\n", g0, g1, c0,
+                        c1);
+            check(g0 > 0, "reorder: the case really starts with the wires spread out");
+            check(g1 == 0, "reorder: minimize wire pitch puts them on neighbouring pins");
+        }
+
+        // (c) Grouped AND starting at the top.
+        {
+            Document d;
+            std::vector<QString> ids;
+            makeDoc(d, ids, {{2, 4}, {4, 2}, {6, 1}});
+            Editor ed;
+            ed.setDocument(&d);
+            ed.selectById(QStringLiteral("c1"));
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            Editor::PinoutGoal goal;
+            goal.group = true;
+            goal.fromTop = true;
+            ed.reorderSelectedPinout(goal);
+            std::vector<QString> ids2;
+            HarnessDef def;
+            ed.selectById(QStringLiteral("c1"));
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            check(ed.buildPinoutModel(ids2, def), "reorder: the model still reads back");
+            check(harnessWireSpanPenalty(def) == 0,
+                  "reorder: from the top still groups the wires");
+            check(harnessPinOrderPenalty(def) == 0,
+                  "reorder: ...and no spare pin is left above them");
+        }
+
+        // (d) Crossings, starting at the top.
+        {
+            Document d;
+            std::vector<QString> ids;
+            makeDoc(d, ids, {{2, 4}, {4, 2}, {6, 1}});
+            Editor ed;
+            ed.setDocument(&d);
+            ed.selectById(QStringLiteral("c1"));
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            Editor::PinoutGoal goal;
+            goal.fromTop = true;
+            ed.reorderSelectedPinout(goal);
+            std::vector<QString> ids2;
+            HarnessDef def;
+            ed.selectById(QStringLiteral("c1"));
+            ed.selectById(QStringLiteral("c2"), /*additive=*/true);
+            check(ed.buildPinoutModel(ids2, def), "reorder: the model reads back");
+            check(harnessCrossings(def) == 0, "reorder: crossings from the top untangles it");
+            check(harnessPinOrderPenalty(def) == 0,
+                  "reorder: ...with the wired pins at the top");
+        }
+
+        // The grouping metric itself: gaps inside the band the wires occupy.
+        {
+            HarnessDef d;
+            HarnessConnector a1;
+            a1.id = "p1"; a1.side = HarnessSide::Left; a1.pinCount = 6;
+            HarnessConnector b1;
+            b1.id = "p2"; b1.side = HarnessSide::Right; b1.pinCount = 6;
+            d.connectors = {a1, b1};
+            auto wire = [&d](const char* id, int from, int to) {
+                HarnessWire w;
+                w.id = QString::fromLatin1(id);
+                w.fromConn = "p1"; w.fromPin = from; w.toConn = "p2"; w.toPin = to;
+                d.wires.push_back(w);
+            };
+            wire("a", 1, 1);
+            wire("b", 2, 2);
+            check(harnessWireSpanPenalty(d) == 0, "span: neighbouring pins have no gap");
+            d.wires.clear();
+            wire("a", 1, 1);
+            wire("b", 4, 2);
+            check(harnessWireSpanPenalty(d) == 2 + 0,
+                  "span: two spare pins between them on the left count");
+        }
+    }
+
+    // ---- A shield bonded to its body is not also spliced to a wire ----
+    {
+        // The bond IS the joint: a drain brought to the same leg is joining a conductor that
+        // already ends there, so a dot on top of it claims two joints where there is one.
+        auto shieldCase = [](bool bondToBody) {
+            HarnessDef d;
+            HarnessConnector p1;
+            p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 6;
+            p1.shieldLeft = true;
+            p1.bodyBondLeft = bondToBody;
+            HarnessConnector p2;
+            p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 6;
+            d.connectors = {p1, p2};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                d.wires.push_back(w);
+            }
+            HarnessWire dr;
+            dr.id = "dr";
+            dr.fromConn = "p1";
+            dr.fromPin = 6;
+            dr.toConn = harnessOverallShieldKey(QStringLiteral("p1"), HarnessSide::Left);
+            d.wires.push_back(dr);
+            d.layout.shieldAmount = 1;
+            d.layout.spliceAtJoins = true;
+            return d;
+        };
+        auto splices = [](const HarnessBuild& b) {
+            int n = 0;
+            for (const auto& e : b.entities)
+                if (e.type == EntityType::Splice) ++n;
+            return n;
+        };
+        const int bonded = splices(buildHarness(shieldCase(true)));
+        const int loose = splices(buildHarness(shieldCase(false)));
+        std::printf("    (shield splices: bonded to body=%d, not bonded=%d)\n", bonded,
+                    loose);
+        check(loose >= 1, "shield splice: with no bond, the drain onto the leg is spliced");
+        check(bonded == 0,
+              "shield splice: a leg already bonded to the body carries no splice as well");
+    }
+
+    // ---- The three markings read one per row, and a click on one picks the wire ----
+    {
+        Document d;
+        d.entities().clear();
+        Entity w;
+        w.id = "w1";
+        w.type = EntityType::Wire;
+        w.layer = QStringLiteral("Wires");
+        w.points = {{0, 0}, {300, 0}};
+        w.meta.insert("wireColor", QStringLiteral("RD"));
+        w.meta.insert("wireGauge", QStringLiteral("0.5"));
+        w.meta.insert("showColorName", true);
+        w.meta.insert("showGaugeName", true);
+        w.meta.insert("wireLabel", QStringLiteral("PWR"));
+        w.meta.insert("showWireLabel", true);
+        w.meta.insert("annCount", 1);
+        w.meta.insert("annSize", 4.0);
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        ed.snapSettings().ortho = false;
+
+        // Each marking sits at its OWN height above the run, so a click on any of them finds the
+        // wire - that is what puts its colour, gauge and label in Properties. The heights are the
+        // ones the drawing actually uses, so they are read back rather than assumed.
+        for (const QString& part : wireAnnotParts()) {
+            const double h = wireAnnotGapFor(d.entities().front(), part);
+            ed.clearSelection();
+            ed.onPointerPress({150, h + 1.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1 && ed.selection().front() == QLatin1String("w1"),
+                  "markings: a click on a marking picks the wire");
+        }
+        // Well clear of the highest of them, nothing is picked.
+        {
+            double top = 0.0;
+            for (const QString& part : wireAnnotParts())
+                top = std::max(top, wireAnnotGapFor(d.entities().front(), part));
+            ed.clearSelection();
+            ed.onPointerPress({150, top + 30.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().empty(), "markings: a click clear of them picks nothing");
+        }
+
+        // Equal gaps mean equal heights: nothing is stacked relative to anything else.
+        {
+            Entity& we = d.entities().front();
+            for (const QString& part : wireAnnotParts()) setWireAnnotGapFor(we, part, 7.0);
+            for (const QString& part : wireAnnotParts())
+                check(near(wireAnnotGapFor(we, part), 7.0),
+                      "markings: a height set is the height used, the same for each of them");
+            // ...and the defaults are 10 apart, label highest.
+            for (const QString& part : wireAnnotParts()) we.meta.remove(
+                QStringLiteral("annGap") + QString(part).replace(0, 1, part.at(0).toUpper()));
+            const double g = wireAnnotGapFor(we, QStringLiteral("gauge"));
+            const double c = wireAnnotGapFor(we, QStringLiteral("color"));
+            const double l = wireAnnotGapFor(we, QStringLiteral("label"));
+            std::printf("    (marking heights: gauge %.0f, colour %.0f, label %.0f)\n",
+                        g, c, l);
+            check(near(g, 2.0) && near(c, 2.0) && near(l, 2.0),
+                  "markings: all three sit 2 above the wire by default");
+            // They are kept apart ALONG the wire instead: 10 between each, so a pin pitch of 15
+            // has room for them. Label first, then the colour, then the cross-section.
+            const double len = polylineLength(we.points); // this wire's own length
+            auto at = [&we, len](const char* part) {
+                const std::vector<WireAnnot> a = wireAnnotsFor(we, QString::fromLatin1(part));
+                return a.empty() ? 0.0 : a.front().t * len;
+            };
+            const double xl = at("label"), xc = at("color"), xg = at("gauge");
+            std::printf("    (marking places along the wire: label %.0f, colour %.0f, gauge %.0f)\n", xl, xc, xg);
+            // 10 of CLEAR space between them: the distance between two centres is 10 plus half
+            // of each one's text, so none of them is ever drawn over another.
+            auto widthOf = [&we](const char* part) {
+                const QString p = QString::fromLatin1(part);
+                return 0.62 * wireAnnotSizeFor(we, p) * wireAnnotPartText(we, p).size();
+            };
+            check(near(xc - xl, kAnnotGroupGap + (widthOf("label") + widthOf("color")) / 2.0) &&
+                      near(xg - xc, kAnnotGroupGap + (widthOf("color") + widthOf("gauge")) / 2.0),
+                  "markings: 10 of clear space between them, so none is drawn over another");
+            check(xl < xc && xc < xg, "markings: label first along the wire, then colour, then AWG");
+        }
+    }
+
+    // ---- Selecting a bundled wire lights the rest of its bundle ----
+    {
+        Document d;
+        d.entities().clear();
+        auto wire = [&d](const char* id, double y, const char* bundle) {
+            Entity w;
+            w.id = QString::fromLatin1(id);
+            w.type = EntityType::Wire;
+            w.layer = QStringLiteral("Wires");
+            w.points = {{0, y}, {300, y}};
+            if (bundle && *bundle) w.meta.insert("bundle", QString::fromLatin1(bundle));
+            d.entities().push_back(w);
+        };
+        wire("a", 0, "CABLE1");
+        wire("b", -20, "CABLE1");
+        wire("c", -40, "CABLE2");
+        wire("d", -60, "");
+        Editor ed;
+        ed.setDocument(&d);
+        ed.selectById(QStringLiteral("a"));
+        const QSet<QString> lit = ed.bundleCompanions();
+        check(lit.size() == 1 && lit.contains(QStringLiteral("b")),
+              "bundle: the other wire of the cable is lit");
+        check(!lit.contains(QStringLiteral("a")),
+              "bundle: the selected wire itself is drawn as selected, not as a companion");
+        check(!lit.contains(QStringLiteral("c")) && !lit.contains(QStringLiteral("d")),
+              "bundle: another cable and a loose wire are not lit");
+        // Lit is not selected: an edit still reaches only what was clicked.
+        check(ed.selection().size() == 1,
+              "bundle: lighting the cable does not select it");
+        // A wire in no bundle lights nothing.
+        ed.selectById(QStringLiteral("d"));
+        check(ed.bundleCompanions().isEmpty(), "bundle: a loose wire lights nothing");
+        // Clearing the selection puts the lights out.
+        ed.clearSelection();
+        check(ed.bundleCompanions().isEmpty(), "bundle: nothing selected, nothing lit");
+    }
+
     // ---- Every twist of a group braids the SAME wires ----
     {
         HarnessDef d;
@@ -4097,18 +5661,867 @@ int run_harness_tests() {
                 }
             return -1.0;
         };
-        HarnessDef shortLeg = base();
-        shortLeg.connectors[0].shieldLeft = true;
-        shortLeg.layout.shieldLegLength = 10.0;
-        const double leg10 = legOf(buildHarness(shortLeg));
-        check(leg10 >= 10.0 - 1e-6, "layout: the shield leg reaches at least the set length");
-        HarnessDef longLeg = base();
-        longLeg.connectors[0].shieldLeft = true;
-        longLeg.layout.shieldLegLength = 40.0;
-        check(near(legOf(buildHarness(longLeg)) - leg10, 30.0),
-              "layout: raising the setting lengthens the leg by exactly that much");
+        // A leg only reaches out to the set length when something terminates it - a drain wire
+        // run to the screen, or a bond to the connector body. Standing on its own it is a short
+        // stub with an X on the end, because there is nothing out there to reach.
+        auto legCase = [&base](double len, bool drain) {
+            HarnessDef d = base();
+            d.connectors[0].shieldLeft = true;
+            d.layout.shieldLegLength = len;
+            if (drain) {
+                HarnessWire dr;
+                dr.id = "dr";
+                dr.fromConn = "p1";
+                dr.fromPin = 4;
+                dr.toConn = harnessOverallShieldKey(QStringLiteral("p1"), HarnessSide::Left);
+                d.wires.push_back(dr);
+            }
+            return d;
+        };
+        const double stub10 = legOf(buildHarness(legCase(10.0, false)));
+        const double stub40 = legOf(buildHarness(legCase(40.0, false)));
+        std::printf("    (shield leg: unconnected %.2f / %.2f, drained %.2f)\n", stub10,
+                    stub40, legOf(buildHarness(legCase(10.0, true))));
+        check(near(stub10, 5.0), "layout: an unconnected shield leg is a 5-long stub");
+        check(near(stub40, 5.0),
+              "layout: the length setting does not stretch a leg that reaches nothing");
+        const double leg10 = legOf(buildHarness(legCase(10.0, true)));
+        check(leg10 >= 10.0 - 1e-6, "layout: a terminated shield leg reaches the set length");
+        check(near(legOf(buildHarness(legCase(40.0, true))) - leg10, 30.0),
+              "layout: raising the setting lengthens the terminated leg by exactly that much");
         check(near(HarnessLayout().shieldLegLength, 20.0),
               "layout: a shield leg is 20 long unless told otherwise");
+
+        // ---- Every screen keeps the same proportion, whatever band it encloses ----
+        {
+            // The large radius follows the wires the screen has to cover, so the small one is
+            // taken from it: a screen around eight wires is the same shape as one around two.
+            auto ratios = [](int wires) {
+                HarnessDef d;
+                HarnessConnector a;
+                a.id = "p1"; a.side = HarnessSide::Left; a.designator = "P1";
+                a.pinCount = wires + 1;
+                a.shieldLeft = true;
+                HarnessConnector b2;
+                b2.id = "p2"; b2.side = HarnessSide::Right; b2.designator = "P2";
+                b2.pinCount = wires + 1;
+                d.connectors = {a, b2};
+                for (int i = 1; i <= wires; ++i) {
+                    HarnessWire w;
+                    w.id = QStringLiteral("w%1").arg(i);
+                    w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                    w.shieldGroup = QStringLiteral("S1");
+                    d.wires.push_back(w);
+                }
+                d.layout.shieldAmount = 1;
+                d.layout.wireShieldAmount = 1;
+                std::vector<double> out;
+                for (const auto& e : buildHarness(d).entities)
+                    if (e.type == EntityType::Screen && e.meta.contains(QLatin1String("ry")))
+                        out.push_back(e.meta.value("ry").toDouble() /
+                                      e.meta.value("rx").toDouble());
+                return out;
+            };
+            int checked = 0;
+            for (int wires : {2, 8}) {
+                const std::vector<double> rs = ratios(wires);
+                check(!rs.empty(), "shield ratio: the screens are there to measure");
+                for (double r : rs) {
+                    std::printf("    (shield ratio at %d wires: %.3f)\n", wires, r);
+                    check(near(r, 3.0), "shield ratio: large / small is 3");
+                    ++checked;
+                }
+            }
+            check(checked >= 2, "shield ratio: both the small and the large band were measured");
+        }
+
+        // ---- A twist symbol is never drawn under a screen ----
+        {
+            // A braid drawn over a twist hides the crossings the twist is there to show, so the
+            // sweep that places the twists skips any x a screen already occupies.
+            HarnessDef d;
+            HarnessConnector a;
+            a.id = "p1"; a.side = HarnessSide::Left; a.designator = "P1"; a.pinCount = 4;
+            a.shieldLeft = true;
+            HarnessConnector b2;
+            b2.id = "p2"; b2.side = HarnessSide::Right; b2.designator = "P2"; b2.pinCount = 4;
+            b2.shieldRight = true;
+            d.connectors = {a, b2};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                w.twistGroup = QStringLiteral("T1");
+                w.shieldGroup = QStringLiteral("S1");
+                d.wires.push_back(w);
+            }
+            d.layout.shieldAmount = 1;
+            d.layout.wireShieldAmount = 2;
+            d.layout.twistCount = 4;
+            const HarnessBuild out = buildHarness(d);
+            std::vector<std::pair<double, double>> screens; // centre x, half width
+            for (const auto& e : out.entities) {
+                if (e.type != EntityType::Screen || e.points.empty()) continue;
+                const int k = std::min(e.meta.value("catch").toInt(
+                                           static_cast<int>(e.points.size())),
+                                       static_cast<int>(e.points.size()));
+                double cx = 0.0;
+                for (int i = 0; i < k; ++i) cx += e.points[i].x;
+                if (k > 0) cx /= k;
+                screens.push_back({cx, e.meta.value("rx").toDouble(12.0)});
+            }
+            int twists = 0, clashes = 0;
+            for (const auto& e : out.entities) {
+                if (e.type != EntityType::Twist) continue;
+                ++twists;
+                for (const auto& sc : screens)
+                    if (std::abs(sc.first - e.a.x) < sc.second) ++clashes;
+            }
+            std::printf("    (twists: %d drawn over %d screen(s), %d overlaid)\n",
+                        twists, int(screens.size()), clashes);
+            check(twists >= 1 && !screens.empty(),
+                  "twist/screen: the drawing really has both to compare");
+            check(clashes == 0, "twist/screen: no twist symbol sits inside a screen");
+        }
+
+        // ---- The three markings are three separate markings ----
+    {
+        // Each is switched on by itself, repeated as many times as IT says, and each instance
+        // sits where it was dragged to. They also read on their own rows, evenly spaced.
+        Document d;
+        d.entities().clear();
+        Entity w;
+        w.id = "w1";
+        w.type = EntityType::Wire;
+        w.layer = QStringLiteral("Wires");
+        w.points = {{0, 0}, {400, 0}};
+        w.meta.insert("wireColor", QStringLiteral("WH"));
+        w.meta.insert("wireGauge", QStringLiteral("0.5"));
+        w.meta.insert("wireLabel", QStringLiteral("PWR"));
+        w.meta.insert("showColorName", true);
+        w.meta.insert("showGaugeName", true);
+        w.meta.insert("showWireLabel", true);
+        w.meta.insert("annCountColor", 3);
+        w.meta.insert("annCountGauge", 2);
+        w.meta.insert("annCountLabel", 1);
+        d.entities().push_back(w);
+        const Entity& e = d.entities().front();
+        std::printf("    (markings: colour %d, gauge %d, label %d)\n",
+                    int(wireAnnotsFor(e, QStringLiteral("color")).size()),
+                    int(wireAnnotsFor(e, QStringLiteral("gauge")).size()),
+                    int(wireAnnotsFor(e, QStringLiteral("label")).size()));
+        check(wireAnnotsFor(e, QStringLiteral("color")).size() == 3,
+              "markings: the colour is drawn its own number of times");
+        check(wireAnnotsFor(e, QStringLiteral("gauge")).size() == 2,
+              "markings: the cross-section is drawn its own number of times");
+        check(wireAnnotsFor(e, QStringLiteral("label")).size() == 1,
+              "markings: the label is drawn its own number of times");
+        // Switching one off leaves the others alone.
+        {
+            Entity off = e;
+            off.meta.insert("showColorName", false);
+            check(wireAnnotsFor(off, QStringLiteral("color")).empty() &&
+                      wireAnnotsFor(off, QStringLiteral("gauge")).size() == 2,
+                  "markings: hiding one does not touch the others");
+        }
+        // A drawing made before they were separated keeps the amount it had.
+        {
+            Entity old = e;
+            old.meta.remove(QStringLiteral("annCountColor"));
+            old.meta.remove(QStringLiteral("annCountGauge"));
+            old.meta.remove(QStringLiteral("annCountLabel"));
+            old.meta.insert("annCount", 4);
+            check(wireAnnotsFor(old, QStringLiteral("color")).size() == 4 &&
+                      wireAnnotsFor(old, QStringLiteral("gauge")).size() == 4,
+                  "markings: the old shared amount still drives colour and cross-section");
+            check(wireAnnotsFor(old, QStringLiteral("label")).size() == 1,
+                  "markings: and the label was drawn once");
+        }
+        // Setting one amount keeps the places already dragged and spreads the new ones.
+        {
+            Editor ed;
+            ed.setDocument(&d);
+            ed.selectById(QStringLiteral("w1"));
+            std::vector<double> ts = {0.2, 0.4, 0.6};
+            setWireAnnotFractionsFor(d.entities().front(), QStringLiteral("color"), ts);
+            ed.setSelectionWireAnnotCountFor(QStringLiteral("color"), 4);
+            const std::vector<double> after =
+                wireAnnotFractionsFor(d.entities().front(), QStringLiteral("color"), 4);
+            check(after.size() == 4 && near(after[0], 0.2) && near(after[1], 0.4) &&
+                      near(after[2], 0.6),
+                  "markings: raising the amount keeps the instances already placed");
+            // ...and the OTHER markings' amounts did not change with it.
+            check(wireAnnotCountFor(d.entities().front(), QStringLiteral("gauge")) == 2,
+                  "markings: one amount is one marking's own");
+        }
+    }
+
+    // ---- The parts library ----
+    {
+        // Every kind names itself, keeps a stable key in the file, and says which technical
+        // parameters it has - the library's form is built from that list, so a kind is complete
+        // when its fields are.
+        int kinds = 0, withFields = 0;
+        for (PartKind k : allPartKinds()) {
+            ++kinds;
+            check(!partKindName(k).isEmpty(), "library: every kind has a name");
+            check(partKindFromKey(partKindKey(k)) == k,
+                  "library: a kind survives a trip through its file key");
+            if (!partFields(k).empty()) ++withFields;
+        }
+        std::printf("    (library: %d kinds, %d with parameters)\n", kinds, withFields);
+        check(kinds >= 11, "library: the kinds asked for are all there");
+        check(withFields == kinds, "library: every kind has parameters of its own");
+
+        // The parameters asked for, kind by kind.
+        auto has = [](PartKind k, const char* key) {
+            for (const PartField& f : partFields(k))
+                if (f.key == QLatin1String(key)) return true;
+            return false;
+        };
+        auto isRange = [](PartKind k, const char* key) {
+            for (const PartField& f : partFields(k))
+                if (f.key == QLatin1String(key)) return f.type == PartField::Type::Range;
+            return false;
+        };
+        check(has(PartKind::Wire, "gauge") && has(PartKind::Wire, "material") &&
+                  has(PartKind::Wire, "insulation"),
+              "library: a wire carries its own technical parameters");
+        check(has(PartKind::Connector, "shellSize") && has(PartKind::Connector, "material") &&
+                  has(PartKind::Connector, "withPins") && isRange(PartKind::Connector, "pinGauge"),
+              "library: a connector says shell size, material, and whether pins come with it");
+        check(isRange(PartKind::ContactPin, "gauge") && has(PartKind::ContactPin, "material"),
+              "library: a contact pin is a gauge range and a material");
+        check(has(PartKind::Ferrule, "size") && isRange(PartKind::Ferrule, "stud"),
+              "library: a ferrule is a size and a stud range");
+        check(has(PartKind::Crimp, "type") && isRange(PartKind::Crimp, "stud"),
+              "library: a crimp names its type and the studs it fits");
+        check(has(PartKind::Splice, "type") && isRange(PartKind::Splice, "insertion"),
+              "library: a splice is crimp or solder, over an insertion range");
+        check(has(PartKind::Heatshrink, "material") && isRange(PartKind::Heatshrink, "entry") &&
+                  has(PartKind::Heatshrink, "adhesive"),
+              "library: heatshrink is a material, an entry range and whether it is lined");
+        check(has(PartKind::HeatshrinkBoot, "shellSize") &&
+                  isRange(PartKind::HeatshrinkBoot, "connEntry") &&
+                  isRange(PartKind::HeatshrinkBoot, "cableEntry"),
+              "library: a boot has a shell size and both entry ranges");
+        check(has(PartKind::Backshell, "shellSize") && isRange(PartKind::Backshell, "connEntry") &&
+                  isRange(PartKind::Backshell, "cableEntry"),
+              "library: a backshell has a shell size and both entry ranges");
+        check(isRange(PartKind::YSplit, "main") && has(PartKind::YSplit, "legs") &&
+                  isRange(PartKind::YSplit, "leg1") && isRange(PartKind::YSplit, "leg3"),
+              "library: a Y-split has a main range, a leg count and a range per leg");
+        check(has(PartKind::ShieldBraid, "size"),
+              "library: braid is bought by a size written by hand");
+
+        // A library is a file: parts go in, the file is written, and it comes back the same.
+        PartsLibrary lib;
+        LibraryPart& w = lib.add(PartKind::Wire);
+        w.description = QStringLiteral("22 AWG PTFE white");
+        w.mfrName = QStringLiteral("Acme");
+        w.mfrPn = QStringLiteral("A-22-PTFE-WH");
+        w.params.insert(QStringLiteral("gauge"), QStringLiteral("22"));
+        LibraryPart& b = lib.add(PartKind::Backshell);
+        b.description = QStringLiteral("90 degree, size 11");
+        b.mfrPn = QStringLiteral("BS-11-90");
+        b.params.insert(QStringLiteral("connEntryMin"), QStringLiteral("6"));
+        b.params.insert(QStringLiteral("connEntryMax"), QStringLiteral("9"));
+        // A part's two drawings are entities, so a symbol drawn once can be dropped anywhere.
+        std::vector<Entity> sym;
+        Entity line;
+        line.type = EntityType::Line;
+        line.a = {0, 0};
+        line.b = {10, 0};
+        sym.push_back(line);
+        lib.parts.front().schematic = partDrawingFromEntities(sym);
+
+        const QString path = QDir::tempPath() + QStringLiteral("/edraw-test-library.json");
+        QFile::remove(path);
+        check(lib.save(path), "library: it writes its file");
+        PartsLibrary back;
+        check(back.load(path), "library: and reads it again");
+        std::printf("    (library file: %d part(s) written, %d read)\n",
+                    int(lib.parts.size()), int(back.parts.size()));
+        check(back.parts.size() == lib.parts.size(), "library: every part survives the trip");
+        const LibraryPart* rw = back.byId(lib.parts.front().id);
+        check(rw && rw->kind == PartKind::Wire && rw->mfrPn == QLatin1String("A-22-PTFE-WH") &&
+                  rw->value(QStringLiteral("gauge")) == QLatin1String("22"),
+              "library: a part comes back with its kind, its P/N and its parameters");
+        check(rw && rw->hasSchematic() && !rw->hasMechanical(),
+              "library: and with the drawings it had, and only those");
+        const std::vector<Entity> backSym = partDrawingEntities(rw->schematic);
+        check(backSym.size() == 1 && backSym.front().type == EntityType::Line &&
+                  near(backSym.front().b.x, 10.0),
+              "library: a stored drawing comes back as the entities it was");
+        check(backSym.front().id.isEmpty(),
+              "library: with no id of its own, so the sheet it lands on names it");
+
+        // Duplicating gives a part of its own, and deleting takes only that one. (The part's
+        // values are taken by VALUE first: adding to the library may move its parts in memory.)
+        const size_t was = back.parts.size();
+        const QString srcId = lib.parts.front().id;
+        const QString srcPn = rw->mfrPn;
+        LibraryPart* copy = back.duplicate(srcId);
+        check(copy && copy->id != srcId && copy->mfrPn == srcPn,
+              "library: a duplicate is the same part under a new id");
+        check(back.parts.size() == was + 1, "library: and is added to the library");
+        back.remove(copy->id);
+        check(back.parts.size() == was && back.byId(lib.parts.front().id),
+              "library: deleting one leaves the rest alone");
+        check(back.ofKind(PartKind::Backshell).size() == 1,
+              "library: the parts of one kind can be listed on their own");
+        QFile::remove(path);
+    }
+
+    // ---- Units, and a bill of materials that adds them up properly ----
+    {
+        // Every part is issued in something, and only quantities of the SAME dimension can be
+        // added together: 300 mm of wire and 1.2 m of wire are 1.5 m; metres and pieces are not.
+        check(partUnitDimension(QStringLiteral("mm")) == QLatin1String("length") &&
+                  partUnitDimension(QStringLiteral("each")) == QLatin1String("count"),
+              "units: a unit knows what kind of thing it measures");
+        check(partUnitsCompatible(QStringLiteral("mm"), QStringLiteral("m")) &&
+                  !partUnitsCompatible(QStringLiteral("m"), QStringLiteral("each")),
+              "units: lengths add to lengths, never to pieces");
+        double got = 0.0;
+        check(convertPartUnit(1500.0, QStringLiteral("mm"), QStringLiteral("m"), got) &&
+                  near(got, 1.5),
+              "units: mm to m");
+        check(convertPartUnit(1.0, QStringLiteral("ft"), QStringLiteral("mm"), got) &&
+                  near(got, 304.8),
+              "units: a foot is 304.8 mm");
+        got = -1.0;
+        check(!convertPartUnit(1.0, QStringLiteral("m"), QStringLiteral("each"), got) &&
+                  near(got, -1.0),
+              "units: what cannot be converted is left alone");
+        check(defaultUnitForKind(PartKind::Wire) == QLatin1String("m") &&
+                  defaultUnitForKind(PartKind::Connector) == QLatin1String("each") &&
+                  defaultUnitForKind(PartKind::Heatshrink) == QLatin1String("mm"),
+              "units: a kind starts in the unit it is bought in");
+
+        // The seven columns, and headings a drawing may rename.
+        check(bomColumnCount() == 7, "bom: seven columns");
+        BomTable t;
+        check(t.header(0) == QLatin1String("Line #") && t.header(6) == QLatin1String("Units"),
+              "bom: the default headings");
+        t.setHeader(2, QStringLiteral("Our P/N"));
+        check(t.header(2) == QLatin1String("Our P/N") && t.header(1) == QLatin1String("Description"),
+              "bom: a renamed heading sticks, and only that one");
+
+        // Totalling: the same part in two units becomes one line, in the first row's unit.
+        std::vector<BomRow> rows;
+        BomRow a1;
+        a1.description = QStringLiteral("22 AWG white");
+        a1.mfrPn = QStringLiteral("W-22-WH");
+        a1.qty = 1.2;
+        a1.unit = QStringLiteral("m");
+        a1.ref = QStringLiteral("W1");
+        BomRow a2 = a1;
+        a2.qty = 300.0;
+        a2.unit = QStringLiteral("mm");
+        a2.ref = QStringLiteral("W2");
+        BomRow b1;
+        b1.description = QStringLiteral("Backshell size 11");
+        b1.mfrPn = QStringLiteral("BS-11");
+        b1.qty = 2.0;
+        b1.unit = QStringLiteral("each");
+        rows = {a1, a2, b1};
+        std::vector<BomRow> one = bomUnify(rows);
+        std::printf("    (bom: %d row(s) in, %d line(s) out, first %.2f %s)\n",
+                    int(rows.size()), int(one.size()), one.empty() ? 0.0 : one.front().qty,
+                    one.empty() ? "-" : qPrintable(one.front().unit));
+        check(one.size() == 2, "bom: the same part is one line");
+        check(near(one.front().qty, 1.5) && one.front().unit == QLatin1String("m"),
+              "bom: totalled in the unit of the first row of that part");
+        check(one.front().ref.contains(QLatin1String("W1")) &&
+                  one.front().ref.contains(QLatin1String("W2")),
+              "bom: and it still says where it is used");
+        // A part in units that cannot be added keeps its own line rather than being forced.
+        BomRow odd = a1;
+        odd.qty = 3.0;
+        odd.unit = QStringLiteral("each");
+        std::vector<BomRow> mixed = bomUnify({a1, odd});
+        check(mixed.size() == 2, "bom: quantities that cannot be added stay separate lines");
+
+        // What the drawing calls for, with the library filling in the numbers.
+        PartsLibrary lib;
+        LibraryPart& wp = lib.add(PartKind::Wire);
+        wp.description = QStringLiteral("22 AWG PTFE white");
+        wp.mfrPn = QStringLiteral("A-22");
+        wp.internalPn = QStringLiteral("INT-1");
+        wp.unit = QStringLiteral("m");
+        const QString wireId = wp.id;
+        Document d;
+        d.entities().clear();
+        Entity w;
+        w.id = "w1";
+        w.type = EntityType::Wire;
+        w.layer = QStringLiteral("Wires");
+        w.points = {{0, 0}, {2000, 0}}; // 2000 mm
+        w.meta.insert("libPart", wireId);
+        d.entities().push_back(w);
+        Entity plain;
+        plain.id = "w2";
+        plain.type = EntityType::Wire;
+        plain.layer = QStringLiteral("Wires");
+        plain.points = {{0, 50}, {500, 50}};
+        plain.meta.insert("wireColor", QStringLiteral("RD"));
+        plain.meta.insert("wireGauge", QStringLiteral("0.5"));
+        d.entities().push_back(plain);
+        const std::vector<BomRow> drawn = bomFromDrawing(d, lib);
+        std::printf("    (bom from drawing: %d row(s))\n", int(drawn.size()));
+        check(drawn.size() == 2, "bom: a row per wire in the drawing");
+        const BomRow* fromLib = nullptr;
+        for (const BomRow& r : drawn)
+            if (r.partId == wireId) fromLib = &r;
+        check(fromLib && fromLib->mfrPn == QLatin1String("A-22") &&
+                  fromLib->internalPn == QLatin1String("INT-1"),
+              "bom: a wire made of a library part is ordered by that part's numbers");
+        check(fromLib && fromLib->unit == QLatin1String("m") && near(fromLib->qty, 2.0),
+              "bom: and its length is given in the unit the part is bought in");
+        for (const BomRow& r : drawn)
+            if (r.partId.isEmpty())
+                check(r.unit == QLatin1String("mm") && near(r.qty, 500.0),
+                      "bom: a wire that names no part is measured in the drawing's own unit");
+
+        // A library part becomes a row of its own.
+        const BomRow made = bomRowFromPart(wp, 3.0);
+        check(made.partId == wireId && made.unit == QLatin1String("m") && near(made.qty, 3.0) &&
+                  made.description == wp.description,
+              "bom: a part added from the library carries its description, numbers and unit");
+
+        // The table is a file: the typed rows and the headings survive, the drawing's do not (they
+        // are read back off the drawing).
+        BomTable store;
+        store.setHeader(1, QStringLiteral("What it is"));
+        store.rows.push_back(made);
+        BomRow drawnRow = made;
+        drawnRow.fromDrawing = true;
+        store.rows.push_back(drawnRow);
+        BomTable back;
+        back.fromJson(store.toJson());
+        std::printf("    (bom file: %d row(s) stored of %d)\n", int(back.rows.size()),
+                    int(store.rows.size()));
+        check(back.rows.size() == 1 && !back.rows.front().fromDrawing,
+              "bom: only the typed rows are stored");
+        check(back.header(1) == QLatin1String("What it is"),
+              "bom: and the headings the drawing was given");
+    }
+
+    // ---- A marking can be picked on its own, and only slid along its wire ----
+    {
+        // A zone over the text picks THAT marking - not the wire - and pulling it changes only how
+        // far along the run it sits. With several picked, Shift pulls them all, each along its own
+        // wire, so they line up under the cursor.
+        Document d;
+        d.entities().clear();
+        auto wire = [&d](const char* id, double y, const char* label) {
+            Entity w;
+            w.id = QString::fromLatin1(id);
+            w.type = EntityType::Wire;
+            w.layer = QStringLiteral("Wires");
+            w.points = {{0, y}, {400, y}};
+            w.meta.insert("wireLabel", QString::fromLatin1(label));
+            w.meta.insert("showWireLabel", true);
+            w.meta.insert("annSizeLabel", 4.0);
+            d.entities().push_back(w);
+        };
+        wire("w1", 0, "AAA");
+        wire("w2", -40, "BBB");
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        ed.snapSettings().ortho = false;
+
+        // Where each label is, and the box it occupies.
+        auto labelAt = [&d](const char* id) {
+            for (const auto& e : d.entities())
+                if (e.id == QLatin1String(id)) {
+                    const std::vector<WireAnnot> a2 =
+                        wireAnnotsFor(e, QStringLiteral("label"));
+                    return a2.empty() ? Vec2{0, 0} : a2.front().pos;
+                }
+            return Vec2{0, 0};
+        };
+        const Vec2 p1 = labelAt("w1");
+        // A window zone (left to right) around w1's label alone, starting well clear of the wire
+        // so the first click is on empty space rather than on the wire itself.
+        ed.onPointerPress({p1.x - 30, p1.y + 25}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({p1.x - 30, p1.y + 25}, Qt::LeftButton);
+        ed.onPointerMove({p1.x + 30, p1.y + 1.2});
+        ed.onPointerPress({p1.x + 30, p1.y + 1.2}, Qt::LeftButton, Qt::NoModifier);
+        std::printf("    (mark pick: %d marking(s), %d entity/ies selected)\n",
+                    int(ed.markSelection().size()), int(ed.selection().size()));
+        check(ed.markSelection().size() == 1,
+              "mark pick: a zone over the text picks that marking");
+        check(ed.selection().empty(), "mark pick: and does not select the wire it belongs to");
+        check(ed.markSelection().front().part == QLatin1String("label"),
+              "mark pick: the marking picked is the one the zone was over");
+
+        // Pull it: only the place along the wire changes. The grab is on the text's box, which
+        // sits its gap above the run.
+        const Vec2 before = labelAt("w1");
+        const Vec2 grabAt{before.x, before.y + 4.0};
+        ed.onPointerPress(grabAt, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({350, before.y + 25});
+        ed.onPointerRelease({350, before.y + 25}, Qt::LeftButton);
+        const Vec2 after = labelAt("w1");
+        std::printf("    (mark drag: (%.0f,%.0f) -> (%.0f,%.0f))\n", before.x, before.y,
+                    after.x, after.y);
+        check(std::abs(after.x - 350.0) < 20.0, "mark drag: it follows the cursor along the wire");
+        check(near(after.y, before.y), "mark drag: and never leaves the wire it names");
+
+        // Both labels picked, Shift-pulled: each lands on its own wire under the cursor.
+        ed.clearSelection();
+        // A window zone (left to right) holding both texts but neither whole wire, so the two
+        // markings are picked and the wires are left alone.
+        ed.onPointerPress({150, 20}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({150, 20}, Qt::LeftButton);
+        ed.onPointerMove({390, -45});
+        ed.onPointerPress({390, -45}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.markSelection().size() == 2, "mark pick: a zone over both picks both");
+        const Vec2 g = labelAt("w1");
+        ed.onPointerPress({g.x, g.y + 4.0}, Qt::LeftButton, Qt::ShiftModifier);
+        ed.onPointerMove({120, 0});
+        ed.onPointerRelease({120, 0}, Qt::LeftButton);
+        const Vec2 a1 = labelAt("w1"), a2 = labelAt("w2");
+        std::printf("    (shift pull: w1 at %.0f, w2 at %.0f)\n", a1.x, a2.x);
+        check(std::abs(a1.x - a2.x) < 1.0,
+              "shift pull: every picked marking lines up under the cursor");
+        check(near(a1.y, 0.0) && near(a2.y, -40.0),
+              "shift pull: each one stays on the wire it belongs to");
+    }
+
+    // ---- A vertical run: which side the text sits, and which way it reads ----
+    {
+        Entity w;
+        w.type = EntityType::Wire;
+        w.layer = QStringLiteral("Wires");
+        w.points = {{100, 0}, {100, 300}}; // straight up
+        w.meta.insert("wireLabel", QStringLiteral("PWR"));
+        w.meta.insert("showWireLabel", true);
+        check(wireAnnotVerticalSide(w) == QLatin1String("left") &&
+                  wireAnnotVerticalText(w) == QLatin1String("up"),
+              "vertical text: left and reading up unless told otherwise");
+        auto dirOf = [](const Entity& e) {
+            const std::vector<WireAnnot> a2 = wireAnnotsFor(e, QStringLiteral("label"));
+            return a2.empty() ? Vec2{0, 0} : a2.front().dir;
+        };
+        const Vec2 up = dirOf(w);
+        check(up.y > 0.0, "vertical text: reading up runs with the wire");
+        w.meta.insert("annVertText", QStringLiteral("down"));
+        check(dirOf(w).y < 0.0, "vertical text: asking for down turns it round");
+        // The side is which way the text is offset from the run.
+        const std::vector<WireAnnot> leftSide = wireAnnotsFor(w, QStringLiteral("label"));
+        w.meta.insert("annVertSide", QStringLiteral("right"));
+        const std::vector<WireAnnot> rightSide = wireAnnotsFor(w, QStringLiteral("label"));
+        check(!leftSide.empty() && !rightSide.empty() && leftSide.front().flip != rightSide.front().flip,
+              "vertical text: the side asked for is the side it sits on");
+    }
+
+    // ---- Each marking is drawn in its own text height ----
+    {
+        Entity w;
+        w.type = EntityType::Wire;
+        w.points = {{0, 0}, {200, 0}};
+        w.meta.insert("wireColor", QStringLiteral("WH"));
+        w.meta.insert("wireGauge", QStringLiteral("0.5"));
+        w.meta.insert("wireLabel", QStringLiteral("PWR"));
+        w.meta.insert("showColorName", true);
+        w.meta.insert("showGaugeName", true);
+        check(near(wireAnnotSizeFor(w, QStringLiteral("label")), 3.0) &&
+                  near(wireAnnotSizeFor(w, QStringLiteral("color")), 3.0),
+              "marking height: 3 unless the drawing says otherwise");
+        // The wire's own marking size still speaks for the markings that have none.
+        w.meta.insert("annSize", 5.0);
+        check(near(wireAnnotSizeFor(w, QStringLiteral("gauge")), 5.0),
+              "marking height: the wire's marking size stands in");
+        // ...and one marking's height is its own.
+        setWireAnnotSizeFor(w, QStringLiteral("label"), 8.0);
+        check(near(wireAnnotSizeFor(w, QStringLiteral("label")), 8.0) &&
+                  near(wireAnnotSizeFor(w, QStringLiteral("color")), 5.0),
+              "marking height: set on one marking, it belongs to that marking");
+    }
+
+    // ---- A twist braids the wires it was given, even among look-alikes ----
+    {
+        // The reported cuts: the generated runs were matched back to the definition's rows by
+        // what they look like (label, colour, gauge), so with several identical white wires - and
+        // a cable cut into sections and pigtails - a twist could end up naming a wire it has
+        // nothing to do with. It then interrupted THAT wire's run, which read as a wire ending in
+        // mid air. Every twist must name exactly the entities its own rows were drawn as.
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "c1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 9;
+        HarnessConnector p2;
+        p2.id = "c2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 9;
+        d.connectors = {p1, p2};
+        // Six wires that look identical, two of them a twisted pair, plus a spliced coax.
+        for (int i = 1; i <= 6; ++i) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.fromConn = "c1"; w.fromPin = i; w.toConn = "c2"; w.toPin = i;
+            if (i == 5 || i == 6) w.twistGroup = QStringLiteral("T1");
+            d.wires.push_back(w);
+        }
+        HarnessWire sig;
+        sig.id = "w8"; sig.kind = "coax-splice"; sig.bundle = "COAX1"; sig.color = "SIGNAL1";
+        sig.fromConn = "c1"; sig.fromPin = 8; sig.toConn = "c2"; sig.toPin = 8;
+        HarnessWire shl;
+        shl.id = "w9"; shl.kind = "coax-splice"; shl.bundle = "COAX1"; shl.color = "SHIELD1";
+        shl.fromConn = "c1"; shl.fromPin = 9; shl.toConn = "c2"; shl.toPin = 9;
+        d.wires.push_back(sig);
+        d.wires.push_back(shl);
+
+        Document doc;
+        doc.entities().clear();
+        Editor ed;
+        ed.setDocument(&doc);
+        ed.insertHarness(d);
+
+        // What each twist points at, and which definition row that entity was drawn from.
+        int twists = 0, wrong = 0, named = 0;
+        for (const auto& t : doc.entities()) {
+            if (t.type != EntityType::Twist) continue;
+            ++twists;
+            for (const auto& v : t.meta.value(QStringLiteral("wires")).toArray()) {
+                ++named;
+                bool found = false;
+                for (const auto& w : doc.entities()) {
+                    if (w.id != v.toString()) continue;
+                    found = true;
+                    const QString from = w.meta.value(QStringLiteral("defWire")).toString();
+                    if (from != QLatin1String("w5") && from != QLatin1String("w6")) ++wrong;
+                }
+                if (!found) ++wrong; // named an entity that is not in the drawing
+            }
+        }
+        std::printf("    (twist refs: %d twist(s), %d wire(s) named, %d wrong)\n",
+                    twists, named, wrong);
+        check(twists >= 1, "twist refs: the pair really was braided");
+        check(named == twists * 2, "twist refs: each twist names both wires of its pair");
+        check(wrong == 0, "twist refs: a twist only ever names the wires of its own group");
+
+        // And nothing else claims the coax pigtails: they are not any definition row.
+        int pigtails = 0;
+        for (const auto& w : doc.entities())
+            if (w.type == EntityType::Wire &&
+                !w.meta.contains(QLatin1String("defWire")) &&
+                !w.meta.contains(QLatin1String("shieldLeg")) &&
+                !w.meta.contains(QLatin1String("shieldBond")))
+                ++pigtails;
+        std::printf("    (unnamed runs: %d)\n", pigtails);
+        check(pigtails >= 4, "twist refs: the cable's pigtails belong to no definition row");
+    }
+
+    // ---- A twist is never drawn over a wire's corner ----
+        {
+            // A twist takes over a stretch of straight wire. Placed across a corner, the leg that
+            // turns there was drawn as a line running out of the braid to nothing - the reported
+            // "unconnected vertical wire".
+            HarnessDef d;
+            HarnessConnector a;
+            a.id = "p1"; a.side = HarnessSide::Left; a.designator = "P1"; a.pinCount = 6;
+            HarnessConnector b2;
+            b2.id = "p2"; b2.side = HarnessSide::Right; b2.designator = "P2"; b2.pinCount = 6;
+            b2.leg = QStringLiteral("2"); // dropped below, so both wires turn a corner mid-span
+            d.connectors = {a, b2};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                w.twistGroup = QStringLiteral("T1");
+                d.wires.push_back(w);
+            }
+            d.layout.twistCount = 2;
+            d.layout.twistAmount = 2;
+            const HarnessBuild out = buildHarness(d);
+            int twists = 0, overCorner = 0;
+            for (const auto& t : out.entities) {
+                if (t.type != EntityType::Twist) continue;
+                ++twists;
+                double band = 0.0, cx = 0.0;
+                for (const Vec2& c1 : t.points)
+                    for (const Vec2& c2 : t.points) band = std::max(band, std::abs(c1.y - c2.y));
+                for (const Vec2& c1 : t.points) cx += c1.x;
+                if (!t.points.empty()) cx /= t.points.size();
+                const double half =
+                    twistBandWidth(t.meta.value("repeats").toInt(2), band,
+                                   t.meta.value("flatLen").toDouble(6.0)) / 2.0;
+                for (const auto& w : out.entities) {
+                    if (w.type != EntityType::Wire || w.points.size() < 3) continue;
+                    for (size_t i = 1; i + 1 < w.points.size(); ++i)
+                        if (std::abs(w.points[i].x - cx) < half) ++overCorner;
+                }
+            }
+            std::printf("    (twist/corner: %d twist(s), %d over a corner)\n", twists,
+                        overCorner);
+            check(twists >= 1, "twist/corner: the pair really was braided");
+            check(overCorner == 0, "twist/corner: no twist symbol covers a wire's corner");
+        }
+
+        // ---- A generated screen is not lettered ----
+        {
+            HarnessDef d;
+            HarnessConnector a;
+            a.id = "p1"; a.side = HarnessSide::Left; a.designator = "P1"; a.pinCount = 4;
+            a.shieldLeft = true;
+            HarnessConnector b2;
+            b2.id = "p2"; b2.side = HarnessSide::Right; b2.designator = "P2"; b2.pinCount = 4;
+            d.connectors = {a, b2};
+            for (int i = 1; i <= 2; ++i) {
+                HarnessWire w;
+                w.id = QStringLiteral("w%1").arg(i);
+                w.fromConn = "p1"; w.fromPin = i; w.toConn = "p2"; w.toPin = i;
+                w.shieldGroup = QStringLiteral("S1");
+                d.wires.push_back(w);
+            }
+            d.layout.shieldAmount = 1;
+            int screens = 0, lettered = 0;
+            for (const auto& e : buildHarness(d).entities) {
+                if (e.type != EntityType::Screen) continue;
+                ++screens;
+                if (e.meta.value("showS").toBool(false)) ++lettered;
+            }
+            check(screens >= 2, "screen letter: the screens are there to check");
+            check(lettered == 0, "screen letter: a generated screen carries no S");
+        }
+
+        // ---- A coax joins the harness through one splice with two joints ----
+        {
+            // The shield conductor lands on the BRAID, not on the signal it screens; and where
+            // the cable meets the harness both conductors are spliced, drawn as a single part.
+            HarnessDef d;
+            HarnessConnector p1;
+            p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 4;
+            HarnessConnector p2;
+            p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 4;
+            d.connectors = {p1, p2};
+            HarnessWire sig;
+            sig.id = "sig"; sig.kind = "coax-splice"; sig.bundle = "COAX1";
+            sig.color = "SIGNAL1";
+            sig.fromConn = "p1"; sig.fromPin = 1; sig.toConn = "p2"; sig.toPin = 1;
+            HarnessWire shl;
+            shl.id = "shl"; shl.kind = "coax-splice"; shl.bundle = "COAX1";
+            shl.color = "SHIELD1";
+            shl.fromConn = "p1"; shl.fromPin = 3; shl.toConn = "p2"; shl.toPin = 3;
+            d.wires = {sig, shl};
+            d.layout.spliceAtJoins = true;
+            const HarnessBuild out = buildHarness(d);
+
+            // The braid, and where the shield conductor ends.
+            int braids = 0, ontoSignal = 0, ontoBraid = 0, pairs = 0, plainDots = 0;
+            for (const auto& sc : out.entities) {
+                if (sc.type != EntityType::Screen ||
+                    !sc.meta.contains(QLatin1String("coaxScreenOf")))
+                    continue;
+                ++braids;
+                const Vec2 c = sc.points.front();
+                const double ry = sc.meta.value("ry").toDouble();
+                for (const auto& w : out.entities) {
+                    if (w.type != EntityType::Wire ||
+                        w.meta.value("wireKind").toString() != QLatin1String("coaxShield"))
+                        continue;
+                    const Vec2 tip = w.points.back();
+                    if (std::abs(tip.x - c.x) > 1e-6) continue;
+                    if (std::abs(tip.y - c.y) < 1e-6) ++ontoSignal;
+                    else if (near(std::abs(tip.y - c.y), ry)) ++ontoBraid;
+                }
+            }
+            for (const auto& sp : out.entities) {
+                if (sp.type != EntityType::Splice) continue;
+                if (sp.meta.value("pair").toBool(false)) ++pairs;
+                else ++plainDots;
+            }
+            std::printf("    (coax: %d braid(s), shield tip on signal %d / on braid %d,"
+                        " splices %d paired + %d plain)\n",
+                        braids, ontoSignal, ontoBraid, pairs, plainDots);
+            check(braids == 2, "coax: a braid at each end of the cable");
+            check(ontoSignal == 0, "coax: the shield never runs into the signal centreline");
+            check(ontoBraid == braids, "coax: every shield conductor ends on the braid's outline");
+            check(pairs == 2, "coax: each end carries one two-joint splice");
+            check(plainDots == 0, "coax: and no loose dot repeating the same joint");
+            // The two joints sit on the two conductors, at the same x.
+            for (const auto& sp : out.entities) {
+                if (sp.type != EntityType::Splice || !sp.meta.value("pair").toBool(false)) continue;
+                check(near(sp.a.x, sp.b.x), "coax splice: both joints sit at the same x");
+                check(std::abs(sp.a.y - sp.b.y) > 1e-6,
+                      "coax splice: the joints are on the two different conductors");
+                check(sp.meta.value("spliceText").toString() == QLatin1String("SPLICE"),
+                      "coax splice: the part is labelled");
+            }
+            // Past each joint the conductors are wires of their own: the cable is what runs
+            // between the two splices, and the pigtails reach the pins.
+            {
+                int reachPin = 0, cableEnds = 0;
+                std::vector<Vec2> joints;
+                for (const auto& sp : out.entities)
+                    if (sp.type == EntityType::Splice && sp.meta.value("pair").toBool(false)) {
+                        joints.push_back(sp.a);
+                        joints.push_back(sp.b);
+                    }
+                auto atJoint = [&joints](const Vec2& q) {
+                    for (const Vec2& j : joints)
+                        if (std::abs(j.x - q.x) < 1e-6 && std::abs(j.y - q.y) < 1e-6) return true;
+                    return false;
+                };
+                // Every connector pin, so a pigtail can be told from the cable's own sections
+                // (which run from a joint to the braid, not to a pin).
+                std::vector<Vec2> pins;
+                for (const auto& e : out.entities)
+                    if (e.type == EntityType::Connector) {
+                        const ConnectorGeometry g =
+                            connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
+                        for (const Vec2& pe : g.pinEnd) pins.push_back(pe);
+                    }
+                auto atPin = [&pins](const Vec2& q) {
+                    for (const Vec2& pe : pins)
+                        if (std::abs(pe.x - q.x) < 1e-6 && std::abs(pe.y - q.y) < 1e-6) return true;
+                    return false;
+                };
+                for (const auto& w : out.entities) {
+                    if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                    const bool a = atJoint(w.points.front()), b2 = atJoint(w.points.back());
+                    if (a && b2) ++cableEnds; // the cable's own signal section
+                    else if ((a && atPin(w.points.back())) || (b2 && atPin(w.points.front())))
+                        ++reachPin; // a pigtail: the joint at one end, a pin at the other
+                }
+                std::printf("    (coax cut: %d cable section(s), %d pigtail(s))\n",
+                            cableEnds, reachPin);
+                check(cableEnds == 1, "coax cut: one cable section runs between the two joints");
+                // Two conductors x two ends: four pigtails.
+                check(reachPin == 4, "coax cut: every conductor is a separate wire past the joint");
+                // And no conductor still runs straight from a pin into the cable.
+                for (const auto& w : out.entities) {
+                    if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                    if (w.meta.value("bundle").toString() != QLatin1String("COAX1")) continue;
+                    check(!atPin(w.points.front()) && !atPin(w.points.back()),
+                          "coax cut: the cable itself no longer reaches a pin");
+                }
+                for (const auto& w : out.entities) {
+                    if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+                    if (atJoint(w.points.front()) && atJoint(w.points.back()))
+                        check(w.meta.contains(QLatin1String("bundle")),
+                              "coax cut: the cable section is still part of the bundle");
+                }
+            }
+
+            // A plain coax has no transition at all: it runs pin to pin as one cable.
+            HarnessDef plain = d;
+            for (auto& w : plain.wires) w.kind = QStringLiteral("coax");
+            int none = 0, sections = 0;
+            for (const auto& e : buildHarness(plain).entities) {
+                if (e.type == EntityType::Splice) ++none;
+                if (e.type == EntityType::Wire &&
+                    e.meta.value("bundle").toString() == QLatin1String("COAX1"))
+                    ++sections;
+            }
+            std::printf("    (plain coax: %d splice(s), %d bundled run(s))\n", none,
+                        sections);
+            check(none == 0, "coax splice: only a coax-splice is spliced to the harness");
+            check(sections >= 1, "coax: a plain coax still draws its cable");
+        }
 
         // ---- Shield appearance and the body bond ----
         // A generated screen is drawn SOLID, and its outline follows the Shield type field.
@@ -4178,10 +6591,24 @@ int run_harness_tests() {
                   "shield bond: the drain leaves clear of the connector body, not across it");
             const Entity* bond = nullptr;
             for (const auto& e : out.entities)
-                if (e.type == EntityType::Polyline &&
+                if (e.type == EntityType::Wire &&
                     e.meta.value("shieldBond").toString() == QLatin1String("P1"))
                     bond = &e;
-            check(bond != nullptr, "shield bond: a bond to the body was drawn");
+            check(bond != nullptr, "shield bond: a drain wire to the body was drawn");
+            if (bond) {
+                check(bond->meta.value("drainWire").toBool(),
+                      "shield bond: the drain is marked as one");
+                check(bond->meta.value("wireColor").toString() == QLatin1String("DRAIN") &&
+                          bond->meta.value("wireGauge").toString() == QLatin1String("0.5"),
+                      "shield bond: the drain carries the Drain colour and a cross-section");
+            }
+            // A screen terminated on its drain is not marked not-connected, so no X is drawn.
+            for (const auto& e : out.entities)
+                if (e.type == EntityType::Screen &&
+                    e.meta.value("overallShield").toString() == QLatin1String("P1"))
+                    check(e.meta.contains("notConnected") &&
+                              !e.meta.value("notConnected").toBool(),
+                          "shield bond: the leg is terminated, so the X goes");
             if (bond) {
                 check(bond->points.size() >= 2 && bond->points.back().x == drain.x &&
                           near(bond->points.back().y, drain.y),
@@ -4289,8 +6716,8 @@ int run_harness_tests() {
                           "wire colour: the code is still carried as information");
                 }
             check(wires > 0, "wire colour: the by-layer case really produced wires");
-            check(HarnessLayout().wireColorMode == QLatin1String("actual"),
-                  "wire colour: Actual unless told otherwise");
+            check(HarnessLayout().wireColorMode == QLatin1String("bylayer"),
+                  "wire colour: By layer unless told otherwise");
         }
 
         // ---- Custom wire colours ----

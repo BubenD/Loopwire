@@ -202,6 +202,98 @@ bool groupIsContiguous(const HarnessDef& def, const QString& key, bool shield,
 
 } // namespace
 
+bool harnessIsCoaxKind(const QString& kind) {
+    return kind == QLatin1String("coax") || kind == QLatin1String("coax-splice");
+}
+
+bool harnessCoaxSplices(const HarnessDef& def, const QString& bundle) {
+    if (bundle.isEmpty()) return false;
+    // One row saying so makes the cable a spliced one: both conductors of a cable transition
+    // together, so the rows cannot disagree about it.
+    for (const auto& w : def.wires)
+        if (w.bundle == bundle && w.kind == QLatin1String("coax-splice")) return true;
+    return false;
+}
+
+int harnessCoaxIndex(const HarnessDef& def, const HarnessWire& wire) {
+    if (!harnessIsCoaxKind(wire.kind) || wire.bundle.isEmpty()) return 0;
+    // The number names the COAX, not the row: a coax is a cable with two conductors in it, and
+    // both rows of bundle COAX1 are conductors of coax 1 - Signal 1 and Shield 1. Numbering the
+    // rows instead gave "Signal 1" and "Shield 2" for the two halves of one cable, which reads
+    // as two different coaxes. Bundles are counted in the order they first appear, so the number
+    // follows the drawing rather than a name that happens to have a digit in it.
+    QStringList bundles;
+    for (const auto& w : def.wires) {
+        if (!harnessIsCoaxKind(w.kind) || w.bundle.isEmpty()) continue;
+        if (!bundles.contains(w.bundle)) bundles << w.bundle;
+    }
+    // Numbered even when it is the only one: bundle COAX1 is coax 1, and its two conductors read
+    // Signal 1 / Shield 1. Only a coax with no bundle at all is left unnumbered.
+    const int at = bundles.indexOf(wire.bundle);
+    return at < 0 ? 0 : at + 1;
+}
+
+QString harnessOpenEndpointKey() { return QStringLiteral("#OPEN"); }
+
+bool harnessIsOpenEndpoint(const QString& key) { return key == QLatin1String("#OPEN"); }
+
+QString harnessOverallShieldKey(const QString& connId, HarnessSide side) {
+    return QStringLiteral("#S:%1:%2").arg(connId, side == HarnessSide::Left
+                                                      ? QStringLiteral("left")
+                                                      : QStringLiteral("right"));
+}
+
+QString harnessInternalShieldKey(const QString& group) {
+    return QStringLiteral("#I:") + group;
+}
+
+bool harnessIsShieldEndpoint(const QString& key) {
+    return key.startsWith(QLatin1String("#S:")) || key.startsWith(QLatin1String("#I:"));
+}
+
+QString harnessShieldEndpointGroup(const QString& key) {
+    return key.startsWith(QLatin1String("#I:")) ? key.mid(3) : QString();
+}
+
+bool harnessShieldEndpointConn(const QString& key, QString& connId, HarnessSide& side) {
+    if (!key.startsWith(QLatin1String("#S:"))) return false;
+    const QString rest = key.mid(3);
+    const int cut = rest.lastIndexOf(QLatin1Char(':'));
+    if (cut <= 0) return false;
+    connId = rest.left(cut);
+    side = (rest.mid(cut + 1) == QLatin1String("right")) ? HarnessSide::Right : HarnessSide::Left;
+    return true;
+}
+
+QString harnessShieldEndpointLabel(const HarnessDef& def, const QString& key) {
+    const QString group = harnessShieldEndpointGroup(key);
+    if (!group.isEmpty()) return QStringLiteral("Shield %1 (internal)").arg(group);
+    QString connId;
+    HarnessSide side = HarnessSide::Left;
+    if (!harnessShieldEndpointConn(key, connId, side)) return key;
+    const HarnessConnector* c = harnessConnById(def, connId);
+    if (!c) return key;
+    return QStringLiteral("%1 shield (%2)")
+        .arg(c->designator.isEmpty() ? c->id : c->designator,
+             side == HarnessSide::Left ? QStringLiteral("left") : QStringLiteral("right"));
+}
+
+QStringList harnessShieldEndpoints(const HarnessDef& def) {
+    QStringList out;
+    // Only the screens that exist: a drop-down of shields the harness has not been given would
+    // be noise, and a wire could be pointed at one that is never drawn.
+    for (const auto& c : def.connectors) {
+        if (c.shieldLeft) out << harnessOverallShieldKey(c.id, HarnessSide::Left);
+        if (c.shieldRight) out << harnessOverallShieldKey(c.id, HarnessSide::Right);
+    }
+    for (const auto& w : def.wires) {
+        if (w.shieldGroup.isEmpty()) continue;
+        const QString key = harnessInternalShieldKey(w.shieldGroup);
+        if (!out.contains(key)) out << key;
+    }
+    return out;
+}
+
 const HarnessConnector* harnessConnById(const HarnessDef& def, const QString& id) {
     for (const auto& c : def.connectors)
         if (c.id == id) return &c;
@@ -281,8 +373,85 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
     // two wires — otherwise the generated drawing cannot be built at all.
     QHash<QString, QString> pinTaken; // "conn/pin" -> wire id
     for (const auto& w : def.wires) {
+        // A coax is a cable of two conductors: one row for the SIGNAL and one for the SHIELD, in
+        // the same bundle. With only one of them there is nothing to draw - a signal with no braid
+        // is a plain wire, and a braid with no signal has nothing to screen.
+        if (harnessIsCoaxKind(w.kind)) {
+            if (w.bundle.isEmpty()) {
+                add(QStringLiteral("coaxnobundle:%1").arg(w.id),
+                    QStringLiteral("A coax row is in no bundle, so its signal and shield cannot "
+                                 "be paired - unify the two rows as a coax"),
+                    QString(), w.id);
+            } else {
+                bool haveSignal = false, haveShield = false;
+                for (const auto& o : def.wires) {
+                    if (!harnessIsCoaxKind(o.kind) || o.bundle != w.bundle) continue;
+                    if (o.color.startsWith(QLatin1String("SHIELD"))) haveShield = true;
+                    else haveSignal = true;
+                }
+                if (!haveSignal || !haveShield)
+                    add(QStringLiteral("coaxhalf:%1").arg(w.bundle),
+                        QStringLiteral("Coax %1 has only its %2: a coax needs one Signal row and "
+                                     "one Shield row")
+                            .arg(w.bundle, haveShield ? QStringLiteral("shield")
+                                                      : QStringLiteral("signal")),
+                        QString(), w.id);
+            }
+        }
+
+        // An OPEN end names nothing at all, so only the other end is checked.
+        if (harnessIsOpenEndpoint(w.fromConn) || harnessIsOpenEndpoint(w.toConn)) {
+            const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
+            if (fromOpen && harnessIsOpenEndpoint(w.toConn)) {
+                add(QStringLiteral("bothopen:%1").arg(w.id),
+                    QStringLiteral("A wire is open at both ends, so it joins nothing"),
+                    QString(), w.id);
+                continue;
+            }
+            const HarnessConnector* c = harnessConnById(def, fromOpen ? w.toConn : w.fromConn);
+            const int pin = fromOpen ? w.toPin : w.fromPin;
+            if (!c)
+                add(QStringLiteral("badconn:%1").arg(w.id),
+                    QStringLiteral("An open-ended wire has no connector at its other end"),
+                    QString(), w.id);
+            else if (pin < 1 || pin > std::max(1, c->pinCount))
+                add(QStringLiteral("badpin:%1:%2").arg(w.id).arg(pin),
+                    QStringLiteral("%1 has no pin %2")
+                        .arg(c->designator.isEmpty() ? c->id : c->designator).arg(pin),
+                    c->id, w.id);
+            continue;
+        }
+        // A drain wire ends on a SCREEN, not on a pin: it is checked against the shields the
+        // harness has rather than against a connector's pins.
+        const QStringList shields = harnessShieldEndpoints(def);
+        bool shieldEnd = false;
+        for (const QString& key : {w.fromConn, w.toConn}) {
+            if (!harnessIsShieldEndpoint(key)) continue;
+            shieldEnd = true;
+            if (!shields.contains(key))
+                add(QStringLiteral("badshield:%1").arg(w.id),
+                    QStringLiteral("A wire drains to \"%1\", which the harness does not have")
+                        .arg(harnessShieldEndpointLabel(def, key)),
+                    QString(), w.id);
+        }
         const HarnessConnector* a = harnessConnById(def, w.fromConn);
         const HarnessConnector* b = harnessConnById(def, w.toConn);
+        if (shieldEnd) {
+            // The other end still has to be a real pin.
+            const HarnessConnector* pinSide = a ? a : b;
+            const int pin = a ? w.fromPin : w.toPin;
+            if (!pinSide) {
+                add(QStringLiteral("badconn:%1").arg(w.id),
+                    QStringLiteral("A drain wire has no connector end"), QString(), w.id);
+            } else if (pin < 1 || pin > std::max(1, pinSide->pinCount)) {
+                add(QStringLiteral("badpin:%1:%2").arg(w.id).arg(pin),
+                    QStringLiteral("%1 has no pin %2")
+                        .arg(pinSide->designator.isEmpty() ? pinSide->id : pinSide->designator)
+                        .arg(pin),
+                    pinSide->id, w.id);
+            }
+            continue;
+        }
         if (!a || !b) {
             add(QStringLiteral("badconn:%1").arg(w.id),
                 QStringLiteral("A wire refers to a connector that is not in the harness"),
@@ -463,6 +632,27 @@ int harnessBundleBreaks(const HarnessDef& def, bool shield) {
     return breaks;
 }
 
+int harnessWireSpanPenalty(const HarnessDef& def) {
+    int gaps = 0;
+    for (const auto& c : def.connectors) {
+        const std::vector<int> seq = harnessPinSequence(c);
+        int first = -1, last = -1, wired = 0;
+        for (int row = 0; row < static_cast<int>(seq.size()); ++row) {
+            bool used = false;
+            for (const auto& w : def.wires)
+                if ((w.fromConn == c.id && w.fromPin == seq[row]) ||
+                    (w.toConn == c.id && w.toPin == seq[row])) { used = true; break; }
+            if (!used) continue;
+            if (first < 0) first = row;
+            last = row;
+            ++wired;
+        }
+        // The spare pins caught inside the band the wires occupy.
+        if (wired > 1) gaps += (last - first + 1) - wired;
+    }
+    return gaps;
+}
+
 int harnessPinOrderPenalty(const HarnessDef& def) {
     int penalty = 0;
     for (const auto& c : def.connectors) {
@@ -489,7 +679,8 @@ int harnessLayoutCost(const HarnessDef& def, const HarnessOptimizeWeights& w) {
     return w.crossing * harnessCrossings(def) +
            w.shieldBreak * harnessBundleBreaks(def, /*shield=*/true) +
            w.twistBreak * harnessBundleBreaks(def, /*shield=*/false) +
-           w.pinOrder * harnessPinOrderPenalty(def);
+           w.pinOrder * harnessPinOrderPenalty(def) +
+           w.wireSpan * harnessWireSpanPenalty(def);
 }
 
 int optimizeHarnessPinout(HarnessDef& def, const HarnessOptimizeWeights& weights) {
@@ -720,6 +911,8 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         e.layer = QStringLiteral("Connectors");
         e.a = p.origin;
         writeConnectorSpec(e.meta, p.spec);
+        // Which library part this connector is, so the bill of materials can order it.
+        if (p.conn && !p.conn->libPart.isEmpty()) e.meta.insert("libPart", p.conn->libPart);
         out.entities.push_back(std::move(e));
     }
 
@@ -742,6 +935,10 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     };
     std::vector<Leg> legs;
     for (const HarnessWire* w : wires) {
+        // A coax's SHIELD row is the braid, not a run of its own: it is drawn as a stub into the
+        // screen symbol on the signal (see the coax pass below), so it is not routed here.
+        if (harnessIsCoaxKind(w->kind) && w->color.startsWith(QLatin1String("SHIELD")))
+            continue;
         Leg L2;
         L2.w = w;
         L2.a = placedById(placed, w->fromConn);
@@ -806,7 +1003,15 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         } else {
             e.points = {pa, {midX, pa.y}, {midX, pb.y}, pb};
         }
-        e.meta.insert("wireColor", w->color);
+        // A coax's signal is numbered when its cable holds more than one coax, so the two
+        // conductors of each can be told apart on the drawing.
+        {
+            const int coaxNo = harnessCoaxIndex(def, *w);
+            e.meta.insert("wireColor",
+                          (coaxNo > 0 && w->color == QLatin1String("SIGNAL"))
+                              ? QStringLiteral("SIGNAL%1").arg(coaxNo)
+                              : w->color);
+        }
         e.meta.insert("wireGauge", w->gauge);
         // The colour that is actually DRAWN is the wire's ordinary colour property. With
         // "By layer" it is left unset, so the wire takes the layer's colour.
@@ -823,6 +1028,22 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         if (w->showColor || w->showGauge) e.meta.insert("annCount", 1);
         if (!w->label.isEmpty()) e.meta.insert("wireLabel", w->label);
         e.meta.insert("showWireLabel", w->showLabel);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
+        // the colour, then the label.
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        e.meta.insert("annSize", L.textHeight);
+        e.meta.insert("colorNameMode", L.colorNameMode == QLatin1String("long")
+                                          ? QStringLiteral("full")
+                                          : QStringLiteral("code"));
+        if (w->kind != QLatin1String("wire")) e.meta.insert("wireKind", w->kind);
+        // Which definition row this run came from. The twists and screens name their wires by
+        // that id, so this is what lets them be re-pointed at the real entities exactly.
+        e.meta.insert("defWire", w->id);
+        // Which library part this run is made of, so the bill of materials can order it.
+        if (!w->libPart.isEmpty()) e.meta.insert("libPart", w->libPart);
+        if (!w->bundle.isEmpty()) e.meta.insert("bundle", w->bundle);
         e.meta.insert("showLabel", true);
         routed.push_back({w->id, out.entities.size()});
         out.entities.push_back(std::move(e));
@@ -887,9 +1108,17 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     // Placing one screen: cut the wires at world x, size the ellipse to the band, and hang
     // the drain below it. Returns the drain end so a body bond can reach it.
     const double legLen = std::max(0.0, L.shieldLegLength);
+    // The proportion between a screen's two radii. The large one follows the band of wires it
+    // has to enclose, so the small one follows from it - a screen keeps the same shape whatever
+    // it is drawn around, instead of going from a circle to a sliver as the band grows.
+    constexpr double kShieldRatio = 3.0;
+    // A leg that terminates on something reaches as far as the Layout says. One that reaches
+    // NOTHING is a stub with an X on the end: it only has to be long enough to read as a leg, and
+    // drawing it full length leaves a long line pointing at nothing.
+    constexpr double kOpenLegLength = 5.0;
     auto placeScreen = [&](const std::vector<QString>& wireIds, double x, const QString& key,
                            bool overall, bool owns, Vec2& drainOut,
-                           const Placed* body = nullptr) {
+                           const Placed* body = nullptr, bool terminated = false) {
         std::vector<Vec2> cuts;
         QJsonArray refs;
         QString gauge;
@@ -897,10 +1126,15 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         if (cuts.empty()) return false;
         double yMin = cuts.front().y, yMax = cuts.front().y;
         for (const Vec2& c : cuts) { yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y); }
-        // An overall screen sits a little wider, so an internal one nests visibly inside it.
-        const double pad = overall ? 12.0 : 7.0;
+        // How far the outline reaches past the outermost wire it encloses: a quarter of the pin
+        // pitch, so the clearance is in proportion to the harness rather than a fixed number of
+        // units that looks tight at a wide pitch and loose at a narrow one. An overall screen
+        // sits a little wider again, so an internal one nests visibly inside it.
+        const double pitchRef = body ? body->spec.pitch : (laneStep > 0.0 ? laneStep : 15.0);
+        const double clearance = std::max(1.0, pitchRef / 4.0);
+        const double pad = overall ? clearance * 1.35 : clearance;
         const double ry = (yMax - yMin) / 2.0 + pad;
-        const double rx = overall ? 12.0 : 8.0;
+        const double rx = std::max(2.0, ry / kShieldRatio);
         Entity e;
         e.type = EntityType::Screen;
         e.layer = QStringLiteral("Wires");
@@ -911,15 +1145,18 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         // band, down out of a low one. It is also carried clear of the body's own extent, so
         // the bond that follows it runs entirely in the empty space beside the connector
         // instead of over the other pins' stubs.
+        const double legLenHere = terminated ? legLen : kOpenLegLength;
         const bool up = body && ((yMin + yMax) * 0.5) >=
                                     (body->geom.rectMin.y + body->geom.rectMax.y) * 0.5;
         if (up) {
-            double y = yMax + pad + legLen;
-            if (body) y = std::max(y, body->geom.rectMax.y + legLen);
+            double y = yMax + pad + legLenHere;
+            // A leg that goes somewhere is carried clear of the connector body on its way; a stub
+            // that ends in an X has nowhere to go, so it stays the length it was given.
+            if (body && terminated) y = std::max(y, body->geom.rectMax.y + legLenHere);
             drainOut = {x, y};
         } else {
-            double y = yMin - pad - legLen;
-            if (body) y = std::min(y, body->geom.rectMin.y - legLen);
+            double y = yMin - pad - legLenHere;
+            if (body && terminated) y = std::min(y, body->geom.rectMin.y - legLenHere);
             drainOut = {x, y};
         }
         e.points.push_back(drainOut);
@@ -934,7 +1171,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                                    ? QStringLiteral("capsule")
                                    : QStringLiteral("ellipse"));
         e.meta.insert("legDir", up ? QStringLiteral("top") : QStringLiteral("bottom"));
-        e.meta.insert("showS", true);
+        e.meta.insert("showS", false); // the outline says it is a screen; the letter is opt-in
         e.meta.insert("sSize", 4.0);
         // A screen is drawn with a SOLID outline: on a harness diagram the dashed one reads
         // as a note or a boundary rather than as the braid itself.
@@ -945,6 +1182,8 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     };
     // Bond a drain end back to a connector's own body joint: down from the corner, then out
     // to the drain, the way a screen is terminated onto a shell.
+    // The bond is a WIRE - the drain - not a decorative line: it carries the screen to the
+    // shell, so it is drawn, counted and edited like the conductor it is.
     auto bondToBody = [&](const Placed& p, const Vec2& drain, const QString& key) {
         const bool leftBody = (p.conn->side == HarnessSide::Left);
         // The joint the drain lands on: the body corner on the harness side, at whichever end
@@ -960,10 +1199,17 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         const double run = std::abs(drain.x - corner.x);
         const double diag = std::min(dy, run * 0.5);
         Entity bond;
-        bond.type = EntityType::Polyline;
+        bond.type = EntityType::Wire;
         bond.layer = QStringLiteral("Wires");
         bond.points = {corner, {corner.x + inward * diag, drain.y}, drain};
-        bond.meta.insert("shieldBond", key);
+        bond.meta.insert("shieldBond", key); // which screen's drain this is
+        bond.meta.insert("drainWire", true);
+        bond.meta.insert("wireColor", QStringLiteral("DRAIN"));
+        bond.meta.insert("wireGauge", QStringLiteral("0.5"));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            bond.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            bond.color = wireColorHex(QStringLiteral("DRAIN"));
         out.entities.push_back(std::move(bond));
     };
 
@@ -986,16 +1232,31 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         const double inward = (p.conn->side == HarnessSide::Left) ? 1.0 : -1.0;
         const double baseX = p.geom.pinEnd.empty() ? p.origin.x : p.geom.pinEnd.front().x;
         const QString key = p.conn->designator.isEmpty() ? p.conn->id : p.conn->designator;
+        // Is anything going to land on this screen's leg? A bond to the body, or a wire the
+        // definition runs to this very screen. If not, the leg is a short stub with an X.
+        bool overallTerminated = wantsBond;
+        {
+            const QString endpointKey = harnessOverallShieldKey(p.conn->id, p.conn->side);
+            for (const auto& w : def.wires)
+                if (w.fromConn == endpointKey || w.toConn == endpointKey) overallTerminated = true;
+        }
         bool haveDrain = false;
         Vec2 firstDrain{0.0, 0.0};
         for (int k = 0; k < std::max(1, L.shieldAmount); ++k) {
             Vec2 drain;
             if (!placeScreen(ids, baseX + inward * (25.0 + 34.0 * k), key, /*overall=*/true,
-                             /*owns=*/k == 0, drain, &p))
+                             /*owns=*/k == 0, drain, &p, /*terminated=*/overallTerminated))
                 continue;
             if (!haveDrain) { firstDrain = drain; haveDrain = true; }
         }
-        if (haveDrain && wantsBond) bondToBody(p, firstDrain, key);
+        if (haveDrain && wantsBond) {
+            bondToBody(p, firstDrain, key);
+            // Terminated on the drain: the X marker belongs on a leg that reaches nothing.
+            for (Entity& e : out.entities)
+                if (e.type == EntityType::Screen &&
+                    e.meta.value("overallShield").toString() == key)
+                    e.meta.insert("notConnected", false);
+        }
     }
 
     // ---- Internal shields: one per wire-level shield group ----
@@ -1020,7 +1281,400 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         for (int k = 0; k < amount; ++k) {
             const double x = xa + (xb - xa) * (k + 1.0) / (amount + 1.0);
             Vec2 drain;
-            placeScreen(ids, x, key, /*overall=*/false, /*owns=*/k == 0, drain);
+            bool innerTerminated = false;
+            {
+                const QString endpointKey = harnessInternalShieldKey(key);
+                for (const auto& w : def.wires)
+                    if (w.fromConn == endpointKey || w.toConn == endpointKey)
+                        innerTerminated = true;
+            }
+            placeScreen(ids, x, key, /*overall=*/false, /*owns=*/k == 0, drain, nullptr,
+                        /*terminated=*/innerTerminated);
+        }
+    }
+
+    // ---- Flying leads: a wire with one OPEN end ----
+    // The wire leaves its pin, runs out into the corridor and stops. It cannot go through the
+    // ordinary routing, which needs a pin at both ends, so it is drawn here - and it is
+    // terminated with the same X the unconnected-pin rule uses, because an end that reaches
+    // nothing is exactly what that mark is for.
+    for (const auto& w : def.wires) {
+        const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
+        const bool toOpen = harnessIsOpenEndpoint(w.toConn);
+        if (fromOpen == toOpen) continue; // both ends open is not a wire; neither is neither
+        const QString connId = fromOpen ? w.toConn : w.fromConn;
+        const int pin = fromOpen ? w.toPin : w.fromPin;
+        const Placed* p = placedById(placed, connId);
+        if (!p) continue;
+        Vec2 pinPt;
+        if (!pinEndOf(*p, pin, pinPt)) continue;
+        // Out into the corridor, as far as a lane and a half - far enough to read as a lead
+        // rather than a stub, and clear of the connector it leaves.
+        const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
+        const double reach = std::max(laneStep * 1.5, 20.0);
+        const Vec2 tip{pinPt.x + inward * reach, pinPt.y};
+        Entity e;
+        e.type = EntityType::Wire;
+        e.layer = QStringLiteral("Wires");
+        e.points = {pinPt, tip};
+        e.meta.insert("wireColor", w.color);
+        e.meta.insert("wireGauge", w.gauge);
+        e.meta.insert("openEnd", true);
+        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
+        e.meta.insert("showWireLabel", w.showLabel);
+        e.meta.insert("showColorName", w.showColor);
+        e.meta.insert("showGaugeName", w.showGauge);
+        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
+        // the colour, then the label.
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            e.color = wireColorHex(w.color);
+        out.entities.push_back(std::move(e));
+        Entity x;
+        x.type = EntityType::NotConnected;
+        x.layer = QStringLiteral("Wires");
+        x.a = tip;
+        x.meta.insert("ncSize", std::max(2.0, p->spec.pitch * 0.3));
+        out.entities.push_back(std::move(x));
+    }
+
+    // ---- Coax: a signal with its braid, drawn as a screen on the signal ----
+    // A coax is a cable of TWO conductors, given as two rows of one bundle: a SIGNAL and a
+    // SHIELD. The signal runs pin to pin like any wire. The screen is not a second line beside
+    // it - it is the braid AROUND it - so it is drawn as a screen symbol on the signal near each
+    // end, and the shield row's own conductor is brought from its pin along and up into that
+    // symbol. The shield row is therefore not routed pin to pin; it is this stub at each end.
+    {
+        std::vector<Entity> extra;
+        // The coax bundles, and which row of each is the signal and which the shield.
+        QStringList bundles;
+        for (const auto& w : def.wires) {
+            if (!harnessIsCoaxKind(w.kind) || w.bundle.isEmpty()) continue;
+            if (!bundles.contains(w.bundle)) bundles << w.bundle;
+        }
+        for (const QString& bundle : bundles) {
+            const HarnessWire* signal = nullptr;
+            const HarnessWire* shield = nullptr;
+            for (const auto& w : def.wires) {
+                if (!harnessIsCoaxKind(w.kind) || w.bundle != bundle) continue;
+                if (w.color.startsWith(QLatin1String("SHIELD"))) shield = &w;
+                else signal = &w; // a row that is not the shield is the signal
+            }
+            if (!signal || !shield) continue; // half a coax cannot be drawn; the validator says so
+            // The signal as it was routed.
+            int sigIdx = -1;
+            for (const Routed& r : routed)
+                if (r.wireId == signal->id) sigIdx = r.entityIndex;
+            if (sigIdx < 0 || out.entities[sigIdx].points.size() < 2) continue;
+            const std::vector<Vec2> sigRun = out.entities[sigIdx].points;
+            const int coaxNo = harnessCoaxIndex(def, *signal);
+            // Only a coax-splice reaches the harness through a splice. A plain coax runs pin to
+            // pin as one cable, so nothing is cut and no joint is drawn.
+            const bool splices = harnessCoaxSplices(def, bundle);
+            // Where each end's splice landed, so the conductors can be cut there afterwards.
+            std::vector<std::pair<int, double>> cutAtEnd; // end index, x
+
+            // One braid symbol per END, just inboard of the connector the shield row lands on.
+            for (int end = 0; end < 2; ++end) {
+                const QString connId = end == 0 ? shield->fromConn : shield->toConn;
+                const int pin = end == 0 ? shield->fromPin : shield->toPin;
+                const Placed* p = placedById(placed, connId);
+                if (!p) continue;
+                Vec2 pinPt;
+                if (!pinEndOf(*p, pin, pinPt)) continue;
+                const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
+                const double baseX = p->geom.pinEnd.empty() ? p->origin.x
+                                                            : p->geom.pinEnd.front().x;
+                // The splice sits this far outboard of the braid: pins, splice, then cable. Far
+                // enough that the splice housing and the braid do not touch.
+                const double spliceGap =
+                    std::max(14.0, p->spec.pitch * 0.9) + std::max(0.0, L.spliceSize) * 2.2;
+                // Neither may land on a screen already drawn at this end (the connector's own
+                // overall screen sits in the same place the braid would like to go).
+                auto blocked = [&out](double x) {
+                    for (const Entity& e : out.entities) {
+                        if (e.type != EntityType::Screen || e.points.empty()) continue;
+                        const int k = std::min(e.meta.value("catch").toInt(
+                                                   static_cast<int>(e.points.size())),
+                                               static_cast<int>(e.points.size()));
+                        double cx = 0.0;
+                        for (int i = 0; i < k; ++i) cx += e.points[i].x;
+                        if (k > 0) cx /= k;
+                        if (std::abs(cx - x) < e.meta.value("rx").toDouble(12.0) + 4.0) return true;
+                    }
+                    return false;
+                };
+                double screenX = baseX + inward * std::max(20.0, p->spec.pitch * 1.6);
+                for (int guard = 0; guard < 60; ++guard) {
+                    if (!blocked(screenX) && !blocked(screenX - inward * spliceGap)) break;
+                    screenX += inward * 4.0;
+                }
+                // Where the signal runs at that x - the braid sits ON the signal.
+                bool onSignal = false;
+                double sigY = sigRun.front().y;
+                for (size_t i = 1; i < sigRun.size(); ++i) {
+                    const Vec2 a = sigRun[i - 1], b = sigRun[i];
+                    if (screenX < std::min(a.x, b.x) - 1e-9 || screenX > std::max(a.x, b.x) + 1e-9)
+                        continue;
+                    const double t = (std::abs(b.x - a.x) < 1e-9) ? 0.0
+                                                                 : (screenX - a.x) / (b.x - a.x);
+                    sigY = a.y + (b.y - a.y) * t;
+                    onSignal = true;
+                    break;
+                }
+                if (!onSignal) continue;
+                const Vec2 catchPt{screenX, sigY};
+
+                // The braid: a screen catching the signal, drawn where it crosses.
+                Entity sc;
+                sc.type = EntityType::Screen;
+                sc.layer = QStringLiteral("Wires");
+                sc.points = {catchPt};
+                sc.meta.insert("catch", 1);
+                QJsonArray refs;
+                refs.append(signal->id); // re-pointed at the real entity id when stamped
+                sc.meta.insert("wires", end == 0 ? refs : QJsonArray());
+                // Same proportion as every other screen: the small radius follows the large one.
+                sc.meta.insert("ry", std::max(5.0, p->spec.pitch * 0.42));
+                sc.meta.insert("rx", std::max(2.0, std::max(5.0, p->spec.pitch * 0.42) / 3.0));
+                sc.meta.insert("rot", 1.5707963267948966);
+                sc.meta.insert("shape", QStringLiteral("ellipse"));
+                sc.meta.insert("lineType", QStringLiteral("solid"));
+                sc.meta.insert("legDir", QStringLiteral("bottom"));
+                sc.meta.insert("showS", false);
+                sc.meta.insert("notConnected", false); // the shield conductor terminates it
+                sc.meta.insert("coaxScreenOf", signal->id);
+                if (coaxNo > 0) sc.meta.insert("coaxNumber", coaxNo);
+                extra.push_back(sc);
+
+                // The shield conductor: out of its pin, along, and up to the BRAID - stopping on
+                // the screen's outline, not carrying on to the signal centreline. The braid is
+                // what it joins; running it into the signal would draw the screen shorted to the
+                // conductor it screens.
+                const double ryHere = std::max(5.0, p->spec.pitch * 0.42);
+                const bool fromBelow = pinPt.y < sigY;
+                const Vec2 joinPt{screenX, sigY + (fromBelow ? -ryHere : ryHere)};
+                const double spliceX = screenX - inward * spliceGap;
+                Entity sh;
+                sh.type = EntityType::Wire;
+                sh.layer = QStringLiteral("Wires");
+                // With a splice, the cable's own shield conductor starts AT the joint - the run
+                // from the pin to the joint is a separate harness wire, added below.
+                const Vec2 shieldStart = splices ? Vec2{spliceX, pinPt.y} : pinPt;
+                if (std::abs(shieldStart.y - joinPt.y) < 1e-6) sh.points = {shieldStart, joinPt};
+                else sh.points = {shieldStart, {screenX, shieldStart.y}, joinPt};
+                sh.meta.insert("wireColor", coaxNo > 0
+                                                ? QStringLiteral("SHIELD%1").arg(coaxNo)
+                                                : QStringLiteral("SHIELD"));
+                sh.meta.insert("wireGauge", shield->gauge);
+                sh.meta.insert("wireKind", QStringLiteral("coaxShield"));
+                // The cable's shield section IS the shield row, at this end.
+                if (end == 0) sh.meta.insert("defWire", shield->id);
+                sh.meta.insert("coaxScreenOf", signal->id);
+                sh.meta.insert("bundle", bundle);
+                if (!shield->label.isEmpty()) sh.meta.insert("wireLabel", shield->label);
+                sh.meta.insert("showWireLabel", shield->showLabel);
+                sh.meta.insert("showColorName", shield->showColor);
+                sh.meta.insert("showGaugeName", shield->showGauge);
+                if (shield->showColor || shield->showGauge) sh.meta.insert("annCount", 1);
+                if (L.textGap > 0.0) sh.meta.insert("textGap", L.textGap);
+                for (const QString& part : wireAnnotParts())
+                    setWireAnnotGapFor(sh, part, L.textGap + wireAnnotDefaultGap(part));
+                sh.meta.insert("annSize", L.textHeight);
+                if (L.wireColorMode == QLatin1String("bylayer"))
+                    sh.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+                else
+                    sh.color = wireColorHex(QStringLiteral("SHIELD"));
+                extra.push_back(sh);
+
+                // Where the cable joins the harness, both of its conductors are spliced - so the
+                // splice is ONE part with two joints: the signal above, the shield below, tied by
+                // a bar. It sits between the pins and the braid, which is where the coax proper
+                // begins.
+                if (splices) {
+                    bool onRun = false;
+                    double spliceY = sigY;
+                    for (size_t i = 1; i < sigRun.size(); ++i) {
+                        const Vec2 ra = sigRun[i - 1], rb = sigRun[i];
+                        if (spliceX < std::min(ra.x, rb.x) - 1e-9 ||
+                            spliceX > std::max(ra.x, rb.x) + 1e-9)
+                            continue;
+                        const double t = (std::abs(rb.x - ra.x) < 1e-9)
+                                             ? 0.0
+                                             : (spliceX - ra.x) / (rb.x - ra.x);
+                        spliceY = ra.y + (rb.y - ra.y) * t;
+                        onRun = true;
+                        break;
+                    }
+                    // Only when the shield really runs alongside there: a shield leaving from a
+                    // pin level with the signal has no second joint to draw.
+                    if (onRun && std::abs(pinPt.y - spliceY) > 1e-6) {
+                        Entity sp;
+                        sp.type = EntityType::Splice;
+                        sp.layer = QStringLiteral("Wires");
+                        sp.a = {spliceX, spliceY};
+                        sp.b = {spliceX, pinPt.y};
+                        sp.meta.insert("pair", true);
+                        // A cable transition is a small joint whatever the general splice size:
+                        // two of them plus the housing would swamp the cable at size 3.
+                        sp.meta.insert("size", 1.0);
+                        // The body around each joint is sized from the connector pitch, so a small
+                        // joint still reads as a splice instead of collapsing into its own dot.
+                        sp.meta.insert("houseRx", std::max(3.0, p->spec.pitch * 0.22));
+                        sp.meta.insert("houseRy", std::max(2.0, p->spec.pitch * 0.15));
+                        sp.meta.insert("spliceText", QStringLiteral("SPLICE"));
+                        sp.meta.insert("textSize", L.textHeight);
+                        sp.meta.insert("bundle", bundle);
+                        sp.meta.insert("coaxScreenOf", signal->id);
+                        if (coaxNo > 0) sp.meta.insert("coaxNumber", coaxNo);
+                        extra.push_back(sp);
+                        cutAtEnd.push_back({end, spliceX});
+
+                        // The pigtail: pin to the joint, on the shield's own level. It is a wire
+                        // in its own right - not part of the cable - so it carries no bundle and
+                        // keeps its own colour and gauge.
+                        Entity tail;
+                        tail.type = EntityType::Wire;
+                        tail.layer = QStringLiteral("Wires");
+                        tail.points = {pinPt, {spliceX, pinPt.y}};
+                        tail.meta.insert("wireColor", shield->color);
+                        tail.meta.insert("wireGauge", shield->gauge);
+                        tail.meta.insert("annSize", L.textHeight);
+                        if (L.textGap > 0.0) tail.meta.insert("textGap", L.textGap);
+                        for (const QString& part : wireAnnotParts())
+                            setWireAnnotGapFor(tail, part,
+                                               L.textGap + wireAnnotDefaultGap(part));
+                        if (L.wireColorMode == QLatin1String("bylayer"))
+                            tail.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+                        else
+                            tail.color = wireColorHex(shield->color);
+                        extra.push_back(tail);
+                    }
+                }
+            }
+
+            // ---- Past the splice the signal is a separate wire too ----
+            // The cable is what runs BETWEEN the two joints; the stretch from each pin out to its
+            // joint is an ordinary harness wire. Cutting the routed signal leaves the cable
+            // section in place (the braid and the splices already point at it) and adds the
+            // pigtails as wires of their own.
+            for (const auto& cut : cutAtEnd) {
+                std::vector<Vec2>& run = out.entities[sigIdx].points;
+                if (run.size() < 2) continue;
+                const bool head = cut.first == 0; // end 0 is the run's first vertex
+                const size_t i = head ? 0 : run.size() - 2;
+                const Vec2 a = run[i], b = run[i + 1];
+                const double x = cut.second;
+                if (x < std::min(a.x, b.x) + 1e-9 || x > std::max(a.x, b.x) - 1e-9)
+                    continue; // the joint is not on this end's own segment; leave the run whole
+                const double t = (x - a.x) / (b.x - a.x);
+                const Vec2 at{x, a.y + (b.y - a.y) * t};
+                Entity tail = out.entities[sigIdx];
+                tail.id.clear();
+                tail.points = head ? std::vector<Vec2>{a, at} : std::vector<Vec2>{at, b};
+                tail.meta.remove(QStringLiteral("bundle")); // a pigtail is not part of the cable
+                tail.meta.remove(QStringLiteral("wireKind"));
+                // A pigtail is a new conductor, not the definition's row: leaving the row's id on
+                // it would let a twist or a screen catch the pigtail instead of the cable.
+                tail.meta.remove(QStringLiteral("defWire"));
+                tail.meta.insert("wireColor", signal->color);
+                // The markings stay on the cable itself, so the same colour and gauge are not
+                // printed three times over one conductor. They can be switched on per wire.
+                tail.meta.insert("showColorName", false);
+                tail.meta.insert("showGaugeName", false);
+                tail.meta.insert("showWireLabel", false);
+                extra.push_back(tail);
+                if (head) run[0] = at;
+                else run[run.size() - 1] = at;
+            }
+        }
+        for (Entity& e : extra) out.entities.push_back(std::move(e));
+    }
+
+    // ---- Drain wires: a wire whose end is a SHIELD ----
+    // A wire can be defined pin-to-shield, which is what a drain is. It cannot be routed with
+    // the others because it needs the screen's leg, and the screens are placed off the wires
+    // they catch - so it is routed here, once every leg exists. The wire is brought to the leg
+    // and joined to it with a splice, the way a drain is terminated.
+    for (const auto& w : def.wires) {
+        const bool fromShield = harnessIsShieldEndpoint(w.fromConn);
+        const bool toShield = harnessIsShieldEndpoint(w.toConn);
+        if (fromShield == toShield) continue; // pin-to-pin (routed above), or shield-to-shield
+        const QString shieldKey = fromShield ? w.fromConn : w.toConn;
+        const QString connId = fromShield ? w.toConn : w.fromConn;
+        const int pin = fromShield ? w.toPin : w.fromPin;
+        const Placed* p = placedById(placed, connId);
+        if (!p) continue;
+        Vec2 pinPt;
+        if (!pinEndOf(*p, pin, pinPt)) continue;
+        // The leg of the screen this drains: the internal group by name, the overall one by the
+        // connector and end it belongs to. The NEAREST leg wins when a screen was placed more
+        // than once, so the drain takes the shortest way to it.
+        const QString group = harnessShieldEndpointGroup(shieldKey);
+        QString wantConn;
+        HarnessSide wantSide = HarnessSide::Left;
+        const bool overall = harnessShieldEndpointConn(shieldKey, wantConn, wantSide);
+        const HarnessConnector* wantC = overall ? harnessConnById(def, wantConn) : nullptr;
+        const QString overallName =
+            wantC ? (wantC->designator.isEmpty() ? wantC->id : wantC->designator) : QString();
+        Vec2 leg{0.0, 0.0};
+        bool haveLeg = false;
+        for (const Entity& e : out.entities) {
+            if (e.type != EntityType::Screen || e.points.empty()) continue;
+            const bool match = overall
+                                   ? e.meta.value("overallShield").toString() == overallName
+                                   : e.meta.value("shieldGroup").toString() == group;
+            if (!match) continue;
+            const int k = std::min(e.meta.value("catch").toInt(
+                                       static_cast<int>(e.points.size())),
+                                   static_cast<int>(e.points.size()));
+            if (static_cast<int>(e.points.size()) <= k) continue;
+            const Vec2 cand = e.points.back();
+            if (!haveLeg || distance(cand, pinPt) < distance(leg, pinPt)) {
+                leg = cand;
+                haveLeg = true;
+            }
+        }
+        if (!haveLeg) continue;
+        Entity e;
+        e.type = EntityType::Wire;
+        e.layer = QStringLiteral("Wires");
+        // Out of the pin, then up or down to the leg: a right-angled run like every other wire.
+        if (std::abs(pinPt.y - leg.y) < 1e-6) e.points = {pinPt, leg};
+        else e.points = {pinPt, {leg.x, pinPt.y}, leg};
+        e.meta.insert("wireColor", w.color);
+        e.meta.insert("wireGauge", w.gauge);
+        e.meta.insert("shieldLeg", shieldKey); // which screen's leg it lands on
+        e.meta.insert("drainWire", true);
+        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
+        e.meta.insert("showWireLabel", w.showLabel);
+        e.meta.insert("showColorName", w.showColor);
+        e.meta.insert("showGaugeName", w.showGauge);
+        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
+        // the colour, then the label.
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            e.color = wireColorHex(w.color);
+        out.entities.push_back(std::move(e));
+        // The joint on the leg is placed by the splice pass at the end. The screen, though, is
+        // no longer a leg that reaches nothing.
+        for (Entity& sc : out.entities) {
+            if (sc.type != EntityType::Screen || sc.points.empty()) continue;
+            const bool match = overall
+                                   ? sc.meta.value("overallShield").toString() == overallName
+                                   : sc.meta.value("shieldGroup").toString() == group;
+            if (match && distance(sc.points.back(), leg) < 1e-6)
+                sc.meta.insert("notConnected", false);
         }
     }
 
@@ -1062,6 +1716,40 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 QString gauge;
                 cutAt(ids, x, cuts, wireIds, gauge);
                 if (static_cast<int>(cuts.size()) != want) continue; // not the whole group here
+                // How far the symbol will reach along the wires, from the same formula the
+                // renderer uses - everything below is judged against the WHOLE symbol, not just
+                // its centre.
+                double band = 0.0;
+                for (const Vec2& c1 : cuts)
+                    for (const Vec2& c2 : cuts) band = std::max(band, std::abs(c1.y - c2.y));
+                const double half = twistBandWidth(std::max(1, L.twistCount), band, 6.0) / 2.0;
+                // The symbol takes over a stretch of straight wire, so that whole stretch has to
+                // BE straight on every wire of the group: a corner inside it would be drawn as a
+                // wire running out of the braid into nothing.
+                bool overCorner = false;
+                for (const Routed& r : routed) {
+                    if (std::find(ids.begin(), ids.end(), r.wireId) == ids.end()) continue;
+                    const std::vector<Vec2>& run = out.entities[r.entityIndex].points;
+                    for (size_t i = 1; i + 1 < run.size(); ++i)
+                        if (std::abs(run[i].x - x) < half + 2.0) overCorner = true;
+                }
+                if (overCorner) continue;
+                // Keep clear of the screens already placed: a braid drawn over a screen hides the
+                // crossings the twist is there to show. Judged against each screen's own width
+                // plus the symbol's reach, so the two never touch.
+                bool underScreen = false;
+                for (const Entity& sc : out.entities) {
+                    if (sc.type != EntityType::Screen || sc.points.empty()) continue;
+                    const int k = std::min(sc.meta.value("catch").toInt(
+                                               static_cast<int>(sc.points.size())),
+                                           static_cast<int>(sc.points.size()));
+                    double cx = 0.0;
+                    for (int i = 0; i < k; ++i) cx += sc.points[i].x;
+                    if (k > 0) cx /= k;
+                    const double reach = sc.meta.value("rx").toDouble(12.0) + half + 2.0;
+                    if (std::abs(cx - x) < reach) { underScreen = true; break; }
+                }
+                if (underScreen) continue;
                 // Keep the symbols clear of each other.
                 bool tooClose = false;
                 for (double had : spots)
@@ -1118,6 +1806,160 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 e.meta.insert("ncSize", std::max(2.0, p.spec.pitch * 0.3));
                 out.entities.push_back(std::move(e));
             }
+        }
+    }
+
+    // ---- Unconnected wire ends ----
+    // The other half of the same rule: a wire END that reaches no pin. It happens when a wire
+    // names a pin the connector does not have, or names no connector at all - the validator
+    // reports it, and with this rule on the drawing marks it too, so the fault is visible on
+    // the sheet rather than only in the issue list.
+    if (L.terminateUnconnectedWires) {
+        std::vector<Vec2> pinEnds;
+        for (const Placed& p : placed)
+            for (const Vec2& pe : p.geom.pinEnd) pinEnds.push_back(pe);
+        // A conductor cut at a cable transition ends ON its splice, which is a termination like
+        // any other - marking it open would put an X on a joint.
+        for (const Entity& e : out.entities) {
+            if (e.type != EntityType::Splice) continue;
+            pinEnds.push_back(e.a);
+            if (e.meta.value("pair").toBool(false)) pinEnds.push_back(e.b);
+        }
+        auto onAPin = [&pinEnds](const Vec2& pt) {
+            for (const Vec2& pe : pinEnds)
+                if (std::abs(pe.x - pt.x) < 1e-6 && std::abs(pe.y - pt.y) < 1e-6) return true;
+            return false;
+        };
+        for (const Routed& r : routed) {
+            const Entity& we = out.entities[r.entityIndex];
+            if (we.points.size() < 2) continue;
+            for (const Vec2& tip : {we.points.front(), we.points.back()}) {
+                if (onAPin(tip)) continue;
+                Entity e;
+                e.type = EntityType::NotConnected;
+                e.layer = QStringLiteral("Wires");
+                e.a = tip;
+                e.meta.insert("ncSize", 3.0);
+                out.entities.push_back(std::move(e));
+            }
+        }
+    }
+
+    // ---- Splices: every point where wires actually MEET ----
+    // A joint is where one conductor joins another, and that is the only place a dot belongs.
+    // Judged from the finished drawing, over EVERY wire in it - the pin-to-pin runs, the drains,
+    // a coax screen and its bond alike - so nothing is missed and nothing is invented:
+    //   - two wire ENDS at the same point, or
+    //   - one wire's END landing on another wire's RUN (a T-junction).
+    // A connector PIN is not a joint: two wires on one pin is a wiring fault, which the
+    // validator reports; marking it as a splice would say the drawing is fine.
+    if (L.spliceAtJoins) {
+        std::vector<const Entity*> wires;
+        std::vector<Vec2> legEnds; // a screen's drain leg: a conductor end that is not a Wire
+        // A screen whose drain is bonded to the connector BODY is already terminated there. A wire
+        // brought to the same leg is joining a conductor that has an end of its own, so the joint
+        // is the bond - putting a splice dot on top of it says there are two joints where there is
+        // one. Those legs are left out of the meeting-point sweep below.
+        std::vector<Vec2> bondedLegs;
+        for (const Entity& e : out.entities)
+            if (e.type == EntityType::Wire && e.meta.contains(QStringLiteral("shieldBond")) &&
+                e.points.size() >= 2)
+                bondedLegs.push_back(e.points.back());
+        for (const Entity& e : out.entities) {
+            if (e.type == EntityType::Wire && e.points.size() >= 2) {
+                wires.push_back(&e);
+                continue;
+            }
+            if (e.type != EntityType::Screen || e.points.empty()) continue;
+            const int k = std::min(e.meta.value("catch").toInt(
+                                       static_cast<int>(e.points.size())),
+                                   static_cast<int>(e.points.size()));
+            if (static_cast<int>(e.points.size()) > k) {
+                bool bonded = false;
+                for (const Vec2& bl : bondedLegs)
+                    if (std::abs(bl.x - e.points.back().x) < 1e-6 &&
+                        std::abs(bl.y - e.points.back().y) < 1e-6)
+                        bonded = true;
+                if (!bonded) legEnds.push_back(e.points.back());
+            }
+        }
+        std::vector<Vec2> pinEnds;
+        for (const Placed& p : placed)
+            for (const Vec2& pe : p.geom.pinEnd) pinEnds.push_back(pe);
+        auto same = [](const Vec2& a, const Vec2& b) {
+            return std::abs(a.x - b.x) < 1e-6 && std::abs(a.y - b.y) < 1e-6;
+        };
+        auto onAPin = [&pinEnds, &same](const Vec2& pt) {
+            for (const Vec2& pe : pinEnds)
+                if (same(pe, pt)) return true;
+            return false;
+        };
+        // A point strictly INSIDE a segment (an end that merely continues its own wire, or one
+        // that lands on a neighbour's corner, is not a T-junction).
+        auto insideSegment = [](const Vec2& pt, const Vec2& a, const Vec2& b) {
+            const double len = distance(a, b);
+            if (len < 1e-9) return false;
+            const double cross = std::abs((b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x));
+            if (cross / len > 1e-6) return false;
+            const double t = ((pt.x - a.x) * (b.x - a.x) + (pt.y - a.y) * (b.y - a.y)) / (len * len);
+            return t > 1e-6 && t < 1.0 - 1e-6;
+        };
+        // The coax assembly already carries its own splice; a plain dot on either of its joints
+        // would read as a second splice on the same conductors.
+        std::vector<Vec2> joints;
+        for (const Entity& e : out.entities)
+            if (e.type == EntityType::Splice && e.meta.value("pair").toBool(false)) {
+                bondedLegs.push_back(e.a);
+                bondedLegs.push_back(e.b);
+            }
+        auto note = [&joints, &same, &bondedLegs](const Vec2& pt) {
+            // A leg bonded to the connector body is already terminated there: the bond IS the
+            // joint, so a dot on top of it would claim two joints where there is one.
+            for (const Vec2& bl : bondedLegs)
+                if (same(bl, pt)) return;
+            for (const Vec2& j : joints)
+                if (same(j, pt)) return;
+            joints.push_back(pt);
+        };
+        for (size_t i = 0; i < wires.size(); ++i) {
+            for (int end = 0; end < 2; ++end) {
+                const Vec2 tip = end == 0 ? wires[i]->points.front() : wires[i]->points.back();
+                if (onAPin(tip)) continue;
+                // A wire brought onto a screen's leg is joined to the screen there.
+                bool metLeg = false;
+                for (const Vec2& leg : legEnds)
+                    if (same(leg, tip)) { metLeg = true; break; }
+                if (metLeg) {
+                    note(tip);
+                    continue;
+                }
+                for (size_t j = 0; j < wires.size(); ++j) {
+                    if (i == j) continue;
+                    if (same(wires[j]->points.front(), tip) ||
+                        same(wires[j]->points.back(), tip)) {
+                        note(tip);
+                        break;
+                    }
+                    bool onRun = false;
+                    for (size_t sg = 1; sg < wires[j]->points.size(); ++sg)
+                        if (insideSegment(tip, wires[j]->points[sg - 1], wires[j]->points[sg])) {
+                            onRun = true;
+                            break;
+                        }
+                    if (onRun) {
+                        note(tip);
+                        break;
+                    }
+                }
+            }
+        }
+        for (const Vec2& j : joints) {
+            Entity e;
+            e.type = EntityType::Splice;
+            e.layer = QStringLiteral("Wires");
+            e.a = j;
+            e.meta.insert("size", L.spliceSize);
+            out.entities.push_back(std::move(e));
         }
     }
     return out;

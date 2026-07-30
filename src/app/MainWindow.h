@@ -37,13 +37,20 @@ namespace Edraw_Desktop {
 class CanvasWidget;
 class Editor;
 class HarnessBuilderDialog;
+class PartsLibraryDialog;
+class BomDialog;
 
 // Top-level application window: ribbon, dockable panels (layers / properties /
 // entity list), command bar, coordinate readout, and view/edit actions.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    // `onModule` is called as each startup module is reached, so the splash can name it. The
+    // names, in order, are startupModules().
+    using ModuleReporter = std::function<void(const QString&)>;
+    explicit MainWindow(QWidget* parent = nullptr, ModuleReporter onModule = {});
+    // The startup steps, in the order they run. What the splash counts and shows.
+    static QStringList startupModules();
     ~MainWindow() override;
 
     // Open a .dwx or .dxf by path (used by File>Open and the command line).
@@ -139,7 +146,14 @@ private:
     // The Harness Builder (modeless, one instance): describe a harness, then Generate draws
     // it. Kept alive between openings so a part-built definition is not lost on Close.
     void showHarnessBuilder();
+    // The parts library: the raw materials a harness is built from, with a schematic symbol and a
+    // mechanical drawing per part. Modeless and kept alive, like the builder.
+    void showPartsLibrary();
+    // The ribbon button that opens the library. Both harness tabs carry it, so it is built once.
+    QToolButton* makePartsLibraryButton(QWidget* parent);
     HarnessBuilderDialog* harnessDlg_ = nullptr;
+    PartsLibraryDialog* libraryDlg_ = nullptr;
+    BomDialog* bomDlg_ = nullptr;
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
@@ -181,6 +195,8 @@ private:
     void findText();             // Find: locate & select text entities by content
     void showOptions();          // AutoCAD-style Options dialog (E menu)
     void showAbout();            // app name / description / version (E menu)
+    // Light-on-dark tooltips, so a hint is readable against this window.
+    void applyTooltipStyle();
     void loadSettings();         // restore persisted drafting/snap toggles
     void saveSettings();         // persist drafting/snap toggles on close
     void applyTheme(bool dark);  // re-theme chrome + canvas (Dark / Light)

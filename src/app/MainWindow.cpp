@@ -1,6 +1,8 @@
 #include "app/MainWindow.h"
 
 #include "app/HarnessBuilderDialog.h"
+#include "app/BomDialog.h"
+#include "app/PartsLibraryDialog.h"
 
 #include "app/Editor.h"
 #include "app/FontLibrary.h"
@@ -1509,13 +1511,31 @@ private:
 
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+QStringList MainWindow::startupModules() {
+    // One entry per note() below, in order. The splash sizes its bar from this list, so a step
+    // added there belongs here too.
+    return {QStringLiteral("Drawing canvas"),   QStringLiteral("Document tabs"),
+            QStringLiteral("Preferences"),      QStringLiteral("Ribbon"),
+            QStringLiteral("Panels"),           QStringLiteral("Status controls"),
+            QStringLiteral("Command bar"),      QStringLiteral("Menus"),
+            QStringLiteral("Commands"),         QStringLiteral("Command autocomplete")};
+}
+
+MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(parent) {
+    // Name each step as it is reached. Nothing is timed or faked: the splash moves on when the
+    // module before it is actually built.
+    auto note = [&onModule](const QString& module) {
+        Q_ASSERT(startupModules().contains(module));
+        if (onModule) onModule(module);
+    };
     setWindowTitle(QStringLiteral("Edraw"));
     resize(1340, 860);
 
+    note(QStringLiteral("Drawing canvas"));
     canvas_ = new CanvasWidget(this);
     editor_ = new Editor(this);
     canvas_->setEditor(editor_);
+    note(QStringLiteral("Document tabs"));
     buildDocumentArea(); // tab bar + canvas as the central widget
 
     coordLabel_ = new QLabel(QStringLiteral("0.000, 0.000"), this);
@@ -1687,14 +1707,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // Restore saved drafting/snap preferences before the status toggles are built
     // so their initial checked state reflects the last session.
+    note(QStringLiteral("Preferences"));
     loadSettings();
+    applyTooltipStyle();
 
+    note(QStringLiteral("Ribbon"));
     buildRibbon();
+    note(QStringLiteral("Panels"));
     buildPanels();
+    note(QStringLiteral("Status controls"));
     buildStatusControls();
+    note(QStringLiteral("Command bar"));
     buildCommandBar();
+    note(QStringLiteral("Menus"));
     buildMenus();
+    note(QStringLiteral("Commands"));
     buildCommands();
+    note(QStringLiteral("Command autocomplete"));
 
     // Command autocomplete: typing the first letters suggests every matching
     // command/alias and previews what it does ("tr — Trim to a boundary"). Accepting
@@ -2296,24 +2325,6 @@ void MainWindow::buildRibbon() {
         });
         addGroup(lay, QStringLiteral("Properties"), propsW);
 
-        // AI group (Phase 7 — currently informational buttons).
-        auto* aiW = new QWidget(page);
-        auto* ag = new QGridLayout(aiW);
-        ag->setContentsMargins(0, 0, 0, 0);
-        ag->setSpacing(2);
-        auto aiBtn = [&](const QString& t) {
-            auto* b = new QToolButton(aiW);
-            b->setText(t);
-            b->setMinimumWidth(64);
-            connect(b, &QToolButton::clicked, this, [this, t] {
-                statusBar()->showMessage(QStringLiteral("%1 — coming in the AI phase").arg(t));
-            });
-            return b;
-        };
-        ag->addWidget(aiBtn(QStringLiteral("AI draw")), 0, 0);
-        ag->addWidget(aiBtn(QStringLiteral("AI lib")), 0, 1);
-        ag->addWidget(aiBtn(QStringLiteral("Codex")), 1, 0, 1, 2);
-        lay->addWidget(ribbonGroup(QStringLiteral("AI"), aiW));
         lay->addStretch(1);
         ribbon_->addTab(page, QStringLiteral("Home"));
     }
@@ -2644,16 +2655,17 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         modG->addWidget(modCrossBtn, 0, 1);
-        // Twist align: select one or more twist marks first, click this, then click a
-        // destination point on a wire — every selected twist slides to that position.
+        // Align: select whatever rides on the wires - twist marks, shields, a wire carrying a
+        // colour/gauge marking or a label - click this, then click the column to line them all
+        // up on. Each stays on its own wire; the column only says how far along.
         auto* twistAlignBtn = new QToolButton(modW);
-        twistAlignBtn->setText(QStringLiteral("Twist\nalign"));
+        twistAlignBtn->setText(QStringLiteral("Align"));
         twistAlignBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         twistAlignBtn->setIconSize(QSize(26, 26));
         twistAlignBtn->setMinimumWidth(66);
         twistAlignBtn->setToolTip(QStringLiteral(
-            "Select twist marks, click this, then click a destination point on a wire "
-            "to align them all there"));
+            "Line up what rides on the wires - twist marks, shields, colour/gauge markings and "
+            "wire labels - on one column: select them, click this, then click the column"));
         {
             QPixmap pm(28, 28);
             pm.fill(Qt::transparent);
@@ -2918,6 +2930,7 @@ void MainWindow::buildRibbon() {
             }
             connect(hbBtn, &QToolButton::clicked, this, [this] { showHarnessBuilder(); });
             hbg->addWidget(hbBtn, 0, 0);
+            hbg->addWidget(makePartsLibraryButton(hbW), 0, 1);
             addGroup(lay, QStringLiteral("Harness"), hbW);
         }
         lay->addStretch(1);
@@ -2970,6 +2983,7 @@ void MainWindow::buildRibbon() {
             }
             connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
             dg->addWidget(bomBtn, 0, 0);
+            dg->addWidget(makePartsLibraryButton(dataW), 0, 1);
             addGroup(lay, QStringLiteral("Data"), dataW);
         }
         lay->addStretch(1);
@@ -4335,6 +4349,10 @@ void MainWindow::buildPanels() {
     propsTable_->setShowGrid(false);
     propsTable_->setColumnWidth(0, 110);
     propsTable_->horizontalHeader()->setStretchLastSection(true);
+    // A little air between the value fields and the scroll bar: a field that runs right up to the
+    // bar looks clipped, and its drop-down arrow ends up under the user's thumb. Padding on the
+    // frame shrinks the cells' area and leaves the bar where it is.
+    propsTable_->setStyleSheet(QStringLiteral("QTableWidget { padding-right: 5px; }"));
     propsTable_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::SelectedClicked);
     pv->addWidget(propsTable_);
     propsDock->setManaged(new DockTitleBar(propsDock, QStringLiteral("PROPERTIES")), propsWidget);
@@ -5170,6 +5188,38 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         canvas_->setFocus(Qt::OtherFocusReason);
     });
 
+    // Re-ordering the pinout of the connectors in the selection. Offered only when there is
+    // something to work on - two or more selected connectors with wires running between them -
+    // because on any other selection every one of these would do nothing.
+    if (editor_->canReorderSelectedPinout()) {
+        menu.addSeparator();
+        auto* pm = menu.addMenu(QStringLiteral("Re-order pinout"));
+        struct Cmd { const char* text; const char* tip; bool group; bool fromTop; };
+        const Cmd cmds[] = {
+            {"Minimize wire crossings",
+             "Re-order the pins so as few wires cross as the wiring allows", false, false},
+            {"Minimize wire pitch",
+             "Re-order the pins so the wires sit on neighbouring pins, as one tight group",
+             true, false},
+            {"Minimize wire pitch, from the top",
+             "As above, and the group starts at the connector's first pin", true, true},
+            {"Minimize wire crossings, from the top",
+             "Fewest crossings, with the wired pins starting at the connector's first pin",
+             false, true},
+        };
+        for (const Cmd& c : cmds) {
+            QAction* act = pm->addAction(QString::fromLatin1(c.text));
+            act->setToolTip(QString::fromLatin1(c.tip));
+            const bool group = c.group, fromTop = c.fromTop;
+            connect(act, &QAction::triggered, this, [this, group, fromTop] {
+                Editor::PinoutGoal goal;
+                goal.group = group;
+                goal.fromTop = fromTop;
+                editor_->reorderSelectedPinout(goal);
+            });
+        }
+    }
+
     QAction* cancel = menu.addAction(QStringLiteral("Cancel"));
     connect(cancel, &QAction::triggered, this,
             [this] { editor_->onKey(Qt::Key_Escape, Qt::NoModifier); });
@@ -5487,6 +5537,9 @@ void MainWindow::showOptions() {
     EntityRenderer::setLengthUnitInch(lenUnit->currentIndex() == 1);
     EntityRenderer::setDualUnits(dualUnits->isChecked());
     crossSectionAwg_ = (xsec->currentIndex() == 1);
+    // Every cross-section shown anywhere follows this: the wire markings, the harness
+    // builder's gauge list and the bill of materials.
+    setWireGaugeNotationAwg(crossSectionAwg_);
     saveSettings();
     canvas_->update();
 }
@@ -5681,10 +5734,12 @@ void MainWindow::refreshProperties() {
         cb->addItems(items);
         if (cb->findText(current) < 0) cb->insertItem(0, current);
         cb->setCurrentText(current);
-        connect(cb, &QComboBox::currentTextChanged, this, [this, apply](const QString& t) {
-            if (refreshing_) return;
-            deferredPropApply([apply, t] { apply(t); });
-        });
+        connect(cb, &QComboBox::currentTextChanged, this,
+                [this, apply, current](const QString& t) {
+                    if (refreshing_ || applyingPropEdit_) return;
+                    if (t == current) return; // back to what it was: nothing to apply
+                    deferredPropApply([apply, t] { apply(t); });
+                });
         propsTable_->setCellWidget(r, 1, cb);
     };
     // A dropdown whose items carry an AutoCAD-style preview icon. `apply` gets
@@ -5721,6 +5776,10 @@ void MainWindow::refreshProperties() {
         propsTable_->setCellWidget(r, 1, cb);
     };
     // A numeric value cell that applies on edit (deferred).
+    // True when a field's value is still exactly what it was built with - nothing to apply.
+    // (Comparing values, not "was the widget touched": a value typed back to what it already was
+    // is not a change either, and a rebuilt field must never look like an edit.)
+    auto unchanged = [](double a, double b) { return std::abs(a - b) < 1e-9; };
     auto addNum = [&](const QString& k, double value, std::function<void(double)> apply) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
@@ -5733,8 +5792,10 @@ void MainWindow::refreshProperties() {
         if (std::isnan(value)) {
             auto* le = new QLineEdit(propsTable_);
             le->setText(QStringLiteral("#Value"));
-            connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
-                if (refreshing_) return;
+            const QString built = le->text();
+            connect(le, &QLineEdit::editingFinished, this, [this, le, apply, built] {
+                if (refreshing_ || applyingPropEdit_) return;
+                if (le->text() == built) return; // untouched "#Value": nothing was typed
                 bool ok = false;
                 const double v = le->text().trimmed().toDouble(&ok);
                 if (ok) deferredPropApply([apply, v] { apply(v); });
@@ -5748,9 +5809,34 @@ void MainWindow::refreshProperties() {
         sp->setKeyboardTracking(false); // don't reformat/emit while typing (avoids jitter)
         sp->setValue(value);
         sp->setButtonSymbols(QAbstractSpinBox::NoButtons);
-        connect(sp, &QDoubleSpinBox::editingFinished, this, [this, sp, apply] {
-            if (refreshing_) return;
-            const double v = sp->value();
+        connect(sp, &QDoubleSpinBox::editingFinished, this,
+                [this, sp, apply, value, unchanged] {
+                    if (refreshing_ || applyingPropEdit_) return;
+                    const double v = sp->value();
+                    // Untouched: this is a rebuilt field losing focus, not an edit. Applying
+                    // here would push the pre-edit value back over the one just typed.
+                    if (unchanged(v, value)) return;
+                    deferredPropApply([apply, v] { apply(v); });
+                });
+        propsTable_->setCellWidget(r, 1, sp);
+    };
+    // A whole-number cell: an amount of something (how many times a marking is repeated, how
+    // many pins, how many twists). No decimals, because a count has none.
+    auto addInt = [&](const QString& k, int value, std::function<void(int)> apply) {
+        const int r = propsTable_->rowCount();
+        propsTable_->insertRow(r);
+        auto* key = new QTableWidgetItem(k);
+        key->setFlags(Qt::ItemIsEnabled);
+        propsTable_->setItem(r, 0, key);
+        auto* sp = new QSpinBox(propsTable_);
+        sp->setRange(1, 999);
+        sp->setKeyboardTracking(false); // don't reformat / emit while typing
+        sp->setValue(value);
+        sp->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        connect(sp, &QSpinBox::editingFinished, this, [this, sp, apply, value] {
+            if (refreshing_ || applyingPropEdit_) return;
+            const int v = sp->value();
+            if (v == value) return; // a rebuilt field losing focus, not an edit
             deferredPropApply([apply, v] { apply(v); });
         });
         propsTable_->setCellWidget(r, 1, sp);
@@ -5768,13 +5854,123 @@ void MainWindow::refreshProperties() {
         auto* le = new QLineEdit(propsTable_);
         le->setText(value);
         if (!placeholder.isEmpty()) le->setPlaceholderText(placeholder);
-        connect(le, &QLineEdit::editingFinished, this, [this, le, apply] {
-            if (refreshing_) return;
+        connect(le, &QLineEdit::editingFinished, this, [this, le, apply, value] {
+            if (refreshing_ || applyingPropEdit_) return;
             const QString t = le->text();
+            if (t == value) return; // a rebuilt field losing focus, not an edit
             deferredPropApply([apply, t] { apply(t); });
         });
         propsTable_->setCellWidget(r, 1, le);
     };
+    // The eye that shows / hides a marking on the drawing. Drawn rather than typed, so it reads
+    // the same whatever fonts are installed: an open eye when the marking is drawn, a struck-out
+    // one when it is not.
+    auto eyeIcon = [](bool shown) {
+        QPixmap pm(18, 18);
+        pm.fill(Qt::transparent);
+        QPainter pp(&pm);
+        pp.setRenderHint(QPainter::Antialiasing, true);
+        const QColor ink = shown ? QColor("#d7dade") : QColor("#7c828a");
+        pp.setPen(QPen(ink, 1.4));
+        pp.setBrush(Qt::NoBrush);
+        QPainterPath eye; // the lid: two arcs meeting at the corners
+        eye.moveTo(2.5, 9);
+        eye.quadTo(9, 2.5, 15.5, 9);
+        eye.quadTo(9, 15.5, 2.5, 9);
+        pp.drawPath(eye);
+        if (shown) {
+            pp.setBrush(ink);
+            pp.drawEllipse(QPointF(9, 9), 2.4, 2.4);
+        } else {
+            pp.drawLine(QPointF(3, 15), QPointF(15, 3)); // struck out: not drawn
+        }
+        return QIcon(pm);
+    };
+    // A value row with its amount and its eye on the end of it. `field` is the editor for the
+    // value itself; `amount` (when > 0) is how many times that marking is repeated along the wire.
+    auto addWithEye = [this, eyeIcon](const QString& k, QWidget* field, bool shown,
+                                      std::function<void(bool)> applyShown, int amount = -1,
+                                      std::function<void(int)> applyAmount = {}) {
+        const int r = propsTable_->rowCount();
+        propsTable_->insertRow(r);
+        auto* key = new QTableWidgetItem(k);
+        key->setFlags(Qt::ItemIsEnabled);
+        propsTable_->setItem(r, 0, key);
+        auto* host = new QWidget(propsTable_);
+        auto* lay = new QHBoxLayout(host);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        field->setParent(host);
+        lay->addWidget(field, 1);
+        if (amount > 0 && applyAmount) {
+            auto* amt = new QSpinBox(host);
+            amt->setRange(1, 20);
+            amt->setValue(amount);
+            amt->setKeyboardTracking(false);
+            amt->setButtonSymbols(QAbstractSpinBox::NoButtons);
+            amt->setFixedWidth(34);
+            amt->setAlignment(Qt::AlignCenter);
+            amt->setToolTip(QStringLiteral("How many times this is repeated along the wire"));
+            connect(amt, &QSpinBox::editingFinished, this, [this, amt, applyAmount, amount] {
+                if (refreshing_ || applyingPropEdit_) return;
+                const int v = amt->value();
+                if (v == amount) return; // a rebuilt field losing focus, not an edit
+                deferredPropApply([applyAmount, v] { applyAmount(v); });
+            });
+            lay->addWidget(amt, 0);
+        }
+        auto* eye = new QToolButton(host);
+        eye->setCheckable(true);
+        eye->setChecked(shown);
+        eye->setIcon(eyeIcon(shown));
+        eye->setIconSize(QSize(16, 16));
+        eye->setAutoRaise(true);
+        eye->setToolTip(QStringLiteral("Show this on the wire in the drawing"));
+        eye->setFocusPolicy(Qt::NoFocus);
+        connect(eye, &QToolButton::clicked, this, [this, eye, eyeIcon, applyShown](bool on) {
+            if (refreshing_ || applyingPropEdit_) return;
+            eye->setIcon(eyeIcon(on));
+            deferredPropApply([applyShown, on] { applyShown(on); });
+        });
+        lay->addWidget(eye, 0);
+        propsTable_->setCellWidget(r, 1, host);
+    };
+    // A text value plus its eye.
+    auto addTextEye = [this, addWithEye](const QString& k, const QString& value,
+                                        std::function<void(const QString&)> apply, bool shown,
+                                        std::function<void(bool)> applyShown, int amount,
+                                        std::function<void(int)> applyAmount,
+                                        const QString& placeholder = QString()) {
+        auto* le = new QLineEdit(propsTable_);
+        le->setText(value);
+        if (!placeholder.isEmpty()) le->setPlaceholderText(placeholder);
+        connect(le, &QLineEdit::editingFinished, this, [this, le, apply, value] {
+            if (refreshing_ || applyingPropEdit_) return;
+            const QString t = le->text();
+            if (t == value) return; // a rebuilt field losing focus, not an edit
+            deferredPropApply([apply, t] { apply(t); });
+        });
+        addWithEye(k, le, shown, applyShown, amount, applyAmount);
+    };
+    // A choice plus its eye.
+    auto addComboEye = [this, addWithEye](const QString& k, const QStringList& items,
+                                         const QString& current,
+                                         std::function<void(const QString&)> apply, bool shown,
+                                         std::function<void(bool)> applyShown, int amount,
+                                         std::function<void(int)> applyAmount) {
+        auto* box = new QComboBox(propsTable_);
+        box->addItems(items);
+        if (!current.isEmpty() && box->findText(current) < 0) box->addItem(current);
+        box->setCurrentText(current);
+        connect(box, &QComboBox::currentTextChanged, this,
+                [this, apply, current](const QString& t) {
+                    if (refreshing_ || applyingPropEdit_) return;
+                    if (t == current) return; // a rebuilt field, not a choice
+                    deferredPropApply([apply, t] { apply(t); });
+                });
+        addWithEye(k, box, shown, applyShown, amount, applyAmount);
+    };
+
     // A row whose value cell is an action button (opens a sub-editor, etc.).
     auto addButton = [&](const QString& k, const QString& text, std::function<void()> onClick) {
         const int r = propsTable_->rowCount();
@@ -6004,9 +6200,10 @@ void MainWindow::refreshProperties() {
         else
             addButton(QStringLiteral("Pin wiring"), QStringLiteral("Pin table…"),
                       [this] { showPinTable(editor_->selectedConnectorId()); });
-        addNum(QStringLiteral("Pins"), csNum("pinCount", cs.pinCount), [edit](double v) {
-            edit([v](ConnectorSpec& s) { s.pinCount = std::clamp(int(v + 0.5), 1, 128); });
-        });
+        addInt(QStringLiteral("Pins"), static_cast<int>(csNum("pinCount", cs.pinCount)),
+               [edit](int v) {
+                   edit([v](ConnectorSpec& s) { s.pinCount = std::clamp(v, 1, 128); });
+               });
         {
             // "Mixed" names the pins A1..A10, B1..B10 - a letter per block of ten.
             auto annName = [](const QString& mode) {
@@ -6105,22 +6302,102 @@ void MainWindow::refreshProperties() {
         // Wire label: free text identifying the wire. Placing a Wire label with the
         // ribbon tool onto this wire writes the same field, and editing it here updates
         // any label already attached.
-        addText(QStringLiteral("Wire label"), mv(QStringLiteral("wireLabel")).toString(),
-                [this](const QString& t) { editor_->setSelectionWireLabel(t); },
-                QStringLiteral("e.g. W12 / PWR-A"));
+        // Each marking: the value, how many times it repeats, and the eye that shows or hides
+        // it - followed by how far above the wire it sits. All three are independent markings.
+        addTextEye(QStringLiteral("Wire label"), mv(QStringLiteral("wireLabel")).toString(),
+                   [this](const QString& t) { editor_->setSelectionWireLabel(t); },
+                   e->meta.value(QStringLiteral("showWireLabel")).toBool(true),
+                   [this](bool on) {
+                       editor_->setSelectionMetaBool(QStringLiteral("showWireLabel"), on);
+                   },
+                   std::max(1, wireAnnotCountFor(*e, QStringLiteral("label"))),
+                   [this](int n) {
+                       editor_->setSelectionWireAnnotCountFor(QStringLiteral("label"), n);
+                   },
+                   QStringLiteral("e.g. W12 / PWR-A"));
+        addNum(QStringLiteral("Wire label height"),
+               wireAnnotSizeFor(*e, QStringLiteral("label")), [this](double v) {
+                   editor_->setSelectionWireAnnotSize(QStringLiteral("label"), v);
+               });
+        addNum(QStringLiteral("Wire label gap"),
+               wireAnnotGapFor(*e, QStringLiteral("label")), [this](double v) {
+                   editor_->setSelectionWireAnnotGap(QStringLiteral("label"), v);
+               });
         // AWG cross-section, 4 (thick) … 32 (thin).
         QStringList awgList;
         for (int g = 4; g <= 32; g += 2) awgList << QStringLiteral("%1 AWG").arg(g);
         const QString curAwg = mv(QStringLiteral("awg")).toString();
-        addCombo(QStringLiteral("AWG"), awgList, curAwg, false, [this](const QString& t) {
-            editor_->setSelectionMeta(QStringLiteral("awg"), t);
-        });
+        addComboEye(QStringLiteral("AWG"), awgList, curAwg,
+                    [this](const QString& t) {
+                        editor_->setSelectionMeta(QStringLiteral("awg"), t);
+                    },
+                    wireShowsGaugeName(*e), [this](bool on) {
+                        editor_->setSelectionMetaBool(QStringLiteral("showGaugeName"), on);
+                    },
+                    std::max(1, wireAnnotCountFor(*e, QStringLiteral("gauge"))),
+                    [this](int n) {
+                        editor_->setSelectionWireAnnotCountFor(QStringLiteral("gauge"), n);
+                    });
+        addNum(QStringLiteral("AWG height"), wireAnnotSizeFor(*e, QStringLiteral("gauge")),
+               [this](double v) {
+                   editor_->setSelectionWireAnnotSize(QStringLiteral("gauge"), v);
+               });
+        addNum(QStringLiteral("AWG gap"), wireAnnotGapFor(*e, QStringLiteral("gauge")),
+               [this](double v) {
+                   editor_->setSelectionWireAnnotGap(QStringLiteral("gauge"), v);
+               });
         // Wire colour code (WH, BK, …).
-        addCombo(QStringLiteral("Wire color"), wireColorCodes(),
-                 mv(QStringLiteral("wireColor")).toString(QStringLiteral("WH")), false,
+        addComboEye(QStringLiteral("Wire color"), wireColorCodes(),
+                    mv(QStringLiteral("wireColor")).toString(QStringLiteral("WH")),
+                    [this](const QString& t) {
+                        editor_->setSelectionMeta(QStringLiteral("wireColor"), t);
+                        if (canvas_) canvas_->update();
+                    },
+                    wireShowsColorName(*e), [this](bool on) {
+                        editor_->setSelectionMetaBool(QStringLiteral("showColorName"), on);
+                    },
+                    std::max(1, wireAnnotCountFor(*e, QStringLiteral("color"))),
+                    [this](int n) {
+                        editor_->setSelectionWireAnnotCountFor(QStringLiteral("color"), n);
+                    });
+        addNum(QStringLiteral("Wire color height"), wireAnnotSizeFor(*e, QStringLiteral("color")),
+               [this](double v) {
+                   editor_->setSelectionWireAnnotSize(QStringLiteral("color"), v);
+               });
+        addNum(QStringLiteral("Wire color gap"), wireAnnotGapFor(*e, QStringLiteral("color")),
+               [this](double v) {
+                   editor_->setSelectionWireAnnotGap(QStringLiteral("color"), v);
+               });
+        // On a vertical run: which side of the wire the markings sit, and which way they read.
+        // Neither follows from the geometry, so both are asked for rather than guessed.
+        addCombo(QStringLiteral("Vertical side"),
+                 {QStringLiteral("Left"), QStringLiteral("Right")},
+                 wireAnnotVerticalSide(*e) == QLatin1String("right") ? QStringLiteral("Right")
+                                                                     : QStringLiteral("Left"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("annVertSide"),
+                                               t == QLatin1String("Right")
+                                                   ? QStringLiteral("right")
+                                                   : QStringLiteral("left"));
+                 });
+        addCombo(QStringLiteral("Vertical text"), {QStringLiteral("Up"), QStringLiteral("Down")},
+                 wireAnnotVerticalText(*e) == QLatin1String("down") ? QStringLiteral("Down")
+                                                                    : QStringLiteral("Up"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("annVertText"),
+                                               t == QLatin1String("Down") ? QStringLiteral("down")
+                                                                          : QStringLiteral("up"));
+                 });
+        // What the conductor is made of. Copper unless the drawing says otherwise; the list is
+        // editable, because a harness may call for a metal that is not on it.
+        addCombo(QStringLiteral("Wire material"),
+                 {QStringLiteral("Copper"), QStringLiteral("Tinned copper"),
+                  QStringLiteral("Silver-plated copper"), QStringLiteral("Nickel-plated copper"),
+                  QStringLiteral("Copper-clad aluminium"), QStringLiteral("Aluminium"),
+                  QStringLiteral("Copper alloy"), QStringLiteral("Steel")},
+                 mv(QStringLiteral("wireMaterial")).toString(QStringLiteral("Copper")), true,
                  [this](const QString& t) {
-                     editor_->setSelectionMeta(QStringLiteral("wireColor"), t);
-                     if (canvas_) canvas_->update();
+                     editor_->setSelectionMeta(QStringLiteral("wireMaterial"), t);
                  });
         // Insulation type (editable — user may enter any material).
         addCombo(QStringLiteral("Insulation"),
@@ -6175,42 +6452,21 @@ void MainWindow::refreshProperties() {
                mv(QStringLiteral("resistance")).toDouble(), [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("resistance"), v);
                });
-        // Marking on the drawing: the colour and the cross-section are switched on
-        // independently and repeated `Show count` times along the wire. Each instance
-        // can then be dragged along the run by its grip.
+        // Marking on the drawing. Whether each part is shown is the eye on its own field, up in
+        // the Wire section; what is left here is how the marking is written and how often it is
+        // repeated along the run.
         addHeader(QStringLiteral("Wire marking"));
-        addCombo(QStringLiteral("Show colour"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 wireShowsColorName(*e) ? QStringLiteral("Yes") : QStringLiteral("No"), false,
-                 [this](const QString& t) {
-                     editor_->setSelectionMetaBool(QStringLiteral("showColorName"),
-                                                   t == QLatin1String("Yes"));
-                 });
         addCombo(QStringLiteral("Colour as"),
-                 {QStringLiteral("2 letters"), QStringLiteral("Full name")},
-                 mv(QStringLiteral("colorNameMode")).toString() == QLatin1String("full")
-                     ? QStringLiteral("Full name")
-                     : QStringLiteral("2 letters"),
+                 {QStringLiteral("Full name"), QStringLiteral("2 letters")},
+                 mv(QStringLiteral("colorNameMode")).toString() == QLatin1String("code")
+                     ? QStringLiteral("2 letters")
+                     : QStringLiteral("Full name"),
                  false, [this](const QString& t) {
                      editor_->setSelectionMeta(QStringLiteral("colorNameMode"),
                                                t.startsWith(QLatin1String("Full"))
                                                    ? QStringLiteral("full")
                                                    : QStringLiteral("code"));
                  });
-        addCombo(QStringLiteral("Show gauge"), {QStringLiteral("No"), QStringLiteral("Yes")},
-                 wireShowsGaugeName(*e) ? QStringLiteral("Yes") : QStringLiteral("No"), false,
-                 [this](const QString& t) {
-                     editor_->setSelectionMetaBool(QStringLiteral("showGaugeName"),
-                                                   t == QLatin1String("Yes"));
-                 });
-        addNum(QStringLiteral("Show count"),
-               std::max(1, mv(QStringLiteral("annCount")).toInt(1)), [this](double v) {
-                   editor_->setSelectionWireAnnotCount(static_cast<int>(v));
-               });
-        addNum(QStringLiteral("Marking size"), mv(QStringLiteral("annSize")).toDouble(3.5),
-               [this](double v) {
-                   editor_->setSelectionMetaNumber(QStringLiteral("annSize"),
-                                                   std::clamp(v, 1.0, 50.0));
-               });
     }
 
     // A selected Wire label: its text, and which wire it rides. Editing the text here
@@ -6262,6 +6518,64 @@ void MainWindow::refreshProperties() {
         addNum(QStringLiteral("Large radius"), ry, [this](double v) {
             editor_->resizeSelectedShield(QStringLiteral("ry"), std::max(1.0, v));
         });
+        // The proportion between them, as the ribbon shows it: setting the ratio moves the LARGE
+        // radius, leaving the small one (the width across the wires) where the user put it.
+        {
+            const double rx = mv(QStringLiteral("rx")).toDouble(12.0);
+            addNum(QStringLiteral("Ratio (L/S)"), rx > 1e-6 ? ry / rx : 0.0,
+                   [this, rx](double v) {
+                       editor_->resizeSelectedShield(QStringLiteral("ry"),
+                                                     std::max(1.0, rx * std::max(0.01, v)));
+                   });
+        }
+        // The outline: a plain ellipse, or a capsule (a stadium) for a long band of wires.
+        // "Shield type", not "Type": the General section already has a Type row (the kind of
+        // object), and two rows with one name in a flat list cannot be told apart. Same wording
+        // as the builder's Layout field.
+        addCombo(QStringLiteral("Shield type"),
+                 {QStringLiteral("Ellipse"), QStringLiteral("Capsule")},
+                 mv(QStringLiteral("shape")).toString() == QLatin1String("capsule")
+                     ? QStringLiteral("Capsule")
+                     : QStringLiteral("Ellipse"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("shape"),
+                                               t == QLatin1String("Capsule")
+                                                   ? QStringLiteral("capsule")
+                                                   : QStringLiteral("ellipse"));
+                 });
+        // Which side of the outline the drain leaves from.
+        {
+            const QString legDir =
+                mv(QStringLiteral("legDir")).toString(QStringLiteral("bottom"));
+            auto legName = [](const QString& d) {
+                if (d == QLatin1String("top")) return QStringLiteral("Top");
+                if (d == QLatin1String("left")) return QStringLiteral("Left");
+                if (d == QLatin1String("right")) return QStringLiteral("Right");
+                return QStringLiteral("Bottom");
+            };
+            addCombo(QStringLiteral("Leg side"),
+                     {QStringLiteral("Bottom"), QStringLiteral("Top"), QStringLiteral("Left"),
+                      QStringLiteral("Right")},
+                     legName(legDir), false, [this](const QString& t) {
+                         editor_->setSelectionMeta(QStringLiteral("legDir"), t.toLower());
+                     });
+        }
+        // The outline's line: solid, or dashed with a scale for the dash.
+        addCombo(QStringLiteral("Line"), {QStringLiteral("Solid"), QStringLiteral("Dashed")},
+                 mv(QStringLiteral("lineType")).toString() == QLatin1String("dashed")
+                     ? QStringLiteral("Dashed")
+                     : QStringLiteral("Solid"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("lineType"),
+                                               t == QLatin1String("Dashed")
+                                                   ? QStringLiteral("dashed")
+                                                   : QStringLiteral("solid"));
+                 });
+        addNum(QStringLiteral("LT scale"), mv(QStringLiteral("dashScale")).toDouble(1.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("dashScale"),
+                                                   std::max(0.1, v));
+               });
         addCombo(QStringLiteral("Show S"), {QStringLiteral("Yes"), QStringLiteral("No")},
                  yesNo(mv(QStringLiteral("showS")), false),
                  false, [this](const QString& t) {
@@ -6312,10 +6626,10 @@ void MainWindow::refreshProperties() {
                    });
         } else if (ty == QLatin1String("type3")) {
             addHeader(QStringLiteral("Twist (Type 3)"));
-            addNum(QStringLiteral("Twists"), mv(QStringLiteral("repeats")).toDouble(2.0),
-                   [this](double v) {
+            addInt(QStringLiteral("Twists"), std::max(1, mv(QStringLiteral("repeats")).toInt(2)),
+                   [this](int v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
-                                                       std::max(1.0, std::round(v)));
+                                                       std::max(1, v));
                    });
         } else { // Type 2 (jog) and any legacy braid
             addHeader(QStringLiteral("Twist (Type 2)"));
@@ -6323,10 +6637,10 @@ void MainWindow::refreshProperties() {
                    mv(QStringLiteral("flatLen")).toDouble(6.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("flatLen"), std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Twists"), mv(QStringLiteral("repeats")).toDouble(2.0),
-                   [this](double v) {
+            addInt(QStringLiteral("Twists"), std::max(1, mv(QStringLiteral("repeats")).toInt(2)),
+                   [this](int v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("repeats"),
-                                                       std::max(1.0, std::round(v)));
+                                                       std::max(1, v));
                    });
         }
     }
@@ -7910,6 +8224,48 @@ void MainWindow::showWireRibbon(bool on) {
     }
 }
 
+QToolButton* MainWindow::makePartsLibraryButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Parts\nlibrary"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(30, 30));
+    btn->setMinimumWidth(96);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "The raw materials a harness is built from - wires, connectors, contacts, crimps, "
+        "heatshrink, backshells, braid - each with its manufacturer, part number and technical "
+        "parameters, and with a schematic symbol and a mechanical drawing of its own"));
+    {
+        // A drawer of parts: a box with three compartments and a handle.
+        QPixmap pm(32, 32);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.7));
+        ip.drawRect(4, 9, 24, 17);
+        ip.drawLine(4, 15, 28, 15);
+        ip.drawLine(12, 15, 12, 26);
+        ip.drawLine(20, 15, 20, 26);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.5));
+        ip.drawLine(11, 6, 21, 6);
+        ip.drawLine(16, 6, 16, 9);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showPartsLibrary(); });
+    return btn;
+}
+
+void MainWindow::showPartsLibrary() {
+    // Modeless and kept alive: a part is described while the sheet stays usable, which is what
+    // lets a symbol be drawn, captured, and dropped back without closing anything.
+    if (!libraryDlg_) libraryDlg_ = new PartsLibraryDialog(editor_, this);
+    libraryDlg_->show();
+    libraryDlg_->raise();
+    libraryDlg_->activateWindow();
+}
+
 void MainWindow::showHarnessBuilder() {
     // Modeless and kept alive: the drawing stays usable while a harness is described, and a
     // part-built definition survives Close.
@@ -8322,29 +8678,13 @@ void MainWindow::showPinTable(const QString& connectorId) {
 }
 
 void MainWindow::showBomDialog() {
-    const auto rows = editor_->buildBom();
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("Bill of materials"));
-    dlg.resize(620, 420);
-    auto* lay = new QVBoxLayout(&dlg);
-    auto* table = new QTableWidget(&dlg);
-    table->setColumnCount(5);
-    table->setHorizontalHeaderLabels({"Kind", "Ref", "Part / Color", "Detail", "Qty / Len"});
-    table->horizontalHeader()->setStretchLastSection(true);
-    table->setRowCount(static_cast<int>(rows.size()));
-    for (int r = 0; r < static_cast<int>(rows.size()); ++r) {
-        table->setItem(r, 0, new QTableWidgetItem(rows[r].kind));
-        table->setItem(r, 1, new QTableWidgetItem(rows[r].ref));
-        table->setItem(r, 2, new QTableWidgetItem(rows[r].part));
-        table->setItem(r, 3, new QTableWidgetItem(rows[r].detail));
-        table->setItem(r, 4, new QTableWidgetItem(rows[r].qty));
-    }
-    lay->addWidget(table);
-    auto* box = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    lay->addWidget(box);
-    dlg.exec();
+    // Modeless and kept alive: rows are added from the library and typed in while the drawing
+    // stays usable, and the table is placed on the sheet by a click.
+    if (!bomDlg_) bomDlg_ = new BomDialog(editor_, this);
+    bomDlg_->reload();
+    bomDlg_->show();
+    bomDlg_->raise();
+    bomDlg_->activateWindow();
 }
 
 // ---- Documents (tabs) ------------------------------------------------------
@@ -8452,6 +8792,15 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 
 // ---- Persistent drafting preferences ---------------------------------------
 
+// Tooltips: light text on a dark panel. Left to the platform they come out as black text on a
+// pale yellow box in some themes and black-on-dark in others - unreadable next to this window's
+// own colours either way.
+void MainWindow::applyTooltipStyle() {
+    qApp->setStyleSheet(qApp->styleSheet() +
+                        QStringLiteral("\nQToolTip { color:#e6e9ef; background-color:#2b3138; "
+                                     "border:1px solid #5b6572; padding:3px; }"));
+}
+
 void MainWindow::loadSettings() {
     QSettings s;
     auto& sn = editor_->snapSettings();
@@ -8479,6 +8828,7 @@ void MainWindow::loadSettings() {
     EntityRenderer::setLengthUnitInch(s.value(QStringLiteral("units/inch"), false).toBool());
     EntityRenderer::setDualUnits(s.value(QStringLiteral("units/dual"), false).toBool());
     crossSectionAwg_ = s.value(QStringLiteral("units/awg"), false).toBool();
+    setWireGaugeNotationAwg(crossSectionAwg_); // restored before anything is drawn
     customWireColors_ = s.value(QStringLiteral("wire/customColors")).toStringList();
     insulationMaterials_ = s.value(QStringLiteral("wire/insulationMaterials")).toStringList();
 }

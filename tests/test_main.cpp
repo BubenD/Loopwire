@@ -8,6 +8,8 @@ int run_io_tests();
 int run_harness_tests();
 
 int main() {
+    // Unbuffered, so a crash mid-suite still shows how far it got.
+    setvbuf(stdout, nullptr, _IONBF, 0);
     int failures = 0;
     failures += run_geometry_tests();
     failures += run_editor_tests();

@@ -51,6 +51,10 @@ add_library(edraw_core STATIC
     src/harness/Harness.cpp
     src/harness/HarnessBuilder.h
     src/harness/HarnessBuilder.cpp
+    src/harness/PartsLibrary.h
+    src/harness/PartsLibrary.cpp
+    src/harness/Bom.h
+    src/harness/Bom.cpp
     src/render/CanvasWidget.h
     src/render/CanvasWidget.cpp
     src/render/EntityRenderer.h
@@ -63,6 +67,12 @@ add_library(edraw_core STATIC
     src/app/MainWindow.cpp
     src/app/HarnessBuilderDialog.h
     src/app/HarnessBuilderDialog.cpp
+    src/app/SplashScreen.h
+    src/app/SplashScreen.cpp
+    src/app/PartsLibraryDialog.h
+    src/app/PartsLibraryDialog.cpp
+    src/app/BomDialog.h
+    src/app/BomDialog.cpp
 )
 
 target_include_directories(edraw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

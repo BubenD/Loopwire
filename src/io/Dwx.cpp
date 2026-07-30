@@ -22,6 +22,7 @@ QJsonObject toJson(const Document& doc) {
     QJsonArray entities;
     for (const auto& e : doc.entities()) entities.append(e.toJson());
     root["entities"] = entities;
+    if (!doc.bom().isEmpty()) root["bom"] = doc.bom();
     return root;
 }
 
@@ -37,6 +38,7 @@ void fromJson(Document& doc, const QJsonObject& obj) {
     std::vector<Entity> entities;
     for (const auto& v : obj.value("entities").toArray())
         entities.push_back(Entity::fromJson(v.toObject()));
+    doc.bom() = obj.value("bom").toObject();
     doc.entities() = std::move(entities);
 
     doc.setActiveLayer(doc.layers().empty() ? QStringLiteral("0")

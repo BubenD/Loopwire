@@ -118,11 +118,22 @@ QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
 namespace {
 
 double effectiveWeight(const Entity& e, const Document& doc) {
-    if (e.type == EntityType::Wire)
-        return wireGaugeWeight(e.meta.value("wireGauge").toString());
     if (e.weight > 0.0) return e.weight;
     if (const Layer* layer = doc.findLayer(e.layer)) return layer->weight;
     return 1.0;
+}
+
+// How wide a WIRE is drawn, in screen pixels. The base is the weight the layer gives it - a net
+// wire is as thin as anything else on that layer - and its cross-section moves it a little
+// either way, bounded at both ends: the gauge should be legible in the line, not shout.
+double wireDrawWidth(const Entity& e, const Document& doc) {
+    const double base = std::max(0.6, effectiveWeight(e, doc));
+    const QString gauge = e.meta.value("wireGauge").toString();
+    if (gauge.isEmpty()) return base;
+    // wireGaugeWeight runs 0.7 (32 AWG) to 10 (1 AWG); 1.5 is 0.5 mm2, the everyday size, and
+    // sits at the layer's own weight.
+    const double delta = 0.28 * (wireGaugeWeight(gauge) - 1.5);
+    return std::clamp(base + delta, 0.6, base + 1.9);
 }
 
 // Draw a small text label at a screen point, scaled to world height.
@@ -156,15 +167,15 @@ void drawTextAlongWire(QPainter& p, const ViewTransform& vt, const Vec2& at, con
     QFont f = p.font();
     f.setPixelSize(std::max(1, static_cast<int>(worldHeight * vt.scale())));
     const QFontMetricsF fm(f);
+    // `lift` is the height above the line the text is drawn at, in world units; the small screen
+    // floor keeps a zero-lift marking off the line itself at any zoom.
     const double gap = std::max(2.0, worldHeight * vt.scale() * 0.35) + lift * vt.scale();
     p.save();
     p.setFont(f);
     p.setPen(color);
     p.translate(vt.toScreen(at));
     p.rotate(std::atan2(-dir.y, dir.x) * 180.0 / M_PI);
-    p.drawText(QPointF(-fm.horizontalAdvance(text) / 2.0,
-                       below ? gap + fm.ascent() : -gap),
-               text);
+    p.drawText(QPointF(-fm.horizontalAdvance(text) / 2.0, below ? gap + fm.ascent() : -gap), text);
     p.restore();
 }
 
@@ -700,7 +711,7 @@ std::pair<double, double> twistBandX(const Entity& twist) {
     // so the braid isn't cramped when more twists / longer flats are requested.
     const int repeats = std::max(1, twist.meta.value("repeats").toInt(2));
     const double flat = twist.meta.value("flatLen").toDouble(6.0);
-    const double w = std::max(28.0, repeats * (band * 0.6 + flat) + 16.0);
+    const double w = twistBandWidth(repeats, band, flat);
     return {cx - w / 2.0, cx + w / 2.0};
 }
 
@@ -736,6 +747,13 @@ std::vector<std::vector<Vec2>> clipPolylineByXBands(
     };
     for (size_t i = 1; i < pts.size(); ++i) {
         const Vec2 a = pts[i - 1], b = pts[i];
+        // The twist takes over a stretch of the wire's HORIZONTAL run. A leg that climbs
+        // through the same x-range is not what the symbol replaces, so it is drawn whole -
+        // otherwise a wire that turns a corner near a twist loses the whole leg.
+        if (std::abs(b.y - a.y) > std::abs(b.x - a.x)) {
+            cur.push_back(b);
+            continue;
+        }
         const double xLo = std::min(a.x, b.x), xHi = std::max(a.x, b.x);
         std::vector<std::pair<double, double>> cuts;
         for (const auto& bd : bands) {
@@ -772,9 +790,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                           const ViewTransform& vt, const QColor& overrideColor) {
     const QColor color = overrideColor.isValid() ? overrideColor : resolveColor(e, doc);
     QPen pen(color);
-    pen.setCosmetic(true); // width stays constant in screen px regardless of zoom
-    pen.setWidthF(overrideColor.isValid() ? effectiveWeight(e, doc) + 1.4
-                                          : effectiveWeight(e, doc));
+    pen.setCosmetic(true); // width is set in screen px; for a wire it is derived from the zoom
+    if (e.type == EntityType::Wire) {
+        const double px = wireDrawWidth(e, doc);
+        pen.setWidthF(overrideColor.isValid() ? px + 1.4 : px);
+    } else {
+        pen.setWidthF(overrideColor.isValid() ? effectiveWeight(e, doc) + 1.4
+                                             : effectiveWeight(e, doc));
+    }
     pen.setJoinStyle(Qt::RoundJoin);
     pen.setCapStyle(Qt::RoundCap);
     p.setPen(pen);
@@ -973,27 +996,25 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Wire markings: the colour code / name and the cross-section, each switched on
         // independently and repeated along the run. They read along the wire (colour
         // above it, gauge below) and sit wherever their grip was dragged to.
-        const QString markColor = wireAnnotColorText(e);
-        const QString markGauge = wireAnnotGaugeText(e);
-        const double annSize = e.meta.value("annSize").toDouble(3.5);
-        if (!markColor.isEmpty() || !markGauge.isEmpty()) {
-            for (const WireAnnot& a : wireAnnots(e)) {
-                drawTextAlongWire(p, vt, a.pos, a.dir, markColor, annSize, color.lighter(150),
-                                  /*below=*/false);
-                drawTextAlongWire(p, vt, a.pos, a.dir, markGauge, annSize, color.lighter(130),
-                                  /*below=*/true);
+        // The three markings each read on their OWN line, stacked above the run: the label
+        // topmost, then the colour, then the cross-section. One line holding "RD 0.5 mm2" made
+        // them impossible to tell apart or to point at; a line each can be read - and clicked -
+        // on its own.
+        {
+            // Three separate markings: each at its OWN places along the run, as many times as it
+            // is set to, at its OWN height above it and in its OWN text height. Nothing is stacked
+            // relative to anything else, so a height set here is the height it is drawn at.
+            const int tone[] = {130, 150, 160};
+            int which = 0;
+            for (const QString& part : wireAnnotParts()) {
+                const QString text = wireAnnotPartText(e, part);
+                const int lighten = tone[std::min(which++, 2)];
+                if (text.isEmpty()) continue;
+                const double h = wireAnnotSizeFor(e, part);
+                for (const WireAnnot& a : wireAnnotsFor(e, part))
+                    drawTextAlongWire(p, vt, a.pos, a.dir, text, h, color.lighter(lighten),
+                                      /*below=*/a.flip, /*lift=*/wireAnnotGapFor(e, part));
             }
-        }
-        // The wire's own label sits ABOVE the run, mid-span, reading along it. When a colour
-        // marking is switched on it already occupies the space just above the line, so the
-        // label is lifted clear of it instead of printing on top.
-        const QString wireLbl = e.meta.value("wireLabel").toString();
-        if (!wireLbl.isEmpty() && e.meta.value("showWireLabel").toBool(true)) {
-            Vec2 at, dir;
-            if (wirePointAtFraction(e, 0.5, at, dir))
-                drawTextAlongWire(p, vt, at, dir, wireLbl, annSize, color.lighter(160),
-                                  /*below=*/false,
-                                  /*lift=*/markColor.isEmpty() ? 0.0 : annSize * 1.15);
         }
         break;
     }
@@ -1415,9 +1436,42 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPointF c = vt.toScreen(e.a);
         // World-sized dot so it scales with zoom (screen floor keeps it visible).
         const double r = std::max(2.5, e.meta.value("size").toDouble(4.0) * vt.scale());
-        p.setBrush(color);
-        p.drawEllipse(c, r, r);
-        p.setBrush(Qt::NoBrush);
+        // A splice that joins the two conductors of one cable is drawn as the whole assembly:
+        // each joint in its own housing, and a bar tying the housings into a single splice. `b`
+        // holds the second joint, so the pair travels as one entity.
+        const bool pair = e.meta.value("pair").toBool(false);
+        if (!pair) {
+            p.setBrush(color);
+            p.drawEllipse(c, r, r);
+            p.setBrush(Qt::NoBrush);
+            break;
+        }
+        const QPointF c2 = vt.toScreen(e.b);
+        // The housing is elongated along the conductor. Sized in world units when the drawing says
+        // so, else from the dot - a joint drawn small still needs a body big enough to read.
+        const double houseRx = e.meta.value("houseRx").toDouble(0.0);
+        const double houseRy = e.meta.value("houseRy").toDouble(0.0);
+        const double hx = houseRx > 0.0 ? std::max(3.0, houseRx * vt.scale()) : r * 2.2;
+        const double hy = houseRy > 0.0 ? std::max(2.0, houseRy * vt.scale()) : r * 1.5;
+        // The bar spans the gap between the two housings, so they read as one part.
+        const double top = std::min(c.y(), c2.y()), bot = std::max(c.y(), c2.y());
+        if (bot - top > hy * 2.0 + 1.0) {
+            const double bw = hx * 0.55;
+            p.drawRect(QRectF((c.x() + c2.x()) / 2.0 - bw, top + hy, bw * 2.0,
+                              (bot - hy) - (top + hy)));
+        }
+        for (const QPointF& j : {c, c2}) {
+            p.drawEllipse(j, hx, hy);
+            p.setBrush(color);
+            p.drawEllipse(j, r, r);
+            p.setBrush(Qt::NoBrush);
+        }
+        // The name goes above the assembly: alongside it would sit in the wires' own markings.
+        const QString txt = e.meta.value("spliceText").toString();
+        const double th = e.meta.value("textSize").toDouble(3.5);
+        if (!txt.isEmpty())
+            drawWorldText(p, QPointF((c.x() + c2.x()) / 2.0, top - hy - th * 0.6 * vt.scale()), txt,
+                          th, vt.scale(), color, Qt::AlignHCenter);
         break;
     }
 
@@ -1629,7 +1683,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             // wire must read as connected either way.
             constexpr double kLegTol = 1.0;
             bool wired = false;
+            // A leg that was actually DROPPED on a wire says so, and that outranks the
+            // geometry: the connection was made deliberately and holds while the shield is
+            // moved (the wire is pulled along with it). Only a wire that has since gone is
+            // ignored - then the geometric test below has the last word.
+            const QString legWire = e.meta.value("legWireId").toString();
+            if (!legWire.isEmpty())
+                for (const auto& w : doc.entities())
+                    if (w.id == legWire && w.type == EntityType::Wire) { wired = true; break; }
             for (const auto& w : doc.entities()) {
+                if (wired) break;
                 if (w.type != EntityType::Wire || w.points.empty()) continue;
                 for (const Vec2& pt : w.points)
                     if (std::hypot(pt.x - drain.x, pt.y - drain.y) < kLegTol) { wired = true; break; }

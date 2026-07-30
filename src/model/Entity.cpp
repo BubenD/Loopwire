@@ -136,6 +136,10 @@ Bounds Entity::bounds() const {
         break;
     }
     case EntityType::Splice:
+        bnds.expand(a);
+        // A two-conductor splice reaches down to its second joint.
+        if (meta.value("pair").toBool(false)) bnds.expand(b);
+        break;
     case EntityType::NetLabel:
     case EntityType::NotConnected:
         bnds.expand(a);
