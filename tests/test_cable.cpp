@@ -188,8 +188,11 @@ int run_cable_tests() {
         const CableSpec s = sampleCable();
         const std::vector<CableConductor> cores = cableConductors(s, QStringLiteral("K1"));
         std::printf("    (%zu conductor(s) for the harness)\n", cores.size());
-        check(static_cast<int>(cores.size()) == s.conductorCount(),
-              "place: a row per conductor, no more and no less");
+        // A row per conductor INSIDE the jacket. The drain is a conductor of the cable, counted by
+        // conductorCount, but it is not a hook-up wire to be landed on a pin: it terminates the
+        // overall screen, and that screen is asked for on the connectors instead.
+        check(static_cast<int>(cores.size()) == s.conductorCount() - 1,
+              "place: a row per conductor, the drain excepted - it belongs to the overall screen");
 
         // Every conductor belongs to the cable.
         bool allBundled = true;
@@ -223,11 +226,34 @@ int run_cable_tests() {
         check(coaxRows == 2 && coaxScreens == 1,
               "place: the coax is a core and a screen, and says it is a coax");
 
-        // The drain wire is there, and it is a screen conductor.
+        // The drain does NOT arrive as a hook-up wire, and the overall screen is not written on to
+        // the conductors: it is the cable's, and it is asked for on the connectors.
         int drains = 0;
         for (const CableConductor& c : cores)
             if (c.label.contains(QLatin1String("drain"))) ++drains;
-        check(drains == 1, "place: the drain wire is a conductor and gets a row");
+        check(drains == 0, "place: no drain row - the overall screen is not a wire");
+        check(cableWantsOverallScreen(s), "place: the cable says it wants an overall screen");
+        int wrongly = 0;
+        for (const CableConductor& c : cores)
+            if (c.shieldGroup == QLatin1String("K1")) ++wrongly;
+        check(wrongly == 0, "place: no conductor is marked as if the OVERALL screen were its own");
+        {
+            // A cable with an overall screen but no screened elements leaves every row unscreened -
+            // this is the "a small screen appeared when no wire is screened" case.
+            CableSpec plain;
+            plain.overallFoil = true;
+            plain.drainGauge = QStringLiteral("0.34");
+            plain.elements.push_back(element(CableElementKind::Single, 3, "0.5", false, false,
+                                             false));
+            const std::vector<CableConductor> rows = cableConductors(plain, QStringLiteral("K2"));
+            int screened = 0;
+            for (const CableConductor& c : rows)
+                if (!c.shieldGroup.isEmpty()) ++screened;
+            check(rows.size() == 3 && screened == 0,
+                  "place: an overall screen alone leaves the wires unscreened - no screen symbol "
+                  "around wires that have none");
+            check(cableWantsOverallScreen(plain), "place: and the cable still asks for its screen");
+        }
 
         // Colours: the pairs walk the standard order, and nothing is left unmarked.
         QSet<QString> pairColours;
@@ -249,7 +275,9 @@ int run_cable_tests() {
             if (c.gauge == QLatin1String("0.5")) ++at05;
             if (c.gauge == QLatin1String("0.22")) ++at022;
         }
-        check(at034 == 9 && at05 == 2 && at022 == 2,
+        // 8 pair conductors at 0.34 (the drain, also 0.34, is no longer a row), the two singles at
+        // 0.5, and the coax's two at 0.22.
+        check(at034 == 8 && at05 == 2 && at022 == 2,
               "place: each conductor carries its element's cross-section");
     }
 
@@ -264,7 +292,7 @@ int run_cable_tests() {
               "place: the colours the cable says, not the usual ones");
     }
 
-    // --- An overall screen puts everything inside it in one screen.
+    // --- An overall screen is the CABLE'S, and says so - it is not each wire's own screen.
     {
         CableSpec s;
         s.overallFoil = true;
@@ -272,8 +300,8 @@ int run_cable_tests() {
         const std::vector<CableConductor> cores = cableConductors(s, QStringLiteral("OV"));
         QSet<QString> screens;
         for (const CableConductor& c : cores) screens.insert(c.shieldGroup);
-        check(screens.size() == 1 && screens.contains(QStringLiteral("OV")),
-              "place: an overall screen is one screen around the lot");
+        check(screens.size() == 1 && screens.contains(QString()) && cableWantsOverallScreen(s),
+              "place: an overall screen is the cable's own, not written on to its wires");
     }
 
     // --- The cross-section drawing: something for every conductor, inside the jacket.

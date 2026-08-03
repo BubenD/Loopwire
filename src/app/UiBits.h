@@ -40,6 +40,12 @@ QPushButton* makeRemoveButton(QWidget* parent, const QString& text = QString(),
 // wire's colour where a square reads as a fill.
 QIcon colorCircleIcon(const QString& hex, int size = 14);
 
+// The two marks a group of wires carries in the builder, drawn the way the drawing draws them: a
+// twist is two conductors crossing, a screen is a dashed outline round them. On a merged cell they
+// say what the block of rows is without spending a column on the word.
+QIcon twistIcon(int size = 14);
+QIcon shieldIcon(int size = 14);
+
 // A colour chooser: every harness colour code as a circle and its name, the custom ones that have been
 // added, and a "Custom…" entry that defines a new one - named, coloured, and remembered, so from then
 // on it is offered like any other. The picked code is in the current item's data.

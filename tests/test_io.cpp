@@ -112,6 +112,35 @@ int run_io_tests() {
         check(sp.type == EntityType::Splice && near(sp.a.x, 7.0), "edraw-dwx: splice position");
     }
 
+    // --- A harness PRESET belongs to the drawing, so it has to survive being saved with it.
+    {
+        Document src;
+        QJsonObject one;
+        one[QStringLiteral("connectors")] = QJsonArray{QJsonObject{{"id", "c1"}}};
+        one[QStringLiteral("wires")] = QJsonArray{QJsonObject{{"id", "w1"}},
+                                                 QJsonObject{{"id", "w2"}}};
+        QJsonObject presets;
+        presets[QStringLiteral("P1 → P2")] = one;
+        src.harnessPresets() = presets;
+
+        Document dst;
+        dwx::fromJson(dst, dwx::toJson(src));
+        const QJsonObject back = dst.harnessPresets();
+        check(back.keys() == QStringList{QStringLiteral("P1 → P2")},
+              "dwx: a harness preset is saved with the drawing, under the name it was given");
+        check(back.value(QStringLiteral("P1 → P2")).toObject()
+                  .value(QStringLiteral("wires")).toArray().size() == 2,
+              "dwx: and the whole definition comes back with it");
+
+        // Deleting one leaves the drawing without it - a preset can be thrown away.
+        QJsonObject fewer = dst.harnessPresets();
+        fewer.remove(QStringLiteral("P1 → P2"));
+        dst.harnessPresets() = fewer;
+        Document again;
+        dwx::fromJson(again, dwx::toJson(dst));
+        check(again.harnessPresets().isEmpty(), "dwx: a deleted preset stays deleted");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

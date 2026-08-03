@@ -132,6 +132,10 @@ struct HarnessLayout {
     int shieldAmount = 1; // OVERALL shield symbols placed per connector that asks for one
     int wireShieldAmount = 2; // symbols placed per INTERNAL (wire) shield group
     double shieldLegLength = 20.0; // how far a generated shield's drain leg reaches
+    // How far a FLYING LEAD (a wire with one open end) reaches out of its pin. 0 = worked out, far
+    // enough to lie inside the screens of the cable it belongs to. How long a flying lead is left is
+    // the loom maker's decision, so it can be said outright.
+    double leadLength = 0.0;
     // Outline of a generated screen: "ellipse" or "capsule" (a vertical stadium).
     QString shieldType = QStringLiteral("ellipse");
     // The pin pitch every connector is drawn at. Editing it in the builder writes through to

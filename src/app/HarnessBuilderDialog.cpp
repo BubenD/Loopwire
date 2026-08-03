@@ -1012,6 +1012,14 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     auto* loadBtn = new QPushButton(QStringLiteral("Load"), this);
     loadBtn->setToolTip(QStringLiteral("Bring back the last saved definition"));
     connect(loadBtn, &QPushButton::clicked, this, [this] { loadDefinition(); });
+    // Patterns kept in THIS DRAWING. Save and Load go to a file, for a harness to be reused across
+    // drawings; a preset belongs to the drawing it was generated on, travels inside it, and can be
+    // thrown away from it.
+    auto* presetBtn = new QPushButton(QStringLiteral("Presets"), this);
+    presetBtn->setToolTip(QStringLiteral(
+        "Harness patterns kept inside this drawing: save what is in the builder now, bring one back, "
+        "or delete one. They are saved with the drawing, so they are there when it is opened again."));
+    connect(presetBtn, &QPushButton::clicked, this, [this, presetBtn] { showPresetMenu(presetBtn); });
     auto* closeBtn = new QPushButton(QStringLiteral("Close"), this);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
     // Clear sits in the bottom row with the rest, between Generate and Save. (It used to be built
@@ -1020,6 +1028,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     footer->addWidget(clearBtn);
     footer->addWidget(saveBtn);
     footer->addWidget(loadBtn);
+    footer->addWidget(presetBtn);
     footer->addWidget(closeBtn);
     root->addLayout(footer);
 
@@ -1735,7 +1744,6 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         "with the colours and cross-sections the cable itself says."));
     connect(placeCableBtn, &QPushButton::clicked, this, [this] {
         if (addCableFromLibrary() > 0) {
-            reloadAll();
             spreadSections();
             if (wireTable_ && wireTable_->rowCount()) wireTable_->scrollToBottom();
         }
@@ -1920,21 +1928,15 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
             });
     // Right-clicking a row asks about the part it is made of - a cable bundle, a wire, a braid. The
     // rows of one cable all name the same part, so right-clicking any of them asks about the cable.
+    // This catches the gaps between the cells; armRowMenu catches the cells themselves.
     wireTable_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(wireTable_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& at) {
         const int row = wireTable_->rowAt(at.y());
         if (row < 0) return;
         // A row carries its wire's id on its first cell widget, the way pickedWireIds reads it.
         QWidget* cell = wireTable_->cellWidget(row, 0);
-        const QString id = cell ? cell->property("wireId").toString() : QString();
-        QString libPart, what;
-        for (const auto& w : def_.wires)
-            if (w.id == id) {
-                libPart = w.libPart;
-                what = w.bundle.isEmpty() ? QStringLiteral("That wire")
-                                          : QStringLiteral("The cable %1").arg(w.bundle);
-            }
-        showPartMenu(libPart, wireTable_->viewport()->mapToGlobal(at), what);
+        showWireRowMenu(cell ? cell->property("wireId").toString() : QString(),
+                        wireTable_->viewport()->mapToGlobal(at));
     });
     wireTable_->setMinimumHeight(200);
     return section(QStringLiteral("Wire connections"), wireTable_, this,
@@ -2296,10 +2298,36 @@ int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
         placed.fromPin = nextFreePin(*from);
         placed.toPin = nextFreePin(*to);
     }
-    summaryLabel_->setText(QStringLiteral("%1 placed: %2 conductor(s) — %3")
-                               .arg(part->title())
-                               .arg(cores.size())
-                               .arg(spec.summary()));
+    // A screen around the whole cable is asked for ON THE CONNECTORS it arrives at, one tick per
+    // end - the same ticks a person would use for a screen they were drawing by hand. That is what
+    // draws the screen just inboard of the pins and carries its drain back to the shell, and it is
+    // why the cable's conductors are no longer marked as if each of them were screened.
+    QString shieldNote;
+    if (cableWantsOverallScreen(spec)) {
+        for (auto& c : def_.connectors) {
+            if (c.id != from->id && c.id != to->id) continue;
+            // Only the flag for the connector's own end means anything.
+            if (c.side == HarnessSide::Left) c.shieldLeft = true;
+            else c.shieldRight = true;
+        }
+        QStringList screens;
+        if (spec.overallFoil) screens << QStringLiteral("foil");
+        if (spec.overallBraid) screens << QStringLiteral("braid");
+        shieldNote = QStringLiteral(", overall %1 ticked on %2 and %3")
+                         .arg(screens.join(QStringLiteral(" + ")),
+                              from->designator.isEmpty() ? from->id : from->designator,
+                              to->designator.isEmpty() ? to->id : to->designator);
+    }
+    // The rows, the pin map and the preview are brought up to date here rather than by whoever
+    // called: a public call that changes the harness must not be able to leave the window showing
+    // something else, whatever the caller remembers to do afterwards. The note is set last, since a
+    // rebuild writes its own.
+    const QString note = QStringLiteral("%1 placed: %2 conductor(s) — %3%4")
+                             .arg(part->title())
+                             .arg(cores.size())
+                             .arg(spec.summary(), shieldNote);
+    reloadAll();
+    summaryLabel_->setText(note);
     return static_cast<int>(cores.size());
 }
 
@@ -2475,8 +2503,8 @@ void HarnessBuilderDialog::reloadWires() {
             ++row;
         }
     }
-    // The rows of one cable say its name once, in a cell of their own.
-    mergeBundleCells();
+    // The rows of one cable, screen or twisted pair say so once, in a cell of their own.
+    mergeGroupCells();
     // Sized to the widgets, not the header text: a connector name or a gauge must never be
     // clipped to "0.5 mm...".
     fitColumns(wireTable_);
@@ -2504,65 +2532,170 @@ void HarnessBuilderDialog::reloadWires() {
                                                          : QAbstractItemView::MultiSelection);
 }
 
-// The Bundle column, merged. Rows that run together in one cable are one thing, and a column
-// repeating its name once per row said the opposite - it read as five loose wires that happen to
-// share a word. Consecutive rows of the same bundle are spanned into a single tall cell with the
-// name centred in it, and typing there renames the whole cable at once, because that is what the
-// one cell now stands for. A row on its own keeps an ordinary editable cell: that is how a bundle
-// is named in the first place.
-void HarnessBuilderDialog::mergeBundleCells() {
-    constexpr int kBundleCol = 5;
+// The columns that describe a GROUP of rows rather than one row, merged. Rows that run together as
+// one cable, one screen or one twisted pair are one thing, and a column repeating its name once per
+// row said the opposite - it read as loose wires that happen to share a word. Consecutive rows with
+// the same value are spanned into a single tall cell with that value centred in it, and editing there
+// applies to every row the cell now stands for. A row on its own keeps an ordinary cell: that is how
+// a group is named in the first place.
+//
+// The merged cell also SAYS what the group is - a twisted pair, a screened pair, the cable's part
+// number - which is the difference between a column of repeated text and a marked-up block a wireman
+// can read at a glance. Several pairs simply make several blocks.
+void HarnessBuilderDialog::mergeGroupCells() {
+    struct GroupCol {
+        int col;
+        QString HarnessWire::*field;
+        bool isPart;
+    };
+    static const GroupCol kCols[] = {{5, &HarnessWire::bundle, false},
+                                     {10, &HarnessWire::shieldGroup, false},
+                                     {11, &HarnessWire::twistGroup, false},
+                                     {13, &HarnessWire::libPart, true}};
     const int rows = wireTable_->rowCount();
-    auto bundleAt = [this](int row) -> QString {
+    auto wireAt = [this](int row) -> const HarnessWire* {
         // A group header spans the full width and is not a wire at all.
-        if (wireTable_->columnSpan(row, 0) > 1) return {};
+        if (wireTable_->columnSpan(row, 0) > 1) return nullptr;
         QWidget* cell = wireTable_->cellWidget(row, 0);
         const QString id = cell ? cell->property("wireId").toString() : QString();
-        if (id.isEmpty()) return {};
+        if (id.isEmpty()) return nullptr;
         for (const auto& w : def_.wires)
-            if (w.id == id) return w.bundle;
-        return {};
+            if (w.id == id) return &w;
+        return nullptr;
     };
-    for (int row = 0; row < rows;) {
-        const QString bundle = bundleAt(row);
-        if (bundle.isEmpty()) { ++row; continue; }
-        int end = row + 1;
-        while (end < rows && bundleAt(end) == bundle) ++end;
-        const int count = end - row;
-        if (count < 2) { row = end; continue; }
-        // The ids the merged cell speaks for - all of them, so a rename reaches every row.
-        QStringList ids;
-        for (int r = row; r < end; ++r)
-            if (QWidget* c = wireTable_->cellWidget(r, 0))
-                ids << c->property("wireId").toString();
-        // The covered rows' own editors go away first: a widget left in a cell a span covers is
-        // still a live widget sitting on top of the table.
-        for (int r = row; r < end; ++r) wireTable_->removeCellWidget(r, kBundleCol);
-        wireTable_->setSpan(row, kBundleCol, count, 1);
-        auto* one = new QLineEdit(bundle, wireTable_);
-        one->setAlignment(Qt::AlignCenter);
-        one->setFrame(false);
-        one->setToolTip(QStringLiteral(
-            "These %1 rows are one cable. Renaming it here renames it on all of them; empty the "
-            "field to break the cable up into separate wires again.").arg(count));
-        // Centred in the tall cell, and carrying the bundle's own colour so the merged block
-        // reads as one object rather than a hole in the tinted rows.
-        QString sheet = QStringLiteral("border:none;font-weight:600;");
-        if (const QString tint = bundleTint(bundle); !tint.isEmpty())
-            sheet += QStringLiteral("background:%1;").arg(tint);
-        one->setStyleSheet(sheet);
-        connect(one, &QLineEdit::editingFinished, this, [this, ids, one, bundle] {
-            if (syncing_) return;
-            const QString name = one->text().trimmed();
-            if (name == bundle) return;
-            for (auto& w : def_.wires)
-                if (ids.contains(w.id)) w.bundle = name;
-            reloadWires();
-            refreshPreview();
-        });
-        wireTable_->setCellWidget(row, kBundleCol, one);
-        row = end;
+    for (const GroupCol& gc : kCols) {
+        auto valueAt = [&](int row) -> QString {
+            const HarnessWire* w = wireAt(row);
+            return w ? (w->*gc.field) : QString();
+        };
+        for (int row = 0; row < rows;) {
+            const QString value = valueAt(row);
+            if (value.isEmpty()) { ++row; continue; }
+            int end = row + 1;
+            while (end < rows && valueAt(end) == value) ++end;
+            const int count = end - row;
+            if (count < 2) { row = end; continue; }
+            // The ids the merged cell speaks for - all of them, so an edit reaches every row.
+            QStringList ids;
+            for (int r = row; r < end; ++r)
+                if (QWidget* c = wireTable_->cellWidget(r, 0))
+                    ids << c->property("wireId").toString();
+            // The covered rows' own editors go away first: a widget left in a cell a span covers is
+            // still a live widget sitting on top of the table.
+            for (int r = row; r < end; ++r) wireTable_->removeCellWidget(r, gc.col);
+            wireTable_->setSpan(row, gc.col, count, 1);
+            const QString tint = bundleTint(wireAt(row) ? wireAt(row)->bundle : QString());
+
+            if (gc.isPart) {
+                // One cable, one part number. Repeating it down the rows invited them to disagree,
+                // and a bill of materials cannot be built out of rows that disagree about what they
+                // are made of. Choosing here names the part for the whole bundle at once.
+                auto* box = libraryPartBox(wireTable_,
+                                           {PartKind::Wire, PartKind::Cable, PartKind::ShieldBraid},
+                                           value);
+                centerCombo(box);
+                box->setToolTip(QStringLiteral(
+                    "The part all %1 of these rows are made of — one cable, one part number. "
+                    "Choosing here names it for every one of them.").arg(count));
+                if (!tint.isEmpty())
+                    box->setStyleSheet(QStringLiteral("background:%1;").arg(tint));
+                connect(box, &QComboBox::currentIndexChanged, this, [this, ids, box](int i) {
+                    if (syncing_ || i < 0) return;
+                    const QString part = box->itemData(i).toString();
+                    const LibraryPart* p = sharedLibrary().byId(part);
+                    const QString gauge = p ? p->value(QStringLiteral("gauge")) : QString();
+                    for (auto& w : def_.wires)
+                        if (ids.contains(w.id)) {
+                            w.libPart = part;
+                            if (!gauge.isEmpty()) w.gauge = gauge;
+                        }
+                    reloadWires();
+                    refreshPreview();
+                });
+                wireTable_->setCellWidget(row, gc.col, box);
+                armCellMenu(box, ids.value(0));
+                row = end;
+                continue;
+            }
+
+            auto* one = new QLineEdit(value, wireTable_);
+            one->setAlignment(Qt::AlignCenter);
+            one->setFrame(false);
+            // What this block IS, said in the cell rather than left to be worked out from the
+            // column heading and the row count. A pair of twisted wires is a twisted pair; screened,
+            // it is a screened pair - and its screen is caught at BOTH ends, which is what the
+            // symbols on the drawing show.
+            QString what;
+            if (gc.col == 11)
+                what = count == 2 ? QStringLiteral("twisted pair")
+                                  : QStringLiteral("twisted group of %1").arg(count);
+            else if (gc.col == 10)
+                what = count == 2 ? QStringLiteral("screened pair")
+                                  : QStringLiteral("screened group of %1").arg(count);
+            if (!what.isEmpty()) {
+                one->addAction(gc.col == 11 ? twistIcon() : shieldIcon(), QLineEdit::LeadingPosition);
+                one->setToolTip(QStringLiteral(
+                    "%1 — these %2 rows are %3 together, and the drawing marks it at both ends. "
+                    "The name is theirs as a group: change it here and it changes on all of them, "
+                    "empty it to break them apart.")
+                                    .arg(what.left(1).toUpper() + what.mid(1))
+                                    .arg(count)
+                                    .arg(gc.col == 11 ? QStringLiteral("twisted")
+                                                      : QStringLiteral("screened")));
+            } else {
+                one->setToolTip(QStringLiteral(
+                    "These %1 rows are one cable. Renaming it here renames it on all of them; empty "
+                    "the field to break the cable up into separate wires again.").arg(count));
+            }
+            // Centred in the tall cell, and carrying the bundle's own colour so the merged block
+            // reads as one object rather than a hole in the tinted rows.
+            QString sheet = QStringLiteral("border:none;font-weight:600;");
+            if (!tint.isEmpty()) sheet += QStringLiteral("background:%1;").arg(tint);
+            one->setStyleSheet(sheet);
+            const QString before = value;
+            QString HarnessWire::*field = gc.field;
+            connect(one, &QLineEdit::editingFinished, this, [this, ids, one, before, field] {
+                if (syncing_) return;
+                const QString name = one->text().trimmed();
+                if (name == before) return;
+                for (auto& w : def_.wires)
+                    if (ids.contains(w.id)) (w.*field) = name;
+                reloadWires();
+                refreshPreview();
+            });
+            wireTable_->setCellWidget(row, gc.col, one);
+            armCellMenu(one, ids.value(0));
+            row = end;
+        }
     }
+}
+
+// Right-clicking a row asks about the part the row is made of. Every cell of the row is a WIDGET,
+// and a widget takes the press before the table ever sees it - which is why the table's own context
+// menu never opened and Qt answered instead with a line edit's Copy / Select All over the rows. Each
+// cell is asked to defer to this.
+void HarnessBuilderDialog::showWireRowMenu(const QString& wireId, const QPoint& globalPos) {
+    QString libPart, what;
+    for (const auto& w : def_.wires)
+        if (w.id == wireId) {
+            libPart = w.libPart;
+            what = w.bundle.isEmpty() ? QStringLiteral("That wire")
+                                      : QStringLiteral("The cable %1").arg(w.bundle);
+        }
+    showPartMenu(libPart, globalPos, what);
+}
+
+void HarnessBuilderDialog::armCellMenu(QWidget* cell, const QString& wireId) {
+    if (!cell) return;
+    cell->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(cell, &QWidget::customContextMenuRequested, this,
+            [this, cell, wireId](const QPoint& at) {
+                showWireRowMenu(wireId, cell->mapToGlobal(at));
+            });
+}
+
+void HarnessBuilderDialog::armRowMenu(int row, const QString& wireId) {
+    for (int c = 0; c < wireTable_->columnCount(); ++c) armCellMenu(wireTable_->cellWidget(row, c), wireId);
 }
 
 // Put a new wire into the group `key` names: for a connector pair that means the two connectors
@@ -2965,6 +3098,8 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
             });
             wireTable_->setCellWidget(row, 13, lib);
         }
+        // Every cell of the row now exists, so every cell can hand a right-click to the row's menu.
+        armRowMenu(row, id);
     }
 }
 
@@ -3052,6 +3187,13 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
     numField(gaps, QStringLiteral("Pin pitch"), def_.layout.pinPitch, 1, 500, &pinPitchSpin_);
     numField(gaps, QStringLiteral("Shield leg length"), def_.layout.shieldLegLength, 0, 1000,
              &shieldLegSpin_);
+    numField(gaps, QStringLiteral("Flying lead length"), def_.layout.leadLength, 0, 5000,
+             &leadLenSpin_);
+    leadLenSpin_->setSpecialValueText(QStringLiteral("auto"));
+    leadLenSpin_->setToolTip(QStringLiteral(
+        "How far a wire with an OPEN end reaches out of its pin before it is terminated. Left on "
+        "auto it reaches far enough to lie inside the screens of the cable it belongs to; a lead is "
+        "otherwise as long as you leave it, and the drawn wire can still be pulled by its end."));
     numField(gaps, QStringLiteral("Text gap over line"), def_.layout.textGap, 0, 200,
              &textGapSpin_);
     numField(gaps, QStringLiteral("Text height"), def_.layout.textHeight, 0.5, 100,
@@ -3141,6 +3283,7 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
     bindNum(gapSpin_, &HarnessLayout::connectorGap);
     bindNum(legGapSpin_, &HarnessLayout::legGap);
     bindNum(shieldLegSpin_, &HarnessLayout::shieldLegLength);
+    bindNum(leadLenSpin_, &HarnessLayout::leadLength);
     bindNum(textGapSpin_, &HarnessLayout::textGap);
     bindNum(spliceSizeSpin_, &HarnessLayout::spliceSize);
     bindNum(textHeightSpin_, &HarnessLayout::textHeight);
@@ -3211,6 +3354,7 @@ void HarnessBuilderDialog::reloadLayout() {
     shieldAmountSpin_->setValue(def_.layout.shieldAmount);
     wireShieldAmountSpin_->setValue(def_.layout.wireShieldAmount);
     shieldLegSpin_->setValue(def_.layout.shieldLegLength);
+    leadLenSpin_->setValue(def_.layout.leadLength);
     pinPitchSpin_->setValue(def_.layout.pinPitch);
     {
         const int at = twistTypeBox_->findData(def_.layout.twistType);
@@ -3228,6 +3372,7 @@ void HarnessBuilderDialog::reloadLayout() {
     terminateWiresBox_->setChecked(def_.layout.terminateUnconnectedWires);
     spliceBox_->setChecked(def_.layout.spliceAtJoins);
     shieldLegSpin_->setValue(def_.layout.shieldLegLength);
+    leadLenSpin_->setValue(def_.layout.leadLength);
     textGapSpin_->setValue(def_.layout.textGap);
     spliceSizeSpin_->setValue(def_.layout.spliceSize);
     textHeightSpin_->setValue(def_.layout.textHeight);
@@ -3319,10 +3464,28 @@ void HarnessBuilderDialog::generate() {
     } else {
         showIssues({}, true);
     }
-    // Hand the harness to the cursor rather than dropping it at its designed coordinates:
-    // the window steps out of the way, the whole harness ghosts under the crosshair, and a
-    // click places it. Esc abandons the placement and brings the window back with the
-    // definition untouched, so nothing is lost by trying a position.
+    // What is being generated is kept WITH THE DRAWING, as a preset, without being asked for: a
+    // harness that has been drawn is a harness worth being able to bring back, and having to remember
+    // to save it first is how it gets lost. It is named after the ends it runs between, so generating
+    // the same harness again replaces its own preset instead of piling up copies, while a second
+    // harness on the same sheet keeps one of its own. This happens before the placement rather than
+    // after it, so abandoning the placement with Esc still leaves the pattern kept - the work of
+    // describing the harness was done either way. Presets are listed, loaded and deleted under
+    // Presets.
+    if (Document* doc = editor_->document(); doc && !def_.connectors.empty()) {
+        QStringList ends;
+        for (const auto& c : def_.connectors)
+            ends << (c.designator.isEmpty() ? c.id : c.designator);
+        if (ends.size() > 3) ends = QStringList{ends.first(), QStringLiteral("…"), ends.last()};
+        const QString name = ends.join(QStringLiteral(" → "));
+        QJsonObject presets = doc->harnessPresets();
+        presets[name] = definitionToJson();
+        doc->harnessPresets() = presets;
+        doc->setDirty(true);
+        lastPresetName_ = name;
+    }
+    // Hand the harness to the cursor rather than dropping it at its designed coordinates: the window
+    // steps out of the way, the whole harness ghosts under the crosshair, and a click places it.
     editor_->beginHarnessPlacement(def_);
     if (!editor_->harnessPlacing()) {
         summaryLabel_->setText(QStringLiteral("Nothing to generate"));
@@ -3389,6 +3552,7 @@ QJsonObject HarnessBuilderDialog::definitionToJson() const {
     lay["shieldAmount"] = def_.layout.shieldAmount;
     lay["wireShieldAmount"] = def_.layout.wireShieldAmount;
     lay["shieldLegLength"] = def_.layout.shieldLegLength;
+    lay["leadLength"] = def_.layout.leadLength;
     lay["pinPitch"] = def_.layout.pinPitch;
     lay["twistType"] = def_.layout.twistType;
     lay["shieldType"] = def_.layout.shieldType;
@@ -3433,6 +3597,116 @@ void HarnessBuilderDialog::saveDefinition() {
     f.close();
     st.setValue(QLatin1String(kLastPathKey), path);
     summaryLabel_->setText(QStringLiteral("Saved %1").arg(QFileInfo(path).fileName()));
+}
+
+// ---- Patterns kept in the drawing -----------------------------------------------------------------
+//
+// A pattern saved to a FILE is for reuse across drawings. A PRESET belongs to the drawing it was
+// generated on: it is saved inside it, comes back with it when it is opened, and is deleted from it
+// when it is not wanted. That is what makes "generate, then keep this arrangement with the sheet"
+// possible without leaving a trail of files that have to be matched back up to drawings by name.
+
+void HarnessBuilderDialog::showPresetMenu(QWidget* under) {
+    Document* doc = editor_ ? editor_->document() : nullptr;
+    QMenu menu(this);
+    if (!doc) {
+        menu.addAction(QStringLiteral("No drawing to keep a preset in"))->setEnabled(false);
+        menu.exec(under ? under->mapToGlobal(QPoint(0, under->height())) : QCursor::pos());
+        return;
+    }
+    menu.addAction(QStringLiteral("Save what is in the builder now…"), this,
+                   [this] { savePresetToDrawing(); });
+    const QJsonObject presets = doc->harnessPresets();
+    QStringList names = presets.keys();
+    names.sort(Qt::CaseInsensitive);
+    if (names.isEmpty()) {
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("This drawing has no presets yet"))->setEnabled(false);
+    } else {
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("In this drawing:"))->setEnabled(false);
+        for (const QString& name : names) {
+            // Each preset says how big it is, so one can be told from another without loading it.
+            const QJsonObject def = presets.value(name).toObject();
+            const int conns = def.value(QStringLiteral("connectors")).toArray().size();
+            const int wires = def.value(QStringLiteral("wires")).toArray().size();
+            QMenu* sub = menu.addMenu(QStringLiteral("%1  (%2 connector%3, %4 wire%5)")
+                                          .arg(name)
+                                          .arg(conns)
+                                          .arg(conns == 1 ? QString() : QStringLiteral("s"))
+                                          .arg(wires)
+                                          .arg(wires == 1 ? QString() : QStringLiteral("s")));
+            sub->addAction(QStringLiteral("Load it"), this,
+                           [this, name] { loadPresetFromDrawing(name); });
+            sub->addAction(QStringLiteral("Delete it"), this,
+                           [this, name] { deletePresetFromDrawing(name); });
+        }
+    }
+    menu.exec(under ? under->mapToGlobal(QPoint(0, under->height())) : QCursor::pos());
+}
+
+void HarnessBuilderDialog::savePresetToDrawing() {
+    Document* doc = editor_ ? editor_->document() : nullptr;
+    if (!doc) return;
+    // Named after the drawing's own harness by default, numbered so a second one does not overwrite
+    // the first by accident.
+    QString suggestion = QStringLiteral("Harness 1");
+    {
+        int n = 1;
+        while (doc->harnessPresets().contains(suggestion))
+            suggestion = QStringLiteral("Harness %1").arg(++n);
+    }
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, QStringLiteral("Keep this harness with the drawing"),
+                              QStringLiteral("Call the preset:"), QLineEdit::Normal, suggestion, &ok)
+            .trimmed();
+    if (!ok || name.isEmpty()) return;
+    if (doc->harnessPresets().contains(name) &&
+        QMessageBox::question(this, QStringLiteral("Schematic harness builder"),
+                              QStringLiteral("This drawing already has a preset called \"%1\". "
+                                             "Replace it?")
+                                  .arg(name),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) !=
+            QMessageBox::Yes)
+        return;
+    QJsonObject presets = doc->harnessPresets();
+    presets[name] = definitionToJson();
+    doc->harnessPresets() = presets;
+    doc->setDirty(true);   // the drawing has changed: it now carries this preset
+    summaryLabel_->setText(QStringLiteral("\"%1\" kept with the drawing — %2 connector(s), "
+                                         "%3 wire(s)")
+                               .arg(name)
+                               .arg(def_.connectors.size())
+                               .arg(def_.wires.size()));
+}
+
+void HarnessBuilderDialog::loadPresetFromDrawing(const QString& name) {
+    Document* doc = editor_ ? editor_->document() : nullptr;
+    if (!doc) return;
+    const QJsonObject def = doc->harnessPresets().value(name).toObject();
+    if (def.isEmpty() || !def.contains(QStringLiteral("connectors"))) {
+        summaryLabel_->setText(QStringLiteral("\"%1\" is empty").arg(name));
+        return;
+    }
+    applyDefinitionJson(def);
+    spreadSections();
+    summaryLabel_->setText(QStringLiteral("Loaded \"%1\" from the drawing").arg(name));
+}
+
+void HarnessBuilderDialog::deletePresetFromDrawing(const QString& name) {
+    Document* doc = editor_ ? editor_->document() : nullptr;
+    if (!doc) return;
+    if (QMessageBox::question(this, QStringLiteral("Schematic harness builder"),
+                              QStringLiteral("Delete the preset \"%1\" from this drawing?").arg(name),
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes)
+        return;
+    QJsonObject presets = doc->harnessPresets();
+    presets.remove(name);
+    doc->harnessPresets() = presets;
+    doc->setDirty(true);
+    summaryLabel_->setText(QStringLiteral("Deleted the preset \"%1\"").arg(name));
 }
 
 void HarnessBuilderDialog::loadDefinition() {
@@ -3523,6 +3797,7 @@ void HarnessBuilderDialog::applyDefinitionJson(const QJsonObject& root) {
     loaded.layout.shieldAmount = fileVersion >= 2 ? lay.value("shieldAmount").toInt(1) : 1;
     loaded.layout.wireShieldAmount = lay.value("wireShieldAmount").toInt(2);
     loaded.layout.shieldLegLength = lay.value("shieldLegLength").toDouble(20.0);
+    loaded.layout.leadLength = lay.value("leadLength").toDouble(0.0);
     loaded.layout.pinPitch = lay.value("pinPitch").toDouble(15.0);
     loaded.layout.twistType = lay.value("twistType").toString(QStringLiteral("jog"));
     loaded.layout.shieldType = lay.value("shieldType").toString(QStringLiteral("ellipse"));

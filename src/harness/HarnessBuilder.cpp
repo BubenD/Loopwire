@@ -1213,6 +1213,109 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         out.entities.push_back(std::move(bond));
     };
 
+    // ---- Flying leads: a wire with one OPEN end ----
+    // The wire leaves its pin, runs out into the corridor and stops. It cannot go through the
+    // ordinary routing, which needs a pin at both ends, so it is drawn here - and it is
+    // terminated with the same X the unconnected-pin rule uses, because an end that reaches
+    // nothing is exactly what that mark is for.
+    //
+    // This is done BEFORE the screens, and each lead is registered as a routed run, for one reason:
+    // a screen is drawn around the wires it finds at its own x, and a lead that did not exist yet
+    // was found by nothing. A cable whose screened pair came out as two flying leads therefore had
+    // its screen silently skipped - the pair was drawn outside every screen it is actually inside.
+    // Now a lead is enclosed by the same screens as any other conductor of its cable: its own, and
+    // the overall one at the end it arrives at.
+    for (const auto& w : def.wires) {
+        const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
+        const bool toOpen = harnessIsOpenEndpoint(w.toConn);
+        if (fromOpen == toOpen) continue; // both ends open is not a wire; neither is neither
+        const QString connId = fromOpen ? w.toConn : w.fromConn;
+        const int pin = fromOpen ? w.toPin : w.fromPin;
+        const Placed* p = placedById(placed, connId);
+        if (!p) continue;
+        Vec2 pinPt;
+        if (!pinEndOf(*p, pin, pinPt)) continue;
+        // How far it reaches into the corridor. Far enough to be INSIDE the screens of the cable it
+        // belongs to - a lead that stops short of them is drawn as though it were outside the
+        // jacket - which means clearing the outermost overall screen symbol at this end, with room
+        // past it for the group's own screen. A length given by hand wins: the lead is a flying
+        // lead, and how long a flying lead is left is the loom maker's decision, not the drawing's.
+        double reach = std::max(laneStep * 1.5, 20.0);
+        if (L.leadLength > 0.0) {
+            reach = L.leadLength;
+        } else {
+            // Clear of the outermost overall screen at this end AND of its width - a screen is an
+            // ellipse, not a line, and a lead that stops level with its centre is drawn cut in half by
+            // it - with room past that for the lead's own group to be screened without the two
+            // outlines crossing.
+            const double outermost = 25.0 + 34.0 * (std::max(1, L.shieldAmount) - 1);
+            int arriving = 0;
+            for (const auto& other : def.wires)
+                if (other.fromConn == p->conn->id || other.toConn == p->conn->id) ++arriving;
+            // The same shape placeScreen will give it: half the band it encloses, plus its padding,
+            // divided by the outline's aspect.
+            const double ry = std::max(1, arriving - 1) * p->spec.pitch * 0.5 + p->spec.pitch * 0.34;
+            const double rx = std::max(2.0, ry / 3.0);
+            // Room past the overall screen for the lead's own screen AND for a twist mark, if it is
+            // one of a twisted pair: both are drawn along the lead, and a lead too short for them is a
+            // pair that comes out neither screened nor twisted on the drawing.
+            reach = std::max(reach, outermost + rx * 2.0 + std::max(30.0, p->spec.pitch * 2.0) +
+                                        (w.twistGroup.isEmpty() ? 0.0 : p->spec.pitch * 2.5));
+        }
+        const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
+        const Vec2 tip{pinPt.x + inward * reach, pinPt.y};
+        Entity e;
+        e.type = EntityType::Wire;
+        e.layer = QStringLiteral("Wires");
+        e.points = {pinPt, tip};
+        e.meta.insert("wireColor", w.color);
+        e.meta.insert("wireGauge", w.gauge);
+        e.meta.insert("openEnd", true);
+        // Which cable it is one of. A flying lead has nothing else to say what it belongs to: the
+        // rest of the bundle is a screen and a jacket it is drawn beside rather than inside.
+        if (!w.bundle.isEmpty()) e.meta.insert("bundle", w.bundle);
+        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
+        e.meta.insert("showWireLabel", w.showLabel);
+        e.meta.insert("showColorName", w.showColor);
+        e.meta.insert("showGaugeName", w.showGauge);
+        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
+        // the colour, then the label.
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            e.color = wireColorHex(w.color);
+        out.entities.push_back(std::move(e));
+        // Routed like any other run, so every screen that should catch this lead can find it.
+        routed.push_back({w.id, out.entities.size() - 1});
+        Entity x;
+        x.type = EntityType::NotConnected;
+        x.layer = QStringLiteral("Wires");
+        x.a = tip;
+        x.meta.insert("ncSize", std::max(2.0, p->spec.pitch * 0.3));
+        out.entities.push_back(std::move(x));
+        // The BUNDLE MARK: a band across the lead, in the marking orange, saying this loose end is
+        // part of a cable and not a wire of its own. Two ticks, the way a bundle is banded by hand.
+        if (!w.bundle.isEmpty()) {
+            const double band = std::max(2.0, p->spec.pitch * 0.28);
+            const double at = tip.x - inward * band * 2.2;   // just inboard of the terminated end
+            for (int k = 0; k < 2; ++k) {
+                Entity m;
+                m.type = EntityType::Line;
+                m.layer = QStringLiteral("Wires");
+                m.color = QStringLiteral("#ff8c00");
+                const double mx = at - inward * band * 0.8 * k;
+                m.a = {mx, tip.y - band};
+                m.b = {mx, tip.y + band};
+                m.meta.insert("bundleMark", w.bundle);
+                out.entities.push_back(std::move(m));
+            }
+        }
+    }
+
     // ---- Overall shields: one per connector that asks for one ----
     // The OVERALL screen wraps everything arriving at that connector, so it is asked for on
     // the connector rather than per wire, and it is drawn just inboard of its own pins — the
@@ -1277,9 +1380,46 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             }
         }
         if (xa > xb) continue;
-        const int amount = std::max(1, L.wireShieldAmount);
+        // How many symbols this screen gets. Twice - once near each end - for a group that runs
+        // between two connectors, because that is where a screen is caught and terminated. But a group
+        // whose wires are all FLYING LEADS has one end and a short run: two symbols on it are the same
+        // screen drawn twice over a few tens of units, and they crowd out the twist mark the pair also
+        // needs. Such a group is marked once.
+        bool allLeads = true;
+        for (const auto& w : def.wires) {
+            if (w.shieldGroup != key) continue;
+            if (!harnessIsOpenEndpoint(w.fromConn) && !harnessIsOpenEndpoint(w.toConn))
+                allLeads = false;
+        }
+        const int amount = allLeads ? 1 : std::max(1, L.wireShieldAmount);
+        // A screen must not be drawn on top of a screen already there. On a long run the two never
+        // met; on a SHORT one - a screened pair that comes out as a pair of flying leads, whose whole
+        // span is a few tens of units - the group's symbols land right on the overall screen at that
+        // end and the two outlines cross into an unreadable knot. Each symbol is nudged along the run
+        // until it is clear of the ones already placed.
+        auto clearOf = [&out](double x, double margin) {
+            for (int guard = 0; guard < 8; ++guard) {
+                bool moved = false;
+                for (const Entity& e : out.entities) {
+                    if (e.type != EntityType::Screen || e.points.empty()) continue;
+                    // Its own half-width, so the outlines do not cross rather than merely the centres
+                    // not coinciding.
+                    const double keepAway = e.meta.value("rx").toDouble() + margin;
+                    if (std::abs(e.points.front().x - x) < keepAway) {
+                        x = e.points.front().x + keepAway;
+                        moved = true;
+                    }
+                }
+                if (!moved) break;
+            }
+            return x;
+        };
         for (int k = 0; k < amount; ++k) {
-            const double x = xa + (xb - xa) * (k + 1.0) / (amount + 1.0);
+            double x = xa + (xb - xa) * (k + 1.0) / (amount + 1.0);
+            // Kept inside the group's own run: a screen drawn past the end of the wires it encloses
+            // encloses nothing.
+            const double keepAway = std::max(6.0, (xb - xa) * 0.12);
+            x = std::min(clearOf(x, keepAway), xb - keepAway * 0.5);
             Vec2 drain;
             bool innerTerminated = false;
             {
@@ -1291,56 +1431,6 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             placeScreen(ids, x, key, /*overall=*/false, /*owns=*/k == 0, drain, nullptr,
                         /*terminated=*/innerTerminated);
         }
-    }
-
-    // ---- Flying leads: a wire with one OPEN end ----
-    // The wire leaves its pin, runs out into the corridor and stops. It cannot go through the
-    // ordinary routing, which needs a pin at both ends, so it is drawn here - and it is
-    // terminated with the same X the unconnected-pin rule uses, because an end that reaches
-    // nothing is exactly what that mark is for.
-    for (const auto& w : def.wires) {
-        const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
-        const bool toOpen = harnessIsOpenEndpoint(w.toConn);
-        if (fromOpen == toOpen) continue; // both ends open is not a wire; neither is neither
-        const QString connId = fromOpen ? w.toConn : w.fromConn;
-        const int pin = fromOpen ? w.toPin : w.fromPin;
-        const Placed* p = placedById(placed, connId);
-        if (!p) continue;
-        Vec2 pinPt;
-        if (!pinEndOf(*p, pin, pinPt)) continue;
-        // Out into the corridor, as far as a lane and a half - far enough to read as a lead
-        // rather than a stub, and clear of the connector it leaves.
-        const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
-        const double reach = std::max(laneStep * 1.5, 20.0);
-        const Vec2 tip{pinPt.x + inward * reach, pinPt.y};
-        Entity e;
-        e.type = EntityType::Wire;
-        e.layer = QStringLiteral("Wires");
-        e.points = {pinPt, tip};
-        e.meta.insert("wireColor", w.color);
-        e.meta.insert("wireGauge", w.gauge);
-        e.meta.insert("openEnd", true);
-        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
-        e.meta.insert("showWireLabel", w.showLabel);
-        e.meta.insert("showColorName", w.showColor);
-        e.meta.insert("showGaugeName", w.showGauge);
-        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
-        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
-        // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
-        // the colour, then the label.
-        for (const QString& part : wireAnnotParts())
-            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
-        if (L.wireColorMode == QLatin1String("bylayer"))
-            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
-        else
-            e.color = wireColorHex(w.color);
-        out.entities.push_back(std::move(e));
-        Entity x;
-        x.type = EntityType::NotConnected;
-        x.layer = QStringLiteral("Wires");
-        x.a = tip;
-        x.meta.insert("ncSize", std::max(2.0, p->spec.pitch * 0.3));
-        out.entities.push_back(std::move(x));
     }
 
     // ---- Coax: a signal with its braid, drawn as a screen on the signal ----

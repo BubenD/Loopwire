@@ -137,6 +137,11 @@ struct CableConductor {
 // rows are gathered under - the cable's own designation is what a drawing wants to see.
 std::vector<CableConductor> cableConductors(const CableSpec& spec, const QString& bundleName);
 
+// Whether the cable has a screen around the WHOLE of it. Such a screen is not one of the conductors
+// and is not written on to them: it is asked for on the connectors the cable arrives at, which is
+// where a screen is terminated. See the note in cableConductors.
+bool cableWantsOverallScreen(const CableSpec& spec);
+
 // The colours one element takes under a standard. `index` counts the elements of that kind seen so
 // far, which is what walks a multi-pair table from pair 1 to pair 2 to pair 3.
 QStringList cableColoursFor(CableColourStandard standard, CableElementKind kind, int index);

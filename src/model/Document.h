@@ -45,6 +45,13 @@ public:
     QString& unit() { return unit_; }
     const QString& unit() const { return unit_; }
 
+    // The harness patterns saved INTO this drawing. A pattern saved to a file is for reuse across
+    // drawings; these belong to this one - generated from it, kept with it, deleted from it - so a
+    // drawing that has been laid out once can be regenerated without going to find a file. Keyed by
+    // the name the user gave, each value a whole builder definition.
+    QJsonObject& harnessPresets() { return harnessPresets_; }
+    const QJsonObject& harnessPresets() const { return harnessPresets_; }
+
     // The drawing's bill of materials: the rows someone typed and the column headings they chose.
     // The rows the drawing itself implies are not kept here - they are read off the entities every
     // time, so they cannot go stale (see bomFromDrawing).
@@ -69,6 +76,7 @@ private:
     int multiLineCount_ = 3;
     int polygonSides_ = 5;
     QJsonObject bom_;
+    QJsonObject harnessPresets_;
     bool dirty_ = false;
 };
 

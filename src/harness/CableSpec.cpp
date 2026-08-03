@@ -427,26 +427,18 @@ std::vector<CableConductor> cableConductors(const CableSpec& spec, const QString
         }
         (void)perElement;
     }
-    // An overall screen is one more thing to terminate: it belongs to the whole cable, so its group
-    // is the cable itself.
-    if (spec.overallFoil || spec.overallBraid) {
-        for (CableConductor& cc : out)
-            if (cc.shieldGroup.isEmpty() && cc.kind != QLatin1String("coax"))
-                cc.shieldGroup = bundle;   // everything inside the overall screen is in that screen
-    }
-    if (!spec.drainGauge.trimmed().isEmpty()) {
-        CableConductor drain;
-        drain.gauge = spec.drainGauge.trimmed();
-        drain.colour = QStringLiteral("SH");
-        drain.kind = QStringLiteral("wire");
-        drain.bundle = bundle;
-        drain.label = QStringLiteral("%1 drain").arg(bundle);
-        drain.isScreen = true;
-        drain.shieldGroup = bundle;
-        drain.element = 0;
-        out.push_back(drain);
-    }
+    // An overall screen is NOT a property of the conductors, and it used to be written on to every
+    // one of them as an internal shield group - plus a drain wire of its own to terminate it. A cable
+    // whose wires are not individually screened then drew a screen symbol around them anyway, saying
+    // something about the wires that is not true of them, and the drain arrived as a hook-up wire
+    // that had to be landed on a pin. The overall screen belongs to the CABLE and is asked for on the
+    // connectors it arrives at - a tick per end - which is how the drawing already terminates a
+    // screen onto a shell. So nothing is added here for it; see cableWantsOverallScreen.
     return out;
+}
+
+bool cableWantsOverallScreen(const CableSpec& spec) {
+    return spec.overallFoil || spec.overallBraid;
 }
 
 // ---- Where a part keeps it -----------------------------------------------------------------------

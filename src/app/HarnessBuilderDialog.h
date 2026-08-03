@@ -47,6 +47,10 @@ public:
     // which cable. Returns how many conductors were added.
     int addCableFromLibrary(const QString& libPartId = QString());
 
+    // What the builder currently describes. Read-only: everything that changes a harness goes
+    // through the dialog's own controls, so the definition and the tables can never disagree.
+    const HarnessDef& definition() const { return def_; }
+
 signals:
     // "See it in the library": the host owns the library window, so it is asked to open it at the part.
     void openLibraryAt(const QString& libPartId);
@@ -81,8 +85,13 @@ private:
     // Insert a spanning, clickable header for a group of wires; returns nothing but hides
     // its members when the group is folded.
     void buildGroupHeader(int row, const QString& key, const QString& title, int memberCount);
-    // The rows of one bundle carry ONE Bundle cell between them, merged down the column.
-    void mergeBundleCells();
+    // The rows of one bundle / screen / twisted pair carry ONE cell between them, merged down the
+    // column and marked with what the block is.
+    void mergeGroupCells();
+    // The part menu for a row, and the wiring that lets a right-click ON A CELL reach it.
+    void showWireRowMenu(const QString& wireId, const QPoint& globalPos);
+    void armRowMenu(int row, const QString& wireId);
+    void armCellMenu(QWidget* cell, const QString& wireId);
     void reloadLayout();
     // Give each section the height its contents need, so nothing has to be dragged into view.
     void spreadSections();
@@ -126,6 +135,14 @@ private:
     // place, so Save and Load cannot drift apart.
     QJsonObject definitionToJson() const;
     void applyDefinitionJson(const QJsonObject& root);
+    // Patterns kept in the DRAWING rather than in a file: saved after a generate, chosen to be
+    // loaded again, deleted when they are no longer wanted.
+    void showPresetMenu(QWidget* under);
+    // The preset a generate wrote, so the menu can point at what was just kept.
+    QString lastPresetName_;
+    void savePresetToDrawing();
+    void loadPresetFromDrawing(const QString& name);
+    void deletePresetFromDrawing(const QString& name);
 
     // Helpers.
     QString uniqueConnectorId() const;
@@ -197,6 +214,7 @@ private:
     QSpinBox* shieldAmountSpin_ = nullptr;
     QSpinBox* wireShieldAmountSpin_ = nullptr;
     QDoubleSpinBox* shieldLegSpin_ = nullptr;
+    QDoubleSpinBox* leadLenSpin_ = nullptr;
     QDoubleSpinBox* pinPitchSpin_ = nullptr;
     QComboBox* twistTypeBox_ = nullptr;
     QComboBox* shieldTypeBox_ = nullptr;

@@ -14,9 +14,12 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QToolButton>
 
 #include <algorithm>
@@ -136,6 +139,46 @@ QIcon colorCircleIcon(const QString& hex, int size) {
         p.setPen(QPen(QColor("#20242b"), 1.4));
         p.drawLine(QPointF(size * 0.25, size * 0.75), QPointF(size * 0.75, size * 0.25));
     }
+    return QIcon(pm);
+}
+
+QIcon twistIcon(int size) {
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#cfe3ff"));
+    pen.setWidthF(std::max(1.2, size / 11.0));
+    p.setPen(pen);
+    // Two conductors crossing twice: the twist symbol, small.
+    const double h = size / 2.0;
+    const double a = size * 0.12, b = size - a;
+    QPainterPath one, two;
+    one.moveTo(a, h - size * 0.22);
+    one.cubicTo(size * 0.4, h - size * 0.22, size * 0.6, h + size * 0.22, b, h + size * 0.22);
+    two.moveTo(a, h + size * 0.22);
+    two.cubicTo(size * 0.4, h + size * 0.22, size * 0.6, h - size * 0.22, b, h - size * 0.22);
+    p.drawPath(one);
+    p.drawPath(two);
+    return QIcon(pm);
+}
+
+QIcon shieldIcon(int size) {
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    // The screen: a dashed outline with the wires it catches inside it.
+    QPen pen(QColor("#9fb4c8"));
+    pen.setWidthF(std::max(1.0, size / 13.0));
+    pen.setStyle(Qt::DotLine);
+    p.setPen(pen);
+    p.drawEllipse(QRectF(size * 0.08, size * 0.2, size * 0.84, size * 0.6));
+    QPen wire(QColor("#cfe3ff"));
+    wire.setWidthF(std::max(1.0, size / 14.0));
+    p.setPen(wire);
+    p.drawLine(QPointF(size * 0.22, size * 0.42), QPointF(size * 0.78, size * 0.42));
+    p.drawLine(QPointF(size * 0.22, size * 0.58), QPointF(size * 0.78, size * 0.58));
     return QIcon(pm);
 }
 
@@ -291,12 +334,37 @@ QWidget* makeColorListEditor(QWidget* parent, const QStringList& codes, const QS
     return host;
 }
 
-// See installOpaqueMenus. Timing is the whole trick. The style sets the flag while the menu handles
-// its own Polish event - so clearing it from an event filter, which runs BEFORE that, achieves
-// nothing: the style puts it straight back. The flag has to go once the style is done and before the
-// popup's window is made, and aboutToShow is exactly that moment. Every popup re-clears it, which
-// also covers a menu that is built once and shown again and again.
+// See installOpaqueMenus. Two things are done to every menu, because the see-through popup has two
+// halves to it and either one alone leaves a way for it to come back.
+//
+// The Windows 11 style draws a menu as a ROUNDED, TRANSLUCENT panel: it asks for a window with an
+// alpha channel and then paints its own corners into it. Whatever is not painted is a hole. So the
+// menu is given a base style that has no such idea - a plain filled panel - and the application
+// stylesheet still colours it, since the sheet is layered over whichever base style a widget has.
+// The style is set while the menu is being polished, which is before it paints or is shown, and one
+// instance is shared by every menu in the application.
+//
+// And the flags themselves are cleared on the way to being shown. A menu that was polished before
+// this was installed - or one whose style refuses to let go - still ends up with an opaque window,
+// because aboutToShow runs after the style has had its say and before the popup's window exists,
+// which is the one moment they can be taken away and stay away.
 namespace {
+
+QStyle* plainMenuStyle() {
+    // Owned by the application: a style outlives the menus that use it.
+    static QStyle* style = [] {
+        QStyle* s = QStyleFactory::create(QStringLiteral("Fusion"));
+        if (s) s->setParent(QCoreApplication::instance());
+        return s;
+    }();
+    return style;
+}
+
+void makeMenuOpaque(QMenu* menu) {
+    menu->setAttribute(Qt::WA_TranslucentBackground, false);
+    menu->setAttribute(Qt::WA_NoSystemBackground, false);
+}
+
 class OpaqueMenuFilter : public QObject {
 public:
     using QObject::QObject;
@@ -305,10 +373,11 @@ protected:
     bool eventFilter(QObject* watched, QEvent* ev) override {
         if (ev->type() == QEvent::Polish) {
             if (auto* menu = qobject_cast<QMenu*>(watched)) {
-                QObject::connect(menu, &QMenu::aboutToShow, menu, [menu] {
-                    menu->setAttribute(Qt::WA_TranslucentBackground, false);
-                    menu->setAttribute(Qt::WA_NoSystemBackground, false);
-                });
+                if (QStyle* plain = plainMenuStyle(); plain && menu->style() != plain)
+                    menu->setStyle(plain);
+                makeMenuOpaque(menu);
+                QObject::connect(menu, &QMenu::aboutToShow, menu,
+                                 [menu] { makeMenuOpaque(menu); });
             }
         }
         return QObject::eventFilter(watched, ev);
