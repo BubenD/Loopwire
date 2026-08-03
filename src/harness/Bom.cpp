@@ -17,16 +17,76 @@ QString identityOf(const BomRow& r) {
     if (!r.partId.isEmpty()) return QStringLiteral("id:") + r.partId;
     if (!r.mfrPn.isEmpty()) return QStringLiteral("pn:") + r.mfrPn.toLower();
     if (!r.internalPn.isEmpty()) return QStringLiteral("ipn:") + r.internalPn.toLower();
-    return QStringLiteral("d:") + r.description.toLower();
+    if (!r.description.trimmed().isEmpty()) return QStringLiteral("d:") + r.description.toLower();
+    // Nothing said about what it is: the row is only itself, so a second blank row is a second
+    // row rather than one more of the first.
+    return QStringLiteral("row:") + r.rowId;
 }
 
 } // namespace
 
-QString BomRow::qtyText() const {
-    // A count reads as a whole number; a length keeps two decimals unless it is a round figure.
+QString BomRow::qtyText(int decimals) const {
+    // A whole figure reads as a whole number; anything else keeps the decimals asked for.
     if (std::abs(qty - std::round(qty)) < 1e-9)
         return QString::number(static_cast<long long>(std::llround(qty)));
-    return QString::number(qty, 'f', 2);
+    return QString::number(qty, 'f', std::max(0, decimals));
+}
+
+bool BomConfig::columnShown(int i) const {
+    if (i < 0 || i >= bomColumnCount()) return false;
+    if (columns.isEmpty()) return true; // nothing said: every column
+    return i < columns.size() ? columns.at(i) : true;
+}
+
+void BomConfig::setColumnShown(int i, bool on) {
+    if (i < 0 || i >= bomColumnCount()) return;
+    while (columns.size() < bomColumnCount()) columns << true;
+    columns[i] = on;
+}
+
+QJsonObject BomConfig::toJson() const {
+    QJsonObject o;
+    o[QStringLiteral("lengthUnit")] = lengthUnit;
+    o[QStringLiteral("unify")] = unify;
+    o[QStringLiteral("includeDrawing")] = includeDrawing;
+    o[QStringLiteral("qtyDecimals")] = qtyDecimals;
+    o[QStringLiteral("sparePercent")] = sparePercent;
+    o[QStringLiteral("roundUpLengths")] = roundUpLengths;
+    QJsonArray cols;
+    for (int i = 0; i < bomColumnCount(); ++i) cols.append(columnShown(i));
+    o[QStringLiteral("columns")] = cols;
+    return o;
+}
+
+void BomConfig::fromJson(const QJsonObject& o) {
+    const BomConfig def;
+    lengthUnit = o.value(QStringLiteral("lengthUnit")).toString(def.lengthUnit);
+    unify = o.value(QStringLiteral("unify")).toBool(def.unify);
+    includeDrawing = o.value(QStringLiteral("includeDrawing")).toBool(def.includeDrawing);
+    qtyDecimals = o.value(QStringLiteral("qtyDecimals")).toInt(def.qtyDecimals);
+    sparePercent = o.value(QStringLiteral("sparePercent")).toDouble(def.sparePercent);
+    roundUpLengths = o.value(QStringLiteral("roundUpLengths")).toBool(def.roundUpLengths);
+    columns.clear();
+    for (const auto& v : o.value(QStringLiteral("columns")).toArray()) columns << v.toBool(true);
+}
+
+std::vector<BomRow> bomApplyConfig(const std::vector<BomRow>& rows, const BomConfig& cfg) {
+    std::vector<BomRow> out;
+    out.reserve(rows.size());
+    for (BomRow r : rows) {
+        // Lengths only: a connector counted in pieces is not a length, and 2.5 pieces means
+        // nothing. A row already in the working unit is simply left alone.
+        if (partUnitDimension(r.unit) == QLatin1String("length")) {
+            double v = r.qty;
+            if (cfg.lengthUnit != r.unit && convertPartUnit(r.qty, r.unit, cfg.lengthUnit, v))
+                r.unit = cfg.lengthUnit;
+            if (cfg.sparePercent > 0.0) v *= 1.0 + cfg.sparePercent / 100.0;
+            if (cfg.roundUpLengths) v = std::ceil(v);
+            r.qty = v;
+        }
+        out.push_back(r);
+    }
+    return out;
 }
 
 QStringList bomDefaultHeaders() {
@@ -65,6 +125,7 @@ QJsonObject BomTable::toJson() const {
         // the drawing every time, so they can never go stale.
         if (r.fromDrawing) continue;
         QJsonObject ro;
+        ro[QStringLiteral("rowId")] = r.rowId;
         ro[QStringLiteral("description")] = r.description;
         ro[QStringLiteral("internalPn")] = r.internalPn;
         ro[QStringLiteral("mfrPn")] = r.mfrPn;
@@ -76,16 +137,19 @@ QJsonObject BomTable::toJson() const {
         arr.append(ro);
     }
     o[QStringLiteral("rows")] = arr;
+    o[QStringLiteral("config")] = config.toJson();
     return o;
 }
 
 void BomTable::fromJson(const QJsonObject& o) {
+    config.fromJson(o.value(QStringLiteral("config")).toObject());
     headers.clear();
     for (const auto& v : o.value(QStringLiteral("headers")).toArray()) headers << v.toString();
     rows.clear();
     for (const auto& v : o.value(QStringLiteral("rows")).toArray()) {
         const QJsonObject ro = v.toObject();
         BomRow r;
+        r.rowId = ro.value(QStringLiteral("rowId")).toString();
         r.description = ro.value(QStringLiteral("description")).toString();
         r.internalPn = ro.value(QStringLiteral("internalPn")).toString();
         r.mfrPn = ro.value(QStringLiteral("mfrPn")).toString();
@@ -95,6 +159,7 @@ void BomTable::fromJson(const QJsonObject& o) {
         r.partId = ro.value(QStringLiteral("partId")).toString();
         r.ref = ro.value(QStringLiteral("ref")).toString();
         r.fromDrawing = false;
+        if (r.rowId.isEmpty()) r.rowId = bomNextRowId(rows);
         rows.push_back(r);
     }
 }
@@ -140,6 +205,16 @@ BomRow bomRowFromPart(const LibraryPart& part, double qty) {
     r.unit = part.unit.isEmpty() ? defaultUnitForKind(part.kind) : part.unit;
     r.partId = part.id;
     return r;
+}
+
+QString bomNextRowId(const std::vector<BomRow>& rows) {
+    for (int i = static_cast<int>(rows.size()) + 1;; ++i) {
+        const QString id = QStringLiteral("r%1").arg(i);
+        bool taken = false;
+        for (const BomRow& r : rows)
+            if (r.rowId == id) { taken = true; break; }
+        if (!taken) return id;
+    }
 }
 
 std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib) {

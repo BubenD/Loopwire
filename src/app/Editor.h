@@ -352,6 +352,11 @@ public:
     void cutSelection();           // Ctrl+X: copy to clipboard + delete the originals
     void copyWithBase(bool cut);   // Ctrl+Shift+C: then pick a base point
     void paste();                  // Ctrl+V: then click to place (relative to base)
+    // When the application last put something on its OWN clipboard (ms since the epoch). A paste has
+    // to choose between what was copied in here and what is on the system clipboard - a screenshot,
+    // say - and the answer is simply whichever happened last.
+    qint64 clipboardStamp() const { return clipStamp_; }
+    bool clipboardEmpty() const { return clipboard_.empty(); }
     // Put a set of entities on the clipboard and start placing them: the parts library inserts a
     // part's drawing this way, so it is dropped by a click like anything else that is pasted.
     void placeEntities(const std::vector<Entity>& ents);
@@ -761,6 +766,12 @@ public:
     void refreshBundleCompanions();
     // Connect the refresh to selectionChanged (called once, from the constructor).
     void hookSelectionCompanions();
+    // A placed block is one object: pull every piece of a picked copy into the selection. True when
+    // that added anything, so the caller knows to announce the selection again.
+    bool expandBlockSelection();
+    // Part of a block that has been placed - and so not editable on the sheet. Static: it asks only
+    // about the entity, and is called from const paths that draw the grips.
+    static bool isBlockPiece(const Entity& e);
 
     // Pixel tolerance (screen px) for snapping/hit testing.
     void setPixelTolerance(double px) { pixelTol_ = px; }
@@ -771,10 +782,17 @@ signals:
     void selectionChanged();
     void toolChanged(ToolId t);
     void message(const QString& text);
+    // Ctrl+V. The host decides what a paste means: the system clipboard may hold a picture that is
+    // newer than anything copied in here. Not connected => the editor pastes its own clipboard.
+    void pasteRequested();
     // Tool needs free-text/numeric input (prompt shown by the host UI).
     void textPromptRequested(const QString& prompt);
     // Double-clicked an existing text object — the host opens the editor for it.
     void editTextRequested(const QString& id);
+    // Double-clicked a copy of a block — the host opens the block editor for it.
+    void editBlockRequested(const QString& name);
+    // Double-clicked the sheet frame — the host opens the template editor for it.
+    void editTemplateRequested(const QString& name);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
     void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at,
                                 double cellW, double cellH);
@@ -1243,6 +1261,7 @@ private:
 
     // Clipboard with a base point (AutoCAD COPYBASE / cut / paste-to-point).
     Vec2 clipboardBase_{0, 0};    // reference point the clipboard is stored relative to
+    qint64 clipStamp_ = 0;        // when the internal clipboard was last filled
     bool awaitClipBase_ = false;  // next click sets the base point (after Ctrl+Shift+C / Ctrl+X)
     bool clipCut_ = false;        // the pending base-point op is a cut (delete originals)
     bool pastePlacing_ = false;   // paste in progress: next click drops the contents

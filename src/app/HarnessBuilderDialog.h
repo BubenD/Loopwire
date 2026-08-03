@@ -42,8 +42,20 @@ class HarnessBuilderDialog : public QDialog {
 public:
     explicit HarnessBuilderDialog(Editor* editor, QWidget* parent = nullptr);
 
+    // Place a CABLE from the library: one click gives the harness every conductor the cable has, with
+    // its colours, cross-sections, twisted groups and screens already set. `libPartId` empty asks
+    // which cable. Returns how many conductors were added.
+    int addCableFromLibrary(const QString& libPartId = QString());
+
+signals:
+    // "See it in the library": the host owns the library window, so it is asked to open it at the part.
+    void openLibraryAt(const QString& libPartId);
+
 protected:
     void keyPressEvent(QKeyEvent* e) override;
+    // The libraries are read again every time this window is opened, so a part added since it was
+    // last used is there to be picked.
+    void showEvent(QShowEvent* e) override;
 
 private:
     // --- Sections, in the order they appear ---
@@ -69,6 +81,8 @@ private:
     // Insert a spanning, clickable header for a group of wires; returns nothing but hides
     // its members when the group is folded.
     void buildGroupHeader(int row, const QString& key, const QString& title, int memberCount);
+    // The rows of one bundle carry ONE Bundle cell between them, merged down the column.
+    void mergeBundleCells();
     void reloadLayout();
     // Give each section the height its contents need, so nothing has to be dragged into view.
     void spreadSections();
@@ -77,7 +91,13 @@ private:
     // --- Actions ---
     void addConnector(HarnessSide side);
     void removeConnector(int row);
+    // Right-clicking anything that names a library part: look at it, or open the library at it. The
+    // same menu wherever a part is named, because the question is the same.
+    void showPartMenu(const QString& libPartId, const QPoint& at, const QString& what);
     void addWire();
+    // The lowest pin of a connector no wire has taken yet - what a new row, or each conductor of a
+    // placed cable, lands on.
+    int nextFreePin(const HarnessConnector& c) const;
     // Add a wire belonging to the group `key` names - a grouped list has to know where a new row
     // goes; set from a group header click while an Add is waiting.
     void addWireToGroup(const QString& key);

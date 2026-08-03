@@ -319,10 +319,34 @@ void CanvasWidget::drawOriginMarker(QPainter& p, const ViewTransform& vt) const 
     p.drawText(o + QPointF(7, 16), QStringLiteral("0,0"));
 }
 
+// What the layer table says, boiled down to one number. Cheap enough to work out on every paint - a
+// drawing has layers in the dozens, not the thousands - and it means a layer switched off, renamed,
+// recoloured or given a different weight redraws the scene at once, from wherever it was changed.
+quint64 CanvasWidget::layerFingerprint() const {
+    if (!doc_) return 0;
+    quint64 h = 1469598103934665603ULL;   // FNV-1a
+    auto mix = [&h](quint64 v) { h = (h ^ v) * 1099511628211ULL; };
+    for (const Layer& l : doc_->layers()) {
+        mix(qHash(l.name));
+        mix(qHash(l.color));
+        mix(l.visible ? 1u : 2u);
+        mix(l.locked ? 3u : 4u);
+        mix(static_cast<quint64>(l.weight * 1000.0));
+    }
+    return h;
+}
+
 void CanvasWidget::paintEvent(QPaintEvent*) {
     const ViewTransform vt = transform();
     const qreal dpr = devicePixelRatioF();
     const QSize devSize = size() * dpr;
+
+    // A layer that has been switched off (or recoloured, or reweighted) since the cache was built
+    // means the cache is out of date, whoever changed it and whether or not they said so.
+    if (const quint64 stamp = layerFingerprint(); stamp != layerStamp_) {
+        layerStamp_ = stamp;
+        sceneDirty_ = true;
+    }
 
     // Rebuild the static scene (grid + entities) only when it actually changed;
     // cursor-move previews reuse this cache so the overlay tracks without lag.

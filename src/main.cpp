@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 #include "app/SplashScreen.h"
+#include "app/UiBits.h"
 
 #include <QApplication>
 #include <QFile>
@@ -14,6 +15,8 @@ int main(int argc, char** argv) {
 
     if (QFile qss(QStringLiteral(":/edraw.qss")); qss.open(QFile::ReadOnly | QFile::Text))
         app.setStyleSheet(QString::fromUtf8(qss.readAll()));
+    // A right-click menu must have a background. See installOpaqueMenus.
+    Edraw_Desktop::installOpaqueMenus(&app);
 
     // The logo, and what is being loaded, while the window builds itself.
     Edraw_Desktop::SplashScreen splash(Edraw_Desktop::MainWindow::startupModules());

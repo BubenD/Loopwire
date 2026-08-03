@@ -18,6 +18,11 @@ namespace Edraw_Desktop {
 // sheet afterwards, and shown in the library the way it will look on the drawing.
 enum class PartKind {
     Wire,
+    // A cable is not a wire: it is a jacket with a make-up inside it - so many pairs, so many
+    // singles, a coax, screens at one level or two. What it is made of is described by a CableSpec
+    // (harness/CableSpec.h) kept in its "structure" parameter, and the harness builder expands it
+    // into its conductors rather than making a person type them out.
+    Cable,
     Connector,
     ContactPin,
     Ferrule,
@@ -38,6 +43,12 @@ enum class PartKind {
     Tape,
     Terminal,       // terminal block / stud / bus bar
     Overmould,
+    // Components a harness carries in-line rather than merely joins: these are IN the circuit, and
+    // each has a standard schematic symbol (see builtinSchematicSymbol).
+    Resistor,
+    Capacitor,
+    Inductor,       // coil / choke
+    FerriteBead,
     Other
 };
 
@@ -54,7 +65,7 @@ PartKind partKindFromKey(const QString& key);
 // lets a bill of materials total 300 mm of wire and 1.2 m of wire as one line.
 struct PartUnit {
     QString code;   // "mm", "m", "each", ... - what a file stores and a row shows
-    QString label;  // "millimetre", "each", ...
+    QString label;  // "millimeter", "each", ...
     QString dim;    // "length" | "count" | "mass" | "volume" | "area" | "time"
     double toBase = 1.0;
 };
@@ -85,6 +96,18 @@ struct PartField {
 // Which parameters a kind has, in order. The library's form is built from this, so a kind gains a
 // parameter by being given one here - there is no per-kind form to write.
 std::vector<PartField> partFields(PartKind kind);
+// The choices one named Choice field of a kind offers - so a window other than the library's own form
+// (the cable builder, say) offers the same list rather than a copy of it that drifts.
+QStringList partFieldChoices(PartKind kind, const QString& key);
+// ---- Choices a person has added -----------------------------------------------------------------
+// A material this shop uses that is not on the built-in list, a plating, a jacket compound. Kept with
+// the application's settings rather than in a library file, so it is offered for every part in every
+// library from then on - and offered by every window that asks for that field, not only the one it was
+// typed into.
+QStringList addedChoices(const QString& key);
+void rememberChoice(const QString& key, const QString& value, const QStringList& builtIn);
+// The built-in list plus what has been added, which is what a chooser should offer.
+QStringList choicesFor(PartKind kind, const QString& key);
 
 // A part in the library.
 struct LibraryPart {
@@ -100,6 +123,16 @@ struct LibraryPart {
     // The technical parameters, by field key (a Range's two halves are "<key>Min"/"<key>Max",
     // a Bool is "1"/"0"). Text, so a value can be blank / "as required" / a range written by hand.
     QMap<QString, QString> params;
+    // The files this part points at, each by the name it is filed under in the datasheet folder - not
+    // a path, so a library can be moved between machines and the folder found again. Several parts
+    // pointing at one file is normal (a family shares one datasheet), which is why removing one only
+    // deletes the file when nothing else points at it.
+    //
+    // Several FILES per part is just as normal: the datasheet, an outline drawing, a qualification
+    // report, an approved-parts certificate. The first is "the" datasheet where only one can be shown.
+    QStringList datasheets;
+    QString datasheet() const { return datasheets.isEmpty() ? QString() : datasheets.front(); }
+    bool hasDatasheet() const { return !datasheets.isEmpty(); }
     // The two drawings, as entities. Empty until one is captured from a sheet.
     QJsonArray schematic;
     QJsonArray mechanical;
@@ -115,7 +148,7 @@ struct LibraryPart {
 struct PartsLibrary {
     std::vector<LibraryPart> parts;
 
-    // %APPDATA%/Whatson/Edraw/parts-library.plb (created on first save). A library is a .plb
+    // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
     static QString defaultPath();
     static QString fileFilter(); // "Part library (*.plb);;All files (*)"
@@ -134,6 +167,80 @@ struct PartsLibrary {
     // Every part of one kind, in list order.
     std::vector<const LibraryPart*> ofKind(PartKind kind) const;
 };
+
+// The libraries in use at once: a project's own beside a company one, say. Which files are
+// connected is remembered between sessions; one of them is the one being WORKED ON (what a new part
+// is added to), while everything that only reads parts - the bill of materials, the harness
+// builder's pickers - sees all of them together.
+class PartsCatalog {
+public:
+    // The connected files, in order, and which is being worked on.
+    const QStringList& paths() const { return paths_; }
+    int activeIndex() const { return active_; }
+    QString activePath() const;
+    void setActiveIndex(int i);
+    void setActivePath(const QString& path);
+
+    // Connect a library file (loading it) / disconnect one. Connecting a file already connected
+    // just makes it the one being worked on.
+    bool connectLibrary(const QString& path);
+    void disconnectLibrary(const QString& path);
+    // Load every remembered file (and the default one on a first run).
+    void openRemembered();
+    // What is remembered between sessions. A driver or a test can switch this off, so a run of its
+    // own never leaves the application pointed at a file it made up.
+    void remember() const;
+    void setRemembering(bool on) { remembering_ = on; }
+
+    // The library being worked on - what "New part" adds to. Never null once openRemembered() has
+    // run; a catalog with nothing connected keeps one empty library of its own.
+    PartsLibrary& active();
+    const PartsLibrary& active() const;
+    PartsLibrary* byPath(const QString& path);
+    // Save every library that is connected, each to its own file.
+    bool saveAll() const;
+
+    // Reading across all of them.
+    const LibraryPart* byId(const QString& id) const;
+    std::vector<const LibraryPart*> ofKind(PartKind kind) const;
+    int partCount() const;
+    // Which connected file a part lives in ("" when nothing has it).
+    QString pathOf(const QString& partId) const;
+    // All the parts of every connected library, as one library to read from.
+    PartsLibrary merged() const;
+
+private:
+    QStringList paths_;
+    std::vector<PartsLibrary> libs_;
+    int active_ = 0;
+    bool remembering_ = true;
+    PartsLibrary empty_; // stands in when nothing is connected
+};
+
+// Where the library used to be written (the app-data folder with the names repeated). Kept so a
+// library saved by an earlier version is taken over rather than left behind.
+QString legacyLibraryPath();
+
+// A description written from what the part says it IS: its kind, and the parameters that matter for
+// that kind, in the order a catalogue would write them ("Hook-up wire, 22 AWG, PVC, tinned copper,
+// 300 V"). Nothing is invented - a parameter that is blank is simply left out - so the sentence is
+// only ever as complete as the data behind it.
+QString describePart(const LibraryPart& part);
+
+// A library of real parts to start from, so the shelf is not bare on a first run: Alpha Wire
+// hook-up wire from 14 to 30 AWG, with the manufacturer's own part numbers and the technical
+// figures its data sheets give.
+PartsLibrary seedLibrary();
+
+// The standard schematic symbol for the kinds that have one - the components a harness carries in
+// line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the
+// schematic, so a part of one of those kinds shows a symbol and can be dropped on a sheet without
+// anyone drawing it first. Empty for kinds with no symbol, because they are not in the circuit: a
+// boot does not appear on a schematic.
+QJsonArray builtinSchematicSymbol(PartKind kind);
+// The symbol a part actually shows: the one captured for it, or failing that the built-in one for
+// its kind. What the library previews and what Insert puts on the sheet.
+QJsonArray partSchematicDrawing(const LibraryPart& part);
 
 // The entities of one of a part's drawings, ready to be added to a document (ids cleared, so the
 // document gives them its own).

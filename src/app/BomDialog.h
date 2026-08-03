@@ -6,6 +6,9 @@
 #include <QDialog>
 
 class QCheckBox;
+class QComboBox;
+class QDoubleSpinBox;
+class QSpinBox;
 class QLabel;
 class QLineEdit;
 class QTableWidget;
@@ -13,6 +16,13 @@ class QTableWidget;
 namespace Edraw_Desktop {
 
 class Editor;
+
+// What the dialog asks MainWindow for: the Options dialog, opened on the BOM page.
+class BomConfigOpener {
+public:
+    virtual ~BomConfigOpener() = default;
+    virtual void openBomConfiguration() = 0;
+};
 
 // The drawing's bill of materials: line #, description, internal P/N, manufacturer P/N and name,
 // quantity and the unit it is counted in.
@@ -26,6 +36,8 @@ class BomDialog : public QDialog {
     Q_OBJECT
 public:
     explicit BomDialog(Editor* editor, QWidget* parent = nullptr);
+    // Who opens the Options dialog when the Configuration button is pressed (the main window).
+    void setConfigOpener(BomConfigOpener* opener) { opener_ = opener; }
 
     // Testing / driving.
     const BomTable& table() const { return table_; }
@@ -34,18 +46,29 @@ public:
     void addFromLibrary(const QString& partId, double qty);
     void removeCurrentRow();
     void setUnifyTotals(bool on);
+    // The whole configuration at once (what the list works in, which columns reach the drawing).
+    void setConfig(const BomConfig& cfg);
+    const BomConfig& config() const { return table_.config; }
     std::vector<BomRow> shownRows() const; // what the table is showing, in order
     void placeOnDrawing();                 // the BOM as a table on the sheet
+    bool exportCsv(const QString& path);   // the list as it reads, as a CSV file
+    // Move the typed row at `from` to `to` (dragging a line in the list). The line numbers follow
+    // the new order - they are the rows' places, not something a row carries.
+    void moveRow(int from, int to);
 
 private:
     void buildUi();
     void refreshTable();
     void refreshLibraryList();
+    int shownColumnCount() const;
+    void loadControlsFromConfig(); // the configuration into the controls that show it
     void storeTable();     // manual rows + headings back onto the drawing
     void loadTable();      // ...and out of it again
 
     Editor* editor_ = nullptr;
-    PartsLibrary lib_;
+    BomConfigOpener* opener_ = nullptr;
+    PartsCatalog catalog_;
+    PartsLibrary lib_; // every connected library merged, for adding from
     BomTable table_;
     bool unify_ = true;
     bool syncing_ = false;
@@ -55,7 +78,14 @@ private:
     QLineEdit* libFilter_ = nullptr;
     QCheckBox* unifyBox_ = nullptr;
     QCheckBox* fromDrawingBox_ = nullptr;
+    // Configuration: what the list works in, and which columns reach the drawing.
+    QComboBox* lengthUnitBox_ = nullptr;
+    QDoubleSpinBox* spareSpin_ = nullptr;
+    QSpinBox* decimalsSpin_ = nullptr;
+    QCheckBox* roundUpBox_ = nullptr;
+    QList<QCheckBox*> columnBoxes_;
     QLabel* summary_ = nullptr;
+    QLabel* cfgSummary_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

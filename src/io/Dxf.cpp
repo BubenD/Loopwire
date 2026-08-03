@@ -173,6 +173,10 @@ QString toDxf(const Document& doc) {
         case EntityType::Rect:
         case EntityType::Hatch:
         case EntityType::Wipeout:
+        // A picture exports as the rectangle it occupies: a DXF image is a reference to a file
+        // beside the drawing, and an embedded one has nowhere to go. The frame at least keeps the
+        // layout right rather than silently dropping part of the sheet.
+        case EntityType::Image:
             L << dxfPolyline(e, doc, e.points, true);
             break;
         case EntityType::Circle:

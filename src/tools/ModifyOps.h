@@ -45,6 +45,15 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
 // (double lines / polylines are tested on their physical lines).
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others);
 
+// True when `e` lies wholly within the circle `ref` - every part of it inside the ring, its ends
+// allowed to sit exactly ON the ring. A chord drawn between two points of a circle is inside it, not
+// crossing it, and neither is anything that never reaches the ring at all.
+//
+// It matters to trimming: such a thing has NOTHING outside the boundary to keep, so trimming it back
+// to the circle leaves nothing and the whole object goes. Without this it cannot be trimmed at all -
+// there is no crossing to cut at.
+bool whollyInsideCircle(const Entity& e, const Entity& ref);
+
 // The boundary segment of a cutting edge in `cutters` (physical lines for double
 // entities; `selfId` skipped) that passes through point `p`, or nullopt. Used to
 // record the exact cut line so a trimmed double line's physical runs end on it.
@@ -66,11 +75,15 @@ std::optional<std::pair<Vec2, double>> cutCircleThrough(const Vec2& p,
 bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters,
                   std::optional<Entity>& extra);
 
-// AutoCAD "quick" trim: remove the piece of `line` the user clicked, bounded by
-// the nearest cutting intersection on each side of the pick (cutting edges =
-// `others`). If the picked piece sits between two cuts the line is split — `line`
-// keeps the first part and the second part is returned via `extra`. If the pick is
-// past the last cut, only that end is shortened. Returns true if anything changed.
+// Quick trim: remove the piece of `line` the pick is in, bounded by the cutting edges in `others`.
+//
+//  - a cut on one side only: everything from it to the near end goes (trimming a tail off);
+//  - between two boundaries: the piece between them goes. When those two are the crossings of one
+//    circle, that is everything inside the ring, so both ends of what is left sit ON the circle -
+//    which is what trimming to a circle has to mean.
+//
+// A split leaves the first piece in `line` and returns the second via `extra`. True if anything
+// changed.
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
                    std::optional<Entity>& extra);
 

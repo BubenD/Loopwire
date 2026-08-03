@@ -71,8 +71,10 @@ public:
                           int(c.green() + (target.green() - c.green()) * t + 0.5),
                           int(c.blue() + (target.blue() - c.blue()) * t + 0.5));
         };
-        gridMinor_ = mix(0.08);
-        gridMajor_ = mix(0.20);
+        // Five per cent quieter than it was (0.08 -> 0.076, 0.20 -> 0.19): the grid is there to
+        // judge distance by, not to compete with the drawing on top of it.
+        gridMinor_ = mix(0.076);
+        gridMajor_ = mix(0.19);
         invalidateScene();
     }
     void setGridColors(const QColor& minor, const QColor& major) {
@@ -150,11 +152,13 @@ protected:
     // instead of letting Qt move keyboard focus off the canvas.
     bool focusNextPrevChild(bool next) override;
 
-    // Mark the cached static scene (grid + entities) stale so it is re-rendered
-    // on the next paint. Cursor-move previews skip this for a lag-free overlay.
+public:
+    // Mark the cached static scene (grid + entities) stale so it is re-rendered on the next paint.
+    // Cursor-move previews skip this for a lag-free overlay. Public because anything that changes what
+    // the drawing LOOKS like - a layer switched off, a layer recoloured - has to say so: a plain
+    // update() repaints the cache as it stands and shows no change at all.
     void invalidateScene();
 
-public:
     // Begin an interactive rubber-band capture of a rectangular world region (used by
     // "Export PDF (window)"). The next left-drag defines the window; on release `onDone`
     // is called with its two opposite world corners. Esc cancels (onDone not called).
@@ -188,11 +192,16 @@ private:
     QColor crosshairColor_{"#cdd6e4"};
     int pickboxPx_ = 3;                 // half-size of the central pick box
     QColor bgColor_{"#1e2832"};         // canvas (model space) background (dark slate)
-    QColor gridMinor_{"#2c3845"};
-    QColor gridMajor_{"#3a4a58"};
+    QColor gridMinor_{"#2b3743"};   // 5% quieter than the #2c3845 it was
+    QColor gridMajor_{"#394856"};
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change
     bool sceneDirty_ = true;
+    // A fingerprint of the layer table as the cache was built from it. Layers are changed from several
+    // places - the panel, the properties, a command, a file being loaded - and any of them switching a
+    // layer off has to show immediately, so the check is here rather than at every one of those sites.
+    quint64 layerStamp_ = 0;
+    quint64 layerFingerprint() const;
     // While panning we blit the cached scene shifted by this offset instead of
     // rebuilding it every mouse tick; reset to 0 whenever the cache is rebuilt.
     QPointF sceneOffset_;

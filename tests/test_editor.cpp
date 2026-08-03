@@ -1296,6 +1296,214 @@ int run_editor_tests() {
               "trim-quick: outer pieces are [0..30] and [70..100]");
     }
 
+    // --- Trimming against a CIRCLE cuts on the circle, not on a chord of one.
+    //     The cutter is reduced to a 96-sided polygon for the general case, and every chord of that
+    //     polygon lies inside the ring - so a trim that used it would stop short by R(1-cos(pi/96)),
+    //     which is small enough to look right and wrong enough that snapping to that end misses.
+    {
+        // A circle of radius 50 at the origin, and a line along y = 0 from x = -100 to x = 100. The
+        // crossings are exactly (-50,0) and (50,0).
+        Entity circ;
+        circ.type = EntityType::Circle;
+        circ.center = {0, 0};
+        circ.radius = 50.0;
+        std::vector<Entity> cutters = {circ};
+
+        // Picking outside the circle trims that end back to the ring.
+        Entity h;
+        h.type = EntityType::Line;
+        h.a = {-100, 0};
+        h.b = {100, 0};
+        std::optional<Entity> extra;
+        bool ok = trimLineQuick(h, {90, 0}, cutters, extra);
+        check(ok && !extra, "trim-circle: the piece outside the circle is removed");
+        const double cutX = std::max(h.a.x, h.b.x);
+        std::printf("    (trimmed to x = %.9f; the ring is at 50)\n", cutX);
+        check(near(cutX, 50.0, 1e-9), "trim-circle: and the end lands ON the ring, to nine places");
+
+        // A fence INSIDE the ring takes everything inside it, wherever in the ring the fence fell.
+        // Both ends of what is left sit ON the circle - a piece surviving inside with a raw end where
+        // the fence happened to land is not a trim.
+        for (double fenceX : {-20.0, 0.0, 20.0}) {
+            Entity h2;
+            h2.type = EntityType::Line;
+            h2.a = {-100, 0};
+            h2.b = {100, 0};
+            std::optional<Entity> extra2;
+            const bool split = trimLineQuick(h2, {fenceX, 0}, cutters, extra2);
+            std::printf("    (fence inside at %+5.1f: kept [%.1f..%.1f] and [%.1f..%.1f])\n", fenceX,
+                        std::min(h2.a.x, h2.b.x), std::max(h2.a.x, h2.b.x),
+                        extra2 ? std::min(extra2->a.x, extra2->b.x) : 0.0,
+                        extra2 ? std::max(extra2->a.x, extra2->b.x) : 0.0);
+            check(split && extra2, "trim-circle: a fence inside the ring splits the line in two");
+            check(near(std::max(h2.a.x, h2.b.x), -50.0, 1e-9),
+                  "trim-circle: the first piece ends ON the ring");
+            check(extra2 && near(std::min(extra2->a.x, extra2->b.x), 50.0, 1e-9),
+                  "trim-circle: and the second starts ON it - all of the inside is gone");
+        }
+
+        // Off-centre, where a chord and the ring differ most: a line at y = 30 crosses at x = +-40.
+        Entity h3;
+        h3.type = EntityType::Line;
+        h3.a = {-100, 30};
+        h3.b = {100, 30};
+        std::optional<Entity> extra3;
+        ok = trimLineQuick(h3, {90, 30}, cutters, extra3);
+        check(ok && near(std::max(h3.a.x, h3.b.x), 40.0, 1e-9),
+              "trim-circle: an off-centre chord cuts at 40, exactly");
+
+        // A line that misses the circle is not cut at all.
+        Entity miss;
+        miss.type = EntityType::Line;
+        miss.a = {-100, 80};
+        miss.b = {100, 80};
+        std::optional<Entity> extraMiss;
+        check(!trimLineQuick(miss, {0, 80}, cutters, extraMiss),
+              "trim-circle: a line that misses it is left alone");
+
+        // An ARC only cuts where it actually sweeps. The right half (-90 to +90 degrees) crosses
+        // y = 0 at x = +50 only, so the left end has nothing to trim it.
+        Entity arc;
+        arc.type = EntityType::Arc;
+        arc.center = {0, 0};
+        arc.radius = 50.0;
+        arc.startAngle = -1.5707963267948966;
+        arc.endAngle = 1.5707963267948966;
+        std::vector<Entity> arcCutter = {arc};
+        Entity h4;
+        h4.type = EntityType::Line;
+        h4.a = {-100, 0};
+        h4.b = {100, 0};
+        std::optional<Entity> extra4;
+        ok = trimLineQuick(h4, {90, 0}, arcCutter, extra4);
+        check(ok && !extra4 && near(std::max(h4.a.x, h4.b.x), 50.0, 1e-9),
+              "trim-arc: an arc cuts where it sweeps");
+        Entity h5;
+        h5.type = EntityType::Line;
+        h5.a = {-100, 0};
+        h5.b = {100, 0};
+        std::optional<Entity> extra5;
+        // Picking on the left: the arc does not reach there, so the only cut is the one at +50, and
+        // the piece the pick is in - everything from -100 up to +50 - is what goes. (Quick trim
+        // removes the piece that was clicked, so the survivor is the far side.)
+        ok = trimLineQuick(h5, {-90, 0}, arcCutter, extra5);
+        check(ok && !extra5 && near(std::min(h5.a.x, h5.b.x), 50.0, 1e-9) &&
+                  near(std::max(h5.a.x, h5.b.x), 100.0, 1e-9),
+              "trim-arc: the clicked piece goes, bounded by the one cut the arc gives");
+
+        // Extending onto a circle lands on the ring too, for the same reason.
+        Entity stub;
+        stub.type = EntityType::Line;
+        stub.a = {0, 0};
+        stub.b = {20, 0};
+        check(extendLineTo(stub, {20, 0}, cutters) && near(stub.b.x, 50.0, 1e-9),
+              "extend-circle: an extended end lands on the ring, not on a chord");
+    }
+
+    // --- A primitive with NOTHING outside a circular reference goes whole.
+    //     Trimming it back to the ring would leave nothing, and without this it could not be
+    //     trimmed at all: a chord between two points of the circle has no crossing to cut at,
+    //     because its crossings are its own endpoints.
+    {
+        Entity ref;
+        ref.type = EntityType::Circle;
+        ref.center = {0, 0};
+        ref.radius = 50.0;
+
+        auto lineFrom = [](Vec2 a, Vec2 b) {
+            Entity e;
+            e.type = EntityType::Line;
+            e.a = a;
+            e.b = b;
+            return e;
+        };
+        // A chord: both ends exactly on the ring.
+        check(whollyInsideCircle(lineFrom({-50, 0}, {50, 0}), ref),
+              "inside-circle: a chord between two points of the ring is inside it");
+        // Wholly within, touching nothing.
+        check(whollyInsideCircle(lineFrom({-30, 0}, {30, 0}), ref),
+              "inside-circle: and so is something that never reaches the ring");
+        // One end out: that crosses, and must NOT be swallowed whole.
+        check(!whollyInsideCircle(lineFrom({0, 0}, {100, 0}), ref),
+              "inside-circle: one end outside means it crosses, not that it is inside");
+        check(!whollyInsideCircle(lineFrom({-100, 0}, {100, 0}), ref),
+              "inside-circle: and a line right through it is not inside it");
+
+        // A polyline is inside only when every vertex is.
+        Entity poly;
+        poly.type = EntityType::Polyline;
+        poly.points = {{-30, -30}, {0, 20}, {30, -30}};
+        check(whollyInsideCircle(poly, ref), "inside-circle: every vertex of a polyline inside");
+        poly.points[1] = {0, 80};
+        check(!whollyInsideCircle(poly, ref), "inside-circle: one vertex out and it is not");
+
+        // A smaller circle within the ring; and one that pokes out.
+        Entity small;
+        small.type = EntityType::Circle;
+        small.center = {10, 0};
+        small.radius = 20.0;
+        check(whollyInsideCircle(small, ref), "inside-circle: a smaller ring within it");
+        small.radius = 45.0;
+        check(!whollyInsideCircle(small, ref), "inside-circle: unless it pokes out");
+
+        // An ARC is not a closed boundary, so nothing is "inside" it - trimming to an arc has to go
+        // through the ordinary crossing path.
+        Entity arcRef;
+        arcRef.type = EntityType::Arc;
+        arcRef.center = {0, 0};
+        arcRef.radius = 50.0;
+        arcRef.startAngle = 0.0;
+        arcRef.endAngle = 3.14159265358979323846;
+        check(!whollyInsideCircle(lineFrom({-30, 0}, {30, 0}), arcRef),
+              "inside-circle: an arc encloses nothing, so nothing is inside it");
+    }
+
+    // --- The Trim tool removes such an object outright, and only when the fence crossed it.
+    {
+        Document d;
+        d.entities().clear();
+        Entity circ;
+        circ.id = "c";
+        circ.type = EntityType::Circle;
+        circ.center = {0, 0};
+        circ.radius = 50.0;
+        d.entities().push_back(circ);
+        Entity chord;              // both ends on the ring: nothing outside to keep
+        chord.id = "chord";
+        chord.type = EntityType::Line;
+        chord.a = {-50, 0};
+        chord.b = {50, 0};
+        d.entities().push_back(chord);
+        Entity bystander;          // also inside, but the fence will not touch it
+        bystander.id = "bystander";
+        bystander.type = EntityType::Line;
+        bystander.a = {-30, 30};
+        bystander.b = {30, 30};
+        d.entities().push_back(bystander);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setPixelTolerance(3);
+        ed.selectById("c");
+        ed.setTool(ToolId::Trim);
+        // A fence across the chord only, well below the bystander.
+        ed.onPointerPress({20, -12}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({20, 12});
+        ed.onPointerPress({20, 12}, Qt::LeftButton, Qt::NoModifier);
+
+        bool hasChord = false, hasBystander = false, hasCircle = false;
+        for (const Entity& e : d.entities()) {
+            if (e.id == QLatin1String("chord")) hasChord = true;
+            if (e.id == QLatin1String("bystander")) hasBystander = true;
+            if (e.id == QLatin1String("c")) hasCircle = true;
+        }
+        check(!hasChord, "trim-inside: the chord the fence crossed is removed outright");
+        check(hasBystander,
+              "trim-inside: another object inside the circle is left alone - the fence decides");
+        check(hasCircle, "trim-inside: and the reference itself is never touched");
+    }
+
     // --- Moving a trimmed double line carries its cut line along (no distortion).
     {
         Entity dl; dl.type = EntityType::DoubleLine; dl.a = {0, 0}; dl.b = {100, 0};
@@ -1343,35 +1551,95 @@ int run_editor_tests() {
         check(r && near(std::abs(r->b.y - r->a.y), 200.0), "trim-fence: reference is not trimmed");
     }
 
-    // --- Trim removes only up to the NEXT joint (not to the line end), and the
-    //     reference stays selected for further cuts.
+    // --- Only the REFERENCE bounds a trim. Another object lying across the same line is not a
+    //     boundary, however close it is: trimming to an object means trimming to THAT object.
+    //     (It used to stop at any object on the sheet, which meant a second circle overlapping the
+    //     reference cut the removal short and left material inside the reference.)
     {
         Document d; d.entities().clear();
         Entity ref; ref.id = "ref"; ref.type = EntityType::Line; ref.a = {50, -100}; ref.b = {50, 100};
         Entity h; h.id = "h"; h.type = EntityType::Line; h.a = {0, 0}; h.b = {100, 0};
-        Entity j; j.id = "j"; j.type = EntityType::Line; j.a = {70, -10}; j.b = {70, 10}; // a joint at x=70
+        Entity j; j.id = "j"; j.type = EntityType::Line; j.a = {70, -10}; j.b = {70, 10}; // NOT selected
         d.entities().push_back(ref);
         d.entities().push_back(h);
         d.entities().push_back(j);
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
         ed.selectById("ref");
         ed.setTool(ToolId::Trim);
-        // Cut line at x=60 (between the reference x=50 and the joint x=70).
+        // Cut line at x=60: past the reference at x=50, and past the unselected line at x=70.
         ed.onPointerPress({60, -5}, Qt::LeftButton, Qt::NoModifier); // cut-line start
         ed.onPointerMove({60, 5});
         ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier);  // cut-line end -> apply
-        // h now has two pieces: [0..50] and [70..100]; the [50..70] middle is removed.
-        int pieces = 0; bool left = false, right = false;
+        // The reference gives one cut, at x=50, and the fence is past it - so the tail goes and one
+        // piece [0..50] is left. The line at x=70 does not bound it.
+        int pieces = 0;
+        bool trimmedToRef = false;
         for (const auto& e : d.entities()) {
             if (e.type != EntityType::Line || !(near(e.a.y, 0.0) && near(e.b.y, 0.0))) continue;
             ++pieces;
-            if (near(std::min(e.a.x, e.b.x), 0.0) && near(std::max(e.a.x, e.b.x), 50.0)) left = true;
-            if (near(std::min(e.a.x, e.b.x), 70.0) && near(std::max(e.a.x, e.b.x), 100.0)) right = true;
+            if (near(std::min(e.a.x, e.b.x), 0.0) && near(std::max(e.a.x, e.b.x), 50.0))
+                trimmedToRef = true;
         }
-        check(pieces == 2 && left && right, "trim-joint: removed from reference (50) up to the next joint (70)");
+        check(pieces == 1 && trimmedToRef,
+              "trim-ref-only: trimmed to the reference at 50, ignoring the object at 70");
         // The reference is still selected for further cuts (until Esc).
         check(ed.selection().size() == 1 && ed.selection().front() == "ref",
-              "trim-joint: reference stays selected after trimming");
+              "trim-ref-only: reference stays selected after trimming");
+    }
+
+    // --- Two overlapping circles, one of them the reference: only the reference's inside goes.
+    {
+        Document d;
+        d.entities().clear();
+        Entity small;                       // the reference
+        small.id = "small";
+        small.type = EntityType::Circle;
+        small.center = {0, 0};
+        small.radius = 50.0;
+        d.entities().push_back(small);
+        Entity big;                         // overlapping it, NOT selected
+        big.id = "big";
+        big.type = EntityType::Circle;
+        big.center = {70, -55};
+        big.radius = 75.0;                  // its ring meets y=0 at x = +19.01 and +120.99
+        d.entities().push_back(big);
+        Entity h;
+        h.id = "h";
+        h.type = EntityType::Line;
+        h.a = {-160, 0};
+        h.b = {200, 0};
+        d.entities().push_back(h);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setPixelTolerance(3);
+        ed.selectById("small");
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({-20, -12}, Qt::LeftButton, Qt::NoModifier);   // fence inside the small one
+        ed.onPointerMove({-20, 12});
+        ed.onPointerPress({-20, 12}, Qt::LeftButton, Qt::NoModifier);
+
+        bool left = false, right = false;
+        int pieces = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.type != EntityType::Line) continue;
+            ++pieces;
+            if (near(std::max(e.a.x, e.b.x), -50.0, 1e-6)) left = true;
+            if (near(std::min(e.a.x, e.b.x), 50.0, 1e-6)) right = true;
+        }
+        check(pieces == 2, "trim-two-circles: the line is split in two");
+        check(left && right,
+              "trim-two-circles: both new ends are on the REFERENCE ring (-50 and +50)");
+        // The unselected circle's crossing at +19.01 must not appear as an end.
+        bool onBigRing = false;
+        for (const Entity& e : d.entities()) {
+            if (e.type != EntityType::Line) continue;
+            if (near(std::min(e.a.x, e.b.x), 19.01, 0.05) ||
+                near(std::max(e.a.x, e.b.x), 19.01, 0.05))
+                onBigRing = true;
+        }
+        check(!onBigRing, "trim-two-circles: and the circle nobody selected did not bound it");
     }
 
     // --- Trim to a DOUBLE LINE reference stops at the near PHYSICAL line, not the

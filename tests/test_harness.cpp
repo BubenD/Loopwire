@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QSet>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -5873,6 +5874,86 @@ int run_harness_tests() {
         check(kinds >= 11, "library: the kinds asked for are all there");
         check(withFields == kinds, "library: every kind has parameters of its own");
 
+        // ---- The components a harness carries in line, and their standard symbols ----
+        {
+            const PartKind components[] = {PartKind::Resistor, PartKind::Capacitor,
+                                           PartKind::Inductor, PartKind::FerriteBead};
+            for (PartKind k : components) {
+                const QJsonArray sym = builtinSchematicSymbol(k);
+                const std::vector<Entity> ents = partDrawingEntities(sym);
+                std::printf("    (symbol %-16s %2lld entity/ies)\n",
+                            qPrintable(partKindName(k)),
+                            static_cast<long long>(ents.size()));
+                check(!ents.empty(), "symbols: every component kind has a symbol drawn for it");
+                // It straddles the origin and is the size of a schematic symbol, not of a sheet:
+                // dropped on a drawing beside a connector it needs no scaling.
+                Bounds b;
+                for (const Entity& e : ents) {
+                    const Bounds eb = e.bounds();
+                    if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+                }
+                check(b.valid && b.min.x < 0.0 && b.max.x > 0.0,
+                      "symbols: drawn about the origin, so it lands where it is clicked");
+                check(b.valid && (b.max.x - b.min.x) > 20.0 && (b.max.x - b.min.x) < 80.0,
+                      "symbols: about as long as a connector's pins");
+                // A part of that kind shows the standard symbol without one being captured...
+                LibraryPart part;
+                part.kind = k;
+                check(!part.hasSchematic(), "symbols: a new part has nothing captured");
+                check(!partSchematicDrawing(part).isEmpty(),
+                      "symbols: and still has a symbol to show and to insert");
+                // ...and a captured one takes precedence over it.
+                Entity own;
+                own.type = EntityType::Circle;
+                own.center = Vec2{0.0, 0.0};
+                own.radius = 5.0;
+                part.schematic = partDrawingFromEntities({own});
+                check(partDrawingEntities(partSchematicDrawing(part)).size() == 1,
+                      "symbols: a symbol drawn for the part itself wins");
+            }
+            // A resistor is a rectangle with a lead each side; a capacitor is two plates with a gap
+            // between them, which is the difference that has to survive.
+            const std::vector<Entity> res =
+                partDrawingEntities(builtinSchematicSymbol(PartKind::Resistor));
+            int rects = 0;
+            for (const Entity& e : res)
+                if (e.type == EntityType::Rect) ++rects;
+            check(rects == 1, "symbols: the resistor is a rectangle on the line");
+            const std::vector<Entity> coil =
+                partDrawingEntities(builtinSchematicSymbol(PartKind::Inductor));
+            int arcs = 0;
+            for (const Entity& e : coil)
+                if (e.type == EntityType::Arc) ++arcs;
+            check(arcs == 4, "symbols: the coil is a row of humps");
+            // A bead is that coil with a core over it, so it has the humps AND more besides.
+            const std::vector<Entity> bead =
+                partDrawingEntities(builtinSchematicSymbol(PartKind::FerriteBead));
+            check(bead.size() > coil.size(),
+                  "symbols: the bead is the coil with a core drawn over it");
+            // Anything that is not in the circuit has no symbol at all, rather than an empty box.
+            check(builtinSchematicSymbol(PartKind::HeatshrinkBoot).isEmpty(),
+                  "symbols: a part that is not in the circuit has none");
+
+            // Their descriptions read the way a catalogue writes them.
+            LibraryPart r;
+            r.kind = PartKind::Resistor;
+            r.params[QStringLiteral("value")] = QStringLiteral("100");
+            r.params[QStringLiteral("tolerance")] = QStringLiteral("1");
+            r.params[QStringLiteral("power")] = QStringLiteral("0.25");
+            std::printf("    (described: %s)\n", qPrintable(describePart(r)));
+            check(describePart(r).contains(QLatin1String("100 ohm")) &&
+                      describePart(r).contains(QLatin1String("0.25 W")),
+                  "symbols: a resistor is described by its value first");
+            LibraryPart fb;
+            fb.kind = PartKind::FerriteBead;
+            fb.params[QStringLiteral("impedance")] = QStringLiteral("600");
+            fb.params[QStringLiteral("atFreq")] = QStringLiteral("100");
+            std::printf("    (described: %s)\n", qPrintable(describePart(fb)));
+            check(describePart(fb).contains(QLatin1String("600 ohm")) &&
+                      describePart(fb).contains(QLatin1String("at 100 MHz")),
+                  "symbols: a bead's impedance is written with the frequency it is measured at");
+        }
+
         // The parameters asked for, kind by kind.
         auto has = [](PartKind k, const char* key) {
             for (const PartField& f : partFields(k))
@@ -6036,12 +6117,97 @@ int run_harness_tests() {
         check(one.front().ref.contains(QLatin1String("W1")) &&
                   one.front().ref.contains(QLatin1String("W2")),
               "bom: and it still says where it is used");
+        // A row that names nothing is only itself: two blank rows are two lines, not one line of
+        // qty 2. (Pressing "+ Row" twice used to read as adding 1 to the first row's quantity.)
+        {
+            std::vector<BomRow> blanks;
+            for (int i = 0; i < 3; ++i) {
+                BomRow blank;
+                blank.rowId = bomNextRowId(blanks);
+                blank.qty = 1.0;
+                blank.unit = QStringLiteral("each");
+                blanks.push_back(blank);
+            }
+            const std::vector<BomRow> kept = bomUnify(blanks);
+            std::printf("    (bom blanks: %d row(s) in, %d line(s) out, first qty %.0f)\n",
+                        int(blanks.size()), int(kept.size()),
+                        kept.empty() ? 0.0 : kept.front().qty);
+            check(kept.size() == 3, "bom: a blank row is a row of its own");
+            check(!kept.empty() && near(kept.front().qty, 1.0),
+                  "bom: and adding one does not raise another's quantity");
+            // Once two of them say they are the same thing, they DO total.
+            blanks[0].description = QStringLiteral("Ty-wrap");
+            blanks[1].description = QStringLiteral("Ty-wrap");
+            check(bomUnify(blanks).size() == 2,
+                  "bom: rows that name the same part still come out as one line");
+        }
+
         // A part in units that cannot be added keeps its own line rather than being forced.
         BomRow odd = a1;
         odd.qty = 3.0;
         odd.unit = QStringLiteral("each");
         std::vector<BomRow> mixed = bomUnify({a1, odd});
         check(mixed.size() == 2, "bom: quantities that cannot be added stay separate lines");
+
+        // ---- The configuration: what the list works in, and which columns reach the sheet ----
+        {
+            BomConfig cfg;
+            check(cfg.lengthUnit == QLatin1String("m") && cfg.unify && cfg.includeDrawing,
+                  "bom config: lengths by the metre, totalled, with the drawing included");
+            for (int i = 0; i < bomColumnCount(); ++i)
+                check(cfg.columnShown(i), "bom config: every column reaches the sheet unless told");
+            cfg.setColumnShown(2, false);
+            check(!cfg.columnShown(2) && cfg.columnShown(1) && cfg.columnShown(3),
+                  "bom config: switching one column off leaves the rest on");
+
+            // A length is converted into the working unit, given its spare, and rounded up.
+            BomRow wire;
+            wire.rowId = QStringLiteral("r1");
+            wire.description = QStringLiteral("22 AWG");
+            wire.qty = 1500.0;
+            wire.unit = QStringLiteral("mm");
+            BomRow conn;
+            conn.rowId = QStringLiteral("r2");
+            conn.description = QStringLiteral("Connector");
+            conn.qty = 2.0;
+            conn.unit = QStringLiteral("each");
+            cfg.lengthUnit = QStringLiteral("m");
+            std::vector<BomRow> done = bomApplyConfig({wire, conn}, cfg);
+            std::printf("    (bom config: 1500 mm -> %.2f %s; 2 each -> %.2f %s)\n",
+                        done[0].qty, qPrintable(done[0].unit), done[1].qty,
+                        qPrintable(done[1].unit));
+            check(near(done[0].qty, 1.5) && done[0].unit == QLatin1String("m"),
+                  "bom config: a length is listed in the working unit");
+            check(near(done[1].qty, 2.0) && done[1].unit == QLatin1String("each"),
+                  "bom config: and a count is left alone");
+            cfg.sparePercent = 10.0;
+            done = bomApplyConfig({wire, conn}, cfg);
+            check(near(done[0].qty, 1.65) && near(done[1].qty, 2.0),
+                  "bom config: spare is added to lengths only");
+            cfg.roundUpLengths = true;
+            done = bomApplyConfig({wire, conn}, cfg);
+            check(near(done[0].qty, 2.0) && near(done[1].qty, 2.0),
+                  "bom config: rounding up applies to lengths only");
+            // Two decimals or none, as asked.
+            BomRow odd;
+            odd.qty = 1.234;
+            check(odd.qtyText(2) == QLatin1String("1.23") && odd.qtyText(0) == QLatin1String("1"),
+                  "bom config: a quantity shows the decimals asked for");
+            BomRow whole;
+            whole.qty = 3.0;
+            check(whole.qtyText(2) == QLatin1String("3"),
+                  "bom config: a whole figure shows none");
+
+            // And the configuration is kept with the drawing.
+            BomTable t2;
+            t2.config = cfg;
+            BomTable back2;
+            back2.fromJson(t2.toJson());
+            check(back2.config.lengthUnit == cfg.lengthUnit &&
+                      near(back2.config.sparePercent, 10.0) && back2.config.roundUpLengths &&
+                      !back2.config.columnShown(2),
+                  "bom config: it survives a trip through the drawing's file");
+        }
 
         // What the drawing calls for, with the library filling in the numbers.
         PartsLibrary lib;
@@ -6106,6 +6272,119 @@ int run_harness_tests() {
               "bom: only the typed rows are stored");
         check(back.header(1) == QLatin1String("What it is"),
               "bom: and the headings the drawing was given");
+    }
+
+    // ---- The library a first run starts from: real parts, 14 to 30 AWG ----
+    {
+        const PartsLibrary seed = seedLibrary();
+        const std::vector<const LibraryPart*> wires = seed.ofKind(PartKind::Wire);
+        std::printf("    (seed library: %d part(s), %d of them wire)\n",
+                    int(seed.parts.size()), int(wires.size()));
+        check(wires.size() >= 10, "seed: ten wires to start from");
+        // Every gauge from 14 to 30, and every one of them a real Alpha Wire part number with the
+        // figures its data sheet gives.
+        QSet<int> gauges;
+        int named = 0, withStrands = 0;
+        for (const LibraryPart* p : wires) {
+            gauges.insert(p->value(QStringLiteral("gauge")).toInt());
+            if (p->mfrName == QLatin1String("Alpha Wire") && !p->mfrPn.isEmpty()) ++named;
+            if (!p->value(QStringLiteral("strands")).isEmpty()) ++withStrands;
+            check(p->unit == QLatin1String("m"), "seed: wire is bought by the metre");
+            check(p->value(QStringLiteral("voltage")) == QLatin1String("300"),
+                  "seed: and carries its voltage rating");
+        }
+        for (int awg : {14, 16, 18, 20, 22, 24, 26, 28, 30})
+            check(gauges.contains(awg),
+                  "seed: every gauge from 14 to 30 AWG is there");
+        check(named == static_cast<int>(wires.size()),
+              "seed: every wire names its manufacturer and part number");
+        check(withStrands == static_cast<int>(wires.size()),
+              "seed: and its stranding");
+        // Resistance is kept per METRE (a data sheet gives it per 1000 ft), and every wire says how
+        // tightly it may be bent.
+        for (const LibraryPart* p : wires) {
+            const double ohmPerM = p->value(QStringLiteral("resistance")).toDouble();
+            const double bend = p->value(QStringLiteral("bendRadius")).toDouble();
+            const double od = p->value(QStringLiteral("od")).toDouble();
+            check(ohmPerM > 0.0 && ohmPerM < 1.0, "seed: resistance is per metre, not per 1000 ft");
+            check(near(bend, od * 10.0), "seed: the bend radius is ten times the diameter");
+        }
+        // The 16 AWG figure is the one on the data sheet: 4.4 ohm/1000 ft is 0.0144 ohm/m.
+        for (const LibraryPart* p : wires)
+            if (p->value(QStringLiteral("gauge")) == QLatin1String("16"))
+                check(std::abs(p->value(QStringLiteral("resistance")).toDouble() - 0.0144) < 0.0002,
+                      "seed: 4.4 ohm/1000ft reads as 0.0144 ohm/m");
+
+        // The connectors, ferrules and ring terminals that came with it.
+        const int conns = static_cast<int>(seed.ofKind(PartKind::Connector).size());
+        const int ferrules = static_cast<int>(seed.ofKind(PartKind::Ferrule).size());
+        const int rings = static_cast<int>(seed.ofKind(PartKind::Crimp).size());
+        std::printf("    (seed: %d connector(s), %d ferrule(s), %d ring terminal(s))\n",
+                    conns, ferrules, rings);
+        check(conns >= 20, "seed: ten Molex and ten Amphenol connectors");
+        check(ferrules >= 10, "seed: ten ferrules");
+        check(rings >= 10, "seed: ten ring terminals");
+        int molex = 0, amphenol = 0;
+        QSet<QString> shells, ferruleSizes, studs;
+        for (const LibraryPart* p : seed.ofKind(PartKind::Connector)) {
+            if (p->mfrName == QLatin1String("Molex")) ++molex;
+            if (p->mfrName.startsWith(QLatin1String("Amphenol"))) {
+                ++amphenol;
+                shells.insert(p->value(QStringLiteral("shellSize")));
+                check(p->value(QStringLiteral("spec")).contains(QLatin1String("38999")),
+                      "seed: an Amphenol part says which standard it is built to");
+            }
+            check(!p->mfrPn.isEmpty(), "seed: every connector has a part number");
+        }
+        for (const LibraryPart* p : seed.ofKind(PartKind::Ferrule))
+            ferruleSizes.insert(p->value(QStringLiteral("size")));
+        for (const LibraryPart* p : seed.ofKind(PartKind::Crimp))
+            studs.insert(p->value(QStringLiteral("size")));
+        check(molex >= 10 && amphenol >= 10, "seed: ten of each make");
+        check(shells.size() >= 5, "seed: the military connectors cover several shell sizes");
+        check(ferruleSizes.size() >= 8, "seed: the ferrules are a spread of sizes");
+        check(studs.size() >= 6, "seed: the ring terminals are a spread of studs");
+
+        // ---- A description written from the technical data ----
+        {
+            // What the part IS, from the parameters that are filled in - and nothing that is not.
+            LibraryPart w;
+            w.kind = PartKind::Wire;
+            w.params.insert(QStringLiteral("gauge"), QStringLiteral("22"));
+            w.params.insert(QStringLiteral("insulation"), QStringLiteral("PTFE"));
+            w.params.insert(QStringLiteral("material"), QStringLiteral("Silver-plated copper"));
+            w.params.insert(QStringLiteral("voltage"), QStringLiteral("600"));
+            const QString made = describePart(w);
+            std::printf("    (described: %s)\n", qPrintable(made));
+            check(made.startsWith(QLatin1String("Hook-up wire")),
+                  "describe: it leads with what kind of thing it is");
+            check(made.contains(QLatin1String("22 AWG")) && made.contains(QLatin1String("PTFE")) &&
+                      made.contains(QLatin1String("600 V")),
+                  "describe: every parameter that is filled in is named");
+            check(!made.contains(QLatin1String("Colour")) && !made.contains(QLatin1String(", ,")),
+                  "describe: and nothing that is blank");
+            // A range reads as a range, and a yes/no is named only when it is yes.
+            LibraryPart c;
+            c.kind = PartKind::Crimp;
+            c.params.insert(QStringLiteral("type"), QStringLiteral("Ring"));
+            c.params.insert(QStringLiteral("gaugeMin"), QStringLiteral("16"));
+            c.params.insert(QStringLiteral("gaugeMax"), QStringLiteral("14"));
+            c.params.insert(QStringLiteral("insulated"), QStringLiteral("Yes"));
+            const QString rc = describePart(c);
+            std::printf("    (described: %s)\n", qPrintable(rc));
+            check(rc.contains(QLatin1String("16-14 AWG")), "describe: a range reads as a range");
+            check(rc.contains(QLatin1String("insulated")),
+                  "describe: a yes/no is named when it is yes");
+            LibraryPart plain = c;
+            plain.params.insert(QStringLiteral("insulated"), QStringLiteral("No"));
+            check(!describePart(plain).contains(QLatin1String("insulated")),
+                  "describe: and left out when it is no");
+            // A part with nothing filled in still says what it is.
+            LibraryPart bare;
+            bare.kind = PartKind::Backshell;
+            check(describePart(bare) == QLatin1String("Backshell"),
+                  "describe: a part with no data still names its kind");
+        }
     }
 
     // ---- A marking can be picked on its own, and only slid along its wire ----

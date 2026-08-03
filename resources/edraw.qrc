@@ -4,5 +4,6 @@
     <file>edraw.qss</file>
     <file>edraw.ico</file>
     <file>caret-down.svg</file>
+    <file>caret-up.svg</file>
   </qresource>
 </RCC>

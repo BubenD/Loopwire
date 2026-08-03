@@ -1,6 +1,11 @@
 #include "app/HarnessBuilderDialog.h"
 
+#include "io/AppPaths.h"
+
 #include "app/Editor.h"
+#include "app/UiBits.h"
+#include "app/PartViewDialog.h"
+#include "harness/CableSpec.h"
 #include "harness/Harness.h"
 #include "harness/PartsLibrary.h"
 
@@ -15,6 +20,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QMenu>
+#include <QShowEvent>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -47,15 +54,32 @@ namespace {
 // The parts library, read once per dialog: the rows pick from it, and a harness described here is
 // then a harness of REAL parts - which is what lets a bill of materials carry the manufacturer's
 // numbers and the units each thing is bought in.
-const PartsLibrary& sharedLibrary() {
+PartsLibrary& sharedLibraryStore() {
     static PartsLibrary lib;
-    static bool loaded = false;
-    if (!loaded) {
-        lib.load(PartsLibrary::defaultPath());
-        loaded = true;
-    }
     return lib;
 }
+bool& sharedLibraryLoaded() {
+    static bool loaded = false;
+    return loaded;
+}
+
+const PartsLibrary& sharedLibrary() {
+    // Every connected library, merged: a harness may be built from parts kept in more than one.
+    if (!sharedLibraryLoaded()) {
+        PartsCatalog catalog;
+        catalog.openRemembered();
+        sharedLibraryStore() = catalog.merged();
+        sharedLibraryLoaded() = true;
+    }
+    return sharedLibraryStore();
+}
+
+// Read the libraries again next time they are asked for.
+//
+// They used to be read ONCE per run, which meant a part added in the library window - a cable, say -
+// could not be placed in a harness until the application had been restarted. Nobody would guess that;
+// they would decide the cable had not saved.
+void forgetSharedLibrary() { sharedLibraryLoaded() = false; }
 
 // A cell that names the library part a row is made of. `kinds` are the kinds worth offering for
 // that row - a connector row offers connectors, a wire row offers wires and cables - and the empty
@@ -68,7 +92,18 @@ QComboBox* libraryPartBox(QWidget* parent, const std::vector<PartKind>& kinds,
     for (PartKind k : kinds)
         for (const LibraryPart* p : sharedLibrary().ofKind(k))
             box->addItem(QStringLiteral("%1 · %2").arg(partKindName(k), p->title()), p->id);
-    const int at = box->findData(current);
+    int at = box->findData(current);
+    // A part the row already names but the list does not offer - its library disconnected since,
+    // or a kind this column does not stock - is put in anyway. Dropping it would silently unname
+    // the row and take the part off the bill of materials, which is not something a list of
+    // choices is allowed to decide by itself.
+    if (at < 0 && !current.isEmpty()) {
+        const LibraryPart* p = sharedLibrary().byId(current);
+        box->addItem(p ? QStringLiteral("%1 · %2").arg(partKindName(p->kind), p->title())
+                       : QStringLiteral("(part not in a connected library)"),
+                     current);
+        at = box->count() - 1;
+    }
     box->setCurrentIndex(at >= 0 ? at : 0);
     box->setToolTip(QStringLiteral(
         "The library part this row is made of. What the bill of materials orders: its "
@@ -979,7 +1014,10 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(loadBtn, &QPushButton::clicked, this, [this] { loadDefinition(); });
     auto* closeBtn = new QPushButton(QStringLiteral("Close"), this);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
+    // Clear sits in the bottom row with the rest, between Generate and Save. (It used to be built
+    // and wired but never put in a layout, which left it stranded at the corner of the window.)
     footer->addWidget(generateBtn);
+    footer->addWidget(clearBtn);
     footer->addWidget(saveBtn);
     footer->addWidget(loadBtn);
     footer->addWidget(closeBtn);
@@ -1012,8 +1050,8 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
 // ---- Step 1: connectors ----------------------------------------------------
 
 QWidget* HarnessBuilderDialog::buildConnectorsSection() {
-    auto* addLeft = new QPushButton(QStringLiteral("+ Left"), this);
-    auto* addRight = new QPushButton(QStringLiteral("+ Right"), this);
+    auto* addLeft = makeAddButton(this, QStringLiteral("Left"));
+    auto* addRight = makeAddButton(this, QStringLiteral("Right"));
     connect(addLeft, &QPushButton::clicked, this, [this] {
         addConnector(HarnessSide::Left);
         reloadAll();
@@ -1037,6 +1075,14 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
     connTable_->verticalHeader()->setVisible(false);
     connTable_->horizontalHeader()->setStretchLastSection(true);
     connTable_->setSelectionMode(QAbstractItemView::NoSelection);
+    connTable_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(connTable_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        const int row = connTable_->rowAt(at.y());
+        if (row < 0 || row >= static_cast<int>(def_.connectors.size())) return;
+        const HarnessConnector& c = def_.connectors[static_cast<size_t>(row)];
+        showPartMenu(c.libPart, connTable_->viewport()->mapToGlobal(at),
+                     QStringLiteral("The connector %1").arg(c.designator));
+    });
     connTable_->setMinimumHeight(140);
     return section(QStringLiteral("Connectors"), connTable_, this, {addLeft, addRight});
 }
@@ -1137,14 +1183,34 @@ void HarnessBuilderDialog::reloadConnectors() {
         centerField(pins);
         connect(pins, &QSpinBox::valueChanged, this, [this, id](int v) {
             if (syncing_) return;
+            // What to SAY is held until after the tables are rebuilt: reloadAll writes its own count
+            // into the summary line, so anything said before it is wiped out before it is read - and
+            // "the library part has been taken off" is the one thing here nobody should miss.
+            QString note;
             if (auto* cc = connById(id)) {
                 cc->pinCount = v;
                 // Drop any stored pin order entry that no longer exists.
                 cc->pinOrder.erase(std::remove_if(cc->pinOrder.begin(), cc->pinOrder.end(),
                                                   [v](int p) { return p < 1 || p > v; }),
                                    cc->pinOrder.end());
+                // A count the library part does not have means the row is no longer THAT part: better
+                // to have no part than the wrong one, because a bill of materials would order it.
+                if (!cc->libPart.isEmpty()) {
+                    if (const LibraryPart* lp = sharedLibrary().byId(cc->libPart)) {
+                        const int pins = lp->value(QStringLiteral("pins")).toInt();
+                        if (pins > 0 && pins != v) {
+                            note = QStringLiteral("%1 has %2 pins, not %3 — the library part has "
+                                                  "been taken off this connector")
+                                       .arg(lp->title())
+                                       .arg(pins)
+                                       .arg(v);
+                            cc->libPart.clear();
+                        }
+                    }
+                }
             }
             reloadAll();
+            if (!note.isEmpty()) summaryLabel_->setText(note);
         });
         connTable_->setCellWidget(row, 4, pins);
 
@@ -1264,6 +1330,23 @@ void HarnessBuilderDialog::reloadConnectors() {
                 if (syncing_ || i < 0) return;
                 if (auto* cc = connById(id)) {
                     cc->libPart = lib->itemData(i).toString();
+                    // The library knows how many pins the connector HAS: a 9-way is a 9-way, and a
+                    // row that says otherwise is describing a part that does not exist. So the count
+                    // follows the part the moment one is named.
+                    if (const LibraryPart* lp = sharedLibrary().byId(cc->libPart)) {
+                        const int pins = lp->value(QStringLiteral("pins")).toInt();
+                        if (pins > 0 && pins != cc->pinCount) {
+                            cc->pinCount = pins;
+                            cc->pinOrder.erase(
+                                std::remove_if(cc->pinOrder.begin(), cc->pinOrder.end(),
+                                               [pins](int p) { return p < 1 || p > pins; }),
+                                cc->pinOrder.end());
+                            summaryLabel_->setText(
+                                QStringLiteral("%1 has %2 pins — the row now says so")
+                                    .arg(lp->title())
+                                    .arg(pins));
+                        }
+                    }
                     // The library knows the part number: take it, so the drawing and the bill of
                     // materials say the same thing.
                     if (const LibraryPart* p = sharedLibrary().byId(cc->libPart))
@@ -1596,19 +1679,45 @@ QStringList HarnessBuilderDialog::colorChoices() {
 // ---- Step 4: wire connections ----------------------------------------------
 
 QWidget* HarnessBuilderDialog::buildWiresSection() {
-    auto* addBtn = new QPushButton(QStringLiteral("+ Add wire"), this);
+    auto* addBtn = makeAddButton(this, QStringLiteral("Add wire"),
+                                QStringLiteral("One more conductor between two connectors"));
     connect(addBtn, &QPushButton::clicked, this, [this] {
         // Grouped, a new row has to belong somewhere: the group decides which connectors it runs
         // between (or which shield / twisted group it joins), and guessing would drop it into a
         // group the user was not looking at. So the click arms a pick, the headers light up, and
         // the one clicked takes the wire.
+        //
+        // Unless there is nothing to choose between. With one group - a harness of one cable, say,
+        // or a first pair of connectors - asking which group to use has exactly one answer, and the
+        // click did nothing visible while it waited to be told it. With no groups at all there is
+        // not even a header to click, so waiting left the list impossible to add to. Both go
+        // straight in; the pick is for when the answer is genuinely a choice.
         if (grouping_ != WireGrouping::None) {
-            pendingAddGroup_ = true;
-            syncing_ = true;
-            reloadWires();
-            syncing_ = false;
+            QStringList groupKeys;
+            for (int r = 0; r < wireTable_->rowCount(); ++r)
+                if (QWidget* band = wireTable_->cellWidget(r, 0)) {
+                    const QVariant k = band->property("groupKey");
+                    if (k.isValid()) groupKeys << k.toString();
+                }
+            if (groupKeys.size() == 1) {
+                addWireToGroup(groupKeys.first());
+                return;
+            }
+            if (!groupKeys.isEmpty()) {
+                pendingAddGroup_ = true;
+                syncing_ = true;
+                reloadWires();
+                syncing_ = false;
+                summaryLabel_->setText(QStringLiteral(
+                    "Click the group to add the wire to (Esc to cancel)"));
+                return;
+            }
+        }
+        // Two connectors are what a wire runs between; without them the click used to do nothing
+        // at all and look broken - say so instead.
+        if (def_.connectors.size() < 2) {
             summaryLabel_->setText(QStringLiteral(
-                "Click the group to add the wire to (Esc to cancel)"));
+                "A wire runs between two connectors — add a second connector first"));
             return;
         }
         addWire();
@@ -1617,6 +1726,21 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         if (wireTable_ && wireTable_->rowCount())
             wireTable_->scrollToBottom();
     });
+    // A cable is not a wire, and adding one row at a time is not how it goes in: one click places the
+    // cable and every conductor it contains, described as the cable describes them.
+    auto* placeCableBtn = makeAddButton(this, QStringLiteral("Add cable"));
+    placeCableBtn->setToolTip(QStringLiteral(
+        "Place a cable from the library. Every conductor it is made of is added at once - the pairs "
+        "twisted, the screened groups screened, a coax as a coax, the drain wire there to be landed - "
+        "with the colours and cross-sections the cable itself says."));
+    connect(placeCableBtn, &QPushButton::clicked, this, [this] {
+        if (addCableFromLibrary() > 0) {
+            reloadAll();
+            spreadSections();
+            if (wireTable_ && wireTable_->rowCount()) wireTable_->scrollToBottom();
+        }
+    });
+
     auto* fillBtn = new QPushButton(QStringLiteral("Auto-fill pins"), this);
     fillBtn->setToolTip(QStringLiteral("Give every wire the next free pin at each end, in "
                                       "order, without disturbing the pins already set"));
@@ -1794,9 +1918,28 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
                 summaryLabel_->setText(
                     QStringLiteral("%1 row(s) picked — Enter to apply, Esc to cancel").arg(n));
             });
+    // Right-clicking a row asks about the part it is made of - a cable bundle, a wire, a braid. The
+    // rows of one cable all name the same part, so right-clicking any of them asks about the cable.
+    wireTable_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(wireTable_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        const int row = wireTable_->rowAt(at.y());
+        if (row < 0) return;
+        // A row carries its wire's id on its first cell widget, the way pickedWireIds reads it.
+        QWidget* cell = wireTable_->cellWidget(row, 0);
+        const QString id = cell ? cell->property("wireId").toString() : QString();
+        QString libPart, what;
+        for (const auto& w : def_.wires)
+            if (w.id == id) {
+                libPart = w.libPart;
+                what = w.bundle.isEmpty() ? QStringLiteral("That wire")
+                                          : QStringLiteral("The cable %1").arg(w.bundle);
+            }
+        showPartMenu(libPart, wireTable_->viewport()->mapToGlobal(at), what);
+    });
     wireTable_->setMinimumHeight(200);
     return section(QStringLiteral("Wire connections"), wireTable_, this,
-                   QList<QWidget*>{addBtn, fillBtn, cableBtn, coaxBtn, looseBtn, finishUnifyBtn_,
+                   QList<QWidget*>{addBtn, placeCableBtn, fillBtn, cableBtn, coaxBtn, looseBtn,
+                                   finishUnifyBtn_,
                                    allGaugeLabel,
                                    allGaugeBox_, showLabel} +
                        showAllBoxes +
@@ -1949,6 +2092,11 @@ void HarnessBuilderDialog::applyUnify() {
 
 // Enter applies a pending pick and Esc abandons it — both taken before QDialog can read them as
 // "press the default button" and "close the window".
+void HarnessBuilderDialog::showEvent(QShowEvent* e) {
+    forgetSharedLibrary();   // a part added since this window was last open is pickable now
+    QDialog::showEvent(e);
+}
+
 void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
     if (pendingAddGroup_ && e->key() == Qt::Key_Escape) {
         pendingAddGroup_ = false;
@@ -1988,6 +2136,173 @@ QStringList HarnessBuilderDialog::pickedWireIds() const {
     return out;
 }
 
+// A cable placed into the harness, expanded into what it is made of.
+//
+// This is the point of describing a cable's make-up at all. Dropping a 4-pair screened cable into a
+// harness used to mean adding eight rows, setting eight colours, remembering which pairs go together,
+// inventing a twist group per pair and a shield group for the lot, and getting the coax's two rows
+// right. Now the cable says all of that itself: the library knows what it is, and this turns it into
+// rows - the pairs twisted, the screened groups screened, the coax drawn as a coax, the drain wire
+// there to be landed on a pin.
+// The menu a part gets when it is right-clicked: see what it is, see its two drawings, or go to it in
+// the library. Wherever a part is NAMED - a wire row, a cable bundle, a connector - the question is the
+// same one, so it is the same menu.
+void HarnessBuilderDialog::showPartMenu(const QString& libPartId, const QPoint& at,
+                                        const QString& what) {
+    if (libPartId.trimmed().isEmpty()) {
+        summaryLabel_->setText(
+            QStringLiteral("%1 is not made of a library part yet — name one in its Library column, "
+                           "and there will be something to look at.")
+                .arg(what.isEmpty() ? QStringLiteral("That row") : what));
+        return;
+    }
+    const LibraryPart* part = sharedLibrary().byId(libPartId);
+    if (!part) {
+        summaryLabel_->setText(QStringLiteral(
+            "The part this is made of is not in any connected library — connect the library it lives "
+            "in and it will be found."));
+        return;
+    }
+    QMenu menu(this);
+    const QString title = part->title();
+    menu.addAction(QStringLiteral("%1 — %2").arg(partKindName(part->kind), title))->setEnabled(false);
+    menu.addSeparator();
+    const QString noun = part->kind == PartKind::Cable ? QStringLiteral("cable")
+                                                       : partKindName(part->kind).toLower();
+    menu.addAction(QStringLiteral("See the %1's schematic").arg(noun), this, [this, part] {
+        PartViewDialog::showPart(*part, PartViewDialog::Show::Schematic, this);
+    });
+    menu.addAction(QStringLiteral("See the %1's mechanical drawing").arg(noun), this, [this, part] {
+        PartViewDialog::showPart(*part, PartViewDialog::Show::Mechanical, this);
+    });
+    menu.addAction(QStringLiteral("See what it is"), this, [this, part] {
+        PartViewDialog::showPart(*part, PartViewDialog::Show::Data, this);
+    });
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("See the %1 in the library").arg(noun), this,
+                   [this, libPartId] { emit openLibraryAt(libPartId); });
+    menu.exec(at);
+}
+
+int HarnessBuilderDialog::nextFreePin(const HarnessConnector& c) const {
+    for (int p = 1; p <= std::max(1, c.pinCount); ++p) {
+        bool used = false;
+        for (const auto& e : def_.wires)
+            if ((e.fromConn == c.id && e.fromPin == p) || (e.toConn == c.id && e.toPin == p)) {
+                used = true;
+                break;
+            }
+        if (!used) return p;
+    }
+    return 1;
+}
+
+int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
+    if (def_.connectors.size() < 2) {
+        summaryLabel_->setText(QStringLiteral(
+            "A cable runs between two connectors — add the connectors first."));
+        return 0;
+    }
+    // Which cable. Asked for when it is not named, out of the cables the connected libraries hold.
+    QString id = libPartId;
+    const PartsLibrary lib = sharedLibrary();
+    if (id.isEmpty()) {
+        QStringList titles;
+        QStringList ids;
+        for (const LibraryPart& p : lib.parts) {
+            if (p.kind != PartKind::Cable) continue;
+            // cableSpecOf, not the raw parameter: the make-up has its own key now, and a cable described
+            // before that has it under the old one. Reading the old key directly is what made a
+            // perfectly good cable report "no make-up described" and refuse to be placed.
+            const CableSpec spec = cableSpecOf(p);
+            titles << QStringLiteral("%1  —  %2").arg(p.title(), spec.isEmpty()
+                                                                     ? QStringLiteral("no make-up "
+                                                                                      "described")
+                                                                     : spec.summary());
+            ids << p.id;
+        }
+        if (ids.isEmpty()) {
+            summaryLabel_->setText(QStringLiteral(
+                "No cables in the library yet — add one there (its kind is Cable) and describe its "
+                "make-up, then it can be placed here."));
+            return 0;
+        }
+        bool ok = false;
+        const QString picked = QInputDialog::getItem(this, QStringLiteral("Place a cable"),
+                                                     QStringLiteral("Which cable?"), titles, 0,
+                                                     false, &ok);
+        if (!ok) return 0;
+        const int at = titles.indexOf(picked);
+        if (at < 0) return 0;
+        id = ids.at(at);
+    }
+    const LibraryPart* part = lib.byId(id);
+    if (!part) return 0;
+    const CableSpec spec = cableSpecOf(*part);
+    if (spec.isEmpty()) {
+        summaryLabel_->setText(
+            QStringLiteral("%1 has no make-up described — open it in the library and say what is "
+                           "inside the jacket.")
+                .arg(part->title()));
+        return 0;
+    }
+
+    // The bundle name: the cable's own designation, made unique so two of the same cable in one
+    // harness are two cables and not one.
+    QString bundle = part->mfrPn.isEmpty() ? part->description : part->mfrPn;
+    if (bundle.trimmed().isEmpty()) bundle = QStringLiteral("cable");
+    {
+        int n = 1;
+        QString candidate = bundle;
+        auto taken = [this](const QString& name) {
+            for (const auto& w : def_.wires)
+                if (w.bundle == name) return true;
+            return false;
+        };
+        while (taken(candidate)) candidate = QStringLiteral("%1 (%2)").arg(bundle).arg(++n);
+        bundle = candidate;
+    }
+
+    // Which connectors it runs between, and the next free pin at each end - the same defaults a new
+    // wire takes, so a placed cable behaves like the rows a person would have added.
+    const HarnessConnector* from = nullptr;
+    const HarnessConnector* to = nullptr;
+    for (const auto& c : def_.connectors) {
+        if (!from && c.side == HarnessSide::Left) from = &c;
+        if (!to && c.side == HarnessSide::Right) to = &c;
+    }
+    if (!from) from = &def_.connectors.front();
+    if (!to) to = &def_.connectors.back();
+
+    const std::vector<CableConductor> cores = cableConductors(spec, bundle);
+    for (const CableConductor& cc : cores) {
+        HarnessWire w;
+        w.id = uniqueWireId();
+        ++wireSeq_;
+        w.fromConn = from->id;
+        w.toConn = to->id;
+        w.gauge = cc.gauge;
+        w.color = cc.colour;
+        w.kind = cc.kind;
+        w.bundle = cc.bundle;
+        w.twistGroup = cc.twistGroup;
+        w.shieldGroup = cc.shieldGroup;
+        w.label = cc.label;
+        w.libPart = part->id;   // so the bill of materials orders the CABLE, by its own number
+        w.showColor = true;
+        def_.wires.push_back(w);
+        // The pins are given out after each row is in, so nextFreePin sees the rows already placed.
+        HarnessWire& placed = def_.wires.back();
+        placed.fromPin = nextFreePin(*from);
+        placed.toPin = nextFreePin(*to);
+    }
+    summaryLabel_->setText(QStringLiteral("%1 placed: %2 conductor(s) — %3")
+                               .arg(part->title())
+                               .arg(cores.size())
+                               .arg(spec.summary()));
+    return static_cast<int>(cores.size());
+}
+
 void HarnessBuilderDialog::addWire() {
     if (def_.connectors.size() < 2) return;
     HarnessWire w;
@@ -2005,20 +2320,8 @@ void HarnessBuilderDialog::addWire() {
     if (!to) to = &def_.connectors.back();
     w.fromConn = from->id;
     w.toConn = to->id;
-    auto nextFree = [this](const HarnessConnector& c) {
-        for (int p = 1; p <= std::max(1, c.pinCount); ++p) {
-            bool used = false;
-            for (const auto& e : def_.wires)
-                if ((e.fromConn == c.id && e.fromPin == p) || (e.toConn == c.id && e.toPin == p)) {
-                    used = true;
-                    break;
-                }
-            if (!used) return p;
-        }
-        return 1;
-    };
-    w.fromPin = nextFree(*from);
-    w.toPin = nextFree(*to);
+    w.fromPin = nextFreePin(*from);
+    w.toPin = nextFreePin(*to);
     def_.wires.push_back(w);
 }
 
@@ -2172,6 +2475,8 @@ void HarnessBuilderDialog::reloadWires() {
             ++row;
         }
     }
+    // The rows of one cable say its name once, in a cell of their own.
+    mergeBundleCells();
     // Sized to the widgets, not the header text: a connector name or a gauge must never be
     // clipped to "0.5 mm...".
     fitColumns(wireTable_);
@@ -2197,6 +2502,67 @@ void HarnessBuilderDialog::reloadWires() {
     // A rebuild must not quietly make the rows pickable again.
     wireTable_->setSelectionMode(pendingUnify_.isEmpty() ? QAbstractItemView::NoSelection
                                                          : QAbstractItemView::MultiSelection);
+}
+
+// The Bundle column, merged. Rows that run together in one cable are one thing, and a column
+// repeating its name once per row said the opposite - it read as five loose wires that happen to
+// share a word. Consecutive rows of the same bundle are spanned into a single tall cell with the
+// name centred in it, and typing there renames the whole cable at once, because that is what the
+// one cell now stands for. A row on its own keeps an ordinary editable cell: that is how a bundle
+// is named in the first place.
+void HarnessBuilderDialog::mergeBundleCells() {
+    constexpr int kBundleCol = 5;
+    const int rows = wireTable_->rowCount();
+    auto bundleAt = [this](int row) -> QString {
+        // A group header spans the full width and is not a wire at all.
+        if (wireTable_->columnSpan(row, 0) > 1) return {};
+        QWidget* cell = wireTable_->cellWidget(row, 0);
+        const QString id = cell ? cell->property("wireId").toString() : QString();
+        if (id.isEmpty()) return {};
+        for (const auto& w : def_.wires)
+            if (w.id == id) return w.bundle;
+        return {};
+    };
+    for (int row = 0; row < rows;) {
+        const QString bundle = bundleAt(row);
+        if (bundle.isEmpty()) { ++row; continue; }
+        int end = row + 1;
+        while (end < rows && bundleAt(end) == bundle) ++end;
+        const int count = end - row;
+        if (count < 2) { row = end; continue; }
+        // The ids the merged cell speaks for - all of them, so a rename reaches every row.
+        QStringList ids;
+        for (int r = row; r < end; ++r)
+            if (QWidget* c = wireTable_->cellWidget(r, 0))
+                ids << c->property("wireId").toString();
+        // The covered rows' own editors go away first: a widget left in a cell a span covers is
+        // still a live widget sitting on top of the table.
+        for (int r = row; r < end; ++r) wireTable_->removeCellWidget(r, kBundleCol);
+        wireTable_->setSpan(row, kBundleCol, count, 1);
+        auto* one = new QLineEdit(bundle, wireTable_);
+        one->setAlignment(Qt::AlignCenter);
+        one->setFrame(false);
+        one->setToolTip(QStringLiteral(
+            "These %1 rows are one cable. Renaming it here renames it on all of them; empty the "
+            "field to break the cable up into separate wires again.").arg(count));
+        // Centred in the tall cell, and carrying the bundle's own colour so the merged block
+        // reads as one object rather than a hole in the tinted rows.
+        QString sheet = QStringLiteral("border:none;font-weight:600;");
+        if (const QString tint = bundleTint(bundle); !tint.isEmpty())
+            sheet += QStringLiteral("background:%1;").arg(tint);
+        one->setStyleSheet(sheet);
+        connect(one, &QLineEdit::editingFinished, this, [this, ids, one, bundle] {
+            if (syncing_) return;
+            const QString name = one->text().trimmed();
+            if (name == bundle) return;
+            for (auto& w : def_.wires)
+                if (ids.contains(w.id)) w.bundle = name;
+            reloadWires();
+            refreshPreview();
+        });
+        wireTable_->setCellWidget(row, kBundleCol, one);
+        row = end;
+    }
 }
 
 // Put a new wire into the group `key` names: for a connector pair that means the two connectors
@@ -2234,6 +2600,9 @@ void HarnessBuilderDialog::buildGroupHeader(int row, const QString& key, const Q
     // One clickable band across the whole width, so the fold target is obvious and large.
     wireTable_->setSpan(row, 0, 1, wireTable_->columnCount());
     auto* btn = new QToolButton(wireTable_);
+    // The group this band stands for, readable from outside: Add wire needs to know which groups
+    // there are to add to.
+    btn->setProperty("groupKey", key);
     btn->setText(QStringLiteral("%1  %2   (%3 wire%4)")
                      .arg(folded ? QStringLiteral("▸") : QStringLiteral("▾"), title)
                      .arg(memberCount)
@@ -2572,9 +2941,12 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
         });
         wireTable_->setCellWidget(row, 12, del);
         {
-            // A conductor may be a discrete wire, or one core of a cable / coax: all three kinds
-            // are offered, because that is what the row can be made of.
-            auto* lib = libraryPartBox(wireTable_, {PartKind::Wire, PartKind::ShieldBraid},
+            // A conductor may be a discrete wire, one core of a CABLE, or a braid. All three are
+            // offered, because all three are what a row can be made of - and a row placed by "Add
+            // cable" IS a cable core, so a list without cables in it could not even show what the row
+            // already was, let alone let a hook-up wire be chosen for it afterwards.
+            auto* lib = libraryPartBox(wireTable_,
+                                       {PartKind::Wire, PartKind::Cable, PartKind::ShieldBraid},
                                        w.libPart);
             centerCombo(lib);
             connect(lib, &QComboBox::currentIndexChanged, this, [this, id, lib, wireById](int i) {
@@ -3041,9 +3413,13 @@ QJsonObject HarnessBuilderDialog::definitionToJson() const {
 // and shared like any other document instead of living inside the application settings.
 void HarnessBuilderDialog::saveDefinition() {
     QSettings st;
-    QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("Save builder pattern"),
-        st.value(QLatin1String(kLastPathKey)).toString(), QLatin1String(kFileFilter));
+    // Presets live in a folder of their own, so the dialog opens where the others already are
+    // rather than wherever the file dialog was last used for something unrelated.
+    QString where = st.value(QLatin1String(kLastPathKey)).toString();
+    if (where.isEmpty() || !where.startsWith(AppPaths::builderDir()))
+        where = AppPaths::builderDir();
+    QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save builder pattern"), where,
+                                                QLatin1String(kFileFilter));
     if (path.isEmpty()) return;
     if (!path.endsWith(QLatin1String(kFileSuffix), Qt::CaseInsensitive))
         path += QLatin1String(kFileSuffix);
@@ -3061,9 +3437,11 @@ void HarnessBuilderDialog::saveDefinition() {
 
 void HarnessBuilderDialog::loadDefinition() {
     QSettings st;
-    const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("Load builder pattern"),
-        st.value(QLatin1String(kLastPathKey)).toString(), QLatin1String(kFileFilter));
+    QString where = st.value(QLatin1String(kLastPathKey)).toString();
+    if (where.isEmpty() || !where.startsWith(AppPaths::builderDir()))
+        where = AppPaths::builderDir();
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Load builder pattern"),
+                                                      where, QLatin1String(kFileFilter));
     if (path.isEmpty()) return;
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {

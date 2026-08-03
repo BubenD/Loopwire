@@ -2,12 +2,15 @@
 
 #include "geometry/Geometry.h"
 #include "harness/Harness.h"
+#include "model/Picture.h"
 
 #include <QFont>
+#include <QHash>
 #include <QJsonArray>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPolygonF>
 #include <QtMath>
 
@@ -20,6 +23,28 @@ int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 bool g_lengthInch = false;   // dimension unit: false = mm (world), true = inch
 bool g_dualUnits = false;    // append the other unit in parentheses
+
+// Decoded pictures, by content hash. A picture is decoded once and then drawn from the cache: without
+// this, every repaint would re-decode every picture on the sheet, and panning a drawing with a logo on
+// it would crawl. The cache is bounded, so a session that places dozens of different pictures does not
+// hold all of them in memory for ever.
+QHash<QString, QPixmap> g_pictures;
+
+QPixmap picturePixmap(const Entity& e) {
+    const QString key = e.meta.value(QLatin1String(PictureKeys::kKey)).toString();
+    if (!key.isEmpty()) {
+        const auto it = g_pictures.constFind(key);
+        if (it != g_pictures.constEnd()) return *it;
+    }
+    QPixmap pm;
+    const QByteArray bytes = pictureBytes(e);
+    if (bytes.isEmpty() || !pm.loadFromData(bytes)) return QPixmap();
+    if (!key.isEmpty()) {
+        if (g_pictures.size() > 64) g_pictures.clear();
+        g_pictures.insert(key, pm);
+    }
+    return pm;
+}
 }
 void EntityRenderer::setDimensionDecimals(int d) { g_dimDecimals = std::clamp(d, 0, 6); }
 int EntityRenderer::dimensionDecimals() { return g_dimDecimals; }
@@ -120,14 +145,74 @@ namespace {
 double effectiveWeight(const Entity& e, const Document& doc) {
     if (e.weight > 0.0) return e.weight;
     if (const Layer* layer = doc.findLayer(e.layer)) return layer->weight;
-    return 1.0;
+    return 0.25;   // no such layer: the same hairline a layer gives by default
 }
+
+// The pen width to draw with, in screen pixels - which is NOT the same as the lineweight.
+//
+// A lineweight is a number off the standard list (0.25 is a normal line). Handed straight to Qt as a
+// cosmetic pen width, anything under 1 is drawn as a FRACTION of a pixel: Qt renders it by lowering the
+// coverage, so a 0.25 line comes out as a quarter-lit grey smear instead of a thin white line. Which is
+// exactly what a hairline default did to every drawing - thin, but washed out.
+//
+// So: a line is never drawn narrower than one whole pixel. Thinner than that is not thinner, it is
+// fainter, and a drawing is meant to be read.
+double penPixels(double weight) { return std::max(1.0, weight); }
+
+// Is this shape made of straight edges? A hairline one is drawn without antialiasing (see the guard
+// below); a curve is not, because a jagged circle is worse than a slightly soft one.
+bool straightEdged(EntityType t) {
+    switch (t) {
+    case EntityType::Line:
+    case EntityType::DoubleLine:
+    case EntityType::Polyline:
+    case EntityType::Rect:
+    case EntityType::Polygon:
+    case EntityType::Wire:
+    case EntityType::Dimension:
+    case EntityType::Wipeout:
+    case EntityType::NetLabel:
+    case EntityType::Bundle:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Antialiasing turned off while a hairline straight edge is drawn, and put back afterwards.
+//
+// A one-pixel antialiased line that falls between two rows of pixels is drawn as two half-lit rows -
+// which is grey, not white. That is what made a thin line look washed out: the width was right and the
+// brightness was not. Without antialiasing the same line is one row, fully lit, which is what a drawing
+// is meant to look like and what every CAD application does with a hairline.
+class HairlineCrisp {
+public:
+    HairlineCrisp(QPainter& p, bool apply) : p_(p), apply_(apply) {
+        if (!apply_) return;
+        was_ = p_.testRenderHint(QPainter::Antialiasing);
+        p_.setRenderHint(QPainter::Antialiasing, false);
+    }
+    ~HairlineCrisp() {
+        if (apply_) p_.setRenderHint(QPainter::Antialiasing, was_);
+    }
+    HairlineCrisp(const HairlineCrisp&) = delete;
+    HairlineCrisp& operator=(const HairlineCrisp&) = delete;
+
+private:
+    QPainter& p_;
+    bool apply_ = false;
+    bool was_ = true;
+};
 
 // How wide a WIRE is drawn, in screen pixels. The base is the weight the layer gives it - a net
 // wire is as thin as anything else on that layer - and its cross-section moves it a little
 // either way, bounded at both ends: the gauge should be legible in the line, not shout.
 double wireDrawWidth(const Entity& e, const Document& doc) {
-    const double base = std::max(0.6, effectiveWeight(e, doc));
+    // A conductor is the subject of a harness drawing, so it is drawn heavier than the geometry around
+    // it. The floor is exactly what a wire used to get from the old default layer weight, so every
+    // harness drawing looks the same as it did while ordinary lines became hairlines. A layer set
+    // heavier than this still carries its wires heavier.
+    const double base = std::max(2.0, effectiveWeight(e, doc));
     const QString gauge = e.meta.value("wireGauge").toString();
     if (gauge.isEmpty()) return base;
     // wireGaugeWeight runs 0.7 (32 AWG) to 10 (1 AWG); 1.5 is 0.5 mm2, the everyday size, and
@@ -791,15 +876,24 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     const QColor color = overrideColor.isValid() ? overrideColor : resolveColor(e, doc);
     QPen pen(color);
     pen.setCosmetic(true); // width is set in screen px; for a wire it is derived from the zoom
-    if (e.type == EntityType::Wire) {
-        const double px = wireDrawWidth(e, doc);
-        pen.setWidthF(overrideColor.isValid() ? px + 1.4 : px);
-    } else {
-        pen.setWidthF(overrideColor.isValid() ? effectiveWeight(e, doc) + 1.4
-                                             : effectiveWeight(e, doc));
-    }
+    const double px = penPixels(e.type == EntityType::Wire ? wireDrawWidth(e, doc)
+                                                           : effectiveWeight(e, doc));
+    pen.setWidthF(overrideColor.isValid() ? px + 1.4 : px);
+    // A hairline straight edge is drawn crisp rather than antialiased, so it comes out white instead of
+    // grey. Restored the moment this entity is done with.
+    const HairlineCrisp crisp(p, px <= 1.25 && !overrideColor.isValid() && straightEdged(e.type));
     pen.setJoinStyle(Qt::RoundJoin);
     pen.setCapStyle(Qt::RoundCap);
+    // Dashed, when the object says so. Qt measures a dash pattern in units of the PEN WIDTH, so a raw
+    // {6,4} on a hairline collapses to nothing - it is normalised by the width, which makes the dash
+    // the same length on screen whatever the object is drawn with. Only the shield used to honour
+    // this; a screen drawn as plain lines, a construction line, a boundary all want it too.
+    if (e.meta.value("lineType").toString(QStringLiteral("solid")) == QLatin1String("dashed")) {
+        const double ds = std::max(0.1, e.meta.value("dashScale").toDouble(1.0));
+        const double we = pen.widthF() > 0.0 ? pen.widthF() : 1.0;
+        pen.setDashPattern({6.0 * ds / we, 4.0 * ds / we});
+        pen.setCapStyle(Qt::FlatCap);   // a round cap on a short dash fills the gap back in
+    }
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
 
@@ -1206,6 +1300,57 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
+    case EntityType::Image: {
+        if (e.points.size() < 4) break;
+        const QPixmap pm = picturePixmap(e);
+        const Bounds b = boundsOf(e.points);
+        // The rectangle the picture fills, in screen terms. World y is up and screen y is down, so the
+        // world TOP-left corner is the screen top-left one.
+        const QPointF tl = vt.toScreen({b.min.x, b.max.y});
+        const QPointF br = vt.toScreen({b.max.x, b.min.y});
+        const QRectF target(tl, br);
+        if (pm.isNull()) {
+            // A picture whose bytes did not survive: say so on the sheet rather than leaving a blank,
+            // so it is obvious what is missing and where it was.
+            p.save();
+            QPen pen(color);
+            pen.setCosmetic(true);
+            pen.setStyle(Qt::DashLine);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(target);
+            p.drawLine(target.topLeft(), target.bottomRight());
+            p.drawLine(target.topRight(), target.bottomLeft());
+            p.restore();
+            break;
+        }
+        p.save();
+        const double opacity =
+            std::clamp(e.meta.value(QLatin1String(PictureKeys::kOpacity)).toDouble(100.0), 0.0, 100.0);
+        if (opacity < 100.0) p.setOpacity(opacity / 100.0);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        // Rotated by a grip or by the Rotate tool: turn the painter about the middle and draw it
+        // straight, so a rotated picture is not sheared.
+        if (std::abs(e.rotation) > 1e-9) {
+            p.translate(target.center());
+            p.rotate(-e.rotation * 180.0 / M_PI);   // screen y is down, so the sign flips
+            p.translate(-target.center());
+        }
+        p.drawPixmap(target, pm, QRectF(pm.rect()));
+        p.restore();
+        // A selected picture gets its outline drawn, so its corner grips have something to sit on and
+        // an all-white picture on a white sheet can still be seen and grabbed.
+        if (overrideColor.isValid()) {
+            QPen pen(color);
+            pen.setCosmetic(true);
+            pen.setWidthF(2.0);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(toScreenPoly(e.points, vt));
+        }
+        break;
+    }
+
     case EntityType::Circle: {
         const QPointF c = vt.toScreen(e.center);
         const double r = e.radius * vt.scale();
@@ -1525,7 +1670,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Draw the braid at the crossed WIRE's thickness (stored gauge), so it reads as part
         // of the wire rather than a thin overlay. Falls back to the default pen if no gauge.
         if (e.meta.contains(QStringLiteral("wireGauge"))) {
-            const double ww = wireGaugeWeight(e.meta.value("wireGauge").toString());
+            const double ww = penPixels(wireGaugeWeight(e.meta.value("wireGauge").toString()));
             QPen tp = p.pen();
             tp.setWidthF(overrideColor.isValid() ? ww + 1.4 : ww);
             p.setPen(tp);

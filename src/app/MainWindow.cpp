@@ -1,10 +1,25 @@
 #include "app/MainWindow.h"
 
+#include "app/ribbon/RibbonIcons.h"
+
 #include "app/HarnessBuilderDialog.h"
 #include "app/BomDialog.h"
+#include "harness/Bom.h"
+#include "harness/PartsLibrary.h"
 #include "app/PartsLibraryDialog.h"
+#include "app/PartViewDialog.h"
+#include "app/BlockDialog.h"
+#include "app/BundleDiameterDialog.h"
+#include "app/MechanicalBuilderDialog.h"
+#include "app/MechanicalValidationDialog.h"
+#include "app/TemplateDialog.h"
+#include "model/Block.h"
+#include "model/Picture.h"
+#include "app/ThermalModelDialog.h"
+#include "app/VoltageDropDialog.h"
 
 #include "app/Editor.h"
+#include "app/UiBits.h"
 #include "app/FontLibrary.h"
 #include "harness/Harness.h"
 #include "io/Dwx.h"
@@ -15,6 +30,10 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QMimeData>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -150,168 +169,6 @@ private:
     bool dragging_ = false;
 };
 
-// Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
-// icon grid without external assets.
-QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1")) {
-    QPixmap pm(24, 24);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(ink);
-    pen.setWidthF(1.6);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    p.setPen(pen);
-    p.setBrush(Qt::NoBrush);
-    switch (id) {
-    case ToolId::Select: {
-        QPolygonF a({{6, 4}, {6, 18}, {10, 14}, {13, 20}, {15, 19}, {12, 13}, {17, 13}});
-        p.setBrush(ink);
-        p.drawPolygon(a);
-        break;
-    }
-    case ToolId::Line: p.drawLine(5, 18, 19, 6); break;
-    case ToolId::DoubleLine: p.drawLine(4, 16, 17, 5); p.drawLine(7, 19, 20, 8); break;
-    case ToolId::Polyline: { QPolygonF a({{4, 16}, {9, 9}, {14, 14}, {20, 6}}); p.drawPolyline(a); break; }
-    case ToolId::DoublePolyline: {
-        QPolygonF a({{4, 14}, {9, 7}, {14, 12}, {20, 4}});
-        QPolygonF b({{4, 19}, {9, 12}, {14, 17}, {20, 9}});
-        p.drawPolyline(a); p.drawPolyline(b); break;
-    }
-    case ToolId::Rect: p.drawRect(5, 7, 14, 10); break;
-    case ToolId::Polygon: {
-        QPolygonF h; for (int i = 0; i < 6; ++i) { double an = M_PI / 6 + i * M_PI / 3; h << QPointF(12 + 8 * std::cos(an), 12 + 8 * std::sin(an)); } p.drawPolygon(h); break;
-    }
-    case ToolId::Circle: p.drawEllipse(QPointF(12, 12), 7, 7); break;
-    case ToolId::Arc: { QPainterPath pa; pa.moveTo(5, 17); pa.arcTo(5, 5, 16, 16, 180, -120); p.drawPath(pa); break; }
-    case ToolId::Ellipse: p.drawEllipse(QPointF(12, 12), 8, 5); break;
-    case ToolId::Spline: { QPainterPath pa; pa.moveTo(4, 16); pa.cubicTo(8, 2, 16, 22, 20, 8); p.drawPath(pa); break; }
-    case ToolId::Text: { QFont f = p.font(); f.setPixelSize(16); f.setBold(true); p.setFont(f); p.drawText(pm.rect(), Qt::AlignCenter, "A"); break; }
-    case ToolId::MText: { QFont f = p.font(); f.setPixelSize(11); f.setBold(true); p.setFont(f); p.drawText(QRect(2, 2, 20, 20), Qt::AlignLeft | Qt::AlignTop, "A"); p.drawLine(9, 8, 20, 8); p.drawLine(5, 14, 20, 14); p.drawLine(5, 19, 20, 19); break; }
-    case ToolId::Dimension: p.drawLine(5, 12, 19, 12); p.drawLine(5, 8, 5, 16); p.drawLine(19, 8, 19, 16); break;
-    case ToolId::Hatch: {
-        p.drawRect(4, 5, 16, 14);
-        // diagonal hatch lines clipped to the box
-        p.save();
-        p.setClipRect(4, 5, 16, 14);
-        for (int o = -14; o <= 16; o += 4) p.drawLine(4 + o, 19, 4 + o + 14, 5);
-        p.restore();
-        break;
-    }
-    case ToolId::Wipeout: {
-        p.drawRect(4, 5, 16, 14);
-        p.drawLine(4, 19, 20, 5); // crossed-out (masked) box
-        p.drawLine(4, 5, 20, 19);
-        break;
-    }
-    case ToolId::Move: {
-        // Four-headed move arrow (clear 4-way cross).
-        p.drawLine(12, 4, 12, 20); p.drawLine(4, 12, 20, 12);
-        p.drawLine(12, 4, 9, 7);   p.drawLine(12, 4, 15, 7);    // up
-        p.drawLine(12, 20, 9, 17); p.drawLine(12, 20, 15, 17);  // down
-        p.drawLine(4, 12, 7, 9);   p.drawLine(4, 12, 7, 15);    // left
-        p.drawLine(20, 12, 17, 9); p.drawLine(20, 12, 17, 15);  // right
-        break;
-    }
-    case ToolId::Rotate: {
-        // Near-full circular arrow.
-        QPainterPath pa; pa.arcMoveTo(5, 5, 14, 14, 70); pa.arcTo(5, 5, 14, 14, 70, 250);
-        p.drawPath(pa);
-        const QPointF tip(12 + 7 * std::cos(-70 * M_PI / 180), 12 + 7 * std::sin(-70 * M_PI / 180));
-        p.drawLine(tip, tip + QPointF(-4, -1)); p.drawLine(tip, tip + QPointF(0, -4));
-        break;
-    }
-    case ToolId::Mirror: {
-        // Dashed mirror axis with a solid shape and its reflection.
-        QPen dash = pen; dash.setStyle(Qt::DashLine); p.setPen(dash);
-        p.drawLine(12, 3, 12, 21);
-        p.setPen(pen);
-        QPolygonF a({{4, 7}, {10, 12}, {4, 17}}); QPolygonF b({{20, 7}, {14, 12}, {20, 17}});
-        p.drawPolygon(a); p.drawPolygon(b);
-        break;
-    }
-    case ToolId::Scale: {
-        // Small square growing into a larger one along a diagonal arrow.
-        p.drawRect(5, 14, 5, 5);
-        p.drawRect(5, 6, 13, 13);
-        p.drawLine(7, 17, 16, 8);
-        p.drawLine(16, 8, 12, 8); p.drawLine(16, 8, 16, 12); // arrowhead
-        break;
-    }
-    case ToolId::Offset: {
-        // Two parallel corner polylines (the offset of a shape).
-        QPolygonF a({{5, 6}, {5, 19}, {19, 19}}); p.drawPolyline(a);
-        QPolygonF b({{9, 6}, {9, 15}, {19, 15}}); p.drawPolyline(b);
-        break;
-    }
-    case ToolId::Trim: {
-        // A line trimmed at a boundary: a vertical cutting edge, the kept part solid
-        // up to it, and the removed part beyond shown dashed (AutoCAD TRIM sense).
-        p.drawLine(14, 4, 14, 20);          // boundary / cutting edge
-        p.drawLine(3, 12, 14, 12);          // kept segment
-        QPen dash = pen;
-        dash.setStyle(Qt::DashLine);
-        p.setPen(dash);
-        p.drawLine(14, 12, 21, 12);         // trimmed-away segment
-        p.setPen(pen);
-        break;
-    }
-    case ToolId::Extend: {
-        // Arrow extending to a boundary wall.
-        p.drawLine(19, 4, 19, 20);          // wall
-        p.drawLine(4, 12, 16, 12);          // shaft
-        p.drawLine(16, 12, 13, 9); p.drawLine(16, 12, 13, 15); // arrowhead
-        break;
-    }
-    case ToolId::Fillet: { QPainterPath pa; pa.moveTo(5, 19); pa.lineTo(5, 12); pa.arcTo(5, 5, 14, 14, 180, -90); pa.lineTo(19, 5); p.drawPath(pa); break; }
-    case ToolId::Chamfer: { QPolygonF a({{5, 19}, {5, 10}, {10, 5}, {19, 5}}); p.drawPolyline(a); break; }
-    case ToolId::Wire: { pen.setWidthF(2.4); p.setPen(pen); p.drawLine(4, 17, 20, 7); break; }
-    case ToolId::Connector: p.drawRect(6, 5, 8, 14); p.drawLine(14, 9, 20, 9); p.drawLine(14, 15, 20, 15); break;
-    case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
-    case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
-    case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
-    case ToolId::Balloon: {
-        // Numbered callout: a circle with a leader stub and a "1" inside.
-        p.drawEllipse(QPointF(9, 9), 6, 6);
-        p.drawLine(13, 13, 20, 20); // leader
-        QFont f = p.font(); f.setPixelSize(8); f.setBold(true); p.setFont(f);
-        p.drawText(QRectF(3, 3, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
-        break;
-    }
-    case ToolId::TextLeader: {
-        // A leader arrow up to a short landing, with text lines (no circle).
-        p.drawLine(4, 20, 12, 12);          // leader
-        p.drawLine(4, 20, 4, 16); p.drawLine(4, 20, 8, 20); // arrowhead
-        p.drawLine(12, 12, 20, 12);         // horizontal landing
-        p.drawLine(13, 8, 20, 8);           // text lines above the landing
-        p.drawLine(13, 5, 18, 5);
-        break;
-    }
-    case ToolId::Note: {
-        // Bordered note box with a few text lines.
-        p.drawRect(4, 5, 16, 14);
-        for (int i = 0; i < 3; ++i) p.drawLine(7, 9 + i * 3, 17, 9 + i * 3);
-        break;
-    }
-    case ToolId::Revision: {
-        // Titled box: a top strip + a small revision triangle.
-        p.drawRect(4, 5, 16, 14);
-        p.drawLine(4, 10, 20, 10); // title strip divider
-        QPolygonF tri({{12, 12}, {16, 18}, {8, 18}}); // rev triangle
-        p.drawPolyline(tri); p.drawLine(8, 18, 12, 12);
-        break;
-    }
-    case ToolId::Table: {
-        // Grid of cells.
-        p.drawRect(4, 5, 16, 14);
-        p.drawLine(4, 10, 20, 10); p.drawLine(4, 15, 20, 15); // rows
-        p.drawLine(9, 5, 9, 19); p.drawLine(15, 5, 15, 19);   // cols
-        break;
-    }
-    }
-    p.end();
-    return QIcon(pm);
-}
 
 // Monochrome glyphs for the Modify "Operations" buttons (Array, Explode, Purge,
 // Delete, Fillet radius) — same flat line-art style as the tool icons so they sit
@@ -1518,7 +1375,8 @@ QStringList MainWindow::startupModules() {
             QStringLiteral("Preferences"),      QStringLiteral("Ribbon"),
             QStringLiteral("Panels"),           QStringLiteral("Status controls"),
             QStringLiteral("Command bar"),      QStringLiteral("Menus"),
-            QStringLiteral("Commands"),         QStringLiteral("Command autocomplete")};
+            QStringLiteral("Commands"),         QStringLiteral("Parts library"),
+            QStringLiteral("Command autocomplete")};
 }
 
 MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(parent) {
@@ -1647,6 +1505,14 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         style.boxHeight = h;
         beginInlineText(QString(), QString(), style, tl);
     });
+    // Double-clicking a copy of a block opens the block itself.
+    connect(editor_, &Editor::editBlockRequested, this,
+            [this](const QString& name) { openBlockEditor(name); });
+    // Double-clicking the sheet frame opens the template it came from.
+    connect(editor_, &Editor::editTemplateRequested, this,
+            [this](const QString& name) { openTemplateEditor(name); });
+    // Ctrl+V: the window decides, because the system clipboard may hold a newer picture.
+    connect(editor_, &Editor::pasteRequested, this, [this] { pasteFromClipboard(); });
     connect(editor_, &Editor::editTextRequested, this, [this](const QString& id) {
         if (!doc_) return;
         const Entity* found = nullptr;
@@ -1723,6 +1589,23 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     buildMenus();
     note(QStringLiteral("Commands"));
     buildCommands();
+    // Watch the system clipboard, so a paste knows whether the picture on it arrived before or after
+    // whatever was last copied inside the application.
+    if (QClipboard* cb = QGuiApplication::clipboard())
+        connect(cb, &QClipboard::dataChanged, this, [this] {
+            const QMimeData* md = QGuiApplication::clipboard()->mimeData();
+            if (md && (md->hasImage() || md->hasUrls()))
+                sysClipImageAt_ = QDateTime::currentMSecsSinceEpoch();
+        });
+    note(QStringLiteral("Parts library"));
+    {
+        // Open the connected libraries once at start-up: the default one is created and filled with
+        // real parts on a first run, so the bill of materials and the harness builder find a shelf
+        // that is already stocked - without waiting for the library window to be opened.
+        PartsCatalog catalog;
+        catalog.openRemembered();
+    }
+
     note(QStringLiteral("Command autocomplete"));
 
     // Command autocomplete: typing the first letters suggests every matching
@@ -2105,72 +1988,111 @@ QWidget* MainWindow::clipboardRow(bool iconOnly) {
     return w;
 }
 
-void MainWindow::buildRibbon() {
-    toolGroup_ = new QActionGroup(this);
-    toolGroup_->setExclusive(true);
+// A ribbon tab page holds horizontal groups separated by vertical rules. Members rather than
+// lambdas in buildRibbon(), because each tab is built in a file of its own and has to reach them.
+std::pair<QWidget*, QHBoxLayout*> MainWindow::makeTabPage() {
+    auto* page = new QWidget(ribbon_);
+    auto* lay = new QHBoxLayout(page);
+    lay->setContentsMargins(6, 4, 6, 2);
+    lay->setSpacing(0);
+    lay->setAlignment(Qt::AlignLeft);
+    return {page, lay};
+}
 
-    ribbon_ = new QTabWidget(this);
-    ribbon_->setDocumentMode(true);
-    ribbon_->setFixedHeight(150); // taller: larger icons + room for the 4-row hatch fields
-    // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
-    // Use background-color (not the `background` shorthand) so it reliably wins
-    // over the application stylesheet's QWidget{background-color:...} rule.
-    ribbon_->setStyleSheet(QStringLiteral(
-        "QTabWidget::pane{background-color:#3a3d43;border:none;border-bottom:1px solid #2a2c31;}"
-        "QWidget{background-color:#3a3d43;color:#c9ccd1;}"
-        "QTabBar{background-color:#2f3237;}"
-        "QTabBar::tab{background-color:transparent;color:#c2c5ca;padding:5px 14px;border:none;}"
-        "QTabBar::tab:hover{color:#ffffff;}"
-        "QTabBar::tab:selected{color:#ffffff;background-color:#3a3d43;border-bottom:2px solid #3d8bfd;}"
-        "QLabel{background-color:transparent;color:#c8ccd2;}"
-        "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
-        "QToolButton:hover{background-color:#484c53;border-color:#5a5f68;}"
-        "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
-        "QToolButton:pressed{background-color:#22384f;}"
-        "QFrame{color:#2a2c31;}"
-        // Combos + spin fields: lighter field, bright text, clear border so they
-        // read against the charcoal ribbon in dark mode.
-        "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
-        "QComboBox:hover{border-color:#5aa0ff;}"
-        // Line edits (and the editable-combo line edit) need bright text too, else they
-        // render near-black on the ribbon.
-        "QLineEdit{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
-        "QComboBox QLineEdit{background-color:transparent;border:none;color:#f2f4f7;}"
-        // A distinct, button-like drop-down box with a clear down-triangle (a non-zero
-        // arrow box is required for the CSS border-triangle to render).
-        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
-        "background-color:#6a6f78;border-left:1px solid #7b818b;border-top-right-radius:3px;"
-        "border-bottom-right-radius:3px;width:18px;}"
-        "QComboBox::drop-down:hover{background-color:#7c828c;}"
-        "QComboBox::down-arrow{image:url(:/caret-down.svg);width:12px;height:12px;}"
-        "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
-        "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
-        "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
-        "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:14px;background-color:#6a6f78;}"
-        "QAbstractSpinBox::up-arrow{image:none;width:7px;height:7px;border-left:3px solid transparent;border-right:3px solid transparent;border-bottom:5px solid #e8eaed;}"
-        "QAbstractSpinBox::down-arrow{image:none;width:7px;height:7px;border-left:3px solid transparent;border-right:3px solid transparent;border-top:5px solid #e8eaed;}"));
+// Exactly one ribbon page visible: the one whose tab is selected.
+//
+// A QTabWidget shows and hides its pages itself. Calling show() on a page that is NOT the current one
+// makes that page paint over the whole ribbon - the tab bar included - which is how the template's
+// groups ended up on top of a drawing's ribbon with no tabs to be seen. A page that has been DETACHED
+// (a contextual tab not currently offered) has to be hidden too: removing its tab leaves it a child of
+// the ribbon, and a child that was never hidden is shown the moment its parent is.
+void MainWindow::normaliseRibbonPages() {
+    if (!ribbon_) return;
+    QWidget* cur = ribbon_->currentWidget();
+    for (int i = 0; i < ribbon_->count(); ++i) {
+        QWidget* page = ribbon_->widget(i);
+        if (page && page != cur && page->isVisible()) page->hide();
+    }
+    for (QWidget* page : {templateTab_, hatchTab_, tableCellTab_, arrayTab_, connectorTab_, wireTab_,
+                          captureTab_})
+        if (page && ribbon_->indexOf(page) < 0 && page->isVisible()) page->hide();
+    if (cur) cur->show();
+}
 
-    // A ribbon tab page holds horizontal groups separated by vertical rules.
-    auto makeTabPage = [&]() {
-        auto* page = new QWidget(ribbon_);
-        auto* lay = new QHBoxLayout(page);
-        lay->setContentsMargins(6, 4, 6, 2);
-        lay->setSpacing(0);
-        lay->setAlignment(Qt::AlignLeft);
-        return std::pair<QWidget*, QHBoxLayout*>{page, lay};
+// Undo and Redo, drawn as the arrows they are. The keys have always done this; the buttons are for
+// the hand that is already on the mouse - and for anyone who does not know the keys exist.
+QWidget* MainWindow::undoRedoRow(QWidget* parent) {
+    auto* host = new QWidget(parent);
+    auto* lay = new QHBoxLayout(host);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(2);
+    auto arrow = [](bool redo) {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(QColor("#d6dae1"));
+        pen.setWidthF(2.2);
+        pen.setCapStyle(Qt::RoundCap);
+        p.setPen(pen);
+        // A curved arrow, going back for undo and forward for redo.
+        QPainterPath path;
+        if (redo) {
+            path.moveTo(6, 19);
+            path.cubicTo(9, 9, 19, 7, 22, 12);
+        } else {
+            path.moveTo(22, 19);
+            path.cubicTo(19, 9, 9, 7, 6, 12);
+        }
+        p.drawPath(path);
+        p.setBrush(QColor("#d6dae1"));
+        p.setPen(Qt::NoPen);
+        QPolygonF head;
+        if (redo) head << QPointF(22, 12) << QPointF(17, 12) << QPointF(22, 17);
+        else head << QPointF(6, 12) << QPointF(11, 12) << QPointF(6, 17);
+        p.drawPolygon(head);
+        return QIcon(pm);
     };
-    auto addGroup = [&](QHBoxLayout* lay, const QString& title, QWidget* content) {
-        lay->addWidget(ribbonGroup(title, content));
-        auto* rule = new QFrame(lay->parentWidget());
-        rule->setFrameShape(QFrame::VLine);
-        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-        lay->addWidget(rule);
+    auto button = [&](bool redo) {
+        auto* b = new QToolButton(host);
+        b->setIcon(arrow(redo));
+        b->setIconSize(QSize(26, 26));
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setText(redo ? QStringLiteral("Redo") : QStringLiteral("Undo"));
+        b->setToolTip(redo ? QStringLiteral("Redo the last undone change (Ctrl+Y)")
+                           : QStringLiteral("Undo the last change (Ctrl+Z)"));
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setMinimumWidth(52);
+        connect(b, &QToolButton::clicked, this, [this, redo] {
+            if (redo) editor_->redo();
+            else editor_->undo();
+            canvas_->setFocus(Qt::OtherFocusReason);   // the keys keep working afterwards
+        });
+        // Greyed when there is nothing to do, so the button says what the drawing's state is.
+        auto sync = [this, b, redo] { b->setEnabled(redo ? editor_->canRedo() : editor_->canUndo()); };
+        sync();
+        connect(editor_, &Editor::changed, this, sync);
+        connect(editor_, &Editor::selectionChanged, this, sync);
+        return b;
     };
-    // Match properties (paintbrush): pick a source object, then click similar-type
-    // targets to copy its style/geometry/technical properties. Shared by the Home and
-    // Schematic-build Modify groups. iconOnly => match the plain tool-row icons (Home);
-    // otherwise a labelled text-under-icon button (Schematic build).
-    auto makeMatchBtn = [this](QWidget* parent, bool iconOnly) {
+    lay->addWidget(button(false));
+    lay->addWidget(button(true));
+    return host;
+}
+
+void MainWindow::addGroup(QHBoxLayout* lay, const QString& title, QWidget* content) {
+    lay->addWidget(ribbonGroup(title, content));
+    auto* rule = new QFrame(lay->parentWidget());
+    rule->setFrameShape(QFrame::VLine);
+    rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+    lay->addWidget(rule);
+}
+
+// Match properties (paintbrush): pick a source object, then click similar-type targets to copy its
+// style/geometry/technical properties. Shared by the Home and Schematic-build Modify groups.
+// iconOnly => match the plain tool-row icons (Home); otherwise a labelled text-under-icon button.
+QToolButton* MainWindow::makeMatchBtn(QWidget* parent, bool iconOnly) {
         auto* b = new QToolButton(parent);
         if (iconOnly) {
             b->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -2224,771 +2146,67 @@ void MainWindow::buildRibbon() {
             canvas_->setFocus(Qt::OtherFocusReason);
         });
         return b;
-    };
+}
 
-    // ---- HOME : Draw | Modify | Properties | AI ----
-    {
-        auto [page, lay] = makeTabPage();
-        QAction* sel = makeToolAction(QStringLiteral("Select"), ToolId::Select);
-        sel->setChecked(true);
-        addGroup(lay, QStringLiteral("Draw"),
-                 toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
-                          ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
-                          ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
-                          ToolId::Hatch, ToolId::Wipeout}));
-        {
-            // Modify group holds the modify tools AND the Copy/Cut clipboard button.
-            auto* modW = new QWidget(page);
-            auto* mh = new QHBoxLayout(modW);
-            mh->setContentsMargins(0, 0, 0, 0);
-            mh->setSpacing(2);
-            // 9 modify tools lay out 5 + 4, leaving the bottom-right grid cell empty;
-            // drop the Match icon into it so it lines up with the other icons in the row.
-            auto* modRow = toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                                    ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
-                                    ToolId::Chamfer});
-            if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
-                g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
-            mh->addWidget(modRow);
-            // Icon only here, matching the tool icons it sits beside; the name is on hover.
-            mh->addWidget(clipboardRow(/*iconOnly=*/true));
-            addGroup(lay, QStringLiteral("Modify"), modW);
-        }
-        addGroup(lay, QStringLiteral("Operations"), operationsRow());
-        {
-            // Annotation group: the annotation tools + a Table button (Insert Table).
-            auto* annoW = new QWidget(page);
-            auto* ah = new QHBoxLayout(annoW);
-            ah->setContentsMargins(0, 0, 0, 0);
-            ah->setSpacing(2);
-            ah->addWidget(toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon,
-                                   ToolId::Note, ToolId::Revision}));
-            auto* tb = new QToolButton(annoW);
-            tb->setIcon(makeToolIcon(ToolId::Table));
-            tb->setIconSize(QSize(28, 28));
-            tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
-            tb->setAutoRaise(true);
-            tb->setFocusPolicy(Qt::NoFocus);
-            tb->setToolTip(QStringLiteral("Insert Table"));
-            connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-            ah->addWidget(tb);
-            addGroup(lay, QStringLiteral("Annotation"), annoW);
-        }
+void MainWindow::buildRibbon() {
+    toolGroup_ = new QActionGroup(this);
+    toolGroup_->setExclusive(true);
 
-        // Properties group: Layer + Color dropdowns.
-        auto* propsW = new QWidget(page);
-        auto* pg = new QGridLayout(propsW);
-        pg->setContentsMargins(0, 0, 0, 0);
-        pg->setSpacing(2);
-        layerCombo_ = new QComboBox(propsW);
-        layerCombo_->setMinimumWidth(120);
-        colorCombo_ = new QComboBox(propsW);
-        colorCombo_->setMinimumWidth(120);
-        colorCombo_->addItems({"ByLayer", "White", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"});
-        // Bright, full-width labels so "Layer"/"Color" read clearly in dark mode.
-        auto propLabel = [&](const QString& t) {
-            auto* l = new QLabel(t, propsW);
-            l->setStyleSheet(QStringLiteral("color:#e6e9ef; background:transparent;"));
-            l->setMinimumWidth(38);
-            return l;
-        };
-        // Lineweight dropdown (ByLayer + standard weights) for new entities / selection.
-        auto* lwCombo = new QComboBox(propsW);
-        lwCombo->setMinimumWidth(120);
-        lwCombo->addItems({"ByLayer", "0.00", "0.13", "0.25", "0.35", "0.50", "0.70",
-                           "1.00", "1.40", "2.00"});
-        pg->addWidget(propLabel(QStringLiteral("Layer")), 0, 0);
-        pg->addWidget(layerCombo_, 0, 1);
-        pg->addWidget(propLabel(QStringLiteral("Color")), 1, 0);
-        pg->addWidget(colorCombo_, 1, 1);
-        pg->addWidget(propLabel(QStringLiteral("Weight")), 2, 0);
-        pg->addWidget(lwCombo, 2, 1);
-        connect(lwCombo, &QComboBox::activated, this, [this, lwCombo](int) {
-            const QString t = lwCombo->currentText();
-            const double w = (t == QLatin1String("ByLayer")) ? 0.0 : t.toDouble();
-            editor_->setCurrentWeight(w);   // applies to newly drawn entities
-            editor_->setSelectionWeight(w); // and to any current selection
-        });
-        connect(layerCombo_, &QComboBox::activated, this, [this](int) {
-            const QString name = layerCombo_->currentText();
-            doc_->setActiveLayer(name);
-            editor_->setSelectionLayer(name);
-        });
-        connect(colorCombo_, &QComboBox::activated, this, [this](int) {
-            static const QHash<QString, QString> map = {
-                {"ByLayer", ""}, {"White", "#ffffff"}, {"Red", "#ff0000"},
-                {"Yellow", "#ffff00"}, {"Green", "#00ff00"}, {"Cyan", "#00ffff"},
-                {"Blue", "#0000ff"}, {"Magenta", "#ff00ff"}};
-            const QString hex = map.value(colorCombo_->currentText(), QString());
-            editor_->setCurrentColor(hex);     // applies to newly drawn entities
-            editor_->setSelectionColor(hex);   // and recolors any current selection
-        });
-        addGroup(lay, QStringLiteral("Properties"), propsW);
+    ribbon_ = new QTabWidget(this);
+    ribbon_->setDocumentMode(true);
+    ribbon_->setFixedHeight(150); // taller: larger icons + room for the 4-row hatch fields
+    // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
+    // Use background-color (not the `background` shorthand) so it reliably wins
+    // over the application stylesheet's QWidget{background-color:...} rule.
+    ribbon_->setStyleSheet(QStringLiteral(
+        "QTabWidget::pane{background-color:#3a3d43;border:none;border-bottom:1px solid #2a2c31;}"
+        "QWidget{background-color:#3a3d43;color:#c9ccd1;}"
+        "QTabBar{background-color:#2f3237;}"
+        "QTabBar::tab{background-color:transparent;color:#c2c5ca;padding:5px 14px;border:none;}"
+        "QTabBar::tab:hover{color:#ffffff;}"
+        "QTabBar::tab:selected{color:#ffffff;background-color:#3a3d43;border-bottom:2px solid #3d8bfd;}"
+        "QLabel{background-color:transparent;color:#c8ccd2;}"
+        "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
+        "QToolButton:hover{background-color:#484c53;border-color:#5a5f68;}"
+        "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
+        "QToolButton:pressed{background-color:#22384f;}"
+        "QFrame{color:#2a2c31;}"
+        // Combos + spin fields: lighter field, bright text, clear border so they
+        // read against the charcoal ribbon in dark mode.
+        "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
+        "QComboBox:hover{border-color:#5aa0ff;}"
+        // Line edits (and the editable-combo line edit) need bright text too, else they
+        // render near-black on the ribbon.
+        "QLineEdit{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QComboBox QLineEdit{background-color:transparent;border:none;color:#f2f4f7;}"
+        // A distinct, button-like drop-down box with a clear down-triangle (a non-zero
+        // arrow box is required for the CSS border-triangle to render).
+        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
+        "background-color:#6a6f78;border-left:1px solid #7b818b;border-top-right-radius:3px;"
+        "border-bottom-right-radius:3px;width:18px;}"
+        "QComboBox::drop-down:hover{background-color:#7c828c;}"
+        "QComboBox::down-arrow{image:url(:/caret-down.svg);width:12px;height:12px;}"
+        "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
+        "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
+        "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:14px;background-color:#6a6f78;}"
+        // The arrows have to be IMAGES. Styling ::up-button at all stops Qt drawing the style's own
+        // arrow, and its stylesheet engine does not do the CSS border-triangle trick - so what was
+        // here before ("image:none" plus borders) left two blank blocks that turned blue on hover,
+        // which is exactly what a spin box must not look like.
+        "QAbstractSpinBox::up-arrow{image:url(:/caret-up.svg);width:9px;height:9px;}"
+        "QAbstractSpinBox::down-arrow{image:url(:/caret-down.svg);width:9px;height:9px;}"
+        "QAbstractSpinBox::up-arrow:disabled,QAbstractSpinBox::down-arrow:disabled{opacity:80;}"));
 
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Home"));
-    }
+    // One tab per file, in src/app/ribbon/ - the ribbon was the biggest thing in this file and the
+    // place every new feature landed.
+    buildHomeTab();
+    buildModifyTab();
+    buildInsertTab();
+    buildAnnotationTab();
+    buildSchematicBuildTab();
+    buildHarnessMechanicalTab();
 
-    // ---- MODIFY ----
-    {
-        auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Transform"),
-                 toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                          ToolId::Offset}));
-        {
-            // Edit group: the pick-modify tools plus the Copy/Cut clipboard button.
-            auto* editW = new QWidget(page);
-            auto* eh = new QHBoxLayout(editW);
-            eh->setContentsMargins(0, 0, 0, 0);
-            eh->setSpacing(2);
-            eh->addWidget(
-                toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
-            eh->addWidget(clipboardRow());
-            addGroup(lay, QStringLiteral("Edit"), editW);
-        }
-        addGroup(lay, QStringLiteral("Operations"), operationsRow());
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Modify"));
-    }
-
-    // ---- INSERT ----
-    {
-        auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Annotation"), toolRow({ToolId::Text, ToolId::Dimension}));
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Insert"));
-    }
-
-    // ---- ANNOTATION ----
-    {
-        auto [page, lay] = makeTabPage();
-        addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
-        {
-            // Callouts + a Table button that asks rows/cols before you drag the grid.
-            auto* calloutW = new QWidget(page);
-            auto* ch = new QHBoxLayout(calloutW);
-            ch->setContentsMargins(0, 0, 0, 0);
-            ch->setSpacing(2);
-            // Leader = a split-button: click places a TEXT leader (no circle); the
-            // fall-menu offers a Balloon leader plus the multileader operations.
-            auto* balloonBtn = new QToolButton(calloutW);
-            balloonBtn->setIcon(makeToolIcon(ToolId::TextLeader));
-            balloonBtn->setIconSize(QSize(28, 28));
-            balloonBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-            balloonBtn->setAutoRaise(true);
-            balloonBtn->setFocusPolicy(Qt::NoFocus);
-            balloonBtn->setToolTip(QStringLiteral("Leader (text) — click the tip then the label"));
-            balloonBtn->setPopupMode(QToolButton::MenuButtonPopup);
-            connect(balloonBtn, &QToolButton::clicked, this,
-                    [this] { editor_->setTool(ToolId::TextLeader); });
-            auto* lm = new QMenu(balloonBtn);
-            {
-                QAction* a = lm->addAction(makeToolIcon(ToolId::TextLeader),
-                                           QStringLiteral("Leader (text only)"));
-                connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::TextLeader); });
-                a = lm->addAction(makeToolIcon(ToolId::Balloon), QStringLiteral("Balloon"));
-                connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
-                lm->addSeparator();
-                a = lm->addAction(QStringLiteral("Add Leader"));
-                connect(a, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });
-                a = lm->addAction(QStringLiteral("Remove Leader"));
-                connect(a, &QAction::triggered, this,
-                        [this] { editor_->removeLeaderFromSelection(); });
-                lm->addSeparator();
-                a = lm->addAction(QStringLiteral("Align"));
-                connect(a, &QAction::triggered, this, [this] { editor_->alignBalloons(); });
-                a = lm->addAction(QStringLiteral("Collect"));
-                connect(a, &QAction::triggered, this, [this] { editor_->collectBalloons(); });
-            }
-            balloonBtn->setMenu(lm);
-            ch->addWidget(balloonBtn);
-            ch->addWidget(toolRow({ToolId::Note, ToolId::Revision}));
-            auto* tableBtn = new QToolButton(calloutW);
-            tableBtn->setIcon(makeToolIcon(ToolId::Table));
-            tableBtn->setIconSize(QSize(28, 28));
-            tableBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-            tableBtn->setAutoRaise(true);
-            tableBtn->setFocusPolicy(Qt::NoFocus);
-            tableBtn->setToolTip(QStringLiteral("Table — set rows/columns, then drag its size"));
-            connect(tableBtn, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-            ch->addWidget(tableBtn);
-            addGroup(lay, QStringLiteral("Callouts"), calloutW);
-        }
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Annotation"));
-    }
-
-
-    // ---- SCHEMATIC BUILD: placement tools; the "Connector build" groups live in a
-    //      contextual tab that opens only when a connector is being placed / edited. ----
-    {
-        auto [page, lay] = makeTabPage();
-        // Screen / shield button (joins the Place group below).
-        auto* screenBtn = new QToolButton(page);
-        // Icon-only: the name shows on hover (tooltip), not as a label.
-        screenBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        screenBtn->setIconSize(QSize(28, 28));
-        screenBtn->setAutoRaise(true);
-        screenBtn->setFocusPolicy(Qt::NoFocus);
-        screenBtn->setToolTip(QStringLiteral(
-            "Shield: click, then drag a crossing line across the wires to shield them"));
-        {
-            // Braided-shield cable: a cable body with a criss-cross braid mesh in the middle
-            // section (matching the reference picture of a braid shield over a wire).
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            // Cable body: top + bottom edges running the full width.
-            QPen body(QColor("#cfe3ff"));
-            body.setWidthF(1.6);
-            ip.setPen(body);
-            ip.drawLine(2, 9, 26, 9);
-            ip.drawLine(2, 19, 26, 19);
-            // Braid mesh: criss-cross diagonals clipped to the middle section of the cable.
-            ip.save();
-            ip.setClipRect(8, 9, 12, 11);
-            QPen mesh(QColor("#8fb7ff"));
-            mesh.setWidthF(1.1);
-            ip.setPen(mesh);
-            for (int x = 0; x <= 26; x += 4) {
-                ip.drawLine(x, 8, x + 11, 20); // "\" strands
-                ip.drawLine(x, 20, x + 11, 8); // "/" strands
-            }
-            ip.restore();
-            // Ticks where the braided section starts / ends.
-            ip.setPen(body);
-            ip.drawLine(8, 8, 8, 20);
-            ip.drawLine(20, 8, 20, 20);
-            ip.end();
-            screenBtn->setIcon(QIcon(pm));
-        }
-        connect(screenBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginScreen();
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        // Twist: split-button + per-type menu. Lives in the Place group (it places a twist
-        // symbol); the same handlers as before.
-        auto* modTwistBtn = new QToolButton(page);
-        // Icon-only: the name shows on hover (tooltip). The MenuButtonPopup arrow stays as
-        // the fall-menu (type) affordance.
-        modTwistBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        modTwistBtn->setIconSize(QSize(28, 28));
-        modTwistBtn->setAutoRaise(true);
-        modTwistBtn->setFocusPolicy(Qt::NoFocus);
-        modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
-        modTwistBtn->setToolTip(QStringLiteral(
-            "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(1.8);
-            ip.setPen(pen);
-            QPolygonF a, b;
-            for (int k = 0; k <= 3; ++k) {
-                const double x = 4 + k * 6.7;
-                a << QPointF(x, (k % 2 == 0) ? 9 : 19);
-                b << QPointF(x, (k % 2 == 0) ? 19 : 9);
-            }
-            ip.drawPolyline(a);
-            ip.drawPolyline(b);
-            ip.end();
-            modTwistBtn->setIcon(QIcon(pm));
-        }
-        {
-            auto* modTm = new QMenu(modTwistBtn);
-            modTm->addAction(QStringLiteral("Type 1 (crossed)"), this, [this] {
-                editor_->beginTwist(QStringLiteral("crossed"));
-                canvas_->setFocus(Qt::OtherFocusReason);
-            });
-            modTm->addAction(QStringLiteral("Type 2 (twice twisted)"), this, [this] {
-                editor_->beginTwist(QStringLiteral("jog"));
-                canvas_->setFocus(Qt::OtherFocusReason);
-            });
-            modTm->addAction(QStringLiteral("Type 3 (sharp diamond)"), this, [this] {
-                editor_->beginTwist(QStringLiteral("type3"));
-                canvas_->setFocus(Qt::OtherFocusReason);
-            });
-            modTm->addSeparator();
-            modTm->addAction(QStringLiteral("Remove twist…"), this, [this] {
-                editor_->beginTwistRemove();
-                canvas_->setFocus(Qt::OtherFocusReason);
-            });
-            modTwistBtn->setMenu(modTm);
-        }
-        connect(modTwistBtn, &QToolButton::clicked, this, [this] {
-            // Re-arm the LAST chosen type (defaults to crossed), so the picked type sticks.
-            editor_->beginTwist(editor_->lastTwistType());
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        auto* placeW = new QWidget(page);
-        auto* placeLay = new QHBoxLayout(placeW);
-        placeLay->setContentsMargins(0, 0, 0, 0);
-        placeLay->setSpacing(4);
-        placeLay->addWidget(toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice,
-                                     ToolId::NetLabel, ToolId::NotConnected}));
-        // Shield + Twist share one 2-row icon column (same small-icon style as the tool row),
-        // with Twist directly UNDER Shield.
-        auto* stW = new QWidget(page);
-        auto* stG = new QGridLayout(stW);
-        stG->setContentsMargins(0, 0, 0, 0);
-        stG->setSpacing(1);
-        stG->addWidget(screenBtn, 0, 0);
-        stG->addWidget(modTwistBtn, 1, 0);
-        placeLay->addWidget(stW);
-        schemPlaceGroup_ = ribbonGroup(QStringLiteral("Place"), placeW);
-        lay->addWidget(schemPlaceGroup_);
-        {
-            auto* rule = new QFrame(page);
-            rule->setFrameShape(QFrame::VLine);
-            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-            lay->addWidget(rule);
-            schemPlaceRule_ = rule;
-        }
-        // Marker size — appears ONLY while the Splice or X (termination) tool is active,
-        // editing that tool's size; also typeable in the flying command field.
-        auto* mkW = new QWidget(page);
-        auto* mkG = new QGridLayout(mkW);
-        mkG->setContentsMargins(0, 0, 0, 0);
-        mkG->setSpacing(2);
-        markerLabel_ = new QLabel(QStringLiteral("Size"), mkW);
-        markerSpin_ = new QDoubleSpinBox(mkW);
-        markerSpin_->setRange(0.5, 500.0);
-        markerSpin_->setDecimals(1);
-        markerSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons); // field only, no +/-
-        connect(markerSpin_, &QDoubleSpinBox::editingFinished, this, [this] {
-            if (editor_->tool() == ToolId::Splice) editor_->spliceSize() = markerSpin_->value();
-            else if (editor_->tool() == ToolId::NotConnected)
-                editor_->ncSize() = markerSpin_->value();
-        });
-        mkG->addWidget(markerLabel_, 0, 0);
-        mkG->addWidget(markerSpin_, 1, 0);
-        auto* mkGroup = ribbonGroup(QStringLiteral("Marker"), mkW);
-        // Bright text (the ribbon label cascade doesn't reach inline labels/fields).
-        mkGroup->setStyleSheet(QStringLiteral("QLabel,QCheckBox{color:#e6e9ef;background:transparent;}"));
-        mkGroup->setVisible(false);
-        markerGroup_ = mkGroup;
-        lay->addWidget(mkGroup);
-        // Show + relabel the marker size for the active tool (Splice / X), hide otherwise.
-        // The group show/hide (marker vs twist vs the rest) is centralised in
-        // updateSchematicRibbonGroups(); this lambda only sets the marker label/value.
-        auto syncMarker = [this] {
-            const ToolId t = editor_->tool();
-            const bool splice = t == ToolId::Splice, x = t == ToolId::NotConnected;
-            updateSchematicRibbonGroups();
-            if ((splice || x) && markerSpin_) {
-                QSignalBlocker b(markerSpin_);
-                markerLabel_->setText(splice ? QStringLiteral("Splice ⌀") : QStringLiteral("X size"));
-                markerSpin_->setValue(splice ? editor_->spliceSize() : editor_->ncSize());
-            }
-        };
-        connect(editor_, &Editor::toolChanged, this, [syncMarker](ToolId) { syncMarker(); });
-        connect(editor_, &Editor::markerSizeChanged, this, [syncMarker] { syncMarker(); });
-        syncMarker();
-        // Modify: straighten the wiring around a reference connector.
-        auto* modW = new QWidget(page);
-        auto* modG = new QGridLayout(modW);
-        modG->setContentsMargins(0, 0, 0, 0);
-        modG->setSpacing(2);
-        auto* alignBtn = new QToolButton(modW);
-        alignBtn->setText(QStringLiteral("Align\nrouting"));
-        alignBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        alignBtn->setIconSize(QSize(26, 26));
-        alignBtn->setMinimumWidth(66);
-        // Icon: two pin stubs on the left joined by a right-angle (0°/90°) route to a
-        // pin stub on the right — the "make wires orthogonal" glyph.
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(1.8);
-            ip.setPen(pen);
-            ip.drawLine(3, 7, 12, 7);    // top pin exits right
-            ip.drawLine(12, 7, 12, 21);  // vertical run (90°)
-            ip.drawLine(12, 21, 25, 21); // into the lower-right pin
-            ip.drawLine(3, 14, 8, 14);   // a second (straight) pin stub
-            ip.drawLine(8, 14, 8, 21);
-            ip.end();
-            alignBtn->setIcon(QIcon(pm));
-        }
-        alignBtn->setToolTip(QStringLiteral(
-            "Click a reference connector; connectors wired to it shift so their wires "
-            "become horizontal/vertical"));
-        connect(alignBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginAlignRouting();
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modG->addWidget(alignBtn, 0, 0);
-        // Cross switch: toggle a wire crossing between a bridge (hop) and a plain cross.
-        auto* modCrossBtn = new QToolButton(modW);
-        modCrossBtn->setText(QStringLiteral("Cross\nswitch"));
-        modCrossBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        modCrossBtn->setIconSize(QSize(26, 26));
-        modCrossBtn->setMinimumWidth(66);
-        modCrossBtn->setToolTip(QStringLiteral(
-            "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(2.0);
-            ip.setPen(pen);
-            ip.drawLine(3, 20, 9, 20);
-            QPainterPath hop;
-            hop.moveTo(9, 20);
-            hop.arcTo(9, 12, 10, 16, 180, -180);
-            ip.drawPath(hop);
-            ip.drawLine(19, 20, 25, 20);
-            ip.drawLine(14, 6, 14, 26);
-            ip.end();
-            modCrossBtn->setIcon(QIcon(pm));
-        }
-        connect(modCrossBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginCrossSwitch();
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modG->addWidget(modCrossBtn, 0, 1);
-        // Align: select whatever rides on the wires - twist marks, shields, a wire carrying a
-        // colour/gauge marking or a label - click this, then click the column to line them all
-        // up on. Each stays on its own wire; the column only says how far along.
-        auto* twistAlignBtn = new QToolButton(modW);
-        twistAlignBtn->setText(QStringLiteral("Align"));
-        twistAlignBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        twistAlignBtn->setIconSize(QSize(26, 26));
-        twistAlignBtn->setMinimumWidth(66);
-        twistAlignBtn->setToolTip(QStringLiteral(
-            "Line up what rides on the wires - twist marks, shields, colour/gauge markings and "
-            "wire labels - on one column: select them, click this, then click the column"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(1.8);
-            ip.setPen(pen);
-            // Two small braids (twist marks) with a dashed alignment line through them.
-            for (int cx : {8, 20}) {
-                ip.drawLine(cx - 4, 8, cx + 4, 16);
-                ip.drawLine(cx + 4, 8, cx - 4, 16);
-            }
-            QPen dash(QColor("#8fb7ff"));
-            dash.setWidthF(1.2);
-            dash.setStyle(Qt::DashLine);
-            ip.setPen(dash);
-            ip.drawLine(14, 4, 14, 24);
-            ip.end();
-            twistAlignBtn->setIcon(QIcon(pm));
-        }
-        connect(twistAlignBtn, &QToolButton::clicked, this, [this] {
-            editor_->beginTwistAlign();
-            canvas_->setFocus(Qt::OtherFocusReason);
-        });
-        modG->addWidget(twistAlignBtn, 0, 2);
-        modG->addWidget(makeMatchBtn(modW, /*iconOnly=*/false), 0, 3);
-        // "Crossed" twist parameters (apply to the next Crossed twist placed): the diagonal
-        // angle and the horizontal cap length.
-        {
-            // Contextual twist parameters — shown while a twist is armed, with only the
-            // fields relevant to the chosen type:
-            //   Type 1 (crossed): Diag°, H len, Amount
-            //   Type 2 (jog):     H len, Repeats, Amount
-            //   Type 3 (diamond): Repeats, Amount
-            auto* tpW = new QWidget(page);
-            auto* tpG = new QGridLayout(tpW);
-            tpG->setContentsMargins(0, 0, 0, 0);
-            tpG->setHorizontalSpacing(4);
-            tpG->setVerticalSpacing(3);
-            auto lbl = [&](const QString& t) {
-                auto* l = new QLabel(t, tpW);
-                l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
-                return l;
-            };
-            auto spin = [&](double lo, double hi, int dec) {
-                auto* s = new QDoubleSpinBox(tpW);
-                s->setRange(lo, hi);
-                s->setDecimals(dec);
-                s->setKeyboardTracking(false);
-                s->setButtonSymbols(QAbstractSpinBox::NoButtons);
-                s->setMinimumWidth(48);
-                return s;
-            };
-            auto* twAng = spin(0.0, 89.0, 1);
-            twAng->setToolTip(QStringLiteral("Type 1: diagonal angle (deg)"));
-            connect(twAng, &QDoubleSpinBox::editingFinished, this,
-                    [this, twAng] { editor_->twistDiagAngle() = twAng->value(); });
-            auto* twLen = spin(0.0, 500.0, 1);
-            twLen->setToolTip(QStringLiteral("Horizontal length (Type 1 cap / Type 2 flat)"));
-            connect(twLen, &QDoubleSpinBox::editingFinished, this, [this, twLen] {
-                if (editor_->twistArmType() == QLatin1String("jog"))
-                    editor_->twistFlatLen() = twLen->value();
-                else
-                    editor_->twistCapLen() = twLen->value();
-            });
-            auto* twRep = spin(1.0, 20.0, 0);
-            twRep->setToolTip(QStringLiteral("Type 2/3: number of twists (repeats)"));
-            connect(twRep, &QDoubleSpinBox::editingFinished, this, [this, twRep] {
-                editor_->twistRepeats() = std::max(1, static_cast<int>(twRep->value()));
-            });
-            // Amount is a fall-menu (dropdown), matching the Shield "Amount" control.
-            auto* twAmt = new QComboBox(tpW);
-            for (int n = 1; n <= 9; ++n) twAmt->addItem(QString::number(n));
-            twAmt->setMinimumWidth(52);
-            twAmt->setToolTip(QStringLiteral("How many twist marks to place side by side"));
-            connect(twAmt, &QComboBox::currentTextChanged, this,
-                    [this](const QString& t) { editor_->twistAmount() = std::max(1, t.toInt()); });
-            auto* angLbl = lbl(QStringLiteral("Diag°"));
-            auto* lenLbl = lbl(QStringLiteral("H len"));
-            auto* repLbl = lbl(QStringLiteral("Twists"));
-            auto* amtLbl = lbl(QStringLiteral("Amount"));
-            // Two columns: (label,field) at cols 0-1 and 2-3; rows fill per type.
-            tpG->addWidget(angLbl, 0, 0); tpG->addWidget(twAng, 0, 1);
-            tpG->addWidget(lenLbl, 1, 0); tpG->addWidget(twLen, 1, 1);
-            tpG->addWidget(repLbl, 0, 2); tpG->addWidget(twRep, 0, 3);
-            tpG->addWidget(amtLbl, 1, 2); tpG->addWidget(twAmt, 1, 3);
-            // The twist parameters live in their OWN ribbon group. While a twist is armed the
-            // Schematic-build ribbon shows ONLY this group (see updateSchematicRibbonGroups);
-            // otherwise it is hidden and the Place / Modify / DRC groups show.
-            schemTwistGroup_ = ribbonGroup(QStringLiteral("Twist"), tpW);
-            lay->addWidget(schemTwistGroup_);
-            {
-                auto* rule = new QFrame(page);
-                rule->setFrameShape(QFrame::VLine);
-                rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-                lay->addWidget(rule);
-                schemTwistRule_ = rule;
-            }
-            schemTwistGroup_->setVisible(false);
-            schemTwistRule_->setVisible(false);
-            connect(editor_, &Editor::twistArmChanged, this,
-                    [this, twAng, twLen, twRep, twAmt, angLbl, lenLbl, repLbl] {
-                        const QString ty = editor_->twistArmType();
-                        // Show only the twist menu in the ribbon (or restore the rest).
-                        updateSchematicRibbonGroups();
-                        if (ty.isEmpty()) return;
-                        const bool crossed = ty == QLatin1String("crossed");
-                        const bool jog = ty == QLatin1String("jog");
-                        const bool type3 = ty == QLatin1String("type3");
-                        angLbl->setVisible(crossed); twAng->setVisible(crossed);
-                        lenLbl->setVisible(crossed || jog); twLen->setVisible(crossed || jog);
-                        repLbl->setVisible(jog || type3); twRep->setVisible(jog || type3);
-                        QSignalBlocker b1(twAng), b2(twLen), b3(twRep), b4(twAmt);
-                        twAng->setValue(editor_->twistDiagAngle());
-                        twLen->setValue(jog ? editor_->twistFlatLen() : editor_->twistCapLen());
-                        twRep->setValue(editor_->twistRepeats());
-                        twAmt->setCurrentText(QString::number(std::max(1, editor_->twistAmount())));
-                    });
-        }
-        // Built manually (not via addGroup) so the group + its separator rule can be
-        // captured and hidden while the Splice / Termination tool is armed.
-        schemModifyGroup_ = ribbonGroup(QStringLiteral("Modify"), modW);
-        lay->addWidget(schemModifyGroup_);
-        {
-            auto* rule = new QFrame(page);
-            rule->setFrameShape(QFrame::VLine);
-            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-            lay->addWidget(rule);
-            schemModifyRule_ = rule;
-        }
-
-        // ---- DRC (design-rule check) group: Validate / Bypass table / Rules ----
-        auto* drcW = new QWidget(page);
-        auto* drcG = new QGridLayout(drcW);
-        drcG->setContentsMargins(0, 0, 0, 0);
-        drcG->setSpacing(2);
-        // Validate button: schematic design-rule check.
-        auto* valBtn = new QToolButton(drcW);
-        valBtn->setText(QStringLiteral("Validate"));
-        valBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        valBtn->setIconSize(QSize(26, 26));
-        valBtn->setMinimumWidth(66);
-        valBtn->setToolTip(QStringLiteral(
-            "Check the schematic: every connector pin wired or X-terminated, no duplicate "
-            "pin labels, no open wires"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#7ee0a0"));
-            pen.setWidthF(2.4);
-            pen.setCapStyle(Qt::RoundCap);
-            pen.setJoinStyle(Qt::RoundJoin);
-            ip.setPen(pen);
-            ip.drawLine(6, 15, 12, 21); // check mark
-            ip.drawLine(12, 21, 23, 7);
-            ip.end();
-            valBtn->setIcon(QIcon(pm));
-        }
-        connect(valBtn, &QToolButton::clicked, this, [this] { showValidation(); });
-        drcG->addWidget(valBtn, 0, 0);
-        // Bypass table button: review discrepancies the user accepted (bypassed).
-        auto* bypassBtn = new QToolButton(drcW);
-        bypassBtn->setText(QStringLiteral("Bypass table"));
-        bypassBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        bypassBtn->setIconSize(QSize(26, 26));
-        bypassBtn->setMinimumWidth(66);
-        bypassBtn->setToolTip(QStringLiteral("Show discrepancies you have bypassed (accepted)"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#ffb038"));
-            pen.setWidthF(2.4);
-            ip.setPen(pen);
-            ip.setBrush(Qt::NoBrush);
-            ip.drawEllipse(QPointF(14, 14), 9.0, 9.0);
-            ip.drawLine(8, 8, 20, 20); // slash = "bypassed"
-            ip.end();
-            bypassBtn->setIcon(QIcon(pm));
-        }
-        connect(bypassBtn, &QToolButton::clicked, this, [this] { showBypassTable(); });
-        drcG->addWidget(bypassBtn, 0, 1);
-        // Validation rules button: choose which design-rule checks run.
-        auto* rulesBtn = new QToolButton(drcW);
-        rulesBtn->setText(QStringLiteral("Rules"));
-        rulesBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        rulesBtn->setIconSize(QSize(26, 26));
-        rulesBtn->setMinimumWidth(66);
-        rulesBtn->setToolTip(QStringLiteral("Choose which validation rules are checked"));
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#8fb7ff"));
-            pen.setWidthF(2.2);
-            pen.setCapStyle(Qt::RoundCap);
-            pen.setJoinStyle(Qt::RoundJoin);
-            ip.setPen(pen);
-            // A checklist: three rows, each a tiny check + a rule line.
-            for (int i = 0; i < 3; ++i) {
-                const int y = 8 + i * 6;
-                ip.drawLine(6, y, 8, y + 2);
-                ip.drawLine(8, y + 2, 11, y - 1);
-                ip.drawLine(14, y + 1, 22, y + 1);
-            }
-            ip.end();
-            rulesBtn->setIcon(QIcon(pm));
-        }
-        connect(rulesBtn, &QToolButton::clicked, this, [this] { showValidationRules(); });
-        drcG->addWidget(rulesBtn, 0, 2);
-        // Built manually (see Modify above) so the group + rule can be hidden while the
-        // Splice / Termination tool is armed.
-        schemDrcGroup_ = ribbonGroup(QStringLiteral("DRC"), drcW);
-        lay->addWidget(schemDrcGroup_);
-        {
-            auto* rule = new QFrame(page);
-            rule->setFrameShape(QFrame::VLine);
-            rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-            lay->addWidget(rule);
-            schemDrcRule_ = rule;
-        }
-        // ---- The Harness Builder: describe the whole harness, then generate it. It lives
-        //      here, with the rest of the schematic-building tools, rather than on a tab of
-        //      its own. ----
-        {
-            auto* hbW = new QWidget(page);
-            auto* hbg = new QGridLayout(hbW);
-            hbg->setContentsMargins(0, 0, 0, 0);
-            hbg->setSpacing(2);
-            auto* hbBtn = new QToolButton(hbW);
-            hbBtn->setText(QStringLiteral("Schematic harness\nbuilder"));
-            hbBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            hbBtn->setIconSize(QSize(30, 30));
-            hbBtn->setMinimumWidth(112);
-            hbBtn->setAutoRaise(true);
-            hbBtn->setToolTip(QStringLiteral(
-                "Describe the whole harness - connectors, their order and side, the pinout, "
-                "every pin-to-pin wire, shields and twisted pairs - then generate the schematic"));
-            {
-                // A connector on each side joined by three wires: the harness-in-one-picture.
-                QPixmap pm(32, 32);
-                pm.fill(Qt::transparent);
-                QPainter ip(&pm);
-                ip.setRenderHint(QPainter::Antialiasing, true);
-                QPen pen(QColor("#8fb7ff"));
-                pen.setWidthF(1.7);
-                ip.setPen(pen);
-                ip.drawRect(3, 8, 6, 16);
-                ip.drawRect(23, 8, 6, 16);
-                ip.setPen(QPen(QColor("#7ee0a0"), 1.5));
-                for (int i = 0; i < 3; ++i) {
-                    const int y = 12 + i * 4;
-                    ip.drawLine(9, y, 23, y);
-                }
-                ip.end();
-                hbBtn->setIcon(QIcon(pm));
-            }
-            connect(hbBtn, &QToolButton::clicked, this, [this] { showHarnessBuilder(); });
-            hbg->addWidget(hbBtn, 0, 0);
-            hbg->addWidget(makePartsLibraryButton(hbW), 0, 1);
-            addGroup(lay, QStringLiteral("Harness"), hbW);
-        }
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Schematic build"));
-    }
-
-    // ---- HARNESS MECHANICAL ---- the physical side of the harness: the bundle and its
-    //      branches drawn to shape, their lengths dimensioned, and the parts called out.
-    //      (The schematic side lives on Schematic build.) ----
-    {
-        auto [page, lay] = makeTabPage();
-        // Bundle + branches: a double polyline is the bundle body, a plain one a centreline,
-        // Offset walks a parallel edge out and Fillet rounds a branch off the trunk.
-        addGroup(lay, QStringLiteral("Bundle"),
-                 toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
-                          ToolId::Fillet}));
-        // Cut lengths and branch lengths.
-        addGroup(lay, QStringLiteral("Length"), toolRow({ToolId::Dimension, ToolId::Line}));
-        // Calling the parts out on the board.
-        addGroup(lay, QStringLiteral("Callouts"),
-                 toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note, ToolId::Table}));
-        {
-            // The parts behind the drawing: the same bill of materials the "bom" command opens.
-            auto* dataW = new QWidget(page);
-            auto* dg = new QGridLayout(dataW);
-            dg->setContentsMargins(0, 0, 0, 0);
-            dg->setSpacing(2);
-            auto* bomBtn = new QToolButton(dataW);
-            bomBtn->setText(QStringLiteral("Bill of\nmaterials"));
-            bomBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            bomBtn->setIconSize(QSize(26, 26));
-            bomBtn->setMinimumWidth(84);
-            bomBtn->setAutoRaise(true);
-            bomBtn->setFocusPolicy(Qt::NoFocus);
-            bomBtn->setToolTip(QStringLiteral(
-                "Every connector, wire and accessory in the drawing, counted"));
-            {
-                // A short parts list: a heading rule and three rows.
-                QPixmap pm(28, 28);
-                pm.fill(Qt::transparent);
-                QPainter ip(&pm);
-                ip.setRenderHint(QPainter::Antialiasing, true);
-                ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
-                ip.drawRect(4, 4, 20, 20);
-                ip.drawLine(4, 10, 24, 10);
-                ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
-                for (int i = 0; i < 3; ++i) ip.drawLine(7, 14 + i * 4, 21, 14 + i * 4);
-                ip.end();
-                bomBtn->setIcon(QIcon(pm));
-            }
-            connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
-            dg->addWidget(bomBtn, 0, 0);
-            dg->addWidget(makePartsLibraryButton(dataW), 0, 1);
-            addGroup(lay, QStringLiteral("Data"), dataW);
-        }
-        lay->addStretch(1);
-        ribbon_->addTab(page, QStringLiteral("Harness mechanical"));
-    }
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
 
@@ -3001,6 +2219,7 @@ void MainWindow::buildRibbon() {
     buildConnectorRibbonTab(); // built once, added only while placing/editing a connector
     buildWireRibbonTab();      // built once, added only while the Wire tool is active
     buildArrayRibbonTab();     // built once, added only while an array is being laid out
+    buildTemplateRibbonTab();  // built once, added only while a template is being drawn
     // Drafting toggles + grid size now live in the bottom-right status bar
     // (see buildStatusControls()).
 }
@@ -4388,8 +3607,10 @@ void MainWindow::buildPanels() {
     auto* nameRow = new QHBoxLayout();
     auto* nameEdit = new QLineEdit(layersWidget);
     nameEdit->setPlaceholderText(QStringLiteral("Layer name"));
-    auto* addLayer = new QPushButton(QStringLiteral("Add"), layersWidget);
-    auto* delLayer = new QPushButton(QStringLiteral("Delete"), layersWidget);
+    auto* addLayer = makeAddButton(layersWidget, QStringLiteral("Add"),
+                                  QStringLiteral("Add a layer with the name typed beside"));
+    auto* delLayer = makeRemoveButton(layersWidget, QStringLiteral("Delete"),
+                                     QStringLiteral("Delete the selected layer"), true);
     auto* lockLayer = new QPushButton(QStringLiteral("Lock"), layersWidget);
     nameRow->addWidget(nameEdit, 1);
     nameRow->addWidget(addLayer);
@@ -4398,11 +3619,12 @@ void MainWindow::buildPanels() {
     lv->addLayout(nameRow);
 
     layersTable_ = new QTableWidget(layersWidget);
-    layersTable_->setColumnCount(5);
-    layersTable_->setHorizontalHeaderLabels({"Status", "Name", "On", "Lock", "Color"});
+    layersTable_->setColumnCount(6);
+    // Lineweight is a layer's property and belongs with the rest of them: without it here a drawing
+    // that came in with heavy layers - an older file, or a DXF - could not be made to draw thin.
+    layersTable_->setHorizontalHeaderLabels({"Status", "Name", "On", "Lock", "Color", "Weight"});
     layersTable_->verticalHeader()->setVisible(false);
-    // Only Name stretches; Status / On / Lock / Color keep fixed widths so they
-    // don't grow with the panel width.
+    // Only Name stretches; the rest keep fixed widths so they don't grow with the panel width.
     {
         auto* hh = layersTable_->horizontalHeader();
         hh->setStretchLastSection(false);
@@ -4411,11 +3633,13 @@ void MainWindow::buildPanels() {
         hh->setSectionResizeMode(2, QHeaderView::Fixed);   // On
         hh->setSectionResizeMode(3, QHeaderView::Fixed);   // Lock
         hh->setSectionResizeMode(4, QHeaderView::Fixed);   // Color
+        hh->setSectionResizeMode(5, QHeaderView::Fixed);   // Weight
     }
     layersTable_->setColumnWidth(0, 50);
     layersTable_->setColumnWidth(2, 42);
     layersTable_->setColumnWidth(3, 46);
     layersTable_->setColumnWidth(4, 58);
+    layersTable_->setColumnWidth(5, 66);
     lv->addWidget(layersTable_);
     layersDock->setManaged(new DockTitleBar(layersDock, QStringLiteral("LAYERS")), layersWidget);
     addDockWidget(Qt::LeftDockWidgetArea, layersDock);
@@ -4427,7 +3651,7 @@ void MainWindow::buildPanels() {
         auto& ls = doc_->layers();
         QString name = nameEdit->text().trimmed();
         if (name.isEmpty()) name = QStringLiteral("Layer%1").arg(ls.size());
-        ls.push_back({name, "#ffffff", true, false, 2.0});
+        ls.push_back({name, "#ffffff", true, false, 0.25});   // a hairline, like every other new layer
         nameEdit->clear();
         doc_->setDirty(true);
         refreshLayers();
@@ -4460,7 +3684,7 @@ void MainWindow::buildPanels() {
         else if (item->column() == 2) ls[r].visible = item->checkState() == Qt::Checked;
         else if (item->column() == 3) ls[r].locked = item->checkState() == Qt::Checked;
         doc_->setDirty(true);
-        canvas_->update();
+        canvas_->invalidateScene();   // the drawing itself changed, not just the overlay
     });
     connect(layersTable_, &QTableWidget::cellClicked, this, [this](int row, int) {
         auto& ls = doc_->layers();
@@ -4552,6 +3776,10 @@ void MainWindow::buildMenus() {
     fileMenu->addAction(QStringLiteral("&Export DXF..."), this, [this] { exportDxfAs(); });
     fileMenu->addAction(QStringLiteral("Export &PDF..."), this, [this] { exportPdf(false); });
     fileMenu->addAction(QStringLiteral("Export PDF (&window)..."), this, [this] { exportPdf(true); });
+    fileMenu->addSeparator();
+    // What a new drawing starts as: the sheet, its border, the layers and the defaults.
+    fileMenu->addAction(QStringLiteral("Drawing &templates..."), this,
+                        [this] { showTemplateDialog(); });
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("&Options..."), this, [this] { showOptions(); });
     fileMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
@@ -4649,7 +3877,19 @@ void MainWindow::applyTheme(bool dark) {
         "QAbstractSpinBox::down-button{subcontrol-origin:border;subcontrol-position:bottom right;"
         "width:18px;border-left:1px solid {INBORD};}"
         "QAbstractSpinBox::up-button:hover,QAbstractSpinBox::down-button:hover{background:#3d8bfd;}"
+        // Styling the buttons takes the style's own arrows away, so they are put back as images.
+        "QAbstractSpinBox::up-arrow{image:url(:/caret-up.svg);width:9px;height:9px;}"
+        "QAbstractSpinBox::down-arrow{image:url(:/caret-down.svg);width:9px;height:9px;}"
         "QComboBox QAbstractItemView{background:{PANEL};color:{TEXT};selection-background-color:{SEL};}"
+        // A POPUP MENU. This sheet replaces the one loaded from the resources, and that one had these
+        // rules while this one did not - so every right-click menu in the application came up with no
+        // background at all, the drawing showing through the words. A menu has to be opaque.
+        "QMenu{background-color:{PANEL};color:{TEXT};border:1px solid {LINE};}"
+        "QMenu::item{padding:4px 22px;}"
+        "QMenu::item:selected{background-color:{SEL};color:{SELTX};}"
+        "QMenu::item:disabled{color:#8b929c;}"
+        "QMenu::separator{height:1px;background:{LINE};margin:3px 6px;}"
+        "QToolTip{background-color:{PANEL};color:{TEXT};border:1px solid {LINE};padding:3px;}"
         "QPushButton{background-color:{BTN};color:{TEXT};border:1px solid {INBORD};"
         "border-radius:3px;padding:3px 10px;}"
         "QPushButton:hover{background-color:{HOVER};}"
@@ -5124,6 +4364,7 @@ void MainWindow::commitInlineText(bool apply) {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+
     if (obj == inlineEdit_ && e->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(e);
         if (ke->key() == Qt::Key_Escape) { commitInlineText(false); return true; }
@@ -5172,6 +4413,61 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     QMenu menu(this);
     const bool hasSel = !editor_->selection().empty();
 
+    // Anything drawn FROM a library part carries its id, so the sheet can answer the same question the
+    // builder's tables answer: what is that thing? A cable's wires, a connector, a braid - the entry is
+    // named after what it actually is, and it comes first because it is what a right-click on a drawn
+    // object is usually asking.
+    {
+        QString libPart;
+        QString what;
+        auto lookAt = [&](const Entity& e) {
+            const QString id = e.meta.value(QStringLiteral("libPart")).toString();
+            if (id.isEmpty() || !libPart.isEmpty()) return;
+            libPart = id;
+            what = e.meta.value(QStringLiteral("bundle")).toString();
+        };
+        if (doc_) {
+            // Whatever is selected first - a right-click on the sheet acts on the selection - and then
+            // a wire under the cursor, which is the one thing worth picking up without selecting it.
+            for (const auto& id : editor_->selection())
+                for (const auto& e : doc_->entities())
+                    if (e.id == id) lookAt(e);
+            if (libPart.isEmpty()) {
+                const QString wire = editor_->wireAt(world);
+                for (const auto& e : doc_->entities())
+                    if (e.id == wire) lookAt(e);
+            }
+        }
+        if (!libPart.isEmpty()) {
+            PartsCatalog catalog;
+            catalog.openRemembered();
+            if (const LibraryPart* part = catalog.byId(libPart)) {
+                const LibraryPart copyOfPart = *part;   // the catalog goes out of scope; the part must not
+                const QString noun = part->kind == PartKind::Cable
+                                         ? QStringLiteral("cable")
+                                         : partKindName(part->kind).toLower();
+                menu.addAction(QStringLiteral("%1 — %2").arg(partKindName(part->kind), part->title()))
+                    ->setEnabled(false);
+                menu.addAction(QStringLiteral("See the %1's schematic").arg(noun), this,
+                               [this, copyOfPart] {
+                                   PartViewDialog::showPart(copyOfPart,
+                                                            PartViewDialog::Show::Schematic, this);
+                               });
+                menu.addAction(QStringLiteral("See the %1's mechanical drawing").arg(noun), this,
+                               [this, copyOfPart] {
+                                   PartViewDialog::showPart(copyOfPart,
+                                                            PartViewDialog::Show::Mechanical, this);
+                               });
+                menu.addAction(QStringLiteral("See what it is"), this, [this, copyOfPart] {
+                    PartViewDialog::showPart(copyOfPart, PartViewDialog::Show::Data, this);
+                });
+                menu.addAction(QStringLiteral("See the %1 in the library").arg(noun), this,
+                               [this, libPart] { showPartsLibraryAt(libPart); });
+                menu.addSeparator();
+            }
+        }
+    }
+
     QAction* copy = menu.addAction(QStringLiteral("Copy"));
     copy->setEnabled(hasSel);
     connect(copy, &QAction::triggered, this, [this] { editor_->copySelection(); });
@@ -5191,6 +4487,38 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         editor_->beginMatchProps();
         canvas_->setFocus(Qt::OtherFocusReason);
     });
+
+    // A table under the cursor (or selected): its contents as a CSV file. Offered only when there
+    // is a table to export, so the menu says nothing that would do nothing.
+    {
+        const Entity* table = nullptr;
+        if (doc_) {
+            for (const auto& e : doc_->entities())
+                if (e.meta.value("table").toBool()) {
+                    const Bounds tb = e.bounds();
+                    if (tb.valid && world.x >= tb.min.x && world.x <= tb.max.x &&
+                        world.y >= tb.min.y && world.y <= tb.max.y)
+                        table = &e;
+                }
+            if (!table)
+                for (const auto& id : editor_->selection())
+                    for (const auto& e : doc_->entities())
+                        if (e.id == id && e.meta.value("table").toBool()) table = &e;
+        }
+        if (table) {
+            menu.addSeparator();
+            const QString tableId = table->id;
+            const bool isBom = table->meta.value("bomTable").toBool();
+            QAction* csv = menu.addAction(isBom
+                                              ? QStringLiteral("Export bill of materials to CSV...")
+                                              : QStringLiteral("Export table to CSV..."));
+            connect(csv, &QAction::triggered, this, [this, tableId] {
+                // The export works on the selection, so the table under the cursor becomes it.
+                editor_->selectById(tableId);
+                exportTableCsv();
+            });
+        }
+    }
 
     // Re-ordering the pinout of the connectors in the selection. Offered only when there is
     // something to work on - two or more selected connectors with wires running between them -
@@ -5323,7 +4651,7 @@ void MainWindow::showAbout() {
 
 // ---- Options dialog --------------------------------------------------------
 
-void MainWindow::showOptions() {
+void MainWindow::showOptions(const QString& page) {
     QDialog dlg(this);
     dlg.setWindowTitle(QStringLiteral("Options"));
     dlg.resize(560, 520);
@@ -5503,12 +4831,83 @@ void MainWindow::showOptions() {
     ufm->addRow(QStringLiteral("Wire cross-section"), xsec);
     tabs->addTab(units, QStringLiteral("Units"));
 
+    // ===== BOM: how this drawing's bill of materials is worked out and what reaches the sheet =====
+    // The settings belong to the DRAWING (a sheet keeps the units and columns it was set up with),
+    // so this page edits the open drawing's own configuration.
+    auto* bom = new QWidget(tabs);
+    auto* bf = new QFormLayout(bom);
+    BomTable bomTable;
+    if (doc_) bomTable.fromJson(doc_->bom());
+    BomConfig& bc = bomTable.config;
+    auto* bomUnit = new QComboBox(bom);
+    for (const PartUnit& u : partUnits())
+        if (u.dim == QLatin1String("length"))
+            bomUnit->addItem(QStringLiteral("%1 — %2").arg(u.code, u.label), u.code);
+    bomUnit->setCurrentIndex(std::max(0, bomUnit->findData(bc.lengthUnit)));
+    bomUnit->setToolTip(QStringLiteral(
+        "The unit every LENGTH is listed and totalled in. The drawing is in millimeters; a harness "
+        "is usually bought by the meter. A row counted in pieces is not affected."));
+    bf->addRow(QStringLiteral("Lengths in"), bomUnit);
+    auto* bomSpare = new QDoubleSpinBox(bom);
+    bomSpare->setRange(0.0, 500.0);
+    bomSpare->setDecimals(1);
+    bomSpare->setSuffix(QStringLiteral(" %"));
+    bomSpare->setValue(bc.sparePercent);
+    bomSpare->setToolTip(QStringLiteral("Added to every length; pieces are not affected"));
+    bf->addRow(QStringLiteral("Spare on lengths"), bomSpare);
+    auto* bomDec = new QSpinBox(bom);
+    bomDec->setRange(0, 4);
+    bomDec->setValue(bc.qtyDecimals);
+    bf->addRow(QStringLiteral("Quantity decimals"), bomDec);
+    auto* bomRound = new QCheckBox(QStringLiteral("Round lengths up to the next whole unit"), bom);
+    bomRound->setChecked(bc.roundUpLengths);
+    bf->addRow(QString(), bomRound);
+    auto* bomUnify = new QCheckBox(QStringLiteral("Total the same part into one line"), bom);
+    bomUnify->setChecked(bc.unify);
+    bf->addRow(QString(), bomUnify);
+    auto* bomDrawing = new QCheckBox(QStringLiteral("Include what the drawing calls for"), bom);
+    bomDrawing->setChecked(bc.includeDrawing);
+    bf->addRow(QString(), bomDrawing);
+    // Which columns the table placed on the drawing carries. The labels are the drawing's own, so
+    // a renamed column is ticked by the name it was given.
+    QList<QCheckBox*> bomCols;
+    {
+        auto* colsW = new QWidget(bom);
+        auto* colsL = new QGridLayout(colsW);
+        colsL->setContentsMargins(0, 0, 0, 0);
+        for (int i = 0; i < bomColumnCount(); ++i) {
+            auto* cb = new QCheckBox(bomTable.header(i), colsW);
+            cb->setChecked(bc.columnShown(i));
+            bomCols << cb;
+            colsL->addWidget(cb, i / 3, i % 3);
+        }
+        bf->addRow(QStringLiteral("Columns on the drawing"), colsW);
+    }
+    tabs->addTab(bom, QStringLiteral("BOM"));
+    if (!page.isEmpty())
+        for (int i = 0; i < tabs->count(); ++i)
+            if (tabs->tabText(i).compare(page, Qt::CaseInsensitive) == 0) tabs->setCurrentIndex(i);
+
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     outer->addWidget(bb);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     if (dlg.exec() != QDialog::Accepted) return;
+
+    // The drawing's bill-of-materials configuration, as set on the BOM page.
+    if (doc_) {
+        bc.lengthUnit = bomUnit->currentData().toString();
+        bc.sparePercent = bomSpare->value();
+        bc.qtyDecimals = bomDec->value();
+        bc.roundUpLengths = bomRound->isChecked();
+        bc.unify = bomUnify->isChecked();
+        bc.includeDrawing = bomDrawing->isChecked();
+        for (int i = 0; i < bomCols.size(); ++i) bc.setColumnShown(i, bomCols[i]->isChecked());
+        doc_->bom() = bomTable.toJson();
+        doc_->setDirty(true);
+        if (bomDlg_) bomDlg_->reload(); // the list is showing: it follows at once
+    }
 
     // Apply everything. The theme sets canvas colors; explicit picks override.
     applyTheme(scheme->currentIndex() == 0);
@@ -5573,7 +4972,10 @@ void MainWindow::refreshLayers() {
             if (refreshing_) return;
             onToggle(v);
             doc_->setDirty(true);
-            canvas_->update();
+            // A layer going off or on changes what the drawing IS, so the cached scene has to be
+            // rebuilt. A plain update() repainted the cache exactly as it was, which is why unchecking
+            // a layer appeared to do nothing until the view was panned or something was edited.
+            canvas_->invalidateScene();
         });
         hl->addWidget(cb);
         return w;
@@ -5605,6 +5007,34 @@ void MainWindow::refreshLayers() {
         return w;
     };
 
+    // The lineweight every object on the layer is drawn with, from the standard list. 0.25 is a normal
+    // line - one pixel, the way a frame or a table should look; the heavier ones are for something meant
+    // to stand out. Changing it redraws the sheet at once.
+    auto weightCell = [this](int row, double weight) {
+        auto* cb = new QComboBox(layersTable_);
+        static const double kWeights[] = {0.13, 0.25, 0.35, 0.50, 0.70, 1.00, 1.40, 2.00};
+        int at = -1;
+        for (double w : kWeights) {
+            cb->addItem(QStringLiteral("%1").arg(w, 0, 'f', 2), w);
+            if (std::abs(w - weight) < 1e-9) at = cb->count() - 1;
+        }
+        if (at < 0) {   // a weight from a file that is not one of the standard ones
+            cb->insertItem(0, QStringLiteral("%1").arg(weight, 0, 'f', 2), weight);
+            at = 0;
+        }
+        cb->setCurrentIndex(at);
+        cb->setToolTip(QStringLiteral("How thick everything on this layer is drawn"));
+        connect(cb, &QComboBox::activated, this, [this, cb, row] {
+            if (refreshing_) return;
+            auto& ll = doc_->layers();
+            if (row < 0 || row >= static_cast<int>(ll.size())) return;
+            ll[static_cast<size_t>(row)].weight = cb->currentData().toDouble();
+            doc_->setDirty(true);
+            canvas_->invalidateScene();
+        });
+        return cb;
+    };
+
     layersTable_->setRowCount(static_cast<int>(ls.size()));
     for (int r = 0; r < static_cast<int>(ls.size()); ++r) {
         auto* status = new QTableWidgetItem(ls[r].name == active ? QStringLiteral("●") : QString());
@@ -5618,6 +5048,7 @@ void MainWindow::refreshLayers() {
         layersTable_->setCellWidget(
             r, 3, centeredCheck(ls[r].locked, [this, r](bool v) { doc_->layers()[r].locked = v; }));
         layersTable_->setCellWidget(r, 4, colorCell(r, QColor(ls[r].color)));
+        layersTable_->setCellWidget(r, 5, weightCell(r, ls[r].weight));
     }
     refreshing_ = false;
 
@@ -6735,6 +6166,74 @@ void MainWindow::refreshProperties() {
         addRow(QStringLiteral("Height"), QStringLiteral("0"));
     }
 
+    // --- Picture section: what it is, how big it was, and how big it is now. ---
+    // Width and Height are up in Geometry, where every object's are, so a picture can be sized to an
+    // exact number of millimetres instead of only by eye with the corner grip.
+    if (e && e->type == EntityType::Image) {
+        addHeader(QStringLiteral("Picture"));
+        addRow(QStringLiteral("File"),
+               mv(QLatin1String(PictureKeys::kName)).toString(QStringLiteral("(pasted)")));
+        const double pixW = mv(QLatin1String(PictureKeys::kPixW)).toDouble(0.0);
+        const double pixH = mv(QLatin1String(PictureKeys::kPixH)).toDouble(0.0);
+        if (pixW > 0.0 && pixH > 0.0)
+            addRow(QStringLiteral("Pixels"), QStringLiteral("%1 × %2")
+                                                 .arg(pixW, 0, 'f', 0)
+                                                 .arg(pixH, 0, 'f', 0));
+        addCombo(QStringLiteral("Keep proportions"), {QStringLiteral("Yes"), QStringLiteral("No")},
+                 yesNo(mv(QLatin1String(PictureKeys::kLockAspect)), true), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QLatin1String(PictureKeys::kLockAspect),
+                                                   t == QLatin1String("Yes"));
+                 });
+        addNum(QStringLiteral("Opacity %"), mv(QLatin1String(PictureKeys::kOpacity)).toDouble(100.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QLatin1String(PictureKeys::kOpacity),
+                                                   std::clamp(v, 0.0, 100.0));
+               });
+        // Back to the size it came at - 96 dpi, the size it looked on screen - after it has been
+        // dragged about. Width then Height, because each axis is scaled on its own.
+        if (pixW > 0.0 && pixH > 0.0) {
+            addButton(QStringLiteral("Natural size"), QStringLiteral("Reset"), [this, pixW, pixH] {
+                const QSizeF mm = pictureDefaultSizeMm(
+                    QSize(static_cast<int>(pixW), static_cast<int>(pixH)), 250.0);
+                editor_->setGeometryValue(QStringLiteral("Width"), mm.width());
+                editor_->setGeometryValue(QStringLiteral("Height"), mm.height());
+            });
+        }
+        // A different picture in the same frame: the sheet's layout is kept, only what fills it
+        // changes. Useful for a template whose logo has been redrawn.
+        // The width it has now, taken while the entity is definitely alive: the panel is rebuilt
+        // whenever the selection changes, so a pointer captured here could be stale by the time the
+        // file dialog closes.
+        const Bounds picBounds = e->bounds();
+        const double picW = picBounds.valid ? picBounds.width() : 0.0;
+        addButton(QStringLiteral("Replace"), QStringLiteral("Choose a file…"), [this, picW] {
+            const QString path = QFileDialog::getOpenFileName(
+                this, QStringLiteral("Replace the picture"), QString(), pictureFileFilter());
+            if (path.isEmpty()) return;
+            const Entity fresh = pictureEntityFromFile(path);
+            if (fresh.type != EntityType::Image) {
+                statusBar()->showMessage(QStringLiteral("%1 is not a picture this build can read")
+                                             .arg(QFileInfo(path).fileName()),
+                                         6000);
+                return;
+            }
+            for (const char* key : {PictureKeys::kData, PictureKeys::kFormat, PictureKeys::kName,
+                                    PictureKeys::kKey})
+                editor_->setSelectionMeta(QLatin1String(key),
+                                          fresh.meta.value(QLatin1String(key)).toString());
+            const double w = fresh.meta.value(QLatin1String(PictureKeys::kPixW)).toDouble();
+            const double h = fresh.meta.value(QLatin1String(PictureKeys::kPixH)).toDouble();
+            editor_->setSelectionMetaNumber(QLatin1String(PictureKeys::kPixW), w);
+            editor_->setSelectionMetaNumber(QLatin1String(PictureKeys::kPixH), h);
+            // Keep the width it had on the sheet and take the new picture's proportions, so the
+            // replacement is not squashed into the old one's shape.
+            if (w > 0.0 && h > 0.0 && picW > 1e-9)
+                editor_->setGeometryValue(QStringLiteral("Height"), picW * h / w);
+            refreshProperties();
+        });
+    }
+
     // --- Text section: editable content, font, height, style, justification. ---
     if (e && e->type == EntityType::Text) {
         const QString id = e->id;
@@ -6932,6 +6431,37 @@ void MainWindow::buildCommands() {
          "Schematic harness builder: define the harness and generate it",
          [this] { showHarnessBuilder(); }},
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
+        {{"block", "blocks", "b"}, "Draw", "Blocks: create, insert and edit",
+         [this] { showBlockDialog(); }},
+        {{"makeblock", "mkblock"}, "Draw", "Make a block out of what is selected",
+         [this] { createBlockFromSelection(); }},
+        {{"saveblock"}, "Draw", "Save the block being edited and rebuild every copy",
+         [this] { saveBlockBeingEdited(); }},
+        {{"cancelblock"}, "Draw", "Leave the block being edited as it was",
+         [this] { cancelBlockEdit(); }},
+        {{"drawtemplate", "edittemplate"}, "File",
+         "Draw the template: open it on a tab of its own and lay the sheet out",
+         [this] { openTemplateEditor(QString()); }},
+        {{"savetemplate"}, "File", "Save the template being drawn",
+         [this] { saveTemplateBeingEdited(false); }},
+        {{"template", "tpl", "sheetset"}, "File",
+         "Drawing template: the sheet, the layers and the defaults a drawing starts with",
+         [this] { showTemplateDialog(); }},
+        {{"bundlediameter", "bundle", "bd"}, "Harness",
+         "Bundle diameter: the calculation, with the formula and what it assumes",
+         [this] { showBundleDiameter(); }},
+        {{"thermal", "temp", "heat"}, "Harness",
+         "Lumped thermal model: how hot the bundle gets, and what it could carry",
+         [this] { showThermalModel(); }},
+        {{"mechvalidate", "mdrc"}, "Harness",
+         "Mechanical compatibility: whether what is fitted will go on",
+         [this] { showMechanicalValidation(); }},
+        {{"mechanical", "mhb", "mech"}, "Harness",
+         "Mechanical builder: the harness as a physical object, generated to scale",
+         [this] { showMechanicalBuilder(); }},
+        {{"voltagedrop", "vdrop", "vd"}, "Harness",
+         "Voltage drop: what arrives at the load, wire by wire",
+         [this] { showVoltageDropDialog(); }},
         {{"alignrouting", "align", "ar2"}, "Harness",
          "Align routing to a reference connector", [this] { editor_->beginAlignRouting(); }},
         {{"validate", "drc", "check"}, "Harness",
@@ -6969,7 +6499,12 @@ void MainWindow::buildCommands() {
         {{"selectall", "all"}, "Edit", "Select everything", [this] { editor_->selectAll(); }},
         {{"copy", "co", "cp"}, "Edit", "Copy selection to clipboard", [this] { editor_->copySelection(); }},
         {{"cut", "cu"}, "Edit", "Cut selection to clipboard", [this] { editor_->cutSelection(); }},
-        {{"paste", "pa"}, "Edit", "Paste from clipboard", [this] { editor_->paste(); }},
+        {{"paste", "pa"}, "Edit", "Paste from clipboard - a picture if that is what is on it",
+         [this] { pasteFromClipboard(); }},
+        {{"picture", "image", "img"}, "Insert", "Insert a picture (PNG, JPEG, BMP…) from a file",
+         [this] { insertPictureFromFile(); }},
+        {{"pastepicture", "pasteimage"}, "Insert", "Place the picture on the clipboard",
+         [this] { insertPictureFromClipboard(false); }},
         {{"undo", "u"}, "Edit", "Undo", [this] { editor_->undo(); }},
         {{"redo"}, "Edit", "Redo", [this] { editor_->redo(); }},
         {{"bylayer"}, "Edit", "Set selection color to ByLayer", [this] { editor_->setColorsByLayer(); }},
@@ -8261,19 +7796,82 @@ QToolButton* MainWindow::makePartsLibraryButton(QWidget* parent) {
     return btn;
 }
 
+QToolButton* MainWindow::makeVoltageDropButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Voltage\ndrop"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "What arrives at the load: the drop along the wires, across the contacts and through the "
+        "splices, broken down segment by segment"));
+    {
+        // A supply level falling along a run: the full line, then the sag, then what is left of it.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+        ip.drawLine(4, 8, 24, 8);                     // the supply
+        ip.setPen(QPen(QColor("#e6b45a"), 1.8));
+        ip.drawLine(4, 10, 24, 20);                   // the sag along the harness
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
+        ip.drawLine(4, 10, 4, 8);
+        ip.drawLine(24, 20, 24, 8);                   // what the drop cost, at each end
+        ip.setBrush(QColor("#e6b45a"));
+        ip.drawEllipse(QPointF(24, 20), 2.0, 2.0);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showVoltageDropDialog(); });
+    return btn;
+}
+
 void MainWindow::showPartsLibrary() {
     // Modeless and kept alive: a part is described while the sheet stays usable, which is what
     // lets a symbol be drawn, captured, and dropped back without closing anything.
-    if (!libraryDlg_) libraryDlg_ = new PartsLibraryDialog(editor_, this);
+    if (!libraryDlg_) {
+        libraryDlg_ = new PartsLibraryDialog(editor_, this);
+        // Capturing a drawing for a part: the library window steps aside, and the ribbon takes over
+        // saying what to do - so the sheet is clear to work on and it is still obvious what is going
+        // on and how to finish.
+        connect(libraryDlg_, &PartsLibraryDialog::captureArmed, this,
+                [this](bool mechanical, const QString& what) {
+                    showCaptureRibbon(true, what, mechanical);
+                    statusBar()->showMessage(
+                        QStringLiteral("Select what the %1 drawing of %2 is, then press Enter "
+                                       "(Esc to drop it)")
+                            .arg(mechanical ? QStringLiteral("mechanical")
+                                            : QStringLiteral("schematic"),
+                                 what),
+                        0);
+                });
+        connect(libraryDlg_, &PartsLibraryDialog::captureFinished, this, [this] {
+            showCaptureRibbon(false);
+            statusBar()->clearMessage();
+        });
+    }
     libraryDlg_->show();
     libraryDlg_->raise();
     libraryDlg_->activateWindow();
 }
 
+void MainWindow::showPartsLibraryAt(const QString& libPartId) {
+    showPartsLibrary();
+    if (libraryDlg_ && !libPartId.isEmpty()) libraryDlg_->selectPart(libPartId);
+}
+
 void MainWindow::showHarnessBuilder() {
     // Modeless and kept alive: the drawing stays usable while a harness is described, and a
     // part-built definition survives Close.
-    if (!harnessDlg_) harnessDlg_ = new HarnessBuilderDialog(editor_, this);
+    if (!harnessDlg_) {
+        harnessDlg_ = new HarnessBuilderDialog(editor_, this);
+        // "See it in the library": the builder does not own the library window, so it asks.
+        connect(harnessDlg_, &HarnessBuilderDialog::openLibraryAt, this,
+                [this](const QString& id) { showPartsLibraryAt(id); });
+    }
     harnessDlg_->show();
     harnessDlg_->raise();
     harnessDlg_->activateWindow();
@@ -8684,11 +8282,616 @@ void MainWindow::showPinTable(const QString& connectorId) {
 void MainWindow::showBomDialog() {
     // Modeless and kept alive: rows are added from the library and typed in while the drawing
     // stays usable, and the table is placed on the sheet by a click.
-    if (!bomDlg_) bomDlg_ = new BomDialog(editor_, this);
+    if (!bomDlg_) {
+        bomDlg_ = new BomDialog(editor_, this);
+        bomDlg_->setConfigOpener(this); // its Configuration button opens Options on the BOM page
+    }
     bomDlg_->reload();
     bomDlg_->show();
     bomDlg_->raise();
     bomDlg_->activateWindow();
+}
+
+QToolButton* MainWindow::makeMechanicalBuilderButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Mechanical\nbuilder"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "The harness as a physical object: a trunk that breaks out to each connector, every run drawn "
+        "at the bundle its own conductors make, dimensioned and called out"));
+    {
+        // A trunk breaking out to three ends, drawn as the bundle it is: a body, not a line.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.drawLine(3, 12, 15, 12);           // the trunk, as two edges
+        ip.drawLine(3, 17, 15, 17);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
+        ip.drawLine(15, 13, 25, 6);           // and the branches off it
+        ip.drawLine(15, 16, 25, 9);
+        ip.drawLine(15, 14, 25, 22);
+        ip.drawLine(15, 17, 25, 25);
+        ip.setPen(QPen(QColor("#e6b45a"), 1.4));
+        ip.drawRect(1, 11, 3, 7);             // the connector at the trunk end
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showMechanicalBuilder(); });
+    return btn;
+}
+
+QToolButton* MainWindow::makeMechanicalValidationButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Mechanical\nchecks"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "Whether what is fitted will physically go on: every boot, backshell, sleeve and gland "
+        "against the bundle its own conductors make"));
+    {
+        // A bundle going into something, with a tick beside it.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.drawLine(2, 11, 14, 11);
+        ip.drawLine(2, 16, 14, 16);
+        ip.setPen(QPen(QColor("#e6b45a"), 1.6));
+        ip.drawRect(14, 8, 8, 12);            // the part it goes into
+        ip.setPen(QPen(QColor("#7ee0a0"), 2.0));
+        ip.drawLine(18, 24, 21, 27);          // and the tick
+        ip.drawLine(21, 27, 27, 19);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showMechanicalValidation(); });
+    return btn;
+}
+
+QToolButton* MainWindow::makeBundleDiameterButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Bundle\ndiameter"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "D = √(Σ D²) × k_packing, shown as a calculation: the conductors, the working line by line, "
+        "and what the figure does and does not allow for"));
+    {
+        // A ring of conductors inside the circle they make.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.drawEllipse(QPointF(14, 14), 11.5, 11.5);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.2));
+        const double r = 5.2;
+        for (int i = 0; i < 6; ++i) {
+            const double a = i * 3.14159265 / 3.0;
+            ip.drawEllipse(QPointF(14 + r * std::cos(a), 14 + r * std::sin(a)), 3.0, 3.0);
+        }
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showBundleDiameter(); });
+    return btn;
+}
+
+QToolButton* MainWindow::makeThermalButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Thermal\nmodel"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "How hot the bundle gets: the heat the current makes, the resistances it has to escape "
+        "through, and the loop between them settling - with what it could carry instead"));
+    {
+        // A bundle with heat coming off it, and a thermometer beside it.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.drawEllipse(QPointF(10, 16), 7.0, 7.0);        // the bundle end-on
+        ip.setPen(QPen(QColor("#e06c6c"), 1.4));
+        for (int i = 0; i < 3; ++i) {                     // heat coming off it
+            const int x = 4 + i * 5;
+            ip.drawLine(x, 6, x + 2, 3);
+            ip.drawLine(x + 2, 3, x, 1);
+        }
+        ip.setPen(QPen(QColor("#e6b45a"), 1.6));
+        ip.drawLine(23, 6, 23, 20);                       // the thermometer
+        ip.setBrush(QColor("#e06c6c"));
+        ip.drawEllipse(QPointF(23, 22), 3.0, 3.0);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showThermalModel(); });
+    return btn;
+}
+
+void MainWindow::showMechanicalValidation() {
+    // Modeless and kept alive: a gauge is changed on the drawing, Check again is pressed, and the
+    // answers follow - which is the whole point of checking against the bundle rather than a figure.
+    if (!mechCheckDlg_) mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
+    mechCheckDlg_->readFromDrawing();
+    mechCheckDlg_->show();
+    mechCheckDlg_->raise();
+    mechCheckDlg_->activateWindow();
+}
+
+QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
+    struct Look { const char* text; const char* tip; };
+    const Look look =
+        action == BlockAction::Create
+            ? Look{"Create\nblock", "Make a block out of what is selected, and save it in the block "
+                                   "folder"}
+        : action == BlockAction::Insert
+            ? Look{"Insert\nblock", "Drop a copy of a block on the sheet"}
+        : action == BlockAction::Manage
+            ? Look{"Blocks", "Every block there is: the ones saved as files, and every drawing in "
+                             "the parts library"}
+        : action == BlockAction::SaveEdit
+            ? Look{"Save\nblock", "Only while a block is open for editing"}
+            : Look{"Cancel\nblock", "Leave the block as it was and close it"};
+    auto* btn = new QToolButton(parent);
+    btn->setText(QString::fromLatin1(look.text));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(76);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QString::fromLatin1(look.tip));
+    {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        // A block: a piece of drawing with a base point on it. Create shows it being made, Insert an
+        // arrow bringing it in, Manage a shelf of them, Save a tick.
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        if (action == BlockAction::Manage) {
+            for (int i = 0; i < 3; ++i) ip.drawRect(3, 3 + i * 8, 22, 6);
+        } else {
+            ip.drawRect(5, 8, 14, 12);
+            ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
+            ip.drawLine(8, 14, 16, 14);
+            ip.drawLine(12, 11, 12, 17);
+            ip.setBrush(QColor("#e6b45a"));
+            ip.setPen(QPen(QColor("#e6b45a"), 1.0));
+            ip.drawEllipse(QPointF(5, 20), 2.0, 2.0);   // the base point
+            if (action == BlockAction::Insert) {
+                ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+                ip.drawLine(21, 6, 26, 11);
+                ip.drawLine(26, 11, 21, 11);
+                ip.drawLine(26, 11, 26, 6);
+            } else if (action == BlockAction::SaveEdit) {
+                ip.setPen(QPen(QColor("#7ee0a0"), 2.0));
+                ip.drawLine(18, 23, 21, 26);
+                ip.drawLine(21, 26, 27, 18);
+            } else if (action == BlockAction::CancelEdit) {
+                ip.setPen(QPen(QColor("#e06c6c"), 2.0));
+                ip.drawLine(19, 19, 27, 27);
+                ip.drawLine(27, 19, 19, 27);
+            }
+        }
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    switch (action) {
+        case BlockAction::Create:
+            connect(btn, &QToolButton::clicked, this, [this] { createBlockFromSelection(); });
+            break;
+        case BlockAction::Insert:
+        case BlockAction::Manage:
+            connect(btn, &QToolButton::clicked, this, [this] { showBlockDialog(); });
+            break;
+        case BlockAction::SaveEdit:
+            btn->setEnabled(false);
+            connect(btn, &QToolButton::clicked, this, [this] { saveBlockBeingEdited(); });
+            break;
+        case BlockAction::CancelEdit:
+            btn->setEnabled(false);
+            connect(btn, &QToolButton::clicked, this, [this] { cancelBlockEdit(); });
+            break;
+    }
+    return btn;
+}
+
+void MainWindow::showBlockDialog() {
+    if (!blockDlg_) {
+        blockDlg_ = new BlockDialog(editor_, this);
+        connect(blockDlg_, &BlockDialog::editBlockRequested, this,
+                [this](const QString& name) { openBlockEditor(name); });
+    }
+    blockDlg_->refresh();
+    blockDlg_->show();
+    blockDlg_->raise();
+    blockDlg_->activateWindow();
+}
+
+void MainWindow::createBlockFromSelection() {
+    // Straight to the point when something is selected; otherwise the window explains what is needed.
+    if (editor_ && editor_->copyOfSelection().empty()) {
+        statusBar()->showMessage(
+            QStringLiteral("Select what the block is made of first, then Create block"), 4000);
+        showBlockDialog();
+        return;
+    }
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, QStringLiteral("Create block"), QStringLiteral("Name:"),
+                              QLineEdit::Normal, QString(), &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+    showBlockDialog();
+    if (blockDlg_ && blockDlg_->createFromSelection(name)) {
+        statusBar()->showMessage(QStringLiteral("Block %1 saved").arg(name), 4000);
+    }
+}
+
+void MainWindow::openBlockEditor(const QString& name) {
+    // Already open? Go to it rather than opening it twice.
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
+        if (blockEdits_.value(docs_[i].get()) == name) {
+            docTabs_->setCurrentIndex(i);
+            activateIndex(i);
+            return;
+        }
+    // Find it: a file block, or one of the library's drawings.
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    BlockDef found;
+    for (const BlockDef& b : allBlocks(&catalog))
+        if (b.name == name) found = b;
+    if (found.name.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("No block called %1").arg(name), 4000);
+        return;
+    }
+    if (found.fromLibrary()) {
+        // The drawing belongs to the part. Editing it here would be lost the next time the library
+        // was read, so the library is opened instead - where the change will stick.
+        statusBar()->showMessage(
+            QStringLiteral("%1 is a parts-library drawing — edit it in the parts library").arg(name),
+            6000);
+        showPartsLibrary();
+        return;
+    }
+
+    // The Blocks window gets out of the way for the duration: the block is edited on the sheet, and
+    // the window comes back when the edit ends with Save block or Cancel block.
+    if (blockDlg_ && blockDlg_->isVisible()) {
+        blockDlgWasOpen_ = true;
+        blockDlg_->hide();
+    }
+    auto doc = std::make_unique<Document>(QStringLiteral("Block: %1").arg(name));
+    doc->entities().clear();
+    for (const Entity& e : partDrawingEntities(found.entities)) doc->entities().push_back(e);
+    Document* raw = doc.get();
+    blockEdits_.insert(raw, name);
+    addDocument(std::move(doc), QString());
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
+        if (docs_[i].get() == raw) {
+            docTabs_->setCurrentIndex(i);
+            activateIndex(i);
+            break;
+        }
+    statusBar()->showMessage(
+        QStringLiteral("Editing the block %1 — Save block puts it back and rebuilds every copy")
+            .arg(name),
+        6000);
+}
+
+void MainWindow::saveBlockBeingEdited() {
+    const QString name = blockEdits_.value(doc_);
+    if (name.isEmpty()) return;
+    // Whatever is on this tab IS the block now. The base point stays where it was - the entities are
+    // already in the block's own coordinates, because that is how they were opened.
+    BlockDef block;
+    block.name = name;
+    for (const Entity& e : doc_->entities()) {
+        Entity copy = e;
+        copy.meta.remove(QStringLiteral("block"));
+        copy.meta.remove(QStringLiteral("blockInst"));
+        copy.meta.remove(QStringLiteral("blockOriginX"));
+        copy.meta.remove(QStringLiteral("blockOriginY"));
+        QJsonObject o = copy.toJson();
+        o.remove(QStringLiteral("id"));
+        block.entities.append(o);
+    }
+    if (!block.save(BlockDef::pathFor(name))) {
+        QMessageBox::warning(this, QStringLiteral("Blocks"),
+                             QStringLiteral("Could not save the block %1").arg(name));
+        return;
+    }
+    // And every copy of it, on every drawing that is open, is rebuilt from what was just saved.
+    int rebuilt = 0, sheets = 0;
+    for (auto& d : docs_) {
+        if (blockEdits_.contains(d.get())) continue;   // not the block's own tab
+        const int n = updateBlockInstances(*d, block);
+        if (n > 0) {
+            ++sheets;
+            rebuilt += n;
+        }
+    }
+    doc_->setDirty(false);
+    updateActiveTabText();
+    if (canvas_) canvas_->update();
+    refreshPanels();
+    if (blockDlg_) blockDlg_->refresh();
+    statusBar()->showMessage(
+        rebuilt > 0 ? QStringLiteral("Block %1 saved — %2 cop%3 rebuilt on %4 sheet(s)")
+                          .arg(name)
+                          .arg(rebuilt)
+                          .arg(rebuilt == 1 ? QStringLiteral("y") : QStringLiteral("ies"))
+                          .arg(sheets)
+                    : QStringLiteral("Block %1 saved").arg(name),
+        6000);
+    endBlockEdit();
+}
+
+void MainWindow::cancelBlockEdit() {
+    if (blockEdits_.value(doc_).isEmpty()) return;
+    // Thrown away deliberately, so closing the tab does not ask whether to save it as a drawing.
+    doc_->setDirty(false);
+    statusBar()->showMessage(QStringLiteral("Block left as it was"), 4000);
+    endBlockEdit();
+}
+
+void MainWindow::endBlockEdit() {
+    // Close the block's own tab, whichever way the edit ended, and give the Blocks window back.
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        if (!blockEdits_.contains(docs_[i].get()) || docs_[i].get() != doc_) continue;
+        docs_[i]->setDirty(false);   // its content has been dealt with either way
+        closeDocument(i);
+        break;
+    }
+    if (blockDlgWasOpen_ && blockDlg_) {
+        blockDlg_->refresh();
+        blockDlg_->show();
+        blockDlg_->raise();
+    }
+    blockDlgWasOpen_ = false;
+}
+
+QToolButton* MainWindow::makeTemplateSessionButton(QWidget* parent, int which) {
+    // 0 = Save template, 1 = Save as, 2 = Cancel.
+    auto* btn = new QToolButton(parent);
+    btn->setText(which == 0 ? QStringLiteral("Save\ntemplate")
+                 : which == 1 ? QStringLiteral("Save\nas…")
+                              : QStringLiteral("Cancel\ntemplate"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(76);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(which == 2 ? QStringLiteral("Leave the template as it was and close it")
+                              : QStringLiteral("Only while a template is open for drawing"));
+    {
+        // A sheet with a border, and what is being done to it.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.drawRect(4, 3, 16, 20);
+        ip.setPen(QPen(QColor("#7b828c"), 1.0));
+        ip.drawRect(7, 6, 10, 14);
+        ip.setBrush(QColor("#8fb7ff"));
+        ip.setPen(Qt::NoPen);
+        ip.drawRect(12, 17, 5, 3);          // the title block
+        if (which == 2) {
+            ip.setPen(QPen(QColor("#e06c6c"), 2.0));
+            ip.drawLine(19, 19, 26, 26);
+            ip.drawLine(26, 19, 19, 26);
+        } else {
+            ip.setPen(QPen(QColor("#7ee0a0"), 2.0));
+            ip.drawLine(18, 22, 21, 25);
+            ip.drawLine(21, 25, 27, 17);
+            if (which == 1) {
+                ip.setPen(QPen(QColor("#e6b45a"), 1.4));
+                ip.drawLine(22, 3, 26, 3);   // the extra stroke that says "as..."
+                ip.drawLine(24, 1, 24, 5);
+            }
+        }
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    btn->setEnabled(false);
+    tplSessionBtns_.push_back(btn);   // so every set of them follows the session
+    if (which == 2)
+        connect(btn, &QToolButton::clicked, this, [this] { cancelTemplateEdit(); });
+    else
+        connect(btn, &QToolButton::clicked, this,
+                [this, which] { saveTemplateBeingEdited(which == 1); });
+    return btn;
+}
+
+void MainWindow::openTemplateEditor(const QString& name) {
+    // Already open? Go to it.
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
+        if (templateEdits_.value(docs_[i].get()) == name && !name.isEmpty()) {
+            docTabs_->setCurrentIndex(i);
+            activateIndex(i);
+            return;
+        }
+    // Find it: whichever template of that name is in the template folder, else whatever the window
+    // currently holds (a template being made that has not been saved yet).
+    DrawingTemplate tpl;
+    QString path;
+    for (const QString& p : DrawingTemplate::installed()) {
+        DrawingTemplate t;
+        if (t.load(p) && t.name == name) {
+            tpl = t;
+            path = p;
+            break;
+        }
+    }
+    if (path.isEmpty()) {
+        if (!templateDlg_) templateDlg_ = new TemplateDialog(editor_, this);
+        tpl = templateDlg_->templateData();
+        if (!name.isEmpty()) tpl.name = name;
+    }
+    // A template with nothing in it yet gets a generated frame to start from. One loaded from a file
+    // is taken exactly as it is - including whatever was drawn on it by hand.
+    if (tpl.content.isEmpty()) tpl.content = defaultSheetContent(tpl);
+
+    if (templateDlg_ && templateDlg_->isVisible()) {
+        templateDlgWasOpen_ = true;
+        templateDlg_->hide();
+    }
+    auto doc = std::make_unique<Document>(
+        QStringLiteral("Template: %1").arg(tpl.name.isEmpty() ? QStringLiteral("new") : tpl.name));
+    doc->entities().clear();
+    // Every object of the sheet is a full object here: its own id, its own grips, free to be moved,
+    // stretched, trimmed or deleted. That is what designing a template means - the frame is a starting
+    // point, not a locked group as it is once placed on a drawing.
+    std::vector<Entity> ents = partDrawingEntities(tpl.content);
+    Document* raw = doc.get();
+    templateEdits_.insert(raw, tpl.name);
+    templateEditPaths_.insert(raw, path);
+    tplBeingDrawn_ = tpl;
+    // What is generated says so itself (defaultSheetContent marks it), so nothing has to be assumed
+    // here: a hand-drawn line is never mistaken for the generator's and regenerated away.
+    adoptGeneratedFrame(ents, false);
+    for (const Entity& e : ents) raw->entities().push_back(e);
+    addDocument(std::move(doc), QString());
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
+        if (docs_[i].get() == raw) {
+            docTabs_->setCurrentIndex(i);
+            activateIndex(i);
+            break;
+        }
+    statusBar()->showMessage(
+        QStringLiteral("Drawing the template %1 — draw the sheet, then Save template")
+            .arg(tpl.name),
+        6000);
+}
+
+void MainWindow::saveTemplateBeingEdited(bool saveAs) {
+    if (!templateEdits_.contains(doc_)) return;
+    const QString name = templateEdits_.value(doc_);
+    QString path = templateEditPaths_.value(doc_);
+
+    // Start from what the template already says (its sheet, zones, signatures) and take the SHEET as
+    // its new content: the drawing on this tab is the template now.
+    // The template as the ribbon has it: its sheet, its frame, its revision table. Those are what the
+    // tab has been changing, so they are what gets written.
+    DrawingTemplate tpl = tplBeingDrawn_;
+    if (tpl.name.isEmpty() && !name.isEmpty()) tpl.name = name;
+    if (!name.isEmpty()) tpl.name = name;
+    const DrawingTemplate taken = templateFromDocument(*doc_, tpl.name);
+    tpl.content = taken.content;
+    tpl.layers = taken.layers;
+    tpl.activeLayer = taken.activeLayer;
+
+    if (saveAs || path.isEmpty()) {
+        QString suggested = path.isEmpty() ? DrawingTemplate::pathFor(tpl.name) : path;
+        QString chosen = QFileDialog::getSaveFileName(this, QStringLiteral("Save the template"),
+                                                      suggested, DrawingTemplate::fileFilter());
+        if (chosen.isEmpty()) return;
+        const QString suffix = QStringLiteral(".") + DrawingTemplate::extension();
+        if (!chosen.endsWith(suffix, Qt::CaseInsensitive)) chosen += suffix;
+        path = chosen;
+        tpl.name = QFileInfo(path).completeBaseName();
+    }
+    if (!tpl.save(path)) {
+        QMessageBox::warning(this, QStringLiteral("Drawing template"),
+                             QStringLiteral("Could not write %1").arg(path));
+        return;
+    }
+    if (templateDlg_) {
+        templateDlg_->setTemplateData(tpl);
+        templateDlg_->refreshInstalled();
+    }
+    statusBar()->showMessage(QStringLiteral("Template saved to %1").arg(path), 6000);
+    doc_->setDirty(false);
+    endTemplateEdit();
+}
+
+void MainWindow::cancelTemplateEdit() {
+    if (!templateEdits_.contains(doc_)) return;
+    doc_->setDirty(false);   // thrown away deliberately
+    statusBar()->showMessage(QStringLiteral("Template left as it was"), 4000);
+    endTemplateEdit();
+}
+
+void MainWindow::endTemplateEdit() {
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        if (!templateEdits_.contains(docs_[i].get()) || docs_[i].get() != doc_) continue;
+        docs_[i]->setDirty(false);
+        closeDocument(i);
+        break;
+    }
+    if (templateDlgWasOpen_ && templateDlg_) {
+        templateDlg_->refreshInstalled();
+        templateDlg_->show();
+        templateDlg_->raise();
+    }
+    templateDlgWasOpen_ = false;
+}
+
+void MainWindow::showTemplateDialog() {
+    // Modeless and kept alive: a border is drawn on the sheet, captured here, saved, and applied -
+    // without the window being reopened between each step.
+    if (!templateDlg_) {
+        templateDlg_ = new TemplateDialog(editor_, this);
+        connect(templateDlg_, &TemplateDialog::drawOnSheetRequested, this,
+                [this](const QString& name) { openTemplateEditor(name); });
+    }
+    templateDlg_->refreshInstalled();
+    templateDlg_->show();
+    templateDlg_->raise();
+    templateDlg_->activateWindow();
+}
+
+void MainWindow::showBundleDiameter() {
+    if (!bundleDlg_) bundleDlg_ = new BundleDiameterDialog(editor_, this);
+    bundleDlg_->show();
+    bundleDlg_->raise();
+    bundleDlg_->activateWindow();
+}
+
+void MainWindow::showThermalModel() {
+    if (!thermalDlg_) thermalDlg_ = new ThermalModelDialog(editor_, this);
+    thermalDlg_->show();
+    thermalDlg_->raise();
+    thermalDlg_->activateWindow();
+}
+
+void MainWindow::showMechanicalBuilder() {
+    // Modeless and kept alive: the schematic is edited, read in again, and the mechanical drawing
+    // regenerated, without the definition being retyped each time.
+    if (!mechDlg_) mechDlg_ = new MechanicalBuilderDialog(editor_, this);
+    mechDlg_->show();
+    mechDlg_->raise();
+    mechDlg_->activateWindow();
+}
+
+void MainWindow::showVoltageDropDialog() {
+    // Modeless and kept alive: the drawing is edited - a gauge changed, a splice moved - and the
+    // same window re-reads it on the next Calculate rather than being reopened.
+    if (!voltageDropDlg_) voltageDropDlg_ = new VoltageDropDialog(editor_, this);
+    voltageDropDlg_->reloadFromDocument();
+    voltageDropDlg_->run();   // open on an answer, not on an empty table
+    voltageDropDlg_->show();
+    voltageDropDlg_->raise();
+    voltageDropDlg_->activateWindow();
 }
 
 // ---- Documents (tabs) ------------------------------------------------------
@@ -8711,6 +8914,37 @@ void MainWindow::activateIndex(int index) {
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
+    // A block being edited is not a drawing: the canvas goes grey, so it is never in doubt which
+    // one is which. Switching back to a drawing puts the ordinary background back.
+    const bool editingBlock = blockEdits_.contains(doc_);
+    const bool editingTemplate = templateEdits_.contains(doc_);
+    // Each kind of edit gets its own colour, so which one is open is never in doubt: grey for a
+    // block, a blue slate for a template, the ordinary dark for a drawing.
+    // Both editors get a grey canvas - a lighter one for a template, so it reads as a sheet being
+    // laid out rather than as a drawing. Either way it is never mistaken for the drawing itself.
+    canvas_->setBackgroundColor(editingBlock      ? QColor("#6d7278")
+                                : editingTemplate ? QColor("#7c8189")
+                                                  : normalCanvasColor_);
+    // The Template group is only on the ribbon while a template is open - buttons that mean nothing
+    // to a drawing are not shown to it at all, rather than shown greyed out.
+    if (tplHomeGroup_) tplHomeGroup_->setVisible(editingTemplate);
+    for (QToolButton* b : tplSessionBtns_)
+        if (b) b->setEnabled(editingTemplate);
+    // The template ribbon comes and goes with the session, the way the hatch and table-cell tabs do,
+    // and the harness tabs go the other way: away while a sheet is being laid out.
+    showHarnessRibbonTabs(!editingTemplate);
+    showTemplateRibbon(editingTemplate);
+    if (editingTemplate) syncTemplateRibbon();
+    if (saveBlockBtn_) {
+        saveBlockBtn_->setEnabled(editingBlock);
+        saveBlockBtn_->setToolTip(
+            editingBlock
+                ? QStringLiteral("Save the block %1, rebuild every copy of it, and close it")
+                      .arg(blockEdits_.value(doc_))
+                : QStringLiteral("Only while a block is open for editing"));
+    }
+    if (cancelBlockBtn_) cancelBlockBtn_->setEnabled(editingBlock);
+    normaliseRibbonPages();   // never two pages at once, whatever came and went above
     refreshPanels();
     updateWindowTitleForActive();
 }
@@ -8773,6 +9007,11 @@ void MainWindow::closeDocument(int index) {
     if (!maybeSaveDoc(index)) return; // user cancelled
     {
         QSignalBlocker block(docTabs_);
+        // Forget any block-edit session on this document BEFORE it is destroyed: a stale pointer
+        // left in the map would match the next document allocated at the same address.
+        blockEdits_.remove(docs_[index].get());
+        templateEdits_.remove(docs_[index].get());
+        templateEditPaths_.remove(docs_[index].get());
         docTabs_->removeTab(index);
         docs_.erase(docs_.begin() + index);
         docPaths_.erase(docPaths_.begin() + index);
@@ -8870,9 +9109,25 @@ void MainWindow::saveSettings() {
 // ---- File actions ----------------------------------------------------------
 
 void MainWindow::newDrawing() {
-    addDocument(std::make_unique<Document>(
-                    QStringLiteral("Drawing%1").arg(docs_.size() + 1)),
-                QString());
+    Document* doc = addDocument(std::make_unique<Document>(
+                                    QStringLiteral("Drawing%1").arg(docs_.size() + 1)),
+                                QString());
+    // A new drawing starts from the default template, when one has been set: that is what makes it the
+    // house sheet rather than just a file in a folder.
+    const QString def = TemplateDialog::defaultTemplatePath();
+    if (doc && !def.isEmpty()) {
+        DrawingTemplate tpl;
+        if (tpl.load(def)) {
+            applyTemplate(tpl, *doc);
+            setWireGaugeNotationAwg(tpl.gaugeAwg);
+            doc->setDirty(false);   // a fresh sheet, not unsaved work
+            refreshPanels();
+            if (canvas_) canvas_->update();
+            statusBar()->showMessage(
+                QStringLiteral("New drawing from the template %1").arg(tpl.name), 4000);
+            return;
+        }
+    }
     statusBar()->showMessage(QStringLiteral("New drawing"));
 }
 

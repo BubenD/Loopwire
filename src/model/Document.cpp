@@ -6,9 +6,9 @@ namespace Edraw_Desktop {
 
 std::vector<Layer> Document::defaultLayers() {
     return {
-        {"0", "#ffffff", true, false, 2.0},
-        {"Construction", "#00f0ff", true, false, 2.0},
-        {"Dimensions", "#f5c66d", true, false, 2.0},
+        {"0", "#ffffff", true, false, 0.25},
+        {"Construction", "#00f0ff", true, false, 0.25},
+        {"Dimensions", "#f5c66d", true, false, 0.25},
     };
 }
 

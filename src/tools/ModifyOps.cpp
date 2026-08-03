@@ -301,6 +301,72 @@ bool trimLineAt(Entity& line, const Vec2& pick, const std::vector<Entity>& other
 namespace {
 // Parameters t in (0,1) along `line` (a..b) where cutting edges in `others` cross
 // it. All cutter types (incl. circles/arcs/ellipses) are reduced to segments.
+// A circle or an arc is cut against EXACTLY rather than against the 96-sided polygon
+// forEachCutSegment reduces it to. The difference matters: every chord of that polygon lies inside
+// the circle, so a line trimmed against the polygon stops short of the ring - close enough to look
+// right, and wrong enough that snapping or filleting to that end afterwards misses the circle. Two
+// adjacent chords can also report the same corner twice, which turns one cut into a pair and leaves
+// a hair of geometry behind.
+bool isCircularCutter(const Entity& e) {
+    return (e.type == EntityType::Circle || e.type == EntityType::Arc) && e.radius > 1e-9;
+}
+
+// Is `p` within the swept part of an arc? A full circle takes everything.
+bool onCutterArc(const Entity& cutter, const Vec2& p) {
+    if (cutter.type != EntityType::Arc) return true;
+    double sweep = cutter.endAngle - cutter.startAngle;
+    while (sweep < 0.0) sweep += 2.0 * M_PI;
+    double rel = std::atan2(p.y - cutter.center.y, p.x - cutter.center.x) - cutter.startAngle;
+    while (rel < 0.0) rel += 2.0 * M_PI;
+    return rel <= sweep + 1e-9;
+}
+
+// Where the segment a..a+d crosses a circular cutter, as parameters along it. Only crossings
+// strictly inside the segment count - an end that already sits on the ring is not a cut.
+void appendCircularCuts(const Entity& cutter, const Vec2& a, const Vec2& d, double L2,
+                        double offset, std::vector<double>& out) {
+    for (const Vec2& x : lineCircleIntersection(a, d, cutter.center, cutter.radius)) {
+        const double t = dot(x - a, d) / L2;
+        if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+        if (!onCutterArc(cutter, x)) continue;
+        out.push_back(offset + t);
+    }
+}
+
+// A cut, and the cutting edge that made it. The owner matters for one decision: when the two
+// boundaries either side of the pick are the ENTRY AND EXIT OF THE SAME CIRCLE, the material taken
+// goes back only to the nearer of them - a fence inside a ring should not swallow the whole chord out
+// to the far side. Two DIFFERENT cutting edges keep the ordinary behaviour: the piece between them is
+// what goes, which is what trimming between two lines has always meant.
+struct CutAt {
+    double g = 0.0;             // parameter along the object being trimmed
+    const Entity* from = nullptr;   // the cutting edge, or null for the object's own knee
+    bool circular = false;
+};
+
+std::vector<CutAt> intersectionCuts(const Entity& line, const std::vector<Entity>& others) {
+    std::vector<CutAt> cuts;
+    const Vec2 a = line.a, b = line.b, d = b - a;
+    const double L2 = d.lengthSq();
+    if (L2 < 1e-12) return cuts;
+    for (const auto& e : others) {
+        if (&e == &line) continue;
+        if (isCircularCutter(e)) {
+            std::vector<double> ts;
+            appendCircularCuts(e, a, d, L2, 0.0, ts);
+            for (double t : ts) cuts.push_back({t, &e, true});
+            continue;
+        }
+        forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+            if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
+                const double t = dot(*x - a, d) / L2;
+                if (t > 1e-6 && t < 1.0 - 1e-6) cuts.push_back({t, &e, false});
+            }
+        });
+    }
+    return cuts;
+}
+
 std::vector<double> intersectionParams(const Entity& line, const std::vector<Entity>& others) {
     std::vector<double> ts;
     const Vec2 a = line.a, b = line.b, d = b - a;
@@ -308,6 +374,10 @@ std::vector<double> intersectionParams(const Entity& line, const std::vector<Ent
     if (L2 < 1e-12) return ts;
     for (const auto& e : others) {
         if (&e == &line) continue;
+        if (isCircularCutter(e)) {
+            appendCircularCuts(e, a, d, L2, 0.0, ts);
+            continue;
+        }
         forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
             if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
                 const double t = dot(*x - a, d) / L2;
@@ -416,6 +486,36 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
     return false;
 }
 
+bool whollyInsideCircle(const Entity& e, const Entity& ref) {
+    if (ref.type != EntityType::Circle || ref.radius < 1e-9) return false;   // only a closed ring
+    // A hair of tolerance, so an end drawn onto the ring counts as inside rather than outside.
+    const double R = ref.radius + 1e-6;
+    auto inside = [&](const Vec2& p) { return distance(p, ref.center) <= R; };
+
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine:
+        // A straight run is inside when both ends are: the ring is convex, so everything between
+        // two inside points is inside too.
+        return inside(e.a) && inside(e.b);
+    case EntityType::Polyline:
+    case EntityType::Spline:
+    case EntityType::Wire:
+    case EntityType::Rect:
+    case EntityType::Polygon:
+        if (e.points.size() < 2) return false;
+        for (const Vec2& p : e.points)
+            if (!inside(p)) return false;
+        return true;
+    case EntityType::Circle:
+    case EntityType::Arc:
+        // The whole of the smaller ring within the larger one.
+        return e.radius > 1e-9 && distance(e.center, ref.center) + e.radius <= R;
+    default:
+        return false;
+    }
+}
+
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     if (e.type == EntityType::Line || e.type == EntityType::DoubleLine)
         return !intersectionParams(e, others).empty(); // uses the centreline a,b
@@ -496,6 +596,12 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
         if (L2 < 1e-12) continue;
         for (const auto& c : cutters) {
             if (!selfId.isEmpty() && c.id == selfId) continue;
+            if (isCircularCutter(c)) {
+                std::vector<double> ts;
+                appendCircularCuts(c, A, D, L2, static_cast<double>(i), ts);
+                for (double t : ts) crossings.push_back(t);
+                continue;
+            }
             forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
                 if (auto x = segmentSegmentIntersection(A, B, p1, p2)) {
                     const double t = dot(*x - A, D) / L2;
@@ -554,6 +660,8 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
         return out;
     };
     if (hasLo && hasHi && hi - lo > 1e-6) {
+        // As for a line: the whole span between the two boundaries goes, so a double line crossing a
+        // circle is left clipped to the ring at both ends rather than stopping at the fence.
         result.push_back(sub(0.0, lo));
         result.push_back(sub(hi, static_cast<double>(n - 1)));
     } else if (hasHi) {
@@ -574,23 +682,28 @@ bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& ot
                    std::optional<Entity>& extra) {
     extra.reset();
     if (line.type != EntityType::Line) return false;
-    auto ts = intersectionParams(line, others);
-    if (ts.empty()) return false;
+    auto cuts = intersectionCuts(line, others);
+    if (cuts.empty()) return false;
 
     const Vec2 a = line.a, b = line.b, d = b - a;
     const double L2 = d.lengthSq();
     const double tp = std::clamp(dot(pick - a, d) / L2, 0.0, 1.0);
     auto P = [&](double t) { return a + d * t; };
 
-    // Nearest cut on each side of the pick.
+    // Nearest cut on each side of the pick, and which edge made each.
     double lo = -1e9, hi = 1e9;
     bool hasLo = false, hasHi = false;
-    for (double t : ts) {
-        if (t <= tp && t > lo) { lo = t; hasLo = true; }
-        if (t >= tp && t < hi) { hi = t; hasHi = true; }
+    const CutAt* loCut = nullptr;
+    const CutAt* hiCut = nullptr;
+    for (const CutAt& c : cuts) {
+        if (c.g <= tp && c.g > lo) { lo = c.g; hasLo = true; loCut = &c; }
+        if (c.g >= tp && c.g < hi) { hi = c.g; hasHi = true; hiCut = &c; }
     }
     if (hasLo && hasHi && hi - lo > 1e-6) {
-        // Picked a middle piece bounded on both sides: split, removing it.
+        // The piece between the two boundaries is what goes - including when they are the two
+        // crossings of one circle, so everything inside the ring is removed and both ends of what is
+        // left sit ON the ring. Stopping at the fence instead leaves a piece inside the circle with a
+        // raw end where the fence happened to fall, which is not a trim.
         Entity rem = line;
         rem.id = newId();
         rem.a = P(hi);
@@ -629,7 +742,18 @@ bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& oth
     };
     for (const auto& e : others) {
         if (&e == &line) continue;
-        // Every boundary type (incl. circles/arcs/ellipses) reduced to segments.
+        if (isCircularCutter(e)) {
+            // Exactly onto the ring, for the same reason trimming is: a chord of the approximating
+            // polygon stops inside the circle.
+            for (const Vec2& x : lineCircleIntersection(moving, dir, e.center, e.radius)) {
+                if (!onCutterArc(e, x)) continue;
+                const double t = dot(x - moving, dir);
+                if (t <= 1e-9) continue;              // must be BEYOND the end being extended
+                if (t < bestT) { bestT = t; bestPt = x; found = true; }
+            }
+            continue;
+        }
+        // Every other boundary type (including ellipses) reduced to segments.
         forEachCutSegment(e, tryBoundary);
     }
     if (!found) return false;

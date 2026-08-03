@@ -77,6 +77,7 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Polygon:
     case EntityType::Hatch:
     case EntityType::Wipeout:
+    case EntityType::Image:
         for (size_t i = 0; i < e.points.size(); ++i)
             out.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
         // A table also snaps along its interior grid lines, broken per cell so each
@@ -240,6 +241,7 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::Wire:
     case EntityType::Rect:
     case EntityType::Wipeout:
+    case EntityType::Image:
         for (const auto& p : e.points) out.push_back(p);
         // A table snaps to every grid intersection (all cell corners), not just the
         // four outer corners.

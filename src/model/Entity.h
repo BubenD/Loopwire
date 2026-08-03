@@ -26,6 +26,7 @@ enum class EntityType {
     Dimension,
     Hatch,
     Wipeout,
+    Image,   // a placed picture: points = its four corners, meta carries the bytes
     Wire,
     Splice,
     Connector,
@@ -56,6 +57,7 @@ struct Entity {
     //   Line/DoubleLine      -> a, b
     //   Polyline/Spline/Wire -> points
     //   Rect/Polygon/Hatch   -> points (corners)
+    //   Image                -> points (corners), meta["image"] (base64 bytes) + ["imageFormat"]
     //   Circle/Arc           -> center, radius (+ start/end angle for Arc)
     //   Ellipse              -> center, radius (rx), radiusY (ry), rotation
     //   Text                 -> a (anchor), meta["text"], meta["height"]

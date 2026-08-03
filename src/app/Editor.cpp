@@ -1,5 +1,9 @@
 #include "app/Editor.h"
 
+#include "model/Block.h"
+#include "model/DrawingTemplate.h"
+#include "model/Picture.h"
+
 #include "geometry/Geometry.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
@@ -10,6 +14,7 @@
 #include <QPolygonF>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QDateTime>
 #include <QUuid>
 #include <QtMath>
 #include <algorithm>
@@ -582,6 +587,7 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                 g.push_back({e.points[i], GripRole::Vertex, i});
         }
         break;
+    case EntityType::Image:   // a picture is resized by dragging a corner, or a side
     case EntityType::Rect:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i) {
             g.push_back({e.points[i], GripRole::RectCorner, i});
@@ -703,7 +709,70 @@ Editor::Editor(QObject* parent) : QObject(parent) {
 // Every path that changes the selection ends in selectionChanged(), so the companion set is
 // refreshed from there rather than at each of the two dozen call sites - it cannot go stale.
 void Editor::hookSelectionCompanions() {
-    connect(this, &Editor::selectionChanged, this, [this] { refreshBundleCompanions(); });
+    connect(this, &Editor::selectionChanged, this, [this] {
+        // A block that has been placed is ONE object: picking any piece of it picks the whole copy,
+        // and its pieces have no grips, so nothing inside it can be reshaped on the sheet. It is
+        // changed by double-clicking it, which opens the block itself.
+        //
+        // Done from here for the same reason the companions are: every path that changes the
+        // selection ends in this signal, so none of them can forget.
+        if (expandBlockSelection()) {
+            emit selectionChanged();   // it grew - go round once more, then settle
+            return;
+        }
+        refreshBundleCompanions();
+    });
+}
+
+// One copy of a block, or one placed template frame: either way a set of objects that belongs
+// together and is picked as one thing.
+static QString groupKeyOf(const Entity& e) {
+    const QString block = entityBlockInstance(e);
+    return block.isEmpty() ? entityTemplateGroup(e) : block;
+}
+
+bool Editor::expandBlockSelection() {
+    if (!doc_ || selected_.empty()) return false;
+    // Which groups are involved: a copy of a block, or a template frame that was applied.
+    QStringList keys;
+    for (const QString& id : selected_) {
+        const Entity* e = entityById(id);
+        if (!e) continue;
+        const QString key = groupKeyOf(*e);
+        if (!key.isEmpty() && !keys.contains(key)) keys << key;
+    }
+    if (keys.isEmpty()) return false;
+    bool grew = false;
+    for (const Entity& e : doc_->entities()) {
+        if (!keys.contains(groupKeyOf(e))) continue;
+        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end()) continue;
+        selected_.push_back(e.id);
+        grew = true;
+    }
+    if (grew) {
+        const Entity* first = entityById(selected_.front());
+        const QString block = first ? entityBlockName(*first) : QString();
+        const QString tplName = first ? entityTemplateName(*first) : QString();
+        if (!block.isEmpty())
+            emit message(QStringLiteral("%1 is a block — double-click it to change what is in it")
+                             .arg(block));
+        else if (!entityTemplateGroup(*first).isEmpty())
+            emit message(
+                tplName.isEmpty()
+                    ? QStringLiteral("The sheet frame moves as one — double-click it to edit the "
+                                     "template")
+                    : QStringLiteral("%1 is the sheet's template — it moves as one, and a "
+                                     "double-click edits it")
+                          .arg(tplName));
+    }
+    return grew;
+}
+
+bool Editor::isBlockPiece(const Entity& e) {
+    // No grips on a placed block, nor on a template frame: they move as one and are changed in their
+    // own editor. A FIELD is the exception - it exists to be filled in on the drawing.
+    if (entityIsTemplateField(e)) return false;
+    return !groupKeyOf(e).isEmpty();
 }
 
 void Editor::setDocument(Document* doc) {
@@ -967,14 +1036,16 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         }
         break;
     }
+    case EntityType::Image:
     case EntityType::Rect:
     case EntityType::Polygon:
         for (size_t i = 0; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
         // Tables / note / revision boxes are pickable anywhere INSIDE (so a cell or
         // the box body can be clicked and double-clicked to edit, not only its border).
-        if (e.meta.value("table").toBool() || e.meta.value("note").toBool() ||
-            e.meta.value("revision").toBool()) {
+        // So is a picture: what you see of it is its whole area, so that is what you click.
+        if (e.type == EntityType::Image || e.meta.value("table").toBool() ||
+            e.meta.value("note").toBool() || e.meta.value("revision").toBool()) {
             const Bounds b = boundsOf(e.points);
             if (b.valid && p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
                 best = 0.0;
@@ -1346,7 +1417,20 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         }
         auto it = std::find(selected_.begin(), selected_.end(), *hit);
         if (shift) {
-            if (it != selected_.end()) selected_.erase(it);
+            // Shift on a piece of a block takes the WHOLE copy out again - otherwise the expansion
+            // above would put it straight back and a block could never be deselected.
+            const Entity* he = entityById(*hit);
+            const QString key = he ? entityBlockInstance(*he) : QString();
+            if (!key.isEmpty()) {
+                selected_.erase(std::remove_if(selected_.begin(), selected_.end(),
+                                               [this, &key](const QString& id) {
+                                                   const Entity* x = entityById(id);
+                                                   return x && entityBlockInstance(*x) == key;
+                                               }),
+                                selected_.end());
+            } else if (it != selected_.end()) {
+                selected_.erase(it);
+            }
         } else if (it == selected_.end()) {
             selected_.push_back(*hit);
         }
@@ -1888,6 +1972,7 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     case EntityType::Rect:
     case EntityType::Polygon:
     case EntityType::Wipeout:
+    case EntityType::Image:
         pts = e.points;
         break;
     case EntityType::Circle:
@@ -2004,6 +2089,7 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     case EntityType::Rect:
     case EntityType::Polygon:
     case EntityType::Wipeout:
+    case EntityType::Image:
         for (size_t i = 0; i < e.points.size(); ++i)
             segs.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
         break;
@@ -2366,7 +2452,11 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
             p.drawRect(QRectF(tl, br).normalized());
         }
     }
-    for (const auto& g : gripsOf(e, collectPinEnds(doc_), doc_)) {
+    // A placed block shows no grips: it moves and deletes as one object, and its contents are
+    // changed in the block editor rather than on the sheet. (Anything done to a copy here would be
+    // rebuilt away the next time the block was saved, so grips would promise what they cannot keep.)
+    for (const auto& g : isBlockPiece(e) ? std::vector<Grip>{}
+                                         : gripsOf(e, collectPinEnds(doc_), doc_)) {
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
@@ -2402,6 +2492,7 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     for (const auto& id : selected_) {
         Entity* e = entityById(id);
         if (!e) continue;
+        if (isBlockPiece(*e)) continue;   // and none to grab, for the same reason
         for (const auto& gr : gripsOf(*e, pinEnds, doc_)) {
             const double d = distance(at, gr.pos);
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
@@ -4474,6 +4565,27 @@ void Editor::applyEditDrag(const Vec2& target) {
             if (e->points.size() == 4) {
                 const Vec2 opp = e->points[(index + 2) % 4];
                 Bounds b; b.expand(opp); b.expand(target);
+                // A picture keeps its proportions while a corner is dragged: stretching a logo out of
+                // shape is almost never what was meant, and the lock can be turned off in Properties
+                // (or the side grips used) when it is.
+                if (e->type == EntityType::Image &&
+                    e->meta.value(QLatin1String(PictureKeys::kLockAspect)).toBool(true)) {
+                    const double pw = e->meta.value(QLatin1String(PictureKeys::kPixW)).toDouble(0.0);
+                    const double ph = e->meta.value(QLatin1String(PictureKeys::kPixH)).toDouble(0.0);
+                    const double aspect = (pw > 0.0 && ph > 0.0) ? pw / ph : 0.0;
+                    if (aspect > 0.0) {
+                        // Whichever way it was dragged further decides the size; the other side
+                        // follows, growing away from the corner that stayed put.
+                        double w = b.width(), h = b.height();
+                        if (w / aspect >= h) h = w / aspect;
+                        else w = h * aspect;
+                        const double x0 = (target.x >= opp.x) ? opp.x : opp.x - w;
+                        const double y0 = (target.y >= opp.y) ? opp.y : opp.y - h;
+                        b = Bounds{};
+                        b.expand({x0, y0});
+                        b.expand({x0 + w, y0 + h});
+                    }
+                }
                 e->points = {{b.min.x, b.min.y}, {b.max.x, b.min.y},
                              {b.max.x, b.max.y}, {b.min.x, b.max.y}};
             } else if (index < static_cast<int>(e->points.size())) {
@@ -4792,6 +4904,30 @@ void Editor::onDoubleClick(const Vec2& world) {
                       tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout)) {
         finishDraw();
         return;
+    }
+    // Double-click a copy of a block to edit the block itself - the way a block is opened in every
+    // drawing package. Checked before the text editors below, because a piece of text inside a block
+    // belongs to the block: editing it on the sheet would be undone the next time the block changed.
+    if (tool_ == ToolId::Select) {
+        if (const auto hit = hitTest(world)) {
+            if (const Entity* e = entityById(*hit)) {
+                const QString block = entityBlockName(*e);
+                if (!block.isEmpty()) {
+                    emit editBlockRequested(block);
+                    return;
+                }
+                // A field is filled in on the drawing, so it opens the text editor like any other
+                // text - checked before the frame, since a field IS part of the frame.
+                if (entityIsTemplateField(*e)) {
+                    emit editTextRequested(e->id);
+                    return;
+                }
+                if (!entityTemplateGroup(*e).isEmpty()) {
+                    emit editTemplateRequested(entityTemplateName(*e));
+                    return;
+                }
+            }
+        }
     }
     // Double-click a text-bearing object (while idle) to re-open its editor: plain
     // text, or an annotation that carries editable text (balloon number, note /
@@ -5220,9 +5356,10 @@ std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) c
         switch (e.type) {
         case EntityType::Hatch:
         case EntityType::Wipeout:
+        case EntityType::Image:
         case EntityType::Text:
         case EntityType::Dimension:
-            break; // fills / annotations are not boundaries
+            break; // fills / pictures / annotations are not boundaries
         case EntityType::Polyline:
             // A DOUBLE polyline bounds with its two VISIBLE physical runs, NOT the
             // centerline — so the hatch stops at the inner line, not in the gap.
@@ -7124,22 +7261,49 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         if (const Entity* r = entityById(id)) refs.push_back(*r);
     if (refs.empty()) { emit message(QStringLiteral("Select the reference object first.")); return; }
 
-    // "Until any joint": the trim boundaries are ALL intersections (the reference
-    // plus every other object), so a piece is removed only up to the nearest joint,
-    // not to the object's end. A snapshot keeps the cutter list stable while split
-    // pieces are added.
-    const std::vector<Entity> joints = doc_->entities();
+    // The boundaries are the REFERENCE objects and nothing else. Trimming to a circle means removing
+    // what is inside THAT circle, whatever else the drawing happens to have lying across the same
+    // object.
+    //
+    // It used to be every object on the sheet ("until any joint"), which meant a second circle
+    // overlapping the reference cut the removal short: the piece left behind still had material inside
+    // the reference, and its new end sat on a ring nobody had selected. An object's own knees still
+    // bound it (see trimPolylinePieces) - that is the object's own shape, not another object's.
+    const std::vector<Entity>& joints = refs;
     pushUndo();
     // Snapshot the ids first so trimming doesn't disturb the iteration.
     std::vector<QString> ids;
     for (const auto& e : doc_->entities()) ids.push_back(e.id);
     int count = 0;
     std::vector<Entity> additions; // split pieces, added after the loop
+    std::vector<QString> removals; // objects with nothing left, removed after the loop
     for (const QString& id : ids) {
         if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end())
             continue; // never trim the reference itself
         Entity* obj = entityById(id);
         if (!obj) continue;
+        // An object that lies WHOLLY INSIDE a circular reference has nothing outside the ring to
+        // keep: trimming it back to the circle leaves nothing, so the whole of it goes. This is the
+        // case that could not be trimmed at all otherwise - a chord between two points of the
+        // circle, or anything drawn inside it, has no crossing to cut at.
+        {
+            bool insideRef = false;
+            for (const Entity& r : refs) insideRef = insideRef || whollyInsideCircle(*obj, r);
+            if (insideRef) {
+                // Still only what the cut line actually crossed, so a fence takes what it is drawn
+                // over and not every object sitting inside the circle. The fence IS a line, so the
+                // ordinary crossing test answers it - no second copy of the geometry.
+                Entity fence;
+                fence.type = EntityType::Line;
+                fence.a = a;
+                fence.b = b;
+                if (objectCrosses(*obj, {fence})) {
+                    removals.push_back(id);
+                    ++count;
+                    continue;
+                }
+            }
+        }
         // Where the cut line crosses a centreline (segment list) — the picked side.
         auto cutCrossOn = [&](const std::vector<Vec2>& cpts) -> std::optional<Vec2> {
             for (size_t i = 1; i < cpts.size(); ++i)
@@ -7225,6 +7389,18 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             }
         }
     }
+    for (const QString& gone : removals) {
+        auto& ents = doc_->entities();
+        ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                  [&gone](const Entity& e) { return e.id == gone; }),
+                   ents.end());
+    }
+    selected_.erase(std::remove_if(selected_.begin(), selected_.end(),
+                                   [&removals](const QString& s) {
+                                       return std::find(removals.begin(), removals.end(), s) !=
+                                              removals.end();
+                                   }),
+                    selected_.end());
     for (auto& add : additions) addEntity(std::move(add));
     if (count == 0) {
         undo();
@@ -7980,6 +8156,7 @@ void Editor::purgeUnused() {
                                   case EntityType::Polygon:
                                   case EntityType::Hatch:
                                   case EntityType::Wipeout:
+                                  case EntityType::Image:
                                       return e.points.size() < 2;
                                   default:
                                       return false;
@@ -9724,6 +9901,7 @@ void Editor::deleteSelected() {
 
 void Editor::copySelection() {
     clipboard_.clear();
+    clipStamp_ = QDateTime::currentMSecsSinceEpoch();
     Bounds b;
     for (const auto& id : selected_)
         if (const Entity* e = entityById(id)) {
@@ -9768,6 +9946,7 @@ void Editor::placeEntities(const std::vector<Entity>& ents) {
         return;
     }
     clipboard_ = ents;
+    clipStamp_ = QDateTime::currentMSecsSinceEpoch();
     Bounds b;
     for (const Entity& e : clipboard_) {
         const Bounds eb = e.bounds();
@@ -9979,7 +10158,14 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     if (ctrl && shift && key == Qt::Key_C) { copyWithBase(false); return true; } // copy w/ base
     if (ctrl && key == Qt::Key_C) { copySelection(); return true; }
     if (ctrl && key == Qt::Key_X) { cutSelection(); return true; }               // cut to clipboard
-    if (ctrl && key == Qt::Key_V) { paste(); return true; }
+    if (ctrl && key == Qt::Key_V) {
+        // The window may have something better to paste than what the editor is holding - a picture on
+        // the system clipboard, say. When nobody is listening (the editor driven on its own), paste
+        // what the editor has.
+        if (receivers(SIGNAL(pasteRequested())) > 0) emit pasteRequested();
+        else paste();
+        return true;
+    }
     if (ctrl && key == Qt::Key_Z) { undo(); return true; }
     if (ctrl && (key == Qt::Key_Y)) { redo(); return true; }
     return false;

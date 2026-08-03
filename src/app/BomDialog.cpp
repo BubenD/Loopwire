@@ -1,10 +1,13 @@
 #include "app/BomDialog.h"
 
+#include "app/UiBits.h"
 #include "app/Editor.h"
 #include "model/Document.h"
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFile>
+#include <QFileDialog>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -14,8 +17,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QTableWidget>
+#include <QTextStream>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -25,7 +30,8 @@ namespace Edraw_Desktop {
 BomDialog::BomDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Bill of materials"));
     resize(1120, 700);
-    lib_.load(PartsLibrary::defaultPath());
+    catalog_.openRemembered();
+    lib_ = catalog_.merged(); // every connected library, as one shelf to add from
     buildUi();
     loadTable();
     reload();
@@ -34,24 +40,22 @@ BomDialog::BomDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_
 void BomDialog::buildUi() {
     auto* root = new QVBoxLayout(this);
 
-    auto* opts = new QHBoxLayout;
-    fromDrawingBox_ = new QCheckBox(QStringLiteral("Include what the drawing calls for"), this);
-    fromDrawingBox_->setChecked(true);
-    fromDrawingBox_->setToolTip(QStringLiteral(
-        "Every connector and wire in the drawing, as rows. They are read off the drawing each "
-        "time, so they cannot go stale."));
-    connect(fromDrawingBox_, &QCheckBox::toggled, this, [this](bool) { reload(); });
-    opts->addWidget(fromDrawingBox_);
-    unifyBox_ = new QCheckBox(QStringLiteral("Total the same part into one line"), this);
-    unifyBox_->setChecked(true);
-    unifyBox_->setToolTip(QStringLiteral(
-        "Rows naming the same part are added up in the unit of the first of them - 300 mm of wire "
-        "and 1.2 m of wire come out as one line. Quantities in units that cannot be added (metres "
-        "and pieces) are left as their own lines."));
-    connect(unifyBox_, &QCheckBox::toggled, this, [this](bool on) { setUnifyTotals(on); });
-    opts->addWidget(unifyBox_);
-    opts->addStretch(1);
-    root->addLayout(opts);
+    // ---- One button for the configuration: the settings live in Options, under BOM ----
+    // What the list works in - the units, the spare, the decimals, which columns reach the drawing
+    // - belongs with the drawing's other settings rather than in a strip above the table.
+    auto* topRow = new QHBoxLayout;
+    auto* cfgBtn = new QPushButton(QStringLiteral("Configuration…"), this);
+    cfgBtn->setToolTip(QStringLiteral(
+        "Options → BOM: the unit lengths are listed in, spare, decimals, whether the same part is "
+        "totalled, and which columns the table placed on the drawing carries"));
+    connect(cfgBtn, &QPushButton::clicked, this, [this] {
+        if (opener_) opener_->openBomConfiguration();
+    });
+    topRow->addWidget(cfgBtn);
+    cfgSummary_ = new QLabel(QString(), this);
+    cfgSummary_->setStyleSheet(QStringLiteral("color:#8fa2b8;"));
+    topRow->addWidget(cfgSummary_, 1);
+    root->addLayout(topRow);
 
     auto* split = new QSplitter(Qt::Horizontal, this);
     root->addWidget(split, 1);
@@ -62,6 +66,25 @@ void BomDialog::buildUi() {
     lv->setContentsMargins(0, 0, 0, 0);
     view_ = new QTableWidget(left);
     view_->setColumnCount(bomColumnCount());
+    // Dragging a line moves the part up or down the list. The "#" column is the row's PLACE, so it
+    // simply follows - a part is never carried about by its number.
+    view_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    view_->setSelectionMode(QAbstractItemView::SingleSelection);
+    view_->setDragDropMode(QAbstractItemView::InternalMove);
+    view_->setDragDropOverwriteMode(false);
+    view_->verticalHeader()->setSectionsMovable(true);
+    view_->verticalHeader()->setVisible(true);
+    view_->verticalHeader()->setFixedWidth(18);
+    view_->verticalHeader()->setToolTip(QStringLiteral("Drag a line to move it up or down"));
+    connect(view_->verticalHeader(), &QHeaderView::sectionMoved, this,
+            [this](int, int from, int to) {
+                if (syncing_) return;
+                // The header has already moved visually; the rows themselves are re-ordered and the
+                // table redrawn from them, so the two can never disagree.
+                const QSignalBlocker block(view_->verticalHeader());
+                view_->verticalHeader()->moveSection(to, from); // undo the visual move
+                moveRow(from, to);
+            });
     view_->horizontalHeader()->setStretchLastSection(false);
     view_->horizontalHeader()->setSectionsMovable(false);
     // Any heading can be renamed: double-click it, type, Enter. What a company calls a column is
@@ -89,12 +112,10 @@ void BomDialog::buildUi() {
         if (row < 0 || row >= static_cast<int>(shown.size())) return;
         const BomRow& shownRow = shown[static_cast<size_t>(row)];
         if (shownRow.fromDrawing) { refreshTable(); return; }
-        // Find that row in the table's own rows and write the cell into it.
+        // The row the line came from, by its own id - two blank rows are told apart by nothing
+        // else.
         for (BomRow& r : table_.rows) {
-            if (r.fromDrawing) continue;
-            if (r.description != shownRow.description || r.mfrPn != shownRow.mfrPn ||
-                r.internalPn != shownRow.internalPn)
-                continue;
+            if (r.fromDrawing || r.rowId != shownRow.rowId) continue;
             const QString text = view_->item(row, col) ? view_->item(row, col)->text() : QString();
             switch (col) {
                 case 1: r.description = text; break;
@@ -112,7 +133,7 @@ void BomDialog::buildUi() {
     lv->addWidget(view_, 1);
 
     auto* rowBtns = new QHBoxLayout;
-    auto* addBtn = new QPushButton(QStringLiteral("+ Row"), left);
+    auto* addBtn = makeAddButton(left, QStringLiteral("Row"));
     addBtn->setToolTip(QStringLiteral("A blank row to fill in by hand"));
     connect(addBtn, &QPushButton::clicked, this, [this] { addManualRow(); });
     rowBtns->addWidget(addBtn);
@@ -120,6 +141,20 @@ void BomDialog::buildUi() {
     connect(delBtn, &QPushButton::clicked, this, [this] { removeCurrentRow(); });
     rowBtns->addWidget(delBtn);
     rowBtns->addStretch(1);
+    auto* csvBtn = new QPushButton(QStringLiteral("Export CSV…"), left);
+    csvBtn->setToolTip(QStringLiteral(
+        "The list as it reads here - the same columns, units and totals - as a CSV file"));
+    connect(csvBtn, &QPushButton::clicked, this, [this] {
+        QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export bill of materials"),
+                                                    QString(), QStringLiteral("CSV (*.csv)"));
+        if (path.isEmpty()) return;
+        if (!path.endsWith(QStringLiteral(".csv"), Qt::CaseInsensitive))
+            path += QStringLiteral(".csv");
+        if (summary_)
+            summary_->setText(exportCsv(path) ? QStringLiteral("Exported to %1").arg(path)
+                                              : QStringLiteral("Could not write %1").arg(path));
+    });
+    rowBtns->addWidget(csvBtn);
     auto* placeBtn = new QPushButton(QStringLiteral("Place table on drawing"), left);
     placeBtn->setToolTip(QStringLiteral(
         "The bill of materials as a table on the sheet - then click where it goes"));
@@ -182,6 +217,27 @@ void BomDialog::buildUi() {
 void BomDialog::loadTable() {
     if (!editor_ || !editor_->document()) return;
     table_.fromJson(editor_->document()->bom());
+    unify_ = table_.config.unify;
+    loadControlsFromConfig();
+}
+
+// The controls show what the drawing was set up with.
+void BomDialog::loadControlsFromConfig() {
+    syncing_ = true;
+    if (lengthUnitBox_) {
+        const int at = lengthUnitBox_->findData(table_.config.lengthUnit);
+        if (at >= 0) lengthUnitBox_->setCurrentIndex(at);
+    }
+    if (spareSpin_) spareSpin_->setValue(table_.config.sparePercent);
+    if (decimalsSpin_) decimalsSpin_->setValue(table_.config.qtyDecimals);
+    if (roundUpBox_) roundUpBox_->setChecked(table_.config.roundUpLengths);
+    if (unifyBox_) unifyBox_->setChecked(table_.config.unify);
+    if (fromDrawingBox_) fromDrawingBox_->setChecked(table_.config.includeDrawing);
+    for (int i = 0; i < columnBoxes_.size(); ++i) {
+        columnBoxes_[i]->setText(table_.header(i));
+        columnBoxes_[i]->setChecked(table_.config.columnShown(i));
+    }
+    syncing_ = false;
 }
 
 void BomDialog::storeTable() {
@@ -192,21 +248,36 @@ void BomDialog::storeTable() {
 
 std::vector<BomRow> BomDialog::shownRows() const {
     std::vector<BomRow> rows;
-    if (fromDrawingBox_ && fromDrawingBox_->isChecked() && editor_ && editor_->document())
+    if (table_.config.includeDrawing && editor_ && editor_->document())
         rows = bomFromDrawing(*editor_->document(), lib_);
     for (const BomRow& r : table_.rows)
         if (!r.fromDrawing) rows.push_back(r);
+    // The working unit, the spare and the rounding first, so the lines total in the unit they are
+    // shown in rather than being converted after the sums.
+    rows = bomApplyConfig(rows, table_.config);
     return unify_ ? bomUnify(rows) : rows;
 }
 
 void BomDialog::reload() {
-    lib_.load(PartsLibrary::defaultPath()); // the library may have changed since this opened
+    // The libraries may have changed since this opened - a part added, another connected.
+    catalog_.openRemembered();
+    lib_ = catalog_.merged();
     refreshLibraryList();
+    refreshTable();
+}
+
+void BomDialog::setConfig(const BomConfig& cfg) {
+    table_.config = cfg;
+    unify_ = cfg.unify;
+    storeTable();
+    loadControlsFromConfig();
     refreshTable();
 }
 
 void BomDialog::setUnifyTotals(bool on) {
     unify_ = on;
+    table_.config.unify = on;
+    storeTable();
     refreshTable();
 }
 
@@ -233,19 +304,19 @@ void BomDialog::refreshTable() {
         cell(2, row.internalPn, typed);
         cell(3, row.mfrPn, typed);
         cell(4, row.mfrName, typed);
-        cell(5, row.qtyText(), typed);
+        cell(5, row.qtyText(table_.config.qtyDecimals), typed);
         // The unit is a choice, not free text: what can be totalled with what depends on it.
         if (typed) {
             auto* box = new QComboBox(view_);
             box->addItems(partUnitCodes());
             if (box->findText(row.unit) < 0) box->addItem(row.unit);
             box->setCurrentText(row.unit);
-            const QString desc = row.description, pn = row.mfrPn;
+            const QString rowId = row.rowId;
             connect(box, &QComboBox::currentTextChanged, this,
-                    [this, desc, pn](const QString& u) {
+                    [this, rowId](const QString& u) {
                         if (syncing_) return;
                         for (BomRow& tr : table_.rows)
-                            if (!tr.fromDrawing && tr.description == desc && tr.mfrPn == pn) {
+                            if (!tr.fromDrawing && tr.rowId == rowId) {
                                 tr.unit = u;
                                 break;
                             }
@@ -260,6 +331,18 @@ void BomDialog::refreshTable() {
     }
     view_->resizeColumnsToContents();
     syncing_ = false;
+    if (cfgSummary_)
+        cfgSummary_->setText(
+            QStringLiteral("lengths in %1%2%3 · %4 · %5 of %6 columns on the drawing")
+                .arg(table_.config.lengthUnit,
+                     table_.config.sparePercent > 0.0
+                         ? QStringLiteral(" +%1%% spare").arg(table_.config.sparePercent, 0, 'f', 0)
+                         : QString(),
+                     table_.config.roundUpLengths ? QStringLiteral(", rounded up") : QString(),
+                     table_.config.unify ? QStringLiteral("totalled by part")
+                                         : QStringLiteral("one line per entry"))
+                .arg(shownColumnCount())
+                .arg(bomColumnCount()));
     if (summary_) {
         int drawn = 0;
         for (const BomRow& row : rows)
@@ -269,6 +352,13 @@ void BomDialog::refreshTable() {
                               .arg(drawn)
                               .arg(rows.size() - static_cast<size_t>(drawn)));
     }
+}
+
+int BomDialog::shownColumnCount() const {
+    int n = 0;
+    for (int i = 0; i < bomColumnCount(); ++i)
+        if (table_.config.columnShown(i)) ++n;
+    return n;
 }
 
 void BomDialog::refreshLibraryList() {
@@ -297,22 +387,94 @@ void BomDialog::refreshLibraryList() {
     libView_->resizeColumnsToContents();
 }
 
+bool BomDialog::exportCsv(const QString& path) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
+    QTextStream out(&f);
+    out.setEncoding(QStringConverter::Utf8);
+    // A field is quoted when it holds a comma, a quote or a line break; a quote inside is doubled -
+    // the ordinary CSV rules, so a spreadsheet reads it back as written.
+    auto field = [](const QString& v) {
+        if (!v.contains(QLatin1Char(',')) && !v.contains(QLatin1Char('"')) &&
+            !v.contains(QLatin1Char('\n')))
+            return v;
+        QString q = v;
+        q.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QStringLiteral("\"%1\"").arg(q);
+    };
+    // The same columns the drawing gets, so the file and the sheet say the same thing.
+    std::vector<int> use;
+    for (int i = 0; i < bomColumnCount(); ++i)
+        if (table_.config.columnShown(i)) use.push_back(i);
+    if (use.empty())
+        for (int i = 0; i < bomColumnCount(); ++i) use.push_back(i);
+    QStringList head;
+    for (int i : use) head << field(table_.header(i));
+    out << head.join(QLatin1Char(',')) << "\r\n";
+    int line = 0;
+    for (const BomRow& r : shownRows()) {
+        ++line;
+        const QString byColumn[7] = {QString::number(line), r.description, r.internalPn, r.mfrPn,
+                                    r.mfrName, r.qtyText(table_.config.qtyDecimals), r.unit};
+        QStringList cells;
+        for (int i : use) cells << field(byColumn[i]);
+        out << cells.join(QLatin1Char(',')) << "\r\n";
+    }
+    return true;
+}
+
+void BomDialog::moveRow(int from, int to) {
+    // The lines shown are the drawing's rows followed by the typed ones; only the typed ones have
+    // an order of their own to change.
+    const std::vector<BomRow> shown = shownRows();
+    if (from < 0 || to < 0 || from >= static_cast<int>(shown.size()) ||
+        to >= static_cast<int>(shown.size()) || from == to)
+        return;
+    const QString moveId = shown[static_cast<size_t>(from)].rowId;
+    const QString beforeId = shown[static_cast<size_t>(to)].rowId;
+    if (moveId.isEmpty() || shown[static_cast<size_t>(from)].fromDrawing) {
+        if (summary_)
+            summary_->setText(QStringLiteral(
+                "That line comes from the drawing — its place follows the drawing"));
+        return;
+    }
+    int fromIdx = -1, toIdx = -1;
+    for (size_t i = 0; i < table_.rows.size(); ++i) {
+        if (table_.rows[i].rowId == moveId) fromIdx = static_cast<int>(i);
+        if (table_.rows[i].rowId == beforeId) toIdx = static_cast<int>(i);
+    }
+    if (fromIdx < 0) return;
+    BomRow moved = table_.rows[static_cast<size_t>(fromIdx)];
+    table_.rows.erase(table_.rows.begin() + fromIdx);
+    // The line lands AT the place it was dropped on: the header reports where the section now sits,
+    // so dragging to the bottom means the bottom, not "before the last one".
+    if (toIdx < 0 || toIdx > static_cast<int>(table_.rows.size()))
+        toIdx = static_cast<int>(table_.rows.size());
+    table_.rows.insert(table_.rows.begin() + toIdx, moved);
+    storeTable();
+    refreshTable();
+    if (summary_) summary_->setText(QStringLiteral("Line moved"));
+}
+
 void BomDialog::addManualRow() {
     BomRow r;
-    r.description = QStringLiteral("(new item)");
+    r.rowId = bomNextRowId(table_.rows); // its own row, however many blank ones there are
     r.qty = 1.0;
     r.unit = QStringLiteral("each");
     r.fromDrawing = false;
     table_.rows.push_back(r);
     storeTable();
     refreshTable();
-    if (summary_) summary_->setText(QStringLiteral("Row added — fill it in"));
+    if (summary_)
+        summary_->setText(QStringLiteral("Row %1 added — fill in what it is")
+                              .arg(table_.rows.size()));
 }
 
 void BomDialog::addFromLibrary(const QString& partId, double qty) {
     const LibraryPart* p = lib_.byId(partId);
     if (!p) return;
     BomRow r = bomRowFromPart(*p, qty);
+    r.rowId = bomNextRowId(table_.rows);
     r.fromDrawing = false;
     table_.rows.push_back(r);
     storeTable();
@@ -336,8 +498,7 @@ void BomDialog::removeCurrentRow() {
         return;
     }
     for (size_t i = 0; i < table_.rows.size(); ++i)
-        if (!table_.rows[i].fromDrawing && table_.rows[i].description == row.description &&
-            table_.rows[i].mfrPn == row.mfrPn) {
+        if (!table_.rows[i].fromDrawing && table_.rows[i].rowId == row.rowId) {
             table_.rows.erase(table_.rows.begin() + static_cast<long>(i));
             break;
         }
@@ -354,19 +515,26 @@ void BomDialog::placeOnDrawing() {
     }
     // A table entity: a heading row plus one row per line, filled with what is shown here. It is
     // placed by a click, like anything else that is inserted.
-    const int cols = bomColumnCount();
+    // Only the columns the configuration asks for go onto the sheet: a shop-floor list may want
+    // nothing but the line, what it is and how many.
+    std::vector<int> use;
+    for (int i = 0; i < bomColumnCount(); ++i)
+        if (table_.config.columnShown(i)) use.push_back(i);
+    if (use.empty()) {
+        if (summary_) summary_->setText(QStringLiteral("No columns are switched on for the drawing"));
+        return;
+    }
+    const int cols = static_cast<int>(use.size());
     const int nRows = static_cast<int>(rows.size()) + 1;
     const double rowH = 8.0, textH = rowH * 0.5;
     QJsonArray cells;
-    for (int i = 0; i < cols; ++i) cells.append(table_.header(i));
+    for (int i : use) cells.append(table_.header(i));
+    int line = 0;
     for (const BomRow& r : rows) {
-        cells.append(QString::number(static_cast<int>(cells.size()) / cols)); // line #
-        cells.append(r.description);
-        cells.append(r.internalPn);
-        cells.append(r.mfrPn);
-        cells.append(r.mfrName);
-        cells.append(r.qtyText());
-        cells.append(r.unit);
+        ++line;
+        const QString byColumn[7] = {QString::number(line), r.description, r.internalPn, r.mfrPn,
+                                    r.mfrName, r.qtyText(table_.config.qtyDecimals), r.unit};
+        for (int i : use) cells.append(byColumn[i]);
     }
     // Each column is as wide as the widest thing in it - a description needs room, a line number
     // does not - down to a floor so a short column is still a column. Anything that fits in the
@@ -382,8 +550,8 @@ void BomDialog::placeOnDrawing() {
     }
     double W = 0.0;
     for (int c = 0; c < cols; ++c) {
-        colW[static_cast<size_t>(c)] = std::max(colW[static_cast<size_t>(c)],
-                                               c == 1 ? plainW : minW);
+        colW[static_cast<size_t>(c)] =
+            std::max(colW[static_cast<size_t>(c)], use[static_cast<size_t>(c)] == 1 ? plainW : minW);
         W += colW[static_cast<size_t>(c)];
     }
     const double H = nRows * rowH;
@@ -398,8 +566,11 @@ void BomDialog::placeOnDrawing() {
     // Every cell reads middle-centre - a number, a part number and a unit all sit best that way -
     // except the description, which is prose and so reads middle-left.
     QJsonArray cellAlign;
-    for (int i = 0; i < cells.size(); ++i)
-        cellAlign.append((i % cols) == 1 ? QStringLiteral("ML") : QStringLiteral("MC"));
+    for (int i = 0; i < cells.size(); ++i) {
+        // The description reads middle-left wherever it ends up; everything else middle-centre.
+        const bool isDescription = use[static_cast<size_t>(i % cols)] == 1;
+        cellAlign.append(isDescription ? QStringLiteral("ML") : QStringLiteral("MC"));
+    }
     t.meta.insert(QStringLiteral("table"), true);
     t.meta.insert(QStringLiteral("rows"), nRows);
     t.meta.insert(QStringLiteral("cols"), cols);

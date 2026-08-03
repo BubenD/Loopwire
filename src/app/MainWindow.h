@@ -1,15 +1,19 @@
 #pragma once
 
+#include "app/BomDialog.h" // BomConfigOpener
 #include "app/Editor.h" // Editor::TextStyle used in a method signature
 #include "model/Document.h"
+#include "model/DrawingTemplate.h"   // tplBeingDrawn_ is held by value
 #include "tools/ToolId.h"
 
+#include <QColor>
 #include <QHash>
 #include <QMainWindow>
 #include <QStringList>
 #include <QVector>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 class QLabel;
@@ -31,6 +35,7 @@ class QSpinBox;
 class QButtonGroup;
 class QHBoxLayout;
 class QDialog;
+class QShortcut;
 
 namespace Edraw_Desktop {
 
@@ -39,10 +44,17 @@ class Editor;
 class HarnessBuilderDialog;
 class PartsLibraryDialog;
 class BomDialog;
+class VoltageDropDialog;
+class MechanicalBuilderDialog;
+class MechanicalValidationDialog;
+class BundleDiameterDialog;
+class ThermalModelDialog;
+class TemplateDialog;
+class BlockDialog;
 
 // Top-level application window: ribbon, dockable panels (layers / properties /
 // entity list), command bar, coordinate readout, and view/edit actions.
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow, public BomConfigOpener {
     Q_OBJECT
 public:
     // `onModule` is called as each startup module is reached, so the splash can name it. The
@@ -55,6 +67,22 @@ public:
 
     // Open a .dwx or .dxf by path (used by File>Open and the command line).
     void openPath(const QString& path);
+    // Blocks, as operations the host can be asked to perform - each is also reachable by name from
+    // the command line. Opening one for editing puts it in a tab of its own on a grey canvas.
+    void openBlockEditor(const QString& name);
+    void showBlockDialog();
+    void saveBlockBeingEdited();
+    void cancelBlockEdit();
+    // Drawing the template itself: it opens on a tab of its own, tinted so it can never be mistaken
+    // for a drawing, and is finished with Save template / Save as / Cancel.
+    void openTemplateEditor(const QString& name);
+    void saveTemplateBeingEdited(bool saveAs);
+    void cancelTemplateEdit();
+    // Pictures: a PNG/JPEG/BMP from a file, or whatever is on the clipboard - a screenshot, a copied
+    // image file - dropped onto the sheet and then resized by its corners or in Properties.
+    void insertPictureFromFile();
+    bool insertPictureFromClipboard(bool quiet);
+    void pasteFromClipboard();   // a picture if that is what is on the clipboard, else the drawing kind
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -62,6 +90,22 @@ protected:
 
 private:
     void buildRibbon();
+    // One tab per file, in src/app/ribbon/. They are members, so each still reaches every widget and
+    // helper it needs; splitting them up only stops MainWindow.cpp being where everything lands.
+    void buildHomeTab();
+    void buildModifyTab();
+    void buildInsertTab();
+    void buildAnnotationTab();
+    void buildSchematicBuildTab();
+    void buildHarnessMechanicalTab();
+    // Shared by every tab: a page with its group layout, a titled group with a rule after it, and
+    // the match-properties button that two tabs both carry.
+    std::pair<QWidget*, QHBoxLayout*> makeTabPage();
+    void addGroup(QHBoxLayout* lay, const QString& title, QWidget* content);
+    QToolButton* makeMatchBtn(QWidget* parent, bool iconOnly);
+    // Undo and Redo as ribbon buttons. Ctrl+Z and Ctrl+Y have always worked; a button is what makes
+    // them findable, and it can say whether there is anything left to undo.
+    QWidget* undoRedoRow(QWidget* parent);
     // Show/hide the Schematic-build ribbon groups by context: while a twist is armed only
     // the Twist group shows; while a Splice/X marker tool is armed the Modify/DRC groups hide.
     void updateSchematicRibbonGroups();
@@ -81,6 +125,26 @@ private:
     void buildWireRibbonTab();         // build the contextual "Wire" tab (hidden)
     void showWireRibbon(bool on);      // add/select or remove the contextual Wire tab
     void buildArrayRibbonTab();        // build the contextual "Array Creation" tab (hidden)
+    // The contextual "Template" tab: the sheet, the frame, the revision table and the save buttons,
+    // shown only while a template is being drawn.
+    void buildTemplateRibbonTab();
+    void showTemplateRibbon(bool on);
+    void syncTemplateRibbon();         // reflect the template being drawn in the tab's fields
+    void applyTemplateRibbon();        // and the other way, when one of them is changed
+    void showHarnessRibbonTabs(bool on);   // the harness tabs are put away while drawing a template
+    // A bigger sheet gets a BIGGER ruler, not more of it: the division is rescaled so the same number
+    // of zones spans the new sheet.
+    void keepTemplateZoneCount(const TemplateSheet& from, const TemplateSheet& to);
+    // Exactly one ribbon page visible: the one whose tab is selected. See the definition for why this
+    // has to be enforced rather than left to the tab widget.
+    void normaliseRibbonPages();
+    // The contextual "Capture" tab: shown while the library window has stepped aside so objects can be
+    // selected for a part's drawing. Enter finishes it; Esc drops it.
+    void buildCaptureRibbonTab();
+    void showCaptureRibbon(bool on, const QString& what = QString(), bool mechanical = false);
+    // Stamp the frame with ids and remember it as generated, so every line of it is an ordinary
+    // object that can be picked, moved and reshaped - and an edited one is kept, not regenerated.
+    void adoptGeneratedFrame(std::vector<Entity>& ents, bool markAll);
     void showArrayRibbon(bool on);     // add/select or remove the contextual Array tab
     void updateArrayContext();         // open/sync/close it with the array session
     void beginArrayCommand(ArrayKind kind); // arm an array of that kind on the selection
@@ -149,17 +213,106 @@ private:
     // The parts library: the raw materials a harness is built from, with a schematic symbol and a
     // mechanical drawing per part. Modeless and kept alive, like the builder.
     void showPartsLibrary();
+    // The library, opened with a part already picked: what "see it in the library" asks for.
+    void showPartsLibraryAt(const QString& libPartId);
+    // BomConfigOpener: the bill-of-materials dialog's Configuration button opens Options on its
+    // own page, so every setting lives in one place.
+    void openBomConfiguration() override { showOptions(QStringLiteral("BOM")); }
     // The ribbon button that opens the library. Both harness tabs carry it, so it is built once.
     QToolButton* makePartsLibraryButton(QWidget* parent);
+    // Likewise the voltage-drop button: the question gets asked from the schematic side and checked
+    // again on the mechanical side, so both tabs carry it.
+    QToolButton* makeVoltageDropButton(QWidget* parent);
     HarnessBuilderDialog* harnessDlg_ = nullptr;
     PartsLibraryDialog* libraryDlg_ = nullptr;
+    QWidget* captureTab_ = nullptr;
+    QLabel* captureWhat_ = nullptr;
+    // Enter takes the selection, Esc drops the capture - live ONLY while one is waiting, so neither
+    // key is taken away from the drawing tools the rest of the time.
+    QShortcut* captureTakeSc_ = nullptr;
+    QShortcut* captureDropSc_ = nullptr;
     BomDialog* bomDlg_ = nullptr;
+    VoltageDropDialog* voltageDropDlg_ = nullptr;
+    MechanicalBuilderDialog* mechDlg_ = nullptr;
+    // Which open documents are template-edit sessions, and the template each is drawing. A template
+    // edit is a document like a block edit is: its own tab, its own undo, its own canvas colour.
+    QHash<Document*, QString> templateEdits_;
+    QHash<Document*, QString> templateEditPaths_;
+    // Every Save template / Save as / Cancel button there is. They live in one place - the Template
+    // group on Home - and that whole group is only THERE while a template is open, so a drawing's
+    // ribbon is not carrying three dead buttons about a template nobody is editing.
+    QVector<QToolButton*> tplSessionBtns_;
+    QWidget* tplHomeGroup_ = nullptr;   // the Home "Template" group, shown only during a session
+    QWidget* templateTab_ = nullptr;
+    // Tabs taken out of the ribbon while a template is being drawn, with where each came from so it
+    // goes back exactly where it was. A sheet is not a harness: the harness tabs mean nothing here.
+    struct StashedTab {
+        QWidget* page = nullptr;
+        QString title;
+        int at = 0;
+    };
+    QVector<StashedTab> stashedTabs_;
+    // The generated frame as it was last generated, by id, so an object the user has since CHANGED is
+    // recognised and kept instead of being regenerated over. Free design has to survive a parameter
+    // change; anything untouched is still the generator's to replace.
+    QHash<QString, QJsonObject> tplGeneratedAsMade_;
+    // When an image last arrived on the SYSTEM clipboard. A paste takes whichever is newer, that or
+    // the application's own clipboard, so Ctrl+V after a screenshot pastes the screenshot and Ctrl+V
+    // after copying two lines pastes the lines.
+    qint64 sysClipImageAt_ = 0;
+    QComboBox* tplSheetBox_ = nullptr;
+    QCheckBox* tplZonesChk_ = nullptr;
+    QDoubleSpinBox* tplZoneSizeSpin_ = nullptr;
+    QCheckBox* tplRevChk_ = nullptr;
+    QSpinBox* tplRevRowsSpin_ = nullptr;
+    QLabel* tplRibbonInfo_ = nullptr;
+    bool tplRibbonSyncing_ = false;
+    // The template being drawn, so the ribbon can change it and the save can write it.
+    DrawingTemplate tplBeingDrawn_;
+    bool templateDlgWasOpen_ = false;
+    MechanicalValidationDialog* mechCheckDlg_ = nullptr;
+    BundleDiameterDialog* bundleDlg_ = nullptr;
+    ThermalModelDialog* thermalDlg_ = nullptr;
+    TemplateDialog* templateDlg_ = nullptr;
+    BlockDialog* blockDlg_ = nullptr;
+    // Which open documents are block-edit sessions, and which block each one is editing. A block
+    // being edited is a document of its own - that is what gives it its own undo, its own tab and a
+    // canvas of its own colour, without a bespoke editing mode to get wrong.
+    QHash<Document*, QString> blockEdits_;
+    QColor normalCanvasColor_{"#1e2832"};
+    QToolButton* saveBlockBtn_ = nullptr;
+    QToolButton* cancelBlockBtn_ = nullptr;
+    // Whether the Blocks window was open when a block edit started, so it can be put back.
+    bool blockDlgWasOpen_ = false;
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
     // Text / Actions), mirroring the Edraw web connector builder.
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
+    void showVoltageDropDialog();
+    void showMechanicalBuilder();
+    void showMechanicalValidation();
+    // The Tools group: the calculations, on both harness tabs because they are asked on one side and
+    // checked on the other.
+    void showBundleDiameter();
+    void showThermalModel();
+    // The template module: what a new drawing starts as.
+    void showTemplateDialog();
+    // Blocks.
+    enum class BlockAction { Create, Insert, Manage, SaveEdit, CancelEdit };
+    QToolButton* makeBlockButton(QWidget* parent, BlockAction action);
+    void createBlockFromSelection();
+    // Close the block's tab and give the Blocks window back, however the edit ended.
+    void endBlockEdit();
+    void endTemplateEdit();
+    QToolButton* makeTemplateSessionButton(QWidget* parent, int which);
+    QToolButton* makeMechanicalValidationButton(QWidget* parent);
+    QToolButton* makeBundleDiameterButton(QWidget* parent);
+    QToolButton* makeThermalButton(QWidget* parent);
+    // The ribbon button that opens it. The mechanical tab carries it; so does the schematic one,
+    // because that is where the harness it reads from is drawn.
+    QToolButton* makeMechanicalBuilderButton(QWidget* parent);
     // Run the schematic design-rule check and (re)open the validation window. On a
     // fresh open (revalidate=false) the current discrepancies become the tracked set;
     // on Revalidate (true) that set is kept so issues now fixed can be shown ticked.
@@ -193,7 +346,9 @@ private:
     void layoutInlineText(); // reposition overlay (e.g. after the bar resizes)
     void showCanvasMenu(const QPoint& globalPos); // right-click context menu on the canvas
     void findText();             // Find: locate & select text entities by content
-    void showOptions();          // AutoCAD-style Options dialog (E menu)
+    // AutoCAD-style Options dialog (E menu). `page` names the tab to open on ("BOM" for the bill
+    // of materials configurator), so a dialog elsewhere can send the user straight to it.
+    void showOptions(const QString& page = QString());
     void showAbout();            // app name / description / version (E menu)
     // Light-on-dark tooltips, so a hint is readable against this window.
     void applyTooltipStyle();
