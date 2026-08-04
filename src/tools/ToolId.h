@@ -36,6 +36,7 @@ enum class ToolId {
     Splice,
     NotConnected,
     NetLabel,
+    LengthBreak,
     // Modify (reference-point driven)
     Move,
     Rotate,
@@ -84,7 +85,7 @@ inline bool isDrawTool(ToolId t) {
 
 // Single-click placement tools (connector / markers).
 inline bool isPlacementTool(ToolId t) {
-    return t == ToolId::Connector || t == ToolId::Splice ||
+    return t == ToolId::Connector || t == ToolId::Splice || t == ToolId::LengthBreak ||
            t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Table;
 }
 
@@ -117,6 +118,7 @@ inline QString toolLabel(ToolId t) {
     // it places is a joint between conductors, and that is what it is called.
     case ToolId::Splice: return QStringLiteral("Joint");
     case ToolId::NotConnected: return QStringLiteral("Not connected");
+    case ToolId::LengthBreak: return QStringLiteral("Length break");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.
     case ToolId::NetLabel: return QStringLiteral("Wire label");

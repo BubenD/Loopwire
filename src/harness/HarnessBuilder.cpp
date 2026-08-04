@@ -237,6 +237,13 @@ QString harnessOpenEndpointKey() { return QStringLiteral("#OPEN"); }
 
 bool harnessIsOpenEndpoint(const QString& key) { return key == QLatin1String("#OPEN"); }
 
+bool harnessEndIsOpen(const QString& conn, int pin) {
+    // A shield endpoint is a real termination (the drain lands on the screen's leg), so it is not open
+    // even though it has no pin number.
+    if (harnessIsShieldEndpoint(conn)) return false;
+    return harnessIsOpenEndpoint(conn) || pin < 1;
+}
+
 QString harnessOverallShieldKey(const QString& connId, HarnessSide side) {
     return QStringLiteral("#S:%1:%2").arg(connId, side == HarnessSide::Left
                                                       ? QStringLiteral("left")
@@ -399,10 +406,12 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
             }
         }
 
-        // An OPEN end names nothing at all, so only the other end is checked.
-        if (harnessIsOpenEndpoint(w.fromConn) || harnessIsOpenEndpoint(w.toConn)) {
-            const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
-            if (fromOpen && harnessIsOpenEndpoint(w.toConn)) {
+        // An OPEN end lands on nothing, so only the other end is checked. An end with no pin - pin 0 -
+        // is open in exactly the same way: there is nothing there to be wrong about, and "P1 has no
+        // pin 0" told the user off for a row the app itself had left unlanded.
+        if (harnessEndIsOpen(w.fromConn, w.fromPin) || harnessEndIsOpen(w.toConn, w.toPin)) {
+            const bool fromOpen = harnessEndIsOpen(w.fromConn, w.fromPin);
+            if (fromOpen && harnessEndIsOpen(w.toConn, w.toPin)) {
                 add(QStringLiteral("bothopen:%1").arg(w.id),
                     QStringLiteral("A wire is open at both ends, so it joins nothing"),
                     QString(), w.id);
@@ -410,6 +419,7 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
             }
             const HarnessConnector* c = harnessConnById(def, fromOpen ? w.toConn : w.fromConn);
             const int pin = fromOpen ? w.toPin : w.fromPin;
+            if (harnessIsShieldEndpoint(fromOpen ? w.toConn : w.fromConn)) continue;
             if (!c)
                 add(QStringLiteral("badconn:%1").arg(w.id),
                     QStringLiteral("An open-ended wire has no connector at its other end"),
@@ -1226,8 +1236,11 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     // Now a lead is enclosed by the same screens as any other conductor of its cable: its own, and
     // the overall one at the end it arrives at.
     for (const auto& w : def.wires) {
-        const bool fromOpen = harnessIsOpenEndpoint(w.fromConn);
-        const bool toOpen = harnessIsOpenEndpoint(w.toConn);
+        // An end with no PIN is open too - see harnessEndIsOpen. Such a wire used to be drawn as
+        // nothing at all: the routing needs a pin at both ends and quietly skipped it, so a conductor
+        // the builder listed was missing from the drawing.
+        const bool fromOpen = harnessEndIsOpen(w.fromConn, w.fromPin);
+        const bool toOpen = harnessEndIsOpen(w.toConn, w.toPin);
         if (fromOpen == toOpen) continue; // both ends open is not a wire; neither is neither
         const QString connId = fromOpen ? w.toConn : w.fromConn;
         const int pin = fromOpen ? w.toPin : w.fromPin;

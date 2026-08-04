@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 23> kTypeNames = {{
+const std::array<TypeName, 24> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -29,6 +29,7 @@ const std::array<TypeName, 23> kTypeNames = {{
     {EntityType::Image, "image"},
     {EntityType::Wire, "wire"},
     {EntityType::Splice, "splice"},
+    {EntityType::LengthBreak, "lengthbreak"},
     {EntityType::Connector, "connector"},
     {EntityType::Breakout, "breakout"},
     {EntityType::Bundle, "bundle"},
@@ -142,6 +143,15 @@ Bounds Entity::bounds() const {
         // A two-conductor splice reaches down to its second joint.
         if (meta.value("pair").toBool(false)) bnds.expand(b);
         break;
+    case EntityType::LengthBreak: {
+        // The pair of strokes, whichever way the run points: a square box of the mark's own reach is
+        // right for either style and for any rotation.
+        const double reach = meta.value("size").toDouble(6.0) +
+                             meta.value("gap").toDouble(meta.value("size").toDouble(6.0) * 0.9);
+        bnds.expand({a.x - reach, a.y - reach});
+        bnds.expand({a.x + reach, a.y + reach});
+        break;
+    }
     case EntityType::NetLabel:
     case EntityType::NotConnected:
         bnds.expand(a);
@@ -217,7 +227,7 @@ namespace {
 bool usesPosition(EntityType t) {
     return t == EntityType::Text || t == EntityType::Splice ||
            t == EntityType::NotConnected || t == EntityType::NetLabel ||
-           t == EntityType::Connector;
+           t == EntityType::Connector || t == EntityType::LengthBreak;
 }
 } // namespace
 
@@ -256,6 +266,12 @@ QJsonObject Entity::toJson() const {
             obj["start"] = startAngle;
             obj["end"] = endAngle;
         }
+        break;
+    case EntityType::LengthBreak:
+        // Which way it lies is the run's direction, and a mark that forgets it comes back lying
+        // across the horizontal whatever it was placed on.
+        obj["rotation"] = rotation;
+        obj["position"] = pointToJson(a);
         break;
     case EntityType::Text:
     case EntityType::Splice:

@@ -1624,6 +1624,45 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
+    case EntityType::LengthBreak: {
+        // "Longer than it is drawn": a pair of strokes across the run, the conventional break mark.
+        // Two styles, because both are used - straight strokes on a mechanical layout, S-curves where
+        // the run itself is drawn as a curve - and the choice is the draughtsman's.
+        const QPointF c = vt.toScreen(e.a);
+        const double halfWorld = std::max(0.5, e.meta.value("size").toDouble(6.0));
+        const double half = std::max(4.0, halfWorld * vt.scale());          // reach across the run
+        const double gap = std::max(3.0, e.meta.value("gap").toDouble(halfWorld * 0.9) * vt.scale());
+        // Along the run, and across it. The rotation is the run's own direction, so the mark sits
+        // square to whatever it was placed on however that is later rotated.
+        const double rot = e.rotation;
+        const QPointF along(std::cos(rot), -std::sin(rot));                 // screen y grows down
+        const QPointF across(-std::sin(rot), -std::cos(rot));
+        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
+        for (int k = 0; k < 2; ++k) {
+            // The two strokes, one either side of the point, both leaning the same way - a break is a
+            // pair of parallel marks, not a cross.
+            const QPointF mid = c + along * (gap * (k == 0 ? -0.5 : 0.5));
+            if (!curved) {
+                // A straight stroke, leaning along the run so the pair reads as "//".
+                const QPointF lean = along * (half * 0.55);
+                p.drawLine(mid + across * half + lean, mid - across * half - lean);
+            } else {
+                // An S: out to one side, back through the middle, out to the other - drawn with two
+                // cubics so the curve is smooth where it crosses the run.
+                const QPointF end1 = mid + across * half;
+                const QPointF end2 = mid - across * half;
+                // A long lazy S: the tails run almost straight and the sweep happens where it crosses
+                // the run. A tighter curve hooks at the ends and reads as a pair of Cs instead.
+                const QPointF bow = along * (half * 0.45);
+                QPainterPath path(end1);
+                path.cubicTo(end1 - bow * 0.35, mid + across * (half * 0.45) - bow, mid);
+                path.cubicTo(mid - across * (half * 0.45) + bow, end2 + bow * 0.35, end2);
+                p.drawPath(path);
+            }
+        }
+        break;
+    }
+
     case EntityType::NotConnected: {
         const QPointF c = vt.toScreen(e.a);
         // World-sized so the X scales with the drawing (zooms out as you zoom out),

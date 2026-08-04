@@ -9,6 +9,8 @@
 #include "tools/ModifyOps.h"
 
 #include <QApplication>
+#include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QPainter>
 #include <QPolygonF>
@@ -1941,6 +1943,92 @@ double polygonArea(const std::vector<Vec2>& poly) {
     return std::abs(a2) * 0.5;
 }
 
+// The rectangle a text actually INKS, measured with the same font the renderer draws it with.
+//
+// Entity::bounds() returns the text's line box - ascent plus descent, per line - which is what layout
+// needs and what a container is sized to. It is not what a person points at: the box is around twice
+// the height of a digit and most of the difference hangs below the baseline, empty. A window selection
+// drawn snugly round a big "3" therefore enclosed everything that was drawn and still missed the
+// corners of the box, so the text refused to be selected until a much larger area was swept.
+Bounds textInkBounds(const Entity& e) {
+    const QString txt = e.meta.value(QStringLiteral("text")).toString();
+    const double size = e.meta.value(QStringLiteral("size"))
+                            .toDouble(e.meta.value(QStringLiteral("height")).toDouble(2.5));
+    const Bounds boxed = e.bounds();
+    if (txt.isEmpty() || size <= 1e-9) return boxed;
+    // Measuring glyphs needs a font engine, which needs a GUI application. Without one - the unit
+    // tests run with no application object at all - the line box is the best that can be said.
+    if (!qobject_cast<QGuiApplication*>(QCoreApplication::instance())) return boxed;
+    // Measured big and scaled down: font metrics at a two-unit pixel size are too coarse to trust,
+    // and they scale linearly, so one probe size serves every text on the sheet.
+    constexpr double kProbe = 96.0;
+    QFont f;
+    const QString family = e.meta.value(QStringLiteral("font")).toString();
+    if (!family.isEmpty()) f.setFamily(family);
+    f.setBold(e.meta.value(QStringLiteral("bold")).toBool());
+    f.setItalic(e.meta.value(QStringLiteral("italic")).toBool());
+    f.setPixelSize(static_cast<int>(kProbe));
+    const QFontMetricsF fm(f);
+    const double k = size / kProbe;                    // probe units -> world units
+    const double spacing = std::max(1.0, e.meta.value(QStringLiteral("lineSpacing")).toDouble(1.0));
+    const double lineH = fm.height() * spacing * k;    // the same step the renderer walks
+    const double ascent = fm.ascent() * k;
+    const double bw = e.meta.value(QStringLiteral("boxWidth")).toDouble(0.0);
+    const double bh = e.meta.value(QStringLiteral("boxHeight")).toDouble(0.0);
+
+    // The lines as the renderer lays them out: paragraphs, wrapped to the box when there is one.
+    QStringList lines;
+    for (const QString& para : txt.split(QLatin1Char('\n'))) {
+        if (bw <= 1e-9) { lines << para; continue; }
+        QString cur;
+        for (const QString& word : para.split(QLatin1Char(' '))) {
+            const QString test = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
+            if (!cur.isEmpty() && fm.horizontalAdvance(test) * k > bw) {
+                lines << cur;
+                cur = word;
+            } else {
+                cur = test;
+            }
+        }
+        lines << cur;
+    }
+    if (lines.isEmpty()) return boxed;
+
+    QString just = e.meta.value(QStringLiteral("justify")).toString();
+    if (just.size() < 2) {
+        const QString al = e.meta.value(QStringLiteral("align")).toString();
+        just = QStringLiteral("T") + (al == QLatin1String("center") ? QStringLiteral("C")
+                                      : al == QLatin1String("right") ? QStringLiteral("R")
+                                                                     : QStringLiteral("L"));
+    }
+    const double totalH = lineH * lines.size();
+    double top = e.a.y;                                // world y grows up; the anchor is the box top
+    if (bh > 1e-9) {
+        if (just[0] == QLatin1Char('M')) top -= (bh - totalH) / 2.0;
+        else if (just[0] == QLatin1Char('B')) top -= bh - totalH;
+    }
+    Bounds ink;
+    bool any = false;
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString& ln = lines.at(i);
+        if (ln.isEmpty()) continue;
+        const double baseline = top - ascent - lineH * i;
+        double x = e.a.x;
+        if (bw > 1e-9) {
+            const double lw = fm.horizontalAdvance(ln) * k;
+            if (just[1] == QLatin1Char('C')) x += (bw - lw) / 2.0;
+            else if (just[1] == QLatin1Char('R')) x += bw - lw;
+        }
+        // tightBoundingRect is in the font's own coordinates about the baseline origin, with y
+        // growing DOWN, so its top is negative - above the baseline once the sign is flipped.
+        const QRectF r = fm.tightBoundingRect(ln);
+        ink.expand({x + r.left() * k, baseline - r.top() * k});
+        ink.expand({x + r.right() * k, baseline - r.bottom() * k});
+        any = true;
+    }
+    return any ? ink : boxed;
+}
+
 // Representative points used to test whether an entity is inside a region.
 std::vector<Vec2> entitySelectPoints(const Entity& e) {
     std::vector<Vec2> pts;
@@ -1987,10 +2075,18 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
                {e.center.x, e.center.y - e.radius}};
         break;
     case EntityType::Text: {
-        // The text's bounding rectangle corners (so window selection encloses it
-        // and crossing touches it via the edges below).
-        const Bounds b = e.bounds();
+        // The corners of the INK - the glyphs as drawn - so a window drawn round what you can see
+        // selects it. Entity::bounds() gives the text's LINE BOX, which is the right answer for
+        // layout and the wrong one here: a line box is about twice the height of a digit, and most of
+        // the extra hangs below the baseline where nothing is drawn, so a window drawn snugly round a
+        // big "3" enclosed the glyph and missed the box.
+        const Bounds b = textInkBounds(e);
         pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}};
+        break;
+    }
+    case EntityType::LengthBreak: {
+        const Bounds b = e.bounds();
+        pts = {b.min, {b.max.x, b.min.y}, b.max, {b.min.x, b.max.y}, e.a};
         break;
     }
     case EntityType::Connector: {
@@ -3915,6 +4011,38 @@ std::optional<Vec2> Editor::wireBodyPointNear(const Vec2& q, double tol, QString
                 best = on;
                 if (wireId) *wireId = w.id;
             }
+        }
+    }
+    return best;
+}
+
+std::optional<double> Editor::runDirectionAt(const Vec2& q) const {
+    if (!doc_) return std::nullopt;
+    const double tol = std::max(worldTolerance(), 1e-6);
+    std::optional<double> best;
+    double bestD = tol;
+    auto tryRun = [&](const Vec2& p1, const Vec2& p2) {
+        const Vec2 d = p2 - p1;
+        if (d.lengthSq() < 1e-12) return;
+        const auto c = closestPointOnSegment(q, p1, p2);
+        if (c.distance < bestD) {
+            bestD = c.distance;
+            best = std::atan2(d.y, d.x);
+        }
+    };
+    for (const auto& e : doc_->entities()) {
+        switch (e.type) {
+        case EntityType::Line:
+        case EntityType::DoubleLine:
+            tryRun(e.a, e.b);
+            break;
+        case EntityType::Wire:
+        case EntityType::Polyline:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) tryRun(e.points[i - 1], e.points[i]);
+            break;
+        default:
+            break;
         }
     }
     return best;
@@ -8905,6 +9033,16 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("size", spliceSize_); // dot radius (world units)
         break;
+    case ToolId::LengthBreak:
+        // Placed ON a run, and laid square across it: the mark says THIS run is longer than the
+        // drawing has room for, so it has to be unambiguous which run is meant. The direction comes
+        // from the run under the point; on bare paper it lies across the horizontal.
+        e.type = EntityType::LengthBreak;
+        e.a = p;
+        e.rotation = runDirectionAt(p).value_or(0.0);
+        e.meta.insert("breakStyle", breakStyle_);
+        e.meta.insert("size", breakSize_);
+        break;
     case ToolId::NotConnected: {
         // Shift + click on a connector pin: terminate EVERY still-unconnected pin of that
         // connector at once (pins already wired or already X'd are skipped).
@@ -9020,9 +9158,14 @@ void Editor::handlePlacementPress(const Vec2& p) {
     }
     emit changed();
     // The X (not-connected) terminator keeps placing until Esc, so all of a connector's
-    // unused pins can be X'd in a row; every other placement tool returns to Select.
+    // unused pins can be X'd in a row. So does the break mark: a layout that is drawn short in one
+    // place is usually drawn short in several, and going back to the ribbon between each one is worse
+    // than pressing Esc at the end. Every other placement tool returns to Select.
     if (tool_ == ToolId::NotConnected)
         emit message(QStringLiteral("X placed — click to terminate more pins; Esc to finish"));
+    else if (tool_ == ToolId::LengthBreak)
+        emit message(QStringLiteral(
+            "Break placed — click another run to mark that one too; Esc to finish"));
     else
         setTool(ToolId::Select); // return to Select after placing (Space repeats)
 }

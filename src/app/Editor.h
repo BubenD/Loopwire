@@ -55,6 +55,9 @@ public:
 
     const std::vector<QString>& selection() const { return selected_; }
     const SnapResult& currentSnap() const { return snapResult_; }
+    // The break mark: which of the two styles is placed, and how far it reaches across the run.
+    QString& breakStyle() { return breakStyle_; }
+    double& breakSize() { return breakSize_; }
 
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
@@ -289,6 +292,9 @@ public:
     int wireEndsAt(const Vec2& at, const QString& except = QString()) const;
     // Drop a joint marker at a point (unless one is already there).
     void addSpliceAt(const Vec2& at);
+    // The direction of the run under a point - a wire, a line, a double line, a polyline - as an
+    // angle. Used to lay a mark square across whatever it is placed on.
+    std::optional<double> runDirectionAt(const Vec2& q) const;
     // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
     // What lets a run be landed on another run as a T, and what says a joint belongs there.
     std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,
@@ -1030,6 +1036,8 @@ private:
     // Cursor + snap.
     Vec2 cursor_;
     SnapResult snapResult_;
+    QString breakStyle_ = QStringLiteral("straight"); // "straight" | "curved"
+    double breakSize_ = 6.0;                          // half its reach across the run, world units
     double pixelTol_ = 10.0;
 
     // In-progress draw state.

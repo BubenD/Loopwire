@@ -190,6 +190,12 @@ int harnessCoaxIndex(const HarnessDef& def, const HarnessWire& wire);
 QString harnessOpenEndpointKey();
 bool harnessIsOpenEndpoint(const QString& key);
 
+// Whether an END of a wire lands on nothing. Either it names no connector (#OPEN), or it names one but
+// has no pin: pin 0 is "not landed", which is what a row shows while it is being filled in and what a
+// conductor gets when the connector it was heading for has no free pin left. Neither is a fault to
+// report, and neither is drawn as a pin-to-pin run.
+bool harnessEndIsOpen(const QString& conn, int pin);
+
 QString harnessOverallShieldKey(const QString& connId, HarnessSide side);
 QString harnessInternalShieldKey(const QString& group);
 bool harnessIsShieldEndpoint(const QString& key);

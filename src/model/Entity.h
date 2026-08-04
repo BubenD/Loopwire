@@ -36,6 +36,10 @@ enum class EntityType {
     NotConnected,
     Twist,   // twisted-pair/bundle annotation over a set of wires (points = crossing pts)
     Screen,  // shield/screen annotation enclosing a set of wires (points = bbox corners)
+    // "This run is longer than it is drawn": the break mark, a pair of strokes across a run. Two
+    // styles, both conventional - straight strokes or S-curves - chosen by meta["breakStyle"].
+    // a = where it sits on the run, rotation = the run's direction.
+    LengthBreak,
 };
 
 EntityType entityTypeFromString(const QString& s);

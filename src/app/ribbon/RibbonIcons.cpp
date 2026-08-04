@@ -129,6 +129,12 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
     case ToolId::Connector: p.drawRect(6, 5, 8, 14); p.drawLine(14, 9, 20, 9); p.drawLine(14, 15, 20, 15); break;
     case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
     case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
+    case ToolId::LengthBreak:
+        // A run with the break mark across it: the run, then the pair of strokes.
+        p.drawLine(3, 12, 21, 12);
+        p.drawLine(13, 5, 8, 19);
+        p.drawLine(18, 5, 13, 19);
+        break;
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     case ToolId::Balloon: {
         // Numbered callout: a circle with a leader stub and a "1" inside.

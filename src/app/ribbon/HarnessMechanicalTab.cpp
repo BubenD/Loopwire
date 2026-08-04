@@ -26,6 +26,7 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -45,8 +46,82 @@ void MainWindow::buildHarnessMechanicalTab() {
     addGroup(lay, QStringLiteral("Bundle"),
              toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
                       ToolId::Fillet}));
-    // Cut lengths and branch lengths.
-    addGroup(lay, QStringLiteral("Length"), toolRow({ToolId::Dimension, ToolId::Line}));
+    // Cut lengths and branch lengths - and the mark that says a run is longer than the paper.
+    {
+        auto* lenW = new QWidget(page);
+        auto* lg = new QHBoxLayout(lenW);
+        lg->setContentsMargins(0, 0, 0, 0);
+        lg->setSpacing(2);
+        lg->addWidget(toolRow({ToolId::Dimension, ToolId::Line}));
+        // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
+        // loom on an A3 sheet - and the mark is how a drawing says so: the run is interrupted, the
+        // dimension says the real length. Two buttons rather than a tool plus a hidden setting,
+        // because which style is wanted is decided at the moment of placing it.
+        auto* breakW = new QWidget(lenW);
+        auto* bg = new QGridLayout(breakW);
+        bg->setContentsMargins(0, 0, 0, 0);
+        bg->setSpacing(2);
+        struct Style {
+            const char* key;
+            const char* text;
+            const char* tip;
+            bool curved;
+        };
+        static const Style kStyles[] = {
+            {"straight", "Break\nstraight",
+             "Place the break mark as two straight strokes across a run: the run is longer than it "
+             "is drawn, and the dimension says how long it really is. Click on the run - the mark "
+             "lies square across it.",
+             false},
+            {"curved", "Break\ncurved",
+             "The same mark drawn as two S-curves - the form used where the run itself is drawn as a "
+             "curve. Click on the run to place it.",
+             true},
+        };
+        int col = 0;
+        for (const Style& s : kStyles) {
+            auto* b = new QToolButton(breakW);
+            b->setText(QString::fromLatin1(s.text));
+            b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            b->setIconSize(QSize(26, 26));
+            b->setAutoRaise(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setToolTip(QString::fromLatin1(s.tip));
+            {
+                // The button wears the style it places.
+                QPixmap pm(28, 28);
+                pm.fill(Qt::transparent);
+                QPainter ip(&pm);
+                ip.setRenderHint(QPainter::Antialiasing, true);
+                ip.setPen(QPen(QColor("#cfe3ff"), 1.6));
+                ip.drawLine(2, 14, 26, 14);
+                for (int k = 0; k < 2; ++k) {
+                    const double x = 11.0 + k * 7.0;
+                    if (!s.curved) {
+                        ip.drawLine(QPointF(x + 3, 5), QPointF(x - 3, 23));
+                    } else {
+                        QPainterPath path(QPointF(x + 3, 5));
+                        path.cubicTo(QPointF(x - 2, 9), QPointF(x + 3, 13), QPointF(x, 14));
+                        path.cubicTo(QPointF(x - 3, 15), QPointF(x + 2, 19), QPointF(x - 3, 23));
+                        ip.drawPath(path);
+                    }
+                }
+                ip.end();
+                b->setIcon(QIcon(pm));
+            }
+            const QString key = QString::fromLatin1(s.key);
+            connect(b, &QToolButton::clicked, this, [this, key] {
+                editor_->breakStyle() = key;
+                editor_->setTool(ToolId::LengthBreak);
+                statusBar()->showMessage(
+                    QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
+                    4000);
+            });
+            bg->addWidget(b, 0, col++);
+        }
+        lg->addWidget(breakW);
+        addGroup(lay, QStringLiteral("Length"), lenW);
+    }
     // Calling the parts out on the board.
     addGroup(lay, QStringLiteral("Callouts"),
              toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note, ToolId::Table}));

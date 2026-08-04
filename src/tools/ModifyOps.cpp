@@ -62,7 +62,24 @@ void forEachCutSegment(const Entity& e, F&& f) {
             for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
         }
         break;
-    case EntityType::Spline:
+    case EntityType::Spline: {
+        // The curve AS DRAWN, tessellated - not the straight chords between its points.
+        //
+        // A spline was being cut against its own control polygon, which is not where it is drawn: the
+        // crossing came out beside the visible curve, and the cut FACE was a chord whose lean can be
+        // the opposite of the curve's at that point. Trimming a double line against a hand-drawn
+        // S-curve therefore clipped its two rails on a face tilted the wrong way, so the rail that
+        // should have been the longer one came out the shorter - the "swapped polarity" on the
+        // straight side of the cut. Circles and arcs were already tessellated here for the same
+        // reason; a spline is no different.
+        const std::vector<Vec2> drawn =
+            e.meta.value("splineMode").toString() == QLatin1String("cv")
+                ? bsplinePoints(e.points)
+                : splinePoints(e.points);
+        const std::vector<Vec2>& use = drawn.size() >= 2 ? drawn : e.points;
+        for (size_t i = 1; i < use.size(); ++i) f(use[i - 1], use[i]);
+        break;
+    }
     case EntityType::Wire:
         for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
         break;

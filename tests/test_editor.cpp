@@ -4028,6 +4028,77 @@ int run_editor_tests() {
               "leg side: back to Bottom puts it where it started");
     }
 
+    // --- The break mark: placed on a run, lying across it, and it remembers which way.
+    {
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("r1");
+        run.type = EntityType::Wire;
+        run.points = {{0, 0}, {200, 100}};   // a slope, so the direction is not the default
+        d.entities().push_back(run);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::LengthBreak);
+        ed.breakStyle() = QStringLiteral("curved");
+        ed.breakSize() = 9.0;
+        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+
+        const Entity* mark = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::LengthBreak) mark = &e;
+        check(mark != nullptr, "break: the mark is placed");
+        if (mark) {
+            check(mark->meta.value("breakStyle").toString() == QLatin1String("curved") &&
+                      near(mark->meta.value("size").toDouble(), 9.0),
+                  "break: it carries the style and size it was placed with");
+            check(near(mark->rotation, std::atan2(100.0, 200.0)),
+                  "break: it lies along the run it was placed on, not along the horizontal");
+            const Entity back = Entity::fromJson(mark->toJson());
+            check(back.type == EntityType::LengthBreak && near(back.rotation, mark->rotation) &&
+                      back.meta.value("breakStyle").toString() == QLatin1String("curved"),
+                  "break: saved and read back, it still lies the same way");
+        }
+        // It keeps placing, so several runs can be marked in a row.
+        check(ed.tool() == ToolId::LengthBreak, "break: the tool stays armed for the next run");
+    }
+
+    // --- A spline cutter is cut where it is DRAWN, not along the chords between its points.
+    {
+        Document d;
+        Entity line;
+        line.id = QStringLiteral("l1");
+        line.type = EntityType::Line;
+        line.a = {-100, 0};
+        line.b = {100, 0};
+        d.entities().push_back(line);
+        // An S through four points. Its middle chord crosses y = 0 well away from where the curve
+        // does, and leans the other way - which is what mis-tilted a trimmed double line's cut face.
+        Entity s;
+        s.id = QStringLiteral("s1");
+        s.type = EntityType::Spline;
+        s.points = {{20, -40}, {-10, -12}, {10, 12}, {-20, 40}};
+        d.entities().push_back(s);
+
+        Editor ed;
+        ed.setDocument(&d);
+        ed.selectById(QStringLiteral("s1"));
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({60, -30}, Qt::LeftButton, Qt::NoModifier);   // fence, first point
+        ed.onPointerPress({60, 30}, Qt::LeftButton, Qt::NoModifier);    // and its end
+        const Entity* cut = nullptr;
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("l1")) cut = &e;
+        check(cut != nullptr, "spline cutter: the line is still there");
+        if (cut) {
+            // The drawn curve crosses y = 0 at x = 0 (the S is symmetric about the origin); the chord
+            // between its two middle points crosses at x = 0 as well, but its NEIGHBOURS do not, and
+            // the tessellated curve is what decides. Either way the piece kept must end ON the curve.
+            const double endX = cut->b.x;
+            check(std::abs(endX) < 6.0,
+                  "spline cutter: the line is trimmed where the curve is actually drawn");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
