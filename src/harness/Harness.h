@@ -138,6 +138,14 @@ double wireFractionNearest(const Entity& wire, const Vec2& p);
 // centreline), a wire, a polyline, a spline. What lets an annotation ride the thing it annotates:
 // where along the run it sits, and which way the run points there.
 std::vector<Vec2> runCenterline(const Entity& e);
+
+// A BREAK MARK's two strokes, each as a polyline in world units (a straight stroke is two points; an
+// S is sampled). Everything that has to agree about where the mark is - what it draws, what a click
+// picks, what a zone catches, what stretch of run it hides - asks this, so none of them can drift.
+std::vector<std::vector<Vec2>> breakStrokes(const Entity& mark);
+// How far the strokes lean out of square, as a fraction of the mark's reach. Straight strokes lean;
+// an S is upright and sweeps instead.
+double breakLeanFactor(const Entity& mark);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
 double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).

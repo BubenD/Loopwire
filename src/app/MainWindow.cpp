@@ -2228,6 +2228,30 @@ void MainWindow::buildRibbon() {
 //   • a twist is armed  -> show ONLY the Twist group (the twist menu takes over the ribbon)
 //   • a Splice/X marker -> show the Marker group, hide Modify / DRC
 //   • otherwise         -> show Place / Modify / DRC, hide Marker and Twist
+// The break mark's fields: shown while its tool is armed, and the third one named for the style being
+// placed - a straight stroke has a length, an S has a reach across the run.
+void MainWindow::syncBreakOptions() {
+    if (!editor_ || !breakOptionsGroup_) return;
+    const bool armed = editor_->tool() == ToolId::LengthBreak;
+    breakOptionsGroup_->setVisible(armed);
+    if (!armed) return;
+    const bool curved = editor_->breakStyle() == QLatin1String("curved");
+    if (breakSizeLabel_)
+        breakSizeLabel_->setText(curved ? QStringLiteral("Size") : QStringLiteral("Lines length"));
+    if (breakGapSpin_) {
+        QSignalBlocker b(breakGapSpin_);
+        breakGapSpin_->setValue(editor_->breakGap());
+    }
+    if (breakSizeSpin_) {
+        QSignalBlocker b(breakSizeSpin_);
+        breakSizeSpin_->setValue(editor_->breakSize());
+    }
+    if (breakAngleSpin_) {
+        QSignalBlocker b(breakAngleSpin_);
+        breakAngleSpin_->setValue(editor_->breakAngle() < 0.0 ? -1.0 : editor_->breakAngle());
+    }
+}
+
 void MainWindow::updateSchematicRibbonGroups() {
     if (!editor_) return;
     const bool twistArmed = !editor_->twistArmType().isEmpty();

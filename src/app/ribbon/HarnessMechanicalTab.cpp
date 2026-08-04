@@ -128,6 +128,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             connect(act, &QAction::triggered, this, [this, key, name, showStyle] {
                 showStyle(key, name);
                 editor_->setTool(ToolId::LengthBreak);
+                syncBreakOptions();   // the third field is named for the style being placed
                 statusBar()->showMessage(
                     QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
                     4000);
@@ -141,6 +142,54 @@ void MainWindow::buildHarnessMechanicalTab() {
                 4000);
         });
         bg->addWidget(breakBtn, 0, 0);
+        // The mark's own numbers, beside the button that places it and only while that tool is armed:
+        // what a break looks like is decided as it is placed. The third field is the one that differs
+        // between the styles - a straight stroke has a LENGTH, an S has a reach - so it is relabelled
+        // rather than duplicated.
+        {
+            auto* optW = new QWidget(breakW);
+            auto* og = new QGridLayout(optW);
+            og->setContentsMargins(6, 0, 0, 0);
+            og->setSpacing(2);
+            auto field = [&](const QString& text, double lo, double hi, double step,
+                             QDoubleSpinBox** out, int row) {
+                auto* l = new QLabel(text, optW);
+                l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                auto* s = new QDoubleSpinBox(optW);
+                s->setRange(lo, hi);
+                s->setSingleStep(step);
+                s->setDecimals(1);
+                s->setMinimumWidth(66);
+                s->setSpecialValueText(QStringLiteral("auto"));
+                og->addWidget(l, row, 0);
+                og->addWidget(s, row, 1);
+                *out = s;
+                return s;
+            };
+            field(QStringLiteral("Distance between"), 0.0, 500.0, 1.0, &breakGapSpin_, 0)
+                ->setToolTip(QStringLiteral(
+                    "How far apart the two strokes are drawn. On auto: a proportion of the reach."));
+            field(QStringLiteral("Length"), 0.0, 2000.0, 1.0, &breakSizeSpin_, 1)
+                ->setToolTip(QStringLiteral(
+                    "How far the mark reaches across the run. On auto: as wide as the run it is placed "
+                    "on, with a margin either side."));
+            breakSizeLabel_ = qobject_cast<QLabel*>(og->itemAtPosition(1, 0)->widget());
+            field(QStringLiteral("Angle"), -1.0, 75.0, 5.0, &breakAngleSpin_, 2)
+                ->setToolTip(QStringLiteral(
+                    "How far the strokes lean out of square, in degrees. On auto: the lean each style "
+                    "is drawn with."));
+            connect(breakGapSpin_, &QDoubleSpinBox::valueChanged, this,
+                    [this](double v) { editor_->breakGap() = v; });
+            connect(breakSizeSpin_, &QDoubleSpinBox::valueChanged, this,
+                    [this](double v) { editor_->breakSize() = v; });
+            connect(breakAngleSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                editor_->breakAngle() = v < -0.5 ? -1.0 : v;   // the bottom of the range is "auto"
+            });
+            optW->setVisible(false);
+            breakOptionsGroup_ = optW;
+            bg->addWidget(optW, 0, 1);
+        }
+        connect(editor_, &Editor::toolChanged, this, [this](ToolId) { syncBreakOptions(); });
         lg->addWidget(breakW);
         addGroup(lay, QStringLiteral("Length"), lenW);
     }

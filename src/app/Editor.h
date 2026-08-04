@@ -58,6 +58,19 @@ public:
     // The break mark: which of the two styles is placed, and how far it reaches across the run.
     QString& breakStyle() { return breakStyle_; }
     double& breakSize() { return breakSize_; }
+    // What a break is placed with. The gap is the distance between its two strokes; the angle is how
+    // far they lean out of square; the size is how far they reach across the run, which is worked out
+    // from the run itself unless it is said here. 0 = "as the run needs".
+    double& breakGap() { return breakGap_; }
+    double& breakAngle() { return breakAngle_; }
+    // The mark that WOULD be placed by a click, for the overlay to draw. Empty type when the tool is
+    // not armed. A break is sized and angled by the run under the cursor, so seeing it before
+    // committing is the difference between placing it and placing it twice.
+    Entity breakPreview() const;
+    bool breakFrozen() const { return breakFrozen_; }
+    // Tab: pin the preview where it is, so the numbers on the ribbon can be tried on the real thing
+    // without the cursor moving it. The next click on the drawing places it and resumes.
+    void freezeBreakPreview();
 
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
@@ -303,6 +316,15 @@ public:
     // Slide a break mark along the run it is attached to by `delta`. False when it is attached to
     // nothing, in which case it moves like anything else.
     bool slideBreakAlongHost(Entity& e, const Vec2& delta);
+    // The four corners of what a break mark hides, in world units: stroke 0's two ends then stroke 1's
+    // (so the quad reads round its edge). Empty when the mark masks nothing.
+    std::vector<Vec2> breakMaskQuad(const Entity& mark) const;
+    // `segs` with every stretch hidden by a break mark on `host` removed - what selection and
+    // hit-testing may see of a run.
+    // Whether `p` falls in a stretch of `host` that a break mark hides.
+    bool pointHiddenByBreak(const Entity& host, const Vec2& p) const;
+    std::vector<std::pair<Vec2, Vec2>> unmaskedSegments(
+        const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs) const;
     // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
     // What lets a run be landed on another run as a T, and what says a joint belongs there.
     std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,
@@ -1045,7 +1067,11 @@ private:
     Vec2 cursor_;
     SnapResult snapResult_;
     QString breakStyle_ = QStringLiteral("straight"); // "straight" | "curved"
-    double breakSize_ = 6.0;                          // half its reach across the run, world units
+    double breakSize_ = 0.0;                          // 0 = as wide as the run needs
+    double breakGap_ = 0.0;                           // 0 = a proportion of the reach
+    double breakAngle_ = -1.0;                        // <0 = the shape's own lean (30° / upright)
+    bool breakFrozen_ = false;                        // Tab pinned the preview
+    Vec2 breakFrozenAt_{0.0, 0.0};
     double pixelTol_ = 10.0;
 
     // In-progress draw state.

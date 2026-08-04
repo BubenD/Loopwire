@@ -770,6 +770,11 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     // angle, ...), Tab/Backtab must cycle those fields — so refuse focus traversal and
     // let the key fall through to keyPressEvent (Qt tries focus nav BEFORE keyPress).
     if (editor_ && editor_->drawInputFieldLabels().size() > 1) return false;
+    // Tab while placing a break mark: pin the preview so the ribbon's numbers can be tried on it.
+    if (editor_ && next && editor_->tool() == ToolId::LengthBreak) {
+        editor_->freezeBreakPreview();
+        return true;
+    }
     // Tab while placing a connector: hand focus to the Connector build ribbon so its
     // preferences can be edited; the placement preview stays live.
     if (editor_ && next && editor_->tool() == ToolId::Connector) {

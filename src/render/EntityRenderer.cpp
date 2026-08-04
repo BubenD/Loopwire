@@ -1628,13 +1628,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // "Longer than it is drawn": a pair of strokes across the run, the conventional break mark.
         // Two styles, because both are used - straight strokes on a mechanical layout, S-curves where
         // the run itself is drawn as a curve - and the choice is the draughtsman's.
-        const double halfWorld = std::max(0.5, e.meta.value("size").toDouble(6.0));
-        const double gapWorld = e.meta.value("gap").toDouble(halfWorld * 0.9);
-        // Where it sits and which way it lies. A mark ATTACHED to a run takes both from that run, so
-        // it follows the run when the run is moved or re-shaped, and it can be slid along it. One that
-        // is attached to nothing keeps its own position and angle.
-        Vec2 atWorld = e.a;
-        double rot = e.rotation;
+        //
+        // The shape comes from breakStrokes(), which is also what a click measures against, what a
+        // selection zone catches and what decides which stretch of run is hidden. One description, so
+        // none of them can disagree about where the mark is.
+        Entity shown = e;
         const Entity* host = nullptr;
         {
             const QString hostId = e.meta.value("host").toString();
@@ -1642,51 +1640,32 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 for (const auto& h : doc.entities())
                     if (h.id == hostId) host = &h;
             if (host) {
+                // A mark ATTACHED to a run takes its place and its angle from that run, so it follows
+                // the run when the run is moved or re-shaped, and can be slid along it.
                 Vec2 pos, dir;
                 if (runPointAtFraction(*host, e.meta.value("annT").toDouble(0.5), pos, dir)) {
-                    atWorld = pos;
-                    rot = std::atan2(dir.y, dir.x);
+                    shown.a = pos;
+                    shown.rotation = std::atan2(dir.y, dir.x);
                 } else {
                     host = nullptr;
                 }
             }
         }
-        const QPointF c = vt.toScreen(atWorld);
-        const double half = std::max(4.0, halfWorld * vt.scale());          // reach across the run
-        const double gap = std::max(3.0, gapWorld * vt.scale());
-        // Along the run, and across it.
-        const QPointF along(std::cos(rot), -std::sin(rot));                 // screen y grows down
-        const QPointF across(-std::sin(rot), -std::cos(rot));
-        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
-        // The lean of a straight stroke, and the bow of a curved one.
-        const QPointF lean = along * (half * (curved ? 0.0 : 0.55));
-        const QPointF bow = along * (half * 0.45);
-
-        // Each stroke as a PATH, from the far side of the run to the near side. Both are needed as
-        // paths and not merely drawn, because the stretch of run between them is masked by the region
-        // they bound - which is the whole point of a break, and which a plain rectangle got wrong: the
-        // strokes lean, so a rectangle hid the run past one stroke and left it showing past the other.
-        auto strokePath = [&](int k) {
-            const QPointF mid = c + along * (gap * (k == 0 ? -0.5 : 0.5));
-            const QPointF end1 = mid + across * half + lean;
-            const QPointF end2 = mid - across * half - lean;
-            QPainterPath path(end1);
-            if (!curved) {
-                path.lineTo(end2);
-            } else {
-                // A long lazy S: the tails run almost straight and the sweep happens where it crosses
-                // the run. A tighter curve hooks at the ends and reads as a pair of Cs instead.
-                path.cubicTo(end1 - bow * 0.35, mid + across * (half * 0.45) - bow, mid);
-                path.cubicTo(mid - across * (half * 0.45) + bow, end2 + bow * 0.35, end2);
-            }
+        const std::vector<std::vector<Vec2>> strokes = breakStrokes(shown);
+        if (strokes.size() != 2) break;
+        auto toPath = [&vt](const std::vector<Vec2>& pts) {
+            QPainterPath path(vt.toScreen(pts.front()));
+            for (size_t i = 1; i < pts.size(); ++i) path.lineTo(vt.toScreen(pts[i]));
             return path;
         };
-        const QPainterPath s0 = strokePath(0);
-        const QPainterPath s1 = strokePath(1);
+        const QPainterPath s0 = toPath(strokes[0]);
+        const QPainterPath s1 = toPath(strokes[1]);
 
+        // The run is INTERRUPTED between the two strokes. That is what a break means: the drawing does
+        // not claim to show that stretch. The mask is bounded BY THE STROKES - the strokes lean, so a
+        // rectangle hid the run past one of them and left it showing past the other - and the run
+        // itself is untouched, still one object, still dimensioned, still editable.
         if (e.meta.value("mask").toBool(true)) {
-            // The region BETWEEN the two strokes: down the first, across to the second, back up it.
-            // Whatever the strokes' shape, the mask ends exactly where they are.
             QPainterPath cover = s0;
             cover.lineTo(s1.currentPosition());
             cover.connectPath(s1.toReversed());
@@ -1701,44 +1680,55 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         p.drawPath(s1);
 
         // A JOINT where each stroke crosses the run: the run's cut ends are shown as ends rather than
-        // left as a gap that could be read as a wire simply stopping. One per crossing, so a bundle
-        // drawn as a double line gets four - two on each rail.
-        if (host && e.meta.value("endJoints").toBool(true)) {
+        // left as a gap that could be read as a conductor simply stopping. Four on a bundle drawn as a
+        // double line - two on each rail - and two on a single line. Taken from the strokes as they are
+        // drawn, so on an S the joint sits where the CURVE meets the rail and not where a straight line
+        // between its ends would have.
+        if (e.meta.value("endJoints").toBool(true)) {
+            std::vector<std::vector<Vec2>> lines;
+            auto addRunLines = [&lines](const Entity& r) {
+                if (r.type == EntityType::DoubleLine) {
+                    const double g = r.meta.value("gap").toDouble(10.0);
+                    const Vec2 off = (r.b - r.a).normalized().perp() * (g / 2.0);
+                    lines.push_back({r.a + off, r.b + off});
+                    lines.push_back({r.a - off, r.b - off});
+                } else if (r.type == EntityType::Polyline && r.meta.value("double").toBool()) {
+                    const double g = r.meta.value("gap").toDouble(10.0);
+                    for (double s : {g / 2.0, -g / 2.0}) lines.push_back(offsetPolyline(r.points, s));
+                } else if (std::vector<Vec2> cl = runCenterline(r); cl.size() >= 2) {
+                    lines.push_back(std::move(cl));
+                }
+            };
+            if (host) {
+                addRunLines(*host);
+            } else {
+                // Attached to nothing - a mark from before marks were attached, or one dropped on bare
+                // paper next to a run. The runs it actually crosses are found by looking.
+                const Bounds b = shown.bounds();
+                for (const auto& r : doc.entities()) {
+                    if (r.id == e.id || r.type == EntityType::LengthBreak) continue;
+                    const Bounds rb = r.bounds();
+                    if (rb.max.x < b.min.x || rb.min.x > b.max.x || rb.max.y < b.min.y ||
+                        rb.min.y > b.max.y)
+                        continue;
+                    addRunLines(r);
+                }
+            }
+            const double halfWorld = std::max(0.5, shown.meta.value("size").toDouble(6.0));
             // A joint, not a blob: it marks the cut end of a conductor, so it is read beside the line
-            // it terminates and must not swamp it. Tied to the mark's size so it holds its proportion
-            // on a bundle and on a single wire alike, but bounded at both ends.
+            // it terminates and must not swamp it.
             const double dotWorld = std::clamp(halfWorld * 0.055, 0.7, 2.2);
             const double dot = std::clamp(dotWorld * vt.scale(), 1.3, 4.0);
-            // The run's own drawn lines: a double line's two rails, anything else's centreline.
-            std::vector<std::vector<Vec2>> lines;
-            if (host->type == EntityType::DoubleLine) {
-                const double g = host->meta.value("gap").toDouble(10.0);
-                const Vec2 off = (host->b - host->a).normalized().perp() * (g / 2.0);
-                lines.push_back({host->a + off, host->b + off});
-                lines.push_back({host->a - off, host->b - off});
-            } else if (host->type == EntityType::Polyline &&
-                       host->meta.value("double").toBool()) {
-                const double g = host->meta.value("gap").toDouble(10.0);
-                for (double s : {g / 2.0, -g / 2.0}) lines.push_back(offsetPolyline(host->points, s));
-            } else {
-                lines.push_back(runCenterline(*host));
-            }
-            // In world units, so the crossing is computed on the geometry rather than on pixels.
-            const Vec2 alongW{std::cos(rot), std::sin(rot)};
-            const Vec2 acrossW{-std::sin(rot), std::cos(rot)};
             p.save();
             p.setPen(Qt::NoPen);
             p.setBrush(color);
-            for (int k = 0; k < 2; ++k) {
-                const Vec2 mid = atWorld + alongW * (gapWorld * (k == 0 ? -0.5 : 0.5));
-                const double leanW = halfWorld * (curved ? 0.0 : 0.55);
-                const Vec2 a1 = mid + acrossW * halfWorld + alongW * leanW;
-                const Vec2 a2 = mid - acrossW * halfWorld - alongW * leanW;
-                for (const std::vector<Vec2>& ln : lines)
-                    for (size_t i = 1; i < ln.size(); ++i)
-                        if (auto x = segmentSegmentIntersection(a1, a2, ln[i - 1], ln[i]))
-                            p.drawEllipse(vt.toScreen(*x), dot, dot);
-            }
+            for (const std::vector<Vec2>& stroke : strokes)
+                for (size_t i = 1; i < stroke.size(); ++i)
+                    for (const std::vector<Vec2>& ln : lines)
+                        for (size_t j = 1; j < ln.size(); ++j)
+                            if (auto x = segmentSegmentIntersection(stroke[i - 1], stroke[i],
+                                                                    ln[j - 1], ln[j]))
+                                p.drawEllipse(vt.toScreen(*x), dot, dot);
             p.restore();
         }
         break;

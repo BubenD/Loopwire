@@ -845,6 +845,7 @@ void Editor::setTool(ToolId t) {
     // (cutting/boundary edges). The user then draws a fence line; objects it crosses
     // are trimmed back to / extended to the reference. (Reused for both tools.)
     trimRefIds_.clear();
+    breakFrozen_ = false;   // a pinned break preview belongs to the break tool
     trimFenceActive_ = false;
     if (t == ToolId::Trim || t == ToolId::Extend) trimRefIds_ = selected_;
     tool_ = t;
@@ -1127,32 +1128,14 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::NotConnected:
         best = distance(e.a, p);
         break;
-    case EntityType::LengthBreak: {
+    case EntityType::LengthBreak:
         // A click on either STROKE picks it, the way a click on a line picks the line. Measured to the
         // centre instead, the mark could only be picked by clicking the empty middle between its two
         // strokes - which is where the run it interrupts is, so the click went to the run.
-        const double half = std::max(0.5, e.meta.value("size").toDouble(6.0));
-        const double gap = e.meta.value("gap").toDouble(half * 0.9);
-        const Vec2 along{std::cos(e.rotation), std::sin(e.rotation)};
-        const Vec2 across{-std::sin(e.rotation), std::cos(e.rotation)};
-        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
-        for (int k = 0; k < 2; ++k) {
-            const Vec2 mid = e.a + along * (gap * (k == 0 ? -0.5 : 0.5));
-            const Vec2 lean = along * (half * (curved ? 0.0 : 0.55));
-            const Vec2 end1 = mid + across * half + lean;
-            const Vec2 end2 = mid - across * half - lean;
-            if (!curved) {
-                best = std::min(best, segDist(end1, end2));
-            } else {
-                const Vec2 q1 = mid + across * (half * 0.5) - along * (half * 0.28);
-                const Vec2 q2 = mid - across * (half * 0.5) + along * (half * 0.28);
-                best = std::min(best, segDist(end1, q1));
-                best = std::min(best, segDist(q1, q2));
-                best = std::min(best, segDist(q2, end2));
-            }
-        }
+        for (const auto& stroke : breakStrokes(e))
+            for (size_t i = 1; i < stroke.size(); ++i)
+                best = std::min(best, segDist(stroke[i - 1], stroke[i]));
         break;
-    }
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry g = connectorGeometry(e.a, spec);
@@ -1184,6 +1167,9 @@ std::optional<QString> Editor::hitTest(const Vec2& world) const {
     for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
         if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
             continue;
+        // A stretch of run that a break mark hides is not there to be clicked either: the drawing does
+        // not show it, so a click in it belongs to the mark, or to nothing.
+        if (pointHiddenByBreak(*it, world)) continue;
         const double d = distanceToEntity(*it, world);
         if (d <= best) { best = d; hit = it->id; }
     }
@@ -2275,35 +2261,15 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
         break;
     }
-    case EntityType::LengthBreak: {
+    case EntityType::LengthBreak:
         // The two strokes THEMSELVES, so a zone that touches either one takes the mark and a window
         // round the pair encloses it. Without them the mark fell back to its bounding-box corners,
         // and a zone drawn over the strokes - which is where anyone would draw it - held no corner
         // and selected nothing.
-        const double half = std::max(0.5, e.meta.value("size").toDouble(6.0));
-        const double gap = e.meta.value("gap").toDouble(half * 0.9);
-        const Vec2 along{std::cos(e.rotation), std::sin(e.rotation)};
-        const Vec2 across{-std::sin(e.rotation), std::cos(e.rotation)};
-        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
-        for (int k = 0; k < 2; ++k) {
-            const Vec2 mid = e.a + along * (gap * (k == 0 ? -0.5 : 0.5));
-            const Vec2 lean = along * (half * (curved ? 0.0 : 0.55));
-            const Vec2 end1 = mid + across * half + lean;
-            const Vec2 end2 = mid - across * half - lean;
-            if (!curved) {
-                segs.emplace_back(end1, end2);
-            } else {
-                // The S in three chords: close enough for hit-testing, and it follows the curve
-                // rather than cutting the corner off it.
-                const Vec2 q1 = mid + across * (half * 0.5) - along * (half * 0.28);
-                const Vec2 q2 = mid - across * (half * 0.5) + along * (half * 0.28);
-                segs.emplace_back(end1, q1);
-                segs.emplace_back(q1, q2);
-                segs.emplace_back(q2, end2);
-            }
-        }
+        for (const auto& stroke : breakStrokes(e))
+            for (size_t i = 1; i < stroke.size(); ++i)
+                segs.emplace_back(stroke[i - 1], stroke[i]);
         break;
-    }
     case EntityType::Connector: {
         // Body-rectangle edges + each pin stub, so a crossing zone touching the body
         // or a pin selects the connector (and a window enclosing it does too).
@@ -2436,7 +2402,8 @@ void Editor::finishRegionSelect(bool subtract) {
         // centre, an arc's off-curve quadrant, a line's mid joint — does NOT select.
         // Only point-like entities (markers/connector) with no segments fall back to
         // the representative points.
-        const auto segs = entitySelectSegments(e);
+        // What the drawing SHOWS of this run: a stretch a break mark hides is not there to be picked.
+        const auto segs = unmaskedSegments(e, entitySelectSegments(e));
         bool hit = false;
         if (!segs.empty()) {
             if (crossing) {
@@ -4833,6 +4800,109 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
                           : QStringLiteral("Routing straightened to the reference connector"));
     emit selectionChanged();
     emit changed();
+}
+
+// The strokes of a break mark, in world units: end and end for each. `curved` marks are approximated
+// by the chord of each S - close enough for deciding what is hidden, and convex, which the clipping
+// below needs.
+std::vector<Vec2> Editor::breakMaskQuad(const Entity& mark) const {
+    if (mark.type != EntityType::LengthBreak) return {};
+    if (!mark.meta.value(QStringLiteral("mask")).toBool(true)) return {};
+    const double half = std::max(0.5, mark.meta.value(QStringLiteral("size")).toDouble(6.0));
+    const double gap = mark.meta.value(QStringLiteral("gap")).toDouble(half * 0.9);
+    const double rot = mark.rotation;
+    const Vec2 along{std::cos(rot), std::sin(rot)};
+    const Vec2 across{-std::sin(rot), std::cos(rot)};
+    const bool curved =
+        mark.meta.value(QStringLiteral("breakStyle")).toString() == QLatin1String("curved");
+    const double lean = half * (curved ? 0.0 : breakLeanFactor(mark));
+    std::vector<Vec2> quad;
+    for (int k = 0; k < 2; ++k) {
+        const Vec2 mid = mark.a + along * (gap * (k == 0 ? -0.5 : 0.5));
+        const Vec2 e1 = mid + across * half + along * lean;
+        const Vec2 e2 = mid - across * half - along * lean;
+        if (k == 0) { quad.push_back(e1); quad.push_back(e2); }
+        else { quad.push_back(e2); quad.push_back(e1); }   // round the edge, not across it
+    }
+    return quad;
+}
+
+bool Editor::pointHiddenByBreak(const Entity& host, const Vec2& p) const {
+    if (!doc_ || host.id.isEmpty() || host.type == EntityType::LengthBreak) return false;
+    for (const auto& m : doc_->entities()) {
+        if (m.type != EntityType::LengthBreak) continue;
+        if (m.meta.value(QStringLiteral("host")).toString() != host.id) continue;
+        const std::vector<Vec2> quad = breakMaskQuad(m);
+        if (quad.size() != 4) continue;
+        // Inside the quad: on the inner side of all four edges.
+        Vec2 centre{0, 0};
+        for (const Vec2& c : quad) centre = centre + c;
+        centre = {centre.x / 4.0, centre.y / 4.0};
+        bool inside = true;
+        for (size_t i = 0; i < 4 && inside; ++i) {
+            const Vec2 p1 = quad[i], p2 = quad[(i + 1) % 4];
+            const Vec2 edge = p2 - p1;
+            Vec2 n{-edge.y, edge.x};
+            if ((centre - p1).x * n.x + (centre - p1).y * n.y < 0.0) n = n * -1.0;
+            if ((p - p1).x * n.x + (p - p1).y * n.y < 0.0) inside = false;
+        }
+        if (inside) return true;
+    }
+    return false;
+}
+
+std::vector<std::pair<Vec2, Vec2>> Editor::unmaskedSegments(
+    const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs) const {
+    if (!doc_ || host.id.isEmpty()) return segs;
+    // The marks that hide part of THIS run.
+    std::vector<std::vector<Vec2>> quads;
+    for (const auto& m : doc_->entities()) {
+        if (m.type != EntityType::LengthBreak) continue;
+        if (m.meta.value(QStringLiteral("host")).toString() != host.id) continue;
+        if (auto q = breakMaskQuad(m); q.size() == 4) quads.push_back(std::move(q));
+    }
+    if (quads.empty()) return segs;
+
+    std::vector<std::pair<Vec2, Vec2>> out = segs;
+    for (const std::vector<Vec2>& quad : quads) {
+        std::vector<std::pair<Vec2, Vec2>> kept;
+        for (const auto& s : out) {
+            // The stretch of this segment INSIDE the quad, as a parameter range, by clipping against
+            // each of the quad's four edges in turn.
+            const Vec2 d = s.second - s.first;
+            double lo = 0.0, hi = 1.0;
+            bool empty = false;
+            for (size_t i = 0; i < quad.size() && !empty; ++i) {
+                const Vec2 p1 = quad[i], p2 = quad[(i + 1) % quad.size()];
+                // Inward normal: towards the quad's centre.
+                Vec2 centre{0, 0};
+                for (const Vec2& c : quad) centre = centre + c;
+                centre = {centre.x / quad.size(), centre.y / quad.size()};
+                const Vec2 edge = p2 - p1;
+                Vec2 n{-edge.y, edge.x};
+                if ((centre - p1).x * n.x + (centre - p1).y * n.y < 0.0) n = n * -1.0;
+                // Inside where dot(p - p1, n) >= 0.
+                const double f0 = (s.first - p1).x * n.x + (s.first - p1).y * n.y;
+                const double fd = d.x * n.x + d.y * n.y;
+                if (std::abs(fd) < 1e-12) {
+                    if (f0 < 0.0) empty = true;             // parallel and outside
+                    continue;
+                }
+                const double t = -f0 / fd;
+                if (fd > 0.0) lo = std::max(lo, t);
+                else hi = std::min(hi, t);
+                if (lo > hi) empty = true;
+            }
+            if (empty || hi - lo < 1e-9) { kept.push_back(s); continue; }   // nothing hidden
+            // What is left of the segment: before the hidden stretch, and after it.
+            const Vec2 a{s.first.x + d.x * lo, s.first.y + d.y * lo};
+            const Vec2 b{s.first.x + d.x * hi, s.first.y + d.y * hi};
+            if (lo > 1e-9) kept.emplace_back(s.first, a);
+            if (hi < 1.0 - 1e-9) kept.emplace_back(b, s.second);
+        }
+        out = std::move(kept);
+    }
+    return out;
 }
 
 bool Editor::slideBreakAlongHost(Entity& e, const Vec2& delta) {
@@ -9258,29 +9328,38 @@ void Editor::handlePlacementPress(const Vec2& p) {
         // Placed ON a run, and laid square across it: the mark says THIS run is longer than the
         // drawing has room for, so it has to be unambiguous which run is meant. The direction comes
         // from the run under the point; on bare paper it lies across the horizontal.
+        //
+        // A pinned preview is placed WHERE IT WAS PINNED, not where the click landed: the click is how
+        // the pinned preview is accepted, and it is made on the ribbon's fields as often as on the
+        // drawing.
         e.type = EntityType::LengthBreak;
-        e.a = p;
-        e.rotation = runDirectionAt(p).value_or(0.0);
+        e.a = breakFrozen_ ? breakFrozenAt_ : p;
+        breakFrozen_ = false;
+        e.rotation = runDirectionAt(e.a).value_or(0.0);
         e.meta.insert("breakStyle", breakStyle_);
         // ATTACHED to the run it was put on, by id and by how far along it the click was. From then on
         // the mark belongs to that run: it follows it when the run is moved or re-shaped, and dragging
         // the mark slides it ALONG the run instead of lifting it off - a break marks a place on a run,
         // and a break sitting beside its run means nothing.
-        if (const QString host = runAt(p); !host.isEmpty()) {
+        if (const QString host = runAt(e.a); !host.isEmpty()) {
             e.meta.insert("host", host);
             for (const auto& h : doc_->entities())
-                if (h.id == host) e.meta.insert("annT", runFractionNearest(h, p));
+                if (h.id == host) e.meta.insert("annT", runFractionNearest(h, e.a));
         }
         {
-            // Sized to what it is placed ON. A mark has to cross the whole run to read as a break, and
-            // a bundle drawn as a double line is as wide as its gap - which is not something to be
-            // typed into a settings box before every placement. The span is measured at the point,
-            // with a margin either side so the strokes overhang the way they are drawn by hand. A mark
-            // placed on bare paper keeps the size it was given.
-            const double span = runSpanAcross(p, e.rotation);
-            e.meta.insert("size", span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0)
-                                              : breakSize_);
-            if (span > 1e-6) e.meta.insert("gap", std::max(span * 0.4, 3.0));
+            // Sized to what it is placed ON, unless a size was asked for. A mark has to cross the whole
+            // run to read as a break, and a bundle drawn as a double line is as wide as its gap - which
+            // is not something anyone should have to measure before every placement. The span is taken
+            // at the point, with a margin either side so the strokes overhang the way they are drawn by
+            // hand.
+            double half = breakSize_;
+            if (half <= 1e-6) {
+                const double span = runSpanAcross(e.a, e.rotation);
+                half = span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0) : 6.0;
+            }
+            e.meta.insert("size", half);
+            e.meta.insert("gap", breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
+            if (breakAngle_ >= 0.0) e.meta.insert("angle", breakAngle_);
         }
         break;
     case ToolId::NotConnected: {
@@ -9403,9 +9482,6 @@ void Editor::handlePlacementPress(const Vec2& p) {
     // than pressing Esc at the end. Every other placement tool returns to Select.
     if (tool_ == ToolId::NotConnected)
         emit message(QStringLiteral("X placed — click to terminate more pins; Esc to finish"));
-    else if (tool_ == ToolId::LengthBreak)
-        emit message(QStringLiteral(
-            "Break placed — click another run to mark that one too; Esc to finish"));
     else
         setTool(ToolId::Select); // return to Select after placing (Space repeats)
 }
@@ -9630,6 +9706,34 @@ void Editor::armConnectorPlacement() {
     connectorArmed_ = true;       // ...then arm so the preview ghost appears
     connectorGrab_ = {0.0, 0.0};  // held by the top-left corner until a pin/corner is grabbed
     emit connectorArmedChanged();
+    emit overlayChanged();
+}
+
+Entity Editor::breakPreview() const {
+    Entity e;
+    if (tool_ != ToolId::LengthBreak || !doc_) return e;
+    const Vec2 at = breakFrozen_ ? breakFrozenAt_ : cursor_;
+    e.type = EntityType::LengthBreak;
+    e.a = at;
+    e.rotation = runDirectionAt(at).value_or(0.0);
+    e.meta.insert(QStringLiteral("breakStyle"), breakStyle_);
+    double half = breakSize_;
+    if (half <= 1e-6) {
+        const double span = runSpanAcross(at, e.rotation);
+        half = span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0) : 6.0;
+    }
+    e.meta.insert(QStringLiteral("size"), half);
+    e.meta.insert(QStringLiteral("gap"), breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
+    if (breakAngle_ >= 0.0) e.meta.insert(QStringLiteral("angle"), breakAngle_);
+    return e;
+}
+
+void Editor::freezeBreakPreview() {
+    if (tool_ != ToolId::LengthBreak || breakFrozen_) return;
+    breakFrozen_ = true;
+    breakFrozenAt_ = cursor_;
+    emit message(QStringLiteral(
+        "Preview pinned — try the numbers on the ribbon; click the drawing to place it"));
     emit overlayChanged();
 }
 
@@ -10681,6 +10785,29 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!doc_) return;
+
+    // The break mark that a click would place, drawn where it would go: sized to the run under the
+    // cursor and lying square across it, so it can be judged before it is committed rather than placed
+    // twice. Tab pins it (breakFrozen_) so the numbers on the ribbon can be tried on the real thing
+    // without the cursor moving it.
+    if (tool_ == ToolId::LengthBreak) {
+        const Entity ghost = breakPreview();
+        if (ghost.type == EntityType::LengthBreak) {
+            p.save();
+            QPen pv(QColor(120, 200, 255, breakFrozen_ ? 235 : 190));
+            pv.setCosmetic(true);
+            pv.setWidthF(breakFrozen_ ? 1.8 : 1.4);
+            if (!breakFrozen_) pv.setStyle(Qt::DashLine);
+            p.setPen(pv);
+            p.setBrush(Qt::NoBrush);
+            for (const std::vector<Vec2>& stroke : breakStrokes(ghost)) {
+                QPolygonF poly;
+                for (const Vec2& q : stroke) poly << vt.toScreen(q);
+                p.drawPolyline(poly);
+            }
+            p.restore();
+        }
+    }
 
     // Twist / Screen: preview the crossing line, and (for Screen) a ghost ellipse + drain
     // leg over the wires it currently crosses, so the shield can be judged before

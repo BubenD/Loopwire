@@ -408,6 +408,14 @@ private:
     std::function<void()> syncArrayRibbon_;
     bool arraySyncing_ = false;
     QWidget* markerGroup_ = nullptr;             // Schematic-build "Marker" size group (contextual)
+    // The break mark's own fields, shown while its tool is armed: what a break looks like is decided
+    // as it is placed, so the numbers belong beside the button rather than in a dialog.
+    QWidget* breakOptionsGroup_ = nullptr;
+    QDoubleSpinBox* breakGapSpin_ = nullptr;
+    QDoubleSpinBox* breakSizeSpin_ = nullptr;
+    QDoubleSpinBox* breakAngleSpin_ = nullptr;
+    QLabel* breakSizeLabel_ = nullptr;
+    void syncBreakOptions();
     QLabel* markerLabel_ = nullptr;              // its label ("Joint ⌀" / "X size")
     QDoubleSpinBox* markerSpin_ = nullptr;       // its size spin (edits the active marker tool)
     // Schematic-build Modify / DRC groups (+ their separator rules): hidden while the

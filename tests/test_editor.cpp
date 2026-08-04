@@ -4058,8 +4058,9 @@ int run_editor_tests() {
                       back.meta.value("breakStyle").toString() == QLatin1String("curved"),
                   "break: saved and read back, it still lies the same way");
         }
-        // It keeps placing, so several runs can be marked in a row.
-        check(ed.tool() == ToolId::LengthBreak, "break: the tool stays armed for the next run");
+        // Placed, the app is back in Select - a mark is placed on a run and then adjusted, so being
+        // handed back the pointer is what is wanted rather than being left armed.
+        check(ed.tool() == ToolId::Select, "break: placing one hands back the Select tool");
     }
 
     // --- A spline cutter is cut where it is DRAWN, not along the chords between its points.
@@ -4113,7 +4114,9 @@ int run_editor_tests() {
         ed.setDocument(&d);
         ed.setTool(ToolId::LengthBreak);
         ed.breakStyle() = QStringLiteral("straight");
-        ed.breakSize() = 6.0;                 // the fallback, deliberately far too small for it
+        ed.breakSize() = 0.0;                 // "as wide as the run needs"
+        ed.breakGap() = 0.0;
+        ed.breakAngle() = -1.0;
         ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
 
         const Entity* mark = nullptr;
@@ -4121,10 +4124,9 @@ int run_editor_tests() {
             if (e.type == EntityType::LengthBreak) mark = &e;
         check(mark != nullptr, "break: placed on the bundle");
         if (mark) {
-            // It has to CROSS the run to read as a break: half the width plus a margin, not the
-            // 6 units it would have taken from the setting.
+            // It has to CROSS the run to read as a break: half the bundle's width plus a margin.
             check(mark->meta.value("size").toDouble() > 20.0,
-                  "break: sized to the bundle it was placed on, not to the fallback");
+                  "break: sized to the bundle it was placed on when no size is asked for");
             check(mark->meta.value("size").toDouble() * 2.0 > 40.0,
                   "break: and it reaches beyond both rails");
             check(mark->meta.value("mask").toBool(true),
@@ -4142,6 +4144,35 @@ int run_editor_tests() {
         bool picked = false;
         for (const QString& id : ed.selection()) picked = picked || (id == markId);
         check(picked, "break: a click on one of its strokes selects it");
+
+        // Numbers given on the ribbon are used as given: this is the same mark, said outright.
+        {
+            Document d2;
+            Entity b2 = bundle;
+            d2.entities().push_back(b2);
+            Editor e2;
+            e2.setDocument(&d2);
+            e2.setTool(ToolId::LengthBreak);
+            e2.breakStyle() = QStringLiteral("straight");
+            e2.breakSize() = 14.0;
+            e2.breakGap() = 9.0;
+            e2.breakAngle() = 40.0;
+            e2.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* m3 = nullptr;
+            for (const auto& e : d2.entities())
+                if (e.type == EntityType::LengthBreak) m3 = &e;
+            check(m3 && near(m3->meta.value("size").toDouble(), 14.0) &&
+                      near(m3->meta.value("gap").toDouble(), 9.0) &&
+                      near(m3->meta.value("angle").toDouble(), 40.0),
+                  "break: a size, a distance between the strokes and an angle are used as asked for");
+            // 40 degrees of lean is a real lean: the stroke ends are offset along the run by
+            // reach * tan(40) either way.
+            const auto strokes = m3 ? breakStrokes(*m3) : std::vector<std::vector<Vec2>>{};
+            check(strokes.size() == 2 && strokes[0].size() == 2 &&
+                      std::abs(strokes[0].front().x - strokes[0].back().x) >
+                          2.0 * 14.0 * std::tan(35.0 * 3.14159265358979323846 / 180.0),
+                  "break: and the angle leans the strokes by it");
+        }
 
         // And a selection zone - two clicks, both off the geometry - takes it.
         ed.clearSelection();
@@ -4180,6 +4211,49 @@ int run_editor_tests() {
                 check(near(e.a.y, 0.0),
                       "break: and never off it - what the cursor did across the run is ignored");
             }
+
+        // What the mark HIDES is not there to be picked: the drawing does not show that stretch, so a
+        // click in it belongs to the mark. Where the run IS drawn, a click still takes the run.
+        {
+            const Entity* m = nullptr;
+            for (const auto& e : d.entities())
+                if (e.id == markId) m = &e;
+            const double railY = 20.0;    // the bundle's gap is 40, so its rails are at +/-20
+            const double at = m ? m->a.x : 100.0;
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress({at, railY}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({at, railY}, Qt::LeftButton);
+            bool tookMark = false, tookRun = false;
+            for (const QString& id : ed.selection()) {
+                tookMark = tookMark || id == markId;
+                tookRun = tookRun || id == QLatin1String("bundle");
+            }
+            check(tookMark && !tookRun,
+                  "break: a click where the run is hidden takes the mark, not the run");
+            ed.clearSelection();
+            ed.onPointerPress({20, railY}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({20, railY}, Qt::LeftButton);
+            bool runBack = false;
+            for (const QString& id : ed.selection()) runBack = runBack || id == QLatin1String("bundle");
+            check(runBack, "break: and where the run is drawn, the run is still picked");
+        }
+
+        // A zone in the GAP between the rails, touching neither, takes nothing: a double line is
+        // selected by the lines that are drawn, never by the space between them.
+        {
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            const Vec2 c1{240, -9}, c2{300, 9};   // inside the 40-wide gap, clear of both rails
+            ed.onPointerMove(c1);
+            ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c1, Qt::LeftButton);
+            ed.onPointerMove(c2);
+            ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(c2, Qt::LeftButton);
+            check(ed.selection().empty(),
+                  "double line: a zone in the gap between its lines selects nothing");
+        }
 
         // The run moving carries the mark: it marks a place on the run, not a coordinate.
         for (auto& e : d.entities())

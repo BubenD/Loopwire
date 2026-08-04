@@ -261,6 +261,58 @@ bool wirePointAtFraction(const Entity& wire, double t, Vec2& pos, Vec2& dir) {
     return true;
 }
 
+double breakLeanFactor(const Entity& mark) {
+    // The lean is stated as an ANGLE from square, because that is how a draughtsman thinks of it; the
+    // renderer wants it as a fraction of the reach, which is its tangent.
+    const double deg = mark.meta.value(QStringLiteral("angle")).toDouble(-1.0);
+    const bool curved =
+        mark.meta.value(QStringLiteral("breakStyle")).toString() == QLatin1String("curved");
+    if (deg < -0.5) return curved ? 0.0 : 0.55;     // nothing said: the shapes as they have always been
+    return std::tan(std::clamp(deg, -75.0, 75.0) * 3.14159265358979323846 / 180.0);
+}
+
+std::vector<std::vector<Vec2>> breakStrokes(const Entity& mark) {
+    if (mark.type != EntityType::LengthBreak) return {};
+    const double half = std::max(0.5, mark.meta.value(QStringLiteral("size")).toDouble(6.0));
+    const double gap = mark.meta.value(QStringLiteral("gap")).toDouble(half * 0.9);
+    const double rot = mark.rotation;
+    const Vec2 along{std::cos(rot), std::sin(rot)};
+    const Vec2 across{-std::sin(rot), std::cos(rot)};
+    const bool curved =
+        mark.meta.value(QStringLiteral("breakStyle")).toString() == QLatin1String("curved");
+    const double lean = half * breakLeanFactor(mark);
+    std::vector<std::vector<Vec2>> out;
+    for (int k = 0; k < 2; ++k) {
+        const Vec2 mid = mark.a + along * (gap * (k == 0 ? -0.5 : 0.5));
+        const Vec2 e1 = mid + across * half + along * lean;
+        const Vec2 e2 = mid - across * half - along * lean;
+        if (!curved) {
+            out.push_back({e1, e2});
+            continue;
+        }
+        // The same two cubics the renderer draws, sampled: a long lazy S whose sweep happens where it
+        // crosses the run. Sampled rather than approximated by its chord, so a joint lands where the
+        // curve actually meets the run and not where a straight line between its ends would.
+        const Vec2 bow = along * (half * 0.45);
+        const Vec2 c1 = e1 - bow * 0.35;
+        const Vec2 c2 = mid + across * (half * 0.45) - bow;
+        const Vec2 c3 = mid - across * (half * 0.45) + bow;
+        const Vec2 c4 = e2 + bow * 0.35;
+        auto cubic = [](const Vec2& p0, const Vec2& p1, const Vec2& p2, const Vec2& p3, double t) {
+            const double u = 1.0 - t;
+            const double w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
+            return Vec2{p0.x * w0 + p1.x * w1 + p2.x * w2 + p3.x * w3,
+                        p0.y * w0 + p1.y * w1 + p2.y * w2 + p3.y * w3};
+        };
+        std::vector<Vec2> s;
+        constexpr int kSteps = 12;
+        for (int i = 0; i <= kSteps; ++i) s.push_back(cubic(e1, c1, c2, mark.a + along * (gap * (k == 0 ? -0.5 : 0.5)), double(i) / kSteps));
+        for (int i = 1; i <= kSteps; ++i) s.push_back(cubic(mid, c3, c4, e2, double(i) / kSteps));
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
 std::vector<Vec2> runCenterline(const Entity& e) {
     switch (e.type) {
     case EntityType::Line:
