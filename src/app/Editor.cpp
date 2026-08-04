@@ -1127,6 +1127,32 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::NotConnected:
         best = distance(e.a, p);
         break;
+    case EntityType::LengthBreak: {
+        // A click on either STROKE picks it, the way a click on a line picks the line. Measured to the
+        // centre instead, the mark could only be picked by clicking the empty middle between its two
+        // strokes - which is where the run it interrupts is, so the click went to the run.
+        const double half = std::max(0.5, e.meta.value("size").toDouble(6.0));
+        const double gap = e.meta.value("gap").toDouble(half * 0.9);
+        const Vec2 along{std::cos(e.rotation), std::sin(e.rotation)};
+        const Vec2 across{-std::sin(e.rotation), std::cos(e.rotation)};
+        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
+        for (int k = 0; k < 2; ++k) {
+            const Vec2 mid = e.a + along * (gap * (k == 0 ? -0.5 : 0.5));
+            const Vec2 lean = along * (half * (curved ? 0.0 : 0.55));
+            const Vec2 end1 = mid + across * half + lean;
+            const Vec2 end2 = mid - across * half - lean;
+            if (!curved) {
+                best = std::min(best, segDist(end1, end2));
+            } else {
+                const Vec2 q1 = mid + across * (half * 0.5) - along * (half * 0.28);
+                const Vec2 q2 = mid - across * (half * 0.5) + along * (half * 0.28);
+                best = std::min(best, segDist(end1, q1));
+                best = std::min(best, segDist(q1, q2));
+                best = std::min(best, segDist(q2, end2));
+            }
+        }
+        break;
+    }
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry g = connectorGeometry(e.a, spec);
@@ -2247,6 +2273,35 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         // text box selects it.
         for (size_t i = 0; i < pts.size(); ++i)
             segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
+        break;
+    }
+    case EntityType::LengthBreak: {
+        // The two strokes THEMSELVES, so a zone that touches either one takes the mark and a window
+        // round the pair encloses it. Without them the mark fell back to its bounding-box corners,
+        // and a zone drawn over the strokes - which is where anyone would draw it - held no corner
+        // and selected nothing.
+        const double half = std::max(0.5, e.meta.value("size").toDouble(6.0));
+        const double gap = e.meta.value("gap").toDouble(half * 0.9);
+        const Vec2 along{std::cos(e.rotation), std::sin(e.rotation)};
+        const Vec2 across{-std::sin(e.rotation), std::cos(e.rotation)};
+        const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
+        for (int k = 0; k < 2; ++k) {
+            const Vec2 mid = e.a + along * (gap * (k == 0 ? -0.5 : 0.5));
+            const Vec2 lean = along * (half * (curved ? 0.0 : 0.55));
+            const Vec2 end1 = mid + across * half + lean;
+            const Vec2 end2 = mid - across * half - lean;
+            if (!curved) {
+                segs.emplace_back(end1, end2);
+            } else {
+                // The S in three chords: close enough for hit-testing, and it follows the curve
+                // rather than cutting the corner off it.
+                const Vec2 q1 = mid + across * (half * 0.5) - along * (half * 0.28);
+                const Vec2 q2 = mid - across * (half * 0.5) + along * (half * 0.28);
+                segs.emplace_back(end1, q1);
+                segs.emplace_back(q1, q2);
+                segs.emplace_back(q2, end2);
+            }
+        }
         break;
     }
     case EntityType::Connector: {
@@ -4046,6 +4101,105 @@ std::optional<double> Editor::runDirectionAt(const Vec2& q) const {
         }
     }
     return best;
+}
+
+double Editor::runSpanAcross(const Vec2& q, double rot) const {
+    if (!doc_) return 0.0;
+    // What the mark has to span, taken from ONE decision rather than from whatever happens to be
+    // nearby: the objects SELECTED when it is placed, or - nothing being selected - the run under the
+    // point. Anything else and a mark on one bundle is sized by another bundle further down the sheet.
+    std::vector<const Entity*> source;
+    for (const QString& id : selected_)
+        for (const auto& e : doc_->entities())
+            if (e.id == id) source.push_back(&e);
+    if (source.empty()) {
+        // The run under the point, whatever kind it is. A double line brings its two rails with it,
+        // which is the case this exists for: the mark spans the bundle, not its centreline.
+        const Entity* under = nullptr;
+        double bestD = std::max(worldTolerance(), 1e-6);
+        auto tryRun = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
+            const auto c = closestPointOnSegment(q, p1, p2);
+            if (c.distance < bestD) { bestD = c.distance; under = &e; }
+        };
+        for (const auto& e : doc_->entities()) {
+            switch (e.type) {
+            case EntityType::Line:
+                tryRun(e, e.a, e.b);
+                break;
+            case EntityType::DoubleLine: {
+                const double gap = e.meta.value("gap").toDouble(10.0);
+                const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+                tryRun(e, e.a, e.b);
+                tryRun(e, e.a + off, e.b + off);
+                tryRun(e, e.a - off, e.b - off);
+                break;
+            }
+            case EntityType::Wire:
+            case EntityType::Spline:
+            case EntityType::Polyline:
+                for (size_t i = 1; i < e.points.size(); ++i) tryRun(e, e.points[i - 1], e.points[i]);
+                break;
+            default:
+                break;
+            }
+        }
+        if (!under) return 0.0;
+        source.push_back(under);
+    }
+
+    // How far those objects reach across a line through q, square to the run.
+    const Vec2 across{-std::sin(rot), std::cos(rot)};
+    const Vec2 along{std::cos(rot), std::sin(rot)};
+    double lo = 0.0, hi = 0.0;
+    bool any = false;
+    auto consider = [&](const Vec2& p1, const Vec2& p2) {
+        // Where this segment is level with q along the run: dot(p1 + t*d - q, along) = 0.
+        const Vec2 d = p2 - p1;
+        const double denom = d.x * along.x + d.y * along.y;
+        if (std::abs(denom) < 1e-12) return;                 // it lies across the run, not along it
+        const Vec2 w = q - p1;
+        const double t = (w.x * along.x + w.y * along.y) / denom;
+        if (t < -1e-9 || t > 1.0 + 1e-9) return;             // level with q outside this segment
+        const Vec2 at{p1.x + d.x * t, p1.y + d.y * t};
+        const double s = (at - q).x * across.x + (at - q).y * across.y;
+        lo = any ? std::min(lo, s) : s;
+        hi = any ? std::max(hi, s) : s;
+        any = true;
+    };
+    for (const Entity* e : source) {
+        switch (e->type) {
+        case EntityType::Line:
+            consider(e->a, e->b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e->meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e->b - e->a).normalized().perp() * (gap / 2.0);
+            consider(e->a + off, e->b + off);
+            consider(e->a - off, e->b - off);
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e->points.size(); ++i) consider(e->points[i - 1], e->points[i]);
+            break;
+        case EntityType::Polyline: {
+            if (e->meta.value("double").toBool() && e->points.size() >= 2) {
+                const double gap = e->meta.value("gap").toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e->points, s);
+                    for (size_t i = 1; i < run.size(); ++i) consider(run[i - 1], run[i]);
+                }
+            } else {
+                for (size_t i = 1; i < e->points.size(); ++i)
+                    consider(e->points[i - 1], e->points[i]);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return any ? (hi - lo) : 0.0;
 }
 
 bool Editor::isConnectablePoint(const Vec2& q) const {
@@ -9041,7 +9195,17 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.rotation = runDirectionAt(p).value_or(0.0);
         e.meta.insert("breakStyle", breakStyle_);
-        e.meta.insert("size", breakSize_);
+        {
+            // Sized to what it is placed ON. A mark has to cross the whole run to read as a break, and
+            // a bundle drawn as a double line is as wide as its gap - which is not something to be
+            // typed into a settings box before every placement. The span is measured at the point,
+            // with a margin either side so the strokes overhang the way they are drawn by hand. A mark
+            // placed on bare paper keeps the size it was given.
+            const double span = runSpanAcross(p, e.rotation);
+            e.meta.insert("size", span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0)
+                                              : breakSize_);
+            if (span > 1e-6) e.meta.insert("gap", std::max(span * 0.4, 3.0));
+        }
         break;
     case ToolId::NotConnected: {
         // Shift + click on a connector pin: terminate EVERY still-unconnected pin of that

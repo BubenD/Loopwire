@@ -4099,6 +4099,65 @@ int run_editor_tests() {
         }
     }
 
+    // --- The break mark: sized to the run it is placed on, and easy to pick.
+    {
+        Document d;
+        Entity bundle;
+        bundle.id = QStringLiteral("bundle");
+        bundle.type = EntityType::DoubleLine;
+        bundle.a = {0, 0};
+        bundle.b = {320, 0};
+        bundle.meta.insert("gap", 40.0);      // a bundle 40 wide
+        d.entities().push_back(bundle);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::LengthBreak);
+        ed.breakStyle() = QStringLiteral("straight");
+        ed.breakSize() = 6.0;                 // the fallback, deliberately far too small for it
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+
+        const Entity* mark = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::LengthBreak) mark = &e;
+        check(mark != nullptr, "break: placed on the bundle");
+        if (mark) {
+            // It has to CROSS the run to read as a break: half the width plus a margin, not the
+            // 6 units it would have taken from the setting.
+            check(mark->meta.value("size").toDouble() > 20.0,
+                  "break: sized to the bundle it was placed on, not to the fallback");
+            check(mark->meta.value("size").toDouble() * 2.0 > 40.0,
+                  "break: and it reaches beyond both rails");
+            check(mark->meta.value("mask").toBool(true),
+                  "break: it interrupts the run between its strokes");
+        }
+        // A click ON A STROKE picks it. The strokes are where anyone would click; the empty middle
+        // belongs to the run it interrupts.
+        const QString markId = mark ? mark->id : QString();
+        ed.setTool(ToolId::Select);
+        ed.clearSelection();
+        const double half = mark ? mark->meta.value("size").toDouble(6.0) : 6.0;
+        const double gap = mark ? mark->meta.value("gap").toDouble(half * 0.9) : 5.4;
+        ed.onPointerPress({100.0 - gap / 2.0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({100.0 - gap / 2.0, 0}, Qt::LeftButton);
+        bool picked = false;
+        for (const QString& id : ed.selection()) picked = picked || (id == markId);
+        check(picked, "break: a click on one of its strokes selects it");
+
+        // And a selection zone - two clicks, both off the geometry - takes it.
+        ed.clearSelection();
+        const Vec2 c1{100.0 - half - 20.0, -half - 20.0};
+        const Vec2 c2{100.0 + half + 20.0, half + 20.0};
+        ed.onPointerMove(c1);
+        ed.onPointerPress(c1, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease(c1, Qt::LeftButton);
+        ed.onPointerMove(c2);
+        ed.onPointerPress(c2, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease(c2, Qt::LeftButton);
+        bool zoned = false;
+        for (const QString& id : ed.selection()) zoned = zoned || (id == markId);
+        check(zoned, "break: a zone drawn round it takes it");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

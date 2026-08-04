@@ -1637,11 +1637,28 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double rot = e.rotation;
         const QPointF along(std::cos(rot), -std::sin(rot));                 // screen y grows down
         const QPointF across(-std::sin(rot), -std::cos(rot));
+        const QPointF mid0 = c;
         const bool curved = e.meta.value("breakStyle").toString() == QLatin1String("curved");
+        // The run is INTERRUPTED between the two strokes. That is what a break means: the drawing does
+        // not claim to show that stretch, so it is masked out rather than left running through the
+        // middle of the mark. The run itself is untouched - still one object, still dimensioned, still
+        // editable - and unmasking is a matter of deleting the mark.
+        if (e.meta.value("mask").toBool(true)) {
+            const QPointF halfGap = along * (gap * 0.5);
+            const QPointF reach = across * (half * 1.02);
+            QPolygonF cover;
+            cover << mid0 + halfGap + reach << mid0 - halfGap + reach << mid0 - halfGap - reach
+                  << mid0 + halfGap - reach;
+            p.save();
+            p.setPen(Qt::NoPen);
+            p.setBrush(g_bgColor);
+            p.drawPolygon(cover);
+            p.restore();
+        }
         for (int k = 0; k < 2; ++k) {
             // The two strokes, one either side of the point, both leaning the same way - a break is a
             // pair of parallel marks, not a cross.
-            const QPointF mid = c + along * (gap * (k == 0 ? -0.5 : 0.5));
+            const QPointF mid = mid0 + along * (gap * (k == 0 ? -0.5 : 0.5));
             if (!curved) {
                 // A straight stroke, leaning along the run so the pair reads as "//".
                 const QPointF lean = along * (half * 0.55);

@@ -295,6 +295,9 @@ public:
     // The direction of the run under a point - a wire, a line, a double line, a polyline - as an
     // angle. Used to lay a mark square across whatever it is placed on.
     std::optional<double> runDirectionAt(const Vec2& q) const;
+    // How far the runs at `q` reach across a line through it at `rot`: the width of a double line, of
+    // a pair of rails, of a bundle of parallels. What a mark placed there has to span.
+    double runSpanAcross(const Vec2& q, double rot) const;
     // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
     // What lets a run be landed on another run as a T, and what says a joint belongs there.
     std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,
