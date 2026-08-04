@@ -261,6 +261,36 @@ bool wirePointAtFraction(const Entity& wire, double t, Vec2& pos, Vec2& dir) {
     return true;
 }
 
+std::vector<Vec2> runCenterline(const Entity& e) {
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine:
+        return {e.a, e.b};
+    case EntityType::Wire:
+    case EntityType::Polyline:
+    case EntityType::Spline:
+        return e.points;
+    default:
+        return {};
+    }
+}
+
+bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir) {
+    Entity probe;
+    probe.type = EntityType::Wire;
+    probe.points = runCenterline(e);
+    if (probe.points.size() < 2) return false;
+    return wirePointAtFraction(probe, t, pos, dir);
+}
+
+double runFractionNearest(const Entity& e, const Vec2& p) {
+    Entity probe;
+    probe.type = EntityType::Wire;
+    probe.points = runCenterline(e);
+    if (probe.points.size() < 2) return 0.0;
+    return wireFractionNearest(probe, p);
+}
+
 double wireFractionNearest(const Entity& wire, const Vec2& p) {
     const std::vector<Vec2>& pts = wire.points;
     if (pts.size() < 2) return 0.0;

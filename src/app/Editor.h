@@ -298,6 +298,11 @@ public:
     // How far the runs at `q` reach across a line through it at `rot`: the width of a double line, of
     // a pair of rails, of a bundle of parallels. What a mark placed there has to span.
     double runSpanAcross(const Vec2& q, double rot) const;
+    // The run a mark placed at `q` belongs to: the nearest line / double line / wire / polyline.
+    QString runAt(const Vec2& q) const;
+    // Slide a break mark along the run it is attached to by `delta`. False when it is attached to
+    // nothing, in which case it moves like anything else.
+    bool slideBreakAlongHost(Entity& e, const Vec2& delta);
     // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
     // What lets a run be landed on another run as a T, and what says a joint belongs there.
     std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,

@@ -133,6 +133,13 @@ void setWireAnnotGapFor(Entity& wire, const QString& part, double gap);
 bool wirePointAtFraction(const Entity& wire, double t, Vec2& pos, Vec2& dir);
 // Fraction along the wire nearest world point `p` (0..1). 0 for a degenerate wire.
 double wireFractionNearest(const Entity& wire, const Vec2& p);
+
+// The same two questions for ANY run a mark can be attached to - a line, a double line (its
+// centreline), a wire, a polyline, a spline. What lets an annotation ride the thing it annotates:
+// where along the run it sits, and which way the run points there.
+std::vector<Vec2> runCenterline(const Entity& e);
+bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
+double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).
 std::vector<double> wireAnnotFractions(const Entity& wire, int count);
 void setWireAnnotFractions(Entity& wire, const std::vector<double>& ts);

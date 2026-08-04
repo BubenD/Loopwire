@@ -4103,6 +4103,40 @@ std::optional<double> Editor::runDirectionAt(const Vec2& q) const {
     return best;
 }
 
+QString Editor::runAt(const Vec2& q) const {
+    if (!doc_) return {};
+    const Entity* best = nullptr;
+    double bestD = std::max(worldTolerance(), 1e-6);
+    auto tryRun = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
+        const auto c = closestPointOnSegment(q, p1, p2);
+        if (c.distance < bestD) { bestD = c.distance; best = &e; }
+    };
+    for (const auto& e : doc_->entities()) {
+        switch (e.type) {
+        case EntityType::Line:
+            tryRun(e, e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            // Its rails as well as its centreline: a bundle is picked by the lines that are drawn.
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            tryRun(e, e.a, e.b);
+            tryRun(e, e.a + off, e.b + off);
+            tryRun(e, e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Polyline:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) tryRun(e, e.points[i - 1], e.points[i]);
+            break;
+        default:
+            break;
+        }
+    }
+    return best ? best->id : QString();
+}
+
 double Editor::runSpanAcross(const Vec2& q, double rot) const {
     if (!doc_) return 0.0;
     // What the mark has to span, taken from ONE decision rather than from whatever happens to be
@@ -4801,6 +4835,30 @@ void Editor::alignRoutingFrom(const QString& refConnectorId) {
     emit changed();
 }
 
+bool Editor::slideBreakAlongHost(Entity& e, const Vec2& delta) {
+    if (!doc_ || e.type != EntityType::LengthBreak) return false;
+    const QString hostId = e.meta.value(QStringLiteral("host")).toString();
+    if (hostId.isEmpty()) return false;                  // attached to nothing: it moves freely
+    const Entity* host = nullptr;
+    for (const auto& h : doc_->entities())
+        if (h.id == hostId) host = &h;
+    if (!host) return false;
+    Vec2 pos, dir;
+    const double t0 = e.meta.value(QStringLiteral("annT")).toDouble(0.5);
+    if (!runPointAtFraction(*host, t0, pos, dir)) return false;
+    // The drag is answered by the nearest place ON THE RUN to where it was taken. Whatever the cursor
+    // did across the run is ignored: a break marks a place on a run, and one sitting beside its run
+    // says nothing at all.
+    const double t1 = runFractionNearest(*host, pos + delta);
+    e.meta[QStringLiteral("annT")] = t1;
+    Vec2 at, d2;
+    if (runPointAtFraction(*host, t1, at, d2)) {
+        e.a = at;                        // kept in step, since the hit-test works off it
+        e.rotation = std::atan2(d2.y, d2.x);
+    }
+    return true;
+}
+
 void Editor::applyEditDrag(const Vec2& target) {
     // A leader-landing joint doesn't change geometry as it drags — it re-connects the
     // leader to whichever circle it's dropped on, handled at placement time.
@@ -4844,6 +4902,9 @@ void Editor::applyEditDrag(const Vec2& target) {
     };
     // Apply one grip's mutation on its entity.
     auto applyOne = [&](Entity* e, GripRole role, int index, const Vec2& off) {
+        // A hosted break mark slides along its run whichever way it was taken hold of - by its body or
+        // by one of its grips. Without this, grabbing it by a grip lifted it off the run.
+        if (e->type == EntityType::LengthBreak && slideBreakAlongHost(*e, delta)) return;
         switch (role) {
         case GripRole::LineA: e->a = solveEnd(true, e, off); break;
         case GripRole::LineB: e->b = solveEnd(false, e, off); break;
@@ -5143,6 +5204,12 @@ void Editor::applyEditDrag(const Vec2& target) {
 
     if (editMode_ == 0) {
         for (Entity* e : selectedEntities()) {
+            // A break mark is pinned to the run it marks: dragging it slides it ALONG that run rather
+            // than lifting it off. A break beside its run says nothing, and a break that has to be
+            // nudged back on to the run by eye after every move is worse than one that cannot leave
+            // it. The cursor is projected on to the run and the mark keeps the new place; its angle
+            // comes from the run there, so it stays square through a corner.
+            if (e->type == EntityType::LengthBreak && slideBreakAlongHost(*e, delta)) continue;
             // Twist marks are constrained to their wires: a whole-selection move slides each
             // one ALONG its wires by the drag's x-component (y re-derived from the wire), so
             // several selected twists move together yet stay on the wires. A decorative copy
@@ -9195,6 +9262,15 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.rotation = runDirectionAt(p).value_or(0.0);
         e.meta.insert("breakStyle", breakStyle_);
+        // ATTACHED to the run it was put on, by id and by how far along it the click was. From then on
+        // the mark belongs to that run: it follows it when the run is moved or re-shaped, and dragging
+        // the mark slides it ALONG the run instead of lifting it off - a break marks a place on a run,
+        // and a break sitting beside its run means nothing.
+        if (const QString host = runAt(p); !host.isEmpty()) {
+            e.meta.insert("host", host);
+            for (const auto& h : doc_->entities())
+                if (h.id == host) e.meta.insert("annT", runFractionNearest(h, p));
+        }
         {
             // Sized to what it is placed ON. A mark has to cross the whole run to read as a break, and
             // a bundle drawn as a double line is as wide as its gap - which is not something to be

@@ -55,70 +55,92 @@ void MainWindow::buildHarnessMechanicalTab() {
         lg->addWidget(toolRow({ToolId::Dimension, ToolId::Line}));
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
         // loom on an A3 sheet - and the mark is how a drawing says so: the run is interrupted, the
-        // dimension says the real length. Two buttons rather than a tool plus a hidden setting,
-        // because which style is wanted is decided at the moment of placing it.
+        // dimension says the real length.
+        //
+        // ONE button with the styles hung off it, rather than one button per style: the button places
+        // the mark, and the arrow beside it says which kind - straight strokes to begin with, since
+        // that is the one a mechanical layout uses. Whichever is chosen stays chosen, and the button
+        // wears it, so the next placement needs no menu at all.
         auto* breakW = new QWidget(lenW);
         auto* bg = new QGridLayout(breakW);
         bg->setContentsMargins(0, 0, 0, 0);
         bg->setSpacing(2);
+        auto* breakBtn = new QToolButton(breakW);
+        breakBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        breakBtn->setIconSize(QSize(26, 26));
+        breakBtn->setAutoRaise(true);
+        breakBtn->setFocusPolicy(Qt::NoFocus);
+        breakBtn->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* breakMenu = new QMenu(breakBtn);
+        breakBtn->setMenu(breakMenu);
+        // The icon of a style, drawn as the thing it places.
+        auto styleIcon = [](bool curved) {
+            QPixmap pm(28, 28);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            ip.setPen(QPen(QColor("#cfe3ff"), 1.6));
+            ip.drawLine(2, 14, 26, 14);
+            for (int k = 0; k < 2; ++k) {
+                const double x = 11.0 + k * 7.0;
+                if (!curved) {
+                    ip.drawLine(QPointF(x + 3, 5), QPointF(x - 3, 23));
+                } else {
+                    QPainterPath path(QPointF(x + 3, 5));
+                    path.cubicTo(QPointF(x - 2, 9), QPointF(x + 3, 13), QPointF(x, 14));
+                    path.cubicTo(QPointF(x - 3, 15), QPointF(x + 2, 19), QPointF(x - 3, 23));
+                    ip.drawPath(path);
+                }
+            }
+            ip.end();
+            return QIcon(pm);
+        };
         struct Style {
             const char* key;
-            const char* text;
+            const char* name;
             const char* tip;
             bool curved;
         };
         static const Style kStyles[] = {
-            {"straight", "Break\nstraight",
-             "Place the break mark as two straight strokes across a run: the run is longer than it "
-             "is drawn, and the dimension says how long it really is. Click on the run - the mark "
-             "lies square across it.",
-             false},
-            {"curved", "Break\ncurved",
+            {"straight", "Straight strokes",
+             "Two straight strokes across the run - the form a mechanical layout uses.", false},
+            {"curved", "S-curves",
              "The same mark drawn as two S-curves - the form used where the run itself is drawn as a "
-             "curve. Click on the run to place it.",
-             true},
+             "curve.", true},
         };
-        int col = 0;
+        // Shown on the button: what the next click will place.
+        auto showStyle = [this, breakBtn, styleIcon](const QString& key, const char* name) {
+            editor_->breakStyle() = key;
+            breakBtn->setIcon(styleIcon(key == QLatin1String("curved")));
+            breakBtn->setText(QStringLiteral("Break\n%1").arg(
+                key == QLatin1String("curved") ? QStringLiteral("curved") : QStringLiteral("straight")));
+            breakBtn->setToolTip(
+                QStringLiteral("Mark a run as longer than it is drawn: the run is interrupted and the "
+                               "dimension says its real length. Click on the run - the mark lies square "
+                               "across it, sized to it, and slides along it afterwards.\n\nStyle: %1")
+                    .arg(QString::fromLatin1(name)));
+        };
         for (const Style& s : kStyles) {
-            auto* b = new QToolButton(breakW);
-            b->setText(QString::fromLatin1(s.text));
-            b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            b->setIconSize(QSize(26, 26));
-            b->setAutoRaise(true);
-            b->setFocusPolicy(Qt::NoFocus);
-            b->setToolTip(QString::fromLatin1(s.tip));
-            {
-                // The button wears the style it places.
-                QPixmap pm(28, 28);
-                pm.fill(Qt::transparent);
-                QPainter ip(&pm);
-                ip.setRenderHint(QPainter::Antialiasing, true);
-                ip.setPen(QPen(QColor("#cfe3ff"), 1.6));
-                ip.drawLine(2, 14, 26, 14);
-                for (int k = 0; k < 2; ++k) {
-                    const double x = 11.0 + k * 7.0;
-                    if (!s.curved) {
-                        ip.drawLine(QPointF(x + 3, 5), QPointF(x - 3, 23));
-                    } else {
-                        QPainterPath path(QPointF(x + 3, 5));
-                        path.cubicTo(QPointF(x - 2, 9), QPointF(x + 3, 13), QPointF(x, 14));
-                        path.cubicTo(QPointF(x - 3, 15), QPointF(x + 2, 19), QPointF(x - 3, 23));
-                        ip.drawPath(path);
-                    }
-                }
-                ip.end();
-                b->setIcon(QIcon(pm));
-            }
             const QString key = QString::fromLatin1(s.key);
-            connect(b, &QToolButton::clicked, this, [this, key] {
-                editor_->breakStyle() = key;
+            const char* name = s.name;
+            QAction* act = breakMenu->addAction(styleIcon(s.curved), QString::fromLatin1(s.name));
+            act->setToolTip(QString::fromLatin1(s.tip));
+            connect(act, &QAction::triggered, this, [this, key, name, showStyle] {
+                showStyle(key, name);
                 editor_->setTool(ToolId::LengthBreak);
                 statusBar()->showMessage(
                     QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
                     4000);
             });
-            bg->addWidget(b, 0, col++);
         }
+        showStyle(QStringLiteral("straight"), kStyles[0].name);   // the default
+        connect(breakBtn, &QToolButton::clicked, this, [this] {
+            editor_->setTool(ToolId::LengthBreak);
+            statusBar()->showMessage(
+                QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
+                4000);
+        });
+        bg->addWidget(breakBtn, 0, 0);
         lg->addWidget(breakW);
         addGroup(lay, QStringLiteral("Length"), lenW);
     }

@@ -4156,6 +4156,44 @@ int run_editor_tests() {
         bool zoned = false;
         for (const QString& id : ed.selection()) zoned = zoned || (id == markId);
         check(zoned, "break: a zone drawn round it takes it");
+
+        // It is ATTACHED to the run it was placed on, and it rides it.
+        const Entity* m2 = nullptr;
+        for (const auto& e : d.entities())
+            if (e.id == markId) m2 = &e;
+        check(m2 && m2->meta.value("host").toString() == QLatin1String("bundle"),
+              "break: it is attached to the run it was placed on");
+        const double t0 = m2 ? m2->meta.value("annT").toDouble(-1.0) : -1.0;
+        check(t0 > 0.2 && t0 < 0.4, "break: and it remembers how far along that run it sits");
+
+        // Dragged well off the run, it slides ALONG it and stays on it.
+        ed.clearSelection();
+        ed.selectById(markId);
+        const Vec2 grab{100, 0};
+        ed.onPointerPress(grab, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({grab.x + 80, grab.y - 60});
+        ed.onPointerRelease({grab.x + 80, grab.y - 60}, Qt::LeftButton);
+        for (const auto& e : d.entities())
+            if (e.id == markId) {
+                check(e.meta.value("annT").toDouble() > t0 + 0.1,
+                      "break: dragging it slides it along the run");
+                check(near(e.a.y, 0.0),
+                      "break: and never off it - what the cursor did across the run is ignored");
+            }
+
+        // The run moving carries the mark: it marks a place on the run, not a coordinate.
+        for (auto& e : d.entities())
+            if (e.id == QLatin1String("bundle")) { e.a.y += 50.0; e.b.y += 50.0; }
+        for (const auto& e : d.entities()) {
+            if (e.id != markId) continue;
+            const Entity* h = nullptr;
+            for (const auto& x : d.entities())
+                if (x.id == QLatin1String("bundle")) h = &x;
+            Vec2 at, dir;
+            check(h && runPointAtFraction(*h, e.meta.value("annT").toDouble(), at, dir) &&
+                      near(at.y, 50.0),
+                  "break: the run moved and the mark is drawn on its new place");
+        }
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
