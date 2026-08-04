@@ -204,7 +204,7 @@ VdGraph buildVoltageDropGraph(const Document& doc) {
             if (samePoint(s.at, at)) {
                 VdNode n;
                 n.id = QStringLiteral("splice:%1").arg(s.id);
-                n.name = QStringLiteral("splice %1").arg(s.id);
+                n.name = QStringLiteral("joint %1").arg(s.id);
                 n.kind = VdNodeKind::Splice;
                 n.jointType = s.jointType;
                 n.at = at;

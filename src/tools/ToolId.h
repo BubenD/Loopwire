@@ -113,7 +113,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Table: return QStringLiteral("Table");
     case ToolId::Wire: return QStringLiteral("Wire");
     case ToolId::Connector: return QStringLiteral("Connector");
-    case ToolId::Splice: return QStringLiteral("Splice");
+    // A joint. The tool keeps its Splice id for compatibility with saved drawings and settings; what
+    // it places is a joint between conductors, and that is what it is called.
+    case ToolId::Splice: return QStringLiteral("Joint");
     case ToolId::NotConnected: return QStringLiteral("Not connected");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.

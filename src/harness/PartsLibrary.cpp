@@ -25,7 +25,7 @@ const KindRow kKinds[] = {
     {PartKind::ContactPin, "contact-pin", "Contact pin"},
     {PartKind::Ferrule, "ferrule", "Ferrule"},
     {PartKind::Crimp, "crimp", "Crimp terminal"},
-    {PartKind::Splice, "splice", "Splice"},
+    {PartKind::Splice, "splice", "Joint"},
     {PartKind::Heatshrink, "heatshrink", "Heatshrink"},
     {PartKind::HeatshrinkBoot, "heatshrink-boot", "Heatshrink boot"},
     {PartKind::Backshell, "backshell", "Backshell"},
@@ -803,7 +803,7 @@ QString describePart(const LibraryPart& part) {
                      {"insulated", "", false, true, "insulated"}};
             break;
         case PartKind::Splice:
-            lead = QStringLiteral("Splice");
+            lead = QStringLiteral("Joint");
             order = {{"type", ""}, {"gauge", "AWG", true}, {"insertion", "mm", true},
                      {"ways", "way"}};
             break;

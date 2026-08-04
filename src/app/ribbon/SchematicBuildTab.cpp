@@ -200,7 +200,7 @@ void MainWindow::buildSchematicBuildTab() {
         updateSchematicRibbonGroups();
         if ((splice || x) && markerSpin_) {
             QSignalBlocker b(markerSpin_);
-            markerLabel_->setText(splice ? QStringLiteral("Splice ⌀") : QStringLiteral("X size"));
+            markerLabel_->setText(splice ? QStringLiteral("Joint ⌀") : QStringLiteral("X size"));
             markerSpin_->setValue(splice ? editor_->spliceSize() : editor_->ncSize());
         }
     };

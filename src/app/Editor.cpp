@@ -83,6 +83,11 @@ void shieldExtent(const std::vector<Vec2>& crossings, const Vec2& major, Vec2& c
     spanOut = tMax - tMin;
 }
 
+// "On" as opposed to "near": a point the snap put on a run is on it to within rounding, so this is a
+// rounding tolerance and not a reach. Anything looser and a run drawn close to a neighbour reads as
+// connected to it.
+static constexpr double kOnPointTol = 1e-6;
+
 // Snap a point to a horizontal or vertical segment from `prev` (the wire "90° only"
 // projection): keep whichever axis the cursor moved furthest along, zero the other.
 Vec2 orthoWirePoint(const Vec2& prev, const Vec2& p) {
@@ -856,7 +861,7 @@ void Editor::setTool(ToolId t) {
         emit dynamicPrompt(QStringLiteral("Scale factor (or pick base point)"));
     // Splice / X: pop the flying field so the marker size can be typed before placing.
     if (t == ToolId::Splice)
-        emit dynamicPrompt(QStringLiteral("Splice size <%1>").arg(spliceSize_));
+        emit dynamicPrompt(QStringLiteral("Joint size <%1>").arg(spliceSize_));
     else if (t == ToolId::NotConnected)
         emit dynamicPrompt(QStringLiteral("X size <%1>").arg(ncSize_));
 }
@@ -3490,7 +3495,7 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
             if (!connected && !terminated)
                 issues.push_back({QStringLiteral("openwire:%1:%2").arg(w.id).arg(end),
                                   QStringLiteral("Wire #%1 has an unconnected end (no wire, pin, "
-                                                 "splice or X termination)")
+                                                 "joint or X termination)")
                                       .arg(w.meta.value("entNum").toInt()),
                                   w.id, p});
         }
@@ -3773,6 +3778,10 @@ Vec2 Editor::applyWireClearance(const Vec2& prev, const Vec2& p) const {
     // end at all.
     {
         const double snapTol = std::max(worldTolerance() * 0.5, 1e-6);
+        // On another run's BODY too: that is a T-junction, which is a connection like any other. ON
+        // it, mind - a snapped click lands exactly on the run, whereas a run drawn merely NEAR another
+        // is the very thing this rule is here to push apart.
+        if (wireBodyPointNear(p, kOnPointTol)) return p;
         for (const auto& e : doc_->entities()) {
             switch (e.type) {
             case EntityType::Connector: {
@@ -3880,6 +3889,61 @@ int Editor::wireEndsAt(const Vec2& at, const QString& except) const {
     return n;
 }
 
+std::optional<Vec2> Editor::wireBodyPointNear(const Vec2& q, double tol, QString* wireId,
+                                              const QString& except) const {
+    if (!doc_) return std::nullopt;
+    std::optional<Vec2> best;
+    double bestD = tol;
+    for (const auto& w : doc_->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2 || w.id == except) continue;
+        for (size_t s = 1; s < w.points.size(); ++s) {
+            const Vec2 a = w.points[s - 1], b = w.points[s];
+            const Vec2 ab = b - a;
+            const double len2 = ab.lengthSq();
+            if (len2 < 1e-12) continue;
+            double t = ((q - a).x * ab.x + (q - a).y * ab.y) / len2;
+            t = std::clamp(t, 0.0, 1.0);
+            const Vec2 on{a.x + ab.x * t, a.y + ab.y * t};
+            const double d = distance(q, on);
+            // Its ENDS are a different thing - two wires meeting end to end - and are already
+            // handled as such, so only the run between them counts as a body here.
+            const double endTol = std::max(tol, 1e-6);
+            if (distance(on, w.points.front()) <= endTol || distance(on, w.points.back()) <= endTol)
+                continue;
+            if (d < bestD) {
+                bestD = d;
+                best = on;
+                if (wireId) *wireId = w.id;
+            }
+        }
+    }
+    return best;
+}
+
+bool Editor::isConnectablePoint(const Vec2& q) const {
+    if (!doc_) return false;
+    const double tol = std::max(worldTolerance() * 0.5, 1e-6);
+    for (const Vec2& pe : collectPinEnds(doc_))
+        if (distance(q, pe) <= tol) return true;
+    for (const auto& e : doc_->entities()) {
+        switch (e.type) {
+        case EntityType::Wire:
+            if (!e.points.empty() && (distance(q, e.points.front()) <= tol ||
+                                      distance(q, e.points.back()) <= tol))
+                return true;
+            break;
+        case EntityType::Splice:
+        case EntityType::NotConnected:
+        case EntityType::NetLabel:
+            if (distance(q, e.a) <= tol) return true;
+            break;
+        default:
+            break;
+        }
+    }
+    return wireBodyPointNear(q, kOnPointTol).has_value();
+}
+
 // A joint marker at `at`, unless one is already there. Two wires joined end to end are one
 // conductor with a joint in it, and without the dot the drawing cannot be told from one wire
 // simply passing over another.
@@ -3925,7 +3989,7 @@ bool Editor::mergeWireEnds(const QString& wireId) {
             pushUndo();
             addSpliceAt(myTip); // ...after which `w` must not be read again
             doc_->setDirty(true);
-            emit message(QStringLiteral("Spliced — %1 wires meet here").arg(met + 1));
+            emit message(QStringLiteral("Jointed — %1 wires meet here").arg(met + 1));
             emit changed();
             return true;
         }
@@ -3962,7 +4026,7 @@ bool Editor::mergeWireEnds(const QString& wireId) {
                 addSpliceAt(myTip);
                 selected_ = {wireId};
                 doc_->setDirty(true);
-                emit message(QStringLiteral("Wires joined — one wire of %1 points, spliced at "
+                emit message(QStringLiteral("Wires joined — one wire of %1 points, jointed at "
                                           "the joint")
                                  .arg(mergedCount));
                 emit selectionChanged();
@@ -5145,12 +5209,29 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Wire: {
         // Wire "90° only": snap this vertex to a horizontal/vertical run from the previous
         // one (the cursor itself stayed free). The first point (on a pin, etc.) is kept as-is.
+        //
+        // A point the cursor SNAPPED to is not moved by either rule. It is a pin, another wire's end
+        // or its body - a connection the user aimed at - and the two rules used to move it off:
+        // "90° only" re-projected it on to an axis, and the clearance rule pushed it aside. Between
+        // them, a wire being routed on to a pin would sometimes simply not land on it. The route still
+        // turns square corners: when the point cannot be reached along one axis, a KNEE is put in
+        // before it, so the last leg runs into the connection at 90° and lands exactly on it.
         Vec2 wp = p;
-        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
-            wp = orthoWirePoint(draftPts_.back(), p);
+        const bool landing = (tool_ == ToolId::Wire && !draftPts_.empty() &&
+                              isConnectablePoint(p));
+        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty()) {
+            const Vec2 square = orthoWirePoint(draftPts_.back(), p);
+            if (!landing) {
+                wp = square;
+            } else if (distance(square, p) > 1e-9) {
+                draftPts_.push_back(square);            // the corner
+                draftBulges_.push_back(0.0);
+                draftCornerRadii_.push_back(0.0);
+            }
+        }
         // Pitch rule while routing: hold a clearance from the runs already on the drawing
         // so this run can never land on top of a neighbour (single wire included).
-        if (tool_ == ToolId::Wire && !draftPts_.empty())
+        if (tool_ == ToolId::Wire && !draftPts_.empty() && !landing)
             wp = applyWireClearance(draftPts_.back(), wp);
         // In Arc mode each new vertex makes an arc segment tangent to the previous
         // one; draftBulges_ stays aligned with draftPts_ (bulge of the segment that
@@ -6126,6 +6207,13 @@ void Editor::finishDraw() {
         };
         if (!onPin(wireStart) && wireEndsAt(wireStart, newId) >= 1) addSpliceAt(wireStart);
         if (!onPin(wireEnd) && wireEndsAt(wireEnd, newId) >= 1) addSpliceAt(wireEnd);
+        // And where an end lands on the BODY of another run - a T-junction. Two conductors that meet
+        // in the middle of a run are joined there just as surely as two that meet end to end, and
+        // without the dot the drawing cannot be told from one wire crossing over another.
+        if (!onPin(wireStart) && wireBodyPointNear(wireStart, kOnPointTol, nullptr, newId))
+            addSpliceAt(wireStart);
+        if (!onPin(wireEnd) && wireBodyPointNear(wireEnd, kOnPointTol, nullptr, newId))
+            addSpliceAt(wireEnd);
     }
     draftPts_.clear();
     drafting_ = false;
@@ -6528,7 +6616,7 @@ bool Editor::acceptCommandInput(const QString& text) {
             emit message(QStringLiteral("Size set to %1 — click to place").arg(v));
             emit markerSizeChanged();
             emit dynamicPrompt(tool_ == ToolId::Splice
-                                   ? QStringLiteral("Splice size <%1>").arg(spliceSize_)
+                                   ? QStringLiteral("Joint size <%1>").arg(spliceSize_)
                                    : QStringLiteral("X size <%1>").arg(ncSize_));
         } else {
             emit message(QStringLiteral("Enter a positive size"));
@@ -9366,6 +9454,41 @@ void Editor::setSelectionMeta(const QString& key, const QString& value) {
     for (Entity* e : sel) e->meta[key] = value;
     doc_->setDirty(true);
     emit changed();
+}
+
+void Editor::setSelectionScreenLegDir(const QString& dir) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    int moved = 0;
+    for (Entity* e : sel) {
+        if (e->type != EntityType::Screen) {
+            e->meta[QStringLiteral("legDir")] = dir;
+            continue;
+        }
+        // The leg is the entity's LAST point, past the crossings it catches. Setting the side in the
+        // meta and leaving that point where it was is what made the leg stay at the bottom while the
+        // drawing claimed it was at the top: the side has to carry the point with it. It keeps the
+        // length it had, measured from the outline it used to leave.
+        const ShieldFrame f = shieldFrameOf(*e);
+        const QString was = e->meta.value(QStringLiteral("legDir")).toString(QStringLiteral("bottom"));
+        const bool hasLeg = f.valid && static_cast<int>(e->points.size()) > f.k;
+        double legLen = screenLeg_;
+        if (hasLeg) legLen = distance(e->points.back(), shieldLegEdge(f, was));
+        if (legLen <= 1e-6) legLen = std::max(1.0, screenLeg_);
+        e->meta[QStringLiteral("legDir")] = dir;
+        if (!f.valid) continue;
+        const Vec2 edge = shieldLegEdge(f, dir);
+        const Vec2 out = (edge - f.center).normalized();
+        const Vec2 tip{edge.x + out.x * legLen, edge.y + out.y * legLen};
+        if (hasLeg) e->points.back() = tip;
+        else e->points.push_back(tip);
+        ++moved;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    if (moved > 0)
+        emit message(QStringLiteral("Drain leg moved to the %1").arg(dir));
 }
 
 void Editor::setSelectionMetaNumber(const QString& key, double value) {

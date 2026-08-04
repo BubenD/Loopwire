@@ -5992,7 +5992,8 @@ void MainWindow::refreshProperties() {
                      {QStringLiteral("Bottom"), QStringLiteral("Top"), QStringLiteral("Left"),
                       QStringLiteral("Right")},
                      legName(legDir), false, [this](const QString& t) {
-                         editor_->setSelectionMeta(QStringLiteral("legDir"), t.toLower());
+                         // Moves the leg as well as recording the side; see setSelectionScreenLegDir.
+                         editor_->setSelectionScreenLegDir(t.toLower());
                      });
         }
         // The outline's line: solid, or dashed with a scale for the dash.
@@ -6082,7 +6083,7 @@ void MainWindow::refreshProperties() {
 
     // A selected Splice / X termination: edit its marker size.
     if (e && e->type == EntityType::Splice) {
-        addHeader(QStringLiteral("Splice"));
+        addHeader(QStringLiteral("Joint"));
         addNum(QStringLiteral("Size"), mv(QStringLiteral("size")).toDouble(4.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("size"), std::max(0.5, v));
@@ -6423,7 +6424,9 @@ void MainWindow::buildCommands() {
         // Harness
         {{"wire", "w"}, "Harness", "Wire", tool(ToolId::Wire)},
         {{"connector", "con"}, "Harness", "Connector", tool(ToolId::Connector)},
-        {{"splice"}, "Harness", "Splice marker", tool(ToolId::Splice)},
+        // Both words find it: the app says "joint", and anyone who learned it as a splice still
+        // types that.
+        {{"joint", "splice"}, "Harness", "Joint marker", tool(ToolId::Splice)},
         {{"notconnected", "nc"}, "Harness", "Not-connected marker", tool(ToolId::NotConnected)},
         {{"wirelabel", "wl", "netlabel", "nl"}, "Harness", "Wire label",
          tool(ToolId::NetLabel)},
@@ -6646,6 +6649,9 @@ void MainWindow::showQuickSelectDialog(const QString& sampleId) {
 
     // Object type: every type present in the drawing, opened on the sampled object's.
     auto pretty = [](const QString& t) {
+        // The stored key is what a drawing is written with; what is shown is what the thing is called.
+        // "splice" is the key an earlier version wrote for a JOINT and is kept for compatibility.
+        if (t == QLatin1String("splice")) return QStringLiteral("Joint");
         return t.isEmpty() ? t : t.left(1).toUpper() + t.mid(1);
     };
     auto* typeCombo = new QComboBox(&dlg);
@@ -7806,7 +7812,7 @@ QToolButton* MainWindow::makeVoltageDropButton(QWidget* parent) {
     btn->setFocusPolicy(Qt::NoFocus);
     btn->setToolTip(QStringLiteral(
         "What arrives at the load: the drop along the wires, across the contacts and through the "
-        "splices, broken down segment by segment"));
+        "joints, broken down segment by segment"));
     {
         // A supply level falling along a run: the full line, then the sag, then what is left of it.
         QPixmap pm(28, 28);

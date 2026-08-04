@@ -207,6 +207,19 @@ void centerEdit(QLineEdit* ed) { ed->setAlignment(Qt::AlignCenter); }
 // The background a bundled row is shown on. Every cable/coax gets one of its own, so a bundle
 // can be seen at a glance and told from its neighbours; the colour follows from the name, so it
 // does not change as rows are added or the list is re-grouped.
+// The background a GROUP INSIDE a cable is shown on - a twisted pair, a screened pair. It is a colour
+// of its own, so the pair can be picked out of the cable's rows at a glance, while the cell keeps the
+// cable's colour around its edge to say the pair is part of that cable and not a thing beside it.
+// Deliberately the cool end of the spectrum: the bundle tints are the warm ones.
+QString groupTint(const QString& group) {
+    if (group.isEmpty()) return {};
+    static const char* kTints[] = {"#24424a", "#26364e", "#1f4640", "#2d3f52",
+                                   "#204a46", "#293a4e", "#1e4348", "#2b3d46"};
+    uint h = 0;
+    for (const QChar& c : group) h = h * 31u + c.unicode();
+    return QString::fromLatin1(kTints[h % (sizeof(kTints) / sizeof(kTints[0]))]);
+}
+
 QString bundleTint(const QString& bundle) {
     if (bundle.isEmpty()) return {};
     // Deliberately a different family from endpointTint(): a bundle is a property of the ROW,
@@ -2186,6 +2199,11 @@ void HarnessBuilderDialog::showPartMenu(const QString& libPartId, const QPoint& 
     menu.exec(at);
 }
 
+// The lowest pin of `c` nobody has taken, or 0 when the connector is FULL.
+//
+// It used to answer 1 when every pin was taken, which put a second wire on pin 1 - two conductors
+// crimped into one contact, silently, on a drawing that is meant to be built from. There is no right
+// pin to give out when there are none left, so it says so and the caller leaves that end open.
 int HarnessBuilderDialog::nextFreePin(const HarnessConnector& c) const {
     for (int p = 1; p <= std::max(1, c.pinCount); ++p) {
         bool used = false;
@@ -2196,7 +2214,7 @@ int HarnessBuilderDialog::nextFreePin(const HarnessConnector& c) const {
             }
         if (!used) return p;
     }
-    return 1;
+    return 0;
 }
 
 int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
@@ -2277,6 +2295,7 @@ int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
     if (!to) to = &def_.connectors.back();
 
     const std::vector<CableConductor> cores = cableConductors(spec, bundle);
+    int openEnds = 0;
     for (const CableConductor& cc : cores) {
         HarnessWire w;
         w.id = uniqueWireId();
@@ -2294,9 +2313,21 @@ int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
         w.showColor = true;
         def_.wires.push_back(w);
         // The pins are given out after each row is in, so nextFreePin sees the rows already placed.
+        // A cable of more conductors than the connector has pins is ordinary: the rest come out as
+        // FLYING LEADS, terminated where they are left, rather than being doubled up on to pins that
+        // are already taken. Which conductors those are is the cable's own order, so the same cable in
+        // the same place always lands the same way.
         HarnessWire& placed = def_.wires.back();
         placed.fromPin = nextFreePin(*from);
+        if (placed.fromPin == 0) {
+            placed.fromConn = harnessOpenEndpointKey();
+            ++openEnds;
+        }
         placed.toPin = nextFreePin(*to);
+        if (placed.toPin == 0) {
+            placed.toConn = harnessOpenEndpointKey();
+            ++openEnds;
+        }
     }
     // A screen around the whole cable is asked for ON THE CONNECTORS it arrives at, one tick per
     // end - the same ticks a person would use for a screen they were drawing by hand. That is what
@@ -2322,10 +2353,17 @@ int HarnessBuilderDialog::addCableFromLibrary(const QString& libPartId) {
     // called: a public call that changes the harness must not be able to leave the window showing
     // something else, whatever the caller remembers to do afterwards. The note is set last, since a
     // rebuild writes its own.
-    const QString note = QStringLiteral("%1 placed: %2 conductor(s) — %3%4")
+    QString openNote;
+    if (openEnds > 0)
+        openNote = QStringLiteral(" — %1 end(s) left open: %2 has no more free pins")
+                       .arg(openEnds)
+                       .arg(nextFreePin(*from) == 0
+                                ? (from->designator.isEmpty() ? from->id : from->designator)
+                                : (to->designator.isEmpty() ? to->id : to->designator));
+    const QString note = QStringLiteral("%1 placed: %2 conductor(s) — %3%4%5")
                              .arg(part->title())
                              .arg(cores.size())
-                             .arg(spec.summary(), shieldNote);
+                             .arg(spec.summary(), shieldNote, openNote);
     reloadAll();
     summaryLabel_->setText(note);
     return static_cast<int>(cores.size());
@@ -2350,6 +2388,9 @@ void HarnessBuilderDialog::addWire() {
     w.toConn = to->id;
     w.fromPin = nextFreePin(*from);
     w.toPin = nextFreePin(*to);
+    // A full connector gives the wire an open end rather than a pin somebody else is already on.
+    if (w.fromPin == 0) w.fromConn = harnessOpenEndpointKey();
+    if (w.toPin == 0) w.toConn = harnessOpenEndpointKey();
     def_.wires.push_back(w);
 }
 
@@ -2647,10 +2688,20 @@ void HarnessBuilderDialog::mergeGroupCells() {
                     "These %1 rows are one cable. Renaming it here renames it on all of them; empty "
                     "the field to break the cable up into separate wires again.").arg(count));
             }
-            // Centred in the tall cell, and carrying the bundle's own colour so the merged block
-            // reads as one object rather than a hole in the tinted rows.
-            QString sheet = QStringLiteral("border:none;font-weight:600;");
-            if (!tint.isEmpty()) sheet += QStringLiteral("background:%1;").arg(tint);
+            // Centred in the tall cell. A screen or a twist INSIDE a cable is painted in its own
+            // colour with the cable's colour left around the edge: the pair reads as one thing you can
+            // pick out of the cable, and the border says it is still part of that cable. The bundle's
+            // own cell just takes the cable colour - it IS the cable.
+            QString sheet = QStringLiteral("font-weight:600;");
+            const QString own = what.isEmpty() ? QString() : groupTint(value);
+            if (!own.isEmpty() && !tint.isEmpty())
+                sheet += QStringLiteral("background:%1;border:2px solid %2;").arg(own, tint);
+            else if (!own.isEmpty())
+                sheet += QStringLiteral("background:%1;border:none;").arg(own);
+            else {
+                sheet += QStringLiteral("border:none;");
+                if (!tint.isEmpty()) sheet += QStringLiteral("background:%1;").arg(tint);
+            }
             one->setStyleSheet(sheet);
             const QString before = value;
             QString HarnessWire::*field = gc.field;
@@ -2855,12 +2906,12 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
         auto* kind = new QComboBox(wireTable_);
         kind->addItem(QStringLiteral("Wire"), QStringLiteral("wire"));
         kind->addItem(QStringLiteral("Coax"), QStringLiteral("coax"));
-        kind->addItem(QStringLiteral("Coax-splice"), QStringLiteral("coax-splice"));
+        kind->addItem(QStringLiteral("Coax-joint"), QStringLiteral("coax-splice"));
         kind->setCurrentIndex(std::max(0, kind->findData(w.kind)));
         kind->setToolTip(QStringLiteral(
             "Wire: one conductor. Coax: a signal with its own screen drawn beside it, running "
-            "pin to pin. Coax-splice: the same cable, but joined to the harness through a splice "
-            "at each end - past the splice the two conductors are separate wires. A CABLE is "
+            "pin to pin. Coax-joint: the same cable, but joined to the harness through a joint "
+            "at each end - past the joint the two conductors are separate wires. A CABLE is "
             "not a kind of conductor - it is a bundle: unify the rows that run together."));
         centerCombo(kind);
         connect(kind, &QComboBox::currentIndexChanged, this,
@@ -3200,7 +3251,7 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
              &textHeightSpin_);
     textHeightSpin_->setToolTip(QStringLiteral(
         "How tall the colour/gauge marking and the wire label are drawn"));
-    numField(gaps, QStringLiteral("Splice size"), def_.layout.spliceSize, 0.5, 50,
+    numField(gaps, QStringLiteral("Joint size"), def_.layout.spliceSize, 0.5, 50,
              &spliceSizeSpin_);
     spliceSizeSpin_->setToolTip(QStringLiteral("How big the joint dot is drawn"));
     textGapSpin_->setToolTip(QStringLiteral(
@@ -3257,7 +3308,7 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
     terminateWiresBox_ = new QCheckBox(QStringLiteral("Terminate unconnected wires"), optCol);
     terminateWiresBox_->setToolTip(QStringLiteral(
         "Put an X on a wire end that reaches no pin, so a dangling wire shows on the sheet"));
-    spliceBox_ = new QCheckBox(QStringLiteral("Splice where wires meet"), optCol);
+    spliceBox_ = new QCheckBox(QStringLiteral("Joint where wires meet"), optCol);
     spliceBox_->setToolTip(QStringLiteral(
         "Mark a joint where two wires meet end to end; without it a join cannot be told from "
         "one wire passing over another"));

@@ -6727,8 +6727,10 @@ int run_harness_tests() {
                 check(near(sp.a.x, sp.b.x), "coax splice: both joints sit at the same x");
                 check(std::abs(sp.a.y - sp.b.y) > 1e-6,
                       "coax splice: the joints are on the two different conductors");
-                check(sp.meta.value("spliceText").toString() == QLatin1String("SPLICE"),
-                      "coax splice: the part is labelled");
+                // The meta KEY keeps the old name so drawings written before the rename still read;
+                // the word drawn on the sheet is what the app calls the thing.
+                check(sp.meta.value("spliceText").toString() == QLatin1String("JOINT"),
+                      "coax joint: the part is labelled");
             }
             // Past each joint the conductors are wires of their own: the cable is what runs
             // between the two splices, and the pigtails reach the pins.

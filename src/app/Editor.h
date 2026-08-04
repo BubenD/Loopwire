@@ -249,7 +249,10 @@ public:
     void setSelectionLayer(const QString& layer);
     void setSelectionColor(const QString& hex); // empty => ByLayer
     void setSelectionWeight(double weight);      // 0 => ByLayer
-    void setSelectionMeta(const QString& key, const QString& value); // linetype, plot style, ...
+    void setSelectionMeta(const QString& key, const QString& value);
+    // Which side of a screen its drain leaves from. Not setSelectionMeta: the leg is GEOMETRY - the
+    // last point of the entity - so the side has to move it, or the drawing keeps the old leg.
+    void setSelectionScreenLegDir(const QString& dir); // linetype, plot style, ...
     void setSelectionMetaNumber(const QString& key, double value);   // gap, ...
     // Resize a selected shield's radius ("rx" or "ry") AND scale its drain leg by the same
     // factor (so the leg grows/shrinks with the shield when edited in Properties, matching
@@ -286,6 +289,13 @@ public:
     int wireEndsAt(const Vec2& at, const QString& except = QString()) const;
     // Drop a joint marker at a point (unless one is already there).
     void addSpliceAt(const Vec2& at);
+    // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
+    // What lets a run be landed on another run as a T, and what says a joint belongs there.
+    std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,
+                                          const QString& except = QString()) const;
+    // Is this point ON something a wire can be connected to - a pin end, another wire's end or body,
+    // a joint? Such a point is where the user said the wire goes, and nothing may nudge it.
+    bool isConnectablePoint(const Vec2& q) const;
     // Join this wire to another whose free end has been brought onto one of its own: the two
     // become a single run with a splice at the joint. True if a join was made.
     bool mergeWireEnds(const QString& wireId);

@@ -3948,6 +3948,86 @@ int run_editor_tests() {
         check(ed.selection().size() == 1, "hatch-select: select-zone works in hatch mode");
     }
 
+    // --- Routing on to something: the connection wins over the rules that would move it, and a run
+    //     landed on in the middle of another is a JOINT.
+    {
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("w1");
+        run.type = EntityType::Wire;
+        run.points = {{0, 0}, {200, 0}};
+        d.entities().push_back(run);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.wireClearanceOn() = true;
+        ed.wireGapRule() = QStringLiteral("custom");
+        ed.wireGapCustom() = 10.0;
+        ed.setTool(ToolId::Wire);
+        ed.wireOrtho() = true;                       // "90° only" on: the case that used to miss
+        ed.onPointerPress({60, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onDoubleClick({120, 0});
+
+        const Entity* made = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Wire && e.id != QLatin1String("w1")) made = &e;
+        check(made != nullptr, "routing: the wire was drawn");
+        if (made) {
+            check(made->points.size() == 3, "routing: a knee is put in so the corners stay square");
+            bool square = true;
+            for (size_t i = 1; i < made->points.size(); ++i) {
+                const Vec2 a = made->points[i - 1], b = made->points[i];
+                if (std::abs(a.x - b.x) > 1e-6 && std::abs(a.y - b.y) > 1e-6) square = false;
+            }
+            check(square, "routing: every leg is horizontal or vertical");
+            check(std::abs(made->points.back().x - 120.0) < 1e-6 &&
+                      std::abs(made->points.back().y) < 1e-6,
+                  "routing: it lands EXACTLY on the run it was aimed at, unmoved by ortho or "
+                  "clearance");
+        }
+        int joints = 0;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Splice && std::abs(e.a.x - 120.0) < 1e-6 &&
+                std::abs(e.a.y) < 1e-6)
+                ++joints;
+        check(joints == 1, "routing: a T-junction is jointed where it meets the run");
+
+        // And the clearance rule still does its job on a run that is merely NEAR a neighbour.
+        const Vec2 pushed = ed.applyWireClearance({0, 3}, {80, 3});
+        check(near(pushed.y, 10.0), "routing: a run drawn too close is still pushed to the clearance");
+    }
+
+    // --- A screen's drain leg follows the side it is told to leave from.
+    {
+        Document d;
+        Entity sc;
+        sc.id = QStringLiteral("s1");
+        sc.type = EntityType::Screen;
+        sc.points = {{100, 0}, {100, 30}, {100, -40}}; // two crossings, then the drain end below
+        sc.meta.insert("catch", 2);
+        sc.meta.insert("rx", 8.0);
+        sc.meta.insert("ry", 22.0);
+        sc.meta.insert("rot", 1.5707963267948966);
+        sc.meta.insert("legDir", QStringLiteral("bottom"));
+        d.entities().push_back(sc);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.selectById(QStringLiteral("s1"));
+
+        const Vec2 was = d.entities().front().points.back();
+        ed.setSelectionScreenLegDir(QStringLiteral("top"));
+        const Vec2 now = d.entities().front().points.back();
+        check(now.y > was.y, "leg side: set to Top, the drain end moves to the top");
+        // The centre of the band is y = 15 and ry = 22, so either edge is 33 from the old tip.
+        check(near(std::abs(now.y - 15.0), 55.0) && near(std::abs(was.y - 15.0), 55.0),
+              "leg side: and it keeps the length it had");
+        check(d.entities().front().meta.value("legDir").toString() == QLatin1String("top"),
+              "leg side: the side is recorded too");
+        ed.setSelectionScreenLegDir(QStringLiteral("bottom"));
+        check(near(d.entities().front().points.back().y, was.y),
+              "leg side: back to Bottom puts it where it started");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

@@ -408,7 +408,7 @@ private:
     std::function<void()> syncArrayRibbon_;
     bool arraySyncing_ = false;
     QWidget* markerGroup_ = nullptr;             // Schematic-build "Marker" size group (contextual)
-    QLabel* markerLabel_ = nullptr;              // its label ("Splice ⌀" / "X size")
+    QLabel* markerLabel_ = nullptr;              // its label ("Joint ⌀" / "X size")
     QDoubleSpinBox* markerSpin_ = nullptr;       // its size spin (edits the active marker tool)
     // Schematic-build Modify / DRC groups (+ their separator rules): hidden while the
     // Splice or Termination tool is armed so only the marker preferences show.

@@ -1617,7 +1617,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                         // joint still reads as a splice instead of collapsing into its own dot.
                         sp.meta.insert("houseRx", std::max(3.0, p->spec.pitch * 0.22));
                         sp.meta.insert("houseRy", std::max(2.0, p->spec.pitch * 0.15));
-                        sp.meta.insert("spliceText", QStringLiteral("SPLICE"));
+                        sp.meta.insert("spliceText", QStringLiteral("JOINT"));
                         sp.meta.insert("textSize", L.textHeight);
                         sp.meta.insert("bundle", bundle);
                         sp.meta.insert("coaxScreenOf", signal->id);
