@@ -19,6 +19,7 @@
 #include <QDateTime>
 #include <QUuid>
 #include <QtMath>
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -11924,6 +11925,82 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         p.setPen(sp);
         p.setBrush(Qt::NoBrush);
         p.drawRect(QRectF(s.x() - 5, s.y() - 5, 10, 10));
+    }
+
+    // Drawn LAST, so nothing paints over it: the joints where a selected break mark cuts its run sit
+    // exactly where the mark's own strokes are, and the selection highlight is stroked over that.
+    // The joints where a SELECTED break mark cuts its run. They say which conductors the mark
+    // interrupts and where their cut ends are - which is worth seeing while the mark is being placed
+    // or adjusted, and clutter the rest of the time: a finished drawing shows the interruption, and the
+    // ends of the run are where the strokes are. So they belong to the selection, not to the drawing,
+    // and they are drawn here rather than by the renderer.
+    for (const QString& id : selected_) {
+        const Entity* mark = nullptr;
+        for (const auto& m : doc_->entities())
+            if (m.id == id && m.type == EntityType::LengthBreak) mark = &m;
+        if (!mark || !mark->meta.value(QStringLiteral("endJoints")).toBool(true)) continue;
+        // Where the mark actually lies: from its run when it is attached to one.
+        Entity shown = *mark;
+        const Entity* host = nullptr;
+        if (const QString hostId = mark->meta.value(QStringLiteral("host")).toString();
+            !hostId.isEmpty())
+            for (const auto& h : doc_->entities())
+                if (h.id == hostId) host = &h;
+        if (host) {
+            Vec2 pos, dir;
+            if (runPointAtFraction(*host, mark->meta.value(QStringLiteral("annT")).toDouble(0.5), pos,
+                                   dir)) {
+                shown.a = pos;
+                shown.rotation = std::atan2(dir.y, dir.x);
+            } else {
+                host = nullptr;
+            }
+        }
+        // The lines of the run it interrupts: a double line's two rails, anything else's centreline.
+        std::vector<std::vector<Vec2>> lines;
+        auto addRunLines = [&lines](const Entity& r) {
+            if (r.type == EntityType::DoubleLine) {
+                const double g = r.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                const Vec2 off = (r.b - r.a).normalized().perp() * (g / 2.0);
+                lines.push_back({r.a + off, r.b + off});
+                lines.push_back({r.a - off, r.b - off});
+            } else if (r.type == EntityType::Polyline && r.meta.value(QStringLiteral("double")).toBool()) {
+                const double g = r.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                for (double s : {g / 2.0, -g / 2.0}) lines.push_back(offsetPolyline(r.points, s));
+            } else if (std::vector<Vec2> cl = runCenterline(r); cl.size() >= 2) {
+                lines.push_back(std::move(cl));
+            }
+        };
+        if (host) {
+            addRunLines(*host);
+        } else {
+            const Bounds b = shown.bounds();
+            for (const auto& r : doc_->entities()) {
+                if (r.id == mark->id || r.type == EntityType::LengthBreak) continue;
+                const Bounds rb = r.bounds();
+                if (rb.max.x < b.min.x || rb.min.x > b.max.x || rb.max.y < b.min.y ||
+                    rb.min.y > b.max.y)
+                    continue;
+                addRunLines(r);
+            }
+        }
+        const double halfWorld = std::max(0.5, shown.meta.value(QStringLiteral("size")).toDouble(6.0));
+        const double dotWorld = std::clamp(halfWorld * 0.07, 0.9, 2.6);
+        const double dot = std::clamp(dotWorld * vt.scale(), 2.8, 5.5);
+        p.save();
+        // Amber, with a dark rim: the selected mark is drawn in cyan and the run in white, so a joint in
+        // either of those colours is a dot nobody can see. It is telling the user something - here is a
+        // conductor this mark cuts, and here is its end - so it has to be legible against both.
+        p.setPen(QPen(QColor(20, 26, 34), 1.0));
+        p.setBrush(QColor(255, 196, 92));
+        for (const std::vector<Vec2>& stroke : breakStrokes(shown))
+            for (size_t i = 1; i < stroke.size(); ++i)
+                for (const std::vector<Vec2>& ln : lines)
+                    for (size_t j = 1; j < ln.size(); ++j)
+                        if (auto x = segmentSegmentIntersection(stroke[i - 1], stroke[i], ln[j - 1],
+                                                               ln[j]))
+                            p.drawEllipse(vt.toScreen(*x), dot, dot);
+        p.restore();
     }
 }
 

@@ -1679,58 +1679,6 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         p.drawPath(s0);
         p.drawPath(s1);
 
-        // A JOINT where each stroke crosses the run: the run's cut ends are shown as ends rather than
-        // left as a gap that could be read as a conductor simply stopping. Four on a bundle drawn as a
-        // double line - two on each rail - and two on a single line. Taken from the strokes as they are
-        // drawn, so on an S the joint sits where the CURVE meets the rail and not where a straight line
-        // between its ends would have.
-        if (e.meta.value("endJoints").toBool(true)) {
-            std::vector<std::vector<Vec2>> lines;
-            auto addRunLines = [&lines](const Entity& r) {
-                if (r.type == EntityType::DoubleLine) {
-                    const double g = r.meta.value("gap").toDouble(10.0);
-                    const Vec2 off = (r.b - r.a).normalized().perp() * (g / 2.0);
-                    lines.push_back({r.a + off, r.b + off});
-                    lines.push_back({r.a - off, r.b - off});
-                } else if (r.type == EntityType::Polyline && r.meta.value("double").toBool()) {
-                    const double g = r.meta.value("gap").toDouble(10.0);
-                    for (double s : {g / 2.0, -g / 2.0}) lines.push_back(offsetPolyline(r.points, s));
-                } else if (std::vector<Vec2> cl = runCenterline(r); cl.size() >= 2) {
-                    lines.push_back(std::move(cl));
-                }
-            };
-            if (host) {
-                addRunLines(*host);
-            } else {
-                // Attached to nothing - a mark from before marks were attached, or one dropped on bare
-                // paper next to a run. The runs it actually crosses are found by looking.
-                const Bounds b = shown.bounds();
-                for (const auto& r : doc.entities()) {
-                    if (r.id == e.id || r.type == EntityType::LengthBreak) continue;
-                    const Bounds rb = r.bounds();
-                    if (rb.max.x < b.min.x || rb.min.x > b.max.x || rb.max.y < b.min.y ||
-                        rb.min.y > b.max.y)
-                        continue;
-                    addRunLines(r);
-                }
-            }
-            const double halfWorld = std::max(0.5, shown.meta.value("size").toDouble(6.0));
-            // A joint, not a blob: it marks the cut end of a conductor, so it is read beside the line
-            // it terminates and must not swamp it.
-            const double dotWorld = std::clamp(halfWorld * 0.055, 0.7, 2.2);
-            const double dot = std::clamp(dotWorld * vt.scale(), 1.3, 4.0);
-            p.save();
-            p.setPen(Qt::NoPen);
-            p.setBrush(color);
-            for (const std::vector<Vec2>& stroke : strokes)
-                for (size_t i = 1; i < stroke.size(); ++i)
-                    for (const std::vector<Vec2>& ln : lines)
-                        for (size_t j = 1; j < ln.size(); ++j)
-                            if (auto x = segmentSegmentIntersection(stroke[i - 1], stroke[i],
-                                                                    ln[j - 1], ln[j]))
-                                p.drawEllipse(vt.toScreen(*x), dot, dot);
-            p.restore();
-        }
         break;
     }
 

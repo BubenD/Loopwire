@@ -2,11 +2,14 @@
 #include "geometry/Geometry.h"
 #include "geometry/Snap.h"
 #include "model/Document.h"
+#include "render/EntityRenderer.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
 #include "tools/QuickSelect.h"
 
+#include <QImage>
 #include <QJsonArray>
+#include <QPainter>
 #include <QtMath>
 #include <cmath>
 #include <cstdio>
@@ -4253,6 +4256,37 @@ int run_editor_tests() {
             ed.onPointerRelease(c2, Qt::LeftButton);
             check(ed.selection().empty(),
                   "double line: a zone in the gap between its lines selects nothing");
+        }
+
+        // The joints at its cut ends are SELECTION feedback: an unselected mark draws none, so a
+        // finished drawing carries only the interruption and the strokes.
+        {
+            auto amberDots = [&d, &ed](const Vec2& viewOffset) {
+                ViewTransform vt;
+                vt.view.scale = 1.0;
+                vt.view.x = viewOffset.x;
+                vt.view.y = viewOffset.y;
+                QImage img(420, 260, QImage::Format_RGB32);
+                img.fill(QColor("#1e2832"));
+                QPainter p(&img);
+                for (const auto& e : d.entities()) EntityRenderer::draw(p, e, d, vt);
+                ed.drawOverlay(p, vt);
+                p.end();
+                int lit = 0;
+                for (int y = 0; y < img.height(); ++y)
+                    for (int x = 0; x < img.width(); ++x) {
+                        const QColor c = img.pixelColor(x, y);
+                        if (c.red() > 180 && c.green() > 120 && c.green() < 230 && c.blue() < 140)
+                            ++lit;
+                    }
+                return lit;
+            };
+            ed.clearSelection();
+            const int none = amberDots({40.0, 130.0});
+            ed.selectById(markId);
+            const int some = amberDots({40.0, 130.0});
+            check(none == 0, "break: an unselected mark draws no joints - the drawing stays clean");
+            check(some > 0, "break: a selected one shows where it cuts the run");
         }
 
         // The run moving carries the mark: it marks a place on the run, not a coordinate.
