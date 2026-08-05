@@ -40,6 +40,9 @@ enum class EntityType {
     // styles, both conventional - straight strokes or S-curves - chosen by meta["breakStyle"].
     // a = where it sits on the run, rotation = the run's direction.
     LengthBreak,
+    // Two wires laid up round each other, drawn: straight ends with a run of crossings between them.
+    // a / b are the ends of the run; meta twistWidth / twistPitch / twistEnds shape it.
+    TwistedPair,
 };
 
 EntityType entityTypeFromString(const QString& s);

@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 24> kTypeNames = {{
+const std::array<TypeName, 25> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -30,6 +30,7 @@ const std::array<TypeName, 24> kTypeNames = {{
     {EntityType::Wire, "wire"},
     {EntityType::Splice, "splice"},
     {EntityType::LengthBreak, "lengthbreak"},
+    {EntityType::TwistedPair, "twistedpair"},
     {EntityType::Connector, "connector"},
     {EntityType::Breakout, "breakout"},
     {EntityType::Bundle, "bundle"},
@@ -60,6 +61,13 @@ Bounds Entity::bounds() const {
     case EntityType::DoubleLine:
         bnds.expand(a);
         bnds.expand(b);
+        break;
+    case EntityType::TwistedPair:
+        // The two wires themselves, not the line they were drawn along: the pair reaches half its
+        // width out to either side of that line.
+        for (const auto& strand : twistedPairStrands(*this))
+            for (const auto& p : strand) bnds.expand(p);
+        if (!bnds.valid) { bnds.expand(a); bnds.expand(b); }
         break;
     case EntityType::Hatch:
         // A circle-boundary hatch carries center/radius rather than points.
@@ -253,6 +261,7 @@ QJsonObject Entity::toJson() const {
     case EntityType::Line:
     case EntityType::DoubleLine:
     case EntityType::Dimension:
+    case EntityType::TwistedPair:
         obj["a"] = pointToJson(a);
         obj["b"] = pointToJson(b);
         break;

@@ -1719,6 +1719,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
     }
 
+    case EntityType::TwistedPair: {
+        // Two wires laid up round each other. Straight at both ends, because that is where the pair is
+        // worked on - stripped, crimped, spliced - and twisted in between, which is the whole point of
+        // the drawing: this pair is a twisted pair and is to be made as one.
+        //
+        // The shape comes from twistedPairStrands(), the same description a click measures against and
+        // a selection zone catches, so what is drawn and what can be grabbed cannot drift apart.
+        const auto strands = twistedPairStrands(e);
+        for (const auto& strand : strands) {
+            QPolygonF poly;
+            poly.reserve(static_cast<int>(strand.size()));
+            for (const Vec2& v : strand) poly << vt.toScreen(v);
+            p.drawPolyline(poly);
+        }
+        break;
+    }
+
     case EntityType::NotConnected: {
         const QPointF c = vt.toScreen(e.a);
         // World-sized so the X scales with the drawing (zooms out as you zoom out),

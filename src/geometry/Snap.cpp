@@ -45,6 +45,13 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Line:
         out.emplace_back(e.a, e.b);
         break;
+    case EntityType::TwistedPair:
+        // The wires themselves, so a measurement takes off the drawn run rather than the empty
+        // middle of the twist.
+        for (const auto& strand : twistedPairStrands(e))
+            for (size_t i = 1; i < strand.size(); ++i)
+                out.emplace_back(strand[i - 1], strand[i]);
+        break;
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines — NOT the centerline. A centerline
         // segment would put a phantom midpoint/nearest snap in the empty gap
@@ -141,6 +148,15 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::Line:
         out.push_back(e.a);
         out.push_back(e.b);
+        break;
+    case EntityType::TwistedPair:
+        // The four wire ends - where the pair is joined to anything - and not the centre of the
+        // run, which is between the two wires and on neither of them.
+        for (const auto& strand : twistedPairStrands(e)) {
+            if (strand.empty()) continue;
+            out.push_back(strand.front());
+            out.push_back(strand.back());
+        }
         break;
     case EntityType::DoubleLine: {
         // The four ends of the two VISIBLE parallel lines only — no centerline

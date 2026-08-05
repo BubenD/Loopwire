@@ -135,6 +135,22 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         p.drawLine(13, 5, 8, 19);
         p.drawLine(18, 5, 13, 19);
         break;
+    case ToolId::TwistedPair: {
+        // The thing itself: two wires straight at both ends, crossing twice in the middle.
+        for (double s : {1.0, -1.0}) {
+            QPainterPath pa(QPointF(2, 12 - 4 * s));
+            pa.lineTo(QPointF(6, 12 - 4 * s));
+            for (int k = 0; k < 2; ++k) {
+                const double x = 6 + k * 6.0;
+                pa.cubicTo(QPointF(x + 2, 12 - 4 * s), QPointF(x + 4, 12 + 4 * s),
+                           QPointF(x + 6, 12 + 4 * s));
+                s = -s;
+            }
+            pa.lineTo(QPointF(22, 12 + 4 * s));
+            p.drawPath(pa);
+        }
+        break;
+    }
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     case ToolId::Balloon: {
         // Numbered callout: a circle with a leader stub and a "1" inside.

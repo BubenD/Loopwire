@@ -313,6 +313,51 @@ std::vector<std::vector<Vec2>> breakStrokes(const Entity& mark) {
     return out;
 }
 
+std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair) return {};
+    const Vec2 d = pair.b - pair.a;
+    const double len = d.length();
+    if (len < 1e-9) return {};
+    const Vec2 along{d.x / len, d.y / len};
+    const Vec2 across = along.perp();
+    const double half =
+        std::max(0.1, pair.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth)) / 2.0;
+    double pitch =
+        std::max(0.2, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
+    double lead =
+        std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
+    // The two straight ends and at least one whole crossing have to fit in what was drawn. A pair
+    // drawn shorter than that keeps its proportions - it is drawn small, rather than losing its twist
+    // or running past where it was put.
+    if (2.0 * lead + pitch > len) {
+        const double k = len / (2.0 * lead + pitch);
+        lead *= k;
+        pitch *= k;
+    }
+    const double twistLen = len - 2.0 * lead;
+    // Whole crossings, so the wires come back level with the straight ends they run into: half a
+    // crossing would leave each end offset to the wrong side and the leads would kink into them.
+    const int turns = std::max(1, static_cast<int>(std::llround(twistLen / pitch)));
+    const double used = twistLen / turns;
+    constexpr int kStepsPerTurn = 24;
+    std::vector<std::vector<Vec2>> out;
+    for (const double sign : {1.0, -1.0}) {
+        std::vector<Vec2> s;
+        const Vec2 side = across * (half * sign);
+        s.push_back(pair.a + side);                           // the lead in
+        const Vec2 twistStart = pair.a + along * lead;
+        const int steps = turns * kStepsPerTurn;
+        for (int i = 0; i <= steps; ++i) {
+            const double t = twistLen * i / steps;
+            const double phase = 2.0 * M_PI * t / used;
+            s.push_back(twistStart + along * t + across * (half * sign * std::cos(phase)));
+        }
+        s.push_back(pair.b + side);                           // the lead out
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
 std::vector<Vec2> runCenterline(const Entity& e) {
     switch (e.type) {
     case EntityType::Line:

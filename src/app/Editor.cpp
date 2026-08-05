@@ -408,6 +408,12 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         }
         break;
     }
+    case EntityType::TwistedPair:
+        // The two ends of the run. Dragging one re-lays the pair between where it now is and the other
+        // end, keeping its crossings - it is a length of twisted pair, not a drawn shape.
+        g.push_back({e.a, GripRole::LineA, 0});
+        g.push_back({e.b, GripRole::LineB, 0});
+        break;
     case EntityType::DoubleLine: {
         // Joints ONLY on the two VISIBLE parallel lines — never on the centerline
         // between them. Each end grip carries its offset so dragging it keeps that
@@ -961,6 +967,14 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     switch (e.type) {
     case EntityType::Line:
         best = segDist(e.a, e.b);
+        break;
+    case EntityType::TwistedPair:
+        // The two wires, not the line they were drawn along: the middle of a twisted pair is empty
+        // paper between the crossings, and clicking there should no more pick it than the gap of a
+        // double line picks that.
+        for (const auto& strand : twistedPairStrands(e))
+            for (size_t i = 1; i < strand.size(); ++i)
+                best = std::min(best, segDist(strand[i - 1], strand[i]));
         break;
     case EntityType::Dimension:
         // Select by touching the actual drawn geometry (dimension line, extension
@@ -2083,6 +2097,11 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     case EntityType::Line:
         pts = {e.a, lerp(e.a, e.b, 0.5), e.b};
         break;
+    case EntityType::TwistedPair:
+        for (const auto& strand : twistedPairStrands(e))
+            for (const Vec2& v : strand) pts.push_back(v);
+        if (pts.empty()) pts = {e.a, e.b};
+        break;
     case EntityType::Dimension:
         // The endpoints of the drawn geometry, so a window/crossing reacts to the
         // dimension/extension lines (not just the measured points).
@@ -2193,6 +2212,11 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     switch (e.type) {
     case EntityType::Line:
         segs.emplace_back(e.a, e.b);
+        break;
+    case EntityType::TwistedPair:
+        for (const auto& strand : twistedPairStrands(e))
+            for (size_t i = 1; i < strand.size(); ++i)
+                segs.emplace_back(strand[i - 1], strand[i]);
         break;
     case EntityType::Dimension:
         // The real drawn lines, so a green crossing zone touching ANY of them selects.
@@ -5616,6 +5640,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral("Line: click next point — Enter ends the run, Esc exits"));
         break;
     }
+    case ToolId::TwistedPair:
     case ToolId::DoubleLine:
     case ToolId::Rect:
     case ToolId::Polygon:
@@ -6308,6 +6333,18 @@ void Editor::finishDraw() {
     bool filletTooBig = false; // set if a polyline fillet radius won't fit (warn after)
 
     switch (tool_) {
+    case ToolId::TwistedPair:
+        // Drawn like a line, between the two points the pair runs between. What shapes it - how far
+        // apart the wires are, how long a crossing is, how much straight end to leave - is carried on
+        // the object, so it can be changed afterwards without re-drawing it.
+        if (draftPts_.size() < 2) return;
+        e.type = EntityType::TwistedPair;
+        e.a = draftPts_[0];
+        e.b = draftPts_[1];
+        e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
+        e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+        e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        break;
     case ToolId::Line:
     case ToolId::DoubleLine:
         if (draftPts_.size() < 2) return;
@@ -6775,6 +6812,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     switch (tool_) {
     case ToolId::Line:
     case ToolId::DoubleLine:
+    case ToolId::TwistedPair:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -6825,6 +6863,9 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [LS] line-start%2  ·  [C] close  ·  [U] undo  ·  Enter")
             .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString(),
                  dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
+    case ToolId::TwistedPair:
+        return QStringLiteral(
+            "TWISTED PAIR: click the two ends  ·  straight ends, crossings between them");
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
             .arg(dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
@@ -6947,6 +6988,7 @@ bool Editor::commitDrawFields() {
     switch (tool_) {
     case ToolId::Line:
     case ToolId::DoubleLine:
+    case ToolId::TwistedPair:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -11542,6 +11584,17 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 break;
             }
             if (ok) EntityRenderer::draw(p, temp, *doc_, vt, QColor("#ffffff"));
+        } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
+            // Previewed as the thing itself, drawn by the same code that will draw it once placed -
+            // so what is on screen while placing it is what is placed.
+            Entity tp;
+            tp.type = EntityType::TwistedPair;
+            tp.a = pts[0];
+            tp.b = pts[1];
+            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
+            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
             const Vec2 off = perp * (doubleLineGap_ / 2.0);

@@ -47,13 +47,59 @@ void MainWindow::buildHarnessMechanicalTab() {
     mechGroups_ << addGroupKeep(lay, QStringLiteral("Bundle"),
                                toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
                                         ToolId::Fillet}));
-    // Cut lengths and branch lengths - and the mark that says a run is longer than the paper.
+    // The general drawing and editing tools, the same ones Home carries. A mechanical layout is drawn
+    // with them as much as with the harness tools - a bracket, a panel cut-out, a centreline, a fillet
+    // on a branch - and having to cross to another tab for a line and back for a break mark is the kind
+    // of thing that makes a drawing take twice as long as it should.
+    mechGroups_ << addGroupKeep(lay, QStringLiteral("Draw"),
+                               toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
+                                        ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
+                                        ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
+                                        ToolId::Hatch, ToolId::Wipeout}));
+    {
+        auto* modW = new QWidget(page);
+        auto* mh = new QHBoxLayout(modW);
+        mh->setContentsMargins(0, 0, 0, 0);
+        mh->setSpacing(2);
+        // Nine tools lay out 5 + 4; the Match icon fills the empty cell, as on Home.
+        auto* modRow = toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
+                                ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
+                                ToolId::Chamfer});
+        if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
+            g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
+        mh->addWidget(modRow);
+        mh->addWidget(clipboardRow(/*iconOnly=*/true));
+        mechGroups_ << addGroupKeep(lay, QStringLiteral("Modify"), modW);
+    }
+    {
+        // Annotation: Home's group, with the leader the harness tools use folded in - one group with
+        // every way of writing on the drawing, rather than the same balloon on the tab twice.
+        auto* annoW = new QWidget(page);
+        auto* ah = new QHBoxLayout(annoW);
+        ah->setContentsMargins(0, 0, 0, 0);
+        ah->setSpacing(2);
+        ah->addWidget(toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader,
+                               ToolId::Note, ToolId::Revision}));
+        auto* tb = new QToolButton(annoW);
+        tb->setIcon(makeToolIcon(ToolId::Table));
+        tb->setIconSize(QSize(28, 28));
+        tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        tb->setAutoRaise(true);
+        tb->setFocusPolicy(Qt::NoFocus);
+        tb->setToolTip(QStringLiteral("Insert Table"));
+        connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
+        ah->addWidget(tb);
+        mechGroups_ << addGroupKeep(lay, QStringLiteral("Annotation"), annoW);
+    }
+    // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break
+    // that says a run is longer than the paper, and the twisted pair. They are not drawing tools and
+    // they are not annotation; they are the conventions of this kind of drawing, so they have their own
+    // place on the tab rather than being scattered among the general tools.
     {
         auto* lenW = new QWidget(page);
         auto* lg = new QHBoxLayout(lenW);
         lg->setContentsMargins(0, 0, 0, 0);
         lg->setSpacing(2);
-        lg->addWidget(toolRow({ToolId::Dimension, ToolId::Line}));
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
         // loom on an A3 sheet - and the mark is how a drawing says so: the run is interrupted, the
         // dimension says the real length.
@@ -192,13 +238,26 @@ void MainWindow::buildHarnessMechanicalTab() {
         }
         connect(editor_, &Editor::toolChanged, this, [this](ToolId) { syncBreakOptions(); });
         lg->addWidget(breakW);
-        mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Length"), lenW);
+        // The twisted pair, beside it: two wires laid up round each other, drawn between the two points
+        // it runs between. Straight at both ends, because that is where a pair is worked on - stripped,
+        // crimped, spliced - and twisted in between, which is what the drawing is saying.
+        {
+            auto* tpBtn = new QToolButton(lenW);
+            QAction* act = makeToolAction(toolLabel(ToolId::TwistedPair), ToolId::TwistedPair);
+            tpBtn->setDefaultAction(act);
+            tpBtn->setText(QStringLiteral("Twisted\npair"));
+            tpBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            tpBtn->setIconSize(QSize(26, 26));
+            tpBtn->setAutoRaise(true);
+            tpBtn->setFocusPolicy(Qt::NoFocus);
+            tpBtn->setToolTip(QStringLiteral(
+                "Draw a twisted pair: click the two ends. The wires run straight at both ends and lay "
+                "up round each other in between."));
+            lg->addWidget(tpBtn);
+        }
+        mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }
-    // Calling the parts out on the board.
-    mechGroups_ << addGroupKeep(lay, QStringLiteral("Callouts"),
-                               toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
-                                        ToolId::Table}));
     {
         // The parts behind the drawing: the same bill of materials the "bom" command opens.
         auto* dataW = new QWidget(page);

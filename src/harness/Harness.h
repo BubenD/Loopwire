@@ -146,6 +146,18 @@ std::vector<std::vector<Vec2>> breakStrokes(const Entity& mark);
 // How far the strokes lean out of square, as a fraction of the mark's reach. Straight strokes lean;
 // an S is upright and sweeps instead.
 double breakLeanFactor(const Entity& mark);
+
+// ---- A twisted pair, drawn ---------------------------------------------------
+// Two wires laid up round each other: a straight lead in, a run of crossings, a straight lead out.
+// What a mechanical drawing shows where a pair is twisted, and what the ends are for - a twisted pair
+// is spliced, crimped and dressed like any other wire, and it is the straight ends that get worked on.
+inline constexpr double kTwistedPairWidth = 6.0;  // how far apart the two wires run
+inline constexpr double kTwistedPairPitch = 12.0; // the length of one whole crossing
+inline constexpr double kTwistedPairLead = 6.0;   // the straight run at each end
+// The two wires, each as a polyline in world units. Everything that has to agree about the shape -
+// what is drawn, what a click picks, what a zone catches, how far it reaches - asks this, so none of
+// them can drift apart.
+std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
 double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).

@@ -4385,6 +4385,77 @@ int run_editor_tests() {
         }
     }
 
+    // --- A twisted pair: drawn between two points, straight at the ends, crossing in between.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::TwistedPair);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({120, 0});
+        ed.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+
+        const Entity* pair = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::TwistedPair) pair = &e;
+        check(pair != nullptr, "twisted pair: two clicks draw one");
+        if (pair) {
+            check(near(pair->a.x, 0.0) && near(pair->b.x, 120.0),
+                  "twisted pair: between the two points it was drawn between");
+            const auto strands = twistedPairStrands(*pair);
+            check(strands.size() == 2, "twisted pair: it is two wires");
+            if (strands.size() == 2) {
+                const double half = kTwistedPairWidth / 2.0;
+                // Both wires start and finish clear of the run's own line, on opposite sides, so the
+                // pair reaches its full width at the ends where it is joined to something.
+                check(near(strands[0].front().y, half) && near(strands[1].front().y, -half) &&
+                          near(strands[0].back().y, half) && near(strands[1].back().y, -half),
+                      "twisted pair: the ends of the two wires sit either side of the run");
+                // The ends are STRAIGHT: at the end of the lead the wires are still where they started.
+                auto atX = [](const std::vector<Vec2>& s, double x) {
+                    double y = 0.0, bestD = 1e18;
+                    for (const Vec2& v : s)
+                        if (std::abs(v.x - x) < bestD) { bestD = std::abs(v.x - x); y = v.y; }
+                    return y;
+                };
+                check(near(atX(strands[0], kTwistedPairLead), half),
+                      "twisted pair: it runs straight for the whole lead in");
+                check(near(atX(strands[0], 120.0 - kTwistedPairLead), half),
+                      "twisted pair: and straight again into the lead out, level with where it began");
+                // And it crosses in between: somewhere in the middle the wires have swapped sides.
+                bool crossed = false;
+                for (double x = kTwistedPairLead; x < 120.0 - kTwistedPairLead; x += 1.0)
+                    if (atX(strands[0], x) < -half * 0.8 && atX(strands[1], x) > half * 0.8)
+                        crossed = true;
+                check(crossed, "twisted pair: the wires cross over between the ends");
+            }
+            // Picked on the wires, not on the empty middle: half way between two crossings the run's
+            // own line has nothing drawn on it.
+            const Bounds b = pair->bounds();
+            check(near(b.min.y, -kTwistedPairWidth / 2.0) && near(b.max.y, kTwistedPairWidth / 2.0),
+                  "twisted pair: it reaches half its width either side of the line it was drawn on");
+            const Entity back = Entity::fromJson(pair->toJson());
+            check(back.type == EntityType::TwistedPair && near(back.b.x, 120.0) &&
+                      near(back.meta.value("twistPitch").toDouble(), kTwistedPairPitch),
+                  "twisted pair: saved and read back, it is the same pair");
+        }
+        // A pair drawn shorter than one crossing is drawn small rather than left untwisted.
+        {
+            Entity tiny;
+            tiny.type = EntityType::TwistedPair;
+            tiny.a = {0, 0};
+            tiny.b = {8, 0};
+            const auto strands = twistedPairStrands(tiny);
+            check(strands.size() == 2 && strands[0].size() > 4,
+                  "twisted pair: a short one still twists");
+            if (strands.size() == 2) {
+                double maxX = 0.0;
+                for (const Vec2& v : strands[0]) maxX = std::max(maxX, v.x);
+                check(near(maxX, 8.0), "twisted pair: and stays inside the length it was drawn");
+            }
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
