@@ -43,9 +43,10 @@ void MainWindow::buildHarnessMechanicalTab() {
     auto [page, lay] = makeTabPage();
     // Bundle + branches: a double polyline is the bundle body, a plain one a centreline,
     // Offset walks a parallel edge out and Fillet rounds a branch off the trunk.
-    addGroup(lay, QStringLiteral("Bundle"),
-             toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
-                      ToolId::Fillet}));
+    mechGroups_.clear();
+    mechGroups_ << addGroupKeep(lay, QStringLiteral("Bundle"),
+                               toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
+                                        ToolId::Fillet}));
     // Cut lengths and branch lengths - and the mark that says a run is longer than the paper.
     {
         auto* lenW = new QWidget(page);
@@ -191,11 +192,13 @@ void MainWindow::buildHarnessMechanicalTab() {
         }
         connect(editor_, &Editor::toolChanged, this, [this](ToolId) { syncBreakOptions(); });
         lg->addWidget(breakW);
-        addGroup(lay, QStringLiteral("Length"), lenW);
+        mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Length"), lenW);
+        mechGroups_ << mechBreakGroup_;
     }
     // Calling the parts out on the board.
-    addGroup(lay, QStringLiteral("Callouts"),
-             toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note, ToolId::Table}));
+    mechGroups_ << addGroupKeep(lay, QStringLiteral("Callouts"),
+                               toolRow({ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
+                                        ToolId::Table}));
     {
         // The parts behind the drawing: the same bill of materials the "bom" command opens.
         auto* dataW = new QWidget(page);
@@ -228,7 +231,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
         dg->addWidget(bomBtn, 0, 0);
         dg->addWidget(makePartsLibraryButton(dataW), 0, 1);
-        addGroup(lay, QStringLiteral("Data"), dataW);
+        mechGroups_ << addGroupKeep(lay, QStringLiteral("Data"), dataW);
     }
     {
         auto* anW = new QWidget(page);
@@ -237,7 +240,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         ag->setSpacing(2);
         ag->addWidget(makeMechanicalBuilderButton(anW), 0, 0);
         ag->addWidget(makeMechanicalValidationButton(anW), 0, 1);
-        addGroup(lay, QStringLiteral("Build and check"), anW);
+        mechGroups_ << addGroupKeep(lay, QStringLiteral("Build and check"), anW);
     }
     {
         auto* tw = new QWidget(page);
@@ -247,7 +250,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         tg->addWidget(makeVoltageDropButton(tw), 0, 0);
         tg->addWidget(makeBundleDiameterButton(tw), 0, 1);
         tg->addWidget(makeThermalButton(tw), 0, 2);
-        addGroup(lay, QStringLiteral("Tools"), tw);
+        mechGroups_ << addGroupKeep(lay, QStringLiteral("Tools"), tw);
     }
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("Harness mechanical"));

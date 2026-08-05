@@ -1045,8 +1045,14 @@ public:
         QHash<int, AutoHideDock*> topOfSide;
         for (AutoHideDock* d : allDocks_) {
             if (!d || !d->pinBtn_) continue;
-            if (d->isFloating() || !d->isVisible()) {
+            // A floating palette carries its own pin. One that is not on screen is not part of any
+            // side's reckoning - and must not be given a pin on the strength of being invisible.
+            if (d->isFloating()) {
                 d->pinBtn_->setVisible(true);
+                continue;
+            }
+            if (!d->isVisible()) {
+                d->pinBtn_->setVisible(false);
                 continue;
             }
             const int key = d->areaKey();
@@ -1220,6 +1226,32 @@ private:
     }
 
 protected:
+    // Which panel carries the side's ONE pin is decided from where the panels actually sit, so it can
+    // only be decided once they are on screen. It used to be settled during construction, when every
+    // panel was still invisible: the code took the "not visible" branch for all of them, left every
+    // pin showing and never came back - which is how a side made of two panels ended up with two pins.
+    void showEvent(QShowEvent* e) override {
+        QDockWidget::showEvent(e);
+        QTimer::singleShot(0, this, [] { refreshPinButtons(); });
+    }
+    void hideEvent(QHideEvent* e) override {
+        QDockWidget::hideEvent(e);
+        // A panel closing hands the pin to whatever is now at the top of that side.
+        QTimer::singleShot(0, this, [] { refreshPinButtons(); });
+    }
+    void moveEvent(QMoveEvent* e) override {
+        QDockWidget::moveEvent(e);
+        // Re-ordering a side changes which panel is topmost. Deferred and coalesced: a drag emits
+        // these by the dozen.
+        if (!pinRefresh_) {
+            pinRefresh_ = new QTimer(this);
+            pinRefresh_->setSingleShot(true);
+            pinRefresh_->setInterval(60);
+            QObject::connect(pinRefresh_, &QTimer::timeout, this, [] { refreshPinButtons(); });
+        }
+        pinRefresh_->start();
+    }
+
     // A manual resize of an unpinned panel re-arms a 3 s countdown; once the
     // user stops dragging, the side folds away.
     void resizeEvent(QResizeEvent* e) override {
@@ -1241,6 +1273,7 @@ private:
     QWidget* emptyBar_ = nullptr;
     QTimer* poll_ = nullptr;
     QTimer* resizeTimer_ = nullptr;    // fires 3s after the user finishes resizing
+    QTimer* pinRefresh_ = nullptr;     // coalesces "which panel holds the pin" during a drag
     QElapsedTimer outside_;
     bool pinned_ = true;
     bool collapsed_ = false;
@@ -2082,11 +2115,23 @@ QWidget* MainWindow::undoRedoRow(QWidget* parent) {
 }
 
 void MainWindow::addGroup(QHBoxLayout* lay, const QString& title, QWidget* content) {
-    lay->addWidget(ribbonGroup(title, content));
-    auto* rule = new QFrame(lay->parentWidget());
+    addGroupKeep(lay, title, content);
+}
+
+QWidget* MainWindow::addGroupKeep(QHBoxLayout* lay, const QString& title, QWidget* content) {
+    // The group and its divider in one holder, so folding a group away takes its rule with it and
+    // leaves no double line behind.
+    auto* holder = new QWidget(lay->parentWidget());
+    auto* hl = new QHBoxLayout(holder);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(0);
+    hl->addWidget(ribbonGroup(title, content));
+    auto* rule = new QFrame(holder);
     rule->setFrameShape(QFrame::VLine);
     rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
-    lay->addWidget(rule);
+    hl->addWidget(rule);
+    lay->addWidget(holder);
+    return holder;
 }
 
 // Match properties (paintbrush): pick a source object, then click similar-type targets to copy its
@@ -2230,10 +2275,21 @@ void MainWindow::buildRibbon() {
 //   • otherwise         -> show Place / Modify / DRC, hide Marker and Twist
 // The break mark's fields: shown while its tool is armed, and the third one named for the style being
 // placed - a straight stroke has a length, an S has a reach across the run.
+// While the break tool is armed the Harness-mechanical tab shows the break group alone: the other
+// groups place bundles, dimension them and call parts out, none of which is what the next click will
+// do. Leaving the tab as it was made the mark's own fields one small thing among many.
+void MainWindow::updateMechanicalRibbonGroups() {
+    if (!editor_) return;
+    const bool armed = editor_->tool() == ToolId::LengthBreak;
+    for (QWidget* g : mechGroups_)
+        if (g && g != mechBreakGroup_) g->setVisible(!armed);
+}
+
 void MainWindow::syncBreakOptions() {
     if (!editor_ || !breakOptionsGroup_) return;
     const bool armed = editor_->tool() == ToolId::LengthBreak;
     breakOptionsGroup_->setVisible(armed);
+    updateMechanicalRibbonGroups();
     if (!armed) return;
     const bool curved = editor_->breakStyle() == QLatin1String("curved");
     if (breakSizeLabel_)
@@ -5952,6 +6008,66 @@ void MainWindow::refreshProperties() {
                    editor_->setSelectionMetaNumber(QStringLiteral("textSize"),
                                                    std::clamp(v, 1.0, 50.0));
                });
+    }
+
+    // A selected BREAK MARK: everything about how it is drawn, in the panel as well as on the ribbon.
+    // The ribbon's fields say what the NEXT one will look like; these say what THIS one looks like,
+    // which is what is wanted once it is on the drawing.
+    if (e && e->type == EntityType::LengthBreak) {
+        addHeader(QStringLiteral("Break"));
+        const bool curved =
+            mv(QStringLiteral("breakStyle")).toString() == QLatin1String("curved");
+        addCombo(QStringLiteral("Style"),
+                 {QStringLiteral("Straight strokes"), QStringLiteral("S-curves")},
+                 curved ? QStringLiteral("S-curves") : QStringLiteral("Straight strokes"), false,
+                 [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("breakStyle"),
+                                               t == QLatin1String("S-curves")
+                                                   ? QStringLiteral("curved")
+                                                   : QStringLiteral("straight"));
+                 });
+        addNum(QStringLiteral("Distance between"), mv(QStringLiteral("gap")).toDouble(0.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("gap"),
+                                                   std::clamp(v, 0.5, 500.0));
+               });
+        addNum(curved ? QStringLiteral("Size") : QStringLiteral("Lines length"),
+               mv(QStringLiteral("size")).toDouble(6.0), [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("size"),
+                                                   std::clamp(v, 0.5, 2000.0));
+               });
+        // Blank means "as the style is drawn"; a number leans the strokes by that many degrees.
+        const double ang = mv(QStringLiteral("angle")).toDouble(-1.0);
+        addNum(QStringLiteral("Angle"), ang < 0.0 ? 0.0 : ang, [this](double v) {
+            editor_->setSelectionMetaNumber(QStringLiteral("angle"), std::clamp(v, -75.0, 75.0));
+        });
+        addCombo(QStringLiteral("Interrupts the run"),
+                 {QStringLiteral("Yes"), QStringLiteral("No")},
+                 mv(QStringLiteral("mask")).toBool(true) ? QStringLiteral("Yes")
+                                                        : QStringLiteral("No"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("mask"),
+                                                   t == QLatin1String("Yes"));
+                 });
+        addCombo(QStringLiteral("Joints when selected"),
+                 {QStringLiteral("Yes"), QStringLiteral("No")},
+                 mv(QStringLiteral("endJoints")).toBool(true) ? QStringLiteral("Yes")
+                                                             : QStringLiteral("No"),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("endJoints"),
+                                                   t == QLatin1String("Yes"));
+                 });
+        // What it is attached to, and where along it: read-only, since it is set by placing and by
+        // dragging the mark along its run.
+        const QString host = mv(QStringLiteral("host")).toString();
+        QString onRun = QStringLiteral("nothing");
+        if (!host.isEmpty() && doc_)
+            for (const auto& r : doc_->entities())
+                if (r.id == host)
+                    onRun = QStringLiteral("%1 at %2%")
+                                .arg(entityTypeToString(r.type))
+                                .arg(mv(QStringLiteral("annT")).toDouble(0.5) * 100.0, 0, 'f', 0);
+        addRow(QStringLiteral("On the run"), onRun);
     }
 
     // A selected Shield: edit its ellipse radii and whether the "S" shows.

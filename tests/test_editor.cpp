@@ -4289,6 +4289,32 @@ int run_editor_tests() {
             check(some > 0, "break: a selected one shows where it cuts the run");
         }
 
+        // Its properties can be set one at a time, the way the panel sets them.
+        {
+            ed.clearSelection();
+            ed.selectById(markId);
+            ed.setSelectionMeta(QStringLiteral("breakStyle"), QStringLiteral("curved"));
+            ed.setSelectionMetaNumber(QStringLiteral("gap"), 12.0);
+            ed.setSelectionMetaNumber(QStringLiteral("size"), 18.0);
+            ed.setSelectionMetaNumber(QStringLiteral("angle"), 25.0);
+            ed.setSelectionMetaBool(QStringLiteral("mask"), false);
+            const Entity* m = nullptr;
+            for (const auto& e : d.entities())
+                if (e.id == markId) m = &e;
+            check(m && m->meta.value("breakStyle").toString() == QLatin1String("curved") &&
+                      near(m->meta.value("gap").toDouble(), 12.0) &&
+                      near(m->meta.value("size").toDouble(), 18.0) &&
+                      near(m->meta.value("angle").toDouble(), 25.0) &&
+                      m->meta.value("mask").toBool(true) == false,
+                  "break: every one of its properties can be set on the placed mark");
+            // The shape follows what was set: 25 degrees of lean on an 18 reach.
+            const auto strokes = m ? breakStrokes(*m) : std::vector<std::vector<Vec2>>{};
+            check(strokes.size() == 2, "break: and it still has its two strokes afterwards");
+            // Put it back, so what follows sees the mark it expects.
+            ed.setSelectionMeta(QStringLiteral("breakStyle"), QStringLiteral("straight"));
+            ed.setSelectionMetaBool(QStringLiteral("mask"), true);
+        }
+
         // The run moving carries the mark: it marks a place on the run, not a coordinate.
         for (auto& e : d.entities())
             if (e.id == QLatin1String("bundle")) { e.a.y += 50.0; e.b.y += 50.0; }

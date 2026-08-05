@@ -102,6 +102,8 @@ private:
     // the match-properties button that two tabs both carry.
     std::pair<QWidget*, QHBoxLayout*> makeTabPage();
     void addGroup(QHBoxLayout* lay, const QString& title, QWidget* content);
+    // The same, handing back the group and its divider so a contextual tab can fold them away.
+    QWidget* addGroupKeep(QHBoxLayout* lay, const QString& title, QWidget* content);
     QToolButton* makeMatchBtn(QWidget* parent, bool iconOnly);
     // Undo and Redo as ribbon buttons. Ctrl+Z and Ctrl+Y have always worked; a button is what makes
     // them findable, and it can say whether there is anything left to undo.
@@ -411,6 +413,12 @@ private:
     // The break mark's own fields, shown while its tool is armed: what a break looks like is decided
     // as it is placed, so the numbers belong beside the button rather than in a dialog.
     QWidget* breakOptionsGroup_ = nullptr;
+    // The Harness-mechanical groups, so placing a break can take the tab over the way the twist tool
+    // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
+    // else, because nothing else applies until it is placed.
+    QVector<QWidget*> mechGroups_;
+    QWidget* mechBreakGroup_ = nullptr;
+    void updateMechanicalRibbonGroups();
     QDoubleSpinBox* breakGapSpin_ = nullptr;
     QDoubleSpinBox* breakSizeSpin_ = nullptr;
     QDoubleSpinBox* breakAngleSpin_ = nullptr;

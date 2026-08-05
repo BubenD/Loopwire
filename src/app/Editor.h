@@ -269,7 +269,10 @@ public:
     // Which side of a screen its drain leaves from. Not setSelectionMeta: the leg is GEOMETRY - the
     // last point of the entity - so the side has to move it, or the drawing keeps the old leg.
     void setSelectionScreenLegDir(const QString& dir); // linetype, plot style, ...
-    void setSelectionMetaNumber(const QString& key, double value);   // gap, ...
+    void setSelectionMetaNumber(const QString& key, double value);
+    // A yes/no property of the selection. Written as a real boolean, so what reads it back gets a
+    // boolean and not the string "true".
+    void setSelectionMetaBool(const QString& key, bool value);   // gap, ...
     // Resize a selected shield's radius ("rx" or "ry") AND scale its drain leg by the same
     // factor (so the leg grows/shrinks with the shield when edited in Properties, matching
     // the Scale tool). Only the leg on the axis that changed is scaled.
@@ -348,7 +351,6 @@ public:
     // arrays), measured along its major axis through its centre.
     bool shieldCatchAt(const Entity& screen, double ry, std::vector<Vec2>& crossings,
                        std::vector<QString>& wireIds) const;
-    void setSelectionMetaBool(const QString& key, bool value);       // showS, ...
     // ---- Wire label & marking ----------------------------------------------
     // Set the selected wire(s) label, carrying the new text onto any Wire label
     // (NetLabel) entity attached to them so the drawing and the property agree.
