@@ -1728,6 +1728,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // it: that is what makes it read as twisted rather than as two lines that happen to cross. The
         // stretches come from twistedPairWeave(), built from the same measurement a click is tested
         // against, so what is drawn and what can be grabbed cannot drift apart.
+        //
+        // Painted stretch by stretch, and the pen and brush are swapped WITHOUT save/restore: a pair
+        // has a stretch per half crossing, so a save and a restore for each of them is most of what
+        // drawing one costs. (Gathering the whole pair into one path instead is slower still - Qt
+        // strokes a few large paths less quickly than it draws many small polylines.)
         auto stroke = [&](const std::vector<Vec2>& line) {
             if (line.size() < 2) return;
             QPolygonF poly;
@@ -1735,19 +1740,19 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             for (const Vec2& v : line) poly << vt.toScreen(v);
             p.drawPolyline(poly);
         };
-        const auto weave = twistedPairWeave(e);
-        for (const auto& s : weave) {
+        const QPen wirePen = p.pen();
+        for (const auto& s : twistedPairWeave(e)) {
             stroke(s.backEdgeA);
             stroke(s.backEdgeB);
             if (s.frontOutline.size() > 2) {
                 QPolygonF fill;
                 fill.reserve(static_cast<int>(s.frontOutline.size()));
                 for (const Vec2& v : s.frontOutline) fill << vt.toScreen(v);
-                p.save();
                 p.setPen(Qt::NoPen);
                 p.setBrush(g_bgColor);   // the wire in front hides what runs under it
                 p.drawPolygon(fill);
-                p.restore();
+                p.setBrush(Qt::NoBrush);
+                p.setPen(wirePen);
             }
             stroke(s.frontEdgeA);
             stroke(s.frontEdgeB);

@@ -62,13 +62,21 @@ Bounds Entity::bounds() const {
         bnds.expand(a);
         bnds.expand(b);
         break;
-    case EntityType::TwistedPair:
-        // The two wires themselves, not the line they were drawn along: the pair reaches half its
-        // width out to either side of that line.
-        for (const auto& strand : twistedPairStrands(*this))
-            for (const auto& p : strand) bnds.expand(p);
-        if (!bnds.valid) { bnds.expand(a); bnds.expand(b); }
+    case EntityType::TwistedPair: {
+        // The path it runs along, out by half the cable's width - worked out from the path rather than
+        // by measuring the weave. How far an object reaches is asked constantly: once per object per
+        // repaint, per hit test, per selection zone. Answered by building a woven pair each time, a
+        // sheet with a few pairs on it made the cursor lag behind the mouse. Rounding the knees only
+        // ever cuts a corner inwards, so this still contains the whole of it.
+        const double reach =
+            std::max(0.2, meta.value("twistWidth").toDouble(kTwistedPairWidth)) / 2.0;
+        const std::vector<Vec2>& along = points.size() >= 2 ? points : std::vector<Vec2>{a, b};
+        for (const auto& p : along) {
+            bnds.expand({p.x - reach, p.y - reach});
+            bnds.expand({p.x + reach, p.y + reach});
+        }
         break;
+    }
     case EntityType::Hatch:
         // A circle-boundary hatch carries center/radius rather than points.
         if (meta.value("shape").toString() == QLatin1String("circle")) {

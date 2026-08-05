@@ -45,13 +45,18 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Line:
         out.emplace_back(e.a, e.b);
         break;
-    case EntityType::TwistedPair:
-        // The wires themselves, so a measurement takes off the drawn run rather than the empty
-        // middle of the twist.
-        for (const auto& strand : twistedPairStrands(e))
-            for (size_t i = 1; i < strand.size(); ++i)
-                out.emplace_back(strand[i - 1], strand[i]);
+    case EntityType::TwistedPair: {
+        // The route it runs along, not the weave. The weave is hundreds of little segments - a
+        // decorative crossing of two wires - and offering all of them to the snap system swamped it:
+        // every one becomes a midpoint, a perpendicular foot and a candidate for every intersection
+        // test, and a sheet with a few pairs on it took a quarter of a second per mouse movement. What
+        // a drawing actually measures from is where the pair RUNS and where it ENDS, and the ends are
+        // offered separately below.
+        const std::vector<Vec2>& along =
+            e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
+        for (size_t i = 1; i < along.size(); ++i) out.emplace_back(along[i - 1], along[i]);
         break;
+    }
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines — NOT the centerline. A centerline
         // segment would put a phantom midpoint/nearest snap in the empty gap
@@ -444,13 +449,22 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
             for (auto& seg : segs) allSegs.push_back(seg);
         }
 
-        // Intersections between segments near the cursor.
+        // Intersections between segments near the cursor - NEAR THE CURSOR, which is what this has
+        // always claimed to do. It tested every segment in the drawing against every other, which is
+        // the square of the whole drawing per mouse movement: a few hundred segments is nothing, a few
+        // thousand (a hatch, a long polyline, a woven pair) is tens of millions of tests and the cursor
+        // visibly lags. An intersection further from the cursor than the snap radius could never be
+        // chosen anyway, so it is not worth testing for.
         if (s.snapIntersection) {
-            for (size_t i = 0; i < allSegs.size(); ++i)
-                for (size_t j = i + 1; j < allSegs.size(); ++j)
-                    if (auto x = segmentSegmentIntersection(
-                            allSegs[i].first, allSegs[i].second,
-                            allSegs[j].first, allSegs[j].second))
+            std::vector<std::pair<Vec2, Vec2>> near;
+            near.reserve(allSegs.size());
+            for (const auto& seg : allSegs)
+                if (closestPointOnSegment(raw, seg.first, seg.second).distance <= tolWorld)
+                    near.push_back(seg);
+            for (size_t i = 0; i < near.size(); ++i)
+                for (size_t j = i + 1; j < near.size(); ++j)
+                    if (auto x = segmentSegmentIntersection(near[i].first, near[i].second,
+                                                           near[j].first, near[j].second))
                         consider(*x, SnapKind::Intersection);
         }
 

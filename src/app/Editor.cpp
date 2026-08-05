@@ -974,14 +974,32 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::Line:
         best = segDist(e.a, e.b);
         break;
-    case EntityType::TwistedPair:
+    case EntityType::TwistedPair: {
         // The two wires, not the line they were drawn along: the middle of a twisted pair is empty
         // paper between the crossings, and clicking there should no more pick it than the gap of a
         // double line picks that.
+        //
+        // A pair well clear of the point is answered from its PATH, which is a handful of segments
+        // rather than a few hundred: every mouse movement asks every object how far away it is, and
+        // walking the whole weave of every pair on the sheet each time is what made the cursor lag.
+        // The answer is then a little large - by at most half the cable's width - which cannot make a
+        // far-off pair beat something nearer.
+        const double halfW =
+            std::max(0.2, e.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth)) / 2.0;
+        const std::vector<Vec2>& along =
+            e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
+        double toPath = std::numeric_limits<double>::max();
+        for (size_t i = 1; i < along.size(); ++i)
+            toPath = std::min(toPath, segDist(along[i - 1], along[i]));
+        if (toPath > halfW * 2.0) {
+            best = toPath;
+            break;
+        }
         for (const auto& strand : twistedPairStrands(e))
             for (size_t i = 1; i < strand.size(); ++i)
                 best = std::min(best, segDist(strand[i - 1], strand[i]));
         break;
+    }
     case EntityType::Dimension:
         // Select by touching the actual drawn geometry (dimension line, extension
         // lines, radius/diameter line, angular arc, ...).

@@ -375,9 +375,13 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // Every place the shape is measured: the ends, where the weave starts and stops, and a grid through
     // the weave fine enough that each half crossing is measured the same number of times (so a crossing
     // always lands exactly on a measured place).
-    constexpr int kPerTurn = 48;
+    // 24 places per crossing draws a smooth cosine (15 degrees a step) at any zoom this is read at;
+    // a long route with a tight weave is measured more coarsely rather than without bound, because
+    // everything that asks about the shape walks these places.
+    const int perTurn = std::clamp(2400 / std::max(1, f.turns), 8, 24);
+    const int grid = f.turns * perTurn;
     std::vector<double> us{0.0, f.len};
-    for (int i = 0; i <= f.turns * kPerTurn; ++i) us.push_back(f.lead + woven * i / (f.turns * kPerTurn));
+    for (int i = 0; i <= grid; ++i) us.push_back(f.lead + woven * i / grid);
     for (size_t i = 1; i + 1 < path.size(); ++i) us.push_back(at[i]);
     std::sort(us.begin(), us.end());
     us.erase(std::unique(us.begin(), us.end(),
@@ -429,21 +433,63 @@ std::vector<Vec2> twistEdge(const TwistFrames& f, double wire, double edge, size
     return line;
 }
 
+// What the pair is, kept from the last time it was worked out.
+//
+// Every mouse movement asks the same questions of the same objects: what does a click pick, what can be
+// snapped to, what is on screen, how far does each object reach. Answered by measuring a woven pair
+// again each time, a sheet with a few pairs on it made the cursor lag behind the mouse - the drawing was
+// being re-derived dozens of times a move. So a pair is measured once and the answer kept until the pair
+// itself changes, which is what the key below says.
+struct TwistCached {
+    TwistFrames frames;
+    std::vector<std::vector<Vec2>> strands;
+};
+
+QString twistKey(const Entity& e) {
+    QString k = e.id;
+    k += QLatin1Char('|');
+    const auto& path = e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
+    for (const Vec2& p : path) {
+        k += QString::number(p.x, 'g', 12);
+        k += QLatin1Char(',');
+        k += QString::number(p.y, 'g', 12);
+        k += QLatin1Char(';');
+    }
+    for (const char* m : {"twistWidth", "twistPitch", "twistEnds"}) {
+        k += QString::number(e.meta.value(QLatin1String(m)).toDouble(), 'g', 12);
+        k += QLatin1Char('/');
+    }
+    return k;
+}
+
+const TwistCached* twistCached(const Entity& pair) {
+    static QHash<QString, TwistCached> cache;
+    const QString key = twistKey(pair);
+    const auto it = cache.constFind(key);
+    if (it != cache.constEnd()) return &*it;
+    TwistCached c;
+    if (!twistFrames(pair, c.frames)) return nullptr;
+    for (const double wire : {1.0, -1.0})
+        for (const double edge : {1.0, -1.0})
+            c.strands.push_back(twistEdge(c.frames, wire, edge, 0, c.frames.pos.size() - 1));
+    // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
+    if (cache.size() > 64) cache.clear();
+    return &*cache.insert(key, std::move(c));
+}
+
 } // namespace
 
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
-    TwistFrames f;
-    if (!twistFrames(pair, f)) return {};
-    std::vector<std::vector<Vec2>> out;
-    for (const double wire : {1.0, -1.0})
-        for (const double edge : {1.0, -1.0})
-            out.push_back(twistEdge(f, wire, edge, 0, f.pos.size() - 1));
-    return out;
+    if (pair.type != EntityType::TwistedPair) return {};
+    const TwistCached* c = twistCached(pair);
+    return c ? c->strands : std::vector<std::vector<Vec2>>{};
 }
 
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
-    TwistFrames f;
-    if (!twistFrames(pair, f)) return {};
+    if (pair.type != EntityType::TwistedPair) return {};
+    const TwistCached* cached = twistCached(pair);
+    if (!cached) return {};
+    const TwistFrames& f = cached->frames;
     // Split at the places where the two wires are FARTHEST APART, so each stretch holds exactly one
     // crossing and the change of which wire is in front happens where they are not touching.
     std::vector<double> cuts{0.0, f.lead};
