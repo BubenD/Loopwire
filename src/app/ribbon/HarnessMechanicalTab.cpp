@@ -253,6 +253,23 @@ void MainWindow::buildHarnessMechanicalTab() {
                 "up round each other in between."));
             lg->addWidget(tpBtn);
         }
+        // And the same pair routed: as many knees as the run needs, drawn like a polyline. A pair in a
+        // harness rarely goes straight from one end to the other - it follows the loom round the
+        // corners - and drawing it as a string of separate pairs leaves a join at every knee.
+        {
+            auto* trBtn = new QToolButton(lenW);
+            QAction* act = makeToolAction(toolLabel(ToolId::TwistedRoute), ToolId::TwistedRoute);
+            trBtn->setDefaultAction(act);
+            trBtn->setText(QStringLiteral("Twisted\nroute"));
+            trBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            trBtn->setIconSize(QSize(26, 26));
+            trBtn->setAutoRaise(true);
+            trBtn->setFocusPolicy(Qt::NoFocus);
+            trBtn->setToolTip(QStringLiteral(
+                "Route a twisted pair through as many knees as it needs: click each knee, Enter "
+                "finishes. Straight at both ends, woven in between, all one length of pair."));
+            lg->addWidget(trBtn);
+        }
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }

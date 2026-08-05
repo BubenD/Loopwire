@@ -261,10 +261,20 @@ QJsonObject Entity::toJson() const {
     case EntityType::Line:
     case EntityType::DoubleLine:
     case EntityType::Dimension:
-    case EntityType::TwistedPair:
         obj["a"] = pointToJson(a);
         obj["b"] = pointToJson(b);
         break;
+    case EntityType::TwistedPair: {
+        obj["a"] = pointToJson(a);
+        obj["b"] = pointToJson(b);
+        // A pair routed through knees is those knees; a straight one has none to write.
+        if (points.size() >= 2) {
+            QJsonArray arr;
+            for (const auto& p : points) arr.append(pointToJson(p));
+            obj["points"] = arr;
+        }
+        break;
+    }
     case EntityType::Circle:
         obj["center"] = pointToJson(center);
         obj["radius"] = radius;

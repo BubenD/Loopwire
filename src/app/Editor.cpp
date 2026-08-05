@@ -409,10 +409,16 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::TwistedPair:
-        // The two ends of the run. Dragging one re-lays the pair between where it now is and the other
-        // end, keeping its crossings - it is a length of twisted pair, not a drawn shape.
-        g.push_back({e.a, GripRole::LineA, 0});
-        g.push_back({e.b, GripRole::LineB, 0});
+        // A routed pair is held by its knees, like a polyline; a straight one by its two ends. Either
+        // way the pair is re-laid along whatever the path becomes - it is a length of twisted pair,
+        // not a drawn shape.
+        if (e.points.size() >= 2) {
+            for (size_t i = 0; i < e.points.size(); ++i)
+                g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
+        } else {
+            g.push_back({e.a, GripRole::LineA, 0});
+            g.push_back({e.b, GripRole::LineB, 0});
+        }
         break;
     case EntityType::DoubleLine: {
         // Joints ONLY on the two VISIBLE parallel lines — never on the centerline
@@ -5643,6 +5649,13 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral("Line: click next point — Enter ends the run, Esc exits"));
         break;
     }
+    case ToolId::TwistedRoute:
+        // Like a polyline: each click adds a knee and the pair keeps going until Enter.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(QStringLiteral(
+            "Twisted route: click the next knee — Enter finishes the run, Esc exits"));
+        break;
     case ToolId::TwistedPair:
     case ToolId::DoubleLine:
     case ToolId::Rect:
@@ -6336,6 +6349,17 @@ void Editor::finishDraw() {
     bool filletTooBig = false; // set if a polyline fillet radius won't fit (warn after)
 
     switch (tool_) {
+    case ToolId::TwistedRoute:
+        // The same pair, routed: the knees ARE the object, so they are kept as its points.
+        if (draftPts_.size() < 2) { cancelDraw(); return; }
+        e.type = EntityType::TwistedPair;
+        e.points = draftPts_;
+        e.a = draftPts_.front();
+        e.b = draftPts_.back();
+        e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
+        e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+        e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        break;
     case ToolId::TwistedPair:
         // Drawn like a line, between the two points the pair runs between. What shapes it - how far
         // apart the wires are, how long a crossing is, how much straight end to leave - is carried on
@@ -6816,6 +6840,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::Line:
     case ToolId::DoubleLine:
     case ToolId::TwistedPair:
+    case ToolId::TwistedRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -6869,6 +6894,9 @@ QString Editor::drawCommandHint() const {
     case ToolId::TwistedPair:
         return QStringLiteral(
             "TWISTED PAIR: click the two ends  ·  straight ends, crossings between them");
+    case ToolId::TwistedRoute:
+        return QStringLiteral(
+            "TWISTED ROUTE: click each knee  ·  Enter finishes  ·  straight ends, weave between");
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
             .arg(dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
@@ -6992,6 +7020,7 @@ bool Editor::commitDrawFields() {
     case ToolId::Line:
     case ToolId::DoubleLine:
     case ToolId::TwistedPair:
+    case ToolId::TwistedRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -11610,6 +11639,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 break;
             }
             if (ok) EntityRenderer::draw(p, temp, *doc_, vt, QColor("#ffffff"));
+        } else if (tool_ == ToolId::TwistedRoute && pts.size() >= 2) {
+            Entity tp;
+            tp.type = EntityType::TwistedPair;
+            tp.points = pts;
+            tp.a = pts.front();
+            tp.b = pts.back();
+            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
+            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
         } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
             // Previewed as the thing itself, drawn by the same code that will draw it once placed -
             // so what is on screen while placing it is what is placed.

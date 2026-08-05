@@ -151,6 +151,17 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         }
         break;
     }
+    case ToolId::TwistedRoute: {
+        // The same pair, with a knee in it: along, round the corner, and up.
+        for (double s : {1.0, -1.0}) {
+            QPainterPath pa(QPointF(2, 15 - 3 * s));
+            pa.cubicTo(QPointF(7, 15 - 3 * s), QPointF(8, 15 + 3 * s), QPointF(13, 15 + 3 * s));
+            pa.lineTo(QPointF(16 + 3 * s, 15 + 3 * s));   // the corner
+            pa.lineTo(QPointF(16 + 3 * s, 3));
+            p.drawPath(pa);
+        }
+        break;
+    }
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     case ToolId::Balloon: {
         // Numbered callout: a circle with a leader stub and a "1" inside.

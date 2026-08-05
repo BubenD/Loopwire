@@ -38,6 +38,7 @@ enum class ToolId {
     NetLabel,
     LengthBreak,
     TwistedPair,   // two wires laid up round each other, drawn between two points
+    TwistedRoute,  // ... and the same pair routed through as many knees as it needs
     // Modify (reference-point driven)
     Move,
     Rotate,
@@ -79,6 +80,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Note:      // rubber-band a rectangle, like Rect
     case ToolId::Revision:
     case ToolId::TwistedPair: // two clicks: the two ends the pair runs between
+    case ToolId::TwistedRoute: // as many points as the route needs, like a polyline
         return true;
     default:
         return false;
@@ -123,6 +125,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::NotConnected: return QStringLiteral("Not connected");
     case ToolId::LengthBreak: return QStringLiteral("Length break");
     case ToolId::TwistedPair: return QStringLiteral("Twisted pair");
+    case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.
     case ToolId::NetLabel: return QStringLiteral("Wire label");

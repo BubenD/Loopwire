@@ -1724,14 +1724,33 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // worked on - stripped, crimped, spliced - and twisted in between, which is the whole point of
         // the drawing: this pair is a twisted pair and is to be made as one.
         //
-        // The shape comes from twistedPairStrands(), the same description a click measures against and
-        // a selection zone catches, so what is drawn and what can be grabbed cannot drift apart.
-        const auto strands = twistedPairStrands(e);
-        for (const auto& strand : strands) {
+        // Drawn a stretch at a time, so that at every crossing the wire in FRONT hides the one behind
+        // it: that is what makes it read as twisted rather than as two lines that happen to cross. The
+        // stretches come from twistedPairWeave(), built from the same measurement a click is tested
+        // against, so what is drawn and what can be grabbed cannot drift apart.
+        auto stroke = [&](const std::vector<Vec2>& line) {
+            if (line.size() < 2) return;
             QPolygonF poly;
-            poly.reserve(static_cast<int>(strand.size()));
-            for (const Vec2& v : strand) poly << vt.toScreen(v);
+            poly.reserve(static_cast<int>(line.size()));
+            for (const Vec2& v : line) poly << vt.toScreen(v);
             p.drawPolyline(poly);
+        };
+        const auto weave = twistedPairWeave(e);
+        for (const auto& s : weave) {
+            stroke(s.backEdgeA);
+            stroke(s.backEdgeB);
+            if (s.frontOutline.size() > 2) {
+                QPolygonF fill;
+                fill.reserve(static_cast<int>(s.frontOutline.size()));
+                for (const Vec2& v : s.frontOutline) fill << vt.toScreen(v);
+                p.save();
+                p.setPen(Qt::NoPen);
+                p.setBrush(g_bgColor);   // the wire in front hides what runs under it
+                p.drawPolygon(fill);
+                p.restore();
+            }
+            stroke(s.frontEdgeA);
+            stroke(s.frontEdgeB);
         }
         break;
     }

@@ -151,13 +151,24 @@ double breakLeanFactor(const Entity& mark);
 // Two wires laid up round each other: a straight lead in, a run of crossings, a straight lead out.
 // What a mechanical drawing shows where a pair is twisted, and what the ends are for - a twisted pair
 // is spliced, crimped and dressed like any other wire, and it is the straight ends that get worked on.
-inline constexpr double kTwistedPairWidth = 6.0;  // how far apart the two wires run
-inline constexpr double kTwistedPairPitch = 7.3; // the length of one whole crossing
+inline constexpr double kTwistedPairWidth = 6.0;   // the cable, across: both wires and the parting
+inline constexpr double kTwistedPairPitch = 18.0; // the length of one whole crossing
 inline constexpr double kTwistedPairLead = 6.0;   // the straight run at each end
-// The two wires, each as a polyline in world units. Everything that has to agree about the shape -
-// what is drawn, what a click picks, what a zone catches, how far it reaches - asks this, so none of
-// them can drift apart.
+inline constexpr double kTwistedPairPart = 0.085; // half the parting between the two wires, in widths
+// The four lines the pair is drawn with: each wire's two edges, each running the whole length. What a
+// click picks, what a zone catches and how far it reaches all come from these, so none of them can
+// drift from what is drawn.
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
+
+// The pair as it is DRAWN: one stretch per half crossing, each naming the wire that passes IN FRONT
+// there and the one behind it. A pair reads as twisted only if the wire in front hides the one behind
+// at every crossing - drawn as four lines that simply cross, it reads as a chain of eyes instead.
+struct TwistedPairStretch {
+    std::vector<Vec2> frontOutline;              // closed: filled with the background to hide the other
+    std::vector<Vec2> frontEdgeA, frontEdgeB;    // the front wire's two edges
+    std::vector<Vec2> backEdgeA, backEdgeB;      // and the wire behind it, drawn first
+};
+std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
 double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).
