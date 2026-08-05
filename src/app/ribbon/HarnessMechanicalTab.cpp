@@ -41,12 +41,10 @@ namespace Edraw_Desktop {
 //      (The schematic side lives on Schematic build.) ----
 void MainWindow::buildHarnessMechanicalTab() {
     auto [page, lay] = makeTabPage();
-    // Bundle + branches: a double polyline is the bundle body, a plain one a centreline,
-    // Offset walks a parallel edge out and Fillet rounds a branch off the trunk.
+    // The bundle used to have a group of its own - a double polyline for the body, a plain one for a
+    // centreline, Offset and Fillet - but every one of those four is in Draw and Modify below, so it
+    // was the same four buttons on the tab twice.
     mechGroups_.clear();
-    mechGroups_ << addGroupKeep(lay, QStringLiteral("Bundle"),
-                               toolRow({ToolId::DoublePolyline, ToolId::Polyline, ToolId::Offset,
-                                        ToolId::Fillet}));
     // The general drawing and editing tools, the same ones Home carries. A mechanical layout is drawn
     // with them as much as with the harness tools - a bracket, a panel cut-out, a centreline, a fillet
     // on a branch - and having to cross to another tab for a line and back for a break mark is the kind
