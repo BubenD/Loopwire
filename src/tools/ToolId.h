@@ -83,9 +83,10 @@ inline bool isDrawTool(ToolId t) {
     }
 }
 
-// Single-click placement tools (connector / markers).
+// Single-click placement tools (connector / markers). A length break is NOT one of them: it is marked
+// out by a line drawn across the runs it interrupts, the way a twist or a screen is.
 inline bool isPlacementTool(ToolId t) {
-    return t == ToolId::Connector || t == ToolId::Splice || t == ToolId::LengthBreak ||
+    return t == ToolId::Connector || t == ToolId::Splice ||
            t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Table;
 }
 

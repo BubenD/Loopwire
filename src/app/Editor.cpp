@@ -1745,6 +1745,35 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // Twist / Screen: two clicks define a crossing line across the wires to select them.
     // For Screen, once frozen (Tab), ANY click commits at the frozen end point — the
     // click no longer redefines the line, so ribbon fields can be tuned beforehand.
+    // The break mark is marked out the same way: a line drawn across the runs to be broken. The first
+    // click takes one end, the cursor draws the line and the mark it would make, and the second click
+    // places it. Tab pins the line so the ribbon's numbers can be tried before committing.
+    if (tool_ == ToolId::LengthBreak) {
+        if (!wireBandHasStart_) {
+            wireBandStart_ = raw;
+            wireBandHasStart_ = true;
+            emit message(QStringLiteral(
+                "Now click the other end of the line across the runs you want to break"));
+            emit overlayChanged();
+            return;
+        }
+        Entity mark;
+        const Vec2 end = breakFrozen_ ? breakFrozenAt_ : raw;
+        if (!breakFromBand(wireBandStart_, end, mark)) {
+            emit message(QStringLiteral("Draw the line ACROSS the runs you want to break"));
+            return;
+        }
+        pushUndo();
+        mark.layer = doc_->activeLayer();
+        addEntity(std::move(mark));
+        wireBandHasStart_ = false;
+        breakFrozen_ = false;
+        doc_->setDirty(true);
+        emit changed();
+        emit message(QStringLiteral("Break placed"));
+        setTool(ToolId::Select);
+        return;
+    }
     if (!twistArmType_.isEmpty() || screenArm_) {
         // A FROZEN twist is checked before the "no start yet" case: a click must not
         // commit it. Only Enter places a frozen twist; a click discards the frozen
@@ -4811,7 +4840,20 @@ std::vector<Vec2> Editor::breakMaskQuad(const Entity& mark) const {
     if (!mark.meta.value(QStringLiteral("mask")).toBool(true)) return {};
     const double half = std::max(0.5, mark.meta.value(QStringLiteral("size")).toDouble(6.0));
     const double gap = mark.meta.value(QStringLiteral("gap")).toDouble(half * 0.9);
-    const double rot = mark.rotation;
+    // Where the mark is DRAWN, which for one attached to a run is wherever that run has taken it.
+    Vec2 at = mark.a;
+    double rot = mark.rotation;
+    if (const QString hostId = mark.meta.value(QStringLiteral("host")).toString();
+        !hostId.isEmpty() && doc_)
+        for (const auto& h : doc_->entities())
+            if (h.id == hostId) {
+                Vec2 pos, dir;
+                if (runPointAtFraction(h, mark.meta.value(QStringLiteral("annT")).toDouble(0.5), pos,
+                                       dir)) {
+                    at = pos;
+                    rot = std::atan2(dir.y, dir.x);
+                }
+            }
     const Vec2 along{std::cos(rot), std::sin(rot)};
     const Vec2 across{-std::sin(rot), std::cos(rot)};
     const bool curved =
@@ -4819,7 +4861,7 @@ std::vector<Vec2> Editor::breakMaskQuad(const Entity& mark) const {
     const double lean = half * (curved ? 0.0 : breakLeanFactor(mark));
     std::vector<Vec2> quad;
     for (int k = 0; k < 2; ++k) {
-        const Vec2 mid = mark.a + along * (gap * (k == 0 ? -0.5 : 0.5));
+        const Vec2 mid = at + along * (gap * (k == 0 ? -0.5 : 0.5));
         const Vec2 e1 = mid + across * half + along * lean;
         const Vec2 e2 = mid - across * half - along * lean;
         if (k == 0) { quad.push_back(e1); quad.push_back(e2); }
@@ -4832,7 +4874,6 @@ bool Editor::pointHiddenByBreak(const Entity& host, const Vec2& p) const {
     if (!doc_ || host.id.isEmpty() || host.type == EntityType::LengthBreak) return false;
     for (const auto& m : doc_->entities()) {
         if (m.type != EntityType::LengthBreak) continue;
-        if (m.meta.value(QStringLiteral("host")).toString() != host.id) continue;
         const std::vector<Vec2> quad = breakMaskQuad(m);
         if (quad.size() != 4) continue;
         // Inside the quad: on the inner side of all four edges.
@@ -4855,11 +4896,13 @@ bool Editor::pointHiddenByBreak(const Entity& host, const Vec2& p) const {
 std::vector<std::pair<Vec2, Vec2>> Editor::unmaskedSegments(
     const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs) const {
     if (!doc_ || host.id.isEmpty()) return segs;
-    // The marks that hide part of THIS run.
+    // Every mark that hides part of this run. Not only the ones attached to it: a line drawn across
+    // three wires breaks all three, and the mask is painted over all three, so all three have that
+    // stretch taken out of what can be picked.
     std::vector<std::vector<Vec2>> quads;
     for (const auto& m : doc_->entities()) {
         if (m.type != EntityType::LengthBreak) continue;
-        if (m.meta.value(QStringLiteral("host")).toString() != host.id) continue;
+        if (m.id == host.id) continue;
         if (auto q = breakMaskQuad(m); q.size() == 4) quads.push_back(std::move(q));
     }
     if (quads.empty()) return segs;
@@ -9325,44 +9368,6 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.a = p;
         e.meta.insert("size", spliceSize_); // dot radius (world units)
         break;
-    case ToolId::LengthBreak:
-        // Placed ON a run, and laid square across it: the mark says THIS run is longer than the
-        // drawing has room for, so it has to be unambiguous which run is meant. The direction comes
-        // from the run under the point; on bare paper it lies across the horizontal.
-        //
-        // A pinned preview is placed WHERE IT WAS PINNED, not where the click landed: the click is how
-        // the pinned preview is accepted, and it is made on the ribbon's fields as often as on the
-        // drawing.
-        e.type = EntityType::LengthBreak;
-        e.a = breakFrozen_ ? breakFrozenAt_ : p;
-        breakFrozen_ = false;
-        e.rotation = runDirectionAt(e.a).value_or(0.0);
-        e.meta.insert("breakStyle", breakStyle_);
-        // ATTACHED to the run it was put on, by id and by how far along it the click was. From then on
-        // the mark belongs to that run: it follows it when the run is moved or re-shaped, and dragging
-        // the mark slides it ALONG the run instead of lifting it off - a break marks a place on a run,
-        // and a break sitting beside its run means nothing.
-        if (const QString host = runAt(e.a); !host.isEmpty()) {
-            e.meta.insert("host", host);
-            for (const auto& h : doc_->entities())
-                if (h.id == host) e.meta.insert("annT", runFractionNearest(h, e.a));
-        }
-        {
-            // Sized to what it is placed ON, unless a size was asked for. A mark has to cross the whole
-            // run to read as a break, and a bundle drawn as a double line is as wide as its gap - which
-            // is not something anyone should have to measure before every placement. The span is taken
-            // at the point, with a margin either side so the strokes overhang the way they are drawn by
-            // hand.
-            double half = breakSize_;
-            if (half <= 1e-6) {
-                const double span = runSpanAcross(e.a, e.rotation);
-                half = span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0) : 6.0;
-            }
-            e.meta.insert("size", half);
-            e.meta.insert("gap", breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
-            if (breakAngle_ >= 0.0) e.meta.insert("angle", breakAngle_);
-        }
-        break;
     case ToolId::NotConnected: {
         // Shift + click on a connector pin: terminate EVERY still-unconnected pin of that
         // connector at once (pins already wired or already X'd are skipped).
@@ -9710,31 +9715,114 @@ void Editor::armConnectorPlacement() {
     emit overlayChanged();
 }
 
+// A break is described by a LINE DRAWN ACROSS the runs it interrupts - the same way a screen and a
+// twist are marked out. Which runs are broken is then a fact about the drawing rather than a guess
+// from one click: the line says so, and the mark takes its width, its angle and the run it belongs to
+// from what the line actually crossed.
+bool Editor::breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
+    if (!doc_) return false;
+    // Everything the line crosses, and which way that run was going there. A double line is crossed
+    // at its RAILS - the lines that are drawn - so a band over a bundle measures the bundle.
+    std::vector<Vec2> crossings;
+    std::vector<Vec2> dirs;
+    std::vector<QString> owners;
+    auto tryLine = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
+        if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
+            crossings.push_back(*x);
+            dirs.push_back(p2 - p1);
+            owners.push_back(e.id);
+        }
+    };
+    for (const auto& e : doc_->entities()) {
+        switch (e.type) {
+        case EntityType::Line:
+            tryLine(e, e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            tryLine(e, e.a + off, e.b + off);
+            tryLine(e, e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Polyline: {
+            if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                for (double s : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, s);
+                    for (size_t i = 1; i < run.size(); ++i) tryLine(e, run[i - 1], run[i]);
+                }
+            } else {
+                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    if (crossings.empty()) return false;
+
+    // The runs' own direction, averaged, which is what the mark lies square across. bundlePerpRot
+    // gives the perpendicular of that mean, so the mean itself is a quarter turn back.
+    const double rot = bundlePerpRot(dirs) - M_PI / 2.0;
+    // The band the crossings occupy, measured ACROSS the runs: that is what the mark has to span.
+    const Vec2 across{-std::sin(rot), std::cos(rot)};
+    Vec2 centre;
+    double span = 0.0;
+    shieldExtent(crossings, across, centre, span);
+
+    out = Entity();
+    out.type = EntityType::LengthBreak;
+    out.a = centre;
+    out.rotation = rot;
+    out.meta.insert(QStringLiteral("breakStyle"), breakStyle_);
+    // A size given by hand wins; otherwise the mark overhangs the outermost run it crosses, the way
+    // it is drawn by hand. A single run has no width of its own, so it gets a workable default.
+    double half = breakSize_;
+    if (half <= 1e-6)
+        half = span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0) : 6.0;
+    out.meta.insert(QStringLiteral("size"), half);
+    out.meta.insert(QStringLiteral("gap"),
+                    breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
+    if (breakAngle_ >= 0.0) out.meta.insert(QStringLiteral("angle"), breakAngle_);
+    // Attached to the run crossed nearest the middle of the band: the mark then follows that run and
+    // slides along it, and with one run crossed that is simply the run it is on.
+    QString host;
+    double bestD = 1e18;
+    for (size_t i = 0; i < crossings.size(); ++i) {
+        const double d = distance(crossings[i], centre);
+        if (d < bestD) { bestD = d; host = owners[i]; }
+    }
+    if (!host.isEmpty()) {
+        out.meta.insert(QStringLiteral("host"), host);
+        for (const auto& h : doc_->entities())
+            if (h.id == host)
+                out.meta.insert(QStringLiteral("annT"), runFractionNearest(h, centre));
+    }
+    return true;
+}
+
 Entity Editor::breakPreview() const {
     Entity e;
-    if (tool_ != ToolId::LengthBreak || !doc_) return e;
-    const Vec2 at = breakFrozen_ ? breakFrozenAt_ : cursor_;
-    e.type = EntityType::LengthBreak;
-    e.a = at;
-    e.rotation = runDirectionAt(at).value_or(0.0);
-    e.meta.insert(QStringLiteral("breakStyle"), breakStyle_);
-    double half = breakSize_;
-    if (half <= 1e-6) {
-        const double span = runSpanAcross(at, e.rotation);
-        half = span > 1e-6 ? span * 0.5 + std::max(span * 0.22, 2.0) : 6.0;
-    }
-    e.meta.insert(QStringLiteral("size"), half);
-    e.meta.insert(QStringLiteral("gap"), breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
-    if (breakAngle_ >= 0.0) e.meta.insert(QStringLiteral("angle"), breakAngle_);
+    if (tool_ != ToolId::LengthBreak || !doc_ || !wireBandHasStart_) return e;
+    Entity built;
+    if (breakFromBand(wireBandStart_, breakBandEnd(), built)) return built;
     return e;
 }
 
 void Editor::freezeBreakPreview() {
-    if (tool_ != ToolId::LengthBreak || breakFrozen_) return;
+    // Pins the loose end of the marking line, so the mark it describes stops moving while the numbers
+    // on the ribbon are tried on it. There is nothing to pin before the line has a start.
+    if (tool_ != ToolId::LengthBreak || breakFrozen_ || !wireBandHasStart_) return;
     breakFrozen_ = true;
     breakFrozenAt_ = cursor_;
     emit message(QStringLiteral(
-        "Preview pinned — try the numbers on the ribbon; click the drawing to place it"));
+        "Line pinned — try the numbers on the ribbon; click the drawing to place the break"));
     emit overlayChanged();
 }
 
@@ -10649,6 +10737,16 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // A twist in progress (armed / live preview / frozen): Esc CANCELS the twist function
         // and returns to Select — the Schematic ribbon menu comes back (setTool clears
         // twistArmType_ and emits twistArmChanged, which restores the hidden ribbon groups).
+        // A break being marked out: Esc gives up the line and the tool, like a twist.
+        if (tool_ == ToolId::LengthBreak) {
+            wireBandHasStart_ = false;
+            breakFrozen_ = false;
+            clearSelection();
+            setTool(ToolId::Select);
+            emit message(QStringLiteral("Break cancelled"));
+            emit changed();
+            return true;
+        }
         if (!twistArmType_.isEmpty()) {
             wireBandHasStart_ = false;
             twistFrozen_ = false;
@@ -10792,6 +10890,18 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // twice. Tab pins it (breakFrozen_) so the numbers on the ribbon can be tried on the real thing
     // without the cursor moving it.
     if (tool_ == ToolId::LengthBreak) {
+        // The marking line itself, dashed, while it is being drawn: it is what says which runs are
+        // being broken, so it has to be visible as it is drawn.
+        if (wireBandHasStart_) {
+            p.save();
+            QPen bandPen(QColor(120, 200, 255, breakFrozen_ ? 235 : 170));
+            bandPen.setCosmetic(true);
+            bandPen.setWidthF(1.2);
+            bandPen.setStyle(Qt::DashLine);
+            p.setPen(bandPen);
+            p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(breakBandEnd()));
+            p.restore();
+        }
         const Entity ghost = breakPreview();
         if (ghost.type == EntityType::LengthBreak) {
             p.save();

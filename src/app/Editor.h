@@ -66,8 +66,15 @@ public:
     // The mark that WOULD be placed by a click, for the overlay to draw. Empty type when the tool is
     // not armed. A break is sized and angled by the run under the cursor, so seeing it before
     // committing is the difference between placing it and placing it twice.
+    // The mark that the marking line currently describes, for the overlay to draw. Empty type until
+    // the line has a start. `bandEnd` is where the line's second end is - the cursor, or the pinned
+    // end once Tab has pinned it.
     Entity breakPreview() const;
     bool breakFrozen() const { return breakFrozen_; }
+    // Is a break's marking line being drawn (its first end taken)?
+    bool breakBandStarted() const { return tool_ == ToolId::LengthBreak && wireBandHasStart_; }
+    Vec2 breakBandStart() const { return wireBandStart_; }
+    Vec2 breakBandEnd() const { return breakFrozen_ ? breakFrozenAt_ : cursor_; }
     // Tab: pin the preview where it is, so the numbers on the ribbon can be tried on the real thing
     // without the cursor moving it. The next click on the drawing places it and resumes.
     void freezeBreakPreview();
@@ -319,6 +326,9 @@ public:
     // Slide a break mark along the run it is attached to by `delta`. False when it is attached to
     // nothing, in which case it moves like anything else.
     bool slideBreakAlongHost(Entity& e, const Vec2& delta);
+    // The mark a line drawn from `a` to `b` across the runs describes: where it sits, which way it
+    // lies, how far it reaches, and which run it belongs to. False when the line crossed nothing.
+    bool breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
     // The four corners of what a break mark hides, in world units: stroke 0's two ends then stroke 1's
     // (so the quad reads round its edge). Empty when the mark masks nothing.
     std::vector<Vec2> breakMaskQuad(const Entity& mark) const;

@@ -4044,7 +4044,11 @@ int run_editor_tests() {
         ed.setTool(ToolId::LengthBreak);
         ed.breakStyle() = QStringLiteral("curved");
         ed.breakSize() = 9.0;
-        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+        // Marked out by a LINE DRAWN ACROSS the run: two clicks, either side of it. The run goes up at
+        // atan(100/200), so a line across it here runs the other way.
+        ed.onPointerPress({112, 44}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({88, 56});
+        ed.onPointerPress({88, 56}, Qt::LeftButton, Qt::NoModifier);
 
         const Entity* mark = nullptr;
         for (const auto& e : d.entities())
@@ -4120,7 +4124,10 @@ int run_editor_tests() {
         ed.breakSize() = 0.0;                 // "as wide as the run needs"
         ed.breakGap() = 0.0;
         ed.breakAngle() = -1.0;
-        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+        // A line straight across the bundle, from outside one rail to outside the other.
+        ed.onPointerPress({100, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100, -30});
+        ed.onPointerPress({100, -30}, Qt::LeftButton, Qt::NoModifier);
 
         const Entity* mark = nullptr;
         for (const auto& e : d.entities())
@@ -4160,7 +4167,9 @@ int run_editor_tests() {
             e2.breakSize() = 14.0;
             e2.breakGap() = 9.0;
             e2.breakAngle() = 40.0;
-            e2.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+            e2.onPointerPress({100, 30}, Qt::LeftButton, Qt::NoModifier);
+            e2.onPointerMove({100, -30});
+            e2.onPointerPress({100, -30}, Qt::LeftButton, Qt::NoModifier);
             const Entity* m3 = nullptr;
             for (const auto& e : d2.entities())
                 if (e.type == EntityType::LengthBreak) m3 = &e;
@@ -4240,6 +4249,52 @@ int run_editor_tests() {
             bool runBack = false;
             for (const QString& id : ed.selection()) runBack = runBack || id == QLatin1String("bundle");
             check(runBack, "break: and where the run is drawn, the run is still picked");
+        }
+
+        // A line drawn across SEVERAL runs breaks all of them, and what it covers on each of them is
+        // out of reach - not only on the one the mark is attached to.
+        {
+            Document d3;
+            for (int k = 0; k < 3; ++k) {
+                Entity w;
+                w.id = QStringLiteral("w%1").arg(k + 1);
+                w.type = EntityType::Wire;
+                w.points = {{0, -k * 30.0}, {300, -k * 30.0}};
+                d3.entities().push_back(w);
+            }
+            Editor e3;
+            e3.setDocument(&d3);
+            e3.setTool(ToolId::LengthBreak);
+            e3.breakSize() = 0.0;
+            e3.breakGap() = 0.0;
+            e3.breakAngle() = -1.0;
+            e3.onPointerMove({150, 20});
+            e3.onPointerPress({150, 20}, Qt::LeftButton, Qt::NoModifier);
+            e3.onPointerMove({150, -80});
+            e3.onPointerPress({150, -80}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* m = nullptr;
+            for (const auto& e : d3.entities())
+                if (e.type == EntityType::LengthBreak) m = &e;
+            check(m != nullptr, "band: a line across three wires makes a mark");
+            if (m) {
+                check(m->meta.value("size").toDouble() * 2.0 > 60.0,
+                      "band: sized to span every wire the line crossed");
+                // The middle wire is the one it is attached to; the outer two are covered all the same.
+                e3.setTool(ToolId::Select);
+                for (const QString& id : {QStringLiteral("w1"), QStringLiteral("w2"),
+                                          QStringLiteral("w3")}) {
+                    double y = 0.0;
+                    for (const auto& e : d3.entities())
+                        if (e.id == id) y = e.points.front().y;
+                    e3.clearSelection();
+                    e3.onPointerPress({m->a.x, y}, Qt::LeftButton, Qt::NoModifier);
+                    e3.onPointerRelease({m->a.x, y}, Qt::LeftButton);
+                    bool tookRun = false;
+                    for (const QString& s : e3.selection()) tookRun = tookRun || s == id;
+                    check(!tookRun, "band: the stretch it covers is out of reach on every wire it "
+                                    "crosses, not just its own");
+                }
+            }
         }
 
         // A zone in the GAP between the rails, touching neither, takes nothing: a double line is

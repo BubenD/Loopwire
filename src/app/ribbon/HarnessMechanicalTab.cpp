@@ -131,7 +131,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 editor_->setTool(ToolId::LengthBreak);
                 syncBreakOptions();   // the third field is named for the style being placed
                 statusBar()->showMessage(
-                    QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
+                    QStringLiteral("Draw a line across the runs to break — the mark follows what it crosses"),
                     4000);
             });
         }
@@ -139,7 +139,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         connect(breakBtn, &QToolButton::clicked, this, [this] {
             editor_->setTool(ToolId::LengthBreak);
             statusBar()->showMessage(
-                QStringLiteral("Click on the run the break belongs to — its mark lies across it"),
+                QStringLiteral("Draw a line across the runs to break — the mark follows what it crosses"),
                 4000);
         });
         bg->addWidget(breakBtn, 0, 0);
