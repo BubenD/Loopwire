@@ -449,6 +449,39 @@ bool parse(Document& doc, const QString& text, QString*) {
     }
     if (entFrom < 0) { entFrom = 0; entTo = n; }   // a file with no sections: read it all
 
+    // The sheet: $LIMMIN/$LIMMAX is the drawing area the file was set up with (an A3, here), and
+    // $EXTMIN/$EXTMAX is what was in it when it was last saved. The limits are preferred - they are
+    // the sheet itself - and either is better than the extents of every object in the file, which on a
+    // real drawing include working geometry left off the sheet.
+    {
+        auto headerPoint = [&](const QString& name, Vec2& out) {
+            for (int i = 0; i + 3 < n; ++i) {
+                if (pairs[i].code != "9" || pairs[i].value != name) continue;
+                double x = 0.0, y = 0.0;
+                bool haveX = false, haveY = false;
+                for (int j = i + 1; j < n && j < i + 8; ++j) {
+                    if (pairs[j].code == "10") { x = pairs[j].value.toDouble(); haveX = true; }
+                    else if (pairs[j].code == "20") { y = pairs[j].value.toDouble(); haveY = true; }
+                    else if (pairs[j].code == "9") break;
+                }
+                if (haveX && haveY) { out = {x, y}; return true; }
+                return false;
+            }
+            return false;
+        };
+        Vec2 lo, hi;
+        const bool haveLimits = headerPoint(QStringLiteral("$LIMMIN"), lo) &&
+                                headerPoint(QStringLiteral("$LIMMAX"), hi);
+        const bool haveExtents = !haveLimits && headerPoint(QStringLiteral("$EXTMIN"), lo) &&
+                                 headerPoint(QStringLiteral("$EXTMAX"), hi);
+        if ((haveLimits || haveExtents) && hi.x - lo.x > 1e-6 && hi.y - lo.y > 1e-6) {
+            Bounds sheet;
+            sheet.expand(lo);
+            sheet.expand(hi);
+            doc.sheet() = sheet;
+        }
+    }
+
     std::vector<Entity> entities;
     // One reader, used for the drawing itself and for the inside of every block it places.
     std::function<void(int, int, const Xf&, int)> readRange =
@@ -484,7 +517,8 @@ bool parse(Document& doc, const QString& text, QString*) {
 
                 static const QStringList kKnown = {
                     "LINE",   "LWPOLYLINE", "CIRCLE",  "ARC",    "TEXT",      "MTEXT",
-                    "INSERT", "ELLIPSE",    "SOLID",   "LEADER", "DIMENSION", "ACAD_TABLE"};
+                    "INSERT", "ELLIPSE",    "SOLID",   "LEADER", "DIMENSION", "ACAD_TABLE",
+                    "MULTILEADER"};
                 if (!kKnown.contains(type)) continue;
 
                 const auto g = collectGroup(pairs, i + 1);
@@ -545,6 +579,68 @@ bool parse(Document& doc, const QString& text, QString*) {
                             }
                     } else {
                         readRange(it->from, it->to, xf, depth + 1);
+                    }
+                    continue;
+                }
+
+                if (type == "MULTILEADER") {
+                    // A multileader keeps its words AND the line that points with them inside one
+                    // record: 304 carries the text (and the LEADER_LINE{ / } markers that bracket a
+                    // leader's vertices), and the 10/20 pairs that follow a LEADER_LINE{ marker are
+                    // that line's points. Read as nothing, a callout lost its word - a "LABEL" arrow
+                    // pointing at a cable with no label on it.
+                    QString label;
+                    double height = 0.0;
+                    bool inLine = false;
+                    std::vector<Vec2> verts;
+                    Vec2 textAt{0.0, 0.0};
+                    bool haveText = false;
+                    Vec2 cur{0.0, 0.0};
+                    bool halfPoint = false;
+                    for (const auto& gp : g) {
+                        if (gp.code == "300" || gp.code == "301" || gp.code == "302" ||
+                            gp.code == "303" || gp.code == "304" || gp.code == "305") {
+                            const QString v = gp.value.trimmed();
+                            if (v.endsWith(QLatin1Char('{'))) {
+                                inLine = v.startsWith(QLatin1String("LEADER_LINE"));
+                                continue;
+                            }
+                            if (v == QLatin1String("}")) { inLine = false; continue; }
+                            if (gp.code == "304" && label.isEmpty()) label = v;
+                            continue;
+                        }
+                        if (gp.code == "41" && height <= 0.0) height = gp.value.toDouble();
+                        if (gp.code == "10") {
+                            cur = {gp.value.toDouble(), 0.0};
+                            halfPoint = true;
+                        } else if (gp.code == "20" && halfPoint) {
+                            cur.y = gp.value.toDouble();
+                            halfPoint = false;
+                            if (inLine) verts.push_back(xf.apply(cur));
+                            else if (!haveText) { textAt = xf.apply(cur); haveText = true; }
+                        }
+                    }
+                    // A leader is stored as the points it turns at; where it MEETS the words is the
+                    // content's own base point, so a leader given as a single point is a line from
+                    // there to the text and not nothing at all.
+                    if (verts.size() == 1 && haveText) verts.push_back(textAt);
+                    if (verts.size() > 1) {
+                        Entity lead = e;
+                        lead.id = newId();
+                        lead.type = EntityType::Polyline;
+                        lead.points = verts;
+                        entities.push_back(std::move(lead));
+                    }
+                    if (!label.isEmpty() && haveText) {
+                        Entity txt = e;
+                        txt.id = newId();
+                        txt.type = EntityType::Text;
+                        txt.a = textAt;
+                        txt.meta.insert("text", decodeDxfText(label, true));
+                        txt.meta.insert("size", std::max(0.1, xf.len(height > 0.0 ? height : 2.5)));
+                        // A leader's words sit beside where it lands, reading away from it.
+                        txt.meta.insert("justify", QStringLiteral("ML"));
+                        entities.push_back(std::move(txt));
                     }
                     continue;
                 }
@@ -636,6 +732,14 @@ bool parse(Document& doc, const QString& text, QString*) {
                                                              "MR", "BL", "BC", "BR"};
                         const int at = std::clamp(findVal(g, "71", "1").toInt(), 1, 9);
                         e.meta.insert("justify", QLatin1String(kJust[at - 1]));
+                        // In a DXF the insertion point IS the point the attachment names - the middle
+                        // of the block for a centred one - and the width is only where the lines WRAP.
+                        // This application's own multiline text works the other way about: the point is
+                        // the box's top-left and the text is justified inside the box. Both are wanted,
+                        // so the imported text says which it is. Without this, a table's cell text was
+                        // justified inside its column instead of about its own centre, and every
+                        // centred heading sat off to one side of its cell.
+                        e.meta.insert("anchorJustify", true);
                     } else {
                         // TEXT: a justification other than left/baseline measures from the SECOND
                         // alignment point, which is where the text actually sits.

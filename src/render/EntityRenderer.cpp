@@ -1521,15 +1521,18 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // own box made both of them do nothing, which is why every such label sat low: the anchor was
         // being used as the top whatever it said. Horizontal placement already worked this way (a
         // width of zero makes C shift left by half the line).
+        // Text whose ANCHOR is its justification point (everything read from a DXF) is placed about
+        // that point; the box, if any, only says where the lines wrap.
+        const bool anchorJust = e.meta.value("anchorJustify").toBool();
         const double totalH = lineH * lines.size();
-        const double availH = boxHpx > 1.0 ? boxHpx : 0.0;
+        const double availH = (boxHpx > 1.0 && !anchorJust) ? boxHpx : 0.0;
         double blockTop = anchor.y();
         if (vJust == QLatin1Char('M')) blockTop += (availH - totalH) / 2.0;
         else if (vJust == QLatin1Char('B')) blockTop += availH - totalH;
         double y = blockTop + fm.ascent();
         for (const QString& ln : lines) {
             const double lw = fm.horizontalAdvance(ln);
-            const double avail = boxWpx > 1.0 ? boxWpx : 0.0;
+            const double avail = (boxWpx > 1.0 && !anchorJust) ? boxWpx : 0.0;
             double x = anchor.x();
             if (hJust == QLatin1Char('C')) x += (avail - lw) / 2.0;
             else if (hJust == QLatin1Char('R')) x += avail - lw;

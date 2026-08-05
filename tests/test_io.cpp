@@ -238,6 +238,62 @@ int run_io_tests() {
         }
     }
 
+    // --- The sheet the file states, a multileader's words, and text justified about its anchor.
+    {
+        const QString src = QStringLiteral(
+            "0\nSECTION\n2\nHEADER\n"
+            "9\n$LIMMIN\n10\n0.0\n20\n0.0\n"
+            "9\n$LIMMAX\n10\n420.0\n20\n297.0\n"
+            "9\n$EXTMIN\n10\n5.0\n20\n5.0\n"
+            "9\n$EXTMAX\n10\n415.0\n20\n292.0\n"
+            "0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n"
+            // A cell's heading: centred, with a wrap width. Its anchor is the middle of the words,
+            // NOT the corner of a box to justify them in.
+            "0\nMTEXT\n8\n0\n10\n100.0\n20\n50.0\n40\n2.5\n41\n40.0\n71\n5\n1\nDescription\n"
+            // A callout: one leader vertex, and the word it points with.
+            "0\nMULTILEADER\n8\n0\n40\n1.0\n10\n60.0\n20\n80.0\n41\n2.5\n304\nLABEL\n"
+            "304\nLEADER_LINE{\n10\n40.0\n20\n70.0\n303\n}\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parse(d, src), "dxf-in: the file is read");
+
+        // The sheet: the LIMITS, not the extents, and not the bounding box of the objects.
+        check(d.sheet().valid && near(d.sheet().min.x, 0.0) && near(d.sheet().max.x, 420.0) &&
+                  near(d.sheet().max.y, 297.0),
+              "dxf-in: the sheet the file was drawn on is remembered, so the drawing opens on it");
+
+        // The heading sits ABOUT its anchor: the box only says where the lines wrap.
+        const Entity* head = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Text &&
+                e.meta.value("text").toString() == QLatin1String("Description"))
+                head = &e;
+        check(head != nullptr, "dxf-in: the heading is read");
+        if (head) {
+            check(head->meta.value("anchorJustify").toBool(),
+                  "dxf-in: imported text is justified about its anchor");
+            const Bounds b = head->bounds();
+            const double slack = 1.0;
+            check(std::abs((b.min.x + b.max.x) / 2.0 - head->a.x) < slack,
+                  "dxf-in: so a centred heading straddles its anchor rather than its column");
+            check(b.max.x - b.min.x < 39.0,
+                  "dxf-in: and it is as wide as its words, not as wide as the wrap width");
+        }
+
+        // The callout: the word, and the line that points with it.
+        bool haveLabel = false, haveLeader = false;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::Text && e.meta.value("text").toString() == QLatin1String("LABEL"))
+                haveLabel = true;
+            if (e.type == EntityType::Polyline && e.points.size() == 2 &&
+                near(e.points.front().x, 40.0) && near(e.points.back().x, 60.0))
+                haveLeader = true;
+        }
+        check(haveLabel, "dxf-in: a multileader's words are read");
+        check(haveLeader, "dxf-in: and the leader runs from its vertex to where the words sit");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

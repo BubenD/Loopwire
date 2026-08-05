@@ -45,6 +45,13 @@ public:
     QString& unit() { return unit_; }
     const QString& unit() const { return unit_; }
 
+    // The sheet the drawing was made on, when the file says so: a DXF states its limits, and that
+    // rectangle - not the extents of every last object - is what a drawing is looked at at. A drawing
+    // often carries working geometry off the sheet; fitting to all of it opens the sheet small and off
+    // to one side, which is not how the drawing looks in the application it came from.
+    Bounds& sheet() { return sheet_; }
+    const Bounds& sheet() const { return sheet_; }
+
     // The harness patterns saved INTO this drawing. A pattern saved to a file is for reuse across
     // drawings; these belong to this one - generated from it, kept with it, deleted from it - so a
     // drawing that has been laid out once can be regenerated without going to find a file. Keyed by
@@ -77,6 +84,7 @@ private:
     int polygonSides_ = 5;
     QJsonObject bom_;
     QJsonObject harnessPresets_;
+    Bounds sheet_;                 // invalid unless the file stated its limits
     bool dirty_ = false;
 };
 

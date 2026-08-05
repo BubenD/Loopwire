@@ -219,8 +219,12 @@ void CanvasWidget::fitView() {
     ViewState& view = doc_->view();
     const QSizeF sz = size();
 
-    Bounds box;
-    for (const auto& e : doc_->entities()) box.expand(e.bounds());
+    // The sheet the file was drawn on, when it said: that is what the drawing is looked at at. A real
+    // drawing keeps working geometry off the sheet - a symbol parked to one side, a block placed out in
+    // the field - and fitting to every last object of it opens the sheet small and off to one side.
+    Bounds box = doc_->sheet();
+    if (!box.valid)
+        for (const auto& e : doc_->entities()) box.expand(e.bounds());
 
     if (!box.valid) {
         view = {sz.width() / 2.0, sz.height() / 2.0, 1.0};

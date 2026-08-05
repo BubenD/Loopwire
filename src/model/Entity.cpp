@@ -128,16 +128,18 @@ Bounds Entity::bounds() const {
         // With no box the anchor is the point the text sits ABOUT, sideways as well as vertically:
         // centre shifts it left by half its width, right by all of it. This is what the renderer does,
         // and the two have to agree or the box that selects a label is not the label.
+        // See the renderer: text read from a DXF is justified ABOUT its anchor, not inside its box.
+        const bool anchorJust = meta.value(QStringLiteral("anchorJustify")).toBool();
         double hOff = 0.0, vOff = 0.0;
         {
-            const double avail = bw > 0.0 ? bw : 0.0;
+            const double avail = (bw > 0.0 && !anchorJust) ? bw : 0.0;
             if (just[1] == QLatin1Char('C')) hOff = (avail - textW) / 2.0;
             else if (just[1] == QLatin1Char('R')) hOff = avail - textW;
         }
         // No box height: the anchor is the point the block sits ABOUT, so a middle attachment lifts
         // it by half and a bottom one by all of it. (See the renderer.)
         {
-            const double avail = bh > 0.0 ? bh : 0.0;
+            const double avail = (bh > 0.0 && !anchorJust) ? bh : 0.0;
             if (just[0] == QLatin1Char('M')) vOff = (avail - textH) / 2.0;
             else if (just[0] == QLatin1Char('B')) vOff = avail - textH;
         }
