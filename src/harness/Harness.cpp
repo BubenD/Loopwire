@@ -320,41 +320,120 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     if (len < 1e-9) return {};
     const Vec2 along{d.x / len, d.y / len};
     const Vec2 across = along.perp();
-    const double half =
-        std::max(0.1, pair.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth)) / 2.0;
+    double w = std::max(0.2, pair.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth));
     double pitch =
-        std::max(0.2, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
-    double lead =
-        std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
-    // The two straight ends and at least one whole crossing have to fit in what was drawn. A pair
-    // drawn shorter than that keeps its proportions - it is drawn small, rather than losing its twist
-    // or running past where it was put.
+        std::max(0.05, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
+    double lead = std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
+
+    // A laid-up pair is drawn the way a rope is drawn: one strand crossing the cable at a shallow
+    // angle, over and over, each crossing turned over at the edge so the strand reads as passing
+    // BEHIND the next one. The proportions below are those of the symbol on a real harness drawing -
+    // one band per 1.22 widths, the band 0.98 of a width across, crossing 2.29 widths of cable to rise
+    // 0.94 of its diameter, turned at each edge by a 32 degree arc of 0.75 width radius - so a pair
+    // drawn here sits beside one imported from AutoCAD without looking like a different thing.
+    // Everything is a fraction of the cable's own width, so it scales as one drawing.
+    constexpr double kBandLen = 3.262;    // how far along the cable one band reaches, in widths
+    constexpr double kDiagRun = 2.285;    // the diagonal's run
+    constexpr double kDiagRise = 0.470;   // ... and where it lands, from the centre
+    constexpr double kBandStart = -0.381; // where it leaves the far edge
+    constexpr double kBandStep = 0.977;   // the band's other edge, along the cable
+    constexpr double kArcR = 0.748;       // the turn at the edge
+    constexpr double kArcCx = 2.545, kArcCy = -0.2315;  // its centre, for the top turn
+    constexpr double kArcFrom = 110.41, kArcTo = 78.0;  // and the piece of it that is drawn
+    constexpr double kEdge = 0.500;       // the outside of the cable
+    constexpr double kEdgeEnd = 2.701;    // the short run along the outside
+    const double half = w / 2.0;
+    // The turn bulges a hair past the run along the outside (its apex is at 0.5165 widths), so the
+    // whole pattern is measured against THAT: a cable a given width across is that width across, and
+    // the straight ends line up with the outside of the weave rather than sitting inside it.
+
+    // The two straight ends and at least one whole band have to fit in what was drawn. A pair drawn
+    // shorter than that is drawn SMALLER - thinner, with a tighter weave - rather than losing its
+    // weave or running out past the ends it was drawn between.
     if (2.0 * lead + pitch > len) {
         const double k = len / (2.0 * lead + pitch);
         lead *= k;
         pitch *= k;
     }
-    const double twistLen = len - 2.0 * lead;
-    // Whole crossings, so the wires come back level with the straight ends they run into: half a
-    // crossing would leave each end offset to the wrong side and the leads would kink into them.
-    const int turns = std::max(1, static_cast<int>(std::llround(twistLen / pitch)));
-    const double used = twistLen / turns;
-    constexpr int kStepsPerTurn = 24;
-    std::vector<std::vector<Vec2>> out;
-    for (const double sign : {1.0, -1.0}) {
-        std::vector<Vec2> s;
-        const Vec2 side = across * (half * sign);
-        s.push_back(pair.a + side);                           // the lead in
-        const Vec2 twistStart = pair.a + along * lead;
-        const int steps = turns * kStepsPerTurn;
-        for (int i = 0; i <= steps; ++i) {
-            const double t = twistLen * i / steps;
-            const double phase = 2.0 * M_PI * t / used;
-            s.push_back(twistStart + along * t + across * (half * sign * std::cos(phase)));
-        }
-        s.push_back(pair.b + side);                           // the lead out
-        out.push_back(std::move(s));
+    double twistLen = len - 2.0 * lead;
+    if (twistLen < 1e-9) {
+        lead = len * 0.25;
+        twistLen = len * 0.5;
     }
+    if (w * kBandLen > twistLen) {
+        const double k = twistLen / (w * kBandLen);
+        w *= k;
+        pitch *= k;
+    }
+
+    // Everything below is built in LOCAL coordinates - x along the cable from the end it starts at, y
+    // across it from the centre - and turned into the drawing's own coordinates once, at the end.
+    const double wy = w * (kEdge / (kArcR + kArcCy));   // widths -> across the cable
+    std::vector<std::vector<Vec2>> out;
+
+    // The straight finish at each end: two lines, the width of the cable apart. This is where a pair
+    // is worked on - stripped, crimped, spliced - and where it meets whatever it runs into.
+    if (lead > 1e-9)
+        for (const double s : {1.0, -1.0}) {
+            out.push_back({{0.0, half * s}, {lead, half * s}});
+            out.push_back({{len - lead, half * s}, {len, half * s}});
+        }
+
+    // One band, as a closed outline in local coordinates, laid down every `pitch` and cut off where
+    // the straight ends begin. The bands overlap - that is what makes it read as woven rather than as
+    // a row of separate marks - so they are laid from before the weave starts to past where it ends
+    // and the cut does the rest.
+    auto arcInto = [](std::vector<Vec2>& into, double cx, double cy, double r, double fromDeg,
+                      double toDeg) {
+        constexpr int kSteps = 8;
+        for (int i = 0; i <= kSteps; ++i) {
+            const double aRad = (fromDeg + (toDeg - fromDeg) * i / kSteps) * M_PI / 180.0;
+            into.push_back({cx + r * std::cos(aRad), cy + r * std::sin(aRad)});
+        }
+    };
+    const double from = lead, to = len - lead;
+    for (double s = lead - w * kBandLen; s < to; s += pitch) {
+        std::vector<Vec2> loop;   // x/y in local coordinates, not world yet
+        loop.push_back({s, wy * kBandStart});
+        loop.push_back({s + w * kDiagRun, wy * kDiagRise});
+        arcInto(loop, s + w * kArcCx, wy * kArcCy, wy * kArcR, kArcFrom, kArcTo);
+        loop.push_back({s + w * kEdgeEnd, wy * kEdge});
+        loop.push_back({s + w * kBandLen, -wy * kBandStart});
+        loop.push_back({s + w * kBandStep, -wy * kDiagRise});
+        arcInto(loop, s + w * (kBandLen - kArcCx), -wy * kArcCy, wy * kArcR, kArcFrom - 180.0,
+                kArcTo - 180.0);
+        loop.push_back({s + w * (kBandLen - kEdgeEnd), -wy * kEdge});
+        loop.push_back(loop.front());
+
+        // Cut to the woven stretch: a band that hangs over an end is drawn as far as that end and no
+        // further, so the weave finishes square against the straight ends instead of trailing past
+        // them.
+        std::vector<Vec2> piece;
+        auto flush = [&]() {
+            if (piece.size() > 1) out.push_back(piece);
+            piece.clear();
+        };
+        for (size_t i = 1; i < loop.size(); ++i) {
+            Vec2 p0 = loop[i - 1], p1 = loop[i];
+            const bool in0 = p0.x >= from - 1e-9 && p0.x <= to + 1e-9;
+            const bool in1 = p1.x >= from - 1e-9 && p1.x <= to + 1e-9;
+            if (!in0 && !in1) { flush(); continue; }
+            // Where the edge crosses the end, so the cut is exactly on it.
+            auto atX = [&](double x) {
+                const double t = (x - p0.x) / (p1.x - p0.x);
+                return Vec2{x, p0.y + (p1.y - p0.y) * t};
+            };
+            if (!in0) p0 = atX(p0.x < from ? from : to);
+            if (!in1) p1 = atX(p1.x < from ? from : to);
+            if (piece.empty() || (piece.back() - p0).lengthSq() > 1e-12) { flush(); piece.push_back(p0); }
+            piece.push_back(p1);
+        }
+        flush();
+    }
+    // Local to the drawing's own coordinates, once, at the end - so every piece is measured on the
+    // same cable and a pair drawn on a slope is the same shape as one drawn flat.
+    for (auto& poly : out)
+        for (auto& v : poly) v = pair.a + along * v.x + across * v.y;
     return out;
 }
 

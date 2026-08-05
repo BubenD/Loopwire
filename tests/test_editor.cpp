@@ -4385,7 +4385,7 @@ int run_editor_tests() {
         }
     }
 
-    // --- A twisted pair: drawn between two points, straight at the ends, crossing in between.
+    // --- A twisted pair: drawn between two points, laid up like a rope, straight at the ends.
     {
         Document d;
         Editor ed;
@@ -4402,57 +4402,77 @@ int run_editor_tests() {
         if (pair) {
             check(near(pair->a.x, 0.0) && near(pair->b.x, 120.0),
                   "twisted pair: between the two points it was drawn between");
-            const auto strands = twistedPairStrands(*pair);
-            check(strands.size() == 2, "twisted pair: it is two wires");
-            if (strands.size() == 2) {
-                const double half = kTwistedPairWidth / 2.0;
-                // Both wires start and finish clear of the run's own line, on opposite sides, so the
-                // pair reaches its full width at the ends where it is joined to something.
-                check(near(strands[0].front().y, half) && near(strands[1].front().y, -half) &&
-                          near(strands[0].back().y, half) && near(strands[1].back().y, -half),
-                      "twisted pair: the ends of the two wires sit either side of the run");
-                // The ends are STRAIGHT: at the end of the lead the wires are still where they started.
-                auto atX = [](const std::vector<Vec2>& s, double x) {
-                    double y = 0.0, bestD = 1e18;
-                    for (const Vec2& v : s)
-                        if (std::abs(v.x - x) < bestD) { bestD = std::abs(v.x - x); y = v.y; }
-                    return y;
-                };
-                check(near(atX(strands[0], kTwistedPairLead), half),
-                      "twisted pair: it runs straight for the whole lead in");
-                check(near(atX(strands[0], 120.0 - kTwistedPairLead), half),
-                      "twisted pair: and straight again into the lead out, level with where it began");
-                // And it crosses in between: somewhere in the middle the wires have swapped sides.
-                bool crossed = false;
-                for (double x = kTwistedPairLead; x < 120.0 - kTwistedPairLead; x += 1.0)
-                    if (atX(strands[0], x) < -half * 0.8 && atX(strands[1], x) > half * 0.8)
-                        crossed = true;
-                check(crossed, "twisted pair: the wires cross over between the ends");
+            const double half = kTwistedPairWidth / 2.0;
+            const auto pieces = twistedPairStrands(*pair);
+            check(pieces.size() > 12, "twisted pair: the weave repeats along it");
+
+            // Nothing is drawn outside the cable: not past the ends it was drawn between, and not
+            // wider than the cable is.
+            double minX = 1e18, maxX = -1e18, maxAbsY = 0.0;
+            for (const auto& poly : pieces)
+                for (const Vec2& v : poly) {
+                    minX = std::min(minX, v.x);
+                    maxX = std::max(maxX, v.x);
+                    maxAbsY = std::max(maxAbsY, std::abs(v.y));
+                }
+            check(minX > -1e-6 && maxX < 120.0 + 1e-6,
+                  "twisted pair: the weave is cut at the ends rather than trailing past them");
+            check(near(maxAbsY, half), "twisted pair: and it is as wide as the cable, no wider");
+
+            // The straight finish: the lead is the two lines, one either side, and the weave starts
+            // where they end - nothing of it is drawn over them.
+            int leadLines = 0;
+            bool weaveInLead = false;
+            for (const auto& poly : pieces) {
+                const bool isLeadLine =
+                    poly.size() == 2 && near(std::abs(poly[0].y), half) &&
+                    near(std::abs(poly[1].y), half) && near(poly[0].y, poly[1].y) &&
+                    (near(poly[0].x, 0.0) || near(poly[1].x, 120.0));
+                if (isLeadLine) {
+                    ++leadLines;
+                    continue;
+                }
+                for (const Vec2& v : poly)
+                    if (v.x < kTwistedPairLead - 1e-6 || v.x > 120.0 - kTwistedPairLead + 1e-6)
+                        weaveInLead = true;
             }
-            // Picked on the wires, not on the empty middle: half way between two crossings the run's
-            // own line has nothing drawn on it.
+            check(leadLines == 4 && !weaveInLead,
+                  "twisted pair: each end finishes straight - two lines a cable's width apart, with "
+                  "the weave starting where they end");
+
+            // The weave crosses the cable: a strand runs from one edge to the other.
+            bool crosses = false;
+            for (const auto& poly : pieces) {
+                double lo = 1e18, hi = -1e18;
+                for (const Vec2& v : poly) { lo = std::min(lo, v.y); hi = std::max(hi, v.y); }
+                if (hi - lo > kTwistedPairWidth * 0.8) crosses = true;
+            }
+            check(crosses, "twisted pair: a strand crosses the whole width of the cable");
+
             const Bounds b = pair->bounds();
-            check(near(b.min.y, -kTwistedPairWidth / 2.0) && near(b.max.y, kTwistedPairWidth / 2.0),
+            check(near(b.min.y, -half) && near(b.max.y, half),
                   "twisted pair: it reaches half its width either side of the line it was drawn on");
             const Entity back = Entity::fromJson(pair->toJson());
             check(back.type == EntityType::TwistedPair && near(back.b.x, 120.0) &&
                       near(back.meta.value("twistPitch").toDouble(), kTwistedPairPitch),
                   "twisted pair: saved and read back, it is the same pair");
         }
-        // A pair drawn shorter than one crossing is drawn small rather than left untwisted.
+        // A pair drawn shorter than one band of weave is drawn smaller rather than left unwoven.
         {
             Entity tiny;
             tiny.type = EntityType::TwistedPair;
             tiny.a = {0, 0};
             tiny.b = {8, 0};
-            const auto strands = twistedPairStrands(tiny);
-            check(strands.size() == 2 && strands[0].size() > 4,
-                  "twisted pair: a short one still twists");
-            if (strands.size() == 2) {
-                double maxX = 0.0;
-                for (const Vec2& v : strands[0]) maxX = std::max(maxX, v.x);
-                check(near(maxX, 8.0), "twisted pair: and stays inside the length it was drawn");
-            }
+            const auto pieces = twistedPairStrands(tiny);
+            check(pieces.size() > 4, "twisted pair: a short one still has its weave");
+            double maxX = 0.0, maxAbsY = 0.0;
+            for (const auto& poly : pieces)
+                for (const Vec2& v : poly) {
+                    maxX = std::max(maxX, v.x);
+                    maxAbsY = std::max(maxAbsY, std::abs(v.y));
+                }
+            check(maxX < 8.0 + 1e-6 && maxAbsY < kTwistedPairWidth / 2.0 + 1e-6,
+                  "twisted pair: drawn thinner to fit, and inside the length it was drawn");
         }
     }
 

@@ -152,7 +152,7 @@ double breakLeanFactor(const Entity& mark);
 // What a mechanical drawing shows where a pair is twisted, and what the ends are for - a twisted pair
 // is spliced, crimped and dressed like any other wire, and it is the straight ends that get worked on.
 inline constexpr double kTwistedPairWidth = 6.0;  // how far apart the two wires run
-inline constexpr double kTwistedPairPitch = 12.0; // the length of one whole crossing
+inline constexpr double kTwistedPairPitch = 7.3; // the length of one whole crossing
 inline constexpr double kTwistedPairLead = 6.0;   // the straight run at each end
 // The two wires, each as a polyline in world units. Everything that has to agree about the shape -
 // what is drawn, what a click picks, what a zone catches, how far it reaches - asks this, so none of
