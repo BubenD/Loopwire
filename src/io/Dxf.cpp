@@ -378,7 +378,10 @@ struct Xf {
         Xf out;
         out.sx = sx * parent.sx;
         out.sy = sy * parent.sy;
-        out.rot = rot + parent.rot;
+        // A MIRRORED parent turns the sense of what it holds round: reflecting and then turning is
+        // turning the other way and then reflecting. Added as a plain sum, a mirrored placement put
+        // everything inside it on the wrong side of the turn.
+        out.rot = parent.rot + ((parent.sx * parent.sy < 0.0) ? -rot : rot);
         out.t = parent.apply(t);
         return out;
     }
@@ -511,8 +514,57 @@ bool parse(Document& doc, const QString& text, QString*) {
     struct Slice { quint64 key = 0; int start = 0; };
     std::vector<Slice> slices;
     // One reader, used for the drawing itself and for the inside of every block it places.
+    // Arrowhead sizes. An arrowhead is not stored: a leader says which dimension style it is drawn to
+    // and AutoCAD draws the head from that style's arrow size (DIMASZ, code 41, 2.5mm when the style is
+    // silent), scaled by the style's overall scale. A callout drawn as a multileader takes its size from
+    // its own style instead, which is named by handle. Read as nothing, every balloon's leader was a
+    // bare line resting against the wire it picks out.
+    QHash<QString, double> dimArrow, mleaderArrow;
+    for (int i = 0; i < n; ++i) {
+        if (pairs[i].code != "0") continue;
+        if (pairs[i].value == QLatin1String("DIMSTYLE")) {
+            const auto g = collectGroup(pairs, i + 1);
+            const double scale = findNum(g, "40", 1.0);
+            dimArrow.insert(findVal(g, "2"),
+                            findNum(g, "41", 2.5) * (scale > 1e-9 ? scale : 1.0));
+        } else if (pairs[i].value == QLatin1String("MLEADERSTYLE")) {
+            const auto g = collectGroup(pairs, i + 1);
+            mleaderArrow.insert(findVal(g, "5").trimmed().toUpper(), findNum(g, "42", 2.5));
+        }
+    }
+    // The filled triangle a leader points with: its tip AT the point picked out, lying back along the
+    // leader. AutoCAD's proportions - as long as the arrow size, a third of that across.
+    auto arrowHead = [](const Vec2& tip, const Vec2& from, double size) {
+        std::vector<Vec2> tri;
+        const double dx = tip.x - from.x, dy = tip.y - from.y;
+        const double len = std::hypot(dx, dy);
+        if (len < 1e-9 || size < 1e-9) return tri;
+        const Vec2 dir{dx / len, dy / len};
+        const Vec2 back{tip.x - dir.x * size, tip.y - dir.y * size};
+        const double half = size / 6.0;
+        tri.push_back(tip);
+        tri.push_back({back.x - dir.y * half, back.y + dir.x * half});
+        tri.push_back({back.x + dir.y * half, back.y - dir.x * half});
+        return tri;
+    };
+
+    // The plane an object is drawn on. A 2D object states the normal of its plane (210/220/230, the
+    // drawing's Z axis unless it says otherwise) and its own coordinates are measured in THAT plane's
+    // axes. A normal pointing the other way is how AutoCAD records a mirrored object, and it turns x
+    // round: the schematic's pin leads, mirrored to face the other way, are placed at x = -117 and were
+    // drawn out in the field to the left of the sheet instead of against the connector. Only the objects
+    // whose points are stated on that plane are turned - a LINE, an ELLIPSE, an MTEXT and a LEADER give
+    // theirs in the drawing's own coordinates.
+    auto onPlaneOf = [](const QString& type, const std::vector<Pair>& g, const Xf& parent) {
+        static const QStringList kOnPlane = {"INSERT", "CIRCLE", "ARC",  "TEXT",
+                                            "SOLID",  "SHAPE",  "POLYLINE", "LWPOLYLINE"};
+        Xf flip;
+        if (kOnPlane.contains(type) && findNum(g, "230", 1.0) < 0.0) flip.sx = -1.0;
+        return flip.then(parent);
+    };
+
     std::function<void(int, int, const Xf&, int)> readRange =
-        [&](int from, int to, const Xf& xf, int depth) {
+        [&](int from, int to, const Xf& parentXf, int depth) {
             for (int i = from; i < to; ++i) {
                 if (pairs[i].code != "0") continue;
                 const QString type = pairs[i].value;
@@ -528,6 +580,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                 if (type == "POLYLINE") {
                     // Legacy polyline: gather following VERTEX groups until SEQEND.
                     const auto head = collectGroup(pairs, i + 1);
+                    const Xf xf = onPlaneOf(type, head, parentXf);
                     const QString layer = findVal(head, "8", "0");
                     ensureLayer(layer, 0);
                     Entity e;
@@ -557,6 +610,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                 if (!kKnown.contains(type)) continue;
 
                 const auto g = collectGroup(pairs, i + 1);
+                const Xf xf = onPlaneOf(type, g, parentXf);
                 const QString layer = findVal(g, "8", "0");
                 ensureLayer(layer, 0);
                 const int eci = findVal(g, "62", "256").toInt();
@@ -665,6 +719,18 @@ bool parse(Document& doc, const QString& text, QString*) {
                         lead.type = EntityType::Polyline;
                         lead.points = verts;
                         entities.push_back(std::move(lead));
+                        // And the head it points with. A multileader names its style by handle - the
+                        // LAST 340 in the record; the 340 before it is the style its words are set in.
+                        QString styleHandle;
+                        for (const auto& gp : g)
+                            if (gp.code == QLatin1String("340")) styleHandle = gp.value.trimmed().toUpper();
+                        Entity head = e;
+                        head.id = newId();
+                        head.type = EntityType::Polygon;
+                        head.points = arrowHead(verts[0], verts[1],
+                                                xf.len(mleaderArrow.value(styleHandle, 2.5)));
+                        head.meta.insert("filled", true);
+                        if (head.points.size() == 3) entities.push_back(std::move(head));
                     }
                     if (!label.isEmpty() && haveText) {
                         Entity txt = e;
@@ -747,6 +813,24 @@ bool parse(Document& doc, const QString& text, QString*) {
                     if (type == "LWPOLYLINE" && (findVal(g, "70", "0").toInt() & 1) &&
                         e.points.size() > 2)
                         e.points.push_back(e.points.front());
+                    // A leader points with an arrowhead at its FIRST vertex - the point it picks out.
+                    // Its size comes from the leader's dimension style, which the leader may override in
+                    // its own extended data: 1070 names the setting (41 is the arrow size) and the 1040
+                    // after it carries the value.
+                    if (type == "LEADER" && e.points.size() > 1) {
+                        double size = dimArrow.value(findVal(g, "3"), 2.5);
+                        for (size_t k = 0; k + 1 < g.size(); ++k)
+                            if (g[k].code == QLatin1String("1070") &&
+                                g[k].value.trimmed() == QLatin1String("41") &&
+                                g[k + 1].code == QLatin1String("1040"))
+                                size = g[k + 1].value.toDouble();
+                        Entity head = e;
+                        head.id = newId();
+                        head.type = EntityType::Polygon;
+                        head.points = arrowHead(e.points[0], e.points[1], xf.len(size));
+                        head.meta.insert("filled", true);
+                        if (head.points.size() == 3) entities.push_back(std::move(head));
+                    }
                     if (e.points.size() > 1) entities.push_back(std::move(e));
                 } else if (type == "CIRCLE") {
                     e.type = EntityType::Circle;
@@ -786,6 +870,9 @@ bool parse(Document& doc, const QString& text, QString*) {
                     const Vec2 p3 = xf.apply({findNum(g, "12"), findNum(g, "22")});
                     const Vec2 p4 = xf.apply({findNum(g, "13"), findNum(g, "23")});
                     e.points = {p1, p2, p4, p3};
+                    // A SOLID is solid: a patch of colour, which is what the arrowheads on this
+                    // drawing's dimensions are. Outlined, they read as hollow triangles.
+                    e.meta.insert("filled", true);
                     entities.push_back(std::move(e));
                 } else { // TEXT / MTEXT
                     e.type = EntityType::Text;

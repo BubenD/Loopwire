@@ -1213,6 +1213,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 }
                 break;
             }
+            // A filled shape is a patch of colour rather than an outline of one: a DXF SOLID, and the
+            // head a leader or a dimension points with. Outlined only, an arrowhead read as a hollow
+            // triangle resting on the wire it picks out.
+            if (e.meta.value("filled").toBool() && e.points.size() >= 3) {
+                p.save();
+                p.setBrush(color);
+                p.drawPolygon(toScreenPoly(e.points, vt));
+                p.restore();
+            }
             p.drawPolygon(toScreenPoly(e.points, vt));
             // Note / Revision annotation boxes carry text inside the rectangle.
             const bool note = e.meta.value("note").toBool();

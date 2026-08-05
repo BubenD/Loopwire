@@ -339,6 +339,71 @@ int run_io_tests() {
         }
     }
 
+    // --- A mirrored placement, and the head a leader points with.
+    {
+        // AutoCAD records a mirrored object by turning the normal of its plane round (230 = -1), and
+        // the object's own coordinates are then measured on that plane: x runs the other way. The
+        // schematic's pin leads are placed like this, and read as though the normal were the usual one
+        // they were drawn a sheet's width away to the left instead of against the connector.
+        //
+        // A leader carries no arrowhead: it names a dimension style and AutoCAD draws the head from
+        // that style's arrow size, which the leader may override in its own extended data.
+        const QString src = QStringLiteral(
+            "0\nSECTION\n2\nTABLES\n"
+            "0\nDIMSTYLE\n2\nEdi\n41\n3.0\n"
+            "0\nENDSEC\n"
+            "0\nSECTION\n2\nBLOCKS\n"
+            "0\nBLOCK\n2\npin\n10\n0.0\n20\n0.0\n"
+            "0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n10.0\n21\n0.0\n"
+            "0\nENDBLK\n"
+            "0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n"
+            // Mirrored, and mirrored with a quarter turn on it.
+            "0\nINSERT\n8\n0\n2\npin\n10\n-50.0\n20\n20.0\n230\n-1.0\n"
+            "0\nINSERT\n8\n0\n2\npin\n10\n-50.0\n20\n60.0\n50\n90.0\n230\n-1.0\n"
+            "0\nLEADER\n8\n0\n3\nEdi\n10\n100.0\n20\n100.0\n10\n90.0\n20\n100.0\n"
+            "0\nSOLID\n8\n0\n10\n0.0\n20\n0.0\n11\n1.0\n21\n0.0\n12\n1.0\n22\n1.0\n"
+            "13\n0.0\n23\n1.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parse(d, src), "dxf-in: the file is read");
+
+        bool mirrored = false, turned = false;
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Line) continue;
+            // The plain mirror: the lead runs from x=50 back to x=40, on the sheet, not at x=-50.
+            if (near(e.a.x, 50.0) && near(e.a.y, 20.0) && near(e.b.x, 40.0) && near(e.b.y, 20.0))
+                mirrored = true;
+            // And with a quarter turn: mirroring reverses the sense of the turn, so the lead runs UP
+            // from where it is placed rather than down.
+            if (near(e.a.x, 50.0) && near(e.a.y, 60.0) && near(e.b.x, 50.0) && near(e.b.y, 70.0))
+                turned = true;
+        }
+        check(mirrored, "dxf-in: an object drawn on a plane facing the other way is mirrored onto the "
+                        "sheet rather than placed off it");
+        check(turned, "dxf-in: and a turn inside a mirrored placement turns the other way");
+
+        const Entity* head = nullptr;
+        const Entity* solid = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type != EntityType::Polygon) continue;
+            if (e.points.size() == 3) head = &e;
+            if (e.points.size() == 4) solid = &e;
+        }
+        check(head != nullptr, "dxf-in: a leader is given the arrowhead it points with");
+        if (head) {
+            check(head->meta.value("filled").toBool(), "dxf-in: and the head is filled, not outlined");
+            check(near(head->points[0].x, 100.0) && near(head->points[0].y, 100.0),
+                  "dxf-in: its tip is the point the leader picks out");
+            // 3.0 long (the style's arrow size), a third of that across.
+            check(near(head->points[1].x, 97.0) && near(head->points[2].x, 97.0) &&
+                      near(head->points[1].y, 100.5) && near(head->points[2].y, 99.5),
+                  "dxf-in: and it lies back along the leader, as long as the style's arrow size");
+        }
+        check(solid && solid->meta.value("filled").toBool(),
+              "dxf-in: a SOLID is filled - it is a patch of colour, not an outline of one");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
