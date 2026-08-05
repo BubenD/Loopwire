@@ -41,7 +41,6 @@ void MainWindow::buildSchematicBuildTab() {
     auto [page, lay] = makeTabPage();
     // Undo and Redo on this tab too: a harness is built here, and coming back to Home to undo one
     // wire is the sort of thing that makes a person stop using the tab.
-    addGroup(lay, QStringLiteral("Undo"), undoRedoRow(page));
     // Screen / shield button (joins the Place group below).
     auto* screenBtn = new QToolButton(page);
     // Icon-only: the name shows on hover (tooltip), not as a label.

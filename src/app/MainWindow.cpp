@@ -2054,49 +2054,56 @@ void MainWindow::normaliseRibbonPages() {
 
 // Undo and Redo, drawn as the arrows they are. The keys have always done this; the buttons are for
 // the hand that is already on the mouse - and for anyone who does not know the keys exist.
-QWidget* MainWindow::undoRedoRow(QWidget* parent) {
+QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
     auto* host = new QWidget(parent);
     auto* lay = new QHBoxLayout(host);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(2);
-    auto arrow = [](bool redo) {
+    auto arrow = [compact](bool redo) {
         QPixmap pm(28, 28);
         pm.fill(Qt::transparent);
         QPainter p(&pm);
         p.setRenderHint(QPainter::Antialiasing, true);
         QPen pen(QColor("#d6dae1"));
-        pen.setWidthF(2.2);
+        // Small, the arrow is drawn BOLDER and BIGGER in its box rather than being the large one
+        // shrunk: at 18 pixels a 2.2 wide stroke lands on less than two and reads as grey, and a
+        // five-pixel head disappears altogether.
+        pen.setWidthF(compact ? 3.4 : 2.2);
         pen.setCapStyle(Qt::RoundCap);
         p.setPen(pen);
         // A curved arrow, going back for undo and forward for redo.
+        const double head = compact ? 9.0 : 5.0;
+        const double x0 = compact ? 3.0 : 6.0, x1 = compact ? 25.0 : 22.0;
+        const double yTip = compact ? 11.0 : 12.0, yTail = compact ? 21.0 : 19.0;
         QPainterPath path;
         if (redo) {
-            path.moveTo(6, 19);
-            path.cubicTo(9, 9, 19, 7, 22, 12);
+            path.moveTo(x0, yTail);
+            path.cubicTo(x0 + 3, 8, x1 - 3, 6, x1, yTip);
         } else {
-            path.moveTo(22, 19);
-            path.cubicTo(19, 9, 9, 7, 6, 12);
+            path.moveTo(x1, yTail);
+            path.cubicTo(x1 - 3, 8, x0 + 3, 6, x0, yTip);
         }
         p.drawPath(path);
         p.setBrush(QColor("#d6dae1"));
         p.setPen(Qt::NoPen);
-        QPolygonF head;
-        if (redo) head << QPointF(22, 12) << QPointF(17, 12) << QPointF(22, 17);
-        else head << QPointF(6, 12) << QPointF(11, 12) << QPointF(6, 17);
-        p.drawPolygon(head);
+        QPolygonF tip;
+        if (redo) tip << QPointF(x1, yTip - 1) << QPointF(x1 - head, yTip - 1) << QPointF(x1, yTip - 1 + head);
+        else tip << QPointF(x0, yTip - 1) << QPointF(x0 + head, yTip - 1) << QPointF(x0, yTip - 1 + head);
+        p.drawPolygon(tip);
         return QIcon(pm);
     };
     auto button = [&](bool redo) {
         auto* b = new QToolButton(host);
         b->setIcon(arrow(redo));
-        b->setIconSize(QSize(26, 26));
-        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setText(redo ? QStringLiteral("Redo") : QStringLiteral("Undo"));
+        b->setIconSize(compact ? QSize(18, 18) : QSize(26, 26));
+        b->setToolButtonStyle(compact ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextUnderIcon);
+        if (!compact) b->setText(redo ? QStringLiteral("Redo") : QStringLiteral("Undo"));
         b->setToolTip(redo ? QStringLiteral("Redo the last undone change (Ctrl+Y)")
                            : QStringLiteral("Undo the last change (Ctrl+Z)"));
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus);
-        b->setMinimumWidth(52);
+        if (compact) b->setFixedSize(24, 22);
+        else b->setMinimumWidth(52);
         connect(b, &QToolButton::clicked, this, [this, redo] {
             if (redo) editor_->redo();
             else editor_->undo();
@@ -2109,6 +2116,14 @@ QWidget* MainWindow::undoRedoRow(QWidget* parent) {
         connect(editor_, &Editor::selectionChanged, this, sync);
         return b;
     };
+    if (compact) {
+        // On the tab-bar row, which is its own darker colour. It has to be painted here: the corner of
+        // a tab widget is not the tab bar and not the pane, so left to itself it comes out in the
+        // application's light palette - a white patch in the corner of a charcoal ribbon.
+        lay->setContentsMargins(4, 4, 8, 4);
+        host->setMinimumHeight(30);   // fills the tab row: the corner is painted by the style otherwise
+        host->setStyleSheet(QStringLiteral("QWidget{background-color:#2f3237;}"));
+    }
     lay->addWidget(button(false));
     lay->addWidget(button(true));
     return host;
@@ -2245,6 +2260,12 @@ void MainWindow::buildRibbon() {
 
     // One tab per file, in src/app/ribbon/ - the ribbon was the biggest thing in this file and the
     // place every new feature landed.
+    // Undo and Redo live in the ribbon's top right corner: small, always there whichever tab is
+    // open, and out of the way of the tools. They used to be a group of their own at the front of
+    // Home and of Schematic build - two large buttons taking the best place on the tab, and absent
+    // from every other tab.
+    ribbon_->setCornerWidget(undoRedoRow(ribbon_, /*compact=*/true), Qt::TopRightCorner);
+
     buildHomeTab();
     buildModifyTab();
     buildInsertTab();

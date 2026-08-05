@@ -40,8 +40,6 @@ void MainWindow::buildHomeTab() {
     auto [page, lay] = makeTabPage();
     QAction* sel = makeToolAction(QStringLiteral("Select"), ToolId::Select);
     sel->setChecked(true);
-    // Undo and Redo first, where a hand reaches for them.
-    addGroup(lay, QStringLiteral("Undo"), undoRedoRow(page));
     addGroup(lay, QStringLiteral("Draw"),
              toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
                       ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,

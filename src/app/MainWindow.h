@@ -107,7 +107,9 @@ private:
     QToolButton* makeMatchBtn(QWidget* parent, bool iconOnly);
     // Undo and Redo as ribbon buttons. Ctrl+Z and Ctrl+Y have always worked; a button is what makes
     // them findable, and it can say whether there is anything left to undo.
-    QWidget* undoRedoRow(QWidget* parent);
+    // Undo and Redo. `compact` makes the small icon-only pair that sits in the ribbon's top right
+    // corner - where a hand reaches for them, and out of the way of the tools.
+    QWidget* undoRedoRow(QWidget* parent, bool compact = false);
     // Show/hide the Schematic-build ribbon groups by context: while a twist is armed only
     // the Twist group shows; while a Splice/X marker tool is armed the Modify/DRC groups hide.
     void updateSchematicRibbonGroups();
