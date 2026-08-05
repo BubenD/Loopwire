@@ -2045,9 +2045,11 @@ Bounds textInkBounds(const Entity& e) {
     }
     const double totalH = lineH * lines.size();
     double top = e.a.y;                                // world y grows up; the anchor is the box top
-    if (bh > 1e-9) {
-        if (just[0] == QLatin1Char('M')) top -= (bh - totalH) / 2.0;
-        else if (just[0] == QLatin1Char('B')) top -= bh - totalH;
+    {
+        // No box: the anchor is the middle or the foot of the block, as the renderer places it.
+        const double avail = bh > 1e-9 ? bh : 0.0;
+        if (just[0] == QLatin1Char('M')) top -= (avail - totalH) / 2.0;
+        else if (just[0] == QLatin1Char('B')) top -= avail - totalH;
     }
     Bounds ink;
     bool any = false;
@@ -2056,10 +2058,12 @@ Bounds textInkBounds(const Entity& e) {
         if (ln.isEmpty()) continue;
         const double baseline = top - ascent - lineH * i;
         double x = e.a.x;
-        if (bw > 1e-9) {
+        {
+            // No box: the anchor is the middle or the right-hand end of the line, as it is drawn.
+            const double avail = bw > 1e-9 ? bw : 0.0;
             const double lw = fm.horizontalAdvance(ln) * k;
-            if (just[1] == QLatin1Char('C')) x += (bw - lw) / 2.0;
-            else if (just[1] == QLatin1Char('R')) x += bw - lw;
+            if (just[1] == QLatin1Char('C')) x += (avail - lw) / 2.0;
+            else if (just[1] == QLatin1Char('R')) x += avail - lw;
         }
         // tightBoundingRect is in the font's own coordinates about the baseline origin, with y
         // growing DOWN, so its top is negative - above the baseline once the sign is flipped.

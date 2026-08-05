@@ -236,6 +236,31 @@ std::vector<Pair> collectGroup(const std::vector<Pair>& pairs, int start) {
     return out;
 }
 
+// A tab is written for alignment - a note's indents, the columns of a tolerance table. The drawing
+// carries real tab STOPS in drawing units, which this application's text does not; a stop every four
+// characters keeps the columns lined up and is a great deal closer than the literal "^I" that a tab
+// used to be shown as.
+QString expandTabs(const QString& in) {
+    if (!in.contains(QLatin1Char('\t'))) return in;
+    constexpr int kStop = 4;
+    QString out;
+    int col = 0;
+    for (const QChar c : in) {
+        if (c == QLatin1Char('\n')) {
+            out += c;
+            col = 0;
+        } else if (c == QLatin1Char('\t')) {
+            const int pad = kStop - (col % kStop);
+            out += QString(pad, QLatin1Char(' '));
+            col += pad;
+        } else {
+            out += c;
+            ++col;
+        }
+    }
+    return out;
+}
+
 // ---- Text as AutoCAD writes it ---------------------------------------------------------------
 //
 // A TEXT or MTEXT string is not plain text. It carries the old %% escapes (%%d for a degree sign,
@@ -268,7 +293,11 @@ QString decodeDxfText(const QString& in, bool mtext) {
             s.replace(m.capturedStart(), m.capturedLength(),
                       QString(QChar(m.captured(1).toUShort(nullptr, 16))));
     }
-    if (!mtext) return s;
+    // The caret escapes: ^I is a TAB and ^J a line feed. Shown literally - which is what happened -
+    // a note reads "1.^IElectrical properties" and a wire reads "BLUE^I^I28 AWG".
+    s.replace(QLatin1String("^J"), QLatin1String("\n"));
+    s.replace(QLatin1String("^I"), QLatin1String("\t"));
+    if (!mtext) return expandTabs(s);
 
     // The inline runs. Everything here is formatting, not content: it is dropped, leaving the words.
     QString out;
@@ -313,7 +342,7 @@ QString decodeDxfText(const QString& in, bool mtext) {
         if (c == QLatin1Char('{') || c == QLatin1Char('}')) continue;   // run grouping
         out += c;
     }
-    return out;
+    return expandTabs(out);
 }
 
 // Where a group 1 / group 3 text lives: MTEXT longer than 250 characters arrives as any number of
@@ -595,6 +624,14 @@ bool parse(Document& doc, const QString& text, QString*) {
                         // top-left, top-centre, top-right, middle-left, ... bottom-right.
                         const double w = xf.len(findNum(g, "41", 0.0));
                         if (w > 1e-6) e.meta.insert("boxWidth", w);
+                        const double h = xf.len(findNum(g, "46", 0.0));
+                        if (h > 1e-6) e.meta.insert("boxHeight", h);
+                        // A turn can be stated as a direction vector rather than an angle.
+                        if (findVal(g, "50").isEmpty()) {
+                            const Vec2 dir{findNum(g, "11", 0.0), findNum(g, "21", 0.0)};
+                            if (std::hypot(dir.x, dir.y) > 1e-12)
+                                e.rotation = xf.angle(std::atan2(dir.y, dir.x));
+                        }
                         static const char* const kJust[9] = {"TL", "TC", "TR", "ML", "MC",
                                                              "MR", "BL", "BC", "BR"};
                         const int at = std::clamp(findVal(g, "71", "1").toInt(), 1, 9);

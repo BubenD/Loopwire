@@ -200,6 +200,44 @@ int run_io_tests() {
         }
     }
 
+    // --- The caret escapes, and where a label with no box sits about its anchor.
+    {
+        // ^I is a tab (a note's indents, a tolerance table's columns) and ^J a line feed. Shown
+        // literally, a wire read "BLUE^I^I28 AWG".
+        const QString src = QStringLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nMTEXT\n8\n0\n10\n0.0\n20\n0.0\n40\n2.5\n71\n5\n"
+            "1\nBLUE^I^I28 AWG^JWHITE^I28 AWG\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parse(d, src), "dxf-in: the file is read");
+        const Entity* t = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Text) t = &e;
+        check(t != nullptr, "dxf-in: the label is read");
+        if (t) {
+            const QString s = t->meta.value("text").toString();
+            check(!s.contains(QLatin1String("^I")) && !s.contains(QLatin1String("^J")),
+                  "dxf-in: a caret escape is decoded, not shown");
+            check(s.contains(QLatin1Char('\n')), "dxf-in: ^J breaks the line");
+            check(s.startsWith(QLatin1String("BLUE")) && s.contains(QLatin1String("28 AWG")),
+                  "dxf-in: and the words survive");
+            // Tabs become spacing to the next four-column stop, so the columns line up: BLUE is 4
+            // characters, so two tabs reach column 12.
+            check(s.section(QLatin1Char('\n'), 0, 0) == QLatin1String("BLUE        28 AWG"),
+                  "dxf-in: a tab pads to the next stop rather than vanishing");
+
+            // The anchor: 5 is middle-centre, and with no box the text sits ABOUT that point.
+            check(t->meta.value("justify").toString() == QLatin1String("MC"),
+                  "dxf-in: the attachment point is kept");
+            const Bounds b = t->bounds();
+            check(b.min.y < t->a.y && b.max.y > t->a.y,
+                  "dxf-in: a middle attachment straddles its anchor instead of hanging below it");
+            check(b.min.x < t->a.x && b.max.x > t->a.x,
+                  "dxf-in: and a centre attachment straddles it sideways");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

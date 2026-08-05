@@ -125,14 +125,21 @@ Bounds Entity::bounds() const {
                                           : al == QLatin1String("right") ? QStringLiteral("R")
                                                                          : QStringLiteral("L"));
         }
+        // With no box the anchor is the point the text sits ABOUT, sideways as well as vertically:
+        // centre shifts it left by half its width, right by all of it. This is what the renderer does,
+        // and the two have to agree or the box that selects a label is not the label.
         double hOff = 0.0, vOff = 0.0;
-        if (bw > 0.0) {
-            if (just[1] == QLatin1Char('C')) hOff = (bw - textW) / 2.0;
-            else if (just[1] == QLatin1Char('R')) hOff = bw - textW;
+        {
+            const double avail = bw > 0.0 ? bw : 0.0;
+            if (just[1] == QLatin1Char('C')) hOff = (avail - textW) / 2.0;
+            else if (just[1] == QLatin1Char('R')) hOff = avail - textW;
         }
-        if (bh > 0.0) {
-            if (just[0] == QLatin1Char('M')) vOff = (bh - textH) / 2.0;
-            else if (just[0] == QLatin1Char('B')) vOff = bh - textH;
+        // No box height: the anchor is the point the block sits ABOUT, so a middle attachment lifts
+        // it by half and a bottom one by all of it. (See the renderer.)
+        {
+            const double avail = bh > 0.0 ? bh : 0.0;
+            if (just[0] == QLatin1Char('M')) vOff = (avail - textH) / 2.0;
+            else if (just[0] == QLatin1Char('B')) vOff = avail - textH;
         }
         bnds.expand({a.x + hOff, a.y - vOff});
         bnds.expand({a.x + hOff + textW, a.y - vOff - textH});

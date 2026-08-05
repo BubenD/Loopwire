@@ -1514,8 +1514,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
         // Vertical placement within the container (screen Y grows downward; anchor
         // is the box top). T = top, M = centre, B = bottom of the box.
+        //
+        // With NO box - which is how a cell's text, a balloon's number and a pin's number are written,
+        // and how most of a real drawing's text arrives - the anchor is the point the block is placed
+        // ABOUT, so M has to lift it by half its height and B by all of it. Treating the block as its
+        // own box made both of them do nothing, which is why every such label sat low: the anchor was
+        // being used as the top whatever it said. Horizontal placement already worked this way (a
+        // width of zero makes C shift left by half the line).
         const double totalH = lineH * lines.size();
-        const double availH = boxHpx > 1.0 ? boxHpx : totalH;
+        const double availH = boxHpx > 1.0 ? boxHpx : 0.0;
         double blockTop = anchor.y();
         if (vJust == QLatin1Char('M')) blockTop += (availH - totalH) / 2.0;
         else if (vJust == QLatin1Char('B')) blockTop += availH - totalH;
