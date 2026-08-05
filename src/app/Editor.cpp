@@ -1692,12 +1692,15 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             e.id = uid();
             if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
             if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
+            // Turned the way it was turned under the cursor, about the point it was held by.
+            if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
             translateEntity(e, off);
             selected_.push_back(e.id);
             doc_->entities().push_back(std::move(e));
         }
         pastePlacing_ = false;
         pasteMirrorX_ = pasteMirrorY_ = false;
+        placeRot_ = 0.0;
         doc_->setDirty(true);
         emit message(QStringLiteral("Pasted %1 object(s)").arg(clipboard_.size()));
         emit selectionChanged();
@@ -9652,6 +9655,7 @@ void Editor::beginHarnessPlacement(const HarnessDef& def) {
     Bounds b;
     for (const Entity& e : harnessGhost_) b.expand(e.bounds());
     harnessBase_ = b.valid ? Vec2{b.min.x, b.max.y} : Vec2{0.0, 0.0};
+    placeRot_ = 0.0;   // it starts the way it was built; R turns it before it lands
     harnessPlacing_ = true;
     emit message(QStringLiteral("Harness ready — click to place it, Esc to go back to the builder"));
     emit overlayChanged();
@@ -9660,6 +9664,7 @@ void Editor::beginHarnessPlacement(const HarnessDef& def) {
 void Editor::cancelHarnessPlacement() {
     if (!harnessPlacing_) return;
     harnessPlacing_ = false;
+    placeRot_ = 0.0;
     harnessGhost_.clear();
     emit message(QStringLiteral("Harness placement cancelled"));
     emit harnessPlacementFinished(false);
@@ -9673,6 +9678,8 @@ void Editor::placeHarnessAt(const Vec2& at) {
     pushUndo();
     std::vector<QString> ids;
     for (Entity e : harnessGhost_) {
+        // Placed the way round it was held: turned about the corner it hangs from, then moved.
+        if (std::abs(placeRot_) > 1e-9) rotateEntity(e, harnessBase_, placeRot_);
         translateEntity(e, shift);
         if (e.id.isEmpty()) e.id = uid();
         if (e.type == EntityType::Connector || e.type == EntityType::Wire)
@@ -9682,6 +9689,7 @@ void Editor::placeHarnessAt(const Vec2& at) {
     }
     const int n = static_cast<int>(ids.size());
     harnessPlacing_ = false;
+    placeRot_ = 0.0;
     harnessGhost_.clear();
     selected_ = ids;
     doc_->setDirty(true);
@@ -10686,6 +10694,20 @@ void Editor::copyWithBase(bool cut) {
                      : QStringLiteral("Copy: specify base point"));
 }
 
+void Editor::rotatePlacementPreview(bool clockwise) {
+    // A quarter turn at a time, about the point the thing is held by - which is the paste base or the
+    // corner a harness hangs from, so what is under the crosshair stays under it.
+    if (!placementPreviewActive()) return;
+    placeRot_ += clockwise ? -M_PI / 2.0 : M_PI / 2.0;
+    // Kept in one turn, so the number reads as an angle rather than as a tally of key presses.
+    while (placeRot_ > M_PI + 1e-9) placeRot_ -= 2.0 * M_PI;
+    while (placeRot_ < -M_PI - 1e-9) placeRot_ += 2.0 * M_PI;
+    const int deg = static_cast<int>(std::lround(placeRot_ * 180.0 / M_PI));
+    emit message(QStringLiteral("Turned %1° — R turns it clockwise, Shift+R the other way")
+                     .arg(deg > 0 ? QStringLiteral("+%1").arg(deg) : QString::number(deg)));
+    emit overlayChanged();
+}
+
 void Editor::placeEntities(const std::vector<Entity>& ents) {
     if (!doc_ || ents.empty()) {
         emit message(QStringLiteral("Nothing to place"));
@@ -10718,6 +10740,7 @@ void Editor::paste() {
         return;
     }
     awaitClipBase_ = false;
+    placeRot_ = 0.0;      // something new picked up starts the way it was drawn
     pastePlacing_ = true; // the contents now follow the cursor until clicked to place
     pasteMirrorX_ = pasteMirrorY_ = false;
     emit message(QStringLiteral("Specify insertion point — X / Y mirror before placing"));
@@ -10843,6 +10866,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         filletInputMode_ = false;
         awaitClipBase_ = false;
         pastePlacing_ = false;
+        placeRot_ = 0.0;
         clipCut_ = false;
         cutPending_.clear();
         editGhost_.clear();
@@ -11154,6 +11178,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         for (Entity e : clipboard_) {
             if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
             if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
+            if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
             translateEntity(e, off);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }
@@ -11172,6 +11197,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const Vec2 shift = cursor_ - harnessBase_;
         const QColor ghost(120, 200, 255, 170);
         for (Entity e : harnessGhost_) {
+            if (std::abs(placeRot_) > 1e-9) rotateEntity(e, harnessBase_, placeRot_);
             translateEntity(e, shift);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }

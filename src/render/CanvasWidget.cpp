@@ -698,6 +698,15 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // Anything held under the cursor waiting to be dropped - a paste, a block, a part out of the
+        // library, a generated harness: R turns it a quarter turn clockwise, Shift+R the other way, so
+        // it goes in the way round it is wanted. Handled here, before an idle letter opens the command
+        // box, for the same reason X and Y are.
+        if (editor_->placementPreviewActive() && e->key() == Qt::Key_R) {
+            editor_->rotatePlacementPreview(!(e->modifiers() & Qt::ShiftModifier));
+            e->accept();
+            return;
+        }
         // Tab switches the active dynamic-input reference field (Length<->Angle,
         // X radius<->Y radius, ...) even before the input box has been opened.
         // (focusNextPrevChild is overridden so Tab reaches us instead of moving focus.)

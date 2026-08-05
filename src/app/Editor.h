@@ -425,6 +425,16 @@ public:
     // Flip the paste preview before placing: xAxis mirrors across a vertical line
     // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
     void togglePasteMirror(bool xAxis);
+
+    // ---- Turning what is held under the cursor -------------------------------
+    // Anything waiting to be placed - a paste, a block, a part out of the library, a generated
+    // harness - can be turned before it is dropped: R a quarter turn clockwise, Shift+R the other
+    // way. Otherwise the only way to put a symbol in sideways is to drop it and then rotate it,
+    // which is two commands and an undo when the drop lands in the wrong place.
+    bool placementPreviewActive() const { return pastePlacing_ || harnessPlacing_; }
+    void rotatePlacementPreview(bool clockwise);
+    // How far it has been turned, in radians (a multiple of a quarter turn).
+    double placementPreviewRotation() const { return placeRot_; }
     void undo();
     void redo();
 
@@ -1329,6 +1339,9 @@ private:
     bool awaitClipBase_ = false;  // next click sets the base point (after Ctrl+Shift+C / Ctrl+X)
     bool clipCut_ = false;        // the pending base-point op is a cut (delete originals)
     bool pastePlacing_ = false;   // paste in progress: next click drops the contents
+    // A quarter turn at a time, applied to whatever is held under the cursor about the point it is
+    // held by. Cleared whenever something new is picked up and when it is dropped or abandoned.
+    double placeRot_ = 0.0;
     bool pasteMirrorX_ = false;   // X/Y flip the paste preview about the base before placing
     bool pasteMirrorY_ = false;
     // Cut originals stay visible until the paste lands; these ids are removed when

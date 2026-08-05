@@ -4419,26 +4419,33 @@ int run_editor_tests() {
                   "twisted pair: the weave is cut at the ends rather than trailing past them");
             check(near(maxAbsY, half), "twisted pair: and it is as wide as the cable, no wider");
 
-            // The straight finish: the lead is the two lines, one either side, and the weave starts
-            // where they end - nothing of it is drawn over them.
+            // The straight finish: each end is the TWO WIRES side by side - four lines, the outside
+            // of the cable and the parting between the wires - and the weave starts where they end.
             int leadLines = 0;
             bool weaveInLead = false;
+            std::vector<double> leadYs;
             for (const auto& poly : pieces) {
                 const bool isLeadLine =
-                    poly.size() == 2 && near(std::abs(poly[0].y), half) &&
-                    near(std::abs(poly[1].y), half) && near(poly[0].y, poly[1].y) &&
+                    poly.size() == 2 && near(poly[0].y, poly[1].y) &&
                     (near(poly[0].x, 0.0) || near(poly[1].x, 120.0));
                 if (isLeadLine) {
                     ++leadLines;
+                    if (near(poly[0].x, 0.0)) leadYs.push_back(poly[0].y);
                     continue;
                 }
                 for (const Vec2& v : poly)
                     if (v.x < kTwistedPairLead - 1e-6 || v.x > 120.0 - kTwistedPairLead + 1e-6)
                         weaveInLead = true;
             }
-            check(leadLines == 4 && !weaveInLead,
-                  "twisted pair: each end finishes straight - two lines a cable's width apart, with "
-                  "the weave starting where they end");
+            check(leadLines == 8 && !weaveInLead,
+                  "twisted pair: each end finishes straight, with the weave starting where it ends");
+            std::sort(leadYs.begin(), leadYs.end());
+            check(leadYs.size() == 4 && near(leadYs.front(), -half) && near(leadYs.back(), half),
+                  "twisted pair: the ends are two wires, the outer edges being the cable's own");
+            if (leadYs.size() == 4)
+                check(leadYs[1] < 0.0 && leadYs[2] > 0.0 && leadYs[2] - leadYs[1] < half,
+                      "twisted pair: with the two wires parted about the middle, each one about half "
+                      "the cable across");
 
             // The weave crosses the cable: a strand runs from one edge to the other.
             bool crosses = false;
@@ -4474,6 +4481,50 @@ int run_editor_tests() {
             check(maxX < 8.0 + 1e-6 && maxAbsY < kTwistedPairWidth / 2.0 + 1e-6,
                   "twisted pair: drawn thinner to fit, and inside the length it was drawn");
         }
+    }
+
+    // --- R turns whatever is held under the cursor before it is dropped.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        // A part held under the cursor: a line pointing along +x from the point it is held by.
+        Entity arm;
+        arm.type = EntityType::Line;
+        arm.layer = QStringLiteral("0");
+        arm.a = {0, 0};
+        arm.b = {10, 0};
+        ed.placeEntities({arm});
+        check(ed.placementPreviewActive(),
+              "turn while placing: something held under the cursor is a placement");
+        check(near(ed.placementPreviewRotation(), 0.0),
+              "turn while placing: it starts the way it was drawn");
+
+        ed.rotatePlacementPreview(true);   // R
+        check(near(ed.placementPreviewRotation(), -M_PI / 2.0),
+              "turn while placing: R turns it a quarter turn clockwise");
+        ed.rotatePlacementPreview(false);  // Shift+R
+        ed.rotatePlacementPreview(false);
+        check(near(ed.placementPreviewRotation(), M_PI / 2.0),
+              "turn while placing: Shift+R turns it back the other way");
+
+        // Dropped: what lands is turned the way it was held. Held by (0,0), turned a quarter turn
+        // anticlockwise, dropped at (50,50): the arm now points along +y from there.
+        ed.onPointerMove({50, 50});
+        ed.onPointerPress({50, 50}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* placed = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Line) placed = &e;
+        check(placed != nullptr, "turn while placing: a click drops it");
+        if (placed)
+            check(near(placed->a.x, 50.0) && near(placed->a.y, 50.0) && near(placed->b.x, 50.0) &&
+                      near(placed->b.y, 60.0),
+                  "turn while placing: and it lands turned the way it was held, about the point it "
+                  "was held by");
+        check(near(ed.placementPreviewRotation(), 0.0),
+              "turn while placing: the turn is forgotten once it is dropped");
+        check(!ed.placementPreviewActive(),
+              "turn while placing: and there is nothing held any more");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

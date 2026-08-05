@@ -342,6 +342,7 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     constexpr double kArcFrom = 110.41, kArcTo = 78.0;  // and the piece of it that is drawn
     constexpr double kEdge = 0.500;       // the outside of the cable
     constexpr double kEdgeEnd = 2.701;    // the short run along the outside
+    constexpr double kPartGap = 0.085;    // where the two wires part company at the ends
     const double half = w / 2.0;
     // The turn bulges a hair past the run along the outside (its apex is at 0.5165 widths), so the
     // whole pattern is measured against THAT: a cable a given width across is that width across, and
@@ -371,13 +372,17 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     const double wy = w * (kEdge / (kArcR + kArcCy));   // widths -> across the cable
     std::vector<std::vector<Vec2>> out;
 
-    // The straight finish at each end: two lines, the width of the cable apart. This is where a pair
-    // is worked on - stripped, crimped, spliced - and where it meets whatever it runs into.
-    if (lead > 1e-9)
-        for (const double s : {1.0, -1.0}) {
-            out.push_back({{0.0, half * s}, {lead, half * s}});
-            out.push_back({{len - lead, half * s}, {len, half * s}});
+    // The straight finish at each end: the TWO WIRES, side by side. A pair is untwisted at its ends
+    // and the two wires are then worked on separately - stripped, crimped, spliced, put into
+    // different pins - so what belongs there is two wires with the parting between them, not one
+    // hollow tube the width of the cable.
+    if (lead > 1e-9) {
+        const double part = wy * kPartGap;   // half the parting between the two wires
+        for (const double y : {half, part, -part, -half}) {
+            out.push_back({{0.0, y}, {lead, y}});
+            out.push_back({{len - lead, y}, {len, y}});
         }
+    }
 
     // One band, as a closed outline in local coordinates, laid down every `pitch` and cut off where
     // the straight ends begin. The bands overlap - that is what makes it read as woven rather than as
