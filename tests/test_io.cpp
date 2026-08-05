@@ -141,6 +141,65 @@ int run_io_tests() {
         check(again.harnessPresets().isEmpty(), "dwx: a deleted preset stays deleted");
     }
 
+    // --- DXF as AutoCAD writes it: formatted MTEXT, and geometry placed by blocks.
+    {
+        // A block holding one line and one label, placed twice - once turned and scaled - plus an
+        // MTEXT with the formatting runs, the %% escapes and the split AutoCAD uses for a long note.
+        const QString src = QStringLiteral(
+            "0\nSECTION\n2\nBLOCKS\n"
+            "0\nBLOCK\n2\nSYM\n10\n0.0\n20\n0.0\n"
+            "0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n10.0\n21\n0.0\n"
+            "0\nTEXT\n8\n0\n10\n0.0\n20\n0.0\n40\n2.0\n1\nP1\n"
+            "0\nENDBLK\n"
+            "0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nINSERT\n8\n0\n2\nSYM\n10\n100.0\n20\n50.0\n"
+            "0\nINSERT\n8\n0\n2\nSYM\n10\n200.0\n20\n50.0\n41\n2.0\n42\n2.0\n50\n90.0\n"
+            "0\nMTEXT\n8\n0\n10\n0.0\n20\n0.0\n40\n2.5\n41\n60.0\n71\n1\n"
+            "3\nFirst part of a long note that AutoCAD had to split, \n"
+            "1\n{\\fArial|b0|i0|c0|p34;and the tail}: +0.5%%d, %%c8, %%p1\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        QString err;
+        check(dxf::parse(d, src, &err), "dxf-in: the file is read");
+
+        // The block was placed twice, so its line and its label are there twice - at the insertion
+        // points, and the second one turned a right angle and drawn at twice the size.
+        int lines = 0, labels = 0;
+        const Entity* turned = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.type == EntityType::Line) {
+                ++lines;
+                if (near(e.a.x, 200.0) && near(e.a.y, 50.0)) turned = &e;
+            }
+            if (e.type == EntityType::Text && e.meta.value("text").toString() == "P1") ++labels;
+        }
+        check(lines == 2 && labels == 2,
+              "dxf-in: a block placed by INSERT is drawn, once per placement");
+        check(turned && near(turned->b.x, 200.0) && near(turned->b.y, 70.0),
+              "dxf-in: with the insert's own scale and rotation (10 long, doubled, turned 90)");
+
+        // The note: assembled from its continuation, its formatting dropped, its escapes decoded.
+        const Entity* note = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Text && e.meta.value("text").toString().size() > 20) note = &e;
+        check(note != nullptr, "dxf-in: the note is read");
+        if (note) {
+            const QString s = note->meta.value("text").toString();
+            check(s.startsWith(QLatin1String("First part of a long note")),
+                  "dxf-in: MTEXT split over group 3 and group 1 is put back together");
+            check(s.contains(QLatin1String("and the tail")) && !s.contains(QLatin1Char('{')) &&
+                      !s.contains(QLatin1String("Arial")),
+                  "dxf-in: the inline formatting runs are dropped, not shown as text");
+            check(s.contains(QChar(0x00B0)) && s.contains(QChar(0x2300)) &&
+                      s.contains(QChar(0x00B1)),
+                  "dxf-in: %%d, %%c and %%p come through as degree, diameter and plus-minus");
+            check(near(note->meta.value("boxWidth").toDouble(), 60.0) &&
+                      note->meta.value("justify").toString() == QLatin1String("TL"),
+                  "dxf-in: and it keeps the box it wraps in and where its anchor sits");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
