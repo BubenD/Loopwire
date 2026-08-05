@@ -5674,7 +5674,17 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral(
             "Twisted route: click the next knee — Enter finishes the run, Esc exits"));
         break;
+    case ToolId::TwistedHarness:
     case ToolId::TwistedPair:
+        // Pinned (Tab), the click means "place it" rather than "put the far end here": the end stays
+        // where it was pinned, which is the whole point of pinning it.
+        draftPts_.push_back(twistedFrozen_ ? twistedFrozenAt_ : p);
+        drafting_ = true;
+        if (draftPts_.size() == 2) {
+            twistedFrozen_ = false;
+            finishDraw();
+        }
+        break;
     case ToolId::DoubleLine:
     case ToolId::Rect:
     case ToolId::Polygon:
@@ -6378,6 +6388,18 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
         break;
+    case ToolId::TwistedHarness:
+        // A whole bundle laid up together: the same drawing as a pair, with the number of wires the
+        // ribbon is set to. Two wires IS a pair, so there is one description and not two.
+        if (draftPts_.size() < 2) return;
+        e.type = EntityType::TwistedPair;
+        e.a = draftPts_[0];
+        e.b = draftPts_[1];
+        e.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+        e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
+        e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+        e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        break;
     case ToolId::TwistedPair:
         // Drawn like a line, between the two points the pair runs between. What shapes it - how far
         // apart the wires are, how long a crossing is, how much straight end to leave - is carried on
@@ -6783,6 +6805,7 @@ void Editor::finishDraw() {
 }
 
 void Editor::cancelDraw() {
+    twistedFrozen_ = false;   // nothing pinned once the draft is gone
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
     dpolyLsArm_ = false;  // forget a pending/active line-start reference
@@ -6859,6 +6882,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::DoubleLine:
     case ToolId::TwistedPair:
     case ToolId::TwistedRoute:
+    case ToolId::TwistedHarness:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -6915,6 +6939,10 @@ QString Editor::drawCommandHint() const {
     case ToolId::TwistedRoute:
         return QStringLiteral(
             "TWISTED ROUTE: click each knee  ·  Enter finishes  ·  straight ends, weave between");
+    case ToolId::TwistedHarness:
+        return QStringLiteral("TWISTED HARNESS: click the two ends  ·  %1 wires, all laid up  ·  "
+                              "Tab pins it to set it up on the ribbon")
+            .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
             .arg(dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
@@ -7039,6 +7067,7 @@ bool Editor::commitDrawFields() {
     case ToolId::DoubleLine:
     case ToolId::TwistedPair:
     case ToolId::TwistedRoute:
+    case ToolId::TwistedHarness:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -9917,6 +9946,17 @@ Entity Editor::breakPreview() const {
     return e;
 }
 
+void Editor::freezeTwistedPreview() {
+    // Pins the loose end where it is, so the bundle stops following the cursor while the number of
+    // wires and the rest are tried on it. Nothing to pin before it has a start.
+    if (!isTwistedTool(tool_) || twistedFrozen_ || draftPts_.empty()) return;
+    twistedFrozen_ = true;
+    twistedFrozenAt_ = cursor_;
+    emit message(QStringLiteral(
+        "Pinned - set it up on the ribbon; click the drawing (or Enter) to place it"));
+    emit overlayChanged();
+}
+
 void Editor::freezeBreakPreview() {
     // Pins the loose end of the marking line, so the mark it describes stops moving while the numbers
     // on the ribbon are tried on it. There is nothing to pin before the line has a start.
@@ -10957,6 +10997,14 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             finishWireBand(twistFrozenEnd_);
             return true;
         }
+        // A twisted bundle with only its start down - pinned or not - is finished by Enter, taking
+        // the end from where it was pinned or from the cursor.
+        if (isTwistedTool(tool_) && drafting_ && draftPts_.size() == 1) {
+            draftPts_.push_back(twistedFrozen_ ? twistedFrozenAt_ : cursor_);
+            twistedFrozen_ = false;
+            finishDraw();
+            return true;
+        }
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
         if (drafting_) {
             // Line commits each segment as it goes, so Enter just ends the current
@@ -11664,6 +11712,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.a = pts.front();
             tp.b = pts.back();
             tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
+            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
+        } else if (tool_ == ToolId::TwistedHarness && pts.size() >= 2) {
+            Entity tp;
+            tp.type = EntityType::TwistedPair;
+            tp.a = pts[0];
+            tp.b = twistedFrozen_ ? twistedFrozenAt_ : pts[1];
+            tp.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
             EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));

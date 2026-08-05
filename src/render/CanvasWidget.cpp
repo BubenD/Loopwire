@@ -783,6 +783,13 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     // angle, ...), Tab/Backtab must cycle those fields — so refuse focus traversal and
     // let the key fall through to keyPressEvent (Qt tries focus nav BEFORE keyPress).
     if (editor_ && editor_->drawInputFieldLabels().size() > 1) return false;
+    // Tab while a twisted bundle is being drawn: pin it, so the number of wires and the rest can be
+    // set on the ribbon with the real thing on screen. Checked before the dynamic-input fields, because
+    // for these tools pinning is what Tab is for. Nothing to pin -> falls through as usual.
+    if (editor_ && next && Editor::isTwistedTool(editor_->tool())) {
+        editor_->freezeTwistedPreview();
+        if (editor_->twistedFrozen()) return true;
+    }
     // Tab while placing a break mark: pin the preview so the ribbon's numbers can be tried on it.
     if (editor_ && next && editor_->tool() == ToolId::LengthBreak) {
         editor_->freezeBreakPreview();

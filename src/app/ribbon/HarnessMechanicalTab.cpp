@@ -270,6 +270,55 @@ void MainWindow::buildHarnessMechanicalTab() {
                 "finishes. Straight at both ends, woven in between, all one length of pair."));
             lg->addWidget(trBtn);
         }
+        // And a whole bundle: every wire of it laid up together, however many it fans out to. Two wires
+        // is a pair, so this is the same drawing with a count on it rather than a second one.
+        {
+            auto* thW = new QWidget(lenW);
+            auto* tg = new QHBoxLayout(thW);
+            tg->setContentsMargins(0, 0, 0, 0);
+            tg->setSpacing(2);
+            auto* thBtn = new QToolButton(thW);
+            QAction* act = makeToolAction(toolLabel(ToolId::TwistedHarness), ToolId::TwistedHarness);
+            thBtn->setDefaultAction(act);
+            thBtn->setText(QStringLiteral("Twisted\nharness"));
+            thBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            thBtn->setIconSize(QSize(26, 26));
+            thBtn->setAutoRaise(true);
+            thBtn->setFocusPolicy(Qt::NoFocus);
+            thBtn->setToolTip(QStringLiteral(
+                "Draw a twisted harness: click the two ends and every wire of the bundle is laid up "
+                "together, fanning out to straight ends. Tab pins it so the number of wires can be set "
+                "with it on screen."));
+            tg->addWidget(thBtn);
+            // Its one setting, beside the button and only while the tool is armed.
+            {
+                auto* optW = new QWidget(thW);
+                auto* og = new QGridLayout(optW);
+                og->setContentsMargins(6, 0, 0, 0);
+                og->setSpacing(2);
+                auto* l = new QLabel(QStringLiteral("Wires"), optW);
+                l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistWiresSpin_ = new QSpinBox(optW);
+                twistWiresSpin_->setRange(2, kTwistedMaxWires);
+                twistWiresSpin_->setValue(editor_->twistWires());
+                twistWiresSpin_->setMinimumWidth(56);
+                twistWiresSpin_->setToolTip(QStringLiteral(
+                    "How many wires the bundle fans out to, 2 to %1. Two wires is a twisted pair.")
+                        .arg(kTwistedMaxWires));
+                og->addWidget(l, 0, 0);
+                og->addWidget(twistWiresSpin_, 0, 1);
+                connect(twistWiresSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+                    editor_->twistWires() = v;
+                    canvas_->update();   // a pinned bundle re-draws with the new count
+                    statusBar()->showMessage(
+                        QStringLiteral("Twisted harness: %1 wires").arg(v), 2000);
+                });
+                optW->setVisible(false);
+                twistOptionsGroup_ = optW;
+                tg->addWidget(optW);
+            }
+            lg->addWidget(thW);
+        }
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }

@@ -327,7 +327,8 @@ struct TwistFrames {
     std::vector<Vec2> pos;       // where the path is, at each place it is measured
     std::vector<Vec2> n;         // and which way is across it
     std::vector<double> u;       // how far along it that is
-    double mid = 0.0;            // where each wire's middle lies at the ends
+    int wires = 2;               // how many are laid up together
+    double reach = 0.0;          // how far a wire's middle swings from the middle of the bundle
     double thick = 0.0;          // half a wire's own thickness
     double lead = 0.0;           // the straight run at each end
     double len = 0.0;
@@ -353,9 +354,12 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     if (f.len < 1e-9) return false;
 
     const double half = w / 2.0;
-    const double part = w * kTwistedPairPart;      // half the parting between the two wires
-    f.mid = (half + part) / 2.0;
-    f.thick = (half - part) / 2.0;
+    // Every wire gets the same share of the bundle, with a parting either side of it, and swings from
+    // the middle by whatever is left over. Two wires come out exactly where they did before this took a
+    // count: a pair is the two-wire case of the same drawing, not a different drawing.
+    f.wires = std::clamp(pair.meta.value(QStringLiteral("twistWires")).toInt(2), 2, kTwistedMaxWires);
+    f.thick = (w / (2.0 * f.wires)) * (1.0 - kTwistedPairPart * 2.0);
+    f.reach = half - f.thick;
     double period =
         std::max(0.05, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
     f.lead = std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
@@ -417,19 +421,46 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     return true;
 }
 
-// Where a wire's middle is, across the path, at distance u along it: out at the ends, and one whole
-// crossing between them.
-double twistOffset(const TwistFrames& f, double u) {
-    if (u <= f.lead || u >= f.len - f.lead) return f.mid;
-    return f.mid * std::cos(2.0 * M_PI * (u - f.lead) / f.turn);
+// Each wire has its own place in the lay-up: they are spread evenly round a whole turn of it, which is
+// what laying up a bundle does - at any point along it the wires are spread across the bundle, and each
+// one is at a different depth. (Spread over HALF a turn instead, the phases crowd together as the count
+// goes up and a twelve-wire bundle sweeps up and down as one thick ribbon rather than reading as a
+// bundle.) Two wires give half a turn apart either way, so a pair is unchanged.
+double twistPhase(const TwistFrames& f, int k) {
+    return f.wires > 0 ? 2.0 * M_PI * k / f.wires : 0.0;
+}
+
+// Where wire k's middle is, across the path, at distance u along it.
+//
+// Through the weave it swings from side to side, a whole turn at a time. At the ends it runs straight,
+// and there the wires are EVENLY SPACED across the bundle rather than left where the weave puts them -
+// that is the fan-out: the ends are what gets stripped and landed on pins, so they are spread out
+// squarely, and the straight run from there into the weave is the fan. With two wires those two places
+// are the same one, so a pair's ends run parallel as they always have.
+double twistOffset(const TwistFrames& f, int k, double u) {
+    const double phase = twistPhase(f, k);
+    const double inWeave = f.reach * std::cos(phase);
+    if (u > f.lead && u < f.len - f.lead)
+        return f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase);
+    const double spread = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
+    const double into = u <= f.lead ? u : f.len - u;
+    const double t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
+    return spread + (inWeave - spread) * t;
+}
+
+// How near the front of the bundle wire k is at distance u - the other half of going round, and what
+// says which wire hides which where they cross.
+double twistDepth(const TwistFrames& f, int k, double u) {
+    const double uu = std::clamp(u, f.lead, f.len - f.lead);
+    return std::sin(2.0 * M_PI * (uu - f.lead) / f.turn + twistPhase(f, k));
 }
 
 // One wire's edge, over the measured places [from, to].
-std::vector<Vec2> twistEdge(const TwistFrames& f, double wire, double edge, size_t from, size_t to) {
+std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t from, size_t to) {
     std::vector<Vec2> line;
     line.reserve(to - from + 1);
     for (size_t i = from; i <= to && i < f.pos.size(); ++i)
-        line.push_back(f.pos[i] + f.n[i] * (wire * twistOffset(f, f.u[i]) + edge * f.thick));
+        line.push_back(f.pos[i] + f.n[i] * (twistOffset(f, k, f.u[i]) + edge * f.thick));
     return line;
 }
 
@@ -455,7 +486,7 @@ QString twistKey(const Entity& e) {
         k += QString::number(p.y, 'g', 12);
         k += QLatin1Char(';');
     }
-    for (const char* m : {"twistWidth", "twistPitch", "twistEnds"}) {
+    for (const char* m : {"twistWidth", "twistPitch", "twistEnds", "twistWires"}) {
         k += QString::number(e.meta.value(QLatin1String(m)).toDouble(), 'g', 12);
         k += QLatin1Char('/');
     }
@@ -469,9 +500,9 @@ const TwistCached* twistCached(const Entity& pair) {
     if (it != cache.constEnd()) return &*it;
     TwistCached c;
     if (!twistFrames(pair, c.frames)) return nullptr;
-    for (const double wire : {1.0, -1.0})
+    for (int k = 0; k < c.frames.wires; ++k)
         for (const double edge : {1.0, -1.0})
-            c.strands.push_back(twistEdge(c.frames, wire, edge, 0, c.frames.pos.size() - 1));
+            c.strands.push_back(twistEdge(c.frames, k, edge, 0, c.frames.pos.size() - 1));
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
     if (cache.size() > 64) cache.clear();
     return &*cache.insert(key, std::move(c));
@@ -490,8 +521,8 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     const TwistCached* cached = twistCached(pair);
     if (!cached) return {};
     const TwistFrames& f = cached->frames;
-    // Split at the places where the two wires are FARTHEST APART, so each stretch holds exactly one
-    // crossing and the change of which wire is in front happens where they are not touching.
+    // Split every half turn - where the wires have just changed places - so which of them is in front
+    // is settled once per stretch, and changes where they are furthest apart.
     std::vector<double> cuts{0.0, f.lead};
     for (int k = 1; k < 2 * f.turns; ++k) cuts.push_back(f.lead + f.turn * k / 2.0);
     cuts.push_back(f.len - f.lead);
@@ -502,22 +533,29 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
 
     std::vector<TwistedPairStretch> out;
     size_t idx = 0;
-    int stretch = 0;
-    for (size_t c = 0; c + 1 < cuts.size(); ++c, ++stretch) {
+    for (size_t c = 0; c + 1 < cuts.size(); ++c) {
         while (idx + 1 < f.u.size() && f.u[idx] < cuts[c] - f.len * 1e-9) ++idx;
         size_t to = idx;
         while (to + 1 < f.u.size() && f.u[to + 1] <= cuts[c + 1] + f.len * 1e-9) ++to;
         if (to <= idx) continue;
-        // The wires take it in turns to pass in front, which is what weaving is.
-        const double front = (stretch % 2 == 0) ? 1.0 : -1.0;
+        // Which wire is nearest the front over this stretch, taken at the middle of it.
+        const double mid = (cuts[c] + cuts[c + 1]) / 2.0;
+        std::vector<int> order(static_cast<size_t>(f.wires));
+        for (int k = 0; k < f.wires; ++k) order[static_cast<size_t>(k)] = k;
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            return twistDepth(f, a, mid) < twistDepth(f, b, mid);
+        });
         TwistedPairStretch s;
-        s.frontEdgeA = twistEdge(f, front, 1.0, idx, to);
-        s.frontEdgeB = twistEdge(f, front, -1.0, idx, to);
-        s.backEdgeA = twistEdge(f, -front, 1.0, idx, to);
-        s.backEdgeB = twistEdge(f, -front, -1.0, idx, to);
-        s.frontOutline = s.frontEdgeA;
-        for (auto it = s.frontEdgeB.rbegin(); it != s.frontEdgeB.rend(); ++it)
-            s.frontOutline.push_back(*it);
+        s.wires.reserve(order.size());
+        for (const int k : order) {   // back to front, so the near ones are laid over the far ones
+            TwistedPairStretch::Wire wire;
+            wire.edgeA = twistEdge(f, k, 1.0, idx, to);
+            wire.edgeB = twistEdge(f, k, -1.0, idx, to);
+            wire.outline = wire.edgeA;
+            for (auto it = wire.edgeB.rbegin(); it != wire.edgeB.rend(); ++it)
+                wire.outline.push_back(*it);
+            s.wires.push_back(std::move(wire));
+        }
         out.push_back(std::move(s));
         idx = to;
     }

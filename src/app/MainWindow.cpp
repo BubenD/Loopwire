@@ -2301,13 +2301,27 @@ void MainWindow::buildRibbon() {
 // do. Leaving the tab as it was made the mark's own fields one small thing among many.
 void MainWindow::updateMechanicalRibbonGroups() {
     if (!editor_) return;
-    const bool armed = editor_->tool() == ToolId::LengthBreak;
+    // The rule for this application: while a function is being used, the ribbon shows THAT FUNCTION'S
+    // settings and nothing else. The tools that cannot be used during it are noise, and hunting for the
+    // two fields that matter among forty buttons is what makes a drawing slow to make.
+    const bool armed =
+        editor_->tool() == ToolId::LengthBreak || Editor::isTwistedTool(editor_->tool());
     for (QWidget* g : mechGroups_)
         if (g && g != mechBreakGroup_) g->setVisible(!armed);
 }
 
 void MainWindow::syncBreakOptions() {
-    if (!editor_ || !breakOptionsGroup_) return;
+    if (!editor_) return;
+    // Each function on this tab shows its own settings and only while it is armed.
+    if (twistOptionsGroup_) {
+        const bool twisting = editor_->tool() == ToolId::TwistedHarness;
+        twistOptionsGroup_->setVisible(twisting);
+        if (twisting && twistWiresSpin_) {
+            QSignalBlocker b(twistWiresSpin_);
+            twistWiresSpin_->setValue(editor_->twistWires());
+        }
+    }
+    if (!breakOptionsGroup_) return;
     const bool armed = editor_->tool() == ToolId::LengthBreak;
     breakOptionsGroup_->setVisible(armed);
     updateMechanicalRibbonGroups();

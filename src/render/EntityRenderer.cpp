@@ -1741,22 +1741,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawPolyline(poly);
         };
         const QPen wirePen = p.pen();
-        for (const auto& s : twistedPairWeave(e)) {
-            stroke(s.backEdgeA);
-            stroke(s.backEdgeB);
-            if (s.frontOutline.size() > 2) {
-                QPolygonF fill;
-                fill.reserve(static_cast<int>(s.frontOutline.size()));
-                for (const Vec2& v : s.frontOutline) fill << vt.toScreen(v);
-                p.setPen(Qt::NoPen);
-                p.setBrush(g_bgColor);   // the wire in front hides what runs under it
-                p.drawPolygon(fill);
-                p.setBrush(Qt::NoBrush);
-                p.setPen(wirePen);
+        for (const auto& s : twistedPairWeave(e))
+            for (const auto& wire : s.wires) {   // back to front
+                if (wire.outline.size() > 2) {
+                    QPolygonF fill;
+                    fill.reserve(static_cast<int>(wire.outline.size()));
+                    for (const Vec2& v : wire.outline) fill << vt.toScreen(v);
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(g_bgColor);   // a wire hides whatever runs behind it
+                    p.drawPolygon(fill);
+                    p.setBrush(Qt::NoBrush);
+                    p.setPen(wirePen);
+                }
+                stroke(wire.edgeA);
+                stroke(wire.edgeB);
             }
-            stroke(s.frontEdgeA);
-            stroke(s.frontEdgeB);
-        }
         break;
     }
 

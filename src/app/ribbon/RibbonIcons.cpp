@@ -162,6 +162,21 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         }
         break;
     }
+    case ToolId::TwistedHarness: {
+        // A bundle of them: four wires laid up together, fanned out at both ends.
+        for (int k = 0; k < 4; ++k) {
+            const double y0 = 6.0 + k * 4.0;                 // where it starts, fanned out
+            const double ph = M_PI * k / 3.0;                 // its place in the lay-up
+            QPainterPath pa(QPointF(2, y0));
+            for (int i = 0; i <= 12; ++i) {
+                const double x = 6.0 + i * 1.33;
+                pa.lineTo(QPointF(x, 12.0 + 5.0 * std::cos(2.0 * M_PI * i / 12.0 + ph)));
+            }
+            pa.lineTo(QPointF(26, y0));
+            p.drawPath(pa);
+        }
+        break;
+    }
     case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     case ToolId::Balloon: {
         // Numbered callout: a circle with a leader stub and a "1" inside.

@@ -4533,6 +4533,96 @@ int run_editor_tests() {
         }
     }
 
+    // --- A twisted HARNESS: every wire of a bundle laid up together, fanned out at the ends.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.twistWires() = 6;
+        ed.setTool(ToolId::TwistedHarness);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({200, 0});
+        // Tab pins it where it is, so the ribbon can be set up without the cursor moving it.
+        ed.freezeTwistedPreview();
+        check(ed.twistedFrozen(), "twisted harness: Tab pins it while it is being drawn");
+        ed.onPointerMove({500, 90});   // the cursor wanders off; the pinned end must not follow
+        ed.onPointerPress({500, 90}, Qt::LeftButton, Qt::NoModifier);
+
+        const Entity* bundle = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::TwistedPair) bundle = &e;
+        check(bundle != nullptr, "twisted harness: the second click places it");
+        if (bundle) {
+            check(near(bundle->b.x, 200.0) && near(bundle->b.y, 0.0),
+                  "twisted harness: pinned, it is placed where it was pinned and not where the cursor "
+                  "ended up");
+            check(bundle->meta.value("twistWires").toInt() == 6,
+                  "twisted harness: it carries the number of wires the ribbon was set to");
+            const auto lines = twistedPairStrands(*bundle);
+            check(lines.size() == 12, "twisted harness: six wires, two edges each");
+
+            const double half = bundle->meta.value("twistWidth").toDouble() / 2.0;
+            // Every line runs the whole length - the fan-out and the weave are the same lines - and
+            // nothing is drawn outside the bundle.
+            bool wholeLength = true;
+            double maxAbsY = 0.0;
+            for (const auto& line : lines) {
+                if (!near(line.front().x, 0.0) || !near(line.back().x, 200.0)) wholeLength = false;
+                for (const Vec2& v : line) maxAbsY = std::max(maxAbsY, std::abs(v.y));
+            }
+            check(wholeLength, "twisted harness: every wire runs end to end, fan-out included");
+            check(maxAbsY < half + 1e-6, "twisted harness: and none of it is drawn wider than the bundle");
+
+            // The ends are FANNED OUT: the wire middles are evenly spaced there, which is what gets
+            // stripped and landed on pins.
+            std::vector<double> mids;
+            for (size_t k = 0; k + 1 < lines.size(); k += 2)
+                mids.push_back((lines[k].front().y + lines[k + 1].front().y) / 2.0);
+            std::sort(mids.begin(), mids.end());
+            bool evenlySpaced = mids.size() == 6;
+            for (size_t k = 2; k < mids.size(); ++k)
+                if (std::abs((mids[k] - mids[k - 1]) - (mids[1] - mids[0])) > 1e-6) evenlySpaced = false;
+            check(evenlySpaced, "twisted harness: the wires fan out evenly across the end");
+
+            // And they are laid up: each wire is somewhere else across the bundle in the middle.
+            auto atX = [](const std::vector<Vec2>& s, double x) {
+                double y = 0.0, bestD = 1e18;
+                for (const Vec2& v : s)
+                    if (std::abs(v.x - x) < bestD) { bestD = std::abs(v.x - x); y = v.y; }
+                return y;
+            };
+            int moved = 0;
+            for (size_t k = 0; k + 1 < lines.size(); k += 2) {
+                const double atEnd = (lines[k].front().y + lines[k + 1].front().y) / 2.0;
+                double travel = 0.0;
+                for (double x = 20.0; x < 180.0; x += 2.0)
+                    travel = std::max(travel, std::abs(atX(lines[k], x) - atEnd));
+                if (travel > half * 0.5) ++moved;
+            }
+            check(moved == 6, "twisted harness: every wire of it travels across the bundle - all of "
+                              "them are twisted, not just the outer two");
+        }
+        // A pair is the two-wire case of the same drawing, not a different one.
+        {
+            Entity two;
+            two.type = EntityType::TwistedPair;
+            two.a = {0, 0};
+            two.b = {120, 0};
+            two.meta.insert("twistWires", 2);
+            Entity noCount = two;
+            noCount.meta.remove("twistWires");
+            const auto a = twistedPairStrands(two);
+            const auto b = twistedPairStrands(noCount);
+            bool same = a.size() == b.size() && a.size() == 4;
+            for (size_t i = 0; same && i < a.size(); ++i) {
+                if (a[i].size() != b[i].size()) { same = false; break; }
+                for (size_t j = 0; j < a[i].size(); ++j)
+                    if (!near(a[i][j].x, b[i][j].x) || !near(a[i][j].y, b[i][j].y)) same = false;
+            }
+            check(same, "twisted harness: two wires draws exactly what a twisted pair always did");
+        }
+    }
+
     // --- R turns whatever is held under the cursor before it is dropped.
     {
         Document d;

@@ -79,6 +79,17 @@ public:
     // without the cursor moving it. The next click on the drawing places it and resumes.
     void freezeBreakPreview();
 
+    // How many wires a twisted bundle is drawn with (2..12), set on the ribbon while the tool is armed.
+    int& twistWires() { return twistWires_; }
+    // Tab while one is being drawn PINS it where it is, so the count and the rest can be tried on the
+    // real thing without the cursor moving it. The next click, or Enter, places it.
+    void freezeTwistedPreview();
+    bool twistedFrozen() const { return twistedFrozen_; }
+    // Is a twisted pair / route / harness being drawn?
+    static bool isTwistedTool(ToolId t) {
+        return t == ToolId::TwistedPair || t == ToolId::TwistedRoute || t == ToolId::TwistedHarness;
+    }
+
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
     void onPointerPress(const Vec2& raw, Qt::MouseButton button,
@@ -1093,6 +1104,9 @@ private:
     double breakGap_ = 0.0;                           // 0 = a proportion of the reach
     double breakAngle_ = -1.0;                        // <0 = the shape's own lean (30° / upright)
     bool breakFrozen_ = false;                        // Tab pinned the preview
+    int twistWires_ = 4;             // what a twisted harness fans out to, until the ribbon says otherwise
+    bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
+    Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
     double pixelTol_ = 10.0;
 

@@ -154,19 +154,22 @@ double breakLeanFactor(const Entity& mark);
 inline constexpr double kTwistedPairWidth = 6.0;   // the cable, across: both wires and the parting
 inline constexpr double kTwistedPairPitch = 18.0; // the length of one whole crossing
 inline constexpr double kTwistedPairLead = 6.0;   // the straight run at each end
-inline constexpr double kTwistedPairPart = 0.085; // half the parting between the two wires, in widths
+inline constexpr double kTwistedPairPart = 0.085; // half the parting between wires, in widths
+inline constexpr int kTwistedMaxWires = 12;       // as many as one bundle is drawn with
 // The four lines the pair is drawn with: each wire's two edges, each running the whole length. What a
 // click picks, what a zone catches and how far it reaches all come from these, so none of them can
 // drift from what is drawn.
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
 
-// The pair as it is DRAWN: one stretch per half crossing, each naming the wire that passes IN FRONT
-// there and the one behind it. A pair reads as twisted only if the wire in front hides the one behind
-// at every crossing - drawn as four lines that simply cross, it reads as a chain of eyes instead.
+// The bundle as it is DRAWN: one stretch per half crossing, with that stretch's wires ordered BACK TO
+// FRONT. It reads as laid up only if a wire nearer the front hides the ones behind it - drawn as lines
+// that simply cross, it reads as a chain of eyes instead.
 struct TwistedPairStretch {
-    std::vector<Vec2> frontOutline;              // closed: filled with the background to hide the other
-    std::vector<Vec2> frontEdgeA, frontEdgeB;    // the front wire's two edges
-    std::vector<Vec2> backEdgeA, backEdgeB;      // and the wire behind it, drawn first
+    struct Wire {
+        std::vector<Vec2> outline;      // closed: filled with the background to hide what is behind
+        std::vector<Vec2> edgeA, edgeB; // and then its own two edges
+    };
+    std::vector<Wire> wires;            // back to front
 };
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);

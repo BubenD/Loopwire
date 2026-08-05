@@ -415,6 +415,10 @@ private:
     // The break mark's own fields, shown while its tool is armed: what a break looks like is decided
     // as it is placed, so the numbers belong beside the button rather than in a dialog.
     QWidget* breakOptionsGroup_ = nullptr;
+    // The twisted bundle's own setting: how many wires it fans out to. Shown only while that tool is
+    // armed, like everything else on this tab (see updateMechanicalRibbonGroups).
+    QWidget* twistOptionsGroup_ = nullptr;
+    QSpinBox* twistWiresSpin_ = nullptr;
     // The Harness-mechanical groups, so placing a break can take the tab over the way the twist tool
     // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.
