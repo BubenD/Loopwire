@@ -294,6 +294,51 @@ int run_io_tests() {
         check(haveLeader, "dxf-in: and the leader runs from its vertex to where the words sit");
     }
 
+    // --- A mask, and the order the drawing is drawn in.
+    {
+        // A wipeout hides what is under it - the sleeve round a cable label hides the braid running
+        // through it. Its boundary is in IMAGE space: -0.5..+0.5 across, counted downwards, with 10/20
+        // where it sits and 11/21, 12/22 the vectors along its width and height. And the order matters:
+        // the file LISTS the line first, and the sort table says the mask is drawn first.
+        const QString src = QStringLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLINE\n5\nA1\n8\n0\n10\n95.0\n20\n105.0\n11\n115.0\n21\n105.0\n"
+            "0\nWIPEOUT\n5\nA2\n8\n0\n10\n100.0\n20\n100.0\n"
+            "11\n10.0\n21\n0.0\n12\n0.0\n22\n10.0\n"
+            "14\n-0.5\n24\n0.5\n14\n0.5\n24\n0.5\n14\n0.5\n24\n-0.5\n"
+            "14\n-0.5\n24\n-0.5\n14\n-0.5\n24\n0.5\n"
+            "0\nENDSEC\n"
+            "0\nSECTION\n2\nOBJECTS\n"
+            "0\nSORTENTSTABLE\n5\nB1\n100\nAcDbSortentsTable\n330\n1F\n"
+            "331\nA1\n5\n20\n"
+            "331\nA2\n5\n10\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parse(d, src), "dxf-in: the file is read");
+
+        int maskAt = -1, lineAt = -1;
+        for (size_t i = 0; i < d.entities().size(); ++i) {
+            if (d.entities()[i].type == EntityType::Wipeout) maskAt = int(i);
+            if (d.entities()[i].type == EntityType::Line) lineAt = int(i);
+        }
+        check(maskAt >= 0, "dxf-in: a wipeout is read as a mask");
+        check(lineAt >= 0 && maskAt < lineAt,
+              "dxf-in: and the drawing is put in the order the file says it is drawn in, so a mask "
+              "listed after what it hides still ends up under it");
+        if (maskAt >= 0) {
+            const Entity& m = d.entities()[size_t(maskAt)];
+            const Bounds b = m.bounds();
+            check(near(b.min.x, 100.0) && near(b.max.x, 110.0) && near(b.min.y, 100.0) &&
+                      near(b.max.y, 110.0),
+                  "dxf-in: the mask covers the square the file put it on, not the -0.5..0.5 of its "
+                  "own picture");
+            check(m.points.size() == 4,
+                  "dxf-in: the repeated closing vertex is not kept as a corner of its own");
+            check(m.meta.value("noFrame").toBool(),
+                  "dxf-in: an imported mask is not framed - the drawing outlines it itself");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

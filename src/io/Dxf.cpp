@@ -11,6 +11,7 @@
 #include <QTextStream>
 #include <QUuid>
 #include <QtMath>
+#include <algorithm>
 #include <cmath>
 
 namespace Edraw_Desktop::dxf {
@@ -482,13 +483,47 @@ bool parse(Document& doc, const QString& text, QString*) {
         }
     }
 
+    // The order the drawing is drawn in. A file's objects are not necessarily drawn in the order they
+    // are listed: AutoCAD keeps a sort key per object in a SORTENTSTABLE, and that - not the listing -
+    // decides which of two overlapping objects is on top. In this drawing the mask over the cable label
+    // is LISTED before the braid it hides and SORTED after it, so read in file order the braid was
+    // painted over the mask and ran straight through the label. An object the table says nothing about
+    // sorts by its own handle, which is what AutoCAD does with one.
+    QHash<QString, quint64> drawKey;
+    for (int i = 0; i < n; ++i) {
+        if (pairs[i].code != "0" || pairs[i].value != QLatin1String("SORTENTSTABLE")) continue;
+        QString ent;
+        for (int j = i + 1; j < n && pairs[j].code != "0"; ++j) {
+            if (pairs[j].code == "331") {
+                ent = pairs[j].value.trimmed().toUpper();
+            } else if (pairs[j].code == "5" && !ent.isEmpty()) {
+                bool ok = false;
+                const quint64 k = pairs[j].value.trimmed().toULongLong(&ok, 16);
+                if (ok) drawKey.insert(ent, k);
+                ent.clear();
+            }
+        }
+    }
+
     std::vector<Entity> entities;
+    // Where each of the drawing's own objects starts in the list above, and what it sorts by: the
+    // objects a block places keep the order the block lists them in, which is the order they are drawn.
+    struct Slice { quint64 key = 0; int start = 0; };
+    std::vector<Slice> slices;
     // One reader, used for the drawing itself and for the inside of every block it places.
     std::function<void(int, int, const Xf&, int)> readRange =
         [&](int from, int to, const Xf& xf, int depth) {
             for (int i = from; i < to; ++i) {
                 if (pairs[i].code != "0") continue;
                 const QString type = pairs[i].value;
+
+                if (depth == 0) {
+                    // The start of one of the drawing's own objects, and its place in the drawing order.
+                    const QString h = findVal(collectGroup(pairs, i + 1), "5").trimmed().toUpper();
+                    bool ok = false;
+                    const quint64 own = h.toULongLong(&ok, 16);
+                    slices.push_back({drawKey.value(h, ok ? own : 0), int(entities.size())});
+                }
 
                 if (type == "POLYLINE") {
                     // Legacy polyline: gather following VERTEX groups until SEQEND.
@@ -518,7 +553,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                 static const QStringList kKnown = {
                     "LINE",   "LWPOLYLINE", "CIRCLE",  "ARC",    "TEXT",      "MTEXT",
                     "INSERT", "ELLIPSE",    "SOLID",   "LEADER", "DIMENSION", "ACAD_TABLE",
-                    "MULTILEADER"};
+                    "MULTILEADER", "WIPEOUT"};
                 if (!kKnown.contains(type)) continue;
 
                 const auto g = collectGroup(pairs, i + 1);
@@ -645,6 +680,45 @@ bool parse(Document& doc, const QString& text, QString*) {
                     continue;
                 }
 
+                if (type == "WIPEOUT") {
+                    // A wipeout is a mask: a shape painted in the drawing's background so that what
+                    // lies under it is hidden. The cable label's sleeve is one - in AutoCAD the braid
+                    // stops at the sleeve and the label reads clean, and read as nothing the braid ran
+                    // straight through the words.
+                    //
+                    // Its boundary is not given in the drawing's coordinates. 10/20 is where the mask
+                    // sits, 11/21 and 12/22 are the vectors down one pixel of its width and height, and
+                    // the 14/24 vertices are in IMAGE space: -0.5..+0.5 across, and counted DOWNWARDS.
+                    const Vec2 ins = {findNum(g, "10"), findNum(g, "20")};
+                    const Vec2 u = {findNum(g, "11", 1.0), findNum(g, "21", 0.0)};
+                    const Vec2 v = {findNum(g, "12", 0.0), findNum(g, "22", 1.0)};
+                    e.type = EntityType::Wipeout;
+                    Vec2 cur{0.0, 0.0};
+                    bool half = false;
+                    for (const auto& gp : g) {
+                        if (gp.code == "14") {
+                            cur = {gp.value.toDouble(), 0.0};
+                            half = true;
+                        } else if (gp.code == "24" && half) {
+                            cur.y = gp.value.toDouble();
+                            half = false;
+                            e.points.push_back(xf.apply({ins.x + u.x * (cur.x + 0.5) + v.x * (0.5 - cur.y),
+                                                         ins.y + u.y * (cur.x + 0.5) + v.y * (0.5 - cur.y)}));
+                        }
+                    }
+                    // The boundary closes on itself, and AutoCAD repeats its first vertex to say so.
+                    if (e.points.size() > 3 && std::hypot(e.points.front().x - e.points.back().x,
+                                                          e.points.front().y - e.points.back().y) < 1e-9)
+                        e.points.pop_back();
+                    if (e.points.size() < 3) continue;
+                    // A mask drawn in a real drawing has no outline of its own - the sleeve round the
+                    // label is a separate polyline, and framing the mask as well drew the rectangle
+                    // twice. The frame is still drawn when the mask is selected, so it can be found.
+                    e.meta.insert("noFrame", true);
+                    entities.push_back(std::move(e));
+                    continue;
+                }
+
                 if (type == "LINE") {
                     e.type = EntityType::Line;
                     e.a = xf.apply({findNum(g, "10"), findNum(g, "20")});
@@ -666,6 +740,13 @@ bool parse(Document& doc, const QString& text, QString*) {
                         }
                     }
                     if (have) e.points.push_back(xf.apply(cur));
+                    // A CLOSED polyline (flag 1) is a loop, and its last edge - back to where it
+                    // started - is drawn like any other. Ignoring the flag left every such shape open:
+                    // a connector body missing the side the pins sit against, the sleeve round a cable
+                    // label missing an end, the box round the notes missing its edge.
+                    if (type == "LWPOLYLINE" && (findVal(g, "70", "0").toInt() & 1) &&
+                        e.points.size() > 2)
+                        e.points.push_back(e.points.front());
                     if (e.points.size() > 1) entities.push_back(std::move(e));
                 } else if (type == "CIRCLE") {
                     e.type = EntityType::Circle;
@@ -761,6 +842,23 @@ bool parse(Document& doc, const QString& text, QString*) {
             }
         };
     readRange(entFrom, entTo, Xf{}, 0);
+
+    // Into the order the file says the drawing is drawn in.
+    if (!drawKey.isEmpty() && slices.size() > 1) {
+        std::vector<int> order(slices.size());
+        for (size_t k = 0; k < order.size(); ++k) order[k] = int(k);
+        std::stable_sort(order.begin(), order.end(),
+                         [&](int a, int b) { return slices[a].key < slices[b].key; });
+        std::vector<Entity> sorted;
+        sorted.reserve(entities.size());
+        for (int k : order) {
+            const int from = slices[size_t(k)].start;
+            const int to =
+                k + 1 < int(slices.size()) ? slices[size_t(k) + 1].start : int(entities.size());
+            for (int m = from; m < to; ++m) sorted.push_back(std::move(entities[size_t(m)]));
+        }
+        entities = std::move(sorted);
+    }
 
     std::vector<Layer> layerList;
     for (const auto& l : layers) layerList.push_back(l);

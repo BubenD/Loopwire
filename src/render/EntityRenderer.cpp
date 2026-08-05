@@ -1285,12 +1285,30 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Wipeout: {
         if (e.points.size() < 3) break;
         const QPolygonF poly = toScreenPoly(e.points, vt);
+        // The mask fills to a pixel INSIDE its boundary. A mask is normally drawn with an outline on
+        // that very boundary - the sleeve round a cable label is a rectangle with the mask that hides
+        // the braid exactly under it - and a fill that reached the boundary ate the outline with it,
+        // leaving the cable looking cut rather than labelled.
+        QPolygonF fill = poly;
+        {
+            const QRectF box = poly.boundingRect();
+            const double w = box.width(), h = box.height();
+            const double sx = w > 4.0 ? (w - 2.0) / w : 1.0;
+            const double sy = h > 4.0 ? (h - 2.0) / h : 1.0;
+            const QPointF c = box.center();
+            for (QPointF& q : fill)
+                q = QPointF(c.x() + (q.x() - c.x()) * sx, c.y() + (q.y() - c.y()) * sy);
+        }
         p.save();
         p.setPen(Qt::NoPen);
         p.setBrush(g_bgColor); // opaque mask matching the canvas background
-        p.drawPolygon(poly);
+        p.drawPolygon(fill);
         p.restore();
-        // Thin frame so the (otherwise invisible) mask can be seen and picked.
+        // Thin frame so the (otherwise invisible) mask can be seen and picked. A mask read from a
+        // drawing has an outline of its own where it wants one - the sleeve round a cable label is a
+        // polyline over the mask that hides the braid - so framing it as well drew that rectangle
+        // twice. Such a mask is framed only while it is selected, so it can still be found.
+        if (e.meta.value("noFrame").toBool() && !overrideColor.isValid()) break;
         QPen frame(overrideColor.isValid() ? color : QColor(120, 130, 145));
         frame.setCosmetic(true);
         frame.setWidthF(overrideColor.isValid() ? 2.4 : 1.0);
