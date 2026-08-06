@@ -31,6 +31,9 @@ struct MechWire {
     // either, that is a gap the drawing has to answer, not something to guess at.
     double odMm = 0.0;
     QString libPart;
+    // The cable this conductor is a core OF, when it is one. Every core of one cable carries the same
+    // name, which is what lets a run be recognised as a cable rather than as loose wires.
+    QString bundle;
 };
 
 enum class MechNodeKind { Root, Breakout, Connector, FreeEnd };
@@ -76,6 +79,21 @@ struct MechSegment {
     double lengthMm = 0.0;
     QStringList wireIds;                    // the conductors running through this run
     std::vector<MechFitting> coverings;     // fitted along it
+    // ---- A jacket, when the run is a CABLE rather than loose wires --------------------------------
+    // A cable is not the bundle its cores would make loose: a cable whose five conductors add up to
+    // Ø2.4 is still a Ø5.0 cable, because there is a jacket round them. So a run that is a cable is
+    // drawn - and its boots and its heatshrink are sized - at the JACKET, and only where the jacket
+    // has been cut back does the bundle inside it become the diameter that matters.
+    double jacketOdMm = 0.0;                // over the jacket; 0 = loose wires, bundle from the cores
+    QString cablePart;                      // the library cable, when it comes from one
+    QString cableName;                      // what the schematic calls it ("W1", "cable")
+    // How much jacket is stripped off at each end, so the conductors come out and fan into the
+    // connector. Over that length the run is the bundle, with a cone between the two diameters.
+    double stripFromMm = 0.0;
+    double stripToMm = 0.0;
+
+    bool isCable() const { return jacketOdMm > 0.0; }
+    double stripAt(bool atToEnd) const { return atToEnd ? stripToMm : stripFromMm; }
 };
 
 // How the drawing is laid out, and what is drawn on it.
@@ -99,6 +117,10 @@ struct MechDrawOptions {
     bool balloons = false;                  // a callout on every fitting
     bool connectorBodies = true;
     bool wireCounts = false;                // "(6)" beside each run
+    // A junction where a conductor changes gauge has a splice in it, and a splice is never left bare:
+    // heatshrink goes over it. It is drawn without being asked for, because the transition is worked
+    // out from the conductors either side rather than typed in - the same reason the bundle is.
+    bool spliceHeatshrink = true;
     double textHeight = 5.0;
     QString layer = QStringLiteral("0");
 };
@@ -164,8 +186,61 @@ struct BundleCalc {
 // `packingFactor` <= 0 means: work it out from the count (autoPackingFactor).
 BundleCalc bundleCalculation(const std::vector<double>& wireOds, double packingFactor,
                              double minMm);
-// The same for a segment of a definition, over the conductors routed through it.
+// The same for a segment of a definition, over the conductors routed through it. This is the bundle
+// the bare conductors make - what the run is where its jacket has been cut back, and what it is all
+// the way along when there is no jacket at all.
 double segmentBundleDiameterMm(const MechHarnessDef& def, const MechSegment& seg);
+
+// What the run is drawn AT along its body: the jacket when it is a cable, the bundle when it is loose
+// wires. A Ø5.0 cable is a Ø5.0 run whatever its cores add up to.
+double segmentBodyDiameterMm(const MechHarnessDef& def, const MechSegment& seg);
+
+// And at one END of it: the bundle where the jacket is stripped back, the body where it is not. This
+// is the figure a backshell or a boot at that end has to pass - which is why it is asked for by end
+// and not once for the whole run.
+double segmentEndDiameterMm(const MechHarnessDef& def, const MechSegment& seg, bool atToEnd);
+
+// How much of the jacket is stripped at the end a node sits at. 0 when the run is not a cable.
+double nodeBareLengthMm(const MechHarnessDef& def, const MechNode& node);
+
+// The diameter a fitting at an END has to accept. Anything that goes over the wires themselves - a
+// braid, heatshrink over the braid - is sized on the bare bundle; anything the CABLE passes into - a
+// backshell, a boot, a gland - has to take the jacket, because the jacket is behind it.
+double fittingFitDiameterMm(const MechHarnessDef& def, const MechSegment* seg, PartKind kind,
+                            bool atEnd, bool atToEnd);
+
+// Whether this kind is pulled over the bare conductors at an end rather than stacked back from the
+// node as a body of its own.
+bool mechOverTheWires(PartKind kind);
+
+// ---- The shape of one run -----------------------------------------------------------------------
+
+// A run is not one diameter from end to end. A cable stripped back at both ends is bundle, cone,
+// jacket, cone, bundle - and that shape is the drawing, not a decoration on it. One station per
+// change of diameter, from the run's start to its end.
+struct MechStation {
+    double atMm = 0.0;
+    double diameterMm = 0.0;
+};
+
+std::vector<MechStation> segmentProfile(const MechHarnessDef& def, const MechSegment& seg);
+
+// ---- Where a conductor changes gauge ------------------------------------------------------------
+
+// A junction where the conductors arriving are not the conductors leaving AND their sizes differ:
+// there is a splice inside it. Worked out from the definition rather than declared, so re-gauging a
+// wire moves the transition with it.
+struct MechGaugeChange {
+    QString nodeId;
+    QString nodeName;
+    QString fromSegment;
+    QString toSegment;
+    QString fromGauges;      // "0.5, 0.5" - what arrives
+    QString toGauges;        // "1.0, 1.0" - what leaves
+    double diameterMm = 0.0; // the larger of the two runs, which is what has to be covered
+};
+
+std::vector<MechGaugeChange> mechGaugeChanges(const MechHarnessDef& def);
 
 // ---- Layout -------------------------------------------------------------------------------------
 
@@ -180,7 +255,12 @@ struct MechPlacedSegment {
     Vec2 a{0.0, 0.0};
     Vec2 b{0.0, 0.0};
     double dirDeg = 0.0;
-    double diameterMm = 0.0;
+    double diameterMm = 0.0;        // the body: the jacket when it is a cable, else the bundle
+    // What it is at each end, which is the body again unless the jacket is stripped back there. The
+    // outline is mitred at a junction on THESE, not on the body - a cable that comes out of its jacket
+    // before a breakout meets the other runs at the bundle it has narrowed to.
+    double fromDiameterMm = 0.0;
+    double toDiameterMm = 0.0;
 };
 
 struct MechLayout {
@@ -230,6 +310,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
 // into the branches of the two connectors it joins, and what runs between them becomes the trunk.
 // Lengths are what the schematic happens to be drawn at, which is a starting point and no more -
 // the whole reason the mechanical drawing exists is that those are not the real lengths.
-MechHarnessDef mechFromDrawing(const Document& doc);
+// With a catalog, a run whose conductors are all cores of one cable is recognised as that cable and
+// takes the jacket diameter off the library part, so a Ø5 cable arrives as a Ø5 run.
+MechHarnessDef mechFromDrawing(const Document& doc, const PartsCatalog* catalog = nullptr);
 
 } // namespace Edraw_Desktop

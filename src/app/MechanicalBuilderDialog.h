@@ -44,6 +44,12 @@ public:
     bool selectNode(const QString& nodeId);
     void addBranch(MechNodeKind kind);
     void removeSelected();
+    // The things every connector end has one of or none of - a backshell, a boot, braid over the bare
+    // wires, heatshrink over that - as a tick rather than as a trip to the library. Ticking one adds a
+    // fitting of that kind with nothing but its kind stated, so it is drawn to what it goes over;
+    // choosing a real part for it afterwards is the same list of fittings either way.
+    bool hasEndFitting(PartKind kind) const;
+    void setEndFitting(PartKind kind, bool on);
 
 private:
     void buildUi();
@@ -60,6 +66,9 @@ private:
     void refreshFittingList();
     void addFitting();
     void removeFitting();
+    // Where a fitting of this kind goes at the selected point: at the END - a backshell, a boot, and a
+    // braid or heatshrink when there are bare wires there to cover - or ALONG the run.
+    bool fittingGoesAtEnd(PartKind kind) const;
     // The library parts that could be fitted here, with the ones that will not fit marked.
     void refreshFittingChoices();
 
@@ -81,6 +90,16 @@ private:
     QDoubleSpinBox* lengthSpin_ = nullptr;
     QDoubleSpinBox* angleSpin_ = nullptr;
     QLabel* bundleLabel_ = nullptr;
+    // The run as a CABLE: which cable it is, what the jacket measures over, and how far back the
+    // jacket is cut at this end so the conductors can reach the contacts.
+    QComboBox* cablePart_ = nullptr;
+    QDoubleSpinBox* jacketSpin_ = nullptr;
+    QDoubleSpinBox* stripSpin_ = nullptr;
+    // What is fitted at this end, as ticks.
+    QCheckBox* backshellChk_ = nullptr;
+    QCheckBox* bootChk_ = nullptr;
+    QCheckBox* braidChk_ = nullptr;
+    QCheckBox* shrinkChk_ = nullptr;
     QListWidget* wireList_ = nullptr;
     QListWidget* fittingList_ = nullptr;
     QComboBox* fittingChoice_ = nullptr;
@@ -97,6 +116,7 @@ private:
     QCheckBox* countChk_ = nullptr;
     QCheckBox* balloonChk_ = nullptr;
     QCheckBox* bodiesChk_ = nullptr;
+    QCheckBox* spliceChk_ = nullptr;
 
     QListWidget* issues_ = nullptr;
     QLabel* summary_ = nullptr;

@@ -515,6 +515,222 @@ int run_mechbuilder_tests() {
               "from schematic: an empty sheet gives an empty definition");
     }
 
+    // ---- A cable is its JACKET, not the bundle its cores would make loose ----
+    {
+        // Five conductors that add up to a small bundle, inside a 5 mm cable. The run is a 5 mm run:
+        // that is what it measures, what it is bought as, and what a boot on the end has to pass.
+        MechHarnessDef def = straightDef(300.0, 5, QStringLiteral("0.08"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        MechSegment& s = def.segments.front();
+        const double bundle = segmentBundleDiameterMm(def, s);
+        check(bundle > 0.0 && bundle < 5.0, "cable: the cores make a bundle smaller than the jacket");
+        s.jacketOdMm = 5.0;
+        s.cableName = QStringLiteral("W1");
+        check(near(segmentBodyDiameterMm(def, s), 5.0),
+              "cable: the run is drawn at the jacket, whatever the cores add up to");
+        check(near(segmentBundleDiameterMm(def, s), bundle),
+              "cable: and the bundle inside it is still the bundle");
+        // Whole jacket, both ends: one diameter from end to end.
+        check(segmentProfile(def, s).size() == 2, "cable: an unstripped cable is one diameter");
+        check(near(segmentEndDiameterMm(def, s, true), 5.0),
+              "cable: with the jacket at the end too");
+
+        // Cut back 30 mm at the connector end: bare wires, a cone, then the jacket.
+        s.stripToMm = 30.0;
+        check(near(segmentEndDiameterMm(def, s, /*atToEnd=*/true), bundle),
+              "cable: where the jacket is cut back the run is the bundle");
+        check(near(segmentEndDiameterMm(def, s, /*atToEnd=*/false), 5.0),
+              "cable: and it is still the jacket at the other end");
+        const std::vector<MechStation> prof = segmentProfile(def, s);
+        check(prof.size() == 4, "cable: jacket, the end of the jacket, the cone, the bundle");
+        if (prof.size() == 4) {
+            check(near(prof[0].atMm, 0.0) && near(prof[0].diameterMm, 5.0),
+                  "cable: it starts as a cable");
+            check(near(prof[1].atMm, 270.0) && near(prof[1].diameterMm, 5.0),
+                  "cable: and is a cable up to where it is cut");
+            check(prof[2].atMm > 270.0 && prof[2].atMm <= 300.0 &&
+                      near(prof[2].diameterMm, bundle),
+                  "cable: the wires spread out of it over a cone, not a step");
+            check(near(prof[3].atMm, 300.0) && near(prof[3].diameterMm, bundle),
+                  "cable: and run bare to the end");
+        }
+        // Stripped further than it is long: bare wire from end to end rather than a crossed cone.
+        MechSegment allBare = s;
+        allBare.stripFromMm = 200.0;
+        allBare.stripToMm = 200.0;
+        check(segmentProfile(def, allBare).size() == 2,
+              "cable: strip it all away and it is bare wire, not a knot");
+
+        // The drawing: an edge with knees in it, the jacket at the whole end and the bundle at the
+        // stripped one.
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        const Entity* plus = nullptr;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("bundle") &&
+                e.meta.value(QStringLiteral("side")).toInt() > 0)
+                plus = &e;
+        check(plus && plus->points.size() == 4,
+              "cable: the outline carries a knee at every change of diameter");
+        if (plus && plus->points.size() == 4) {
+            check(near(plus->points.front().y, 2.5),
+                  "cable: half the jacket off the centreline where it is whole");
+            check(near(plus->points.back().y, bundle / 2.0),
+                  "cable: and half the bundle where the jacket is off");
+        }
+        // What is written on it says both figures, because a boot is chosen against the pair.
+        bool bothFigures = false;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("dia") &&
+                e.text.contains(QLatin1String("cable")) && e.text.contains(QLatin1String("bundle")))
+                bothFigures = true;
+        check(bothFigures, "cable: the label gives the cable and the bundle inside it");
+
+        // What each fitting has to go over: the cable enters a boot, so a boot takes 5 mm; a braid is
+        // combed over the conductors, so it takes the bundle.
+        check(near(fittingFitDiameterMm(def, &s, PartKind::HeatshrinkBoot, true, true), 5.0),
+              "cable: a boot at the end has to pass the jacket behind it");
+        check(near(fittingFitDiameterMm(def, &s, PartKind::Backshell, true, true), 5.0),
+              "cable: so does a backshell");
+        check(near(fittingFitDiameterMm(def, &s, PartKind::ShieldBraid, true, true), bundle),
+              "cable: braid over the bare wires goes on the bundle");
+        check(near(fittingFitDiameterMm(def, &s, PartKind::Sleeve, false, true), 5.0),
+              "cable: and a sleeve along the run goes over the cable");
+
+        // A jacket that will not hold its own cores is one of the two figures being wrong.
+        MechHarnessDef silly = def;
+        silly.segments.front().jacketOdMm = 0.5;
+        bool sawTooSmall = false, sawNoStrip = false;
+        for (const MechIssue& i : validateMechanicalHarness(silly, nullptr))
+            if (i.message.contains(QLatin1String("one of the two figures is wrong")))
+                sawTooSmall = true;
+        check(sawTooSmall, "cable: a jacket narrower than its cores is reported");
+        // And a jacket that runs into the connector is a figure nobody has given yet.
+        MechHarnessDef unstripped = def;
+        unstripped.segments.front().stripToMm = 0.0;
+        for (const MechIssue& i : validateMechanicalHarness(unstripped, nullptr))
+            if (i.property == QLatin1String("Wires without jacket")) sawNoStrip = true;
+        check(sawNoStrip, "cable: and so is a jacket that runs into the contacts");
+    }
+
+    // ---- What every connector end can carry ----
+    {
+        MechHarnessDef def = straightDef(300.0, 5, QStringLiteral("0.08"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        def.draw.dimensions = false;
+        def.draw.diameterLabels = false;
+        MechSegment& s = def.segments.front();
+        s.jacketOdMm = 5.0;
+        s.stripToMm = 60.0;               // 60 mm of wire out of the jacket
+        const double bundle = segmentBundleDiameterMm(def, s);
+
+        auto fitting = [](PartKind kind, double lengthMm) {
+            MechFitting f;
+            f.id = QStringLiteral("end-%1").arg(partKindKey(kind));
+            f.kind = kind;
+            f.name = partKindName(kind);
+            f.lengthMm = lengthMm;
+            return f;
+        };
+        for (MechNode& n : def.nodes) {
+            if (n.id != QLatin1String("p1")) continue;
+            n.fittings.push_back(fitting(PartKind::Backshell, 15.0));
+            n.fittings.push_back(fitting(PartKind::HeatshrinkBoot, 12.0));
+            n.fittings.push_back(fitting(PartKind::ShieldBraid, 0.0));
+            n.fittings.push_back(fitting(PartKind::Heatshrink, 0.0));
+        }
+        check(near(nodeBareLengthMm(def, *def.node(QStringLiteral("p1"))), 60.0),
+              "ends: the bare length is the strip at that end of the run");
+
+        // The run goes out along +x and the connector is at (300,0), so a fitting sits back from there.
+        std::vector<Bounds> boxes;
+        for (const Entity& e : buildMechanicalHarness(def, nullptr))
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting"))
+                boxes.push_back(e.bounds());
+        check(boxes.size() == 4, "ends: a backshell, a boot, braid and heatshrink, all four drawn");
+        if (boxes.size() == 4) {
+            // The bodies stack back from the connector, in the order they are built in.
+            check(near(boxes[0].max.x, 300.0) && near(boxes[0].min.x, 285.0),
+                  "ends: the backshell is on the connector");
+            check(near(boxes[1].max.x, 285.0) && near(boxes[1].min.x, 273.0),
+                  "ends: the boot is behind the backshell, not on top of it");
+            // The braid covers the bare stretch that is left - as far back as the jacket, no further.
+            check(near(boxes[2].max.x, 273.0) && near(boxes[2].min.x, 240.0),
+                  "ends: braid covers the wires from the boot back to the jacket");
+            check(near(boxes[3].max.x, 273.0) && near(boxes[3].min.x, 240.0),
+                  "ends: heatshrink goes OVER the braid rather than after it");
+            const double braidOd = boxes[2].max.y - boxes[2].min.y;
+            const double shrinkOd = boxes[3].max.y - boxes[3].min.y;
+            check(braidOd > bundle && shrinkOd > braidOd,
+                  "ends: each layer is a little bigger than the one under it");
+        }
+    }
+
+    // ---- Heatshrink where a conductor changes gauge ----
+    {
+        // 0.5 mm² out to a junction, 1.0 mm² on from it: the wires that arrive are not the wires that
+        // leave, and they are not the same size - so there is a splice inside.
+        MechHarnessDef def = straightDef(200.0, 2, QStringLiteral("0.5"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        for (MechNode& n : def.nodes)
+            if (n.id == QLatin1String("p1")) n.kind = MechNodeKind::Breakout;
+        def.wires.push_back(wireOf(QStringLiteral("w3"), QStringLiteral("1.0")));
+        def.wires.push_back(wireOf(QStringLiteral("w4"), QStringLiteral("1.0")));
+        MechNode p2;
+        p2.id = QStringLiteral("p2");
+        p2.name = QStringLiteral("P2");
+        p2.kind = MechNodeKind::Connector;
+        p2.parentSegment = QStringLiteral("s2");
+        def.nodes.push_back(p2);
+        MechSegment s2;
+        s2.id = QStringLiteral("s2");
+        s2.fromNode = QStringLiteral("p1");
+        s2.toNode = QStringLiteral("p2");
+        s2.lengthMm = 150.0;
+        s2.wireIds = {QStringLiteral("w3"), QStringLiteral("w4")};
+        def.segments.push_back(s2);
+
+        const std::vector<MechGaugeChange> changes = mechGaugeChanges(def);
+        check(changes.size() == 1, "gauge change: the junction the size changes at is found");
+        if (changes.size() == 1) {
+            check(changes.front().nodeId == QLatin1String("p1"),
+                  "gauge change: and it is the right junction");
+            check(changes.front().fromGauges == QLatin1String("0.5, 0.5") &&
+                      changes.front().toGauges == QLatin1String("1, 1"),
+                  "gauge change: it says what changes into what");
+        }
+        // It is drawn without being asked for, because it follows from the conductors.
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        check(countRole(ents, "splice") == 1, "gauge change: heatshrink is drawn over the splice");
+        // And it is listed, so it reaches the bill of materials rather than only the picture.
+        bool said = false;
+        for (const MechIssue& i : validateMechanicalHarness(def, nullptr))
+            if (i.message.contains(QLatin1String("there is a splice"))) said = true;
+        check(said, "gauge change: and it is reported");
+
+        // Turned off, the splice is bare - which is a fault, not a preference.
+        MechHarnessDef bare = def;
+        bare.draw.spliceHeatshrink = false;
+        check(countRole(buildMechanicalHarness(bare, nullptr), "splice") == 0,
+              "gauge change: it can be turned off");
+        bool complained = false;
+        for (const MechIssue& i : validateMechanicalHarness(bare, nullptr))
+            if (i.kind == MechIssueKind::Violation &&
+                i.message.contains(QLatin1String("nothing covers it")))
+                complained = true;
+        check(complained, "gauge change: and then nothing covering it is a fault");
+
+        // A plain breakout carries the SAME conductors on into its branches: nothing is spliced, so
+        // nothing is covered.
+        MechHarnessDef plain = def;
+        for (MechSegment& seg : plain.segments)
+            if (seg.id == QLatin1String("s2"))
+                seg.wireIds = {QStringLiteral("w1"), QStringLiteral("w2")};
+        check(mechGaugeChanges(plain).empty(),
+              "gauge change: a breakout that divides a bundle is not a transition");
+        check(countRole(buildMechanicalHarness(plain, nullptr), "splice") == 0,
+              "gauge change: and gets no heatshrink");
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;

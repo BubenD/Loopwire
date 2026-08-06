@@ -1,6 +1,7 @@
 #include "app/MechanicalBuilderDialog.h"
 
 #include "app/UiBits.h"
+#include "harness/CableSpec.h"
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
 #include "model/Document.h"
@@ -207,10 +208,116 @@ void MechanicalBuilderDialog::buildUi() {
     });
     bundleLabel_ = new QLabel(QString(), selBox);
     bundleLabel_->setStyleSheet(QStringLiteral("color:#8fb0d6;font-weight:600;"));
+    bundleLabel_->setWordWrap(true);
     grid->addWidget(caption(selBox, QStringLiteral("Connector")), r, 0);
     grid->addWidget(connPart_, r, 1);
     grid->addWidget(caption(selBox, QStringLiteral("Bundle")), r, 2);
     grid->addWidget(bundleLabel_, r++, 3);
+
+    // ---- The run as a cable: the jacket, and how far it is cut back at this end ----
+    cablePart_ = new QComboBox(selBox);
+    cablePart_->setToolTip(QStringLiteral(
+        "The cable this run is, when it is one. A cable is drawn at its JACKET, not at the bundle its "
+        "cores would make loose: a Ø5.0 cable whose five conductors add up to Ø2.4 is a Ø5.0 run, and "
+        "a boot at the end of it has to pass Ø5.0. Only where the jacket is cut back does the bundle "
+        "inside become the diameter that matters."));
+    connect(cablePart_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (syncing_) return;
+        MechSegment* s = currentSegment();
+        if (!s) return;
+        s->cablePart = cablePart_->currentData().toString();
+        if (s->cablePart.isEmpty()) {
+            s->jacketOdMm = 0.0;    // loose wires: the bundle is worked out from the conductors
+        } else if (const LibraryPart* p = catalog_.byId(s->cablePart)) {
+            const CableSpec spec = cableSpecOf(*p);
+            if (spec.odMm > 0.0) s->jacketOdMm = spec.odMm;
+            else if (s->jacketOdMm <= 0.0)
+                s->jacketOdMm = segmentBundleDiameterMm(def_, *s) + 1.6;   // until a real figure
+            if (s->cableName.isEmpty()) s->cableName = p->title();
+        }
+        refreshAll();
+    });
+    jacketSpin_ = new QDoubleSpinBox(selBox);
+    jacketSpin_->setRange(0.0, 300.0);
+    jacketSpin_->setDecimals(2);
+    jacketSpin_->setSuffix(QStringLiteral(" mm"));
+    jacketSpin_->setToolTip(QStringLiteral(
+        "Over the jacket. 0 means there is no jacket - loose wires, and the bundle is worked out from "
+        "the conductors. Anything else is what the run is drawn at, and what has to go into a boot."));
+    connect(jacketSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (syncing_) return;
+        if (MechSegment* s = currentSegment()) { s->jacketOdMm = v; refreshAll(); }
+    });
+    stripSpin_ = new QDoubleSpinBox(selBox);
+    stripSpin_->setRange(0.0, 100000.0);
+    stripSpin_->setDecimals(1);
+    stripSpin_->setSuffix(QStringLiteral(" mm"));
+    stripSpin_->setToolTip(QStringLiteral(
+        "Wires without jacket: how far back from this end the jacket is cut, so the conductors come "
+        "out and reach the contacts. Over that length the run is the BUNDLE, with a cone between the "
+        "two diameters - and a braid or heatshrink ticked below covers exactly that stretch."));
+    connect(stripSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (syncing_) return;
+        MechSegment* s = currentSegment();
+        MechNode* n = currentNode();
+        if (!s || !n) return;
+        // A node hangs off the end of its own run, so the strip it owns is the one at that end.
+        if (s->toNode == n->id) s->stripToMm = v;
+        else s->stripFromMm = v;
+        refreshAll();
+    });
+    grid->addWidget(caption(selBox, QStringLiteral("Cable")), r, 0);
+    grid->addWidget(cablePart_, r, 1);
+    {
+        auto* jrow = new QHBoxLayout;
+        jrow->addWidget(caption(selBox, QStringLiteral("Jacket Ø")));
+        jrow->addWidget(jacketSpin_);
+        jrow->addWidget(caption(selBox, QStringLiteral("Wires without jacket")));
+        jrow->addWidget(stripSpin_);
+        grid->addLayout(jrow, r, 2, 1, 2);
+    }
+    ++r;
+
+    // ---- What every end can have, as ticks rather than a trip to the library ----
+    backshellChk_ = new QCheckBox(QStringLiteral("Backshell"), selBox);
+    backshellChk_->setToolTip(QStringLiteral(
+        "A backshell on the connector. It sits at the end and the cable enters it, so it is sized on "
+        "the cable and not on the stripped bundle in front of it."));
+    bootChk_ = new QCheckBox(QStringLiteral("Boot / heatshrink"), selBox);
+    bootChk_->setToolTip(QStringLiteral(
+        "A moulded boot or a heatshrink transition behind the backshell - over the jacket where the "
+        "cable is whole, recovered down onto the bundle where it is not."));
+    braidChk_ = new QCheckBox(QStringLiteral("Shield braid"), selBox);
+    braidChk_->setToolTip(QStringLiteral(
+        "Braid combed over the conductors that come out of the jacket. It covers the stripped stretch, "
+        "so it is as long as \"wires without jacket\" says unless a part states its own length."));
+    shrinkChk_ = new QCheckBox(QStringLiteral("Heatshrink over them"), selBox);
+    shrinkChk_->setToolTip(QStringLiteral(
+        "Heatshrink over the bare conductors - and over the braid, when there is one, rather than "
+        "end to end with it."));
+    {
+        auto* endRow = new QHBoxLayout;
+        endRow->addWidget(backshellChk_);
+        endRow->addWidget(bootChk_);
+        endRow->addWidget(braidChk_);
+        endRow->addWidget(shrinkChk_);
+        endRow->addStretch(1);
+        grid->addWidget(caption(selBox, QStringLiteral("At this end")), r, 0);
+        grid->addLayout(endRow, r++, 1, 1, 3);
+    }
+    const struct { QCheckBox** box; PartKind kind; } endTicks[] = {
+        {&backshellChk_, PartKind::Backshell},
+        {&bootChk_, PartKind::HeatshrinkBoot},
+        {&braidChk_, PartKind::ShieldBraid},
+        {&shrinkChk_, PartKind::Heatshrink},
+    };
+    for (const auto& t : endTicks) {
+        const PartKind kind = t.kind;
+        connect(*t.box, &QCheckBox::toggled, this, [this, kind](bool on) {
+            if (syncing_) return;
+            setEndFitting(kind, on);
+        });
+    }
 
     wireList_ = new QListWidget(selBox);
     wireList_->setMaximumHeight(110);
@@ -237,7 +344,7 @@ void MechanicalBuilderDialog::buildUi() {
 
     auto* fitRow = new QHBoxLayout;
     fittingChoice_ = new QComboBox(selBox);
-    fittingChoice_->setMinimumWidth(280);
+    fittingChoice_->setMinimumWidth(200);
     fitRow->addWidget(fittingChoice_, 1);
     onlyFits_ = new QCheckBox(QStringLiteral("only what fits"), selBox);
     onlyFits_->setChecked(true);
@@ -261,7 +368,12 @@ void MechanicalBuilderDialog::buildUi() {
 
     // ---- Options ----
     auto* optBox = new QGroupBox(QStringLiteral("How it is drawn"), this);
-    auto* opt = new QHBoxLayout(optBox);
+    // Two rows, not one: the figures above, what is put on the drawing below. In one row the window
+    // could not be opened narrower than the sum of them all, which on a laptop meant a window with its
+    // right-hand end off the screen.
+    auto* optCol = new QVBoxLayout(optBox);
+    auto* opt = new QHBoxLayout;
+    optCol->addLayout(opt);
     scaleSpin_ = new QDoubleSpinBox(optBox);
     scaleSpin_->setRange(0.01, 10.0);
     scaleSpin_->setDecimals(3);
@@ -299,15 +411,24 @@ void MechanicalBuilderDialog::buildUi() {
     countChk_ = new QCheckBox(QStringLiteral("Wire count"), optBox);
     balloonChk_ = new QCheckBox(QStringLiteral("Balloons"), optBox);
     bodiesChk_ = new QCheckBox(QStringLiteral("Connector bodies"), optBox);
-    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_}) opt->addWidget(c);
+    spliceChk_ = new QCheckBox(QStringLiteral("Splice heatshrink"), optBox);
+    spliceChk_->setToolTip(QStringLiteral(
+        "A junction where one conductor ends and a different size carries on has a splice in it, and a "
+        "splice is not left bare. Where the transition IS follows from the conductors either side, so "
+        "re-gauging a wire moves the heatshrink with it rather than leaving it behind."));
     opt->addStretch(1);
+    auto* optTicks = new QHBoxLayout;
+    optCol->addLayout(optTicks);
+    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_})
+        optTicks->addWidget(c);
+    optTicks->addStretch(1);
     for (QDoubleSpinBox* s : {scaleSpin_, factorSpin_, exagSpin_, textSpin_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this](double) {
             if (syncing_) return;
             readOptionsFromControls();
             refreshAll();
         });
-    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_})
+    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_})
         connect(c, &QCheckBox::toggled, this, [this](bool) {
             if (syncing_) return;
             readOptionsFromControls();
@@ -344,7 +465,7 @@ void MechanicalBuilderDialog::buildUi() {
 void MechanicalBuilderDialog::readFromDrawing() {
     if (!editor_ || !editor_->document()) return;
     const MechDrawOptions keep = def_.draw;
-    def_ = mechFromDrawing(*editor_->document());
+    def_ = mechFromDrawing(*editor_->document(), &catalog_);
     def_.draw = keep;   // how it is drawn is the user's setting, not the drawing's
     selected_ = def_.nodes.empty() ? QString() : def_.nodes.back().id;
     refreshAll();
@@ -469,9 +590,15 @@ void MechanicalBuilderDialog::refreshFittingChoices() {
     syncing_ = true;
     fittingChoice_->clear();
     const MechSegment* seg = currentSegment();
-    const double bundle = seg ? segmentBundleDiameterMm(def_, *seg) : def_.draw.minBundleMm;
+    const MechNode* node = def_.node(selected_);
+    const bool atToEnd = seg && node ? seg->toNode == node->id : true;
+    // What a part has to go over depends on WHERE it goes: a backshell at the end takes the cable, a
+    // braid over the stripped conductors takes the bundle, a sleeve along the run takes the body. One
+    // figure for all three is how a boot that will not pass the jacket comes to be on the list.
+    double bundle = seg ? segmentBundleDiameterMm(def_, *seg) : def_.draw.minBundleMm;
     int hidden = 0;
     for (PartKind kind : fittingKinds()) {
+        bundle = fittingFitDiameterMm(def_, seg, kind, fittingGoesAtEnd(kind), atToEnd);
         for (const LibraryPart* p : catalog_.ofKind(kind)) {
             QString why;
             bool known = false;
@@ -511,9 +638,63 @@ void MechanicalBuilderDialog::addFitting() {
     f.libPart = part->id;
     f.kind = part->kind;
     f.name = part->description.isEmpty() ? partKindName(part->kind) : part->description;
-    if (fittedAtEnd(part->kind)) n->fittings.push_back(f);
+    if (fittingGoesAtEnd(part->kind)) n->fittings.push_back(f);
     else if (MechSegment* s = currentSegment()) s->coverings.push_back(f);
     else n->fittings.push_back(f);
+    refreshAll();
+}
+
+bool MechanicalBuilderDialog::fittingGoesAtEnd(PartKind kind) const {
+    if (fittedAtEnd(kind)) return true;
+    // A braid or heatshrink is pulled over the conductors that come out of the jacket - so at an end
+    // that HAS bare wires, that is where it goes; anywhere else it runs along the bundle.
+    if (!mechOverTheWires(kind)) return false;
+    const MechNode* n = def_.node(selected_);
+    return n && nodeBareLengthMm(def_, *n) > 0.0;
+}
+
+bool MechanicalBuilderDialog::hasEndFitting(PartKind kind) const {
+    const MechNode* n = def_.node(selected_);
+    if (!n) return false;
+    for (const MechFitting& f : n->fittings)
+        if (f.kind == kind) return true;
+    return false;
+}
+
+void MechanicalBuilderDialog::setEndFitting(PartKind kind, bool on) {
+    MechNode* n = currentNode();
+    if (!n) return;
+    if (on == hasEndFitting(kind)) return;
+    if (!on) {
+        n->fittings.erase(std::remove_if(n->fittings.begin(), n->fittings.end(),
+                                         [kind](const MechFitting& f) { return f.kind == kind; }),
+                          n->fittings.end());
+    } else {
+        MechFitting f;
+        f.id = QStringLiteral("end-%1").arg(partKindKey(kind));
+        f.kind = kind;
+        f.name = partKindName(kind);
+        // Nothing else is stated: it is drawn to what it goes over, and picking a real part for it
+        // later is the same list of fittings either way.
+        n->fittings.push_back(f);
+    }
+    // Keep them in the order they are built in, whatever order they were added in: the backshell on
+    // the connector, the boot behind it, then whatever is pulled over the wires that come out.
+    auto rank = [](PartKind k) {
+        switch (k) {
+            case PartKind::Backshell:      return 0;
+            case PartKind::HeatshrinkBoot: return 1;
+            case PartKind::CableGland:
+            case PartKind::Grommet:
+            case PartKind::Overmould:
+            case PartKind::YSplit:         return 2;
+            default:                       return mechOverTheWires(k) ? 3 : 2;
+        }
+    };
+    std::stable_sort(n->fittings.begin(), n->fittings.end(),
+                     [&rank](const MechFitting& a, const MechFitting& b) {
+                         return rank(a.kind) < rank(b.kind);
+                     });
     refreshAll();
 }
 
@@ -543,8 +724,13 @@ void MechanicalBuilderDialog::refreshFittingList() {
     const MechSegment* seg = currentSegment();
     if (n) {
         for (const MechFitting& f : n->fittings) {
-            auto* item = new QListWidgetItem(
-                QStringLiteral("%1  —  at the end").arg(f.name), fittingList_);
+            // Say which it is: a body at the end, or a layer over the conductors that come out of the
+            // jacket - they are drawn differently, and reading it off the list saves guessing.
+            const QString where = mechOverTheWires(f.kind)
+                                      ? QStringLiteral("over the wires")
+                                      : QStringLiteral("at the end");
+            auto* item = new QListWidgetItem(QStringLiteral("%1  —  %2").arg(f.name, where),
+                                             fittingList_);
             item->setData(Qt::UserRole, f.id);
             item->setData(Qt::UserRole + 1, true);
         }
@@ -572,6 +758,7 @@ void MechanicalBuilderDialog::readOptionsFromControls() {
     if (countChk_) def_.draw.wireCounts = countChk_->isChecked();
     if (balloonChk_) def_.draw.balloons = balloonChk_->isChecked();
     if (bodiesChk_) def_.draw.connectorBodies = bodiesChk_->isChecked();
+    if (spliceChk_) def_.draw.spliceHeatshrink = spliceChk_->isChecked();
 }
 
 void MechanicalBuilderDialog::writeOptionsToControls() {
@@ -585,6 +772,7 @@ void MechanicalBuilderDialog::writeOptionsToControls() {
     if (countChk_) countChk_->setChecked(def_.draw.wireCounts);
     if (balloonChk_) balloonChk_->setChecked(def_.draw.balloons);
     if (bodiesChk_) bodiesChk_->setChecked(def_.draw.connectorBodies);
+    if (spliceChk_) spliceChk_->setChecked(def_.draw.spliceHeatshrink);
     syncing_ = false;
 }
 
@@ -610,8 +798,12 @@ void MechanicalBuilderDialog::refreshTree() {
             if (seg) {
                 item->setText(2, QString::number(seg->lengthMm, 'f', 1));
                 item->setText(3, QString::number(n->angleDeg, 'f', 1));
-                item->setText(4, QStringLiteral("Ø%1").arg(segmentBundleDiameterMm(def_, *seg), 0,
-                                                           'f', 1));
+                // What the run IS: the jacket on a cable, the bundle on loose wires. The bundle inside
+                // a cable is on the row below in the selected-point panel, where it belongs.
+                item->setText(4, seg->isCable()
+                                     ? QStringLiteral("Ø%1 cable").arg(seg->jacketOdMm, 0, 'f', 1)
+                                     : QStringLiteral("Ø%1").arg(segmentBundleDiameterMm(def_, *seg),
+                                                                 0, 'f', 1));
                 item->setText(5, QString::number(seg->wireIds.size()));
             } else {
                 item->setText(2, QStringLiteral("—"));
@@ -660,10 +852,55 @@ void MechanicalBuilderDialog::refreshDetails() {
         if (!seg) bundleLabel_->setText(QStringLiteral("—"));
         else {
             const double d = segmentBundleDiameterMm(def_, *seg);
-            bundleLabel_->setText(QStringLiteral("Ø%1 mm from %2 conductor(s)")
-                                      .arg(d, 0, 'f', 1)
-                                      .arg(seg->wireIds.size()));
+            QString text = QStringLiteral("Ø%1 mm from %2 conductor(s)")
+                               .arg(d, 0, 'f', 1)
+                               .arg(seg->wireIds.size());
+            // On a cable, both figures: what the run is, and what it narrows to where the jacket is
+            // cut back. That is the pair a boot has to be chosen against.
+            if (seg->isCable())
+                text = QStringLiteral("Ø%1 mm cable, Ø%2 mm from %3 core(s)")
+                           .arg(seg->jacketOdMm, 0, 'f', 1)
+                           .arg(d, 0, 'f', 1)
+                           .arg(seg->wireIds.size());
+            bundleLabel_->setText(text);
         }
+    }
+
+    // ---- The cable, and how far its jacket is cut back at this end ----
+    if (cablePart_) {
+        cablePart_->clear();
+        cablePart_->addItem(QStringLiteral("— loose wires —"), QString());
+        for (const LibraryPart* p : catalog_.ofKind(PartKind::Cable)) cablePart_->addItem(p->title(), p->id);
+        const int at = seg ? cablePart_->findData(seg->cablePart) : 0;
+        cablePart_->setCurrentIndex(at >= 0 ? at : 0);
+        cablePart_->setEnabled(seg != nullptr);
+        if (seg && !seg->cablePart.isEmpty() && at < 0)
+            cablePart_->setToolTip(QStringLiteral(
+                "This run's cable is not in any connected library; the jacket diameter beside it is "
+                "what the drawing uses."));
+    }
+    if (jacketSpin_) {
+        jacketSpin_->setValue(seg ? seg->jacketOdMm : 0.0);
+        jacketSpin_->setEnabled(seg != nullptr);
+    }
+    if (stripSpin_) {
+        // Without a jacket there is nothing to strip, so the figure would mean nothing.
+        const bool isCable = seg && seg->isCable();
+        double bare = 0.0;
+        if (isCable && n) bare = seg->toNode == n->id ? seg->stripToMm : seg->stripFromMm;
+        stripSpin_->setValue(bare);
+        stripSpin_->setEnabled(isCable);
+    }
+    const struct { QCheckBox* box; PartKind kind; } ticks[] = {
+        {backshellChk_, PartKind::Backshell},
+        {bootChk_, PartKind::HeatshrinkBoot},
+        {braidChk_, PartKind::ShieldBraid},
+        {shrinkChk_, PartKind::Heatshrink},
+    };
+    for (const auto& t : ticks) {
+        if (!t.box) continue;
+        t.box->setChecked(hasEndFitting(t.kind));
+        t.box->setEnabled(has);
     }
 
     // Which conductors run through this one.

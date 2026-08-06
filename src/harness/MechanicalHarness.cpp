@@ -1,5 +1,6 @@
 #include "harness/MechanicalHarness.h"
 
+#include "harness/CableSpec.h"
 #include "harness/Harness.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace Edraw_Desktop {
 namespace {
@@ -91,13 +93,20 @@ Entity baseEntity(const MechDrawOptions& opt, const QString& role) {
 // breakout has to be mitred: at a junction each edge stops where its neighbour's edge crosses it,
 // which is what makes the outline of the harness continuous instead of three bodies overlapping. The
 // bundle's diameter is recorded on the edge so the width is still a figure and not just a picture.
-Entity makeBundleEdge(const MechDrawOptions& opt, const Vec2& a, const Vec2& b, double diameterMm,
+//
+// A rail is not always straight from one end to the other. Where a cable's jacket has been cut back
+// the run narrows to the bundle inside it, with a cone between the two, so the edge carries a knee at
+// every change of diameter - which is the shape a stripped cable has and the shape a boot has to go
+// over.
+Entity makeBundleEdge(const MechDrawOptions& opt, const std::vector<Vec2>& pts, double diameterMm,
                       const QString& segId, int side) {
     Entity e = baseEntity(opt, QStringLiteral("bundle"));
     e.type = EntityType::Polyline;
-    e.points = {a, b};
-    e.a = a;
-    e.b = b;
+    e.points = pts;
+    if (!pts.empty()) {
+        e.a = pts.front();
+        e.b = pts.back();
+    }
     e.meta.insert(QStringLiteral("mechSeg"), segId);
     e.meta.insert(QStringLiteral("bundleDia"), diameterMm);
     e.meta.insert(QStringLiteral("side"), side);
@@ -414,6 +423,141 @@ double segmentBundleDiameterMm(const MechHarnessDef& def, const MechSegment& seg
     return bundleDiameterMm(ods, def.draw.bundleFactor, def.draw.minBundleMm);
 }
 
+double segmentBodyDiameterMm(const MechHarnessDef& def, const MechSegment& seg) {
+    if (seg.jacketOdMm > 0.0) return seg.jacketOdMm;
+    return segmentBundleDiameterMm(def, seg);
+}
+
+double segmentEndDiameterMm(const MechHarnessDef& def, const MechSegment& seg, bool atToEnd) {
+    if (seg.jacketOdMm <= 0.0) return segmentBundleDiameterMm(def, seg);
+    return seg.stripAt(atToEnd) > 0.0 ? segmentBundleDiameterMm(def, seg) : seg.jacketOdMm;
+}
+
+double nodeBareLengthMm(const MechHarnessDef& def, const MechNode& node) {
+    const MechSegment* seg = def.segment(node.parentSegment);
+    if (!seg || seg->jacketOdMm <= 0.0) return 0.0;
+    // A node hangs off the END of its parent run, so the strip that concerns it is the one at that
+    // end. The root has no parent run and so has nothing stripped.
+    return seg->toNode == node.id ? seg->stripToMm : seg->stripFromMm;
+}
+
+bool mechOverTheWires(PartKind kind) {
+    // Pulled over the conductors themselves rather than being a body in its own right. A braid is
+    // combed over the bare wires and heatshrink is recovered onto whatever is under it; a backshell or
+    // a boot is a thing with a bore, and it stacks back from the connector.
+    return kind == PartKind::ShieldBraid || kind == PartKind::Heatshrink ||
+           kind == PartKind::Tape || kind == PartKind::Marker;
+}
+
+double fittingFitDiameterMm(const MechHarnessDef& def, const MechSegment* seg, PartKind kind,
+                            bool atEnd, bool atToEnd) {
+    if (!seg) return def.draw.minBundleMm;
+    if (!atEnd) return segmentBodyDiameterMm(def, *seg);     // along the run: over the body
+    if (mechOverTheWires(kind)) return segmentEndDiameterMm(def, *seg, atToEnd);
+    // A backshell, a boot, a gland: the cable goes INTO it, so its entry has to take the jacket even
+    // when the last few millimetres in front of it are bare conductors. Sizing one of these on the
+    // stripped bundle is how a boot that cannot be got over the cable ends up on a drawing.
+    return segmentBodyDiameterMm(def, *seg);
+}
+
+std::vector<MechStation> segmentProfile(const MechHarnessDef& def, const MechSegment& seg) {
+    const double len = std::max(0.0, seg.lengthMm);
+    const double bundle = segmentBundleDiameterMm(def, seg);
+    std::vector<MechStation> out;
+    if (seg.jacketOdMm <= 0.0) {
+        out.push_back({0.0, bundle});
+        out.push_back({len, bundle});
+        return out;
+    }
+    const double jacket = seg.jacketOdMm;
+    double sFrom = std::max(0.0, seg.stripFromMm);
+    double sTo = std::max(0.0, seg.stripToMm);
+    // Stripped back further than the run is long, from both ends: there is no jacket left, so it is
+    // bare wire from end to end rather than a cone that crosses itself.
+    if (sFrom + sTo >= len) {
+        out.push_back({0.0, bundle});
+        out.push_back({len, bundle});
+        return out;
+    }
+    // The cone from the bundle out to the jacket. A cut jacket does not step: the wires spread out of
+    // it over about the difference in diameter, and never over more than the strip itself.
+    auto cone = [&](double strip) {
+        return std::min(strip, std::max(1.0, std::abs(jacket - bundle)));
+    };
+    out.push_back({0.0, sFrom > 0.0 ? bundle : jacket});
+    if (sFrom > 0.0) {
+        out.push_back({sFrom - cone(sFrom), bundle});
+        out.push_back({sFrom, jacket});
+    }
+    if (sTo > 0.0) {
+        out.push_back({len - sTo, jacket});
+        out.push_back({len - sTo + cone(sTo), bundle});
+    }
+    out.push_back({len, sTo > 0.0 ? bundle : jacket});
+    // Two stations at the same place say nothing; drop the duplicates a zero-length cone leaves.
+    std::vector<MechStation> tidy;
+    for (const MechStation& s : out)
+        if (tidy.empty() || std::abs(s.atMm - tidy.back().atMm) > 1e-9 ||
+            std::abs(s.diameterMm - tidy.back().diameterMm) > 1e-9)
+            tidy.push_back(s);
+    return tidy;
+}
+
+// ---- Where a conductor changes gauge ------------------------------------------------------------
+
+namespace {
+
+// The sizes a set of conductors is made up of, largest first, as a line of text - "1.0, 0.5, 0.5".
+QString gaugeList(const MechHarnessDef& def, const QStringList& wireIds) {
+    std::vector<double> mm2;
+    for (const QString& id : wireIds) {
+        const MechWire* w = def.wire(id);
+        if (!w) continue;
+        const double a = gaugeMm2(w->gauge);
+        if (a > 0.0) mm2.push_back(a);
+    }
+    std::sort(mm2.begin(), mm2.end(), std::greater<double>());
+    QStringList parts;
+    for (double a : mm2) parts << QString::number(a, 'g', 3);
+    return parts.join(QStringLiteral(", "));
+}
+
+} // namespace
+
+std::vector<MechGaugeChange> mechGaugeChanges(const MechHarnessDef& def) {
+    std::vector<MechGaugeChange> out;
+    for (const MechNode& n : def.nodes) {
+        const MechSegment* in = def.segment(n.parentSegment);
+        if (!in) continue;
+        for (const MechSegment* child : def.childSegments(n.id)) {
+            // Which conductors stop here, and which start. A breakout carries the SAME conductors on
+            // into its branches, so nothing starts or stops and there is no transition; a splice ends
+            // one wire and begins another, which is what this finds.
+            QStringList ended, started;
+            for (const QString& id : in->wireIds)
+                if (!child->wireIds.contains(id)) ended << id;
+            for (const QString& id : child->wireIds)
+                if (!in->wireIds.contains(id)) started << id;
+            if (ended.isEmpty() || started.isEmpty()) continue;
+            const QString a = gaugeList(def, ended);
+            const QString b = gaugeList(def, started);
+            if (a.isEmpty() || b.isEmpty() || a == b) continue;   // a re-route, not a re-gauge
+            MechGaugeChange g;
+            g.nodeId = n.id;
+            g.nodeName = n.name;
+            g.fromSegment = in->id;
+            g.toSegment = child->id;
+            g.fromGauges = a;
+            g.toGauges = b;
+            g.diameterMm = std::max(segmentBodyDiameterMm(def, *in),
+                                    segmentBodyDiameterMm(def, *child));
+            out.push_back(g);
+            break;    // one transition per junction: it is the junction that gets the heatshrink
+        }
+    }
+    return out;
+}
+
 // ---- Layout -------------------------------------------------------------------------------------
 
 const MechPlacedNode* MechLayout::node(const QString& id) const {
@@ -451,7 +595,9 @@ MechLayout layoutMechanicalHarness(const MechHarnessDef& def) {
             const Vec2 at{parent->at.x + std::cos(r) * len, parent->at.y + std::sin(r) * len};
             out.nodes.push_back({n.id, at, dirDeg});
             out.segments.push_back({seg->id, parent->at, at, dirDeg,
-                                    segmentBundleDiameterMm(def, *seg)});
+                                    segmentBodyDiameterMm(def, *seg),
+                                    segmentEndDiameterMm(def, *seg, /*atToEnd=*/false),
+                                    segmentEndDiameterMm(def, *seg, /*atToEnd=*/true)});
             grew = true;
         }
     }
@@ -536,6 +682,43 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
             if (!def.wire(wid))
                 violation(s.id, name, QStringLiteral("It routes a conductor that is not in the "
                                                      "list (%1).").arg(wid));
+        if (s.isCable()) {
+            // A jacket that will not hold what is inside it is not a cable, it is a mistake in one of
+            // the two figures - and it would otherwise be drawn as a cable narrower than its own cores.
+            const double bundle = segmentBundleDiameterMm(def, s);
+            if (bundle > s.jacketOdMm + 1e-6)
+                violation(s.id, name,
+                          QStringLiteral("The jacket is Ø%1 mm and the conductors in it make Ø%2 mm: "
+                                         "one of the two figures is wrong.")
+                              .arg(s.jacketOdMm, 0, 'f', 1)
+                              .arg(bundle, 0, 'f', 1));
+            if (s.stripFromMm + s.stripToMm >= s.lengthMm && s.lengthMm > 0.0)
+                warning(s.id, name,
+                        QStringLiteral("Stripped back %1 mm at one end and %2 mm at the other, on a "
+                                       "%3 mm run: no jacket is left, so it is drawn as bare wires.")
+                            .arg(s.stripFromMm, 0, 'f', 1)
+                            .arg(s.stripToMm, 0, 'f', 1)
+                            .arg(s.lengthMm, 0, 'f', 1));
+            const MechNode* toNode = def.node(s.toNode);
+            if (s.stripToMm <= 0.0 && toNode && toNode->kind == MechNodeKind::Connector)
+                gap(s.id, name, QStringLiteral("Wires without jacket"),
+                    QStringLiteral("the jacket runs into %1: say how far back it is cut so the "
+                                   "conductors can reach the contacts").arg(toNode->name));
+        }
+    }
+
+    // A splice at a gauge change, and whether it is covered.
+    for (const MechGaugeChange& g : mechGaugeChanges(def)) {
+        if (def.draw.spliceHeatshrink)
+            warning(g.nodeId, g.nodeName,
+                    QStringLiteral("The conductors change size here (%1 → %2 mm²), so there is a "
+                                   "splice: heatshrink is drawn over it.")
+                        .arg(g.fromGauges, g.toGauges));
+        else
+            violation(g.nodeId, g.nodeName,
+                      QStringLiteral("The conductors change size here (%1 → %2 mm²), so there is a "
+                                     "splice, and nothing covers it.")
+                          .arg(g.fromGauges, g.toGauges));
     }
 
     for (const MechNode& n : def.nodes) {
@@ -584,14 +767,18 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 
     for (const MechSegment& s : def.segments) {
         const MechNode* to = def.node(s.toNode);
-        const double d = segmentBundleDiameterMm(def, s);
-        checkFittings(s.coverings, d, s.id, to ? to->name : s.id);
+        // Along the run: over the body, which on a cable is the jacket and not the cores inside it.
+        checkFittings(s.coverings, segmentBodyDiameterMm(def, s), s.id, to ? to->name : s.id);
     }
     for (const MechNode& n : def.nodes) {
-        // A node's fittings sit on the run arriving at it.
+        // A node's fittings sit on the run arriving at it - each on what IT has to go over, which is
+        // the bare bundle for a braid and the whole cable for a backshell.
         const MechSegment* seg = def.segment(n.parentSegment);
-        const double d = seg ? segmentBundleDiameterMm(def, *seg) : def.draw.minBundleMm;
-        checkFittings(n.fittings, d, n.id, n.name);
+        const bool atToEnd = seg ? seg->toNode == n.id : true;
+        for (const MechFitting& f : n.fittings) {
+            const double d = fittingFitDiameterMm(def, seg, f.kind, /*atEnd=*/true, atToEnd);
+            checkFittings({f}, d, n.id, n.name);
+        }
     }
     return out;
 }
@@ -663,12 +850,37 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     // stops where the next run's facing edge crosses it, so the outline runs continuously from one
     // branch into the next with a notch between them - the shape a breakout actually has. A run with
     // nothing at its end keeps a square cap there.
-    struct Body { Vec2 fromPlus, fromMinus, toPlus, toMinus; double gap; };
+    //
+    // A run whose jacket is stripped back is not one width from end to end: it is the bundle at the
+    // stripped end, a cone, then the jacket. So each edge is a RAIL of points - one per change of
+    // diameter - rather than two, and the mitring at a junction moves the point at the end without
+    // touching the knees between.
+    struct Body {
+        std::vector<Vec2> plus, minus;   // from the run's start to its end
+        double gap;                      // across the body, for placing what is written beside it
+    };
     QHash<QString, Body> bodies;
     for (const MechPlacedSegment& ps : layout.segments) {
+        const MechSegment* seg = def.segment(ps.id);
         const double gap = across(ps.diameterMm);
-        const Vec2 v = (ps.b - ps.a).normalized().perp() * (gap / 2.0);
-        bodies.insert(ps.id, {ps.a + v, ps.a - v, ps.b + v, ps.b - v, gap});
+        const Vec2 dir = (ps.b - ps.a).normalized();
+        const Vec2 v = dir.perp();
+        Body body;
+        body.gap = gap;
+        const std::vector<MechStation> profile =
+            seg ? segmentProfile(def, *seg) : std::vector<MechStation>{};
+        if (profile.size() >= 2 && seg && seg->lengthMm > 0.0) {
+            for (const MechStation& st : profile) {
+                const Vec2 c = ps.a + dir * along(st.atMm);
+                const double half = across(st.diameterMm) / 2.0;
+                body.plus.push_back(c + v * half);
+                body.minus.push_back(c - v * half);
+            }
+        } else {
+            body.plus = {ps.a + v * (gap / 2.0), ps.b + v * (gap / 2.0)};
+            body.minus = {ps.a - v * (gap / 2.0), ps.b - v * (gap / 2.0)};
+        }
+        bodies.insert(ps.id, body);
     }
     for (const MechPlacedNode& pn : layout.nodes) {
         // The runs meeting here, each as the way it LEAVES this node.
@@ -677,13 +889,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         for (const MechPlacedSegment& ps : layout.segments) {
             const MechSegment* seg = def.segment(ps.id);
             if (!seg) continue;
-            const double half = across(ps.diameterMm) / 2.0;
+            // Half the width AT THIS END - which is the bundle, not the jacket, on a cable that has
+            // come out of its jacket before it reaches the junction.
             if (seg->fromNode == pn.id) {
                 const Vec2 d = (ps.b - ps.a).normalized();
-                legs.push_back({ps.id, true, d, half, std::atan2(d.y, d.x)});
+                legs.push_back({ps.id, true, d, across(ps.fromDiameterMm) / 2.0,
+                                std::atan2(d.y, d.x)});
             } else if (seg->toNode == pn.id) {
                 const Vec2 d = (ps.a - ps.b).normalized();
-                legs.push_back({ps.id, false, d, half, std::atan2(d.y, d.x)});
+                legs.push_back({ps.id, false, d, across(ps.toDiameterMm) / 2.0,
+                                std::atan2(d.y, d.x)});
             }
         }
         if (legs.size() < 2) continue;   // one run: the square cap it already has
@@ -704,16 +919,17 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // segment's start, and the "-" side when it leaves from the end.
             Body& ba = bodies[a.segId];
             Body& bb = bodies[b.segId];
-            if (a.atFrom) ba.fromPlus = v;
-            else ba.toMinus = v;
-            if (b.atFrom) bb.fromMinus = v;
-            else bb.toPlus = v;
+            if (ba.plus.empty() || bb.plus.empty()) continue;
+            if (a.atFrom) ba.plus.front() = v;
+            else ba.minus.back() = v;
+            if (b.atFrom) bb.minus.front() = v;
+            else bb.plus.back() = v;
         }
     }
     for (const MechPlacedSegment& ps : layout.segments) {
         const Body& b = bodies.value(ps.id);
-        out.push_back(makeBundleEdge(opt, b.fromPlus, b.toPlus, ps.diameterMm, ps.id, +1));
-        out.push_back(makeBundleEdge(opt, b.fromMinus, b.toMinus, ps.diameterMm, ps.id, -1));
+        out.push_back(makeBundleEdge(opt, b.plus, ps.diameterMm, ps.id, +1));
+        out.push_back(makeBundleEdge(opt, b.minus, ps.diameterMm, ps.id, -1));
     }
 
     // ---- What is written on each run, and what is fitted to it ----
@@ -732,6 +948,14 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
 
         if (opt.diameterLabels) {
             QString label = QStringLiteral("Ø%1").arg(ps.diameterMm, 0, 'f', 1);
+            // A cable says both figures: the jacket it is bought as, and the bundle it becomes where
+            // the jacket is cut back. One without the other is the figure someone sizes a boot on.
+            if (seg->isCable()) {
+                const double bundle = segmentBundleDiameterMm(def, *seg);
+                label = QStringLiteral("Ø%1 cable").arg(seg->jacketOdMm, 0, 'f', 1);
+                if (seg->stripFromMm > 0.0 || seg->stripToMm > 0.0)
+                    label += QStringLiteral(" / Ø%1 bundle").arg(bundle, 0, 'f', 1);
+            }
             if (opt.wireCounts) label += QStringLiteral("  (%1)").arg(seg->wireIds.size());
             out.push_back(makeText(opt, mid + v * (gap / 2.0 + opt.textHeight * 0.7), label,
                                    opt.textHeight, rad(textDir), QStringLiteral("dia")));
@@ -799,6 +1023,37 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                    opt.textHeight, 0.0, QStringLiteral("label")));
     }
 
+    // ---- Heatshrink where a conductor changes gauge ----
+    // A junction where one wire ends and a bigger one carries on has a splice in it, and a splice is
+    // not left bare. It is not asked for either: the transition is worked out from the conductors
+    // either side, so re-gauging a wire moves the heatshrink with it.
+    if (opt.spliceHeatshrink) {
+        for (const MechGaugeChange& g : mechGaugeChanges(def)) {
+            const MechPlacedNode* pn = layout.node(g.nodeId);
+            if (!pn) continue;
+            const double odMm = g.diameterMm + 2.0;
+            const double lenMm = std::max(20.0, g.diameterMm * 3.0);
+            const double dirRad = rad(pn->dirDeg);
+            Entity box = makeBox(opt, pn->at, dirRad, along(lenMm), across(odMm),
+                                 QStringLiteral("splice"));
+            box.meta.insert(QStringLiteral("mechNode"), g.nodeId);
+            box.meta.insert(QStringLiteral("gaugeChange"),
+                            QStringLiteral("%1 mm² → %2 mm²").arg(g.fromGauges, g.toGauges));
+            out.push_back(box);
+            const Vec2 v = Vec2{std::cos(dirRad), std::sin(dirRad)}.perp();
+            out.push_back(makeText(opt, pn->at - v * (across(odMm) / 2.0 + opt.textHeight * 1.6),
+                                   QStringLiteral("heatshrink over the splice %1 → %2 mm²")
+                                       .arg(g.fromGauges, g.toGauges),
+                                   opt.textHeight, 0.0, QStringLiteral("label")));
+            if (opt.balloons) {
+                ++balloonNo;
+                out.push_back(makeBalloon(opt, pn->at,
+                                          pn->at + v * (across(odMm) / 2.0 + 22.0),
+                                          QString::number(balloonNo)));
+            }
+        }
+    }
+
     // ---- The ends: connectors, free ends, and what is fitted at them ----
     for (const MechPlacedNode& pn : layout.nodes) {
         const MechNode* n = def.node(pn.id);
@@ -806,17 +1061,41 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const MechSegment* seg = def.segment(n->parentSegment);
         const MechPlacedSegment* ps = seg ? layout.segment(seg->id) : nullptr;
         const double bundleMm = ps ? ps->diameterMm : def.draw.minBundleMm;
+        // What is at this end of the run: the bare bundle where the jacket is stripped, the body where
+        // it is not. What goes over the WIRES is drawn on that; what the cable enters is drawn on the
+        // body, because the cable is behind it.
+        const double endMm = seg ? segmentEndDiameterMm(def, *seg, seg->toNode == pn.id) : bundleMm;
+        const double bareMm = seg ? nodeBareLengthMm(def, *n) : 0.0;
         const double dirRad = rad(pn.dirDeg);
         const Vec2 u{std::cos(dirRad), std::sin(dirRad)};
         const Vec2 v = u.perp();
 
-        // What is fitted at the end sits on the run, just back from the node.
+        // What is fitted at the end sits on the run, just back from the node. The bodies - a backshell,
+        // then a boot behind it - stack back one after another, in the order they are fitted. What is
+        // pulled over the conductors themselves does not stack: a braid covers the bare stretch that
+        // is left, and heatshrink goes over the braid rather than after it, which is how it is built.
         double fittedBackMm = 0.0;
+        int overWires = 0;
         for (const MechFitting& f : n->fittings) {
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
+            const bool overTheWires = mechOverTheWires(f.kind);
             double lengthMm = 0.0, odMm = 0.0;
-            fittingSize(f, part, bundleMm, lengthMm, odMm);
-            const double startMm = fittedBackMm + f.atMm;
+            fittingSize(f, part, overTheWires ? endMm : bundleMm, lengthMm, odMm);
+            double startMm = fittedBackMm + f.atMm;
+            if (overTheWires) {
+                // Over the bare wires: from where the bodies end, along as much of the stripped
+                // length as is left. Nothing said about its length means all of it.
+                startMm = fittedBackMm + f.atMm;
+                const double left = std::max(0.0, bareMm - startMm);
+                if (f.lengthMm <= 0.0 &&
+                    (!part || partNumber(*part, QStringLiteral("length")) <= 0.0) && left > 0.0)
+                    lengthMm = left;
+                else if (left > 0.0)
+                    lengthMm = std::min(lengthMm, left);
+                if (f.odMm <= 0.0 && (!part || odMm <= endMm))
+                    odMm = endMm + 1.0 + 1.5 * overWires;   // each layer over the last
+                ++overWires;
+            }
             const Vec2 c = pn.at - u * along(startMm + lengthMm / 2.0);
             if (part && part->hasMechanical()) {
                 for (Entity& e : placedPartDrawing(*part, c, dirRad, opt,
@@ -833,7 +1112,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
                                           QString::number(balloonNo)));
             }
-            fittedBackMm = startMm + lengthMm;
+            // A body takes up room for the next one; a layer over the wires does not.
+            if (!overTheWires) fittedBackMm = startMm + lengthMm;
         }
 
         if (n->kind != MechNodeKind::Connector) {
@@ -899,9 +1179,12 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
 
 // ---- From what is already drawn -----------------------------------------------------------------
 
-MechHarnessDef mechFromDrawing(const Document& doc) {
+MechHarnessDef mechFromDrawing(const Document& doc, const PartsCatalog* catalog) {
     MechHarnessDef def;
     def.name = QStringLiteral("Harness");
+    // Which library part each conductor came out of, so a run of cable cores can be recognised as the
+    // cable it is rather than as so many loose wires that happen to run together.
+    QHash<QString, QString> wirePart;
 
     // Every connector, and where each of its pins ends.
     struct Conn { QString id, designator; int pinCount; std::vector<Vec2> pinEnds; Vec2 at; };
@@ -936,6 +1219,8 @@ MechHarnessDef mechFromDrawing(const Document& doc) {
         if (w.label.isEmpty()) w.label = e.id;
         w.gauge = e.meta.value(QStringLiteral("wireGauge")).toString();
         if (w.gauge.isEmpty()) w.gauge = e.meta.value(QStringLiteral("awg")).toString();
+        w.bundle = e.meta.value(QStringLiteral("bundle")).toString();
+        wirePart.insert(w.id, e.meta.value(QStringLiteral("libPart")).toString());
         def.wires.push_back(w);
         routed.push_back({e.id, connAt(e.points.front()), connAt(e.points.back())});
     }
@@ -983,6 +1268,31 @@ MechHarnessDef mechFromDrawing(const Document& doc) {
         for (const Routed& r : routed)
             if ((r.fromConn == idx || r.toConn == idx) && !s.wireIds.contains(r.wireId))
                 s.wireIds.push_back(r.wireId);
+        // Every conductor in it a core of one and the same cable? Then the run IS that cable: it is
+        // drawn at the jacket, and the bundle inside only shows where the jacket is cut back. A cable
+        // whose five cores add up to Ø2.4 is still a Ø5.0 cable.
+        QString bundle;
+        QString partId;
+        bool oneCable = !s.wireIds.isEmpty();
+        for (const QString& wid : s.wireIds) {
+            const MechWire* w = def.wire(wid);
+            const QString b = w ? w->bundle : QString();
+            const QString p = wirePart.value(wid);
+            if (b.isEmpty()) { oneCable = false; break; }
+            if (bundle.isEmpty()) { bundle = b; partId = p; }
+            else if (bundle != b || partId != p) { oneCable = false; break; }
+        }
+        if (oneCable) {
+            s.cableName = bundle;
+            const LibraryPart* part = catalog ? catalog->byId(partId) : nullptr;
+            if (part && part->kind == PartKind::Cable) {
+                s.cablePart = part->id;
+                const CableSpec spec = cableSpecOf(*part);
+                // Only what the part actually states. How far the jacket is cut back at each end is
+                // not in the part and is not guessed at - the validator asks for it.
+                if (spec.odMm > 0.0) s.jacketOdMm = spec.odMm;
+            }
+        }
         n.parentSegment = s.id;
         def.nodes.push_back(n);
         def.segments.push_back(s);
