@@ -26,6 +26,12 @@ public:
         line(x2, y2, x1, y2);
         line(x1, y2, x1, y1);
     }
+    void poly(const std::vector<Vec2>& pts) {
+        if (pts.size() < 2) return;
+        Entity e = start(EntityType::Polyline);
+        for (const Vec2& v : pts) e.points.push_back({at_.x + v.x, at_.y + v.y});
+        out_.push_back(std::move(e));
+    }
     void circle(double cx, double cy, double r) {
         Entity e = start(EntityType::Circle);
         e.center = {at_.x + cx, at_.y + cy};
@@ -133,16 +139,33 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
     Draw d(at, partSymbolName(s));
     switch (s) {
     case PartSymbol::ThResistor: {
-        // Axial, from the side: a 7 by 2.6 body with a domed end each side, three colour bands, and a
-        // lead out of each dome.
-        const double hx = 3.5, hy = 1.3, lead = 4.5;
-        d.line(-hx, hy, hx, hy);
-        d.line(-hx, -hy, hx, -hy);
-        d.arc(-hx, 0.0, hy, 90.0, 270.0);
-        d.arc(hx, 0.0, hy, -90.0, 90.0);
-        for (const double x : {-1.6, -0.7, 0.2}) d.line(x, hy, x, -hy);   // the bands
-        d.line(-hx - hy, 0.0, -hx - hy - lead, 0.0);
-        d.line(hx + hy, 0.0, hx + hy + lead, 0.0);
+        // Axial, from the side, and shaped like one: the body is WAISTED - full at both ends where the
+        // caps are, narrower through the middle - with a domed end each side, its bands, and a lead out
+        // of each dome. Drawn as a plain 7 by 2.6 box it read as a chip resistor lying on its side.
+        const double hx = 3.5;      // half the body
+        const double hEnd = 1.3;    // half its height at the ends
+        const double hMid = 1.0;    // ... and through the waist
+        const double lead = 4.5;
+        constexpr int kSteps = 24;
+        for (const double side : {1.0, -1.0}) {
+            std::vector<Vec2> edge;
+            for (int i = 0; i <= kSteps; ++i) {
+                const double x = -hx + 2.0 * hx * i / kSteps;
+                const double f = x / hx;
+                edge.push_back({x, side * (hMid + (hEnd - hMid) * f * f)});
+            }
+            d.poly(edge);
+        }
+        d.arc(-hx, 0.0, hEnd, 90.0, 270.0);
+        d.arc(hx, 0.0, hEnd, -90.0, 90.0);
+        // Four bands: three together and the tolerance band set apart, as they are printed.
+        for (const double x : {-1.5, -0.6, 0.3, 1.9}) {
+            const double f = x / hx;
+            const double h = hMid + (hEnd - hMid) * f * f;
+            d.line(x, h, x, -h);
+        }
+        d.line(-hx - hEnd, 0.0, -hx - hEnd - lead, 0.0);
+        d.line(hx + hEnd, 0.0, hx + hEnd + lead, 0.0);
         break;
     }
     case PartSymbol::ThCapacitor: {

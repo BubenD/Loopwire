@@ -4678,6 +4678,23 @@ int run_editor_tests() {
         check(hidden == 2,
               "parts: seen from the side, the ring's hole is drawn as two hidden edges");
 
+        // The through-hole resistor is shaped like one: WAISTED, not a box. Its body is fuller at the
+        // ends, where the caps are, than through the middle - which is what tells it from a chip
+        // resistor lying on its side.
+        {
+            double atEnd = 0.0, atMiddle = 1e18;
+            for (const Entity& e : partSymbolEntities(PartSymbol::ThResistor, Vec2{0.0, 0.0})) {
+                if (e.type != EntityType::Polyline) continue;   // the two edges of the body
+                for (const Vec2& v : e.points) {
+                    if (std::abs(std::abs(v.x) - 3.5) < 1e-6) atEnd = std::max(atEnd, std::abs(v.y));
+                    if (std::abs(v.x) < 1e-6) atMiddle = std::min(atMiddle, std::abs(v.y));
+                }
+            }
+            check(atEnd > 1.2 && atMiddle < atEnd - 0.2,
+                  "parts: the through-hole resistor is waisted - fuller at its ends than through the "
+                  "middle");
+        }
+
         // The chip resistor is told from the chip capacitor on the drawing: the resistor has its
         // printed face, the capacitor has none.
         check(partSymbolEntities(PartSymbol::SmtResistor, Vec2{0.0, 0.0}).size() >
