@@ -628,10 +628,23 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
 }
 
 bool whollyInsideCircle(const Entity& e, const Entity& ref) {
-    if (ref.type != EntityType::Circle || ref.radius < 1e-9) return false;   // only a closed ring
-    // A hair of tolerance, so an end drawn onto the ring counts as inside rather than outside.
+    // Only a CLOSED boundary can have an inside: a whole circle or a whole ellipse. An arc of either
+    // does not enclose anything, and treating one as though it did would delete objects that are
+    // merely near it.
+    const bool ring = ref.type == EntityType::Circle && ref.radius > 1e-9;
+    const bool oval = ref.type == EntityType::Ellipse && ref.radius > 1e-9 && ref.radiusY > 1e-9 &&
+                      !ref.meta.value(QStringLiteral("ellipticalArc")).toBool();
+    if (!ring && !oval) return false;
+    // A hair of tolerance, so an end drawn onto the boundary counts as inside rather than outside.
     const double R = ref.radius + 1e-6;
-    auto inside = [&](const Vec2& p) { return distance(p, ref.center) <= R; };
+    auto inside = [&](const Vec2& p) {
+        if (ring) return distance(p, ref.center) <= R;
+        const double cc = std::cos(ref.rotation), ss = std::sin(ref.rotation);
+        const Vec2 d = p - ref.center;
+        const double lx = (d.x * cc + d.y * ss) / ref.radius;
+        const double ly = (-d.x * ss + d.y * cc) / ref.radiusY;
+        return std::hypot(lx, ly) <= 1.0 + 1e-9;
+    };
 
     switch (e.type) {
     case EntityType::Line:
@@ -650,8 +663,9 @@ bool whollyInsideCircle(const Entity& e, const Entity& ref) {
         return true;
     case EntityType::Circle:
     case EntityType::Arc:
-        // The whole of the smaller ring within the larger one.
-        return e.radius > 1e-9 && distance(e.center, ref.center) + e.radius <= R;
+        // The whole of the smaller ring within the larger one. Only judged against a round boundary -
+        // whether a circle fits inside an ellipse is not a distance.
+        return ring && e.radius > 1e-9 && distance(e.center, ref.center) + e.radius <= R;
     default:
         return false;
     }
@@ -690,8 +704,20 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
         const size_t edges = e.points.size() + (closed ? 1 : 0);
         for (size_t i = 1; i < edges; ++i) {
             const Vec2 A = e.points[i - 1], B = e.points[i % e.points.size()];
+            const Vec2 D = B - A;
+            const double L2 = D.lengthSq();
             for (const auto& c : others) {
                 if (!e.id.isEmpty() && c.id == e.id) continue;
+                // A curve is met exactly, not through the polygon it gets reduced to. Half an ellipse
+                // ENDS on the line it was trimmed by, and a chord that ends on the run it is tested
+                // against is the degenerate case that answers "they do not meet" - so a polyline lying
+                // across a trimmed ellipse could not be trimmed by it at all.
+                if (isCurvedCutter(c) && L2 > 1e-12) {
+                    std::vector<double> ts;
+                    appendCurvedCuts(c, A, D, L2, 0.0, ts);
+                    if (!ts.empty()) return true;
+                    continue;
+                }
                 bool hit = false;
                 forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
                     if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;

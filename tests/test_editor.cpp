@@ -4940,6 +4940,83 @@ int run_editor_tests() {
         }
     }
 
+    // --- A run with a CORNER in it, trimmed by half an ellipse: only the piece between the ellipse's
+    // two ends goes - not everything down to the corner.
+    {
+        for (const bool asPolyline : {true, false}) {
+            Document d;
+            Entity el;
+            el.id = QStringLiteral("el");
+            el.type = EntityType::Ellipse;
+            el.center = {0, 0};
+            el.radius = 60.0;
+            el.radiusY = 100.0;
+            el.meta.insert("ellipticalArc", true);
+            el.startAngle = -M_PI / 2.0;          // its ends sit ON the upright, which is where the
+            el.endAngle = M_PI / 2.0 + 0.25;      // line that trimmed it was; one end runs a little past
+            d.entities().push_back(el);
+            if (asPolyline) {
+                Entity pl;                        // an L: down the upright, then out along the foot
+                pl.id = QStringLiteral("run");
+                pl.type = EntityType::Polyline;
+                pl.points = {{0, 200}, {0, -200}, {260, -200}};
+                d.entities().push_back(pl);
+            } else {
+                Entity up;
+                up.id = QStringLiteral("run");
+                up.type = EntityType::Line;
+                up.a = {0, 200};
+                up.b = {0, -200};
+                d.entities().push_back(up);
+                Entity foot;
+                foot.id = QStringLiteral("foot");
+                foot.type = EntityType::Line;
+                foot.a = {0, -200};
+                foot.b = {260, -200};
+                d.entities().push_back(foot);
+            }
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({60, 0}, Qt::LeftButton, Qt::NoModifier);     // the ellipse: reference
+            ed.onPointerPress({-25, 40}, Qt::LeftButton, Qt::NoModifier);   // fence across the upright,
+            ed.onPointerPress({25, 40}, Qt::LeftButton, Qt::NoModifier);    // between the arc's ends
+
+            // What is left, measured on the upright: the piece above the top end and the piece below
+            // the bottom end, and the corner and the foot untouched.
+            bool upperKept = false, lowerKept = false, footKept = false, insideLeft = false;
+            for (const auto& e : d.entities()) {
+                std::vector<Vec2> run;
+                if (e.type == EntityType::Line) run = {e.a, e.b};
+                else if (e.type == EntityType::Polyline) run = e.points;
+                else continue;
+                for (size_t i = 1; i < run.size(); ++i) {
+                    const Vec2 A = run[i - 1], B = run[i];
+                    if (!near(A.x, 0.0) || !near(B.x, 0.0)) {              // the foot
+                        if (std::abs(B.x - 260.0) < 1e-6 || std::abs(A.x - 260.0) < 1e-6)
+                            footKept = true;
+                        continue;
+                    }
+                    const double lo = std::min(A.y, B.y), hi = std::max(A.y, B.y);
+                    if (hi > 150.0) upperKept = true;
+                    if (lo < -150.0) lowerKept = true;
+                    // Nothing of the upright may be left between the arc's two ends.
+                    if (lo < 90.0 && hi > -90.0) insideLeft = true;
+                }
+            }
+            const char* kind = asPolyline ? "one polyline" : "two lines";
+            check(upperKept, qPrintable(QStringLiteral("trim past a corner (%1): the piece above the "
+                                                      "ellipse is kept").arg(kind)));
+            check(lowerKept, qPrintable(QStringLiteral("trim past a corner (%1): and the piece BELOW it "
+                                                      "is kept - the trim stops at the ellipse, not at "
+                                                      "the corner").arg(kind)));
+            check(footKept, qPrintable(QStringLiteral("trim past a corner (%1): the corner and what "
+                                                     "follows it are untouched").arg(kind)));
+            check(!insideLeft, qPrintable(QStringLiteral("trim past a corner (%1): and the piece "
+                                                        "between the ellipse's ends is gone").arg(kind)));
+        }
+    }
+
     // --- A closed shape can be trimmed too: what is left is the open run it has become.
     {
         Document d;
