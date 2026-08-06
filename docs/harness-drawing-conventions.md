@@ -154,3 +154,10 @@ Implemented against the above:
 - `mechDeltaNotes()` — the process notes the definition can work out for itself, drawn as numbered
   triangles with a `NOTES:` block, starting with the gauge-transition note.
 - A Y-splitter boot at a branch point is drawn as a Y over the junction rather than as a box across it.
+- Where the conductors are open they are drawn as CONDUCTORS: the bundle body stops short of the
+  connector by the open length and each wire is a line from the bundle to the contacts, which is also
+  the check a builder makes on the sheet — that the count going in matches the count in the run.
+- Balloons are on by default and the conductors are ballooned on the run they go through, one per size.
+  A harness of nothing but wire would otherwise have a table and no callouts at all.
+- The open length starts at 20 mm on every connector — a starting figure in the same sense as a run's
+  starting length, because zero would mean heatshrink hard against the contacts, which is never right.

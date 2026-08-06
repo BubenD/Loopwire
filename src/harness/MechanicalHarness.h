@@ -36,6 +36,12 @@ struct MechWire {
     QString bundle;
 };
 
+// How far the conductors run open behind a connector, until somebody says otherwise. A starting figure
+// in the same sense as a run's starting length: the released drawings use 10 to 40 mm, and 20 is the
+// one they use most. Zero would mean heatshrink hard up against the contacts, which is never right, so
+// the default is a workable figure rather than nothing.
+inline constexpr double kMechOpenLengthMm = 20.0;
+
 enum class MechNodeKind { Root, Breakout, Connector, FreeEnd };
 
 QString mechNodeKindName(MechNodeKind kind);
@@ -74,7 +80,7 @@ struct MechNode {
     // where it has them - before anything covers them. It is a figure on the drawing in its own right:
     // the wires have to fan out to the contacts and be inspected, so heatshrink never runs up to the
     // connector face, and how far it stops short is not left to whoever builds it.
-    double openLengthMm = 0.0;
+    double openLengthMm = kMechOpenLengthMm;
 };
 
 struct MechSegment {
@@ -123,9 +129,9 @@ struct MechDrawOptions {
     double diameterExaggeration = 1.0;
     bool dimensions = true;                 // a length dimension on every segment
     bool diameterLabels = true;             // the bundle diameter written along each run
-    // A callout on every part, carrying its BOM item number. The released drawings balloon everything;
-    // it is off by default only because a drawing being built up is easier to read without them.
-    bool balloons = false;
+    // A callout on every part, carrying its BOM item number. On by default: a released harness drawing
+    // balloons everything, and a drawing whose parts cannot be looked up in the table is not one.
+    bool balloons = true;
     // The numbered triangles and the NOTES block beside the harness.
     bool deltaNotes = true;
     bool connectorBodies = true;

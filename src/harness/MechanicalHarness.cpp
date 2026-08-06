@@ -1105,6 +1105,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         return item > 0 ? QString::number(item) : QStringLiteral("?");
     };
 
+    // Where the conductors run OPEN, the bundle has no body: it is not a bundle there, it is so many
+    // separate wires on their way to the contacts. So the outline stops short of the connector by that
+    // distance and the wires themselves are drawn across the gap.
+    auto openAtNode = [&def](const QString& nodeId) {
+        const MechNode* n = def.node(nodeId);
+        if (!n) return 0.0;
+        if (n->kind != MechNodeKind::Connector && n->kind != MechNodeKind::FreeEnd) return 0.0;
+        return std::max(0.0, n->openLengthMm);
+    };
+
     // ---- The outline of the harness ----
     // Every run has two edges, half its bundle either side of its centreline. At a junction an edge
     // stops where the next run's facing edge crosses it, so the outline runs continuously from one
@@ -1129,9 +1139,15 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         body.gap = gap;
         const std::vector<MechStation> profile =
             seg ? segmentProfile(def, *seg) : std::vector<MechStation>{};
-        if (profile.size() >= 2 && seg && seg->lengthMm > 0.0) {
+        // The body stops short at either end where the conductors are open there.
+        const double openFrom = seg ? openAtNode(seg->fromNode) : 0.0;
+        const double openTo = seg ? openAtNode(seg->toNode) : 0.0;
+        const double bodyFrom = openFrom;
+        const double bodyTo = seg ? std::max(bodyFrom, seg->lengthMm - openTo) : 0.0;
+        if (profile.size() >= 2 && seg && seg->lengthMm > 0.0 && bodyTo > bodyFrom) {
             for (const MechStation& st : profile) {
-                const Vec2 c = ps.a + dir * along(st.atMm);
+                const double atMm = std::clamp(st.atMm, bodyFrom, bodyTo);
+                const Vec2 c = ps.a + dir * along(atMm);
                 const double half = across(st.diameterMm) / 2.0;
                 body.plus.push_back(c + v * half);
                 body.minus.push_back(c - v * half);
@@ -1223,6 +1239,37 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         if (opt.dimensions) {
             const Vec2 off = v * -(gap / 2.0 + opt.textHeight * 3.0);
             out.push_back(makeDimension(opt, ps.a, ps.b, mid + off, ps.id));
+        }
+
+        // What the run is MADE of, ballooned on the run itself: the cable, or the conductors by size.
+        // They are bought parts like any other and the released drawings balloon them exactly here -
+        // without which a harness of nothing but wire has a table and no callouts at all.
+        if (opt.balloons) {
+            std::vector<int> items;
+            auto want = [&items](int item) {
+                if (item > 0 && std::find(items.begin(), items.end(), item) == items.end())
+                    items.push_back(item);
+            };
+            if (seg->isCable() || !seg->cablePart.isEmpty()) {
+                want(itemOf(seg->cablePart, PartKind::Cable,
+                            seg->cableName.isEmpty() ? QStringLiteral("Cable") : seg->cableName));
+            } else {
+                // One balloon per SIZE, not per conductor: six wires of one gauge are one item.
+                for (const QString& wid : seg->wireIds) {
+                    const MechWire* w = def.wire(wid);
+                    if (!w) continue;
+                    want(itemOf(w->libPart, PartKind::Wire,
+                                w->gauge.isEmpty()
+                                    ? QStringLiteral("Wire")
+                                    : QStringLiteral("Wire, %1 mm²").arg(w->gauge)));
+                }
+            }
+            const Vec2 tip = lerp(ps.a, ps.b, 0.35);
+            const double step = std::max(9.0, opt.textHeight * 2.6);
+            for (size_t i = 0; i < items.size(); ++i)
+                out.push_back(makeBalloon(opt, tip,
+                                          tip + v * (gap / 2.0 + 24.0 + step * static_cast<double>(i)),
+                                          QString::number(items[i])));
         }
 
         // Anything fitted along the run: a sleeve, a conduit, a tie.
@@ -1353,7 +1400,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         double fittedBackMm = 0.0;
         int overWires = 0;
         int stacked = 0;   // how many bodies are already on, so each steps down from the last
-        const double openMm = std::max(0.0, n->openLengthMm);
+        const double openMm = openAtNode(pn.id);   // 0 at a breakout: nothing comes out there
         double firstCoverAtMm = -1.0;      // where the first thing over the wires starts
         for (const MechFitting& f : n->fittings) {
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
@@ -1424,6 +1471,42 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // A body takes up room for the next one; a layer over the wires does not.
             if (!overTheWires) fittedBackMm = startMm + lengthMm;
+        }
+
+        // ---- The open conductors themselves ----
+        // Where the wires are open they are not a bundle, they are so many separate wires fanning out
+        // to the contacts, and that is how a released drawing shows them: the body stops short and each
+        // conductor is a line from the bundle to the connector. It is also the check a builder makes on
+        // the drawing - that the wire count going into the connector is the wire count in the run.
+        if (openMm > 0.0 && seg && !seg->wireIds.isEmpty() &&
+            (n->kind == MechNodeKind::Connector || n->kind == MechNodeKind::FreeEnd)) {
+            const int count = static_cast<int>(seg->wireIds.size());
+            // Every conductor, up to the point where drawing more lines says less rather than more.
+            const int drawn = std::min(count, 24);
+            // At the connector they are spread across its face; at the far end they close into the
+            // bundle they come out of.
+            const double faceHalf =
+                across(n->bodyHeightMm > 0.0 ? n->bodyHeightMm : std::max(endMm * 1.4, endMm + 2.0)) /
+                2.0;
+            const double bundleHalf = across(endMm) / 2.0;
+            const Vec2 a = pn.at;                                        // the connector face
+            const Vec2 b = pn.at + u * (into * along(openMm));           // where the body starts
+            for (int i = 0; i < drawn; ++i) {
+                // Evenly spaced across each end, so two wires do not lie on top of one another.
+                const double t = drawn == 1 ? 0.0
+                                            : (static_cast<double>(i) / (drawn - 1)) * 2.0 - 1.0;
+                Entity w = baseEntity(opt, QStringLiteral("wires"));
+                w.type = EntityType::Line;
+                w.a = a + v * (t * faceHalf * 0.8);
+                w.b = b + v * (t * bundleHalf);
+                w.meta.insert(QStringLiteral("mechNode"), pn.id);
+                w.meta.insert(QStringLiteral("mechSeg"), seg->id);
+                out.push_back(w);
+            }
+            if (drawn < count)
+                out.push_back(makeText(opt, b - v * (bundleHalf + opt.textHeight * 1.2),
+                                       QStringLiteral("%1 conductors").arg(count),
+                                       opt.textHeight * 0.9, 0.0, QStringLiteral("label")));
         }
 
         // The open conductors, dimensioned: from the back of the bodies to whatever covers them first,

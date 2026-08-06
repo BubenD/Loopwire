@@ -239,7 +239,14 @@ int run_mechbuilder_tests() {
         // Two edges per run: a body is its outline, so a junction can be mitred into it.
         check(countRole(ents, "bundle") == 6, "drawing: two edges per run make up its body");
         check(countRole(ents, "connector") == 2, "drawing: a body at each connector");
-        check(countRole(ents, "dim") == 3, "drawing: a length dimension on every run");
+        // A length dimension on every run - plus one per connector for the open conductors behind it,
+        // which is a figure in its own right and is counted separately here.
+        int runDims = 0;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("dim") &&
+                !e.meta.value(QStringLiteral("openWires")).toBool())
+                ++runDims;
+        check(runDims == 3, "drawing: a length dimension on every run");
         check(countRole(ents, "dia") == 3, "drawing: the bundle diameter written on every run");
         check(countRole(ents, "breakout") == 1,
               "drawing: the point three runs meet at is an object of its own");
@@ -261,8 +268,10 @@ int run_mechbuilder_tests() {
               "drawing: and each carries the bundle it is drawn from");
         check(plus && minus && near(plus->b.y - minus->b.y, expect, 1e-6),
               "drawing: they stand the bundle's diameter apart");
-        check(plus && near(plus->b.x, 400.0, 1e-9),
-              "drawing: and run the length of the run");
+        // The run is 400 mm long and ends at a connector whose conductors run open for the last 20 mm,
+        // so the BODY stops there: past that point it is not a bundle, it is so many separate wires.
+        check(plus && near(plus->b.x, 380.0, 1e-9),
+              "drawing: and run the length of the run, less what is open at the end of it");
 
         // At the breakout - s1's near end, where three runs meet - the edges are mitred into the
         // branches instead of stopping square, so the two edges no longer start abreast. Its far end
@@ -815,6 +824,7 @@ int run_mechbuilder_tests() {
             n.fittings.push_back(fitting(PartKind::HeatshrinkBoot, 12.0));
             n.fittings.push_back(fitting(PartKind::ShieldBraid, 0.0));
             n.fittings.push_back(fitting(PartKind::Heatshrink, 0.0));
+            n.openLengthMm = 10.0;    // and the conductors run open for 10 mm behind the boot
         }
         check(near(nodeBareLengthMm(def, *def.node(QStringLiteral("p1"))), 60.0),
               "ends: the bare length is the strip at that end of the run");
@@ -831,10 +841,11 @@ int run_mechbuilder_tests() {
                   "ends: the backshell is on the connector");
             check(near(boxes[1].max.x, 285.0) && near(boxes[1].min.x, 273.0),
                   "ends: the boot is behind the backshell, not on top of it");
-            // The braid covers the bare stretch that is left - as far back as the jacket, no further.
-            check(near(boxes[2].max.x, 273.0) && near(boxes[2].min.x, 240.0),
-                  "ends: braid covers the wires from the boot back to the jacket");
-            check(near(boxes[3].max.x, 273.0) && near(boxes[3].min.x, 240.0),
+            // Then 10 mm of open conductors, and the braid covers the bare stretch that is left - as
+            // far back as the jacket, no further.
+            check(near(boxes[2].max.x, 263.0) && near(boxes[2].min.x, 240.0),
+                  "ends: braid starts past the open conductors and runs back to the jacket");
+            check(near(boxes[3].max.x, 263.0) && near(boxes[3].min.x, 240.0),
                   "ends: heatshrink goes OVER the braid rather than after it");
             const double braidOd = boxes[2].max.y - boxes[2].min.y;
             const double shrinkOd = boxes[3].max.y - boxes[3].min.y;
@@ -982,9 +993,13 @@ int run_mechbuilder_tests() {
             if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("balloon"))
                 balloonText << e.meta.value(QStringLiteral("text")).toString();
         std::printf("    (balloons: %s)\n", qPrintable(balloonText.join(QStringLiteral(" "))));
-        check(balloonText.size() == 4, "balloons: one on every part fitted");
         check(!balloonText.contains(QStringLiteral("?")),
               "balloons: every one of them found its row");
+        // The other half of the rule: every row in the table is ballooned SOMEWHERE on the drawing.
+        // Wire included - a harness of nothing but wire would otherwise have a table and no callouts.
+        for (const MechBomLine& l : bom)
+            check(balloonText.contains(QString::number(l.item)),
+                  "balloons: nothing is in the table that is not ballooned");
         // The two heatshrinks - one at the end, one along the run - are the same part, so they carry the
         // SAME number. A running count would have called them 3 and 4.
         int shrinkItem = shrink ? shrink->item : -1;
