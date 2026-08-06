@@ -48,7 +48,6 @@ private:
     void refreshPreview();
 
     Editor* editor_ = nullptr;
-    PartsCatalog catalog_;
     std::vector<BlockDef> blocks_;
 
     QListWidget* list_ = nullptr;

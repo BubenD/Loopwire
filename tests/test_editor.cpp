@@ -2,12 +2,14 @@
 #include "geometry/Geometry.h"
 #include "geometry/Snap.h"
 #include "model/Document.h"
+#include "model/PartSymbols.h"
 #include "render/EntityRenderer.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
 #include "tools/QuickSelect.h"
 
 #include <QImage>
+#include <QPointF>
 #include <QJsonArray>
 #include <QPainter>
 #include <QtMath>
@@ -4621,6 +4623,91 @@ int run_editor_tests() {
             }
             check(same, "twisted harness: two wires draws exactly what a twisted pair always did");
         }
+    }
+
+    // --- The stock electronic parts: drawn at size, dropped by a click.
+    {
+        // Every one of them draws something, is built about the point it is dropped at, and says which
+        // part it belongs to - so a drawing can be asked what is on it.
+        for (const bool schematic : {false, true}) {
+            const auto list = schematic ? schematicPartSymbols() : mechanicalPartSymbols();
+            check(!list.empty(), "parts: the menu has entries");
+            for (const PartSymbol s : list) {
+                const auto ents = partSymbolEntities(s, Vec2{100.0, 50.0});
+                const QString what = partSymbolName(s);
+                check(!ents.empty(), qPrintable(QStringLiteral("parts: %1 draws something").arg(what)));
+                check(partSymbolIsSchematic(s) == schematic,
+                      qPrintable(QStringLiteral("parts: %1 knows which drawing it belongs on").arg(what)));
+                Bounds b;
+                bool stamped = true;
+                for (const Entity& e : ents) {
+                    b.expand(e.bounds());
+                    if (e.meta.value(kPartSymbolKey).toString() != what) stamped = false;
+                }
+                check(stamped,
+                      qPrintable(QStringLiteral("parts: every line of %1 says what it is").arg(what)));
+                check(b.valid && std::abs((b.min.x + b.max.x) / 2.0 - 100.0) < 3.0 &&
+                          std::abs((b.min.y + b.max.y) / 2.0 - 50.0) < 3.0,
+                      qPrintable(QStringLiteral("parts: %1 is drawn about where it is dropped").arg(what)));
+            }
+        }
+
+        // At size, where size is the point: an 1206 chip is 3.2 by 1.6, and a ferrite ring is 12 across
+        // with a 6 mm hole - which is what has to fit over the bundle.
+        auto span = [](PartSymbol s) {
+            Bounds b;
+            for (const Entity& e : partSymbolEntities(s, Vec2{0.0, 0.0})) b.expand(e.bounds());
+            return QPointF(b.max.x - b.min.x, b.max.y - b.min.y);
+        };
+        const QPointF chip = span(PartSymbol::SmtResistor);
+        check(near(chip.x(), 3.2) && near(chip.y(), 1.6),
+              "parts: an 1206 chip resistor is 3.2 by 1.6 mm, because that is what it is");
+        const QPointF cap = span(PartSymbol::SmtCapacitor);
+        check(near(cap.x(), 3.2) && near(cap.y(), 1.6), "parts: and so is the chip capacitor");
+        const QPointF ring = span(PartSymbol::FerriteRingTop);
+        check(near(ring.x(), 12.0) && near(ring.y(), 12.0), "parts: a ferrite ring is 12 mm across");
+        int holes = 0;
+        for (const Entity& e : partSymbolEntities(PartSymbol::FerriteRingTop, Vec2{0.0, 0.0}))
+            if (e.type == EntityType::Circle && near(e.radius, 3.0)) ++holes;
+        check(holes == 1, "parts: with a 6 mm hole through it - the ring is a ring");
+
+        // The ring from the side cannot show its hole, so those two edges are drawn hidden.
+        int hidden = 0;
+        for (const Entity& e : partSymbolEntities(PartSymbol::FerriteRingSide, Vec2{0.0, 0.0}))
+            if (e.meta.value("lineType").toString() == QLatin1String("dashed")) ++hidden;
+        check(hidden == 2,
+              "parts: seen from the side, the ring's hole is drawn as two hidden edges");
+
+        // The chip resistor is told from the chip capacitor on the drawing: the resistor has its
+        // printed face, the capacitor has none.
+        check(partSymbolEntities(PartSymbol::SmtResistor, Vec2{0.0, 0.0}).size() >
+                  partSymbolEntities(PartSymbol::SmtCapacitor, Vec2{0.0, 0.0}).size(),
+              "parts: the chip resistor carries its printed face, so it is not the same drawing as the "
+              "capacitor");
+
+        // And a part is placed the way anything else is: handed to the cursor, dropped by a click.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.placeEntities(partSymbolEntities(PartSymbol::SchResistor, Vec2{0.0, 0.0}), Vec2{0.0, 0.0});
+        check(ed.placementPreviewActive(), "parts: a chosen part is held under the cursor");
+        ed.rotatePlacementPreview(true);   // R, before it lands
+        ed.onPointerMove({60, 40});
+        ed.onPointerPress({60, 40}, Qt::LeftButton, Qt::NoModifier);
+        int placed = 0;
+        Bounds b;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(kPartSymbolKey).toString() == partSymbolName(PartSymbol::SchResistor)) {
+                ++placed;
+                b.expand(e.bounds());
+            }
+        check(placed > 0, "parts: and a click puts it on the drawing");
+        check(b.valid && std::abs((b.min.x + b.max.x) / 2.0 - 60.0) < 3.0 &&
+                  std::abs((b.min.y + b.max.y) / 2.0 - 40.0) < 3.0,
+              "parts: where the cursor was");
+        // Turned a quarter turn before landing, it stands up instead of lying down.
+        check(b.max.y - b.min.y > b.max.x - b.min.x,
+              "parts: turned with R first, it lands turned");
     }
 
     // --- R turns whatever is held under the cursor before it is dropped.

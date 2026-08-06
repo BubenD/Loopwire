@@ -2054,6 +2054,46 @@ void MainWindow::normaliseRibbonPages() {
 
 // Undo and Redo, drawn as the arrows they are. The keys have always done this; the buttons are for
 // the hand that is already on the mouse - and for anyone who does not know the keys exist.
+QToolButton* MainWindow::makePartSymbolButton(QWidget* parent, bool schematic) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(schematic ? QStringLiteral("Symbols") : QStringLiteral("Parts"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setPopupMode(QToolButton::InstantPopup);
+    btn->setToolTip(schematic
+                        ? QStringLiteral("The stock symbols: resistor, capacitor, coil, ferrite. Pick "
+                                         "one and it follows the cursor - R turns it, a click drops it.")
+                        : QStringLiteral("The stock parts, drawn at size: resistors, capacitors, coils "
+                                         "and ferrite rings. Pick one and it follows the cursor - R "
+                                         "turns it, a click drops it."));
+    auto* menu = new QMenu(btn);
+    btn->setMenu(menu);
+    const auto list = schematic ? schematicPartSymbols() : mechanicalPartSymbols();
+    btn->setIcon(makePartSymbolIcon(list.front()));
+    for (const PartSymbol s : list) {
+        QAction* act = menu->addAction(makePartSymbolIcon(s), partSymbolName(s));
+        act->setToolTip(partSymbolTip(s));
+        connect(act, &QAction::triggered, this, [this, s, btn] {
+            // Handed to the cursor exactly like a pasted block: it ghosts under the crosshair, R turns
+            // it a quarter turn at a time, and a click puts it down.
+            // Held by its middle: a resistor is put where its body goes, not where its corner does.
+            editor_->placeEntities(partSymbolEntities(s, Vec2{0.0, 0.0}), Vec2{0.0, 0.0});
+            btn->setIcon(makePartSymbolIcon(s));   // the button wears whatever was last placed
+            statusBar()->showMessage(
+                QStringLiteral("%1 - click to place it, R turns it, Esc cancels")
+                    .arg(partSymbolName(s)),
+                4000);
+        });
+    }
+    {
+        // The menus are long enough to want their descriptions.
+        menu->setToolTipsVisible(true);
+    }
+    return btn;
+}
+
 QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
     auto* host = new QWidget(parent);
     auto* lay = new QHBoxLayout(host);

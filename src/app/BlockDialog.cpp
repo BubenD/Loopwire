@@ -24,7 +24,6 @@ namespace Edraw_Desktop {
 BlockDialog::BlockDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Blocks"));
     resize(900, 600);
-    catalog_.openRemembered();
     buildUi();
     refresh();
 }
@@ -117,26 +116,23 @@ void BlockDialog::buildUi() {
 
 void BlockDialog::refresh() {
     const QString keep = selectedBlock() ? selectedBlock()->name : QString();
-    catalog_.openRemembered();
-    blocks_ = allBlocks(&catalog_);
+    // ONLY the blocks the user made. A part in the library is not a block: it is a part, it lives in
+    // the parts library, it is edited there and it is placed from there. Listing every drawing of every
+    // connected library here buried the handful of blocks somebody actually made among dozens of parts
+    // - and the entries could not be edited or deleted from this window anyway, since they belong to
+    // the library.
+    blocks_ = allBlocks(nullptr);
     list_->clear();
-    int files = 0, fromLib = 0;
     for (const BlockDef& b : blocks_) {
-        const bool lib = b.fromLibrary();
-        lib ? ++fromLib : ++files;
         auto* item = new QListWidgetItem(
-            QStringLiteral("%1   —   %2 object(s)%3")
-                .arg(b.name)
-                .arg(b.entities.size())
-                .arg(lib ? QStringLiteral("   [library]") : QString()),
-            list_);
+            QStringLiteral("%1   —   %2 object(s)").arg(b.name).arg(b.entities.size()), list_);
         item->setData(Qt::UserRole, b.name);
-        if (lib) item->setForeground(QColor("#8fb0d6"));
     }
     if (summary_)
-        summary_->setText(QStringLiteral("%1 block(s) saved as files, %2 from the parts library.")
-                              .arg(files)
-                              .arg(fromLib));
+        summary_->setText(blocks_.empty()
+                              ? QStringLiteral("No blocks yet — select something and Create one. "
+                                               "(Library parts live in the parts library.)")
+                              : QStringLiteral("%1 block(s), saved as files.").arg(blocks_.size()));
     if (!keep.isEmpty())
         for (int i = 0; i < list_->count(); ++i)
             if (list_->item(i)->data(Qt::UserRole).toString() == keep) list_->setCurrentRow(i);

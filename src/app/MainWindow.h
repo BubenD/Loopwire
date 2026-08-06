@@ -110,6 +110,10 @@ private:
     // Undo and Redo. `compact` makes the small icon-only pair that sits in the ribbon's top right
     // corner - where a hand reaches for them, and out of the way of the tools.
     QWidget* undoRedoRow(QWidget* parent, bool compact = false);
+    // The stock electronic parts, as one button with a menu of them: the mechanical drawings on the
+    // mechanical tab, the symbols on the schematic tab. Choosing one hands it to the cursor, so it is
+    // dropped by a click - and turned with R first, like anything else being placed.
+    QToolButton* makePartSymbolButton(QWidget* parent, bool schematic);
     // Show/hide the Schematic-build ribbon groups by context: while a twist is armed only
     // the Twist group shows; while a Splice/X marker tool is armed the Modify/DRC groups hide.
     void updateSchematicRibbonGroups();

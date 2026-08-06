@@ -1,5 +1,7 @@
 #include "app/ribbon/RibbonIcons.h"
 
+#include "model/PartSymbols.h"
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -216,6 +218,61 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         p.drawLine(9, 5, 9, 19); p.drawLine(15, 5, 15, 19);   // cols
         break;
     }
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink) {
+    // Drawn from the part's own drawing rather than by hand: the icon is then the part, scaled to fit
+    // the button, and a menu entry cannot come to show something other than what it places.
+    const std::vector<Entity> ents = partSymbolEntities(s, Vec2{0.0, 0.0});
+    Bounds b;
+    for (const Entity& e : ents) b.expand(e.bounds());
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    if (!b.valid) return QIcon(pm);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.2);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    const double w = std::max(1e-6, b.max.x - b.min.x), h = std::max(1e-6, b.max.y - b.min.y);
+    const double k = std::min(24.0 / w, 24.0 / h);
+    // World to icon: y turns over, because a drawing measures upwards and a pixmap downwards.
+    auto to = [&](const Vec2& v) {
+        return QPointF(14.0 + (v.x - (b.min.x + b.max.x) / 2.0) * k,
+                       14.0 - (v.y - (b.min.y + b.max.y) / 2.0) * k);
+    };
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("lineType")).toString() == QLatin1String("dashed")) {
+            QPen dash = pen;
+            dash.setStyle(Qt::DashLine);
+            p.setPen(dash);
+        } else {
+            p.setPen(pen);
+        }
+        switch (e.type) {
+        case EntityType::Line:
+            p.drawLine(to(e.a), to(e.b));
+            break;
+        case EntityType::Circle:
+            p.drawEllipse(to(e.center), e.radius * k, e.radius * k);
+            break;
+        case EntityType::Arc: {
+            const double r = e.radius * k;
+            const QPointF c = to(e.center);
+            const QRectF box(c.x() - r, c.y() - r, 2 * r, 2 * r);
+            const double from = e.startAngle * 180.0 / M_PI;
+            double span = (e.endAngle - e.startAngle) * 180.0 / M_PI;
+            while (span <= 0.0) span += 360.0;
+            p.drawArc(box, static_cast<int>(from * 16), static_cast<int>(span * 16));
+            break;
+        }
+        default:
+            break;
+        }
     }
     p.end();
     return QIcon(pm);

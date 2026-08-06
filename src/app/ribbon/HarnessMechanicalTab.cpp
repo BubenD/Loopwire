@@ -319,6 +319,10 @@ void MainWindow::buildHarnessMechanicalTab() {
             }
             lg->addWidget(thW);
         }
+        // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
+        // the bundle actually takes up on the board. They belong here for the same reason the break
+        // mark does - they are the furniture of this kind of drawing.
+        lg->addWidget(makePartSymbolButton(lenW, /*schematic=*/false));
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }

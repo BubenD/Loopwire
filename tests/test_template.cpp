@@ -520,9 +520,22 @@ int run_block_tests() {
               "library blocks: called after the part");
         check(libs.front().name.contains(QLatin1String("schematic")),
               "library blocks: and after which of its drawings it is");
-        // allBlocks puts the files and the library together.
+        // allBlocks puts the files and the library together, for the code that has to find a block by
+        // name whatever it came from (opening one for editing, rebuilding a copy on a sheet).
         const std::vector<BlockDef> all = allBlocks(&cat);
-        check(all.size() >= libs.size(), "library blocks: listed together with the saved ones");
+        check(all.size() >= libs.size(), "library blocks: found together with the saved ones");
+        // But the BLOCKS WINDOW asks for the saved ones alone, which is what it shows. A part in a
+        // library is not a block the user made: it belongs to the library, it is edited there and
+        // placed from there, and listing every drawing of every connected library in that window
+        // buried the handful of blocks somebody actually made.
+        const std::vector<BlockDef> mine = allBlocks(nullptr);
+        bool anyFromLibrary = false;
+        for (const BlockDef& b : mine)
+            if (b.fromLibrary()) anyFromLibrary = true;
+        check(!anyFromLibrary,
+              "library blocks: asked for the saved blocks alone, no library drawing is among them");
+        check(mine.size() + libs.size() == all.size(),
+              "library blocks: and the two lists together are the whole of it");
     }
 
     const int failed = failures - before;

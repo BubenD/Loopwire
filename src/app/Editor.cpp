@@ -10795,7 +10795,7 @@ void Editor::rotatePlacementPreview(bool clockwise) {
     emit overlayChanged();
 }
 
-void Editor::placeEntities(const std::vector<Entity>& ents) {
+void Editor::placeEntities(const std::vector<Entity>& ents, const std::optional<Vec2>& heldAt) {
     if (!doc_ || ents.empty()) {
         emit message(QStringLiteral("Nothing to place"));
         return;
@@ -10807,7 +10807,7 @@ void Editor::placeEntities(const std::vector<Entity>& ents) {
         const Bounds eb = e.bounds();
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
     }
-    clipboardBase_ = b.valid ? b.min : Vec2{0, 0};
+    clipboardBase_ = heldAt ? *heldAt : (b.valid ? b.min : Vec2{0, 0});
     awaitClipBase_ = false;
     paste(); // the contents now follow the cursor until clicked into place
 }

@@ -34,6 +34,7 @@ add_library(edraw_core STATIC
     src/model/Layer.h
     src/model/Block.h
     src/model/Block.cpp
+    src/model/PartSymbols.cpp
     src/model/DrawingTemplate.h
     src/model/DrawingTemplate.cpp
     src/model/Picture.cpp

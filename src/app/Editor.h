@@ -428,7 +428,11 @@ public:
     bool clipboardEmpty() const { return clipboard_.empty(); }
     // Put a set of entities on the clipboard and start placing them: the parts library inserts a
     // part's drawing this way, so it is dropped by a click like anything else that is pasted.
-    void placeEntities(const std::vector<Entity>& ents);
+    // `heldAt` is the point the cursor holds the set by. Given, the set hangs by THAT point - a part
+    // is held by its middle, because that is where you mean to put it - and left out, by the corner of
+    // its own extent, which is what a pasted set of objects has always done.
+    void placeEntities(const std::vector<Entity>& ents,
+                       const std::optional<Vec2>& heldAt = std::nullopt);
     // Everything currently selected, copied out (the parts library captures a part's drawing from
     // the sheet this way).
     std::vector<Entity> copyOfSelection() const;

@@ -157,6 +157,10 @@ void MainWindow::buildSchematicBuildTab() {
     stG->addWidget(screenBtn, 0, 0);
     stG->addWidget(modTwistBtn, 1, 0);
     placeLay->addWidget(stW);
+    // The stock symbols - resistor, capacitor, coil, ferrite - as one button with a menu of them. A
+    // harness schematic is not only wires: there is a resistor across a pair, a capacitor to the shell,
+    // a bead on a line, and each of them has to be drawn.
+    placeLay->addWidget(makePartSymbolButton(placeW, /*schematic=*/true));
     schemPlaceGroup_ = ribbonGroup(QStringLiteral("Place"), placeW);
     lay->addWidget(schemPlaceGroup_);
     {
