@@ -274,7 +274,18 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
         if (dir.lengthSq() < 1e-18) return false;
         dir = dir.normalized();
         const Vec2 proj = closestPointOnSegment(pick, l.a, l.b).point;
-        u = (dot(proj - P, dir) >= 0.0) ? dir : Vec2{-dir.x, -dir.y};
+        double along = dot(proj - P, dir);
+        // A pick AT the corner says nothing about which side to keep - and that is where one naturally
+        // clicks to round a corner, with the snap putting the click exactly on it. The side to keep is
+        // then the side the line is ON: the end further from the corner. Read as "no side", the kept
+        // length came out as nothing and the whole command answered "these do not form a corner",
+        // which is why two lines meeting at a joint could not be filleted at all.
+        if (std::abs(along) < 1e-9) {
+            const double da = dot(l.a - P, dir), db = dot(l.b - P, dir);
+            along = (std::abs(da) >= std::abs(db)) ? da : db;
+        }
+        if (std::abs(along) < 1e-9) return false;   // both ends at the corner: nothing to keep
+        u = (along >= 0.0) ? dir : Vec2{-dir.x, -dir.y};
         const double da = dot(l.a - P, u), db = dot(l.b - P, u);
         maxAlong = std::max(da, db); // distance from P to the kept (far) endpoint
         moveIsA = da < db;           // trim the endpoint that's less far along u
@@ -428,8 +439,10 @@ CornerResult filletLineCurve(Entity& line, Entity& curve, double radius, const V
             if (s < bestScore) { bestScore = s; best = &x; }
         }
         if (!best) return out;
-        if (distance(line.a, pickLine) <= distance(line.b, pickLine)) line.b = *best;
-        else line.a = *best;
+        // The end that MOVES is the one nearer where they are being joined - not the one nearer the
+        // pick, which at a joint is the same end and would have moved the wrong one.
+        if (distance(line.a, *best) <= distance(line.b, *best)) line.a = *best;
+        else line.b = *best;
         out.ok = true;
         out.hasConnector = false;
         return out;
@@ -492,9 +505,15 @@ CornerResult filletLineCurve(Entity& line, Entity& curve, double radius, const V
     }
     if (!best) return out;
 
-    // The line is taken back (or out) to where the fillet meets it, keeping the end that was picked.
-    if (distance(line.a, pickLine) <= distance(line.b, pickLine)) line.b = bestFoot;
-    else line.a = bestFoot;
+    // The line is taken back (or out) to where the fillet meets it: the end that moves is the one
+    // NEARER the fillet, and the far end is what is kept. (Nearer the pick is not the same thing - at a
+    // joint the pick is on that end, and the far end would have been dragged in instead.) Where that
+    // end WAS is the corner being rounded, which is what tells the curve which of its own ends to give
+    // up.
+    const bool moveA = distance(line.a, bestFoot) <= distance(line.b, bestFoot);
+    const Vec2 corner = moveA ? line.a : line.b;
+    if (moveA) line.a = bestFoot;
+    else line.b = bestFoot;
 
     // A piece of a curve is taken back to where the fillet meets it, keeping the side that was picked.
     // A WHOLE circle or ellipse is left alone - it has no end to shorten, which is what filleting a
@@ -507,9 +526,17 @@ CornerResult filletLineCurve(Entity& line, Entity& curve, double radius, const V
             return r;
         };
         const double tCut = rel(best->t);
-        const double tPick = rel(ellipseParamAt(pickCurve, g.c, g.rx, g.ry, g.rot));
-        if (tPick <= tCut) curve.endAngle = curve.startAngle + tCut;
-        else curve.startAngle = curve.startAngle + tCut;
+        // Which of its own two ends the curve gives up: the one at the CORNER - the place the line's
+        // moved end came from. A fillet rounds a corner, so what comes off is the bit between the
+        // tangent point and that corner, whichever end of the arc it happens to be. (Taken from the
+        // pick instead, a click at the joint - the natural place to click - names the very bit that is
+        // about to be removed, and the arc was cut back to a sliver.)
+        const Vec2 startPt = curveAt(g, g.from);
+        const Vec2 endPt = curveAt(g, g.from + g.sweep);
+        if (distance(startPt, corner) <= distance(endPt, corner))
+            curve.startAngle = curve.startAngle + tCut;   // the start end is at the corner: it goes
+        else
+            curve.endAngle = curve.startAngle + tCut;
         if (curve.type == EntityType::Arc) {
             // An arc says its ends as angles about its centre; keep them in one turn.
             while (curve.endAngle - curve.startAngle > 2.0 * M_PI) curve.endAngle -= 2.0 * M_PI;

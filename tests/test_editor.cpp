@@ -5022,6 +5022,116 @@ int run_editor_tests() {
         }
     }
 
+    // --- Rounding a corner where two objects MEET, clicked at the corner - which is where one clicks.
+    {
+        // Two separate lines sharing an end. The pick lands ON the corner (the snap puts it there), and
+        // a pick at the corner says nothing about which side of each line to keep - read as "no side",
+        // the command used to answer "these do not form a corner" and do nothing.
+        {
+            Document d;
+            Entity v;
+            v.id = QStringLiteral("v");
+            v.type = EntityType::Line;
+            v.a = {0, 300};
+            v.b = {0, 100};
+            d.entities().push_back(v);
+            Entity h;
+            h.id = QStringLiteral("h");
+            h.type = EntityType::Line;
+            h.a = {0, 100};      // the joint
+            h.b = {200, 100};
+            d.entities().push_back(h);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Fillet);
+            ed.setFilletRadius(10.0);
+            ed.onPointerPress({0, 106}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({6, 100}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* vert = nullptr;
+            const Entity* horz = nullptr;
+            const Entity* arc = nullptr;
+            for (const auto& e : d.entities()) {
+                if (e.id == QLatin1String("v")) vert = &e;
+                else if (e.id == QLatin1String("h")) horz = &e;
+                else if (e.type == EntityType::Arc) arc = &e;
+            }
+            check(arc != nullptr,
+                  "corner fillet: two lines with a mutual joint round at the joint, clicked there");
+            if (vert && horz && arc) {
+                check(near(vert->a.y, 300.0) && near(vert->b.y, 110.0),
+                      "corner fillet: each line keeps its far end and stops a radius short of the "
+                      "corner");
+                check(near(horz->a.x, 10.0) && near(horz->b.x, 200.0),
+                      "corner fillet: on both lines");
+                check(near(arc->radius, 10.0) && near(arc->center.x, 10.0) &&
+                          near(arc->center.y, 110.0),
+                      "corner fillet: and the arc between them is tangent to both");
+            }
+        }
+
+        // A line meeting a SEMICIRCLE at its end, and a line meeting HALF AN ELLIPSE at its end. In both
+        // the corner is one of the curve's own ends, so what comes off the curve is the bit between the
+        // fillet and THAT end - not the rest of it, which is what taking the side from the pick did (a
+        // click at the joint names the very bit that is about to go).
+        for (const bool ellipse : {false, true}) {
+            Document d;
+            Entity cv;
+            cv.id = QStringLiteral("cv");
+            if (ellipse) {
+                cv.type = EntityType::Ellipse;
+                cv.radius = 40.0;
+                cv.radiusY = 60.0;
+                cv.meta.insert("ellipticalArc", true);
+            } else {
+                cv.type = EntityType::Arc;
+                cv.radius = 60.0;
+            }
+            cv.center = {0, 0};
+            cv.startAngle = -M_PI / 2.0;
+            cv.endAngle = M_PI / 2.0;        // its top end is (0, 60)
+            d.entities().push_back(cv);
+            Entity up;
+            up.id = QStringLiteral("up");
+            up.type = EntityType::Line;
+            up.a = {0, 260};
+            up.b = {0, 60};                  // meeting that end
+            d.entities().push_back(up);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Fillet);
+            ed.setFilletRadius(10.0);
+            ed.onPointerPress({0, 66}, Qt::LeftButton, Qt::NoModifier);   // the line, at the joint
+            ed.onPointerPress({4, 57}, Qt::LeftButton, Qt::NoModifier);   // the curve, at the joint
+            const Entity* curve = nullptr;
+            const Entity* line = nullptr;
+            const Entity* fillet = nullptr;
+            for (const auto& e : d.entities()) {
+                if (e.id == QLatin1String("cv")) curve = &e;
+                else if (e.id == QLatin1String("up")) line = &e;
+                else if (e.type == EntityType::Arc) fillet = &e;
+            }
+            const char* kind = ellipse ? "half ellipse" : "semicircle";
+            check(fillet != nullptr,
+                  qPrintable(QStringLiteral("corner fillet: a line and a %1 round where they meet")
+                                 .arg(kind)));
+            if (curve && line && fillet) {
+                check(near(line->a.y, 260.0) && line->b.y > 60.0 && line->b.y < 90.0,
+                      qPrintable(QStringLiteral("corner fillet (%1): the line keeps its far end and is "
+                                                "taken BACK from the joint to where the fillet starts")
+                                     .arg(kind)));
+                // The curve keeps the long side: its sweep loses only the bit at the corner.
+                double sweep = curve->endAngle - curve->startAngle;
+                while (sweep <= 0.0) sweep += 2.0 * M_PI;
+                check(sweep > M_PI * 0.7 && sweep < M_PI,
+                      qPrintable(QStringLiteral("corner fillet (%1): and the curve gives up the bit at "
+                                                "the corner, not most of itself").arg(kind)));
+                check(near(fillet->radius, 10.0),
+                      qPrintable(QStringLiteral("corner fillet (%1): with an arc of the radius asked "
+                                                "for").arg(kind)));
+            }
+        }
+    }
+
     // --- At a joint, the topmost object is the one picked - and a two-object command finds the other.
     {
         Document d;
