@@ -135,7 +135,25 @@ bool isCurvedCutter(const Entity& e) {
 
 // Is `p` within the swept part of a cutter that is only part of its curve? A whole circle or a whole
 // ellipse takes everything.
+//
+// A crossing AT one of the arc's own two ends is the case that has to be right, because it is the
+// commonest one there is: trim an ellipse with a line and the half left behind ENDS on that line, so
+// trimming the line by it crosses it exactly at both ends. Measured from the start of the sweep, such a
+// crossing lands at 0 or at the sweep - and the angle is worked out from the crossing point, so it
+// carries a rounding error whose SIGN decides everything. A hair below the start wraps round to nearly
+// a whole turn and reads as "off the arc": the crossing is dropped, and a trim then runs past that end
+// to whatever the next boundary is - the far side of a rectangle, the corner of a run. Which is exactly
+// the fault this tolerance fixes. It is measured as a length along the arc rather than as an angle, so
+// it means the same thing whatever the radius (see arcAngleSlack).
+// The slack an angle gets when deciding whether a point is on an arc: an eyelash of ARC LENGTH, turned
+// into an angle for that radius - so it means the same thing on a 2 mm arc and a 2 metre one. Geometry
+// this close together is meant to touch.
+double arcAngleSlack(double radius) {
+    return std::clamp(1e-4 / std::max(1e-6, radius), 1e-9, 1e-3);
+}
+
 bool onCutterCurve(const Entity& cutter, const Vec2& p) {
+    const double kEps = arcAngleSlack(std::max(cutter.radius, cutter.radiusY));
     const bool isEllipse = cutter.type == EntityType::Ellipse;
     if (isEllipse && !cutter.meta.value(QStringLiteral("ellipticalArc")).toBool()) return true;
     if (!isEllipse && cutter.type != EntityType::Arc) return true;
@@ -144,9 +162,10 @@ bool onCutterCurve(const Entity& cutter, const Vec2& p) {
     const double at = isEllipse ? ellipseParamAt(p, cutter.center, cutter.radius, cutter.radiusY,
                                                  cutter.rotation)
                                 : std::atan2(p.y - cutter.center.y, p.x - cutter.center.x);
-    double rel = at - cutter.startAngle;
-    while (rel < 0.0) rel += 2.0 * M_PI;
-    return rel <= sweep + 1e-9;
+    double rel = std::fmod(at - cutter.startAngle, 2.0 * M_PI);
+    if (rel < 0.0) rel += 2.0 * M_PI;
+    if (rel > 2.0 * M_PI - kEps) rel -= 2.0 * M_PI;   // a hair BEFORE the start is the start
+    return rel >= -kEps && rel <= sweep + kEps;
 }
 
 // Where the segment a..a+d crosses a curved cutter, as parameters along it. Only crossings strictly

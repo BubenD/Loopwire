@@ -5017,6 +5017,50 @@ int run_editor_tests() {
         }
     }
 
+    // --- The crossing at an arc's OWN END must count, whichever side of it the rounding falls.
+    {
+        // Trim an ellipse with a line and the half left behind ENDS on that line: trimming the line by
+        // it then crosses it exactly at both of its ends, and the angle of such a crossing carries a
+        // rounding error whose sign used to decide whether it counted at all. A hair one way and the
+        // crossing was dropped, so the trim ran past that end to the next boundary along - the corner of
+        // the run - and took the whole of it.
+        for (const double nudge : {0.0, 1e-12, -1e-12, 1e-9, -1e-9, 1e-8, -1e-8}) {
+            Document d;
+            Entity el;
+            el.id = QStringLiteral("el");
+            el.type = EntityType::Ellipse;
+            el.center = {0, 0};
+            el.radius = 60.0;
+            el.radiusY = 100.0;
+            el.meta.insert("ellipticalArc", true);
+            el.startAngle = -M_PI / 2.0 + nudge;
+            el.endAngle = M_PI / 2.0 - nudge;
+            d.entities().push_back(el);
+            Entity run;                     // an L, so an overrun shows up as "down to the corner"
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 300}, {0, -300}, {400, -300}};
+            d.entities().push_back(run);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({60, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({-25, 30}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({25, 30}, Qt::LeftButton, Qt::NoModifier);
+            bool lowerKept = false, cornerKept = false;
+            for (const auto& e : d.entities()) {
+                if (e.type != EntityType::Polyline) continue;
+                for (const Vec2& v : e.points) {
+                    if (near(v.x, 0.0) && v.y < -150.0) lowerKept = true;
+                    if (near(v.x, 400.0)) cornerKept = true;
+                }
+            }
+            check(lowerKept && cornerKept,
+                  "trim at an arc's end: the crossing counts however the rounding falls, so the trim "
+                  "stops there instead of running on to the corner");
+        }
+    }
+
     // --- A closed shape can be trimmed too: what is left is the open run it has become.
     {
         Document d;
