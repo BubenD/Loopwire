@@ -130,7 +130,13 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
-                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor, TextWidth, TextHeight,
+                      ArcStart, ArcEnd, ArcMid, EllipseMajor, EllipseMinor,
+                      // The two ends of a PIECE of an ellipse: dragging one moves that end ROUND the
+                      // ellipse, which is what an end of an arc does. Without them the only handles a
+                      // piece had were its ellipse's four axis points, so pulling what looked like its
+                      // end resized the whole ellipse instead of moving the end.
+                      EllipseStart, EllipseEnd,
+                      TextWidth, TextHeight,
                       DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
                       ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove, TwistMove,
                       ShieldRy,
@@ -677,10 +683,28 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             return Vec2{e.center.x + ax * c - ay * s, e.center.y + ax * s + ay * c};
         };
         g.push_back({e.center, GripRole::Center, 0});
-        g.push_back({axisPt(e.radius, 0), GripRole::EllipseMajor, 0});
-        g.push_back({axisPt(-e.radius, 0), GripRole::EllipseMajor, 0});
-        g.push_back({axisPt(0, e.radiusY), GripRole::EllipseMinor, 0});
-        g.push_back({axisPt(0, -e.radiusY), GripRole::EllipseMinor, 0});
+        // A PIECE of one has two ends, and they are handles of their own: they move ROUND the ellipse
+        // rather than resizing it. They go on FIRST because on a half ellipse an end sits exactly where
+        // an axis point does, and at the same place the end is what was grabbed for.
+        const bool piece = e.meta.value(QStringLiteral("ellipticalArc")).toBool();
+        Vec2 ends[2]{};
+        if (piece) {
+            ends[0] = ellipsePointAt(e.startAngle, e.center, e.radius, e.radiusY, e.rotation);
+            ends[1] = ellipsePointAt(e.endAngle, e.center, e.radius, e.radiusY, e.rotation);
+            g.push_back({ends[0], GripRole::EllipseStart, 0});
+            g.push_back({ends[1], GripRole::EllipseEnd, 0});
+        }
+        // ... and the axis points size it and turn it. One that lands on an end is left out: it could
+        // never be grabbed there anyway, and two handles in one place with different jobs is worse than
+        // one.
+        auto axisGrip = [&](const Vec2& at, GripRole role) {
+            if (piece && (distance(at, ends[0]) < 1e-9 || distance(at, ends[1]) < 1e-9)) return;
+            g.push_back({at, role, 0});
+        };
+        axisGrip(axisPt(e.radius, 0), GripRole::EllipseMajor);
+        axisGrip(axisPt(-e.radius, 0), GripRole::EllipseMajor);
+        axisGrip(axisPt(0, e.radiusY), GripRole::EllipseMinor);
+        axisGrip(axisPt(0, -e.radiusY), GripRole::EllipseMinor);
         break;
     }
     case EntityType::Text: {
@@ -1208,21 +1232,26 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
 
 } // namespace
 
-std::optional<QString> Editor::hitTest(const Vec2& world) const {
+std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QString>& skip) const {
     if (!doc_) return std::nullopt;
     const double tol = worldTolerance();
     double best = tol;
     std::optional<QString> hit;
-    // Iterate in reverse so topmost (last drawn) wins.
+    // Iterate in reverse so topmost (last drawn) wins - and it must WIN A TIE, which needs a strict
+    // comparison. With "<=" the last object examined took an equal distance, which is the BOTTOM-most:
+    // where a line ends on an arc, both are nought away from the click (the snap puts the cursor exactly
+    // on the joint), so clicking the line picked whatever was underneath it. Which is why a line meeting
+    // a curve at a joint could not be filleted: the two picks were the same object.
     const auto& ents = doc_->entities();
     for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
         if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
             continue;
+        if (!skip.empty() && std::find(skip.begin(), skip.end(), it->id) != skip.end()) continue;
         // A stretch of run that a break mark hides is not there to be clicked either: the drawing does
         // not show it, so a click in it belongs to the mark, or to nothing.
         if (pointHiddenByBreak(*it, world)) continue;
         const double d = distanceToEntity(*it, world);
-        if (d <= best) { best = d; hit = it->id; }
+        if (d < best) { best = d; hit = it->id; }
     }
     return hit;
 }
@@ -5291,12 +5320,13 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::TextHeight: // drag the MTEXT container's bottom edge
             e->meta["boxHeight"] = std::max(1.0, e->a.y - target.y);
             break;
+        // An arc's ends move ROUND it, keeping its radius: that is what an end of an arc does, and
+        // the radius has a handle of its own (the middle of the arc). Changing both at once meant an
+        // arc could only be resized, never swung.
         case GripRole::ArcStart:
-            e->radius = std::max(1e-6, distance(e->center, target));
             e->startAngle = std::atan2(target.y - e->center.y, target.x - e->center.x);
             break;
         case GripRole::ArcEnd:
-            e->radius = std::max(1e-6, distance(e->center, target));
             e->endAngle = std::atan2(target.y - e->center.y, target.x - e->center.x);
             break;
         case GripRole::ArcMid:
@@ -5313,6 +5343,14 @@ void Editor::applyEditDrag(const Vec2& target) {
             e->radiusY = std::max(1e-6, std::abs(dot(target - e->center, majorDir.perp())));
             break;
         }
+        // An end of a PIECE of an ellipse moves ROUND it: the piece gets longer or shorter and the
+        // ellipse itself - its size, its turn - is left alone. (Its axis grips are what size it.)
+        case GripRole::EllipseStart:
+            e->startAngle = ellipseParamAt(target, e->center, e->radius, e->radiusY, e->rotation);
+            break;
+        case GripRole::EllipseEnd:
+            e->endAngle = ellipseParamAt(target, e->center, e->radius, e->radiusY, e->rotation);
+            break;
         case GripRole::TableColEdge: {
             // Drag an interior vertical grid line: only the column to its LEFT resizes;
             // every other column keeps its width, so the columns to the right shift and
@@ -8337,6 +8375,14 @@ std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {
 
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
+    // The second pick has to be the OTHER object. Where the two meet at a joint they are both under the
+    // cursor, and whichever is on top answers first - so at a joint the second click would land on the
+    // one already picked and the command would wait for ever. Asked again, ignoring what is already
+    // picked, it finds the other one.
+    if (hit && !pickIds_.empty() &&
+        std::find(pickIds_.begin(), pickIds_.end(), *hit) != pickIds_.end()) {
+        if (auto other = hitTest(p, pickIds_)) hit = other;
+    }
 
     // Trim and Extend are handled in onPointerPress (reference + fence line).
     // Fillet / Chamfer: pick two lines.
@@ -10887,6 +10933,34 @@ void Editor::copyWithBase(bool cut) {
     pastePlacing_ = false;
     emit message(cut ? QStringLiteral("Cut: specify base point")
                      : QStringLiteral("Copy: specify base point"));
+}
+
+void Editor::rotateMoveBy90(bool clockwise) {
+    if (!doc_ || !movingSomething()) return;
+    // About the CURSOR, so whatever is under it stays under it - the same as turning something that is
+    // held before being placed.
+    const Vec2 pivot = cursor_;
+    const double by = clockwise ? -M_PI / 2.0 : M_PI / 2.0;
+    if (!editMoved_) {   // the drag has not written anything yet: this turn is the first change
+        pushUndo();
+        editMoved_ = true;
+    }
+    std::vector<QString> ids;
+    if (editMode_ == 0) ids = selected_;
+    else for (const auto& eg : editGrips_) ids.push_back(eg.id);
+    int turned = 0;
+    for (const QString& id : ids)
+        if (Entity* e = entityById(id)) {
+            rotateEntity(*e, pivot, by);
+            ++turned;
+        }
+    if (turned == 0) return;
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Turned %1 object(s) a quarter turn %2 - Space turns again, "
+                                "Shift+Space the other way")
+                     .arg(turned)
+                     .arg(clockwise ? QStringLiteral("clockwise") : QStringLiteral("anticlockwise")));
+    emit changed();
 }
 
 void Editor::rotatePlacementPreview(bool clockwise) {

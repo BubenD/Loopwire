@@ -698,6 +698,14 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // Space while something is being MOVED turns it a quarter turn: clockwise, or the other way
+        // with Shift. Handled before anything else does something with Space (idle, it repeats the last
+        // tool), and only while a move is actually under way.
+        if (editor_->movingSomething() && e->key() == Qt::Key_Space) {
+            editor_->rotateMoveBy90(!(e->modifiers() & Qt::ShiftModifier));
+            e->accept();
+            return;
+        }
         // Anything held under the cursor waiting to be dropped - a paste, a block, a part out of the
         // library, a generated harness: R turns it a quarter turn clockwise, Shift+R the other way, so
         // it goes in the way round it is wanted. Handled here, before an idle letter opens the command

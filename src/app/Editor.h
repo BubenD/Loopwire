@@ -441,6 +441,13 @@ public:
     // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
     void togglePasteMirror(bool xAxis);
 
+    // While something is being MOVED - dragged by the pointer, or by one of its own joints - Space
+    // turns it a quarter turn clockwise about the cursor and Shift+Space the other way. Turning a part
+    // as it is carried to its place is one gesture instead of three (drop it, rotate it, move it back),
+    // and it is the same key pair as when a part is held before being placed.
+    bool movingSomething() const { return editing_ && !selected_.empty(); }
+    void rotateMoveBy90(bool clockwise);
+
     // ---- Turning what is held under the cursor -------------------------------
     // Anything waiting to be placed - a paste, a block, a part out of the library, a generated
     // harness - can be turned before it is dropped: R a quarter turn clockwise, Shift+R the other
@@ -920,7 +927,10 @@ private:
     void addEntity(Entity e);
     void finishDraw();         // commit multi-point tool
     void cancelDraw();
-    std::optional<QString> hitTest(const Vec2& world) const;
+    // The topmost object within reach of `world`, ignoring any whose id is in `skip` - which is how the
+    // second pick of a two-object command finds the OTHER object where both meet at a joint.
+    std::optional<QString> hitTest(const Vec2& world,
+                                   const std::vector<QString>& skip = {}) const;
     std::vector<Entity*> selectedEntities();
     Entity* entityById(const QString& id);
 

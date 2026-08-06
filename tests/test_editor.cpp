@@ -5022,6 +5022,141 @@ int run_editor_tests() {
         }
     }
 
+    // --- At a joint, the topmost object is the one picked - and a two-object command finds the other.
+    {
+        Document d;
+        Entity el;
+        el.id = QStringLiteral("el");
+        el.type = EntityType::Ellipse;
+        el.center = {0, 0};
+        el.radius = 60.0;
+        el.radiusY = 100.0;
+        el.meta.insert("ellipticalArc", true);
+        el.startAngle = -M_PI / 2.0;
+        el.endAngle = M_PI / 2.0;
+        d.entities().push_back(el);
+        Entity line;                       // drawn after it, and ENDING on its top end
+        line.id = QStringLiteral("line");
+        line.type = EntityType::Line;
+        line.a = {0, 300};
+        line.b = {0, 100};
+        d.entities().push_back(line);
+
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({0, 104}, Qt::LeftButton, Qt::NoModifier);
+        check(!ed.selection().empty() && ed.selection().front() == QLatin1String("line"),
+              "pick at a joint: the topmost object wins the tie, not whatever is underneath it");
+
+        // The fillet needs two DIFFERENT objects, and both clicks are at the joint - which is how it is
+        // actually used. Asked again for the other one, it finds the ellipse.
+        Editor f;
+        f.setDocument(&d);
+        f.setTool(ToolId::Fillet);
+        f.setFilletRadius(15.0);
+        f.onPointerPress({0, 104}, Qt::LeftButton, Qt::NoModifier);
+        f.onPointerPress({3, 97}, Qt::LeftButton, Qt::NoModifier);
+        int fillets = 0;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Arc) ++fillets;
+        check(fillets == 1,
+              "pick at a joint: so a line meeting a curve there can be filleted, both clicks at the "
+              "joint");
+    }
+
+    // --- The joints of a curve: an end SWINGS, the size is a different handle.
+    {
+        // A piece of an ellipse: dragging one of its ends moves that end round the ellipse and leaves
+        // the ellipse's own size alone. Before, the only handles a piece had were its ellipse's axis
+        // points, so pulling what looked like its end resized the whole ellipse.
+        Document d;
+        Entity el;
+        el.id = QStringLiteral("el");
+        el.type = EntityType::Ellipse;
+        el.center = {0, 0};
+        el.radius = 60.0;
+        el.radiusY = 100.0;
+        el.meta.insert("ellipticalArc", true);
+        el.startAngle = -M_PI / 2.0;
+        el.endAngle = M_PI / 2.0;
+        d.entities().push_back(el);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({60, 0}, Qt::LeftButton, Qt::NoModifier);      // pick it
+        ed.onPointerPress({0, 100}, Qt::LeftButton, Qt::NoModifier);     // grab its top end
+        ed.onPointerMove({42, 71});                                      // swing it round to about 45
+        ed.onPointerRelease({42, 71}, Qt::LeftButton);
+        const Entity& piece = d.entities().front();
+        check(near(piece.radius, 60.0) && near(piece.radiusY, 100.0),
+              "curve joints: dragging an end of a piece leaves the ellipse the size it was");
+        check(piece.endAngle < M_PI / 2.0 - 0.1 && piece.endAngle > 0.0,
+              "curve joints: and moves that end round it");
+
+        // An arc's end likewise: it swings, and the radius is the middle handle's business.
+        Document d2;
+        Entity a;
+        a.id = QStringLiteral("arc");
+        a.type = EntityType::Arc;
+        a.center = {0, 0};
+        a.radius = 100.0;
+        a.startAngle = 0.0;
+        a.endAngle = M_PI / 2.0;
+        d2.entities().push_back(a);
+        Editor e2;
+        e2.setDocument(&d2);
+        e2.setTool(ToolId::Select);
+        e2.onPointerPress({70.7, 70.7}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({0, 100}, Qt::LeftButton, Qt::NoModifier);     // its end
+        e2.onPointerMove({-40, 60});                                     // round, and nearer in
+        e2.onPointerRelease({-40, 60}, Qt::LeftButton);
+        const Entity& arc = d2.entities().front();
+        check(near(arc.radius, 100.0),
+              "curve joints: an arc's end swings without changing its radius");
+        check(arc.endAngle > M_PI / 2.0,
+              "curve joints: and it does swing - the end is where it was dragged to");
+    }
+
+    // --- Space turns what is being moved: a quarter turn clockwise, Shift+Space the other way.
+    {
+        Document d;
+        Entity l;
+        l.id = QStringLiteral("l");
+        l.type = EntityType::Line;
+        l.a = {0, 0};
+        l.b = {40, 0};   // pointing along +x
+        d.entities().push_back(l);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);   // pick it
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);   // and grab it
+        ed.onPointerMove({120, 0});                                   // carry it to the right
+        check(ed.movingSomething(), "turn while moving: a move is under way");
+        ed.rotateMoveBy90(true);                                      // Space
+        ed.onPointerRelease({120, 0}, Qt::LeftButton);
+        const Entity& moved = d.entities().front();
+        check(near(moved.a.x, 120.0) && near(moved.b.x, 120.0),
+              "turn while moving: it is standing up now, turned about the cursor");
+        check(std::abs(std::abs(moved.a.y - moved.b.y) - 40.0) < 1e-6,
+              "turn while moving: and it is the same line, not a resized one");
+        check(near((moved.a.y + moved.b.y) / 2.0, 0.0),
+              "turn while moving: with the point under the cursor still under it");
+        // The other way round, and while dragging by a JOINT rather than the whole object.
+        Editor e2;
+        e2.setDocument(&d);
+        e2.setTool(ToolId::Select);
+        e2.onPointerPress({120, 20}, Qt::LeftButton, Qt::NoModifier);
+        const int before = int(d.entities().size());
+        e2.onPointerPress({120, 20}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({120, 25});
+        e2.rotateMoveBy90(false);                                     // Shift+Space
+        e2.onPointerRelease({120, 25}, Qt::LeftButton);
+        check(int(d.entities().size()) == before,
+              "turn while moving: turning does not add or lose anything");
+    }
+
     // --- Mirroring a PIECE of an ellipse gives its mirror image, whatever piece it is.
     {
         // A piece of an ellipse says where it starts and stops in the ellipse's own parameter, and
