@@ -835,6 +835,7 @@ void Editor::setDocument(Document* doc) {
 }
 
 void Editor::setTool(ToolId t) {
+    clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
     pickIds_.clear();
@@ -8409,16 +8410,19 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                 const double d = distance(p, dp->points[i]);
                 if (d < bd) { bd = d; knee = i; }
             }
-            if (knee >= 0) {
+            // Only when the click is actually AT that knee. Taking the nearest knee however far away it
+            // was meant a click anywhere on a double polyline rounded a corner somewhere else - and it
+            // swallowed the click, so a double polyline could not be paired with anything either.
+            if (knee >= 0 && bd <= worldTolerance() * 2.5) {
                 const double gap = dp->meta.value("gap").toDouble(10.0);
                 const std::vector<Vec2> corner = {dp->points[knee - 1], dp->points[knee],
                                                   dp->points[knee + 1]};
                 applyCornerModAt(*dp, knee, corner, gap);
+                pickIds_.clear();
+                pickPts_.clear();
+                emit changed();
+                return;
             }
-            pickIds_.clear();
-            pickPts_.clear();
-            emit changed();
-            return;
         }
     }
 
@@ -8509,13 +8513,22 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         return;
     }
 
-    // Fillet TWO connected DOUBLE LINES: if they share a common endpoint, merge them
-    // into a single double polyline with a rounded knee at the connection (so both
-    // physical runs round with a constant gap).
+    // Fillet TWO connected DOUBLE RUNS - a double line or a double polyline, in any combination: if
+    // they share an end, they merge into a single double polyline with a rounded knee at the join, so
+    // both rails round together and the gap stays constant. (A double run and a SINGLE one are refused
+    // further down, with the reason: two edges cannot be rounded into one.)
+    auto doubleRunPoints = [](const Entity& e) {
+        std::vector<Vec2> pts;
+        if (e.type == EntityType::DoubleLine) pts = {e.a, e.b};
+        else if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) pts = e.points;
+        return pts;
+    };
     if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && l1 && l2 && l1 != l2 &&
-        l1->type == EntityType::DoubleLine && l2->type == EntityType::DoubleLine) {
-        const Vec2 e1[2] = {l1->a, l1->b};
-        const Vec2 e2[2] = {l2->a, l2->b};
+        !doubleRunPoints(*l1).empty() && !doubleRunPoints(*l2).empty()) {
+        std::vector<Vec2> r1 = doubleRunPoints(*l1), r2 = doubleRunPoints(*l2);
+        // Which ends meet: orient both so r1 ENDS at the join and r2 STARTS there.
+        const Vec2 e1[2] = {r1.front(), r1.back()};
+        const Vec2 e2[2] = {r2.front(), r2.back()};
         int bi = 0, bj = 0;
         double bd = std::numeric_limits<double>::max();
         for (int i = 0; i < 2; ++i)
@@ -8524,14 +8537,21 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                 if (dd < bd) { bd = dd; bi = i; bj = j; }
             }
         if (bd > worldTolerance() * 4.0) {
-            emit message(QStringLiteral("The two double lines must share a connected end."));
-            pickIds_.clear(); pickPts_.clear();
+            refuseAt(pickPts_.back(),
+                     QStringLiteral("those two runs do not share an end - a corner is where two runs "
+                                    "meet"));
+            pickIds_.clear();
+            pickPts_.clear();
+            emit changed();
             return;
         }
-        const Vec2 shared = lerp(e1[bi], e2[bj], 0.5);
-        const Vec2 free1 = e1[1 - bi], free2 = e2[1 - bj];
+        if (bi == 0) std::reverse(r1.begin(), r1.end());     // r1 must END at the join
+        if (bj == 1) std::reverse(r2.begin(), r2.end());     // r2 must START there
+        const Vec2 shared = lerp(r1.back(), r2.front(), 0.5);
+        r1.back() = shared;
+        r2.front() = shared;
         const double gap = l1->meta.value("gap").toDouble(10.0);
-        const std::vector<Vec2> corner = {free1, shared, free2};
+        const std::vector<Vec2> corner = {r1[r1.size() - 2], shared, r2[1]};
         const bool cham = tool_ == ToolId::Chamfer;
         const double amt = cham ? chamferDist_ : filletRadius_;
         const bool fits = cham ? chamferDistFits(corner, amt + gap / 2.0)
@@ -8550,13 +8570,25 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         merged.layer = l1->layer;
         merged.color = l1->color; // keep the picked lines' colour (never the pick mark)
         merged.weight = l1->weight;
-        merged.points = {free1, shared, free2};
+        merged.points = r1;
+        for (size_t i = 1; i < r2.size(); ++i) merged.points.push_back(r2[i]);
         merged.meta.insert(QStringLiteral("double"), true);
         merged.meta.insert(QStringLiteral("gap"), gap);
+        // The radius goes at the JOIN, and every other corner the two runs already had is left as it
+        // was: merging them must not straighten anything.
         QJsonArray arr;
-        arr.append(0.0);
-        arr.append(amt);
-        arr.append(0.0);
+        const QJsonArray was1 = l1->meta.value(cham ? "cornerChamfers" : "cornerRadii").toArray();
+        const QJsonArray was2 = l2->meta.value(cham ? "cornerChamfers" : "cornerRadii").toArray();
+        const int joinIdx = static_cast<int>(r1.size()) - 1;
+        for (int i = 0; i < static_cast<int>(merged.points.size()); ++i) {
+            if (i == joinIdx) { arr.append(amt); continue; }
+            // Whichever run that vertex came from, in the order it now sits in.
+            const int from1 = (bi == 0) ? (static_cast<int>(r1.size()) - 1 - i) : i;
+            const int from2 = (bj == 1) ? (static_cast<int>(r2.size()) - 1 - (i - joinIdx)) : (i - joinIdx);
+            const QJsonArray& src = (i < joinIdx) ? was1 : was2;
+            const int idx = (i < joinIdx) ? from1 : from2;
+            arr.append(idx >= 0 && idx < src.size() ? src[idx].toDouble() : 0.0);
+        }
         merged.meta.insert(cham ? QStringLiteral("cornerChamfers") : QStringLiteral("cornerRadii"),
                            arr);
         const QString id1 = pickIds_[0], id2 = pickIds_[1];
@@ -8575,97 +8607,126 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         return;
     }
 
-    // FILLET where a RUN meets something else: a polyline (or a rect, or a polygon) picked together
-    // with a line or a curve. The run's own corners are rounded by picking two of its segments (above);
-    // this is the other case - the end of a run meeting a separate object, which is what a shape drawn
-    // as a polyline plus a line is. The picked segment of the run stands in as a line, the fillet is
-    // worked out against it, and the run's END VERTEX is then moved to where the fillet starts.
+    // FILLET where the END OF A RUN meets something else: a polyline (or a rect, or a polygon) picked
+    // with a line, a curve, or ANOTHER RUN. The run's own corners are rounded by picking two of its
+    // segments (above); this is the other case, and it is the ordinary one - a shape drawn as a polyline
+    // for three sides and a line or a notch for the fourth has its corners BETWEEN objects, not inside
+    // one. The picked segment of each run stands in as a line, the fillet is worked out from those, and
+    // each run's END VERTEX is taken back to where the fillet starts.
     if ((tool_ == ToolId::Fillet) && l1 && l2 && l1 != l2) {
         auto isRun = [](const Entity& e) {
             return (e.type == EntityType::Polyline || e.type == EntityType::Rect ||
                     e.type == EntityType::Polygon) &&
-                   e.points.size() >= 2;
+                   e.points.size() >= 2 && !e.meta.value(QStringLiteral("double")).toBool();
         };
         auto isCurve = [](const Entity& e) {
             return e.type == EntityType::Circle || e.type == EntityType::Arc ||
                    e.type == EntityType::Ellipse;
         };
-        Entity* run = nullptr;
-        Entity* other = nullptr;
-        Vec2 pickRun{0.0, 0.0}, pickOther{0.0, 0.0};
-        if (isRun(*l1) && (l2->type == EntityType::Line || isCurve(*l2))) {
-            run = l1; other = l2; pickRun = pickPts_[0]; pickOther = pickPts_[1];
-        } else if (isRun(*l2) && (l1->type == EntityType::Line || isCurve(*l1))) {
-            run = l2; other = l1; pickRun = pickPts_[1]; pickOther = pickPts_[0];
-        }
-        if (run && other) {
-            const int n = static_cast<int>(run->points.size());
-            const bool closed = run->type == EntityType::Rect || run->type == EntityType::Polygon;
-            // Which segment of the run was picked.
+        // A run's picked END segment, standing in as a line: `inner` is the end that must not move,
+        // `outer` the one the fillet takes back. Empty when the pick is not near an end.
+        struct Stand {
+            Entity line;          // the stand-in
+            Entity* src = nullptr;// the run it came from (null: it IS a line or a curve)
+            int endIdx = -1;      // which vertex of the run moves
+        };
+        auto standFor = [&](Entity* e, const Vec2& pick, const Vec2& otherPick, Stand& s,
+                           QString& why) {
+            if (!isRun(*e)) {     // a plain line stands for itself
+                s.line = *e;
+                s.src = nullptr;
+                return true;
+            }
+            const int n = static_cast<int>(e->points.size());
+            const bool closed = e->type == EntityType::Rect || e->type == EntityType::Polygon;
             int seg = -1;
             double bd = std::numeric_limits<double>::max();
             const int edges = closed ? n : n - 1;
             for (int i = 0; i < edges; ++i) {
                 const double dd =
-                    closestPointOnSegment(pickRun, run->points[i], run->points[(i + 1) % n]).distance;
+                    closestPointOnSegment(pick, e->points[i], e->points[(i + 1) % n]).distance;
                 if (dd < bd) { bd = dd; seg = i; }
             }
-            // Only an END of an open run can be taken back: anywhere else the run would have to be cut
-            // in two, which is a different command (trim) and not what rounding a corner means.
-            const bool atStart = !closed && seg == 0;
-            const bool atEnd = !closed && seg == n - 2;
+            bool atStart = !closed && seg == 0;
+            bool atEnd = !closed && seg == n - 2;
+            // A run of a single segment is BOTH its first and its last: which of its two ends is the
+            // corner is then said by the other object - the corner is where the two of them are.
+            if (atStart && atEnd)
+                (distance(e->points.front(), otherPick) <= distance(e->points.back(), otherPick)
+                     ? atEnd
+                     : atStart) = false;
             if (!atStart && !atEnd) {
-                emit message(closed
-                                 ? QStringLiteral("A closed shape cannot be rounded against another "
-                                                  "object - pick two of its own sides instead")
-                                 : QStringLiteral("Pick the run near one of its two ENDS: only an end "
-                                                  "can be taken back to a fillet"));
+                why = closed ? QStringLiteral("a closed shape cannot be rounded against another object "
+                                              "- pick two of its own sides instead")
+                             : QStringLiteral("pick the run near one of its two ENDS: only an end can "
+                                              "be taken back to a fillet");
+                return false;
+            }
+            s.endIdx = atStart ? 0 : n - 1;
+            const int innerIdx = atStart ? 1 : n - 2;
+            s.line = Entity{};
+            s.line.type = EntityType::Line;
+            s.line.layer = e->layer;
+            s.line.a = e->points[innerIdx];       // stays put
+            s.line.b = e->points[s.endIdx];       // taken back
+            s.src = e;
+            return true;
+        };
+
+        const bool anyRun = isRun(*l1) || isRun(*l2);
+        const bool okPair = anyRun && (isRun(*l1) || l1->type == EntityType::Line || isCurve(*l1)) &&
+                            (isRun(*l2) || l2->type == EntityType::Line || isCurve(*l2));
+        if (okPair) {
+            // A curve cannot be one of a pair of runs: the curve case is handled below, with the run
+            // standing in as a line, so only one of the two may be curved.
+            const bool bothCurved = isCurve(*l1) && isCurve(*l2);
+            Stand s1, s2;
+            QString why;
+            if (bothCurved || !standFor(l1, pickPts_[0], pickPts_[1], s1, why) ||
+                !standFor(l2, pickPts_[1], pickPts_[0], s2, why)) {
+                refuseAt(pickPts_.back(),
+                         why.isEmpty() ? QStringLiteral("those two cannot be rounded together") : why);
                 pickIds_.clear();
                 pickPts_.clear();
+                emit changed();
                 return;
             }
-            const int endIdx = atStart ? 0 : n - 1;
-            const int innerIdx = atStart ? 1 : n - 2;
-            // The run's end segment, standing in as a line.
-            Entity stand;
-            stand.type = EntityType::Line;
-            stand.layer = run->layer;
-            stand.a = run->points[innerIdx];   // the end that must NOT move
-            stand.b = run->points[endIdx];     // the end the fillet takes back
             pushUndo();
             CornerResult r;
-            if (other->type == EntityType::Line)
-                r = filletLines(stand, *other, filletRadius_, pickRun, pickOther);
+            if (isCurve(*l1))
+                r = filletLineCurve(s2.line, *l1, filletRadius_, pickPts_[1], pickPts_[0]);
+            else if (isCurve(*l2))
+                r = filletLineCurve(s1.line, *l2, filletRadius_, pickPts_[0], pickPts_[1]);
             else
-                r = filletLineCurve(stand, *other, filletRadius_, pickRun, pickOther);
-            // Did the fillet take back the END of the run, or the other end of the stand-in?
-            const bool innerMoved = distance(stand.a, run->points[innerIdx]) > 1e-9;
-            if (r.ok && innerMoved) {
-                // The fillet moved the wrong end of the stand-in: the corner is not at this end of the
-                // run, so nothing is written back.
-                undo();
-                emit message(QStringLiteral("They meet at the other end of that run - pick it nearer "
-                                            "the corner"));
-            } else if (r.ok) {
-                run->points[endIdx] = stand.b;
-                // Per-corner rounding data no longer matches a moved end.
-                run->meta.remove(QStringLiteral("cornerRadii"));
-                run->meta.remove(QStringLiteral("cornerChamfers"));
+                r = filletLines(s1.line, s2.line, filletRadius_, pickPts_[0], pickPts_[1]);
+            // Each stand-in must have kept the end that belongs to the rest of its run.
+            auto writeBack = [&](Stand& s) {
+                if (!s.src) return true;
+                const int n = static_cast<int>(s.src->points.size());
+                const int innerIdx = (s.endIdx == 0) ? 1 : n - 2;
+                if (distance(s.line.a, s.src->points[innerIdx]) > 1e-9) return false;
+                s.src->points[s.endIdx] = s.line.b;
+                s.src->meta.remove(QStringLiteral("cornerRadii"));
+                s.src->meta.remove(QStringLiteral("cornerChamfers"));
+                return true;
+            };
+            if (r.ok && writeBack(s1) && writeBack(s2)) {
                 if (r.hasConnector) {
                     Entity arc = r.connector;
                     addEntity(std::move(arc));
                 }
                 doc_->setDirty(true);
+                clearRefusal();
                 emit message(r.hasConnector
-                                 ? QStringLiteral("Filleted the run to the %1 (radius %2)")
-                                       .arg(entityTypeToString(other->type))
-                                       .arg(filletRadius_)
+                                 ? QStringLiteral("Rounded the corner (radius %1)").arg(filletRadius_)
                                  : QStringLiteral("Fillet (radius 0): brought them together"));
             } else {
                 undo();
-                emit message(r.tooBig ? QStringLiteral("Fillet radius %1 is too big for that corner")
-                                            .arg(filletRadius_)
-                                      : QStringLiteral("Those two do not form a corner"));
+                refuseAt(pickPts_.back(),
+                         r.tooBig ? QStringLiteral("radius %1 is too big for that corner")
+                                        .arg(filletRadius_)
+                                  : QStringLiteral("they meet at the other end - pick each nearer the "
+                                                   "corner"));
             }
             pickIds_.clear();
             pickPts_.clear();
@@ -8705,10 +8766,10 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                                  : QStringLiteral("Fillet (radius 0): brought them together"));
             } else {
                 undo();
-                emit message(r.tooBig
-                                 ? QStringLiteral("No arc of radius %1 touches both - try a smaller one")
-                                       .arg(filletRadius_)
-                                 : QStringLiteral("Those two cannot be filleted"));
+                refuseAt(pickPts_.back(),
+                         r.tooBig ? QStringLiteral("no arc of radius %1 touches both - try a smaller "
+                                                   "one").arg(filletRadius_)
+                                  : QStringLiteral("those two cannot be filleted"));
             }
             pickIds_.clear();
             pickPts_.clear();
@@ -8741,23 +8802,35 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                                         : QStringLiteral("Fillet (radius 0): corner joined"));
         } else if (r.tooBig) {
             undo();
-            emit message(QStringLiteral("Fillet radius %1 is too big for these lines — not applied")
-                             .arg(filletRadius_));
+            refuseAt(pickPts_.back(), QStringLiteral("radius %1 is too big for these lines")
+                                          .arg(filletRadius_));
         } else {
             undo();
-            emit message(QStringLiteral("Lines do not form a valid corner."));
+            refuseAt(pickPts_.back(), QStringLiteral("these two do not form a corner"));
         }
+        if (r.ok) clearRefusal();
     } else {
-        // Say WHAT was picked. "Pick two distinct lines" left no way to tell whether the two clicks had
-        // landed on one object, or on something the command does not know how to round.
+        // Say WHAT was picked, and MARK the place: a line of text at the bottom of the window is easy to
+        // miss with the eye on the drawing, so the refusal is drawn where it happened as well.
         const QString a = l1 ? entityTypeToString(l1->type) : QStringLiteral("nothing");
         const QString b = l2 ? entityTypeToString(l2->type) : QStringLiteral("nothing");
+        auto isDouble = [](const Entity* e) {
+            return e && (e->type == EntityType::DoubleLine ||
+                         e->meta.value(QStringLiteral("double")).toBool());
+        };
+        const bool dbl = isDouble(l1) || isDouble(l2);
         if (l1 && l1 == l2)
-            emit message(QStringLiteral("Both clicks landed on the same %1 - click the other object, "
-                                        "or two sides of one run to round its own corner").arg(a));
+            refuseAt(pickPts_.back(),
+                     QStringLiteral("both clicks landed on the same %1 - click the other object, or "
+                                    "two sides of one run to round its own corner").arg(a));
+        else if (dbl)
+            refuseAt(pickPts_.back(),
+                     QStringLiteral("a double line has two edges and a single one has one - round a "
+                                    "double to another double, and they join into one run"));
         else
-            emit message(QStringLiteral("%1 cannot be rounded to a %2 yet - lines, arcs, circles, "
-                                        "ellipses and the ends of a run can").arg(a, b));
+            refuseAt(pickPts_.back(),
+                     QStringLiteral("%1 cannot be rounded to a %2 yet - lines, arcs, circles, ellipses "
+                                    "and the ends of a run can").arg(a, b));
     }
     pickIds_.clear();
     pickPts_.clear();
@@ -11047,6 +11120,19 @@ void Editor::copyWithBase(bool cut) {
                      : QStringLiteral("Copy: specify base point"));
 }
 
+void Editor::refuseAt(const Vec2& where, const QString& why) {
+    refused_ = true;
+    refusedAt_ = where;
+    emit message(why);
+    emit overlayChanged();
+}
+
+void Editor::clearRefusal() {
+    if (!refused_) return;
+    refused_ = false;
+    emit overlayChanged();
+}
+
 void Editor::rotateMoveBy90(bool clockwise) {
     if (!doc_ || !movingSomething()) return;
     // About the CURSOR, so whatever is under it stays under it - the same as turning something that is
@@ -12539,6 +12625,23 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else {
             p.drawRect(QRectF(s.x() - 5, s.y() - 5, 10, 10));
         }
+    }
+
+    // A command that has just refused, marked where it happened: a struck-out circle, in the colour
+    // nothing else on a drawing uses. It stays until something works, so it can be looked at.
+    if (refused_) {
+        const QPointF c = vt.toScreen(refusedAt_);
+        p.save();
+        QPen np(QColor("#ff6b6b"));
+        np.setCosmetic(true);
+        np.setWidthF(2.0);
+        p.setPen(np);
+        p.setBrush(Qt::NoBrush);
+        const double r = 9.0;
+        p.drawEllipse(c, r, r);
+        const double k = r * 0.7071;
+        p.drawLine(c + QPointF(-k, k), c + QPointF(k, -k));
+        p.restore();
     }
 
     // Drawn LAST, so nothing paints over it: the joints where a selected break mark cuts its run sit

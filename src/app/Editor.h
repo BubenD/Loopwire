@@ -448,6 +448,13 @@ public:
     bool movingSomething() const { return editing_ && !selected_.empty(); }
     void rotateMoveBy90(bool clockwise);
 
+    // Where a command has just refused to do something, and why. Drawn on the drawing as a struck-out
+    // circle: a line of words at the bottom of the window is easy to miss with the eye on the sheet.
+    // Cleared by the next thing that works, by Esc, or by leaving the tool.
+    bool refused() const { return refused_; }
+    Vec2 refusedAt() const { return refusedAt_; }
+    void clearRefusal();
+
     // ---- Turning what is held under the cursor -------------------------------
     // Anything waiting to be placed - a paste, a block, a part out of the library, a generated
     // harness - can be turned before it is dropped: R a quarter turn clockwise, Shift+R the other
@@ -929,6 +936,8 @@ private:
     void cancelDraw();
     // The topmost object within reach of `world`, ignoring any whose id is in `skip` - which is how the
     // second pick of a two-object command finds the OTHER object where both meet at a joint.
+    // Refuse, out loud and on the drawing.
+    void refuseAt(const Vec2& where, const QString& why);
     std::optional<QString> hitTest(const Vec2& world,
                                    const std::vector<QString>& skip = {}) const;
     std::vector<Entity*> selectedEntities();
@@ -1370,6 +1379,8 @@ private:
     // A quarter turn at a time, applied to whatever is held under the cursor about the point it is
     // held by. Cleared whenever something new is picked up and when it is dropped or abandoned.
     double placeRot_ = 0.0;
+    bool refused_ = false;         // a command said no, and the drawing shows where
+    Vec2 refusedAt_{0.0, 0.0};
     bool pasteMirrorX_ = false;   // X/Y flip the paste preview about the base before placing
     bool pasteMirrorY_ = false;
     // Cut originals stay visible until the paste lands; these ids are removed when

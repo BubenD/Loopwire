@@ -350,8 +350,10 @@ int run_editor_tests() {
               "fillet-2double: connected double lines merge into a filleted double polyline");
     }
 
-    // --- A SINGLE click on a double polyline edits the nearest knee directly (no
-    //     second pick), and re-clicking with a new radius redefines it.
+    // --- A SINGLE click AT A KNEE of a double polyline rounds that knee, and clicking it again with a
+    //     new radius redefines it. A click out along an EDGE does not: that click is the first of a pair,
+    //     so a double polyline can be rounded to another run as well (it could not before, because any
+    //     click on one was swallowed by this shortcut and rounded a knee somewhere else).
     {
         Document d; d.entities().clear();
         Entity dp; dp.id = "dp"; dp.type = EntityType::Polyline;
@@ -362,15 +364,36 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
         ed.setFilletRadius(7.0);
         ed.setTool(ToolId::Fillet);
-        ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier); // ONE click -> knee filleted
-        const Entity* dd = nullptr;
-        for (const auto& e : d.entities()) if (e.id == "dp") dd = &e;
-        const bool one = dd && near(dd->meta.value("cornerRadii").toArray()[1].toDouble(), 7.0);
+        auto radiusAt = [&](int knee) {
+            for (const auto& e : d.entities())
+                if (e.id == QLatin1String("dp")) {
+                    const QJsonArray arr = e.meta.value("cornerRadii").toArray();
+                    return knee < arr.size() ? arr[knee].toDouble() : -1.0;
+                }
+            return -1.0;
+        };
+        // On the rail, right at the knee: the rails mitre at the corner, so the nearest point of the
+        // drawing to the knee (100,0) is (95,5).
+        ed.onPointerPress({95, 5}, Qt::LeftButton, Qt::NoModifier);
+        const bool rounded = near(radiusAt(1), 7.0);
         ed.setFilletRadius(3.0);
-        ed.onPointerPress({60, 5}, Qt::LeftButton, Qt::NoModifier); // click again -> redefine
-        for (const auto& e : d.entities()) if (e.id == "dp") dd = &e;
-        check(one && dd && near(dd->meta.value("cornerRadii").toArray()[1].toDouble(), 3.0),
-              "fillet-dpoly-1click: single click on a double polyline edits/redefines the knee");
+        ed.onPointerPress({95, 5}, Qt::LeftButton, Qt::NoModifier);   // again -> redefined
+        check(rounded && near(radiusAt(1), 3.0),
+              "fillet-dpoly-1click: one click at a knee of a double polyline rounds it, and again "
+              "redefines it");
+        // And a click out along an edge is a first pick, not a knee edit.
+        Document d2; d2.entities().clear();
+        Entity dp2 = dp;
+        dp2.meta.remove("cornerRadii");
+        d2.entities().push_back(dp2);
+        Editor e2; e2.setDocument(&d2); noSnap(e2); e2.setPixelTolerance(3);
+        e2.setFilletRadius(5.0);
+        e2.setTool(ToolId::Fillet);
+        e2.onPointerPress({30, 5}, Qt::LeftButton, Qt::NoModifier);    // far from the knee
+        const QJsonArray after = d2.entities().front().meta.value("cornerRadii").toArray();
+        check(after.isEmpty(),
+              "fillet-dpoly-1click: a click out along an edge rounds nothing - it is the first of a "
+              "pair");
     }
 
     // --- Chamfer a CLOSED figure (rectangle) BY THE TWO CLICKED POINTS: the setback
@@ -5019,6 +5042,142 @@ int run_editor_tests() {
                                                      "follows it are untouched").arg(kind)));
             check(!insideLeft, qPrintable(QStringLiteral("trim past a corner (%1): and the piece "
                                                         "between the ellipse's ends is gone").arg(kind)));
+        }
+    }
+
+    // --- Every pairing a corner can be made of, and a refusal that SHOWS where it happened.
+    {
+        // A shape is drawn out of whatever is to hand - a polyline for three sides, a line for the
+        // fourth, a notch made of half an ellipse - and every corner of it is between two objects.
+        auto lineDown = [] {
+            Entity e;
+            e.id = QStringLiteral("a");
+            e.type = EntityType::Line;
+            e.a = {0, 40};
+            e.b = {0, 300};      // up to the joint at (0,300)
+            return e;
+        };
+        auto polyDown = [] {
+            Entity e;
+            e.id = QStringLiteral("a");
+            e.type = EntityType::Polyline;
+            e.points = {{0, 40}, {0, 300}};
+            return e;
+        };
+        auto polyRight = [] {
+            Entity e;
+            e.id = QStringLiteral("b");
+            e.type = EntityType::Polyline;
+            e.points = {{0, 300}, {220, 300}, {220, 100}};
+            return e;
+        };
+        auto lineRight = [] {
+            Entity e;
+            e.id = QStringLiteral("b");
+            e.type = EntityType::Line;
+            e.a = {0, 300};
+            e.b = {220, 300};
+            return e;
+        };
+        struct Pair { const char* what; Entity first, second; };
+        std::vector<Pair> pairs;
+        pairs.push_back({"polyline + line", polyDown(), lineRight()});
+        pairs.push_back({"line + polyline", lineDown(), polyRight()});
+        pairs.push_back({"polyline + polyline", polyDown(), polyRight()});
+        for (const Pair& pr : pairs) {
+            Document d;
+            d.entities().push_back(pr.first);
+            d.entities().push_back(pr.second);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Fillet);
+            ed.setFilletRadius(20.0);
+            ed.onPointerPress({0, 250}, Qt::LeftButton, Qt::NoModifier);    // up the first
+            ed.onPointerPress({40, 300}, Qt::LeftButton, Qt::NoModifier);   // along the second
+            int arcs = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Arc) ++arcs;
+            check(arcs == 1, qPrintable(QStringLiteral("pairings: %1 rounds at their joint")
+                                            .arg(QString::fromLatin1(pr.what))));
+            check(!ed.refused(), qPrintable(QStringLiteral("pairings: %1 is not refused")
+                                                .arg(QString::fromLatin1(pr.what))));
+        }
+
+        // Two DOUBLE runs - a double line, a double polyline, either way round - join into one run with
+        // the corner rounded, so both rails turn together and the gap stays.
+        {
+            Document d;
+            Entity a;
+            a.id = QStringLiteral("a");
+            a.type = EntityType::DoubleLine;
+            a.a = {0, 0};
+            a.b = {100, 0};
+            a.meta.insert("gap", 10.0);
+            d.entities().push_back(a);
+            Entity b;
+            b.id = QStringLiteral("b");
+            b.type = EntityType::Polyline;
+            b.points = {{100, 0}, {100, 100}, {200, 100}};
+            b.meta.insert("double", true);
+            b.meta.insert("gap", 10.0);
+            d.entities().push_back(b);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setPixelTolerance(3);
+            ed.setFilletRadius(5.0);
+            ed.setTool(ToolId::Fillet);
+            ed.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);     // the double line's rail
+            ed.onPointerPress({105, 50}, Qt::LeftButton, Qt::NoModifier);   // the double polyline's
+            const Entity* merged = nullptr;
+            int doubles = 0;
+            for (const auto& e : d.entities()) {
+                if (e.type == EntityType::DoubleLine) ++doubles;
+                if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) merged = &e;
+            }
+            check(doubles == 0 && merged && merged->points.size() == 4,
+                  "pairings: a double line and a double polyline join into ONE double run");
+            if (merged) {
+                const QJsonArray radii = merged->meta.value("cornerRadii").toArray();
+                check(radii.size() == 4 && near(radii[1].toDouble(), 5.0),
+                      "pairings: with the radius at the join and nowhere else");
+                check(near(radii[2].toDouble(), 0.0),
+                      "pairings: the corners the two runs already had are left as they were");
+            }
+        }
+
+        // And a refusal is SHOWN on the drawing, where it happened - not only said at the bottom of the
+        // window, which is easy to miss with the eye on the sheet.
+        {
+            Document d;
+            Entity dbl;
+            dbl.id = QStringLiteral("dbl");
+            dbl.type = EntityType::DoubleLine;
+            dbl.a = {0, 0};
+            dbl.b = {100, 0};
+            dbl.meta.insert("gap", 10.0);
+            d.entities().push_back(dbl);
+            Entity ln;
+            ln.id = QStringLiteral("ln");
+            ln.type = EntityType::Line;
+            ln.a = {100, 0};
+            ln.b = {100, 100};
+            d.entities().push_back(ln);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setPixelTolerance(3);
+            ed.setFilletRadius(5.0);
+            ed.setTool(ToolId::Fillet);
+            check(!ed.refused(), "refusal: nothing is marked to begin with");
+            ed.onPointerPress({50, 5}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.refused(), "refusal: a double run and a single line cannot be rounded, and it says "
+                                "so ON the drawing");
+            check(near(ed.refusedAt().x, 100.0) && near(ed.refusedAt().y, 50.0),
+                  "refusal: marked where the click was");
+            ed.setTool(ToolId::Select);
+            check(!ed.refused(), "refusal: and cleared when the next command starts");
         }
     }
 
