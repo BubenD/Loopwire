@@ -61,6 +61,10 @@ private:
     // The node being edited, and the run arriving at it.
     MechNode* currentNode();
     MechSegment* currentSegment();
+    // The run AT the selected point, which at the root is the single run leaving it rather than none -
+    // so a connector at the start of a trunk has a cable, a jacket and a stripped length like any
+    // other. `atToEnd` says which of the run's two ends this point is.
+    MechSegment* currentRun(bool* atToEnd = nullptr);
     void readOptionsFromControls();
     void writeOptionsToControls();
     void refreshFittingList();
@@ -94,7 +98,8 @@ private:
     // jacket is cut at this end so the conductors can reach the contacts.
     QComboBox* cablePart_ = nullptr;
     QDoubleSpinBox* jacketSpin_ = nullptr;
-    QDoubleSpinBox* stripSpin_ = nullptr;
+    QDoubleSpinBox* stripSpin_ = nullptr;      // at the selected end
+    QDoubleSpinBox* stripFarSpin_ = nullptr;   // and at the far end of the same run
     // What is fitted at this end, as ticks.
     QCheckBox* backshellChk_ = nullptr;
     QCheckBox* bootChk_ = nullptr;

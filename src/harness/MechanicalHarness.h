@@ -93,6 +93,10 @@ struct MechSegment {
     double stripToMm = 0.0;
 
     bool isCable() const { return jacketOdMm > 0.0; }
+    // A run KNOWN to be a cable - every conductor in it a core of the same one - whose jacket
+    // diameter nobody has given yet. It is not a Ø2.4 bundle of loose wires and must not be sized as
+    // one: until the figure is there, what a boot has to pass is unknown rather than small.
+    bool cableWithoutJacket() const { return jacketOdMm <= 0.0 && !cableName.trimmed().isEmpty(); }
     double stripAt(bool atToEnd) const { return atToEnd ? stripToMm : stripFromMm; }
 };
 
@@ -200,12 +204,22 @@ double segmentBodyDiameterMm(const MechHarnessDef& def, const MechSegment& seg);
 // and not once for the whole run.
 double segmentEndDiameterMm(const MechHarnessDef& def, const MechSegment& seg, bool atToEnd);
 
+// The run at a node, and which of its two ends the node sits at: the run that ARRIVES, or - at the
+// root, where none does - the single run that leaves, taken by its start. Null at a breakout, where no
+// one run is "the" run at it. A connector at the beginning of a trunk is a connector like any other,
+// and this is what makes it one.
+const MechSegment* nodeRunSegment(const MechHarnessDef& def, const MechNode& node,
+                                  bool* atToEnd = nullptr);
+
 // How much of the jacket is stripped at the end a node sits at. 0 when the run is not a cable.
 double nodeBareLengthMm(const MechHarnessDef& def, const MechNode& node);
 
 // The diameter a fitting at an END has to accept. Anything that goes over the wires themselves - a
 // braid, heatshrink over the braid - is sized on the bare bundle; anything the CABLE passes into - a
 // backshell, a boot, a gland - has to take the jacket, because the jacket is behind it.
+// Returns 0 when the figure is NOT KNOWN - a cable whose jacket diameter nobody has given. Nothing
+// can be checked against 0, and that is the honest answer: sizing a boot on the cores of a cable
+// instead of on its jacket is how a boot that will not go on gets onto a drawing.
 double fittingFitDiameterMm(const MechHarnessDef& def, const MechSegment* seg, PartKind kind,
                             bool atEnd, bool atToEnd);
 

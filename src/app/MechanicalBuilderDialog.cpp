@@ -223,17 +223,19 @@ void MechanicalBuilderDialog::buildUi() {
         "inside become the diameter that matters."));
     connect(cablePart_, &QComboBox::currentIndexChanged, this, [this](int) {
         if (syncing_) return;
-        MechSegment* s = currentSegment();
+        MechSegment* s = currentRun();
         if (!s) return;
         s->cablePart = cablePart_->currentData().toString();
         if (s->cablePart.isEmpty()) {
             s->jacketOdMm = 0.0;    // loose wires: the bundle is worked out from the conductors
         } else if (const LibraryPart* p = catalog_.byId(s->cablePart)) {
+            // What the part states, and nothing more. A cable that does not say what it measures over
+            // the jacket leaves the figure empty and is asked for by name in the list below - a jacket
+            // guessed from the cores is the one number on this drawing nobody could check.
             const CableSpec spec = cableSpecOf(*p);
             if (spec.odMm > 0.0) s->jacketOdMm = spec.odMm;
-            else if (s->jacketOdMm <= 0.0)
-                s->jacketOdMm = segmentBundleDiameterMm(def_, *s) + 1.6;   // until a real figure
-            if (s->cableName.isEmpty()) s->cableName = p->title();
+            if (s->cableName.isEmpty())
+                s->cableName = p->mfrPn.isEmpty() ? p->title() : p->mfrPn;
         }
         refreshAll();
     });
@@ -246,34 +248,51 @@ void MechanicalBuilderDialog::buildUi() {
         "the conductors. Anything else is what the run is drawn at, and what has to go into a boot."));
     connect(jacketSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
         if (syncing_) return;
-        if (MechSegment* s = currentSegment()) { s->jacketOdMm = v; refreshAll(); }
+        if (MechSegment* s = currentRun()) { s->jacketOdMm = v; refreshAll(); }
     });
-    stripSpin_ = new QDoubleSpinBox(selBox);
-    stripSpin_->setRange(0.0, 100000.0);
-    stripSpin_->setDecimals(1);
-    stripSpin_->setSuffix(QStringLiteral(" mm"));
-    stripSpin_->setToolTip(QStringLiteral(
-        "Wires without jacket: how far back from this end the jacket is cut, so the conductors come "
-        "out and reach the contacts. Over that length the run is the BUNDLE, with a cone between the "
-        "two diameters - and a braid or heatshrink ticked below covers exactly that stretch."));
-    connect(stripSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-        if (syncing_) return;
-        MechSegment* s = currentSegment();
-        MechNode* n = currentNode();
-        if (!s || !n) return;
-        // A node hangs off the end of its own run, so the strip it owns is the one at that end.
-        if (s->toNode == n->id) s->stripToMm = v;
-        else s->stripFromMm = v;
-        refreshAll();
-    });
+    // The jacket is cut back at BOTH ends of a run, and for different reasons: at the connector so the
+    // conductors can reach the contacts, at a breakout so the cable can divide into branches of loose
+    // wires. Both are on this row, because the far end of a trunk is a breakout - and a breakout has no
+    // run arriving at it, so there would otherwise be nowhere at all to say the jacket stops there.
+    auto stripBox = [this, selBox](bool farEnd) {
+        auto* s = new QDoubleSpinBox(selBox);
+        s->setRange(0.0, 100000.0);
+        s->setDecimals(1);
+        s->setSuffix(QStringLiteral(" mm"));
+        s->setToolTip(farEnd
+            ? QStringLiteral("Wires without jacket at the FAR end of this run - the breakout or point "
+                             "it comes off. This is the one to use when a cable arrives and its jacket "
+                             "is cut at the spread point, with only the conductors carrying on into "
+                             "the branches.")
+            : QStringLiteral("Wires without jacket at THIS end: how far back the jacket is cut so the "
+                             "conductors come out and reach the contacts. Over that length the run is "
+                             "the BUNDLE, with a cone between the two diameters - and a braid or "
+                             "heatshrink ticked below covers exactly that stretch."));
+        connect(s, &QDoubleSpinBox::valueChanged, this, [this, farEnd](double v) {
+            if (syncing_) return;
+            bool atTo = true;
+            MechSegment* seg = currentRun(&atTo);
+            if (!seg) return;
+            // A node sits at one END of its run, so "this end" is that one and "the far end" is the
+            // other, whichever way round the run happens to be defined.
+            if (atTo == !farEnd) seg->stripToMm = v;
+            else seg->stripFromMm = v;
+            refreshAll();
+        });
+        return s;
+    };
+    stripSpin_ = stripBox(false);
+    stripFarSpin_ = stripBox(true);
     grid->addWidget(caption(selBox, QStringLiteral("Cable")), r, 0);
     grid->addWidget(cablePart_, r, 1);
     {
         auto* jrow = new QHBoxLayout;
         jrow->addWidget(caption(selBox, QStringLiteral("Jacket Ø")));
         jrow->addWidget(jacketSpin_);
-        jrow->addWidget(caption(selBox, QStringLiteral("Wires without jacket")));
+        jrow->addWidget(caption(selBox, QStringLiteral("No jacket: this end")));
         jrow->addWidget(stripSpin_);
+        jrow->addWidget(caption(selBox, QStringLiteral("far end")));
+        jrow->addWidget(stripFarSpin_);
         grid->addLayout(jrow, r, 2, 1, 2);
     }
     ++r;
@@ -326,7 +345,7 @@ void MechanicalBuilderDialog::buildUi() {
         "from, so this is where the diameter comes from."));
     connect(wireList_, &QListWidget::itemChanged, this, [this](QListWidgetItem* item) {
         if (syncing_ || !item) return;
-        MechSegment* s = currentSegment();
+        MechSegment* s = currentRun();
         if (!s) return;
         const QString id = item->data(Qt::UserRole).toString();
         const bool on = item->checkState() == Qt::Checked;
@@ -499,6 +518,17 @@ MechSegment* MechanicalBuilderDialog::currentSegment() {
     return nullptr;
 }
 
+MechSegment* MechanicalBuilderDialog::currentRun(bool* atToEnd) {
+    if (atToEnd) *atToEnd = true;
+    const MechNode* n = def_.node(selected_);
+    if (!n) return nullptr;
+    const MechSegment* found = nodeRunSegment(def_, *n, atToEnd);
+    if (!found) return nullptr;
+    for (MechSegment& s : def_.segments)
+        if (s.id == found->id) return &s;
+    return nullptr;
+}
+
 bool MechanicalBuilderDialog::selectNode(const QString& nodeId) {
     if (!def_.node(nodeId)) return false;
     selected_ = nodeId;
@@ -589,23 +619,29 @@ void MechanicalBuilderDialog::refreshFittingChoices() {
     if (!fittingChoice_) return;
     syncing_ = true;
     fittingChoice_->clear();
-    const MechSegment* seg = currentSegment();
-    const MechNode* node = def_.node(selected_);
-    const bool atToEnd = seg && node ? seg->toNode == node->id : true;
+    bool atToEnd = true;
+    const MechSegment* seg = currentRun(&atToEnd);
     // What a part has to go over depends on WHERE it goes: a backshell at the end takes the cable, a
     // braid over the stripped conductors takes the bundle, a sleeve along the run takes the body. One
     // figure for all three is how a boot that will not pass the jacket comes to be on the list.
     double bundle = seg ? segmentBundleDiameterMm(def_, *seg) : def_.draw.minBundleMm;
     int hidden = 0;
+    bool unknown = false;                 // a cable whose jacket diameter nobody has given
     for (PartKind kind : fittingKinds()) {
         bundle = fittingFitDiameterMm(def_, seg, kind, fittingGoesAtEnd(kind), atToEnd);
+        // 0 means the figure is not known. Then NOTHING is hidden and nothing is marked as a misfit:
+        // this is the case where every backshell and every boot used to disappear behind a check made
+        // against the cores of a cable instead of against its jacket.
+        const bool checkable = bundle > 0.0;
+        if (!checkable) unknown = true;
         for (const LibraryPart* p : catalog_.ofKind(kind)) {
             QString why;
             bool known = false;
-            const bool fits = mechFittingFits(*p, bundle, why, &known);
+            const bool fits = !checkable || mechFittingFits(*p, bundle, why, &known);
             if (!fits && onlyFits_ && onlyFits_->isChecked()) { ++hidden; continue; }
             QString label = QStringLiteral("%1 — %2").arg(partKindName(kind), p->title());
             if (!fits) label += QStringLiteral("   ✗ %1").arg(why);
+            else if (!checkable) label += QStringLiteral("   (jacket Ø not given: fit unchecked)");
             else if (!known) label += QStringLiteral("   (does not say what it fits)");
             fittingChoice_->addItem(label, p->id);
         }
@@ -616,10 +652,16 @@ void MechanicalBuilderDialog::refreshFittingChoices() {
                              .arg(bundle, 0, 'f', 1)
                        : QStringLiteral("no fittings in the connected libraries"),
             QString());
+    else if (unknown)
+        fittingChoice_->setToolTip(QStringLiteral(
+            "This run is cable %1 and nothing says what it measures over the jacket, so no fit has "
+            "been checked. Put the jacket Ø in above and the list will say which of these will "
+            "actually go over it.").arg(seg ? seg->cableName : QString()));
     else if (hidden > 0)
         fittingChoice_->setToolTip(
-            QStringLiteral("%1 part(s) hidden because this bundle will not go into them")
-                .arg(hidden));
+            QStringLiteral("%1 part(s) hidden because this %2 mm body will not go into them")
+                .arg(hidden)
+                .arg(bundle, 0, 'f', 1));
     syncing_ = false;
 }
 
@@ -633,13 +675,13 @@ void MechanicalBuilderDialog::addFitting() {
 
     MechFitting f;
     f.id = QStringLiteral("f%1").arg(
-        static_cast<int>(n->fittings.size() + (currentSegment() ? currentSegment()->coverings.size()
-                                                                : 0) + 1));
+        static_cast<int>(n->fittings.size() + (currentRun() ? currentRun()->coverings.size() : 0)
+                         + 1));
     f.libPart = part->id;
     f.kind = part->kind;
     f.name = part->description.isEmpty() ? partKindName(part->kind) : part->description;
     if (fittingGoesAtEnd(part->kind)) n->fittings.push_back(f);
-    else if (MechSegment* s = currentSegment()) s->coverings.push_back(f);
+    else if (MechSegment* s = currentRun()) s->coverings.push_back(f);
     else n->fittings.push_back(f);
     refreshAll();
 }
@@ -709,7 +751,7 @@ void MechanicalBuilderDialog::removeFitting() {
         n->fittings.erase(std::remove_if(n->fittings.begin(), n->fittings.end(),
                                         [&](const MechFitting& f) { return f.id == id; }),
                           n->fittings.end());
-    else if (MechSegment* s = currentSegment())
+    else if (MechSegment* s = currentRun())
         s->coverings.erase(std::remove_if(s->coverings.begin(), s->coverings.end(),
                                          [&](const MechFitting& f) { return f.id == id; }),
                            s->coverings.end());
@@ -721,7 +763,7 @@ void MechanicalBuilderDialog::refreshFittingList() {
     syncing_ = true;
     fittingList_->clear();
     const MechNode* n = def_.node(selected_);
-    const MechSegment* seg = currentSegment();
+    const MechSegment* seg = currentRun();
     if (n) {
         for (const MechFitting& f : n->fittings) {
             // Say which it is: a body at the end, or a layer over the conductors that come out of the
@@ -798,12 +840,17 @@ void MechanicalBuilderDialog::refreshTree() {
             if (seg) {
                 item->setText(2, QString::number(seg->lengthMm, 'f', 1));
                 item->setText(3, QString::number(n->angleDeg, 'f', 1));
-                // What the run IS: the jacket on a cable, the bundle on loose wires. The bundle inside
-                // a cable is on the row below in the selected-point panel, where it belongs.
-                item->setText(4, seg->isCable()
-                                     ? QStringLiteral("Ø%1 cable").arg(seg->jacketOdMm, 0, 'f', 1)
-                                     : QStringLiteral("Ø%1").arg(segmentBundleDiameterMm(def_, *seg),
-                                                                 0, 'f', 1));
+                // What the run IS: the jacket on a cable, the bundle on loose wires - and on a cable
+                // whose jacket figure is missing, that it is a cable and the figure is missing, rather
+                // than a bundle diameter that is not what anything on it has to go over.
+                const double bundleMm = segmentBundleDiameterMm(def_, *seg);
+                if (seg->isCable())
+                    item->setText(4, QStringLiteral("Ø%1 cable").arg(seg->jacketOdMm, 0, 'f', 1));
+                else if (seg->cableWithoutJacket())
+                    item->setText(4, QStringLiteral("cable — jacket Ø?"));
+                else
+                    item->setText(4, QStringLiteral("Ø%1").arg(bundleMm, 0, 'f', 1));
+                if (seg->cableWithoutJacket()) item->setForeground(4, QColor("#e6b45a"));
                 item->setText(5, QString::number(seg->wireIds.size()));
             } else {
                 item->setText(2, QStringLiteral("—"));
@@ -824,6 +871,10 @@ void MechanicalBuilderDialog::refreshDetails() {
     syncing_ = true;
     const MechNode* n = def_.node(selected_);
     const MechSegment* seg = currentSegment();
+    // The jacket belongs to the run this point is an END of - which at the root is the run that leaves
+    // it, so a connector at the start of a trunk has its cable and its stripped length here too.
+    bool runAtTo = true;
+    const MechSegment* run = currentRun(&runAtTo);
     const bool has = n != nullptr;
     for (QWidget* w : {static_cast<QWidget*>(nodeName_), static_cast<QWidget*>(nodeKind_)})
         if (w) w->setEnabled(has);
@@ -849,19 +900,26 @@ void MechanicalBuilderDialog::refreshDetails() {
     }
 
     if (bundleLabel_) {
-        if (!seg) bundleLabel_->setText(QStringLiteral("—"));
+        if (!run) bundleLabel_->setText(QStringLiteral("—"));
         else {
-            const double d = segmentBundleDiameterMm(def_, *seg);
+            const double d = segmentBundleDiameterMm(def_, *run);
             QString text = QStringLiteral("Ø%1 mm from %2 conductor(s)")
                                .arg(d, 0, 'f', 1)
-                               .arg(seg->wireIds.size());
+                               .arg(run->wireIds.size());
             // On a cable, both figures: what the run is, and what it narrows to where the jacket is
             // cut back. That is the pair a boot has to be chosen against.
-            if (seg->isCable())
+            if (run->isCable())
                 text = QStringLiteral("Ø%1 mm cable, Ø%2 mm from %3 core(s)")
-                           .arg(seg->jacketOdMm, 0, 'f', 1)
+                           .arg(run->jacketOdMm, 0, 'f', 1)
                            .arg(d, 0, 'f', 1)
-                           .arg(seg->wireIds.size());
+                           .arg(run->wireIds.size());
+            else if (run->cableWithoutJacket())
+                // The figure everything fitted to this run is chosen against, and it is missing. Say
+                // that here rather than quietly offering the bundle in its place.
+                text = QStringLiteral("cable %1 — jacket Ø not given; its %2 core(s) make Ø%3 mm")
+                           .arg(run->cableName)
+                           .arg(run->wireIds.size())
+                           .arg(d, 0, 'f', 1);
             bundleLabel_->setText(text);
         }
     }
@@ -871,25 +929,26 @@ void MechanicalBuilderDialog::refreshDetails() {
         cablePart_->clear();
         cablePart_->addItem(QStringLiteral("— loose wires —"), QString());
         for (const LibraryPart* p : catalog_.ofKind(PartKind::Cable)) cablePart_->addItem(p->title(), p->id);
-        const int at = seg ? cablePart_->findData(seg->cablePart) : 0;
+        const int at = run ? cablePart_->findData(run->cablePart) : 0;
         cablePart_->setCurrentIndex(at >= 0 ? at : 0);
-        cablePart_->setEnabled(seg != nullptr);
-        if (seg && !seg->cablePart.isEmpty() && at < 0)
+        cablePart_->setEnabled(run != nullptr);
+        if (run && !run->cablePart.isEmpty() && at < 0)
             cablePart_->setToolTip(QStringLiteral(
                 "This run's cable is not in any connected library; the jacket diameter beside it is "
                 "what the drawing uses."));
     }
     if (jacketSpin_) {
-        jacketSpin_->setValue(seg ? seg->jacketOdMm : 0.0);
-        jacketSpin_->setEnabled(seg != nullptr);
+        jacketSpin_->setValue(run ? run->jacketOdMm : 0.0);
+        jacketSpin_->setEnabled(run != nullptr);
     }
-    if (stripSpin_) {
-        // Without a jacket there is nothing to strip, so the figure would mean nothing.
-        const bool isCable = seg && seg->isCable();
-        double bare = 0.0;
-        if (isCable && n) bare = seg->toNode == n->id ? seg->stripToMm : seg->stripFromMm;
-        stripSpin_->setValue(bare);
-        stripSpin_->setEnabled(isCable);
+    if (stripSpin_ && stripFarSpin_) {
+        // A run known to be a cable can be stripped whether or not its jacket diameter is in yet: where
+        // the jacket STOPS is a different question from what it measures, and both get asked.
+        const bool jacketed = run && (run->isCable() || run->cableWithoutJacket());
+        stripSpin_->setValue(run ? (runAtTo ? run->stripToMm : run->stripFromMm) : 0.0);
+        stripFarSpin_->setValue(run ? (runAtTo ? run->stripFromMm : run->stripToMm) : 0.0);
+        stripSpin_->setEnabled(jacketed);
+        stripFarSpin_->setEnabled(jacketed);
     }
     const struct { QCheckBox* box; PartKind kind; } ticks[] = {
         {backshellChk_, PartKind::Backshell},
@@ -916,10 +975,10 @@ void MechanicalBuilderDialog::refreshDetails() {
                 wireList_);
             item->setData(Qt::UserRole, w.id);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(seg && seg->wireIds.contains(w.id) ? Qt::Checked : Qt::Unchecked);
+            item->setCheckState(run && run->wireIds.contains(w.id) ? Qt::Checked : Qt::Unchecked);
             if (od <= 0.0) item->setForeground(QColor("#e6b45a"));
         }
-        wireList_->setEnabled(seg != nullptr);
+        wireList_->setEnabled(run != nullptr);
     }
     refreshFittingList();
     refreshFittingChoices();
