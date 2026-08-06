@@ -6635,13 +6635,14 @@ void MainWindow::refreshBomPanel() {
     rows = bomApplyConfig(rows, table.config);
     if (table.config.unify) rows = bomUnify(rows);
 
-    // Four of the seven columns: what it is, the part number to order it by, how many, and of what.
-    // The rest are for the window and for the table placed on the sheet - a panel this narrow is read,
-    // not filled in. (1 = description, 3 = manufacturer's P/N, 5 = quantity, 6 = units.)
+    // Five of the seven columns: what it is, the part number to order it by, WHO MAKES IT, how many,
+    // and of what. The two left out - the line number and the internal P/N - are for the window and for
+    // the table placed on the sheet. (1 = description, 3 = manufacturer's P/N, 4 = manufacturer,
+    // 5 = quantity, 6 = units.)
     bomPanel_->clear();
-    bomPanel_->setColumnCount(4);
-    bomPanel_->setHorizontalHeaderLabels({table.header(1), table.header(3), table.header(5),
-                                          table.header(6)});
+    bomPanel_->setColumnCount(5);
+    bomPanel_->setHorizontalHeaderLabels({table.header(1), table.header(3), table.header(4),
+                                          table.header(5), table.header(6)});
     bomPanel_->setRowCount(static_cast<int>(rows.size()));
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const BomRow& r = rows[static_cast<size_t>(i)];
@@ -6652,12 +6653,14 @@ void MainWindow::refreshBomPanel() {
         };
         cell(0, r.description.isEmpty() ? r.ref : r.description);
         cell(1, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn);
-        cell(2, r.qtyText(table.config.qtyDecimals));
-        cell(3, r.unit);
+        cell(2, r.mfrName);
+        cell(3, r.qtyText(table.config.qtyDecimals));
+        cell(4, r.unit);
     }
     bomPanel_->horizontalHeader()->setStretchLastSection(false);
+    // The description takes what is left over; the rest are as wide as they need to be.
     bomPanel_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int c = 1; c < 4; ++c)
+    for (int c = 1; c < 5; ++c)
         bomPanel_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
 }
 
