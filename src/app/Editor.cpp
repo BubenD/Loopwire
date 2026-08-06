@@ -1234,7 +1234,11 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
 
 std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QString>& skip) const {
     if (!doc_) return std::nullopt;
-    const double tol = worldTolerance();
+    // Looking for the OTHER object at this place (skip is not empty) reaches a little further: the click
+    // was made at a joint, one object answered first, and the second is by definition right there. Half
+    // a pixel of difference in how two shapes measure their distance should not decide whether a corner
+    // can be filleted.
+    const double tol = worldTolerance() * (skip.empty() ? 1.0 : 1.6);
     double best = tol;
     std::optional<QString> hit;
     // Iterate in reverse so topmost (last drawn) wins - and it must WIN A TIE, which needs a strict
@@ -8571,6 +8575,105 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         return;
     }
 
+    // FILLET where a RUN meets something else: a polyline (or a rect, or a polygon) picked together
+    // with a line or a curve. The run's own corners are rounded by picking two of its segments (above);
+    // this is the other case - the end of a run meeting a separate object, which is what a shape drawn
+    // as a polyline plus a line is. The picked segment of the run stands in as a line, the fillet is
+    // worked out against it, and the run's END VERTEX is then moved to where the fillet starts.
+    if ((tool_ == ToolId::Fillet) && l1 && l2 && l1 != l2) {
+        auto isRun = [](const Entity& e) {
+            return (e.type == EntityType::Polyline || e.type == EntityType::Rect ||
+                    e.type == EntityType::Polygon) &&
+                   e.points.size() >= 2;
+        };
+        auto isCurve = [](const Entity& e) {
+            return e.type == EntityType::Circle || e.type == EntityType::Arc ||
+                   e.type == EntityType::Ellipse;
+        };
+        Entity* run = nullptr;
+        Entity* other = nullptr;
+        Vec2 pickRun{0.0, 0.0}, pickOther{0.0, 0.0};
+        if (isRun(*l1) && (l2->type == EntityType::Line || isCurve(*l2))) {
+            run = l1; other = l2; pickRun = pickPts_[0]; pickOther = pickPts_[1];
+        } else if (isRun(*l2) && (l1->type == EntityType::Line || isCurve(*l1))) {
+            run = l2; other = l1; pickRun = pickPts_[1]; pickOther = pickPts_[0];
+        }
+        if (run && other) {
+            const int n = static_cast<int>(run->points.size());
+            const bool closed = run->type == EntityType::Rect || run->type == EntityType::Polygon;
+            // Which segment of the run was picked.
+            int seg = -1;
+            double bd = std::numeric_limits<double>::max();
+            const int edges = closed ? n : n - 1;
+            for (int i = 0; i < edges; ++i) {
+                const double dd =
+                    closestPointOnSegment(pickRun, run->points[i], run->points[(i + 1) % n]).distance;
+                if (dd < bd) { bd = dd; seg = i; }
+            }
+            // Only an END of an open run can be taken back: anywhere else the run would have to be cut
+            // in two, which is a different command (trim) and not what rounding a corner means.
+            const bool atStart = !closed && seg == 0;
+            const bool atEnd = !closed && seg == n - 2;
+            if (!atStart && !atEnd) {
+                emit message(closed
+                                 ? QStringLiteral("A closed shape cannot be rounded against another "
+                                                  "object - pick two of its own sides instead")
+                                 : QStringLiteral("Pick the run near one of its two ENDS: only an end "
+                                                  "can be taken back to a fillet"));
+                pickIds_.clear();
+                pickPts_.clear();
+                return;
+            }
+            const int endIdx = atStart ? 0 : n - 1;
+            const int innerIdx = atStart ? 1 : n - 2;
+            // The run's end segment, standing in as a line.
+            Entity stand;
+            stand.type = EntityType::Line;
+            stand.layer = run->layer;
+            stand.a = run->points[innerIdx];   // the end that must NOT move
+            stand.b = run->points[endIdx];     // the end the fillet takes back
+            pushUndo();
+            CornerResult r;
+            if (other->type == EntityType::Line)
+                r = filletLines(stand, *other, filletRadius_, pickRun, pickOther);
+            else
+                r = filletLineCurve(stand, *other, filletRadius_, pickRun, pickOther);
+            // Did the fillet take back the END of the run, or the other end of the stand-in?
+            const bool innerMoved = distance(stand.a, run->points[innerIdx]) > 1e-9;
+            if (r.ok && innerMoved) {
+                // The fillet moved the wrong end of the stand-in: the corner is not at this end of the
+                // run, so nothing is written back.
+                undo();
+                emit message(QStringLiteral("They meet at the other end of that run - pick it nearer "
+                                            "the corner"));
+            } else if (r.ok) {
+                run->points[endIdx] = stand.b;
+                // Per-corner rounding data no longer matches a moved end.
+                run->meta.remove(QStringLiteral("cornerRadii"));
+                run->meta.remove(QStringLiteral("cornerChamfers"));
+                if (r.hasConnector) {
+                    Entity arc = r.connector;
+                    addEntity(std::move(arc));
+                }
+                doc_->setDirty(true);
+                emit message(r.hasConnector
+                                 ? QStringLiteral("Filleted the run to the %1 (radius %2)")
+                                       .arg(entityTypeToString(other->type))
+                                       .arg(filletRadius_)
+                                 : QStringLiteral("Fillet (radius 0): brought them together"));
+            } else {
+                undo();
+                emit message(r.tooBig ? QStringLiteral("Fillet radius %1 is too big for that corner")
+                                            .arg(filletRadius_)
+                                      : QStringLiteral("Those two do not form a corner"));
+            }
+            pickIds_.clear();
+            pickPts_.clear();
+            emit changed();
+            return;
+        }
+    }
+
     // FILLET a LINE to a CURVE: a circle, an arc, an ellipse or a piece of one. Picked in either order.
     // The same idea as two lines - an arc of the set radius tangent to both, made near where each was
     // picked - and the reason this was worth having: a harness drawing is full of runs that meet a
@@ -8645,7 +8748,16 @@ void Editor::handlePickModifyPress(const Vec2& p) {
             emit message(QStringLiteral("Lines do not form a valid corner."));
         }
     } else {
-        emit message(QStringLiteral("Pick two distinct lines."));
+        // Say WHAT was picked. "Pick two distinct lines" left no way to tell whether the two clicks had
+        // landed on one object, or on something the command does not know how to round.
+        const QString a = l1 ? entityTypeToString(l1->type) : QStringLiteral("nothing");
+        const QString b = l2 ? entityTypeToString(l2->type) : QStringLiteral("nothing");
+        if (l1 && l1 == l2)
+            emit message(QStringLiteral("Both clicks landed on the same %1 - click the other object, "
+                                        "or two sides of one run to round its own corner").arg(a));
+        else
+            emit message(QStringLiteral("%1 cannot be rounded to a %2 yet - lines, arcs, circles, "
+                                        "ellipses and the ends of a run can").arg(a, b));
     }
     pickIds_.clear();
     pickPts_.clear();

@@ -5022,6 +5022,98 @@ int run_editor_tests() {
         }
     }
 
+    // --- Rounding where the END OF A RUN meets something else: a polyline and a line, or a curve.
+    {
+        // A shape drawn as a polyline for three sides and a separate line (or a notch) for the fourth is
+        // the ordinary way one is drawn, and its corners are then between TWO OBJECTS, not inside one.
+        // Filleting knew how to round two lines, and how to round a run's own corner, and nothing about
+        // this - so the corner where the run met the line could not be rounded at all.
+        for (const bool curve : {false, true}) {
+            Document d;
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 300}, {220, 300}, {220, 0}, {0, 0}};   // starting at the top-left corner
+            d.entities().push_back(run);
+            Entity other;
+            other.id = QStringLiteral("other");
+            if (curve) {
+                other.type = EntityType::Ellipse;
+                other.center = {0, 240};
+                other.radius = 40.0;
+                other.radiusY = 60.0;
+                other.meta.insert("ellipticalArc", true);
+                other.startAngle = -M_PI / 2.0;   // bulging into the shape, top end at (0,300)
+                other.endAngle = M_PI / 2.0;
+            } else {
+                other.type = EntityType::Line;
+                other.a = {0, 300};               // the joint
+                other.b = {0, 40};
+            }
+            d.entities().push_back(other);
+
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Fillet);
+            ed.setFilletRadius(20.0);
+            ed.onPointerPress({20, 300}, Qt::LeftButton, Qt::NoModifier);            // the run's top edge
+            ed.onPointerPress(curve ? Vec2{30.0, 270.0} : Vec2{0.0, 240.0}, Qt::LeftButton,
+                              Qt::NoModifier);                                        // the other object
+            const Entity* r = nullptr;
+            const Entity* fillet = nullptr;
+            for (const auto& e : d.entities()) {
+                if (e.id == QLatin1String("run")) r = &e;
+                else if (e.type == EntityType::Arc && e.id != QLatin1String("other")) fillet = &e;
+            }
+            const char* kind = curve ? "a half ellipse" : "a line";
+            check(fillet != nullptr,
+                  qPrintable(QStringLiteral("run fillet: the end of a run rounds to %1").arg(kind)));
+            if (r && fillet) {
+                check(r->points.size() == 4,
+                      qPrintable(QStringLiteral("run fillet (%1): the run keeps its shape").arg(kind)));
+                check(r->points[0].x > 1.0 && near(r->points[0].y, 300.0),
+                      qPrintable(QStringLiteral("run fillet (%1): its END is taken back along its own "
+                                                "edge to where the fillet starts").arg(kind)));
+                check(near(r->points[1].x, 220.0) && near(r->points[3].x, 0.0),
+                      qPrintable(QStringLiteral("run fillet (%1): and the rest of it is untouched")
+                                     .arg(kind)));
+                check(near(fillet->radius, 20.0),
+                      qPrintable(QStringLiteral("run fillet (%1): the arc is the radius asked for")
+                                     .arg(kind)));
+            }
+        }
+
+        // Picked in the middle of a run, there is nothing to take back: say so rather than doing
+        // something surprising.
+        {
+            Document d;
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 300}, {220, 300}, {220, 0}, {0, 0}};
+            d.entities().push_back(run);
+            Entity line;
+            line.id = QStringLiteral("l");
+            line.type = EntityType::Line;
+            line.a = {300, 150};
+            line.b = {400, 150};
+            d.entities().push_back(line);
+            Editor ed;
+            ed.setDocument(&d);
+            QString msg;
+            QObject::connect(&ed, &Editor::message, [&msg](const QString& m) { msg = m; });
+            ed.setTool(ToolId::Fillet);
+            ed.setFilletRadius(20.0);
+            ed.onPointerPress({220, 150}, Qt::LeftButton, Qt::NoModifier);   // the run's MIDDLE edge
+            ed.onPointerPress({350, 150}, Qt::LeftButton, Qt::NoModifier);
+            int arcs = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Arc) ++arcs;
+            check(arcs == 0 && msg.contains(QLatin1String("END")),
+                  "run fillet: picked in the middle of a run, it says which end to pick instead");
+        }
+    }
+
     // --- Rounding a corner where two objects MEET, clicked at the corner - which is where one clicks.
     {
         // Two separate lines sharing an end. The pick lands ON the corner (the snap puts it there), and
