@@ -128,6 +128,53 @@ void forEachCutSegment(const Entity& e, F&& f) {
     }
 }
 
+bool isCurvedCutter(const Entity& e) {
+    if ((e.type == EntityType::Circle || e.type == EntityType::Arc) && e.radius > 1e-9) return true;
+    return e.type == EntityType::Ellipse && e.radius > 1e-9 && e.radiusY > 1e-9;
+}
+
+// Is `p` within the swept part of a cutter that is only part of its curve? A whole circle or a whole
+// ellipse takes everything.
+bool onCutterCurve(const Entity& cutter, const Vec2& p) {
+    const bool isEllipse = cutter.type == EntityType::Ellipse;
+    if (isEllipse && !cutter.meta.value(QStringLiteral("ellipticalArc")).toBool()) return true;
+    if (!isEllipse && cutter.type != EntityType::Arc) return true;
+    double sweep = cutter.endAngle - cutter.startAngle;
+    while (sweep < 0.0) sweep += 2.0 * M_PI;
+    const double at = isEllipse ? ellipseParamAt(p, cutter.center, cutter.radius, cutter.radiusY,
+                                                 cutter.rotation)
+                                : std::atan2(p.y - cutter.center.y, p.x - cutter.center.x);
+    double rel = at - cutter.startAngle;
+    while (rel < 0.0) rel += 2.0 * M_PI;
+    return rel <= sweep + 1e-9;
+}
+
+// Where the segment a..a+d crosses a curved cutter, as parameters along it. Only crossings strictly
+// inside the segment count - an end that already sits on the curve is not a cut.
+//
+// Worked out AGAINST THE CURVE ITSELF, not against the many-sided polygon forEachCutSegment reduces it
+// to. Two reasons, and both of them bite. Every chord of that polygon lies inside the curve, so the cut
+// lands a little short of it - close enough to look right, and wrong enough that snapping or filleting
+// to that end afterwards misses the curve. And where a chord ENDS on the object being trimmed - which
+// is exactly what happens after trimming an ellipse with a line, since the piece left behind then ends
+// on that line - the chord-against-segment test is the degenerate case that may report the crossing
+// twice or not at all. Not at all is what left one cut instead of two, so trimming the line took
+// everything from the one cut it found to the far end of the line instead of the piece between them.
+void appendCurvedCuts(const Entity& cutter, const Vec2& a, const Vec2& d, double L2, double offset,
+                      std::vector<double>& out) {
+    const std::vector<Vec2> xs =
+        cutter.type == EntityType::Ellipse
+            ? lineEllipseIntersection(a, d, cutter.center, cutter.radius, cutter.radiusY,
+                                      cutter.rotation)
+            : lineCircleIntersection(a, d, cutter.center, cutter.radius);
+    for (const Vec2& x : xs) {
+        const double t = dot(x - a, d) / L2;
+        if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+        if (!onCutterCurve(cutter, x)) continue;
+        out.push_back(offset + t);
+    }
+}
+
 // Gather all segment-segment intersection params of `line` with `others`.
 std::vector<Vec2> lineIntersections(const Entity& line,
                                     const std::vector<Entity>& others) {
@@ -135,8 +182,18 @@ std::vector<Vec2> lineIntersections(const Entity& line,
     auto addSeg = [&](const Vec2& a, const Vec2& b) {
         if (auto x = segmentSegmentIntersection(line.a, line.b, a, b)) out.push_back(*x);
     };
+    const Vec2 dir = line.b - line.a;
+    const double L2 = dir.lengthSq();
     for (const auto& e : others) {
         if (&e == &line) continue;
+        // A circle, an arc or an ellipse is crossed exactly - and was not handled here at all before,
+        // so a line could not be trimmed to a curve by this path.
+        if (isCurvedCutter(e) && L2 > 1e-12) {
+            std::vector<double> ts;
+            appendCurvedCuts(e, line.a, dir, L2, 0.0, ts);
+            for (const double t : ts) out.push_back({line.a.x + dir.x * t, line.a.y + dir.y * t});
+            continue;
+        }
         switch (e.type) {
         case EntityType::Line:
             addSeg(e.a, e.b);
@@ -324,32 +381,6 @@ namespace {
 // right, and wrong enough that snapping or filleting to that end afterwards misses the circle. Two
 // adjacent chords can also report the same corner twice, which turns one cut into a pair and leaves
 // a hair of geometry behind.
-bool isCircularCutter(const Entity& e) {
-    return (e.type == EntityType::Circle || e.type == EntityType::Arc) && e.radius > 1e-9;
-}
-
-// Is `p` within the swept part of an arc? A full circle takes everything.
-bool onCutterArc(const Entity& cutter, const Vec2& p) {
-    if (cutter.type != EntityType::Arc) return true;
-    double sweep = cutter.endAngle - cutter.startAngle;
-    while (sweep < 0.0) sweep += 2.0 * M_PI;
-    double rel = std::atan2(p.y - cutter.center.y, p.x - cutter.center.x) - cutter.startAngle;
-    while (rel < 0.0) rel += 2.0 * M_PI;
-    return rel <= sweep + 1e-9;
-}
-
-// Where the segment a..a+d crosses a circular cutter, as parameters along it. Only crossings
-// strictly inside the segment count - an end that already sits on the ring is not a cut.
-void appendCircularCuts(const Entity& cutter, const Vec2& a, const Vec2& d, double L2,
-                        double offset, std::vector<double>& out) {
-    for (const Vec2& x : lineCircleIntersection(a, d, cutter.center, cutter.radius)) {
-        const double t = dot(x - a, d) / L2;
-        if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
-        if (!onCutterArc(cutter, x)) continue;
-        out.push_back(offset + t);
-    }
-}
-
 // A cut, and the cutting edge that made it. The owner matters for one decision: when the two
 // boundaries either side of the pick are the ENTRY AND EXIT OF THE SAME CIRCLE, the material taken
 // goes back only to the nearer of them - a fence inside a ring should not swallow the whole chord out
@@ -368,9 +399,9 @@ std::vector<CutAt> intersectionCuts(const Entity& line, const std::vector<Entity
     if (L2 < 1e-12) return cuts;
     for (const auto& e : others) {
         if (&e == &line) continue;
-        if (isCircularCutter(e)) {
+        if (isCurvedCutter(e)) {
             std::vector<double> ts;
-            appendCircularCuts(e, a, d, L2, 0.0, ts);
+            appendCurvedCuts(e, a, d, L2, 0.0, ts);
             for (double t : ts) cuts.push_back({t, &e, true});
             continue;
         }
@@ -391,8 +422,8 @@ std::vector<double> intersectionParams(const Entity& line, const std::vector<Ent
     if (L2 < 1e-12) return ts;
     for (const auto& e : others) {
         if (&e == &line) continue;
-        if (isCircularCutter(e)) {
-            appendCircularCuts(e, a, d, L2, 0.0, ts);
+        if (isCurvedCutter(e)) {
+            appendCurvedCuts(e, a, d, L2, 0.0, ts);
             continue;
         }
         forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
@@ -652,9 +683,13 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
         return false;
     }
     if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||
-        e.type == EntityType::Wire) {
-        for (size_t i = 1; i < e.points.size(); ++i) {
-            const Vec2 A = e.points[i - 1], B = e.points[i];
+        e.type == EntityType::Wire || e.type == EntityType::Rect ||
+        e.type == EntityType::Polygon) {
+        // A rect and a polygon are closed, so their last edge - back to where they started - counts too.
+        const bool closed = e.type == EntityType::Rect || e.type == EntityType::Polygon;
+        const size_t edges = e.points.size() + (closed ? 1 : 0);
+        for (size_t i = 1; i < edges; ++i) {
+            const Vec2 A = e.points[i - 1], B = e.points[i % e.points.size()];
             for (const auto& c : others) {
                 if (!e.id.isEmpty() && c.id == e.id) continue;
                 bool hit = false;
@@ -717,9 +752,9 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
         if (L2 < 1e-12) continue;
         for (const auto& c : cutters) {
             if (!selfId.isEmpty() && c.id == selfId) continue;
-            if (isCircularCutter(c)) {
+            if (isCurvedCutter(c)) {
                 std::vector<double> ts;
-                appendCircularCuts(c, A, D, L2, static_cast<double>(i), ts);
+                appendCurvedCuts(c, A, D, L2, static_cast<double>(i), ts);
                 for (double t : ts) crossings.push_back(t);
                 continue;
             }
@@ -863,18 +898,22 @@ bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& oth
     };
     for (const auto& e : others) {
         if (&e == &line) continue;
-        if (isCircularCutter(e)) {
-            // Exactly onto the ring, for the same reason trimming is: a chord of the approximating
-            // polygon stops inside the circle.
-            for (const Vec2& x : lineCircleIntersection(moving, dir, e.center, e.radius)) {
-                if (!onCutterArc(e, x)) continue;
+        if (isCurvedCutter(e)) {
+            // Exactly onto the curve, for the same reason trimming is: a chord of the approximating
+            // polygon stops inside it, so the extended end lands short of what it was extended to.
+            const std::vector<Vec2> xs =
+                e.type == EntityType::Ellipse
+                    ? lineEllipseIntersection(moving, dir, e.center, e.radius, e.radiusY, e.rotation)
+                    : lineCircleIntersection(moving, dir, e.center, e.radius);
+            for (const Vec2& x : xs) {
+                if (!onCutterCurve(e, x)) continue;
                 const double t = dot(x - moving, dir);
                 if (t <= 1e-9) continue;              // must be BEYOND the end being extended
                 if (t < bestT) { bestT = t; bestPt = x; found = true; }
             }
             continue;
         }
-        // Every other boundary type (including ellipses) reduced to segments.
+        // Every other boundary type reduced to segments.
         forEachCutSegment(e, tryBoundary);
     }
     if (!found) return false;

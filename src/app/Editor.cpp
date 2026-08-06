@@ -8031,6 +8031,31 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 storeCutMeta(rem, selfId);
                 additions.push_back(std::move(rem));
             }
+        } else if (obj->type == EntityType::Rect || obj->type == EntityType::Polygon) {
+            // A closed shape is trimmed as the run of its own edges, and what is left is open - so it
+            // becomes a polyline, which is what an open run IS. (The same thing every CAD does with a
+            // trimmed rectangle: it stops being a rectangle.)
+            if (obj->points.size() < 3) continue;
+            std::vector<Vec2> run = obj->points;
+            run.push_back(run.front());   // round to where it started
+            auto pick = cutCrossOn(run);
+            if (!pick || !objectCrosses(*obj, refs)) continue;
+            const QString selfId = obj->id;
+            auto pieces = trimPolylinePieces(run, *pick, joints, selfId);
+            if (pieces.empty()) continue;
+            obj->type = EntityType::Polyline;
+            obj->meta.remove(QStringLiteral("cornerRadii"));
+            obj->meta.remove(QStringLiteral("cornerRadius"));
+            obj->points = pieces[0];
+            storeCutMeta(*obj, selfId);
+            ++count;
+            if (pieces.size() == 2) {
+                Entity rem = *obj;
+                rem.id.clear();
+                rem.points = pieces[1];
+                storeCutMeta(rem, selfId);
+                additions.push_back(std::move(rem));
+            }
         } else if (obj->type == EntityType::Polyline) {
             // Trim the polyline centreline (double polylines: both runs follow).
             auto pick = cutCrossOn(obj->points);
@@ -12268,7 +12293,18 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         sp.setWidthF(1.6);
         p.setPen(sp);
         p.setBrush(Qt::NoBrush);
-        p.drawRect(QRectF(s.x() - 5, s.y() - 5, 10, 10));
+        // The MIDDLE of something - the midpoint of a line, the centre of a circle - is marked with a
+        // triangle, and an end or a crossing with a square. One shape for every kind of snap said
+        // "something was caught" without saying WHAT, which is the one thing worth knowing when the end
+        // and the middle of a short line are a few pixels apart.
+        if (snapResult_.kind == SnapKind::Midpoint || snapResult_.kind == SnapKind::Center) {
+            QPolygonF tri;
+            tri << QPointF(s.x(), s.y() - 6) << QPointF(s.x() + 6, s.y() + 4)
+                << QPointF(s.x() - 6, s.y() + 4);
+            p.drawPolygon(tri);
+        } else {
+            p.drawRect(QRectF(s.x() - 5, s.y() - 5, 10, 10));
+        }
     }
 
     // Drawn LAST, so nothing paints over it: the joints where a selected break mark cuts its run sit

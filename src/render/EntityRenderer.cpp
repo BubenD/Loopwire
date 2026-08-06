@@ -1465,7 +1465,13 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             };
             double sweep = e.endAngle - e.startAngle;
             while (sweep <= 0.0) sweep += 2.0 * M_PI;
-            const int steps = std::max(8, static_cast<int>(std::ceil(sweep / (M_PI / 60.0))));
+            // Stepped by how big the curve is ON SCREEN, not by a fixed angle. A fixed three degrees is
+            // nothing on a small ellipse and a straight run of a dozen pixels on a large one zoomed
+            // into - which is what left a "stub" of straight line at the end of a trimmed ellipse,
+            // sticking out where the curve should have turned away.
+            const double onScreen = sweep * std::max(e.radius, e.radiusY) * vt.scale();
+            const int steps =
+                std::clamp(static_cast<int>(std::ceil(onScreen / 3.0)), 16, 4000);
             QPainterPath path;
             for (int i = 0; i <= steps; ++i) {
                 const QPointF sp = wpt(e.startAngle + sweep * i / steps);

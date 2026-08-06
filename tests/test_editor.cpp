@@ -4818,6 +4818,147 @@ int run_editor_tests() {
               "trim ellipse: a piece of an ellipse can be trimmed again");
     }
 
+    // --- Trimming to a curve: exactly onto it, and the piece between the crossings is what goes.
+    {
+        auto ellipseAt = [](const QString& id, double rx, double ry) {
+            Entity e;
+            e.id = id;
+            e.type = EntityType::Ellipse;
+            e.center = {0, 0};
+            e.radius = rx;
+            e.radiusY = ry;
+            return e;
+        };
+        // The line crosses the ellipse at x = 30: y = +-60*sqrt(1-(30/100)^2) = +-57.2364...
+        const double yCross = 60.0 * std::sqrt(1.0 - 0.09);
+
+        // 1) A whole ellipse as the reference: the part of the line inside it goes, and the two ends
+        // left behind sit ON the ellipse rather than a hair inside it.
+        {
+            Document d;
+            d.entities().push_back(ellipseAt(QStringLiteral("el"), 100.0, 60.0));
+            Entity l;
+            l.id = QStringLiteral("cut");
+            l.type = EntityType::Line;
+            l.a = {30, -90};
+            l.b = {30, 90};
+            d.entities().push_back(l);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({0, 60}, Qt::LeftButton, Qt::NoModifier);    // the ellipse: reference
+            ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);    // a cut line across the line
+            ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+            std::vector<double> ends;
+            int lines = 0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Line) {
+                    ++lines;
+                    ends.push_back(e.a.y);
+                    ends.push_back(e.b.y);
+                }
+            check(lines == 2, "trim to a curve: the stretch inside the ellipse goes, leaving both ends");
+            bool onTheCurve = true;
+            for (const double y : ends)
+                if (!near(std::abs(y), 90.0) && std::abs(std::abs(y) - yCross) > 1e-6)
+                    onTheCurve = false;
+            check(onTheCurve,
+                  "trim to a curve: and the new ends are ON the ellipse - not the fraction short that "
+                  "cutting against a many-sided polygon leaves");
+        }
+
+        // 2) The reference is HALF an ellipse whose two ends sit exactly on the line - which is what is
+        // left after trimming that ellipse with that line. Both crossings still have to be found: one
+        // of them going missing took everything from the cut to the far end of the line.
+        {
+            Document d;
+            Entity half = ellipseAt(QStringLiteral("el"), 100.0, 60.0);
+            half.meta.insert("ellipticalArc", true);
+            half.startAngle = ellipseParamAt({30.0, -yCross}, half.center, half.radius, half.radiusY, 0.0);
+            half.endAngle = ellipseParamAt({30.0, yCross}, half.center, half.radius, half.radiusY, 0.0);
+            d.entities().push_back(half);
+            Entity l;
+            l.id = QStringLiteral("cut");
+            l.type = EntityType::Line;
+            l.a = {30, -90};
+            l.b = {30, 90};
+            d.entities().push_back(l);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);   // the arc's far side
+            ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+            int lines = 0;
+            double kept = 0.0;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Line) {
+                    ++lines;
+                    kept += std::abs(e.b.y - e.a.y);
+                }
+            check(lines == 2,
+                  "trim to a curve: an arc whose own ends touch the line still cuts it in both places");
+            check(std::abs(kept - 2.0 * (90.0 - yCross)) < 1e-6,
+                  "trim to a curve: so what is taken off is the piece between them and nothing more");
+        }
+
+        // 3) Extending a line onto an ellipse lands exactly on it, for the same reason.
+        {
+            Document d;
+            d.entities().push_back(ellipseAt(QStringLiteral("el"), 100.0, 60.0));
+            Entity l;
+            l.id = QStringLiteral("stub");
+            l.type = EntityType::Line;
+            l.a = {30, 0};
+            l.b = {30, 20};
+            d.entities().push_back(l);
+            std::vector<Entity> bounds;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::Ellipse) bounds.push_back(e);
+            Entity line = l;
+            check(extendLineTo(line, Vec2{30.0, 20.0}, bounds),
+                  "extend to a curve: a line can be extended onto an ellipse");
+            check(std::abs(line.b.y - yCross) < 1e-6,
+                  "extend to a curve: and it stops exactly on it");
+        }
+    }
+
+    // --- A closed shape can be trimmed too: what is left is the open run it has become.
+    {
+        Document d;
+        Entity r;
+        r.id = QStringLiteral("box");
+        r.type = EntityType::Rect;
+        r.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+        d.entities().push_back(r);
+        Entity l;
+        l.id = QStringLiteral("ref");
+        l.type = EntityType::Line;
+        l.a = {-20, 30};
+        l.b = {120, 30};      // straight through the box: it crosses both sides
+        d.entities().push_back(l);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({-10, 30}, Qt::LeftButton, Qt::NoModifier);   // the line: reference
+        ed.onPointerPress({110, 10}, Qt::LeftButton, Qt::NoModifier);   // a cut line over the box's
+        ed.onPointerPress({90, 10}, Qt::LeftButton, Qt::NoModifier);    // bottom right side
+        const Entity* box = nullptr;
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("box")) box = &e;
+        check(box != nullptr, "trim a box: it is trimmed, not deleted");
+        if (box) {
+            check(box->type == EntityType::Polyline,
+                  "trim a box: what is left is an open run, so it is a polyline now");
+            bool below = false;
+            for (const Vec2& v : box->points)
+                if (v.y < 30.0 - 1e-6) below = true;
+            check(box->points.size() >= 2, "trim a box: with the rest of its edges kept");
+            check(!below || box->points.size() < 6,
+                  "trim a box: and the piece the cut line crossed is gone");
+        }
+    }
+
     // --- R turns whatever is held under the cursor before it is dropped.
     {
         Document d;
