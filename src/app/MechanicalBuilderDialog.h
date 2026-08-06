@@ -12,6 +12,7 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QTableWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -57,6 +58,9 @@ private:
     void refreshDetails();
     void refreshPreview();
     void refreshIssues();
+    // The bill of materials of the harness, with the balloon number of every line - so the number on
+    // the drawing and the row it points at are read side by side rather than taken on trust.
+    void refreshBom();
     void refreshAll();
     // The node being edited, and the run arriving at it.
     MechNode* currentNode();
@@ -98,6 +102,7 @@ private:
     // jacket is cut at this end so the conductors can reach the contacts.
     QComboBox* cablePart_ = nullptr;
     QDoubleSpinBox* jacketSpin_ = nullptr;
+    QDoubleSpinBox* openSpin_ = nullptr;       // wires open behind the connector
     QDoubleSpinBox* stripSpin_ = nullptr;      // at the selected end
     QDoubleSpinBox* stripFarSpin_ = nullptr;   // and at the far end of the same run
     // What is fitted at this end, as ticks.
@@ -123,6 +128,8 @@ private:
     QCheckBox* bodiesChk_ = nullptr;
     QCheckBox* spliceChk_ = nullptr;
 
+    QTableWidget* bomTable_ = nullptr;
+    QCheckBox* notesChk_ = nullptr;
     QListWidget* issues_ = nullptr;
     QLabel* summary_ = nullptr;
 };

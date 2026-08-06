@@ -909,6 +909,234 @@ int run_mechbuilder_tests() {
               "gauge change: and gets no heatshrink");
     }
 
+    // ---- The bill of materials, and the balloons that point at it ----
+    {
+        // The rule the released drawings keep without exception: every balloon on the assembly is a row
+        // in the table, and every row in the table is ballooned somewhere on the assembly. One row per
+        // PART, not per place it is used.
+        MechHarnessDef def = straightDef(300.0, 4, QStringLiteral("0.5"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        def.draw.balloons = true;
+        auto fitting = [](PartKind kind, double lengthMm) {
+            MechFitting f;
+            f.id = QStringLiteral("f-%1").arg(partKindKey(kind));
+            f.kind = kind;
+            f.name = partKindName(kind);
+            f.lengthMm = lengthMm;
+            return f;
+        };
+        // A backshell and a boot at the connector, and heatshrink at BOTH ends of the run - the same
+        // part in two places, which must come out as one row of 2 x its length.
+        for (MechNode& n : def.nodes) {
+            if (n.id == QLatin1String("p1")) {
+                n.fittings.push_back(fitting(PartKind::Backshell, 15.0));
+                n.fittings.push_back(fitting(PartKind::HeatshrinkBoot, 12.0));
+                n.openLengthMm = 20.0;
+            }
+            if (n.id == QLatin1String("root")) n.fittings.push_back(fitting(PartKind::Heatshrink, 30.0));
+        }
+        def.segments.front().coverings.push_back(fitting(PartKind::Heatshrink, 30.0));
+
+        const std::vector<MechBomLine> bom = mechBom(def, nullptr);
+        std::printf("    (bom: %zu line(s))\n", bom.size());
+        for (const MechBomLine& l : bom)
+            std::printf("      %2d  %-22s %8.1f %s\n", l.item, qPrintable(l.description), l.qty,
+                        qPrintable(l.unit));
+        // Backshell, boot, wire, heatshrink: four lines, numbered from 1 with no gaps.
+        check(bom.size() == 4, "bom: one line per part, whatever order they were fitted in");
+        for (int i = 0; i < static_cast<int>(bom.size()); ++i)
+            check(bom[static_cast<size_t>(i)].item == i + 1, "bom: numbered down the table from 1");
+        const MechBomLine* shrink = nullptr;
+        const MechBomLine* wire = nullptr;
+        const MechBomLine* boot = nullptr;
+        for (const MechBomLine& l : bom) {
+            if (l.kind == PartKind::Heatshrink) shrink = &l;
+            if (l.kind == PartKind::Wire) wire = &l;
+            if (l.kind == PartKind::HeatshrinkBoot) boot = &l;
+        }
+        // The order is by what the thing IS, which is the order the released drawings list them in:
+        // what dresses the connector, then the wire, then what goes over the wire.
+        check(bom.front().kind == PartKind::Backshell,
+              "bom: what dresses the connector is listed first");
+        check(wire && shrink && wire->item < shrink->item,
+              "bom: the wire before the heatshrink that goes over it");
+        check(wire && boot && wire->item < boot->item, "bom: and before the boot");
+        check(shrink && near(shrink->qty, 60.0),
+              "bom: heatshrink used in two places is ONE row of 60 mm, the way it is bought");
+        check(shrink && shrink->unit == QLatin1String("mm"),
+              "bom: anything cut off a reel is counted by length");
+        check(shrink && shrink->where.size() == 2, "bom: and the row says where it is used");
+        check(wire && near(wire->qty, 4 * 300.0) && wire->unit == QLatin1String("mm"),
+              "bom: four conductors 300 mm long are 1200 mm of wire");
+        const MechBomLine* backshell = nullptr;
+        for (const MechBomLine& l : bom)
+            if (l.kind == PartKind::Backshell) backshell = &l;
+        check(backshell && near(backshell->qty, 1.0) &&
+                  backshell->unit == QLatin1String("each"),
+              "bom: a thing is counted each, not by its length");
+
+        // The balloons on the drawing carry those item numbers - not a running count.
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        QStringList balloonText;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("balloon"))
+                balloonText << e.meta.value(QStringLiteral("text")).toString();
+        std::printf("    (balloons: %s)\n", qPrintable(balloonText.join(QStringLiteral(" "))));
+        check(balloonText.size() == 4, "balloons: one on every part fitted");
+        check(!balloonText.contains(QStringLiteral("?")),
+              "balloons: every one of them found its row");
+        // The two heatshrinks - one at the end, one along the run - are the same part, so they carry the
+        // SAME number. A running count would have called them 3 and 4.
+        int shrinkItem = shrink ? shrink->item : -1;
+        check(balloonText.count(QString::number(shrinkItem)) == 2,
+              "balloons: the same part in two places is the same item number twice");
+        for (const QString& s : balloonText) {
+            bool found = false;
+            for (const MechBomLine& l : bom)
+                if (QString::number(l.item) == s) found = true;
+            check(found, "balloons: nothing is ballooned that is not in the table");
+        }
+        // A cable's cores are inside the cable and are not bought twice.
+        MechHarnessDef cabled = def;
+        cabled.segments.front().jacketOdMm = 5.0;
+        cabled.segments.front().cableName = QStringLiteral("W1");
+        bool hasWireRow = false, hasCableRow = false;
+        for (const MechBomLine& l : mechBom(cabled, nullptr)) {
+            if (l.kind == PartKind::Wire) hasWireRow = true;
+            if (l.kind == PartKind::Cable) hasCableRow = true;
+        }
+        check(hasCableRow && !hasWireRow,
+              "bom: a cable is bought as a cable, and its cores are not bought again");
+    }
+
+    // ---- Where the wires are open, and the process notes ----
+    {
+        MechHarnessDef def = straightDef(300.0, 4, QStringLiteral("0.5"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        def.draw.diameterLabels = false;
+        MechFitting shrink;
+        shrink.id = QStringLiteral("s");
+        shrink.kind = PartKind::Heatshrink;
+        shrink.name = QStringLiteral("heatshrink");
+        shrink.lengthMm = 40.0;
+        for (MechNode& n : def.nodes) {
+            if (n.id != QLatin1String("p1")) continue;
+            n.openLengthMm = 20.0;      // 20 mm of open conductors behind the connector
+            n.fittings.push_back(shrink);
+        }
+        // The run goes out along +x to (300,0), so the heatshrink must start 20 mm back from there and
+        // the open conductors are the 20 mm between.
+        std::vector<Bounds> boxes;
+        for (const Entity& e : buildMechanicalHarness(def, nullptr))
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting"))
+                boxes.push_back(e.bounds());
+        check(boxes.size() == 1, "open wires: the heatshrink is drawn");
+        if (boxes.size() == 1)
+            check(near(boxes[0].max.x, 280.0) && near(boxes[0].min.x, 240.0),
+                  "open wires: it stops 20 mm short of the connector face, not at it");
+        // And that 20 mm is a dimension of its own, because it is a figure the harness is built to.
+        bool dimensioned = false;
+        for (const Entity& e : buildMechanicalHarness(def, nullptr))
+            if (e.meta.value(QStringLiteral("openWires")).toBool()) dimensioned = true;
+        check(dimensioned, "open wires: and the distance is dimensioned");
+
+        // And a covering that runs right up to the connector face is asked about, because the distance
+        // it should stop short by is a figure on the drawing rather than the builder's to choose.
+        MechHarnessDef flush0 = def;
+        for (MechNode& n : flush0.nodes) n.openLengthMm = 0.0;
+        bool asked = false;
+        for (const MechIssue& i : validateMechanicalHarness(flush0, nullptr))
+            if (i.property == QLatin1String("Wires open")) asked = true;
+        check(asked, "open wires: heatshrink up to the connector face is reported");
+        bool quiet = true;
+        for (const MechIssue& i : validateMechanicalHarness(def, nullptr))
+            if (i.property == QLatin1String("Wires open")) quiet = false;
+        check(quiet, "open wires: and once the figure is there, nothing is said");
+
+        // Nothing said means nothing open: the covering starts where the bodies end, as before.
+        MechHarnessDef flush = def;
+        for (MechNode& n : flush.nodes) n.openLengthMm = 0.0;
+        std::vector<Bounds> flushBoxes;
+        for (const Entity& e : buildMechanicalHarness(flush, nullptr))
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting"))
+                flushBoxes.push_back(e.bounds());
+        check(flushBoxes.size() == 1 && near(flushBoxes[0].max.x, 300.0),
+              "open wires: with none stated, nothing is invented");
+    }
+
+    // ---- A balloon says what to buy; a triangle says what to do ----
+    {
+        // A gauge transition: 0.5 out to a junction, 1.0 on from it. The note is one the definition can
+        // work out for itself, and the released drawings word it exactly this way.
+        MechHarnessDef def = straightDef(200.0, 2, QStringLiteral("0.5"));
+        def.draw.origin = Vec2{0.0, 0.0};
+        for (MechNode& n : def.nodes)
+            if (n.id == QLatin1String("p1")) n.kind = MechNodeKind::Breakout;
+        def.wires.push_back(wireOf(QStringLiteral("w3"), QStringLiteral("1.0")));
+        MechNode p2;
+        p2.id = QStringLiteral("p2");
+        p2.name = QStringLiteral("P2");
+        p2.kind = MechNodeKind::Connector;
+        p2.parentSegment = QStringLiteral("s2");
+        def.nodes.push_back(p2);
+        MechSegment s2;
+        s2.id = QStringLiteral("s2");
+        s2.fromNode = QStringLiteral("p1");
+        s2.toNode = QStringLiteral("p2");
+        s2.lengthMm = 150.0;
+        s2.wireIds = {QStringLiteral("w3")};
+        def.segments.push_back(s2);
+
+        const std::vector<MechDeltaNote> notes = mechDeltaNotes(def);
+        check(notes.size() == 1 && notes.front().number == 1,
+              "notes: the gauge transition is note 1");
+        check(!notes.empty() && notes.front().text.contains(QLatin1String("GAUGE TRANSITION")),
+              "notes: worded the way a released drawing words it");
+        check(!notes.empty() && notes.front().atNodes == QStringList{QStringLiteral("p1")},
+              "notes: and it points at the junction it happens at");
+
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        int triangles = 0;
+        bool listed = false;
+        for (const Entity& e : ents) {
+            if (e.meta.contains(QStringLiteral("deltaNote"))) ++triangles;
+            if (e.meta.value(QStringLiteral("text")).toString().contains(
+                    QLatin1String("GAUGE TRANSITION")))
+                listed = true;
+        }
+        check(triangles == 1, "notes: a triangle is drawn where it applies");
+        check(listed, "notes: and the note itself is written out beside the harness");
+
+        // A Y-splitter boot brings its own note, because filling it with epoxy is a thing done rather
+        // than a thing drawn.
+        MechHarnessDef withY = def;
+        MechFitting y;
+        y.id = QStringLiteral("y");
+        y.kind = PartKind::YSplit;
+        y.name = QStringLiteral("Y-splitter boot");
+        y.lengthMm = 30.0;
+        for (MechNode& n : withY.nodes)
+            if (n.id == QLatin1String("p1")) n.fittings.push_back(y);
+        const std::vector<MechDeltaNote> both = mechDeltaNotes(withY);
+        check(both.size() == 2 && both[1].number == 2 &&
+                  both[1].text.contains(QLatin1String("Y-SPLITTER")),
+              "notes: a Y-splitter adds the epoxy note as note 2");
+        // And the boot is drawn as a Y - a body on the run that arrives and a leg on each that leaves -
+        // rather than as one box across the junction.
+        int legs = 0;
+        for (const Entity& e : buildMechanicalHarness(withY, nullptr))
+            if (e.meta.contains(QStringLiteral("ysplitLeg"))) ++legs;
+        check(legs == 1, "notes: the Y-splitter is drawn with a leg on the run leaving the junction");
+
+        // Turned off, neither the triangles nor the list are drawn.
+        MechHarnessDef quiet = def;
+        quiet.draw.deltaNotes = false;
+        int quietTriangles = 0;
+        for (const Entity& e : buildMechanicalHarness(quiet, nullptr))
+            if (e.meta.contains(QStringLiteral("deltaNote"))) ++quietTriangles;
+        check(quietTriangles == 0, "notes: they can be turned off");
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;

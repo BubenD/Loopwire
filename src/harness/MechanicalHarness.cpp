@@ -82,6 +82,24 @@ QString bundleWindowKey(PartKind kind) {
     }
 }
 
+// A fitting's length and outside diameter: what it says about itself, else what the library part
+// does, else something proportionate to the bundle so it is at least drawn.
+void fittingSize(const MechFitting& f, const LibraryPart* part, double bundleMm, double& lengthMm,
+                 double& odMm) {
+    lengthMm = f.lengthMm;
+    odMm = f.odMm;
+    if (part) {
+        if (lengthMm <= 0.0) lengthMm = partNumber(*part, QStringLiteral("length"));
+        if (odMm <= 0.0) {
+            double lo = 0.0, hi = 0.0;
+            partWindow(*part, bundleWindowKey(part->kind), lo, hi);
+            if (hi > 0.0) odMm = hi + 2.0;         // over the entry it takes
+        }
+    }
+    if (odMm <= 0.0) odMm = bundleMm + 3.0;
+    if (lengthMm <= 0.0) lengthMm = std::max(12.0, bundleMm * 2.0);
+}
+
 Entity baseEntity(const MechDrawOptions& opt, const QString& role) {
     Entity e;
     e.layer = opt.layer;
@@ -578,6 +596,207 @@ std::vector<MechGaugeChange> mechGaugeChanges(const MechHarnessDef& def) {
     return out;
 }
 
+// ---- The bill of materials ----------------------------------------------------------------------
+
+namespace {
+
+// The order the released drawings list things in: what a harness is built FROM, in the order it is
+// built. Connectors and their contacts, the backshells that dress them, then the cable and wire, then
+// what goes over it, then what is written on it, then what it is stuck together with.
+int bomRank(PartKind kind) {
+    switch (kind) {
+        case PartKind::Connector:     return 0;
+        case PartKind::ContactPin:
+        case PartKind::Crimp:
+        case PartKind::Ferrule:
+        case PartKind::Terminal:
+        case PartKind::Splice:        return 1;
+        case PartKind::Backshell:
+        case PartKind::CableGland:
+        case PartKind::Grommet:
+        case PartKind::Overmould:     return 2;
+        case PartKind::Cable:         return 3;
+        case PartKind::Wire:          return 4;
+        case PartKind::Heatshrink:
+        case PartKind::HeatshrinkBoot:
+        case PartKind::YSplit:        return 5;
+        case PartKind::ShieldBraid:
+        case PartKind::Sleeve:
+        case PartKind::Conduit:       return 6;
+        case PartKind::CableTie:
+        case PartKind::Tape:          return 7;
+        case PartKind::Marker:        return 8;
+        default:                      return 9;
+    }
+}
+
+// Anything cut off a reel is bought by length; a thing is bought by the piece.
+bool boughtByLength(PartKind kind) {
+    switch (kind) {
+        case PartKind::Wire:
+        case PartKind::Cable:
+        case PartKind::Heatshrink:
+        case PartKind::ShieldBraid:
+        case PartKind::Sleeve:
+        case PartKind::Conduit:
+        case PartKind::Tape:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// What makes two of these ONE line: the part number when there is one, else what it is and what it is
+// called. A part used at four ends is one row whose quantity is the total.
+QString bomKey(const QString& libPart, PartKind kind, const QString& description) {
+    if (!libPart.trimmed().isEmpty()) return QStringLiteral("p:") + libPart;
+    return QStringLiteral("k:%1|%2").arg(static_cast<int>(kind)).arg(description.trimmed().toLower());
+}
+
+} // namespace
+
+std::vector<MechBomLine> mechBom(const MechHarnessDef& def, const PartsCatalog* catalog) {
+    std::vector<MechBomLine> lines;
+    QHash<QString, int> at;      // key -> index in `lines`
+
+    auto add = [&](const QString& libPart, PartKind kind, const QString& description, double qty,
+                   const QString& where) {
+        const LibraryPart* part = catalog && !libPart.isEmpty() ? catalog->byId(libPart) : nullptr;
+        MechBomLine line;
+        line.libPart = libPart;
+        line.kind = part ? part->kind : kind;
+        line.description = part && !part->description.isEmpty() ? part->description : description;
+        if (part) {
+            line.mfrPn = part->mfrPn;
+            line.mfrName = part->mfrName;
+            line.unit = part->unit;
+        }
+        // Nothing said: a thing is counted each, a length in the millimetres the drawing is in.
+        if (line.unit.trimmed().isEmpty())
+            line.unit = boughtByLength(line.kind) ? QStringLiteral("mm") : QStringLiteral("each");
+        const QString key = bomKey(line.libPart, line.kind, line.description);
+        auto it = at.find(key);
+        if (it == at.end()) {
+            line.qty = qty;
+            if (!where.isEmpty()) line.where << where;
+            at.insert(key, static_cast<int>(lines.size()));
+            lines.push_back(line);
+            return;
+        }
+        MechBomLine& have = lines[static_cast<size_t>(it.value())];
+        have.qty += qty;
+        if (!where.isEmpty() && !have.where.contains(where)) have.where << where;
+    };
+
+    auto runName = [&def](const MechSegment& s) {
+        const MechNode* to = def.node(s.toNode);
+        return to && !to->name.isEmpty() ? QStringLiteral("the run to %1").arg(to->name) : s.id;
+    };
+
+    // The connectors, and what dresses each of them.
+    for (const MechNode& n : def.nodes) {
+        if (n.kind == MechNodeKind::Connector && !n.libPart.isEmpty())
+            add(n.libPart, PartKind::Connector, QStringLiteral("Connector"), 1.0, n.name);
+        bool atToEnd = true;
+        const MechSegment* seg = nodeRunSegment(def, n, &atToEnd);
+        const double bundleMm = seg ? segmentBodyDiameterMm(def, *seg) : def.draw.minBundleMm;
+        for (const MechFitting& f : n.fittings) {
+            const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
+            double lengthMm = 0.0, odMm = 0.0;
+            fittingSize(f, part, bundleMm, lengthMm, odMm);
+            const PartKind kind = part ? part->kind : f.kind;
+            add(f.libPart, kind, f.name.isEmpty() ? partKindName(kind) : f.name,
+                boughtByLength(kind) ? lengthMm : 1.0, n.name);
+        }
+    }
+
+    // The cable, the conductors, and what is fitted along each run.
+    for (const MechSegment& s : def.segments) {
+        const QString where = runName(s);
+        if (s.isCable() || !s.cablePart.isEmpty())
+            add(s.cablePart, PartKind::Cable,
+                s.cableName.isEmpty() ? QStringLiteral("Cable") : s.cableName, s.lengthMm, where);
+        for (const MechFitting& f : s.coverings) {
+            const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
+            double lengthMm = 0.0, odMm = 0.0;
+            fittingSize(f, part, segmentBodyDiameterMm(def, s), lengthMm, odMm);
+            const PartKind kind = part ? part->kind : f.kind;
+            // A covering with no length of its own runs the length of the run, as it is drawn.
+            if (f.lengthMm <= 0.0 && (!part || partNumber(*part, QStringLiteral("length")) <= 0.0))
+                lengthMm = s.lengthMm;
+            add(f.libPart, kind, f.name.isEmpty() ? partKindName(kind) : f.name,
+                boughtByLength(kind) ? lengthMm : 1.0, where);
+        }
+    }
+
+    // The conductors themselves, by part or by gauge: a cable's cores are inside the cable and are not
+    // bought again, so only the loose wire is listed.
+    for (const MechWire& w : def.wires) {
+        double lengthMm = 0.0;
+        for (const MechSegment& s : def.segments)
+            if (s.wireIds.contains(w.id) && !s.isCable() && s.cablePart.isEmpty())
+                lengthMm += s.lengthMm;
+        if (lengthMm <= 0.0) continue;
+        const QString desc = w.gauge.isEmpty()
+                                 ? QStringLiteral("Wire")
+                                 : QStringLiteral("Wire, %1 mm²").arg(w.gauge);
+        for (const MechSegment& s : def.segments)
+            if (s.wireIds.contains(w.id) && !s.isCable() && s.cablePart.isEmpty())
+                add(w.libPart, PartKind::Wire, desc, 0.0, runName(s));
+        add(w.libPart, PartKind::Wire, desc, lengthMm, QString());
+    }
+
+    // In the order a drawing lists them, and only then numbered - so the item numbers read down the
+    // table rather than following whatever order the harness happened to be typed in.
+    std::stable_sort(lines.begin(), lines.end(),
+                     [](const MechBomLine& a, const MechBomLine& b) {
+                         if (bomRank(a.kind) != bomRank(b.kind))
+                             return bomRank(a.kind) < bomRank(b.kind);
+                         return a.description.localeAwareCompare(b.description) < 0;
+                     });
+    for (size_t i = 0; i < lines.size(); ++i) lines[i].item = static_cast<int>(i) + 1;
+    return lines;
+}
+
+int mechBomItem(const std::vector<MechBomLine>& bom, const QString& libPart, PartKind kind,
+                const QString& description) {
+    const QString key = bomKey(libPart, kind, description);
+    for (const MechBomLine& l : bom)
+        if (bomKey(l.libPart, l.kind, l.description) == key) return l.item;
+    // A description that was replaced by the library part's own: match on the part alone.
+    if (!libPart.trimmed().isEmpty())
+        for (const MechBomLine& l : bom)
+            if (l.libPart == libPart) return l.item;
+    return 0;
+}
+
+// ---- Process notes ------------------------------------------------------------------------------
+
+std::vector<MechDeltaNote> mechDeltaNotes(const MechHarnessDef& def) {
+    std::vector<MechDeltaNote> out;
+    // The one the definition can work out for itself. The sample drawings write it exactly this way,
+    // and it is note 2 on SMP-00001.
+    MechDeltaNote gauge;
+    gauge.text = QStringLiteral("WIRES GAUGE TRANSITION LOCATION.");
+    for (const MechGaugeChange& g : mechGaugeChanges(def))
+        if (!gauge.atNodes.contains(g.nodeId)) gauge.atNodes << g.nodeId;
+    if (!gauge.atNodes.isEmpty()) out.push_back(gauge);
+
+    // A Y-splitter boot is filled with epoxy where it meets the heatshrink on each leg. That is a thing
+    // done rather than a thing drawn, so it is a note - and where it applies follows from the boot
+    // being fitted at all.
+    MechDeltaNote ysplit;
+    ysplit.text = QStringLiteral("APPLY EPOXY OVER Y-SPLITTER, OVERLAP 2 MM ONTO HEATSHRINK ON EACH "
+                                 "LEG.");
+    for (const MechNode& n : def.nodes)
+        for (const MechFitting& f : n.fittings)
+            if (f.kind == PartKind::YSplit && !ysplit.atNodes.contains(n.id)) ysplit.atNodes << n.id;
+    if (!ysplit.atNodes.isEmpty()) out.push_back(ysplit);
+
+    for (size_t i = 0; i < out.size(); ++i) out[i].number = static_cast<int>(i) + 1;
+    return out;
+}
+
 // ---- Layout -------------------------------------------------------------------------------------
 
 const MechPlacedNode* MechLayout::node(const QString& id) const {
@@ -737,6 +956,20 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
         }
     }
 
+    // Heatshrink that runs up to the connector face. The conductors have to fan out to the contacts and
+    // be inspected, so a released drawing always stops the covering short by a stated distance - and
+    // leaving that distance to whoever builds it is exactly the thing a drawing is for.
+    for (const MechNode& n : def.nodes) {
+        if (n.kind != MechNodeKind::Connector || n.openLengthMm > 0.0) continue;
+        bool covered = false;
+        for (const MechFitting& f : n.fittings)
+            if (mechOverTheWires(f.kind)) covered = true;
+        if (covered)
+            gap(n.id, n.name, QStringLiteral("Wires open"),
+                QStringLiteral("something covers the conductors right up to the face of %1: say how "
+                               "far back it stops so they can reach the contacts").arg(n.name));
+    }
+
     // A splice at a gauge change, and whether it is covered.
     for (const MechGaugeChange& g : mechGaugeChanges(def)) {
         if (def.draw.spliceHeatshrink)
@@ -821,24 +1054,6 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 
 namespace {
 
-// A fitting's length and outside diameter: what it says about itself, else what the library part
-// does, else something proportionate to the bundle so it is at least drawn.
-void fittingSize(const MechFitting& f, const LibraryPart* part, double bundleMm, double& lengthMm,
-                 double& odMm) {
-    lengthMm = f.lengthMm;
-    odMm = f.odMm;
-    if (part) {
-        if (lengthMm <= 0.0) lengthMm = partNumber(*part, QStringLiteral("length"));
-        if (odMm <= 0.0) {
-            double lo = 0.0, hi = 0.0;
-            partWindow(*part, bundleWindowKey(part->kind), lo, hi);
-            if (hi > 0.0) odMm = hi + 2.0;         // over the entry it takes
-        }
-    }
-    if (odMm <= 0.0) odMm = bundleMm + 3.0;
-    if (lengthMm <= 0.0) lengthMm = std::max(12.0, bundleMm * 2.0);
-}
-
 // The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
 std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
                                       const MechDrawOptions& opt, const QString& role) {
@@ -877,7 +1092,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     auto along = [&opt](double mm) { return mm * opt.scale; };
     auto across = [&opt, xg](double mm) { return mm * opt.scale * xg; };
 
-    int balloonNo = 0;
+    // The balloons carry BOM ITEM numbers, not a running count. A balloon that says 11 means "item 11
+    // of the table", so the sheet and the table are one document rather than two that have to be kept
+    // in step by hand.
+    const std::vector<MechBomLine> bom = mechBom(def, catalog);
+    auto itemOf = [&bom, catalog](const QString& libPart, PartKind kind, const QString& name) {
+        const LibraryPart* part = catalog && !libPart.isEmpty() ? catalog->byId(libPart) : nullptr;
+        const QString desc = part && !part->description.isEmpty() ? part->description : name;
+        return mechBomItem(bom, libPart, part ? part->kind : kind, desc);
+    };
+    auto balloonText = [](int item) {
+        return item > 0 ? QString::number(item) : QStringLiteral("?");
+    };
 
     // ---- The outline of the harness ----
     // Every run has two edges, half its bundle either side of its centreline. At a junction an edge
@@ -1020,10 +1246,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 box.meta.insert(QStringLiteral("mechSeg"), ps.id);
                 out.push_back(box);
             }
-            if (opt.balloons) {
-                ++balloonNo;
+            if (opt.balloons)
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
-                                          QString::number(balloonNo)));
+                                          balloonText(itemOf(f.libPart, f.kind, f.name))));
+            // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
+            // the drawing is the length in the table.
+            if (opt.dimensions && runMm > 0.0) {
+                const Vec2 a = ps.a + u * along(startMm);
+                const Vec2 b = ps.a + u * along(startMm + runMm);
+                out.push_back(makeDimension(opt, a, b,
+                                            lerp(a, b, 0.5) + v * (across(odMm) / 2.0 +
+                                                                   opt.textHeight * 1.4),
+                                            ps.id));
             }
         }
     }
@@ -1079,12 +1313,10 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                    QStringLiteral("heatshrink over the splice %1 → %2 mm²")
                                        .arg(g.fromGauges, g.toGauges),
                                    opt.textHeight, 0.0, QStringLiteral("label")));
-            if (opt.balloons) {
-                ++balloonNo;
-                out.push_back(makeBalloon(opt, pn->at,
-                                          pn->at + v * (across(odMm) / 2.0 + 22.0),
-                                          QString::number(balloonNo)));
-            }
+            if (opt.balloons)
+                out.push_back(makeBalloon(opt, pn->at, pn->at + v * (across(odMm) / 2.0 + 22.0),
+                                          balloonText(itemOf(QString(), PartKind::Heatshrink,
+                                                             partKindName(PartKind::Heatshrink)))));
         }
     }
 
@@ -1114,8 +1346,15 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // then a boot behind it - stack back one after another, in the order they are fitted. What is
         // pulled over the conductors themselves does not stack: a braid covers the bare stretch that
         // is left, and heatshrink goes over the braid rather than after it, which is how it is built.
+        //
+        // And nothing covers the conductors for the first `openLengthMm` behind the bodies: they run
+        // OPEN there so they can fan out to the contacts and be inspected. A drawing that runs the
+        // heatshrink up to the connector face is wrong, so that distance is kept and dimensioned.
         double fittedBackMm = 0.0;
         int overWires = 0;
+        int stacked = 0;   // how many bodies are already on, so each steps down from the last
+        const double openMm = std::max(0.0, n->openLengthMm);
+        double firstCoverAtMm = -1.0;      // where the first thing over the wires starts
         for (const MechFitting& f : n->fittings) {
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
             const bool overTheWires = mechOverTheWires(f.kind);
@@ -1123,9 +1362,10 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             fittingSize(f, part, overTheWires ? endMm : bundleMm, lengthMm, odMm);
             double startMm = fittedBackMm + f.atMm;
             if (overTheWires) {
-                // Over the bare wires: from where the bodies end, along as much of the stripped
-                // length as is left. Nothing said about its length means all of it.
-                startMm = fittedBackMm + f.atMm;
+                // Over the bare wires: past the open length, from where the bodies end, along as much
+                // of the stripped length as is left. Nothing said about its length means all of it.
+                startMm = fittedBackMm + openMm + f.atMm;
+                if (firstCoverAtMm < 0.0) firstCoverAtMm = startMm;
                 const double left = std::max(0.0, bareMm - startMm);
                 if (f.lengthMm <= 0.0 &&
                     (!part || partNumber(*part, QStringLiteral("length")) <= 0.0) && left > 0.0)
@@ -1135,25 +1375,71 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 if (f.odMm <= 0.0 && (!part || odMm <= endMm))
                     odMm = endMm + 1.0 + 1.5 * overWires;   // each layer over the last
                 ++overWires;
+            } else if (f.odMm <= 0.0 && !part) {
+                // A body typed on the spot rather than chosen: step it down as the stack goes back, the
+                // way a released drawing shows a backshell, then its boot, then the cable - each one
+                // narrower than the one in front of it.
+                odMm = std::max(bundleMm + 1.0, bundleMm + 4.0 - 1.2 * stacked);
+                ++stacked;
             }
             const Vec2 c = pn.at + u * (into * along(startMm + lengthMm / 2.0));
             if (part && part->hasMechanical()) {
                 for (Entity& e : placedPartDrawing(*part, c, dirRad, opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
+            } else if (f.kind == PartKind::YSplit) {
+                // A Y-splitter boot is a Y, not a box across the junction: a body over the run that
+                // arrives, and a leg over each run that leaves. Drawn as a box it would say nothing
+                // about which legs it dresses, and which legs it dresses is what it is for.
+                const Vec2 body = pn.at + u * (into * along(lengthMm * 0.35));
+                Entity trunk = makeBox(opt, body, dirRad, along(lengthMm * 0.7), across(odMm),
+                                       QStringLiteral("fitting"));
+                trunk.meta.insert(QStringLiteral("mechNode"), pn.id);
+                trunk.meta.insert(QStringLiteral("ysplit"), true);
+                out.push_back(trunk);
+                for (const MechSegment* leg : def.childSegments(pn.id)) {
+                    const MechPlacedSegment* lp = layout.segment(leg->id);
+                    if (!lp) continue;
+                    // Each arm is sized on the LEG it dresses, not on the trunk: an arm as wide as the
+                    // trunk on a leg half its size reads as a bowtie across the junction rather than as
+                    // a boot going onto that leg.
+                    const double legOd = across(lp->fromDiameterMm + 1.6);
+                    const double legLen = std::max(along(lengthMm * 0.5), legOd * 1.6);
+                    const Vec2 ld = (lp->b - lp->a).normalized();
+                    Entity arm = makeBox(opt, pn.at + ld * (legLen / 2.0),
+                                         std::atan2(ld.y, ld.x), legLen, legOd,
+                                         QStringLiteral("fitting"));
+                    arm.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    arm.meta.insert(QStringLiteral("ysplitLeg"), leg->id);
+                    out.push_back(arm);
+                }
             } else {
                 Entity box = makeBox(opt, c, dirRad, along(lengthMm), across(odMm),
                                      QStringLiteral("fitting"));
                 box.meta.insert(QStringLiteral("mechNode"), pn.id);
                 out.push_back(box);
             }
-            if (opt.balloons) {
-                ++balloonNo;
+            if (opt.balloons)
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
-                                          QString::number(balloonNo)));
-            }
+                                          balloonText(itemOf(f.libPart, f.kind, f.name))));
             // A body takes up room for the next one; a layer over the wires does not.
             if (!overTheWires) fittedBackMm = startMm + lengthMm;
+        }
+
+        // The open conductors, dimensioned: from the back of the bodies to whatever covers them first,
+        // or to the end of the open length when nothing does. It is one of the figures a harness is
+        // actually built to, and the sample drawings carry it at every connector.
+        if (opt.dimensions && openMm > 0.0) {
+            const double toMm = firstCoverAtMm >= 0.0 ? firstCoverAtMm : fittedBackMm + openMm;
+            const Vec2 a = pn.at + u * (into * along(fittedBackMm));
+            const Vec2 b = pn.at + u * (into * along(toMm));
+            Entity dim = makeDimension(opt, a, b,
+                                       lerp(a, b, 0.5) - v * (across(endMm) / 2.0 +
+                                                              opt.textHeight * 2.2),
+                                       seg ? seg->id : pn.id);
+            dim.meta.insert(QStringLiteral("mechNode"), pn.id);
+            dim.meta.insert(QStringLiteral("openWires"), true);
+            out.push_back(dim);
         }
 
         if (n->kind != MechNodeKind::Connector) {
@@ -1193,11 +1479,78 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             body.meta.insert(QStringLiteral("mechNode"), pn.id);
             out.push_back(body);
         }
+        if (opt.balloons && !n->libPart.isEmpty()) {
+            const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
+            out.push_back(makeBalloon(opt, pn.at,
+                                      pn.at + v * (across(h) / 2.0 + 22.0),
+                                      balloonText(itemOf(n->libPart, PartKind::Connector,
+                                                         QStringLiteral("Connector")))));
+        }
         if (!n->name.isEmpty()) {
             const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
             out.push_back(makeText(opt, pn.at - u * (into * along(26.0)) +
                                             v * (across(h) / 2.0 + 3.0),
                                    n->name, opt.textHeight * 1.2, 0.0, QStringLiteral("label")));
+        }
+    }
+
+    // ---- The process notes: a numbered triangle where each applies, and the list beside them ----
+    // A balloon says what to BUY; a triangle says what to DO. They are different callouts on a released
+    // drawing and they are different here.
+    if (opt.deltaNotes) {
+        const std::vector<MechDeltaNote> notes = mechDeltaNotes(def);
+        for (const MechDeltaNote& note : notes) {
+            for (const QString& nodeId : note.atNodes) {
+                const MechPlacedNode* pn = layout.node(nodeId);
+                if (!pn) continue;
+                double half = def.draw.minBundleMm;
+                for (const MechPlacedSegment& ps : layout.segments) {
+                    const MechSegment* s = def.segment(ps.id);
+                    if (!s || (s->fromNode != nodeId && s->toNode != nodeId)) continue;
+                    half = std::max(half, across(ps.diameterMm) / 2.0);
+                }
+                // An equilateral triangle with the number in it, standing clear of the harness - and
+                // clear of the balloons, which stand off the same side.
+                const double side = std::max(6.0, opt.textHeight * 2.2);
+                const Vec2 at{pn->at.x, pn->at.y + half + side * 1.4 + opt.textHeight * 4.0};
+                Entity tri = baseEntity(opt, QStringLiteral("note"));
+                tri.type = EntityType::Polyline;
+                tri.points = {{at.x - side / 2.0, at.y - side * 0.433},
+                              {at.x + side / 2.0, at.y - side * 0.433},
+                              {at.x, at.y + side * 0.577},
+                              {at.x - side / 2.0, at.y - side * 0.433}};
+                tri.meta.insert(QStringLiteral("mechNode"), nodeId);
+                tri.meta.insert(QStringLiteral("deltaNote"), note.number);
+                out.push_back(tri);
+                out.push_back(makeText(opt, Vec2{at.x, at.y - side * 0.30},
+                                       QString::number(note.number), opt.textHeight * 0.9, 0.0,
+                                       QStringLiteral("note")));
+                // A leader down onto the harness, so it is clear what the note is about.
+                Entity leader = baseEntity(opt, QStringLiteral("note"));
+                leader.type = EntityType::Line;
+                leader.a = Vec2{at.x, at.y - side * 0.433};
+                leader.b = Vec2{pn->at.x, pn->at.y + half};
+                out.push_back(leader);
+            }
+        }
+        // The list itself, above the harness: "1 - WIRES GAUGE TRANSITION LOCATION."
+        if (!notes.empty()) {
+            Bounds b;
+            for (const Entity& e : out) {
+                const Bounds eb = e.bounds();
+                if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+            }
+            if (b.valid) {
+                double y = b.max.y + opt.textHeight * 3.0;
+                out.push_back(makeText(opt, Vec2{b.min.x, y}, QStringLiteral("NOTES:"),
+                                       opt.textHeight, 0.0, QStringLiteral("note")));
+                for (const MechDeltaNote& note : notes) {
+                    y -= opt.textHeight * 1.8;
+                    out.push_back(makeText(opt, Vec2{b.min.x, y},
+                                           QStringLiteral("%1 — %2").arg(note.number).arg(note.text),
+                                           opt.textHeight, 0.0, QStringLiteral("note")));
+                }
+            }
         }
     }
 

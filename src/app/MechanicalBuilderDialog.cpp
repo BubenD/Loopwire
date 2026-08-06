@@ -16,7 +16,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QHeaderView>
 #include <QSplitter>
+#include <QTableWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -130,6 +132,25 @@ void MechanicalBuilderDialog::buildUi() {
     treeBtns->addWidget(delBtn);
     treeBtns->addStretch(1);
     leftLay->addLayout(treeBtns);
+
+    // ---- The bill of materials, with the balloon number of every line ----
+    // The item number IS the balloon on the drawing, so the two are read side by side here rather than
+    // the table being kept in step with the sheet by hand. Everything ballooned is in it and everything
+    // in it is ballooned - which is only true because both come out of this one definition.
+    leftLay->addWidget(caption(leftBox, QStringLiteral("Bill of materials — the balloon numbers on "
+                                                      "the drawing")));
+    bomTable_ = new QTableWidget(leftBox);
+    bomTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    bomTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    bomTable_->verticalHeader()->setVisible(false);
+    bomTable_->setShowGrid(false);
+    bomTable_->setAlternatingRowColors(true);
+    bomTable_->setMinimumHeight(150);
+    bomTable_->setColumnCount(5);
+    bomTable_->setHorizontalHeaderLabels({QStringLiteral("Item"), QStringLiteral("Description"),
+                                          QStringLiteral("Mfr P/N"), QStringLiteral("Qty"),
+                                          QStringLiteral("Unit")});
+    leftLay->addWidget(bomTable_, 1);
     split->addWidget(leftBox);
 
     // ---- The right-hand side: what is selected, and what it will look like ----
@@ -314,8 +335,24 @@ void MechanicalBuilderDialog::buildUi() {
     shrinkChk_->setToolTip(QStringLiteral(
         "Heatshrink over the bare conductors - and over the braid, when there is one, rather than "
         "end to end with it."));
+    openSpin_ = new QDoubleSpinBox(selBox);
+    openSpin_->setRange(0.0, 10000.0);
+    openSpin_->setDecimals(1);
+    openSpin_->setSuffix(QStringLiteral(" mm"));
+    openSpin_->setToolTip(QStringLiteral(
+        "Wires OPEN: how far the conductors run uncovered behind the connector - behind its backshell "
+        "and boot where it has them - before any heatshrink starts. They have to be able to fan out to "
+        "the contacts and be inspected, so heatshrink never runs up to the connector face; this is the "
+        "distance it stops short by, and it is dimensioned on the drawing."));
+    connect(openSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (syncing_) return;
+        if (MechNode* n = currentNode()) { n->openLengthMm = v; refreshAll(); }
+    });
     {
         auto* endRow = new QHBoxLayout;
+        endRow->addWidget(caption(selBox, QStringLiteral("Wires open")));
+        endRow->addWidget(openSpin_);
+        endRow->addSpacing(8);
         endRow->addWidget(backshellChk_);
         endRow->addWidget(bootChk_);
         endRow->addWidget(braidChk_);
@@ -430,6 +467,11 @@ void MechanicalBuilderDialog::buildUi() {
     countChk_ = new QCheckBox(QStringLiteral("Wire count"), optBox);
     balloonChk_ = new QCheckBox(QStringLiteral("Balloons"), optBox);
     bodiesChk_ = new QCheckBox(QStringLiteral("Connector bodies"), optBox);
+    notesChk_ = new QCheckBox(QStringLiteral("Process notes"), optBox);
+    notesChk_->setToolTip(QStringLiteral(
+        "The numbered triangles and the NOTES list beside the harness. A balloon says what to BUY; a "
+        "triangle says what to DO - where the conductors change gauge, where a Y-splitter is filled "
+        "with epoxy - and a released drawing keeps the two apart."));
     spliceChk_ = new QCheckBox(QStringLiteral("Splice heatshrink"), optBox);
     spliceChk_->setToolTip(QStringLiteral(
         "A junction where one conductor ends and a different size carries on has a splice in it, and a "
@@ -438,7 +480,7 @@ void MechanicalBuilderDialog::buildUi() {
     opt->addStretch(1);
     auto* optTicks = new QHBoxLayout;
     optCol->addLayout(optTicks);
-    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_})
+    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_, notesChk_})
         optTicks->addWidget(c);
     optTicks->addStretch(1);
     for (QDoubleSpinBox* s : {scaleSpin_, factorSpin_, exagSpin_, textSpin_})
@@ -447,7 +489,7 @@ void MechanicalBuilderDialog::buildUi() {
             readOptionsFromControls();
             refreshAll();
         });
-    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_})
+    for (QCheckBox* c : {dimsChk_, diaChk_, countChk_, balloonChk_, bodiesChk_, spliceChk_, notesChk_})
         connect(c, &QCheckBox::toggled, this, [this](bool) {
             if (syncing_) return;
             readOptionsFromControls();
@@ -801,6 +843,7 @@ void MechanicalBuilderDialog::readOptionsFromControls() {
     if (balloonChk_) def_.draw.balloons = balloonChk_->isChecked();
     if (bodiesChk_) def_.draw.connectorBodies = bodiesChk_->isChecked();
     if (spliceChk_) def_.draw.spliceHeatshrink = spliceChk_->isChecked();
+    if (notesChk_) def_.draw.deltaNotes = notesChk_->isChecked();
 }
 
 void MechanicalBuilderDialog::writeOptionsToControls() {
@@ -815,6 +858,7 @@ void MechanicalBuilderDialog::writeOptionsToControls() {
     if (balloonChk_) balloonChk_->setChecked(def_.draw.balloons);
     if (bodiesChk_) bodiesChk_->setChecked(def_.draw.connectorBodies);
     if (spliceChk_) spliceChk_->setChecked(def_.draw.spliceHeatshrink);
+    if (notesChk_) notesChk_->setChecked(def_.draw.deltaNotes);
     syncing_ = false;
 }
 
@@ -950,6 +994,10 @@ void MechanicalBuilderDialog::refreshDetails() {
         stripSpin_->setEnabled(jacketed);
         stripFarSpin_->setEnabled(jacketed);
     }
+    if (openSpin_) {
+        openSpin_->setValue(has ? n->openLengthMm : 0.0);
+        openSpin_->setEnabled(has);
+    }
     const struct { QCheckBox* box; PartKind kind; } ticks[] = {
         {backshellChk_, PartKind::Backshell},
         {bootChk_, PartKind::HeatshrinkBoot},
@@ -989,6 +1037,34 @@ void MechanicalBuilderDialog::refreshPreview() {
     if (!preview_) return;
     preview_->setEntities(
         buildMechanicalHarness(def_, &catalog_));
+}
+
+void MechanicalBuilderDialog::refreshBom() {
+    if (!bomTable_) return;
+    const std::vector<MechBomLine> bom = mechBom(def_, &catalog_);
+    bomTable_->setRowCount(static_cast<int>(bom.size()));
+    for (int i = 0; i < static_cast<int>(bom.size()); ++i) {
+        const MechBomLine& l = bom[static_cast<size_t>(i)];
+        auto cell = [&](int col, const QString& text, bool dim = false) {
+            auto* it = new QTableWidgetItem(text);
+            if (dim) it->setForeground(QColor("#9fb4c8"));
+            // What it is and where it is used, on hover: a line nobody can find on the sheet is the
+            // fault a bill of materials is most often wrong in.
+            it->setToolTip(l.where.isEmpty()
+                               ? l.description
+                               : QStringLiteral("%1\nused at: %2")
+                                     .arg(l.description, l.where.join(QStringLiteral(", "))));
+            bomTable_->setItem(i, col, it);
+        };
+        cell(0, QString::number(l.item));
+        cell(1, l.description.isEmpty() ? partKindName(l.kind) : l.description);
+        cell(2, l.mfrPn, l.mfrPn.isEmpty());
+        cell(3, QString::number(l.qty, 'f', l.qty < 10.0 ? 2 : 0));
+        cell(4, l.unit);
+    }
+    bomTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    for (int c : {0, 2, 3, 4})
+        bomTable_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
 }
 
 void MechanicalBuilderDialog::refreshIssues() {
@@ -1035,6 +1111,7 @@ void MechanicalBuilderDialog::refreshAll() {
     refreshTree();
     refreshDetails();
     refreshPreview();
+    refreshBom();
     refreshIssues();
 }
 

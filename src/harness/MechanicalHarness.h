@@ -70,6 +70,11 @@ struct MechNode {
     double bodyWidthMm = 0.0;               // 0 -> from the library part, or a default
     double bodyHeightMm = 0.0;
     std::vector<MechFitting> fittings;
+    // The conductors run OPEN for this distance behind the connector - behind its backshell and boot
+    // where it has them - before anything covers them. It is a figure on the drawing in its own right:
+    // the wires have to fan out to the contacts and be inspected, so heatshrink never runs up to the
+    // connector face, and how far it stops short is not left to whoever builds it.
+    double openLengthMm = 0.0;
 };
 
 struct MechSegment {
@@ -118,7 +123,11 @@ struct MechDrawOptions {
     double diameterExaggeration = 1.0;
     bool dimensions = true;                 // a length dimension on every segment
     bool diameterLabels = true;             // the bundle diameter written along each run
-    bool balloons = false;                  // a callout on every fitting
+    // A callout on every part, carrying its BOM item number. The released drawings balloon everything;
+    // it is off by default only because a drawing being built up is easier to read without them.
+    bool balloons = false;
+    // The numbered triangles and the NOTES block beside the harness.
+    bool deltaNotes = true;
     bool connectorBodies = true;
     bool wireCounts = false;                // "(6)" beside each run
     // A junction where a conductor changes gauge has a splice in it, and a splice is never left bare:
@@ -255,6 +264,53 @@ struct MechGaugeChange {
 };
 
 std::vector<MechGaugeChange> mechGaugeChanges(const MechHarnessDef& def);
+
+// ---- The bill of materials, and the balloons that point at it -----------------------------------
+
+// One line of the harness's bill of materials. `item` IS the balloon number on the drawing: a balloon
+// says "item 11" and item 11 in the table says what to buy. Nothing is ballooned that is not in the
+// table and nothing is in the table that is not ballooned - which is the whole point of generating
+// both from one definition instead of keeping a table beside a drawing and hoping.
+//
+// One line per PART NUMBER rather than per place it is used: heatshrink used at four ends is one line
+// whose quantity is the total, the way it is bought.
+struct MechBomLine {
+    int item = 0;
+    QString libPart;                 // the library part, when it has one
+    PartKind kind = PartKind::Other;
+    QString description;
+    QString mfrPn;
+    QString mfrName;
+    double qty = 0.0;
+    QString unit;                    // "each" for a thing, "mm" for anything cut off a reel
+    QStringList where;               // "P1", "BR1", "the run to P2" - so a line can be found
+};
+
+// The harness as a list of things to buy, ordered by what they are: connectors and contacts first,
+// then backshells and boots, then cable and wire, then heatshrink, braid and sleeving, then labels,
+// then adhesive - the order the released sample drawings use.
+std::vector<MechBomLine> mechBom(const MechHarnessDef& def, const PartsCatalog* catalog);
+
+// The item number for one thing on the drawing, so the balloon and the table agree. 0 when the thing
+// is not in the table at all, which is a fault in the caller rather than a licence to draw a balloon
+// with no number in it.
+int mechBomItem(const std::vector<MechBomLine>& bom, const QString& libPart, PartKind kind,
+                const QString& description);
+
+// ---- Process notes ------------------------------------------------------------------------------
+
+// A PROCESS note: a numbered triangle on the drawing and a line of text in the notes block. It says
+// what to DO at that place - this is where the gauge changes, fill this transition with epoxy - as
+// against a balloon, which says what to BUY. The sample drawings keep the two apart and so does this.
+struct MechDeltaNote {
+    int number = 0;
+    QString text;
+    QStringList atNodes;             // where its triangles go
+};
+
+// The notes the definition can work out for itself, numbered from 1. A gauge transition is one: it is
+// wherever a conductor ends and a different cross-section carries on, which is already known.
+std::vector<MechDeltaNote> mechDeltaNotes(const MechHarnessDef& def);
 
 // ---- Layout -------------------------------------------------------------------------------------
 
