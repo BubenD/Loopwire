@@ -5661,22 +5661,27 @@ void Editor::handleDrawPress(const Vec2& p) {
     }
     switch (tool_) {
     case ToolId::Line: {
-        // AutoCAD LINE: keep drawing connected straight segments until Enter/Esc.
-        // Each completed segment is committed as its own straight line, then the
-        // run continues from that point.
+        // Two points make a line, and then the drawing is done with: back to Select, the same as after
+        // every other drawing this application makes. It used to keep the run going, AutoCAD-style,
+        // which left the tool armed after every single line - and a run of connected segments is what
+        // the polyline tool is for. Space re-arms this one for the next line.
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() >= 2) {
             Entity e;
             e.layer = doc_->activeLayer();
             e.type = EntityType::Line;
-            e.a = draftPts_[draftPts_.size() - 2];
-            e.b = draftPts_.back();
+            e.a = draftPts_[0];
+            e.b = draftPts_[1];
             pushUndo();
             addEntity(std::move(e));
-            draftPts_ = {draftPts_.back()}; // continue from the last point
+            draftPts_.clear();
+            drafting_ = false;
+            setTool(ToolId::Select);
+            emit message(QStringLiteral("Line placed — Space draws another"));
+            break;
         }
-        emit message(QStringLiteral("Line: click next point — Enter ends the run, Esc exits"));
+        emit message(QStringLiteral("Line: click the second point — Esc exits"));
         break;
     }
     case ToolId::TwistedRoute:
@@ -11110,12 +11115,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         }
         // Finish an in-progress multi-point draw; otherwise repeat the last tool.
         if (drafting_) {
-            // Line commits each segment as it goes, so Enter just ends the current
-            // run and stays in the Line tool, ready for the next run (Esc exits).
+            // A line with only its start down: Enter gives up on it and hands back the pointer, which
+            // is where the tool leaves you once a line IS placed.
             if (tool_ == ToolId::Line) {
                 draftPts_.clear();
                 drafting_ = false;
-                emit message(QStringLiteral("Line: pick a start point, or Esc to exit"));
+                setTool(ToolId::Select);
                 emit changed();
                 return true;
             }

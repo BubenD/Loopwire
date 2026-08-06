@@ -2568,24 +2568,29 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Rect, "finish: Space repeats last tool");
     }
 
-    // --- Line tool draws several CONNECTED straight segments until Enter/Esc.
+    // --- A line is two points, and then the pointer comes back: the same as after every other drawing.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::Line);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // start
-        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);  // commits segment 1
-        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier); // commits segment 2
-        check(d.entities().size() == 2, "line-cont: each click adds a connected segment");
-        check(ed.tool() == ToolId::Line && ed.isDrafting(), "line-cont: stays in Line during the run");
-        check(near(d.entities()[0].b.x, 10.0) && near(d.entities()[1].a.x, 10.0) &&
-                  near(d.entities()[1].a.y, 0.0),
-              "line-cont: segments share the joint (connected)");
-        ed.onKey(Qt::Key_Return, Qt::NoModifier); // ends the run, stays in Line
-        check(ed.tool() == ToolId::Line && !ed.isDrafting(), "line-cont: Enter ends run, stays in Line");
-        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier); // start a new run
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);   // that is the line
+        check(d.entities().size() == 1, "line: two points make one line");
+        check(near(d.entities()[0].a.x, 0.0) && near(d.entities()[0].b.x, 10.0),
+              "line: between the two points that were clicked");
+        check(ed.tool() == ToolId::Select && !ed.isDrafting(),
+              "line: and the tool hands back the pointer, as every other drawing does");
+        // Space re-arms it, which is how several lines are drawn one after another.
+        ed.onKey(Qt::Key_Space, Qt::NoModifier);
+        check(ed.tool() == ToolId::Line, "line: Space draws another");
+        ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);   // a line with only its start
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(ed.tool() == ToolId::Select && d.entities().size() == 1,
+              "line: Enter on a half-drawn line gives up on it rather than leaving half a line");
+        ed.setTool(ToolId::Line);
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier);
         ed.onKey(Qt::Key_Escape, Qt::NoModifier);
-        check(ed.tool() == ToolId::Select, "line-cont: Esc exits to Select");
+        check(ed.tool() == ToolId::Select, "line: Esc exits to Select");
     }
 
     // --- "f"/"g" while the Line tool is active are consumed (hint), NOT run as
@@ -5015,6 +5020,80 @@ int run_editor_tests() {
             check(!insideLeft, qPrintable(QStringLiteral("trim past a corner (%1): and the piece "
                                                         "between the ellipse's ends is gone").arg(kind)));
         }
+    }
+
+    // --- Mirroring a PIECE of an ellipse gives its mirror image, whatever piece it is.
+    {
+        // A piece of an ellipse says where it starts and stops in the ellipse's own parameter, and
+        // reflecting the ellipse turns that parameter round - so the piece has to be turned round with
+        // it. A half happens to be symmetric in its own parameter and came out right without that,
+        // which is why this only showed on a piece that was not: the copy was the WRONG PIECE of the
+        // right ellipse.
+        struct Piece { double rot, from, to; };
+        const Piece pieces[] = {{0.0, -90.0, 90.0},   // a half: symmetric, right either way
+                                {0.0, 0.0, 90.0},     // a quarter
+                                {0.0, 10.0, 120.0},   // lopsided
+                                {20.0, 10.0, 120.0}}; // ... and turned as well
+        for (const Piece& pc : pieces) {
+            for (const bool slanted : {false, true}) {
+                Entity el;
+                el.type = EntityType::Ellipse;
+                el.center = {0, 0};
+                el.radius = 40.0;
+                el.radiusY = 25.0;
+                el.rotation = pc.rot * M_PI / 180.0;
+                el.meta.insert("ellipticalArc", true);
+                el.startAngle = pc.from * M_PI / 180.0;
+                el.endAngle = pc.to * M_PI / 180.0;
+                // The mirror line: straight up, or leaning, through (90, 0).
+                const Vec2 mA{90.0, 0.0};
+                const Vec2 mB = slanted ? Vec2{92.0, 1.0} : Vec2{90.0, 1.0};
+                Entity m = el;
+                mirrorEntity(m, mA, mB);
+
+                // By hand: mirror each point of the original, and the copy must pass through it.
+                const Vec2 u = (mB - mA).normalized();
+                auto byHand = [&](const Vec2& p) {
+                    const Vec2 d = p - mA;
+                    const Vec2 onLine = mA + u * dot(d, u);
+                    return onLine * 2.0 - p;
+                };
+                double sweep = el.endAngle - el.startAngle;
+                while (sweep <= 0.0) sweep += 2.0 * M_PI;
+                double msweep = m.endAngle - m.startAngle;
+                while (msweep <= 0.0) msweep += 2.0 * M_PI;
+                double worst = 0.0;
+                for (int k = 0; k <= 24; ++k) {
+                    const Vec2 want =
+                        byHand(ellipsePointAt(el.startAngle + sweep * k / 24, el.center, el.radius,
+                                              el.radiusY, el.rotation));
+                    double best = 1e18;
+                    for (int j = 0; j <= 240; ++j)
+                        best = std::min(best,
+                                        distance(want, ellipsePointAt(m.startAngle + msweep * j / 240,
+                                                                      m.center, m.radius, m.radiusY,
+                                                                      m.rotation)));
+                    worst = std::max(worst, best);
+                }
+                check(worst < 0.05,
+                      "mirror an ellipse piece: the copy runs where the mirror image of the original "
+                      "runs");
+                check(std::abs(msweep - sweep) < 1e-9,
+                      "mirror an ellipse piece: and it is the same amount of ellipse, not more or less");
+            }
+        }
+        // The plain statement of it: a quarter mirrored is the opposite quarter.
+        Entity q;
+        q.type = EntityType::Ellipse;
+        q.center = {0, 0};
+        q.radius = 40.0;
+        q.radiusY = 25.0;
+        q.meta.insert("ellipticalArc", true);
+        q.startAngle = 0.0;
+        q.endAngle = M_PI / 2.0;
+        mirrorEntity(q, Vec2{90.0, 0.0}, Vec2{90.0, 1.0});
+        check(near(q.startAngle, -M_PI / 2.0) && std::abs(q.endAngle) < 1e-9,
+              "mirror an ellipse piece: the parameter is turned round, not left as it was");
     }
 
     // --- Filleting a line to a curve: a half ellipse, a whole circle, and the radius that will not fit.

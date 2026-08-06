@@ -169,6 +169,17 @@ void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
         e.startAngle = ne;
         e.endAngle = ns;
     }
+    // A PIECE of an ellipse says where it starts and stops in the ellipse's own parameter, not as an
+    // angle about its centre - and reflecting the ellipse's frame (below) turns that parameter round.
+    // So the piece runs from minus-the-end to minus-the-start. Left alone, the mirrored copy showed the
+    // WRONG PIECE of the right ellipse: a half happens to be symmetric about its own parameter and came
+    // out looking correct, which is why this only showed on a piece that was not.
+    if (e.type == EntityType::Ellipse && e.meta.value(QStringLiteral("ellipticalArc")).toBool()) {
+        const double ns = -e.endAngle;
+        const double ne = -e.startAngle;
+        e.startAngle = ns;
+        e.endAngle = ne;
+    }
     e.rotation = 2.0 * axis - e.rotation;
 }
 
