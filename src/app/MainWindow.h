@@ -2,6 +2,8 @@
 
 #include "app/BomDialog.h" // BomConfigOpener
 #include "app/Editor.h" // Editor::TextStyle used in a method signature
+#include "harness/Bom.h"
+#include "harness/PartsLibrary.h"
 #include "model/Document.h"
 #include "model/DrawingTemplate.h"   // tplBeingDrawn_ is held by value
 #include "tools/ToolId.h"
@@ -189,6 +191,7 @@ private:
     void refreshLayers();
     void refreshProperties();
     void refreshEntityList();
+    void refreshBomPanel();
     // A Properties-panel field edit rebuilds the whole panel, which would destroy the
     // field the user just clicked into. Run the apply deferred, then re-focus the field
     // now at the same row — so a single click moves editing straight to the new field.
@@ -467,7 +470,13 @@ private:
     QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;
     QTableWidget* propsTable_ = nullptr;
-    QListWidget* entityList_ = nullptr;
+    QListWidget* entityList_ = nullptr;   // no longer built: a click on the drawing says it better
+    // The bill of materials shown beside the drawing (read-only; the window edits it), and the library
+    // it needs to name the parts a drawing only carries the ids of. Opened once, on first use.
+    QTableWidget* bomPanel_ = nullptr;
+    PartsCatalog bomCatalog_;
+    PartsLibrary bomLib_;
+    bool bomLibLoaded_ = false;
     QLineEdit* commandEdit_ = nullptr;
     QLabel* coordLabel_ = nullptr;
     QLabel* cmdHintLabel_ = nullptr; // applicable commands for the active draw tool

@@ -3797,10 +3797,7 @@ void MainWindow::buildPanels() {
     layersTable_->setColumnWidth(5, 66);
     lv->addWidget(layersTable_);
     layersDock->setManaged(new DockTitleBar(layersDock, QStringLiteral("LAYERS")), layersWidget);
-    addDockWidget(Qt::LeftDockWidgetArea, layersDock);
-
-    // Stack Properties above Layers in the left column (Edraw layout).
-    splitDockWidget(propsDock, layersDock, Qt::Vertical);
+    addDockWidget(Qt::RightDockWidgetArea, layersDock);
 
     connect(addLayer, &QPushButton::clicked, this, [this, nameEdit] {
         auto& ls = doc_->layers();
@@ -3862,25 +3859,43 @@ void MainWindow::buildPanels() {
         }
     });
 
-    // ===== ENTITIES (right) =====
-    auto* listDock = new AutoHideDock(QStringLiteral("Entities"), this);
-    configDock(listDock);
-    entityList_ = new QListWidget(listDock);
-    listDock->setManaged(new DockTitleBar(listDock, QStringLiteral("Entities")), entityList_);
-    addDockWidget(Qt::RightDockWidgetArea, listDock);
+    // ===== BILL OF MATERIALS (right, top) =====
+    // What the drawing is made of, beside the drawing. It used to be only behind a button, which meant
+    // the one list that says whether a harness can be BUILT was the one thing never on screen while it
+    // was drawn. Read-only here - the panel shows it, the window edits it - because a bill of materials
+    // is edited a row at a time with the parts library open beside it.
+    auto* bomDock = new AutoHideDock(QStringLiteral("BILL OF MATERIALS"), this);
+    configDock(bomDock);
+    auto* bomWidget = new QWidget(bomDock);
+    auto* bv = new QVBoxLayout(bomWidget);
+    bv->setContentsMargins(4, 4, 4, 4);
+    bv->setSpacing(4);
+    bomPanel_ = new QTableWidget(bomWidget);
+    bomPanel_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    bomPanel_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    bomPanel_->verticalHeader()->setVisible(false);
+    bomPanel_->setShowGrid(false);
+    bomPanel_->setAlternatingRowColors(true);
+    bv->addWidget(bomPanel_);
+    {
+        auto* open = new QPushButton(QStringLiteral("Open the bill of materials"), bomWidget);
+        connect(open, &QPushButton::clicked, this, [this] { showBomDialog(); });
+        bv->addWidget(open);
+    }
+    bomDock->setManaged(new DockTitleBar(bomDock, QStringLiteral("BILL OF MATERIALS")), bomWidget);
+    addDockWidget(Qt::RightDockWidgetArea, bomDock);
+    // The bill of materials above the layers, in the right column.
+    splitDockWidget(bomDock, layersDock, Qt::Vertical);
+    refreshBomPanel();
 
-    connect(entityList_, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
-        const QString id = item->data(Qt::UserRole).toString();
-        const bool additive = QApplication::keyboardModifiers() & Qt::ControlModifier;
-        editor_->selectById(id, additive);
-    });
+    // The list of every entity used to live here. It said what a click on the drawing says better, it
+    // was as long as the drawing, and it was in the way of the two things that are worth having on
+    // screen while drawing: what the drawing is made OF, and which layer it is on.
 
-    // Pin / auto-hide acts on a whole side, and each side is independent: the left
-    // column (Properties + Layers) and the right column (Entities) each carry ONE pin
-    // — on the panel at the top of the side — and folding one leaves the other alone.
-    // The sides themselves are worked out from the live layout, so dragging a panel
-    // across re-forms both.
-    listDock->setPinned(false); // the right column starts folded away, freeing canvas
+    // Pin / auto-hide acts on a whole side, and each side is independent: the left column (Properties)
+    // and the right column (the bill of materials above the layers) each carry ONE pin - on the panel at
+    // the top of the side - and folding one leaves the other alone. The sides themselves are worked out
+    // from the live layout, so dragging a panel across re-forms both.
     AutoHideDock::refreshPinButtons();
 }
 
@@ -5108,6 +5123,7 @@ void MainWindow::refreshPanels() {
     refreshLayers();
     refreshProperties();
     refreshEntityList();
+    refreshBomPanel();
 }
 
 void MainWindow::refreshLayers() {
@@ -6597,6 +6613,52 @@ void MainWindow::refreshProperties() {
     }
     propsTable_->setUpdatesEnabled(true); // one coalesced repaint of the finished table
     refreshing_ = false;
+}
+
+void MainWindow::refreshBomPanel() {
+    if (!bomPanel_ || !doc_) return;
+    // The same rows the bill-of-materials window shows: what the drawing calls for, plus the rows added
+    // by hand, in the working unit, totalled if that is what the drawing asks for.
+    BomTable table;
+    table.fromJson(doc_->bom());
+    std::vector<BomRow> rows;
+    if (table.config.includeDrawing) {
+        if (!bomLibLoaded_) {
+            bomCatalog_.openRemembered();
+            bomLib_ = bomCatalog_.merged();
+            bomLibLoaded_ = true;
+        }
+        rows = bomFromDrawing(*doc_, bomLib_);
+    }
+    for (const BomRow& r : table.rows)
+        if (!r.fromDrawing) rows.push_back(r);
+    rows = bomApplyConfig(rows, table.config);
+    if (table.config.unify) rows = bomUnify(rows);
+
+    // Four of the seven columns: what it is, the part number to order it by, how many, and of what.
+    // The rest are for the window and for the table placed on the sheet - a panel this narrow is read,
+    // not filled in. (1 = description, 3 = manufacturer's P/N, 5 = quantity, 6 = units.)
+    bomPanel_->clear();
+    bomPanel_->setColumnCount(4);
+    bomPanel_->setHorizontalHeaderLabels({table.header(1), table.header(3), table.header(5),
+                                          table.header(6)});
+    bomPanel_->setRowCount(static_cast<int>(rows.size()));
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const BomRow& r = rows[static_cast<size_t>(i)];
+        auto cell = [&](int col, const QString& text) {
+            auto* it = new QTableWidgetItem(text);
+            it->setToolTip(text);
+            bomPanel_->setItem(i, col, it);
+        };
+        cell(0, r.description.isEmpty() ? r.ref : r.description);
+        cell(1, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn);
+        cell(2, r.qtyText(table.config.qtyDecimals));
+        cell(3, r.unit);
+    }
+    bomPanel_->horizontalHeader()->setStretchLastSection(false);
+    bomPanel_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int c = 1; c < 4; ++c)
+        bomPanel_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
 }
 
 void MainWindow::refreshEntityList() {
