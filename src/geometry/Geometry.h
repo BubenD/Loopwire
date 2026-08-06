@@ -124,6 +124,18 @@ inline Vec2 pointOnCircle(const Vec2& center, double radius, double angle) {
 std::vector<Vec2> lineCircleIntersection(const Vec2& p, const Vec2& d,
                                          const Vec2& c, double r);
 
+// Where an infinite line through `p` along `d` crosses an ellipse: centre `c`, semi-axes rx and ry,
+// turned by `rot`. Solved on the ellipse's own axes, where it is a circle once the two axes are scaled
+// to the same length - so it is the same quadratic as a line against a circle, and as exact.
+std::vector<Vec2> lineEllipseIntersection(const Vec2& p, const Vec2& d, const Vec2& c, double rx,
+                                          double ry, double rot);
+
+// The angle ON an ellipse (its own parameter, not the direction from the centre) of a point taken to
+// lie on it. The parameter is what says where a piece of an ellipse starts and stops.
+double ellipseParamAt(const Vec2& pt, const Vec2& c, double rx, double ry, double rot);
+// And back: the point on the ellipse at that parameter.
+Vec2 ellipsePointAt(double t, const Vec2& c, double rx, double ry, double rot);
+
 // Intersections of two circles (0/1/2 points).
 std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
                                            const Vec2& c2, double r2);

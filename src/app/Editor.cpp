@@ -1143,6 +1143,18 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         const Vec2 d = p - e.center;
         const double r = std::hypot(d.x / rx, d.y / ry);
         best = std::abs(r - 1.0) * std::min(rx, ry);
+        // A TRIMMED ellipse is only there where it is still drawn: off its sweep, the nearest thing to
+        // the click is one of its two ends. Without this, clicking the half that was trimmed away still
+        // picked the ellipse - the object answering for geometry that is no longer on the drawing.
+        if (e.meta.value(QStringLiteral("ellipticalArc")).toBool()) {
+            double sweep = e.endAngle - e.startAngle;
+            while (sweep <= 0.0) sweep += 2.0 * M_PI;
+            double rel = ellipseParamAt(p, e.center, rx, ry, e.rotation) - e.startAngle;
+            while (rel < 0.0) rel += 2.0 * M_PI;
+            if (rel > sweep + 1e-9)
+                best = std::min(distance(p, ellipsePointAt(e.startAngle, e.center, rx, ry, e.rotation)),
+                                distance(p, ellipsePointAt(e.endAngle, e.center, rx, ry, e.rotation)));
+        }
         break;
     }
     case EntityType::Text: {
@@ -8041,6 +8053,29 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 if (isDouble) storeCutMeta(rem, selfId);
                 additions.push_back(std::move(rem));
             }
+        } else if (obj->type == EntityType::Ellipse) {
+            // Where the cut line crosses the ellipse is the side that comes off - the same rule as for
+            // a circle, on the ellipse's own parameter.
+            const Vec2 d = b - a;
+            std::optional<Vec2> pick;
+            for (const auto& x : lineEllipseIntersection(a, d, obj->center, obj->radius, obj->radiusY,
+                                                         obj->rotation)) {
+                const double t = (d.lengthSq() > 1e-12) ? dot(x - a, d) / d.lengthSq() : -1.0;
+                if (t < -1e-9 || t > 1.0 + 1e-9) continue;   // off the cut line's own length
+                if (obj->meta.value(QStringLiteral("ellipticalArc")).toBool()) {
+                    double sweep = obj->endAngle - obj->startAngle;
+                    while (sweep < 0) sweep += 2.0 * M_PI;
+                    double rel = ellipseParamAt(x, obj->center, obj->radius, obj->radiusY,
+                                                obj->rotation) -
+                                 obj->startAngle;
+                    while (rel < 0) rel += 2.0 * M_PI;
+                    if (rel > sweep + 1e-9) continue;   // not on the piece that is there
+                }
+                pick = x;
+                break;
+            }
+            if (!pick || !objectCrosses(*obj, refs)) continue;
+            if (trimEllipseAt(*obj, *pick, joints)) ++count;
         } else if (obj->type == EntityType::Circle || obj->type == EntityType::Arc) {
             // The cut line must cross the curve; that crossing is the picked side.
             const Vec2 d = b - a;

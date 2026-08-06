@@ -637,6 +637,44 @@ std::vector<Vec2> expandBulgePolyline(const std::vector<Vec2>& points,
     return out;
 }
 
+Vec2 ellipsePointAt(double t, const Vec2& c, double rx, double ry, double rot) {
+    const double cc = std::cos(rot), ss = std::sin(rot);
+    const double lx = rx * std::cos(t), ly = ry * std::sin(t);
+    return {c.x + lx * cc - ly * ss, c.y + lx * ss + ly * cc};
+}
+
+double ellipseParamAt(const Vec2& pt, const Vec2& c, double rx, double ry, double rot) {
+    const double cc = std::cos(rot), ss = std::sin(rot);
+    const Vec2 d = pt - c;
+    // Onto the ellipse's own axes, then squashed to a circle: the angle there IS the parameter.
+    const double lx = (d.x * cc + d.y * ss) / std::max(1e-12, rx);
+    const double ly = (-d.x * ss + d.y * cc) / std::max(1e-12, ry);
+    return std::atan2(ly, lx);
+}
+
+std::vector<Vec2> lineEllipseIntersection(const Vec2& p, const Vec2& d, const Vec2& c, double rx,
+                                          double ry, double rot) {
+    std::vector<Vec2> out;
+    if (rx < 1e-12 || ry < 1e-12) return out;
+    const double cc = std::cos(rot), ss = std::sin(rot);
+    // The line, on the ellipse's axes and scaled so the ellipse is the unit circle.
+    const Vec2 rel = p - c;
+    const double px = (rel.x * cc + rel.y * ss) / rx, py = (-rel.x * ss + rel.y * cc) / ry;
+    const double dx = (d.x * cc + d.y * ss) / rx, dy = (-d.x * ss + d.y * cc) / ry;
+    const double A = dx * dx + dy * dy;
+    if (A < 1e-18) return out;
+    const double B = 2.0 * (px * dx + py * dy);
+    const double C = px * px + py * py - 1.0;
+    const double disc = B * B - 4.0 * A * C;
+    if (disc < 0.0) return out;
+    const double sq = std::sqrt(disc);
+    for (const double t : {(-B - sq) / (2.0 * A), (-B + sq) / (2.0 * A)}) {
+        out.push_back({p.x + d.x * t, p.y + d.y * t});
+        if (disc < 1e-12) break;   // grazes it: one point, not two of the same
+    }
+    return out;
+}
+
 std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
                                            const Vec2& c2, double r2) {
     std::vector<Vec2> out;

@@ -4710,6 +4710,114 @@ int run_editor_tests() {
               "parts: turned with R first, it lands turned");
     }
 
+    // --- Trimming an ellipse: half of it comes off between the lines that cross it.
+    {
+        Document d;
+        Entity el;
+        el.id = QStringLiteral("el");
+        el.type = EntityType::Ellipse;
+        el.center = {0, 0};
+        el.radius = 20.0;    // across
+        el.radiusY = 30.0;   // up
+        d.entities().push_back(el);
+        Entity cut;          // a line straight down through it: the ellipse is now two halves
+        cut.id = QStringLiteral("cut");
+        cut.type = EntityType::Line;
+        cut.a = {0, -40};
+        cut.b = {0, 40};
+        d.entities().push_back(cut);
+
+        Editor ed;
+        ed.setDocument(&d);
+        // Where a line crosses an ellipse, exactly: the top and the bottom of this one.
+        const auto xs = lineEllipseIntersection(cut.a, cut.b - cut.a, el.center, el.radius,
+                                                el.radiusY, el.rotation);
+        check(xs.size() == 2, "trim ellipse: a line across it crosses it twice");
+        bool topAndBottom = false;
+        if (xs.size() == 2)
+            topAndBottom = (near(std::abs(xs[0].y), 30.0) && near(std::abs(xs[1].y), 30.0) &&
+                            near(xs[0].x, 0.0) && near(xs[1].x, 0.0));
+        check(topAndBottom, "trim ellipse: and the crossings are ON the ellipse, not near it");
+
+        // Trim: the line is the reference, and a cut line is drawn across the LEFT half.
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);      // pick the reference line
+        ed.onPointerPress({-30, 0}, Qt::LeftButton, Qt::NoModifier);     // the cut line, left of it
+        ed.onPointerPress({-5, 0}, Qt::LeftButton, Qt::NoModifier);
+
+        const Entity* left = nullptr;
+        for (const auto& e : d.entities())
+            if (e.id == QLatin1String("el")) left = &e;
+        check(left != nullptr, "trim ellipse: the ellipse is still there - trimmed, not deleted");
+        if (left) {
+            check(left->meta.value("ellipticalArc").toBool(),
+                  "trim ellipse: what is left is a piece of the ellipse");
+            // The right half is kept: the rightmost point is still on it, the leftmost is gone.
+            auto onKeptPiece = [&](double px, double py) {
+                const double t = ellipseParamAt({px, py}, left->center, left->radius, left->radiusY,
+                                                left->rotation);
+                double sweep = left->endAngle - left->startAngle;
+                while (sweep <= 0) sweep += 2.0 * M_PI;
+                double rel = t - left->startAngle;
+                while (rel < 0) rel += 2.0 * M_PI;
+                return rel <= sweep + 1e-9;
+            };
+            check(onKeptPiece(20.0, 0.0), "trim ellipse: the side away from the cut is kept");
+            check(!onKeptPiece(-20.0, 0.0), "trim ellipse: and the side that was cut is gone");
+            // A click on the half that is gone must not select it any more.
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress({-20, 0}, Qt::LeftButton, Qt::NoModifier);
+            const bool pickedEmpty = ed.selection().empty();
+            ed.clearSelection();
+            ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+            check(pickedEmpty && !ed.selection().empty(),
+                  "trim ellipse: the half that is gone cannot be clicked; the half that is left can");
+        }
+    }
+
+    // --- ... and with TWO lines across it, the piece between them comes off.
+    {
+        Document d;
+        Entity el;
+        el.id = QStringLiteral("el");
+        el.type = EntityType::Ellipse;
+        el.center = {0, 0};
+        el.radius = 30.0;
+        el.radiusY = 15.0;
+        d.entities().push_back(el);
+        for (const double y : {8.0, -8.0}) {   // two lines across it, above and below the middle
+            Entity l;
+            l.id = QStringLiteral("l%1").arg(y);
+            l.type = EntityType::Line;
+            l.a = {-40, y};
+            l.b = {40, y};
+            d.entities().push_back(l);
+        }
+        std::vector<Entity> cutters;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Line) cutters.push_back(e);
+        Entity work = el;
+        // Picking the right-hand end takes off the stretch between the two lines on that side.
+        check(trimEllipseAt(work, Vec2{30.0, 0.0}, cutters),
+              "trim ellipse: two lines across it, and the piece between them comes off");
+        auto on = [&](double px, double py) {
+            const double t = ellipseParamAt({px, py}, work.center, work.radius, work.radiusY,
+                                            work.rotation);
+            double sweep = work.endAngle - work.startAngle;
+            while (sweep <= 0) sweep += 2.0 * M_PI;
+            double rel = t - work.startAngle;
+            while (rel < 0) rel += 2.0 * M_PI;
+            return rel <= sweep + 1e-9;
+        };
+        check(!on(30.0, 0.0), "trim ellipse: the picked stretch is the one that goes");
+        check(on(-30.0, 0.0) && on(0.0, 15.0) && on(0.0, -15.0),
+              "trim ellipse: and the rest of it - both ends and the far side - stays");
+        // Trimming what is left again: the top comes off the piece.
+        check(trimEllipseAt(work, Vec2{0.0, 15.0}, cutters),
+              "trim ellipse: a piece of an ellipse can be trimmed again");
+    }
+
     // --- R turns whatever is held under the cursor before it is dropped.
     {
         Document d;

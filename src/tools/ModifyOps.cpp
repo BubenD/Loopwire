@@ -427,7 +427,100 @@ std::vector<double> circleCutAngles(const Vec2& C, double R, const Entity& self,
     }
     return angs;
 }
+// The parameters, on an ellipse, where the cutters cross it. Same shape as circleCutAngles: only
+// crossings that lie ON a cutter's own segment count, so a line that stops short of the ellipse does
+// not cut it.
+std::vector<double> ellipseCutParams(const Entity& self, const std::vector<Entity>& cutters) {
+    std::vector<double> out;
+    for (const auto& e : cutters) {
+        if (&e == &self || (!self.id.isEmpty() && e.id == self.id)) continue;   // not self
+        forEachCutSegment(e, [&](const Vec2& a, const Vec2& b) {
+            const Vec2 d = b - a;
+            const double L2 = d.lengthSq();
+            if (L2 < 1e-12) return;
+            for (const auto& x : lineEllipseIntersection(a, d, self.center, self.radius, self.radiusY,
+                                                         self.rotation)) {
+                const double t = dot(x - a, d) / L2;
+                if (t < -1e-9 || t > 1.0 + 1e-9) continue;   // beyond the cutter's own ends
+                out.push_back(ellipseParamAt(x, self.center, self.radius, self.radiusY, self.rotation));
+            }
+        });
+    }
+    return out;
+}
+
 } // namespace
+
+bool trimEllipseAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters) {
+    if (e.type != EntityType::Ellipse || e.radius < 1e-9 || e.radiusY < 1e-9) return false;
+    auto norm = [](double a) {
+        while (a < 0) a += 2.0 * M_PI;
+        while (a >= 2.0 * M_PI) a -= 2.0 * M_PI;
+        return a;
+    };
+    const bool whole = !e.meta.value(QStringLiteral("ellipticalArc")).toBool();
+    const double pp = norm(ellipseParamAt(pick, e.center, e.radius, e.radiusY, e.rotation));
+
+    std::vector<double> cuts;
+    for (const double a : ellipseCutParams(e, cutters)) cuts.push_back(norm(a));
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end(),
+                           [](double x, double y) { return std::abs(x - y) < 1e-7; }),
+               cuts.end());
+
+    if (whole) {
+        // A whole ellipse: two crossings are needed to bound the stretch that comes off. The pick lies
+        // between two of them (going round), and what is kept is everything else.
+        if (cuts.size() < 2) return false;
+        double lo = cuts.back(), hi = cuts.front();
+        for (size_t i = 0; i + 1 < cuts.size(); ++i)
+            if (pp >= cuts[i] && pp < cuts[i + 1]) { lo = cuts[i]; hi = cuts[i + 1]; break; }
+        e.meta.insert(QStringLiteral("ellipticalArc"), true);
+        e.startAngle = hi;
+        e.endAngle = lo;   // round from hi to lo: the part that is not the picked one
+        return true;
+    }
+
+    // Already a piece of one: measure along its own sweep, from its start.
+    double sweep = e.endAngle - e.startAngle;
+    while (sweep <= 0) sweep += 2.0 * M_PI;
+    while (sweep > 2.0 * M_PI) sweep -= 2.0 * M_PI;
+    auto rel = [&](double a) {
+        double r = a - e.startAngle;
+        while (r < 0) r += 2.0 * M_PI;
+        while (r >= 2.0 * M_PI) r -= 2.0 * M_PI;
+        return r;
+    };
+    const double up = rel(pp);
+    if (up > sweep + 1e-9) return false;   // the pick is not on this piece
+    std::vector<double> us{0.0, sweep};
+    for (const double a : cuts) {
+        const double u = rel(a);
+        if (u > 1e-9 && u < sweep - 1e-9) us.push_back(u);
+    }
+    std::sort(us.begin(), us.end());
+    us.erase(std::unique(us.begin(), us.end(),
+                         [](double x, double y) { return std::abs(x - y) < 1e-7; }),
+             us.end());
+    if (us.size() < 3) return false;   // nothing crosses it, so there is nothing to take off
+    size_t k = 0;
+    for (; k + 1 < us.size(); ++k)
+        if (up >= us[k] && up <= us[k + 1]) break;
+    if (k + 1 >= us.size()) return false;
+    // The piece the pick is on comes off. Trimming out of the MIDDLE would leave two pieces, which the
+    // ends of the sweep cannot say, so the longer of the two is kept - the same choice the rest of
+    // this file makes when a cut cannot be expressed.
+    if (k == 0) {
+        e.startAngle = e.startAngle + us[1];
+    } else if (k + 2 == us.size()) {
+        e.endAngle = e.startAngle + us[k];
+    } else {
+        const double before = us[k], after = sweep - us[k + 1];
+        if (before >= after) e.endAngle = e.startAngle + us[k];
+        else e.startAngle = e.startAngle + us[k + 1];
+    }
+    return true;
+}
 
 bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters,
                   std::optional<Entity>& extra) {
@@ -542,6 +635,17 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
             double sweep = e.endAngle - e.startAngle;
             while (sweep < 0) sweep += 2.0 * M_PI;
             double rel = ang - e.startAngle;
+            while (rel < 0) rel += 2.0 * M_PI;
+            if (rel <= sweep + 1e-9) return true;
+        }
+        return false;
+    }
+    if (e.type == EntityType::Ellipse) {
+        for (const double t : ellipseCutParams(e, others)) {
+            if (!e.meta.value(QStringLiteral("ellipticalArc")).toBool()) return true;
+            double sweep = e.endAngle - e.startAngle;
+            while (sweep < 0) sweep += 2.0 * M_PI;
+            double rel = t - e.startAngle;
             while (rel < 0) rel += 2.0 * M_PI;
             if (rel <= sweep + 1e-9) return true;
         }

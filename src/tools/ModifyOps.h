@@ -72,6 +72,11 @@ std::optional<std::pair<Vec2, double>> cutCircleThrough(const Vec2& p,
 // curve), bounded by where the cutting edges in `cutters` cross it. A circle needs
 // two cuts and becomes an arc; an arc may split — `extra` returns the second arc.
 // Returns true if `e` was modified.
+// Trim an ELLIPSE (whole, or already a piece of one) at its crossings with the cutters: the stretch
+// the pick lies on is removed and what is left is kept as a piece of the same ellipse. Two lines across
+// an ellipse is the ordinary case - it takes the half between them off.
+bool trimEllipseAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters);
+
 bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutters,
                   std::optional<Entity>& extra);
 
