@@ -180,6 +180,10 @@ private:
     // A 2-row icon grid of the Modify "Operations" actions (Array, Explode,
     // Purge, Delete). Reused on both the Home and Modify tabs.
     QWidget* operationsRow();
+    // The Array button, with its flyout of the three array laws. It sits with the MODIFY tools - an
+    // array is a way of copying something about the drawing, which is what those tools do - rather than
+    // among Operations, where it was the only thing that draws anything.
+    QToolButton* makeArrayButton(QWidget* parent);
     // Clipboard group: a Copy button (copies the selection) whose fall-menu holds Cut.
     // iconOnly drops the "Copy"/"Cut" caption so the button matches the plain icon
     // buttons it sits with (Home); the name then shows on hover instead.

@@ -89,10 +89,17 @@ QString CableElement::summary() const {
 // ---- The cable -----------------------------------------------------------------------------------
 
 int CableSpec::conductorCount() const {
+    // The CONDUCTORS: what the cable carries. A drain is not one of them - it belongs to the screen,
+    // it carries no signal, and a cable is bought and specified by its cores plus a drain ("5 cores
+    // + drain"), never as six. It is counted by wireCount() below, for whoever needs every wire in
+    // the jacket.
     int n = 0;
     for (const CableElement& e : elements) n += e.conductors();
-    if (!drainGauge.trimmed().isEmpty()) ++n;   // a drain wire is a conductor like any other
     return n;
+}
+
+int CableSpec::wireCount() const {
+    return conductorCount() + (drainGauge.trimmed().isEmpty() ? 0 : 1);
 }
 
 bool CableSpec::screened() const {

@@ -103,7 +103,10 @@ struct CableSpec {
     CableColourStandard colourStandard = CableColourStandard::HouseOrder;
     std::vector<CableElement> elements;
 
-    int conductorCount() const;         // every conductor inside, drain included
+    int conductorCount() const;         // the conductors: what the cable carries, drain NOT included
+    // Every wire inside the jacket - the conductors and the drain. What a cable is cut and stripped
+    // as, rather than what it is specified as.
+    int wireCount() const;
     bool screened() const;              // any screen at all, at any level
     // One line saying what it is: "4 × twisted pair 24 AWG (foil), 1 × coax, overall braid".
     QString summary() const;

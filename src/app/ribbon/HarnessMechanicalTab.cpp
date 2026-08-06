@@ -66,6 +66,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
             g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
         mh->addWidget(modRow);
+        mh->addWidget(makeArrayButton(modW));
         mh->addWidget(clipboardRow(/*iconOnly=*/true));
         mechGroups_ << addGroupKeep(lay, QStringLiteral("Modify"), modW);
     }

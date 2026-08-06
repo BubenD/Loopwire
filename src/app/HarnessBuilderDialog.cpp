@@ -3910,6 +3910,11 @@ void HarnessBuilderDialog::reloadAll() {
     reloadPinMap();
     reloadWires();
     reloadLayout();
+    // ... and the wiring picture, which is the whole point of looking at this window. It was left out,
+    // so re-ordering the pinout - "Minimise crossings", "Optimise by shield", "Optimise by twist" - did
+    // the work and then showed the OLD tangle: the numbers changed, the drawing did not, and the
+    // buttons looked as though they did nothing at all.
+    refreshPreview();
     syncing_ = false;
     // Keep the running count honest without nagging: crossings now, issues only on demand.
     const int crossings = harnessCrossings(def_);

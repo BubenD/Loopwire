@@ -80,10 +80,14 @@ int run_cable_tests() {
     // --- How many conductors, and is it screened.
     {
         const CableSpec s = sampleCable();
-        // 4 pairs = 8, 2 singles = 2, a coax = 2 (its screen is a conductor), a drain = 1.
+        // 4 pairs = 8, 2 singles = 2, a coax = 2 (its screen IS a conductor: the core runs inside it).
+        // The drain is not among them - it belongs to the screen, it carries no signal, and a cable is
+        // specified as its cores PLUS a drain, never as one more core.
         std::printf("    (%s)\n", qPrintable(s.summary()));
-        check(s.conductorCount() == 13, "cable: every conductor counted, the coax screen and the "
-                                        "drain included");
+        check(s.conductorCount() == 12,
+              "cable: the conductors counted - the coax screen among them, the drain not");
+        check(s.wireCount() == 13,
+              "cable: and every WIRE in the jacket counted separately, the drain included");
         check(s.screened(), "cable: screened, because it has screens");
         CableSpec plain;
         plain.elements.push_back(element(CableElementKind::Single, 3, "0.5", false, false, false));
@@ -120,7 +124,7 @@ int run_cable_tests() {
         check(reread.load(path), "cable: and reads back");
         check(!reread.parts.empty() &&
                   CableSpec::fromCompact(reread.parts.front().value(QStringLiteral("structure")))
-                          .conductorCount() == 13,
+                          .conductorCount() == 12,
               "cable: and the make-up survives the library file");
         QFile::remove(path);
     }
@@ -188,11 +192,11 @@ int run_cable_tests() {
         const CableSpec s = sampleCable();
         const std::vector<CableConductor> cores = cableConductors(s, QStringLiteral("K1"));
         std::printf("    (%zu conductor(s) for the harness)\n", cores.size());
-        // A row per conductor INSIDE the jacket. The drain is a conductor of the cable, counted by
-        // conductorCount, but it is not a hook-up wire to be landed on a pin: it terminates the
-        // overall screen, and that screen is asked for on the connectors instead.
-        check(static_cast<int>(cores.size()) == s.conductorCount() - 1,
-              "place: a row per conductor, the drain excepted - it belongs to the overall screen");
+        // A row per conductor inside the jacket - which is exactly the conductor count, the drain being
+        // no part of it: the drain terminates the overall screen, and that screen is asked for on the
+        // connectors instead.
+        check(static_cast<int>(cores.size()) == s.conductorCount(),
+              "place: a row per conductor, and the drain is not one of them");
 
         // Every conductor belongs to the cable.
         bool allBundled = true;

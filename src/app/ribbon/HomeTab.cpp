@@ -59,6 +59,8 @@ void MainWindow::buildHomeTab() {
         if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
             g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
         mh->addWidget(modRow);
+        // Array sits with the modify tools: it copies something about the drawing, which is what they do.
+        mh->addWidget(makeArrayButton(modW));
         // Icon only here, matching the tool icons it sits beside; the name is on hover.
         mh->addWidget(clipboardRow(/*iconOnly=*/true));
         addGroup(lay, QStringLiteral("Modify"), modW);

@@ -1870,12 +1870,46 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
 // the same style as toolRow so they read consistently in the ribbon. Reused on
 // both the Home and Modify tabs. Buttons are tracked in opButtons_ for theme
 // re-tinting.
+QToolButton* MainWindow::makeArrayButton(QWidget* parent) {
+    auto* b = new QToolButton(parent);
+    b->setIcon(makeOpIcon(QStringLiteral("array")));
+    b->setIconSize(QSize(28, 28));
+    b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    b->setToolTip(QStringLiteral(
+        "Array — rectangular, polar or path (use the arrow to choose the type)"));
+    b->setAutoRaise(true);
+    b->setFocusPolicy(Qt::NoFocus);
+    connect(b, &QToolButton::clicked, this, [this] { beginArrayCommand(editor_->lastArrayKind()); });
+    // AutoCAD-style flyout of the three array laws. The chosen one becomes the button's icon and what a
+    // plain click repeats - so the icon on the ribbon always says which array you get.
+    struct Kind { const char* icon; QString label; ArrayKind kind; };
+    const QList<Kind> kinds = {
+        {"array", QStringLiteral("Rectangular array (linear)"), ArrayKind::Rect},
+        {"arraypolar", QStringLiteral("Polar array"), ArrayKind::Polar},
+        {"arraypath", QStringLiteral("Path array (tracking)"), ArrayKind::Path},
+    };
+    auto* menu = new QMenu(b);
+    for (const Kind& k : kinds) {
+        const QString iconKey = QString::fromLatin1(k.icon);
+        menu->addAction(makeOpIcon(iconKey), k.label, this, [this, b, iconKey, k] {
+            b->setIcon(makeOpIcon(iconKey));
+            for (auto& entry : opButtons_)
+                if (entry.second == b) entry.first = iconKey;
+            beginArrayCommand(k.kind);
+        });
+    }
+    b->setMenu(menu);
+    b->setPopupMode(QToolButton::MenuButtonPopup);
+    opButtons_.append({QStringLiteral("array"), b});   // so the theme re-tints it
+    return b;
+}
+
 QWidget* MainWindow::operationsRow() {
     struct Op { const char* key; QString tip; std::function<void()> fn; };
+    // Array used to be here. It is a way of copying something about the drawing, which is what the
+    // modify tools do - so it now sits with them, and this group is what is left: the commands that act
+    // on a selection without drawing anything.
     const QList<Op> ops = {
-        {"array",
-         QStringLiteral("Array — rectangular, polar or path (use the arrow to choose the type)"),
-         [this] { beginArrayCommand(editor_->lastArrayKind()); }},
         {"qselect",
          QStringLiteral("Quick Select — build a selection from an object's properties.\n"
                         "Either order works: select an object then click this, or click this, "
@@ -1905,30 +1939,6 @@ QWidget* MainWindow::operationsRow() {
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus);
         connect(b, &QToolButton::clicked, this, op.fn);
-        if (key == QLatin1String("array")) {
-            // AutoCAD-style flyout of the three array laws. The chosen one becomes the
-            // button's icon and what a plain click repeats — so the icon on the ribbon
-            // always says which array you get.
-            struct Kind { const char* icon; QString label; ArrayKind kind; };
-            const QList<Kind> kinds = {
-                {"array", QStringLiteral("Rectangular array (linear)"), ArrayKind::Rect},
-                {"arraypolar", QStringLiteral("Polar array"), ArrayKind::Polar},
-                {"arraypath", QStringLiteral("Path array (tracking)"), ArrayKind::Path},
-            };
-            auto* menu = new QMenu(b);
-            for (const Kind& k : kinds) {
-                const QString iconKey = QString::fromLatin1(k.icon);
-                menu->addAction(makeOpIcon(iconKey), k.label, this, [this, b, iconKey, k] {
-                    b->setIcon(makeOpIcon(iconKey));
-                    // Keep the theme re-tint table pointing at the icon now shown.
-                    for (auto& entry : opButtons_)
-                        if (entry.second == b) entry.first = iconKey;
-                    beginArrayCommand(k.kind);
-                });
-            }
-            b->setMenu(menu);
-            b->setPopupMode(QToolButton::MenuButtonPopup);
-        }
         grid->addWidget(b, i / perRow, i % perRow);
         opButtons_.append({key, b});
         ++i;

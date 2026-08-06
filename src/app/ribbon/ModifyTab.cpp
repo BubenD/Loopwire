@@ -38,9 +38,17 @@ namespace Edraw_Desktop {
 // ---- MODIFY ----
 void MainWindow::buildModifyTab() {
     auto [page, lay] = makeTabPage();
-    addGroup(lay, QStringLiteral("Transform"),
-             toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                      ToolId::Offset}));
+    {
+        // Move / Rotate / Mirror / Scale / Offset - and Array, which is the same idea repeated.
+        auto* tw = new QWidget(page);
+        auto* th = new QHBoxLayout(tw);
+        th->setContentsMargins(0, 0, 0, 0);
+        th->setSpacing(2);
+        th->addWidget(toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
+                               ToolId::Offset}));
+        th->addWidget(makeArrayButton(tw));
+        addGroup(lay, QStringLiteral("Transform"), tw);
+    }
     {
         // Edit group: the pick-modify tools plus the Copy/Cut clipboard button.
         auto* editW = new QWidget(page);
