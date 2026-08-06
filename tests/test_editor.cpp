@@ -5017,6 +5017,129 @@ int run_editor_tests() {
         }
     }
 
+    // --- Filleting a line to a curve: a half ellipse, a whole circle, and the radius that will not fit.
+    {
+        auto halfEllipse = [] {
+            Entity el;
+            el.id = QStringLiteral("el");
+            el.type = EntityType::Ellipse;
+            el.center = {0, 0};
+            el.radius = 60.0;
+            el.radiusY = 100.0;
+            el.meta.insert("ellipticalArc", true);
+            el.startAngle = -M_PI / 2.0;   // its ends on x = 0, bulging to the right
+            el.endAngle = M_PI / 2.0;
+            return el;
+        };
+        auto lineDownTo = [] {
+            Entity l;
+            l.id = QStringLiteral("line");
+            l.type = EntityType::Line;
+            l.a = {0, 260};
+            l.b = {0, 100};   // ending at the ellipse's top end
+            return l;
+        };
+
+        // 1) The reported case: a line meeting the top end of a half ellipse.
+        {
+            Entity el = halfEllipse(), line = lineDownTo();
+            const CornerResult r =
+                filletLineCurve(line, el, 25.0, Vec2{0.0, 200.0}, Vec2{45.0, 60.0});
+            check(r.ok && r.hasConnector,
+                  "fillet to a curve: a line and a half ellipse can be filleted");
+            if (r.ok) {
+                const Entity& arc = r.connector;
+                check(arc.type == EntityType::Arc && near(arc.radius, 25.0),
+                      "fillet to a curve: what is added is an arc of the radius asked for");
+                // Tangent to the line: its centre is exactly the radius away from it.
+                check(std::abs(std::abs(arc.center.x) - 25.0) < 1e-6,
+                      "fillet to a curve: tangent to the line - its centre is the radius clear of it");
+                // Tangent to the ellipse: the centre is the radius from the point it touches, and that
+                // point is ON the ellipse.
+                const Vec2 touch = ellipsePointAt(el.endAngle, el.center, el.radius, el.radiusY,
+                                                  el.rotation);
+                check(std::abs(distance(arc.center, touch) - 25.0) < 1e-4,
+                      "fillet to a curve: and tangent to the ellipse, at the end it was trimmed back to");
+                // Both objects were taken back to where the fillet meets them, and the fillet's own two
+                // ends are exactly those places - no gap, no overlap.
+                const Vec2 e0 = pointOnCircle(arc.center, arc.radius, arc.startAngle);
+                const Vec2 e1 = pointOnCircle(arc.center, arc.radius, arc.endAngle);
+                const double toLineEnd = std::min(distance(e0, line.b), distance(e1, line.b));
+                const double toCurve = std::min(distance(e0, touch), distance(e1, touch));
+                check(toLineEnd < 1e-4 && toCurve < 1e-4,
+                      "fillet to a curve: the fillet starts where the line now ends and finishes where "
+                      "the ellipse now does");
+                check(near(line.a.y, 260.0) && line.b.y < 260.0,
+                      "fillet to a curve: the picked end of the line is the end that is kept");
+                check(el.endAngle < M_PI / 2.0 - 1e-9,
+                      "fillet to a curve: and the ellipse is shortened, not left crossing the fillet");
+            }
+        }
+
+        // 2) A WHOLE circle has no end to shorten, so only the line moves - as everywhere else.
+        {
+            Entity c;
+            c.id = QStringLiteral("c");
+            c.type = EntityType::Circle;
+            c.center = {0, 0};
+            c.radius = 80.0;
+            Entity line;
+            line.id = QStringLiteral("l");
+            line.type = EntityType::Line;
+            line.a = {100, 200};   // 20 clear of the ring, so a 30 fillet can touch both
+            line.b = {100, -200};
+            const Entity before = c;
+            const CornerResult r =
+                filletLineCurve(line, c, 30.0, Vec2{100.0, 60.0}, Vec2{78.0, 20.0});
+            check(r.ok && r.hasConnector, "fillet to a curve: a line and a circle can be filleted");
+            check(near(c.radius, before.radius) && near(c.center.x, before.center.x),
+                  "fillet to a curve: a whole circle is left as it was");
+            if (r.ok)
+                check(std::abs(distance(r.connector.center, c.center) - (c.radius + 30.0)) < 1e-4 ||
+                          std::abs(distance(r.connector.center, c.center) - std::abs(c.radius - 30.0)) <
+                              1e-4,
+                      "fillet to a curve: with the fillet tangent to the ring, inside it or outside it");
+        }
+
+        // 3) A radius that cannot reach across the gap is refused rather than half-applied: a line 120
+        // clear of a ring cannot be joined to it by an arc of 30.
+        {
+            Entity c;
+            c.type = EntityType::Circle;
+            c.center = {0, 0};
+            c.radius = 80.0;
+            Entity line;
+            line.type = EntityType::Line;
+            line.a = {200, 200};
+            line.b = {200, -200};
+            const Entity lineBefore = line;
+            const CornerResult r =
+                filletLineCurve(line, c, 30.0, Vec2{200.0, 40.0}, Vec2{75.0, 25.0});
+            check(!r.ok && r.tooBig, "fillet to a curve: a radius that cannot reach both is refused");
+            check(near(line.a.y, lineBefore.a.y) && near(line.b.y, lineBefore.b.y),
+                  "fillet to a curve: and nothing is moved when it is");
+        }
+
+        // 4) Radius 0 is not a fillet but "bring these together": both to the crossing, nothing added.
+        {
+            Entity el = halfEllipse();
+            Entity line;
+            line.id = QStringLiteral("l");
+            line.type = EntityType::Line;
+            line.a = {30, 300};
+            line.b = {30, 40};   // stops short of the ellipse, which it would cross at y = 80
+            const CornerResult r = filletLineCurve(line, el, 0.0, Vec2{30.0, 280.0}, Vec2{45.0, 60.0});
+            check(r.ok && !r.hasConnector,
+                  "fillet to a curve: radius 0 brings them together and adds nothing");
+            if (r.ok) {
+                const double onEllipse =
+                    std::hypot(line.b.x / el.radius, line.b.y / el.radiusY);
+                check(std::abs(onEllipse - 1.0) < 1e-6,
+                      "fillet to a curve: with the line's end taken exactly onto the curve");
+            }
+        }
+    }
+
     // --- The crossing at an arc's OWN END must count, whichever side of it the rounding falls.
     {
         // Trim an ellipse with a line and the half left behind ENDS on that line: trimming the line by

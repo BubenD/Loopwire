@@ -343,6 +343,200 @@ CornerResult filletLines(Entity& l1, Entity& l2, double radius,
     return res;
 }
 
+// ---- Filleting a line to a curve ------------------------------------------
+//
+// Rounding the corner where a line meets a circle, an arc, an ellipse or a piece of one. Between two
+// lines the answer is a formula; against a curve it is not, because the fillet has to be tangent to a
+// curve whose own direction changes along it. So it is SOLVED rather than derived, and the thing solved
+// for is the place on the curve.
+//
+// At a place t on the curve, a circle of the fillet's radius that touches the curve there has its centre
+// on the curve's normal, r away - two of them, one each side. That centre must also be r from the line,
+// which is one number to drive to zero. Sampled all along the curve and refined wherever the sign turns
+// over, that finds every fillet there is; the one nearest where the two objects were PICKED is the one
+// meant, which is how filleting has always chosen between the four corners two lines make.
+namespace {
+
+struct CurveGeom {
+    Vec2 c;
+    double rx = 0.0, ry = 0.0, rot = 0.0;
+    bool closed = true;
+    double from = 0.0, sweep = 2.0 * M_PI;   // the piece that is there, when it is not closed
+};
+
+bool curveGeomOf(const Entity& e, CurveGeom& g) {
+    if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
+        if (e.radius < 1e-9) return false;
+        g = {e.center, e.radius, e.radius, 0.0, e.type == EntityType::Circle, 0.0, 2.0 * M_PI};
+    } else if (e.type == EntityType::Ellipse) {
+        if (e.radius < 1e-9 || e.radiusY < 1e-9) return false;
+        g = {e.center, e.radius, e.radiusY, e.rotation,
+             !e.meta.value(QStringLiteral("ellipticalArc")).toBool(), 0.0, 2.0 * M_PI};
+    } else {
+        return false;
+    }
+    if (!g.closed) {
+        g.from = e.startAngle;
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * M_PI;
+        while (sweep > 2.0 * M_PI) sweep -= 2.0 * M_PI;
+        g.sweep = sweep;
+    }
+    return true;
+}
+
+Vec2 curveAt(const CurveGeom& g, double t) { return ellipsePointAt(t, g.c, g.rx, g.ry, g.rot); }
+
+// Which way the curve runs at t (not normalised).
+Vec2 curveDir(const CurveGeom& g, double t) {
+    const double cc = std::cos(g.rot), ss = std::sin(g.rot);
+    const double lx = -g.rx * std::sin(t), ly = g.ry * std::cos(t);
+    return {lx * cc - ly * ss, lx * ss + ly * cc};
+}
+
+double distToInfiniteLine(const Vec2& p, const Vec2& a, const Vec2& b) {
+    const Vec2 d = b - a;
+    const double len = d.length();
+    if (len < 1e-12) return distance(p, a);
+    return std::abs(cross(d, p - a)) / len;
+}
+
+Vec2 footOnInfiniteLine(const Vec2& p, const Vec2& a, const Vec2& b) {
+    const Vec2 d = b - a;
+    const double L2 = d.lengthSq();
+    if (L2 < 1e-12) return a;
+    return a + d * (dot(p - a, d) / L2);
+}
+
+} // namespace
+
+CornerResult filletLineCurve(Entity& line, Entity& curve, double radius, const Vec2& pickLine,
+                             const Vec2& pickCurve) {
+    CornerResult out;
+    CurveGeom g;
+    if (line.type != EntityType::Line || !curveGeomOf(curve, g)) return out;
+
+    // Radius 0 is not a fillet: it is "bring these two together", so both are taken to the crossing
+    // nearest the picks and nothing is added between them.
+    if (radius < 1e-9) {
+        const std::vector<Vec2> xs =
+            lineEllipseIntersection(line.a, line.b - line.a, g.c, g.rx, g.ry, g.rot);
+        const Vec2* best = nullptr;
+        double bestScore = std::numeric_limits<double>::max();
+        for (const Vec2& x : xs) {
+            const double s = distance(x, pickLine) + distance(x, pickCurve);
+            if (s < bestScore) { bestScore = s; best = &x; }
+        }
+        if (!best) return out;
+        if (distance(line.a, pickLine) <= distance(line.b, pickLine)) line.b = *best;
+        else line.a = *best;
+        out.ok = true;
+        out.hasConnector = false;
+        return out;
+    }
+
+    // Every fillet there is: the sign turning over in "how far the tangent centre is from the line,
+    // less the radius" says one lies between those two samples.
+    struct Found { double t = 0.0; Vec2 c; };
+    std::vector<Found> found;
+    constexpr int kSamples = 1440;
+    for (const double side : {1.0, -1.0}) {
+        auto centreAt = [&](double t) {
+            const Vec2 d = curveDir(g, t);
+            const double len = d.length();
+            const Vec2 n = len < 1e-12 ? Vec2{0.0, 0.0} : Vec2{-d.y / len, d.x / len};
+            return curveAt(g, t) + n * (side * radius);
+        };
+        auto err = [&](double t) {
+            return distToInfiniteLine(centreAt(t), line.a, line.b) - radius;
+        };
+        double prevT = g.from, prevE = err(prevT);
+        for (int i = 1; i <= kSamples; ++i) {
+            const double t = g.from + g.sweep * i / kSamples;
+            const double e = err(t);
+            if ((prevE <= 0.0 && e >= 0.0) || (prevE >= 0.0 && e <= 0.0)) {
+                // Halve the interval down to where it changes: 60 rounds is far past exact.
+                double lo = prevT, hi = t, elo = prevE;
+                for (int k = 0; k < 60; ++k) {
+                    const double mid = (lo + hi) / 2.0;
+                    const double em = err(mid);
+                    if ((elo <= 0.0 && em >= 0.0) || (elo >= 0.0 && em <= 0.0)) hi = mid;
+                    else { lo = mid; elo = em; }
+                }
+                const double root = (lo + hi) / 2.0;
+                found.push_back({root, centreAt(root)});
+            }
+            prevT = t;
+            prevE = e;
+        }
+    }
+    if (found.empty()) {
+        out.tooBig = true;   // no circle of that radius touches both
+        return out;
+    }
+
+    // The one meant: nearest to where the two objects were picked.
+    const Found* best = nullptr;
+    double bestScore = std::numeric_limits<double>::max();
+    Vec2 bestFoot{0.0, 0.0}, bestTouch{0.0, 0.0};
+    for (const Found& f : found) {
+        const Vec2 touch = curveAt(g, f.t);
+        const Vec2 foot = footOnInfiniteLine(f.c, line.a, line.b);
+        const double s = distance(touch, pickCurve) + distance(foot, pickLine);
+        if (s < bestScore) {
+            bestScore = s;
+            best = &f;
+            bestFoot = foot;
+            bestTouch = touch;
+        }
+    }
+    if (!best) return out;
+
+    // The line is taken back (or out) to where the fillet meets it, keeping the end that was picked.
+    if (distance(line.a, pickLine) <= distance(line.b, pickLine)) line.b = bestFoot;
+    else line.a = bestFoot;
+
+    // A piece of a curve is taken back to where the fillet meets it, keeping the side that was picked.
+    // A WHOLE circle or ellipse is left alone - it has no end to shorten, which is what filleting a
+    // line to a circle does everywhere else.
+    if (!g.closed) {
+        auto rel = [&](double t) {
+            double r = t - g.from;
+            while (r < 0.0) r += 2.0 * M_PI;
+            while (r >= 2.0 * M_PI) r -= 2.0 * M_PI;
+            return r;
+        };
+        const double tCut = rel(best->t);
+        const double tPick = rel(ellipseParamAt(pickCurve, g.c, g.rx, g.ry, g.rot));
+        if (tPick <= tCut) curve.endAngle = curve.startAngle + tCut;
+        else curve.startAngle = curve.startAngle + tCut;
+        if (curve.type == EntityType::Arc) {
+            // An arc says its ends as angles about its centre; keep them in one turn.
+            while (curve.endAngle - curve.startAngle > 2.0 * M_PI) curve.endAngle -= 2.0 * M_PI;
+        }
+    }
+
+    // And the fillet itself: the shorter way round between the two places it touches.
+    Entity arc;
+    arc.type = EntityType::Arc;
+    arc.layer = line.layer;
+    arc.color = line.color;
+    arc.weight = line.weight;
+    arc.center = best->c;
+    arc.radius = radius;
+    double a0 = std::atan2(bestTouch.y - best->c.y, bestTouch.x - best->c.x);
+    double a1 = std::atan2(bestFoot.y - best->c.y, bestFoot.x - best->c.x);
+    double sweep = a1 - a0;
+    while (sweep <= 0.0) sweep += 2.0 * M_PI;
+    if (sweep > M_PI) std::swap(a0, a1);
+    arc.startAngle = a0;
+    arc.endAngle = a1;
+    out.connector = std::move(arc);
+    out.hasConnector = true;
+    out.ok = true;
+    return out;
+}
+
 CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
                          const Vec2& near1, const Vec2& near2) {
     CornerResult res;

@@ -22,6 +22,13 @@ struct CornerResult {
 CornerResult filletLines(Entity& l1, Entity& l2, double radius,
                          const Vec2& near1, const Vec2& near2);
 
+// Round the corner where a LINE meets a CURVE - a circle, an arc, an ellipse or a piece of one - with
+// an arc of the given radius. Both are taken back (or out) to where the fillet touches them, keeping the
+// side each was picked on; a whole circle or ellipse is left alone, having no end to shorten. Radius 0
+// brings the two together at their crossing instead, adding nothing.
+CornerResult filletLineCurve(Entity& line, Entity& curve, double radius, const Vec2& pickLine,
+                             const Vec2& pickCurve);
+
 // Bevel the corner between two line entities by the given setbacks.
 CornerResult chamferLines(Entity& l1, Entity& l2, double d1, double d2,
                          const Vec2& near1, const Vec2& near2);

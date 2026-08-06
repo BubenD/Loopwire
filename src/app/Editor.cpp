@@ -8520,6 +8520,49 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         return;
     }
 
+    // FILLET a LINE to a CURVE: a circle, an arc, an ellipse or a piece of one. Picked in either order.
+    // The same idea as two lines - an arc of the set radius tangent to both, made near where each was
+    // picked - and the reason this was worth having: a harness drawing is full of runs that meet a
+    // radius, and a half ellipse is what is left after trimming one.
+    if (tool_ == ToolId::Fillet && l1 && l2 && l1 != l2) {
+        auto curved = [](const Entity& e) {
+            return e.type == EntityType::Circle || e.type == EntityType::Arc ||
+                   e.type == EntityType::Ellipse;
+        };
+        Entity* ln = nullptr;
+        Entity* cv = nullptr;
+        Vec2 pl{0.0, 0.0}, pc{0.0, 0.0};
+        if (l1->type == EntityType::Line && curved(*l2)) {
+            ln = l1; cv = l2; pl = pickPts_[0]; pc = pickPts_[1];
+        } else if (l2->type == EntityType::Line && curved(*l1)) {
+            ln = l2; cv = l1; pl = pickPts_[1]; pc = pickPts_[0];
+        }
+        if (ln && cv) {
+            pushUndo();
+            const CornerResult r = filletLineCurve(*ln, *cv, filletRadius_, pl, pc);
+            if (r.ok) {
+                if (r.hasConnector) {
+                    Entity arc = r.connector;
+                    addEntity(std::move(arc));
+                }
+                emit message(r.hasConnector
+                                 ? QStringLiteral("Filleted the line to the curve (radius %1)")
+                                       .arg(filletRadius_)
+                                 : QStringLiteral("Fillet (radius 0): brought them together"));
+            } else {
+                undo();
+                emit message(r.tooBig
+                                 ? QStringLiteral("No arc of radius %1 touches both - try a smaller one")
+                                       .arg(filletRadius_)
+                                 : QStringLiteral("Those two cannot be filleted"));
+            }
+            pickIds_.clear();
+            pickPts_.clear();
+            emit changed();
+            return;
+        }
+    }
+
     if (l1 && l2 && l1 != l2 && l1->type == EntityType::Line && l2->type == EntityType::Line) {
         pushUndo();
         CornerResult r;
