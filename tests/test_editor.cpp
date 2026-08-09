@@ -3683,6 +3683,67 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // Whichever way round the two are picked. Selecting the RUN and fencing across one of its lines
+        // is what a person does - the selection is the thing being worked on - and it used to do nothing
+        // at all, the run being taken for the boundary and skipped.
+        {
+            Document d7; d7.entities().clear();
+            Entity slant;                      // the boundary, crossing the lower line at x=110
+            slant.id = QStringLiteral("slant");
+            slant.type = EntityType::Line;
+            slant.a = {60, -60};
+            slant.b = {140, 20};
+            d7.entities().push_back(slant);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::DoubleLine;
+            run.a = {0, 0};
+            run.b = {160, 0};                  // lines at y=+/-10
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            d7.entities().push_back(run);
+            Editor ed; ed.setDocument(&d7); noSnap(ed); ed.setPixelTolerance(3);
+            ed.selectById(QStringLiteral("run"));      // the RUN, not the boundary
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({130, -4}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({130, -20});
+            ed.onPointerPress({130, -20}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d7.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == -1,
+                  "trim-either-way: selecting the run and fencing its lower line trims that line");
+            check(ed.selection().size() == 1,
+                  "trim-either-way: and what was selected stays selected for the next one");
+        }
+
+        // A trim that does nothing must not cost the selection either: re-picking the reference before
+        // every retry is most of the work of trimming.
+        {
+            Document d8; d8.entities().clear();
+            Entity far;
+            far.id = QStringLiteral("far");
+            far.type = EntityType::Line;
+            far.a = {900, -50};
+            far.b = {900, 50};                 // nowhere near the run
+            d8.entities().push_back(far);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {160, 0}};
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            d8.entities().push_back(run);
+            Editor ed; ed.setDocument(&d8); noSnap(ed); ed.setPixelTolerance(3);
+            ed.selectById(QStringLiteral("far"));
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({80, 4}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({80, 20});
+            ed.onPointerPress({80, 20}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1 &&
+                      ed.selection().front() == QLatin1String("far"),
+                  "trim-keeps-selection: a trim that does nothing keeps the reference selected");
+        }
+
         // A line that already ENDS on the boundary has nothing past it to remove, and the piece the pick
         // asks for is the whole line. That is refused - and said out loud - rather than recorded as a cap
         // that collapses the line to a point.

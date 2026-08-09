@@ -999,6 +999,10 @@ private:
     // (line/circle) passes through world point `at`, so its physical runs clip flush.
     // Trim ONE physical line of a double run: the fence crossed that line and not the centreline, so
     // that line alone comes back to the reference and the other keeps its length. True when it did it.
+    // One pass of a trim: what to cut, and what bounds it. Run twice - the selection as the boundary,
+    // then the selection as the thing to cut - so the command works whichever way round they were picked.
+    int trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& onlyIds,
+                 const std::vector<Entity>& boundaries, QString* whyOut);
     bool trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
                              const std::vector<Entity>& refs, QString* why = nullptr);
     // Record a cut for ONE physical line at an end, KEEPING whatever cut the other line has there. Each

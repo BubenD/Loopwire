@@ -8150,26 +8150,22 @@ std::vector<Entity> Editor::modifyPreview() const {
 
 // ---- Pick-modify tools (trim / extend / fillet / chamfer) ------------------
 
-void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
-    if (!doc_) return;
-    std::vector<Entity> refs;
-    for (const QString& id : trimRefIds_)
-        if (const Entity* r = entityById(id)) refs.push_back(*r);
-    if (refs.empty()) { emit message(QStringLiteral("Select the reference object first.")); return; }
-
-    // The boundaries are the REFERENCE objects and nothing else. Trimming to a circle means removing
-    // what is inside THAT circle, whatever else the drawing happens to have lying across the same
-    // object.
-    //
-    // It used to be every object on the sheet ("until any joint"), which meant a second circle
-    // overlapping the reference cut the removal short: the piece left behind still had material inside
-    // the reference, and its new end sat on a ring nobody had selected. Nor does an object's own corner
-    // bound it (see trimPolylinePieces): a corner is part of the thing being cut, not a cutting edge.
-    const std::vector<Entity>& joints = refs;
-    pushUndo();
-    // Snapshot the ids first so trimming doesn't disturb the iteration.
-    std::vector<QString> ids;
-    for (const auto& e : doc_->entities()) ids.push_back(e.id);
+// One pass of the trim: everything in `ids` (or everything that is not a boundary) cut back to
+// `boundaries`, where the fence [a,b] crosses it. Returns how many objects were changed, and the first
+// reason it had for changing none.
+int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& onlyIds,
+                     const std::vector<Entity>& boundaries, QString* whyOut) {
+    const std::vector<Entity>& refs = boundaries;
+    const std::vector<Entity>& joints = boundaries;
+    // Which objects this pass may trim: the ones named, or - when none are named - everything that is
+    // not one of the boundaries. Snapshotted first, so trimming does not disturb the iteration.
+    std::vector<QString> ids = onlyIds;
+    if (ids.empty())
+        for (const auto& e : doc_->entities()) {
+            bool isBoundary = false;
+            for (const Entity& bnd : boundaries) isBoundary = isBoundary || bnd.id == e.id;
+            if (!isBoundary) ids.push_back(e.id);
+        }
     int count = 0;
     // Why nothing happened, when nothing happens. A trim that quietly does nothing cannot be told from a
     // trim that is broken, and the difference is usually one sentence.
@@ -8177,8 +8173,6 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     std::vector<Entity> additions; // split pieces, added after the loop
     std::vector<QString> removals; // objects with nothing left, removed after the loop
     for (const QString& id : ids) {
-        if (std::find(trimRefIds_.begin(), trimRefIds_.end(), id) != trimRefIds_.end())
-            continue; // never trim the reference itself
         Entity* obj = entityById(id);
         if (!obj) continue;
         // An object that lies WHOLLY INSIDE a circular reference has nothing outside the ring to
@@ -8362,8 +8356,55 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                                    }),
                     selected_.end());
     for (auto& add : additions) addEntity(std::move(add));
+    if (whyOut && whyOut->isEmpty()) *whyOut = why;
+    return count;
+}
+
+void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
+    if (!doc_) return;
+    std::vector<Entity> refs;
+    for (const QString& id : trimRefIds_)
+        if (const Entity* r = entityById(id)) refs.push_back(*r);
+    if (refs.empty()) { emit message(QStringLiteral("Select the reference object first.")); return; }
+
+    // The boundaries are the REFERENCE objects and nothing else. Trimming to a circle means removing
+    // what is inside THAT circle, whatever else the drawing happens to have lying across the same
+    // object.
+    //
+    // It used to be every object on the sheet ("until any joint"), which meant a second circle
+    // overlapping the reference cut the removal short: the piece left behind still had material inside
+    // the reference, and its new end sat on a ring nobody had selected. Nor does an object's own corner
+    // bound it (see trimPolylinePieces): a corner is part of the thing being cut, not a cutting edge.
+    const std::vector<Entity>& joints = refs;
+    pushUndo();
+    QString why;
+    int count = trimPass(a, b, {}, refs, &why);
+
+    // Nothing? Then the selection is very likely what was MEANT to be trimmed - it is the object the
+    // fence was drawn across - and the rest of the drawing is what bounds it. AutoCAD offers the same
+    // thing the other way round: press Enter with nothing selected and every object becomes a cutting
+    // edge. Retrying like this means the command works whichever way round the two were picked, which is
+    // worth more than being strict about which comes first.
+    bool secondWay = false;
     if (count == 0) {
+        std::vector<Entity> others;
+        for (const auto& e : doc_->entities()) {
+            bool isRef = false;
+            for (const Entity& r : refs) isRef = isRef || r.id == e.id;
+            if (!isRef) others.push_back(e);
+        }
+        QString why2;
+        count = trimPass(a, b, trimRefIds_, others, &why2);
+        secondWay = count > 0;
+        if (count == 0 && why.isEmpty()) why = why2;
+    }
+    if (count == 0) {
+        // undo() clears the selection, and losing it for a trim that did nothing means re-picking the
+        // reference before every retry - which is most of the work of trimming.
+        const std::vector<QString> keep = selected_;
         undo();
+        selected_ = keep;
+        emit selectionChanged();
         // Whatever the trim itself worked out, in preference to the general answer. "The cut line
         // crossed nothing" is true of a great many different mistakes, and the one being made is
         // usually a sentence away - which line has no boundary on it, which one already ends on the
@@ -8376,8 +8417,11 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     }
     doc_->setDirty(true);
     // Keep the reference selected so more cut lines can be drawn; Esc finishes.
-    emit message(QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish")
-                     .arg(count));
+    emit message(secondWay
+                     ? QStringLiteral("Trimmed the selected object against the rest of the drawing "
+                                      "(%1) — draw another cut line or Esc to finish").arg(count)
+                     : QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish")
+                           .arg(count));
     emit changed();
 }
 

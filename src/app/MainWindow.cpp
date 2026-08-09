@@ -4556,7 +4556,10 @@ void MainWindow::commitInlineText(bool apply) {
 }
 
 void MainWindow::leavePropertiesPanel() {
-    if (editor_) editor_->setTool(ToolId::Select);
+    // Esc means Esc: whatever the drawing would do with it. That cancels any command in progress, drops
+    // the selection and goes back to Select - not merely "close the field and leave the object picked",
+    // which leaves the state half way and the next click acting on something still selected.
+    if (editor_) editor_->onKey(Qt::Key_Escape, Qt::NoModifier);
     if (canvas_) canvas_->setFocus(Qt::OtherFocusReason);
 }
 
