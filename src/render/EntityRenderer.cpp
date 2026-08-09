@@ -15,6 +15,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <cstdio>
 
 namespace Edraw_Desktop {
 
@@ -403,6 +404,121 @@ void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side) {
         applyRunCut(rail, e, k, false, side);
     for (const QString& k : {QStringLiteral("cutEnd"), QStringLiteral("cutEnd2")})
         applyRunCut(rail, e, k, true, side);
+}
+
+// The part of a run between two distances along it.
+static std::vector<Vec2> railSlice(const std::vector<Vec2>& run, double from, double to) {
+    std::vector<Vec2> out;
+    if (run.size() < 2 || to - from <= 1e-9) return out;
+    double at = 0.0;
+    for (size_t i = 1; i < run.size(); ++i) {
+        const double segLen = distance(run[i - 1], run[i]);
+        if (segLen <= 1e-12) continue;
+        const double s0 = at;
+        at += segLen;
+        const double lo = std::max(from, s0), hi = std::min(to, at);
+        if (hi - lo <= 1e-9) continue;
+        const Vec2 dir = (run[i] - run[i - 1]).normalized();
+        const Vec2 p0 = run[i - 1] + dir * (lo - s0);
+        const Vec2 p1 = run[i - 1] + dir * (hi - s0);
+        if (out.empty() || distance(out.back(), p0) > 1e-9) out.push_back(p0);
+        out.push_back(p1);
+    }
+    return out;
+}
+
+std::vector<std::vector<Vec2>> splitRailAtHoles(const std::vector<Vec2>& rail, const Entity& e,
+                                                int side) {
+    std::vector<std::vector<Vec2>> pieces;
+    if (rail.size() < 2) {
+        if (!rail.empty()) pieces.push_back(rail);
+        return pieces;
+    }
+    // A hole is kept as the two points on the line where it starts and ends, in world coordinates, so
+    // it follows the object through a move, a turn or a mirror the way the end caps do.
+    std::vector<std::pair<double, double>> spans;
+    for (const auto& hv : e.meta.value(QStringLiteral("holes")).toArray()) {
+        const QJsonArray h = hv.toArray();
+        if (h.size() < 5 || h[0].toInt() != side) continue;
+        const Vec2 p1{h[1].toDouble(), h[2].toDouble()};
+        const Vec2 p2{h[3].toDouble(), h[4].toDouble()};
+        double d1 = 0.0, d2 = 0.0, along = 0.0, best1 = 1e299, best2 = 1e299;
+        for (size_t i = 1; i < rail.size(); ++i) {
+            const auto c1 = closestPointOnSegment(p1, rail[i - 1], rail[i]);
+            if (c1.distance < best1) { best1 = c1.distance; d1 = along + distance(rail[i - 1], c1.point); }
+            const auto c2 = closestPointOnSegment(p2, rail[i - 1], rail[i]);
+            if (c2.distance < best2) { best2 = c2.distance; d2 = along + distance(rail[i - 1], c2.point); }
+            along += distance(rail[i - 1], rail[i]);
+        }
+        if (d2 < d1) std::swap(d1, d2);
+        if (d2 - d1 > 1e-9) spans.push_back({d1, d2});
+    }
+    if (spans.empty()) {
+        pieces.push_back(rail);
+        return pieces;
+    }
+    std::sort(spans.begin(), spans.end());
+    const double total = polylineLength(rail);
+    double at = 0.0;
+    for (const auto& s : spans) {
+        std::vector<Vec2> piece = railSlice(rail, at, s.first);
+        if (piece.size() >= 2) pieces.push_back(std::move(piece));
+        at = std::max(at, s.second);
+    }
+    std::vector<Vec2> tail = railSlice(rail, at, total);
+    if (tail.size() >= 2) pieces.push_back(std::move(tail));
+    return pieces;
+}
+
+Bounds drawnBounds(const Entity& e) {
+    Bounds b = e.bounds();
+    if (!b.valid) return b; // nothing there to reach out from
+    const bool doubleRun = e.type == EntityType::DoubleLine ||
+                           (e.type == EntityType::Polyline && e.meta.value("double").toBool());
+    if (doubleRun) {
+        // The two lines themselves, cap for cap. Built rather than padded because a cap can stretch a
+        // line a long way past the end of its own run - to the far side of whatever it was extended to
+        // meet - and no fixed pad would contain that.
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        std::vector<Vec2> centre;
+        if (e.type == EntityType::DoubleLine) centre = {e.a, e.b};
+        else centre = e.points;
+        if (centre.size() >= 2) {
+            for (int side : {+1, -1}) {
+                std::vector<Vec2> rail;
+                if (e.type == EntityType::DoubleLine) {
+                    const Vec2 off = (e.b - e.a).normalized().perp() * (side * gap / 2.0);
+                    rail = {e.a + off, e.b + off};
+                } else {
+                    rail = offsetPolyline(centre, side * gap / 2.0);
+                }
+                Vec2 ra, rb;
+                if (lsReferenceLine(e, ra, rb)) extendRunStartToLine(rail, ra, rb);
+                applyDoubleRunCuts(rail, e, side);
+                for (const Vec2& p : rail) b.expand(p);
+            }
+            // The lines are taken off the path with its corners sharp, which is the wider of the two:
+            // rounding a corner only ever cuts it inwards, so this contains the rounded run as well.
+        }
+        return b;
+    }
+    if (e.type == EntityType::Dimension) {
+        // The dimension line stands off the measured points, and the text stands off that again.
+        const double pad = std::abs(e.meta.value("offset").toDouble(0.0)) +
+                           e.meta.value("textHeight").toDouble(5.0) * 3.0 +
+                           std::abs(e.meta.value("extOffset").toDouble(2.0));
+        b.expand({b.min.x - pad, b.min.y - pad});
+        b.expand({b.max.x + pad, b.max.y + pad});
+        return b;
+    }
+    if (e.type == EntityType::Wire) {
+        // Markings sit above and below the conductor, and a bridge hop arcs over it.
+        const double pad = std::max(6.0, e.meta.value("markingHeight").toDouble(2.5) * 3.0);
+        b.expand({b.min.x - pad, b.min.y - pad});
+        b.expand({b.max.x + pad, b.max.y + pad});
+        return b;
+    }
+    return b;
 }
 
 namespace {
@@ -964,8 +1080,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             applyRunCut(run1, e, k, true, +1);
             applyRunCut(run2, e, k, true, -1);
         }
-        p.drawLine(vt.toScreen(run1[0]), vt.toScreen(run1[1]));
-        p.drawLine(vt.toScreen(run2[0]), vt.toScreen(run2[1]));
+        // Each line in the pieces it survives in: a trim that took a bite out of the middle of one of
+        // them is kept as a hole, and the line is drawn either side of it.
+        for (int side : {+1, -1})
+            for (const auto& piece : splitRailAtHoles(side > 0 ? run1 : run2, e, side))
+                p.drawPolyline(toScreenPoly(piece, vt));
         break;
     }
 
@@ -1052,8 +1171,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     applyRunCut(run1, e, k, true, +1);
                     applyRunCut(run2, e, k, true, -1);
                 }
-                p.drawPolyline(toScreenPoly(run1, vt));
-                p.drawPolyline(toScreenPoly(run2, vt));
+                for (int side : {+1, -1})
+                    for (const auto& piece : splitRailAtHoles(side > 0 ? run1 : run2, e, side))
+                        p.drawPolyline(toScreenPoly(piece, vt));
             } else if (!bulgeArr.isEmpty()) {
                 // Arc segments (PLINE arc mode): expand bulges into a curved run.
                 std::vector<double> bulges;

@@ -6771,6 +6771,171 @@ int run_editor_tests() {
               "turn while placing: and there is nothing held any more");
     }
 
+    // How far an object REACHES ON THE SHEET, which is the question the canvas has to ask before it
+    // decides an object is off screen and skips it. A double run's lines are gap/2 either side of its
+    // path, so the path can be off screen while both lines fill it - that is what made lines vanish as
+    // the view zoomed in, because the margin the canvas allowed shrank with the zoom while the gap did
+    // not.
+    {
+        Document d; d.entities().clear();
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0, 100}, {200, 100}};
+        run.meta.insert(QStringLiteral("double"), true);
+        run.meta.insert(QStringLiteral("gap"), 10.0);
+        const Bounds path = run.bounds();
+        check(near(path.min.y, 100.0) && near(path.max.y, 100.0),
+              "drawn bounds: the geometry of a double run is its centreline, flat");
+        const Bounds drawn = drawnBounds(run);
+        check(drawn.min.y <= 95.0 + 1e-9 && drawn.max.y >= 105.0 - 1e-9,
+              "drawn bounds: what is DRAWN reaches both lines, gap/2 either side");
+        // The canvas's own test, zoomed in on the top line: 1200x800 px at 256 px per unit is under
+        // 5 units across, so the centreline is well outside the view and the line fills it.
+        auto offScreen = [](const Bounds& b, const Vec2& at, double zoom) {
+            double vMinX = at.x - 600.0 / zoom, vMaxX = at.x + 600.0 / zoom;
+            double vMinY = at.y - 400.0 / zoom, vMaxY = at.y + 400.0 / zoom;
+            const double mx = (vMaxX - vMinX) * 0.05 + 2.0, my = (vMaxY - vMinY) * 0.05 + 2.0;
+            vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
+            return b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY ||
+                               b.min.y > vMaxY);
+        };
+        const Vec2 onTheLine{100, 105};
+        check(offScreen(path, onTheLine, 256.0),
+              "drawn bounds: by its geometry the run counts as off screen at that zoom");
+        check(!offScreen(drawn, onTheLine, 256.0),
+              "drawn bounds: by what is drawn it does not - the line is the whole view");
+    }
+
+    // A cap that stretched a line out to meet something reaches past the end of the run's own points,
+    // and no fixed pad would contain that - it is as far as the thing it was extended to.
+    {
+        Document d; d.entities().clear();
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::DoubleLine;
+        run.a = {0, 0};
+        run.b = {100, 0};
+        run.meta.insert(QStringLiteral("gap"), 10.0);
+        check(near(drawnBounds(run).max.x, 100.0),
+              "drawn bounds: with no cap the run reaches its own end");
+        run.meta.insert(QStringLiteral("cutEnd"), true);
+        run.meta.insert(QStringLiteral("cutEndKind"), QStringLiteral("line"));
+        run.meta.insert(QStringLiteral("cutEndAx"), 300.0);   // a wall 200 further on
+        run.meta.insert(QStringLiteral("cutEndAy"), -50.0);
+        run.meta.insert(QStringLiteral("cutEndBx"), 300.0);
+        run.meta.insert(QStringLiteral("cutEndBy"), 50.0);
+        run.meta.insert(QStringLiteral("cutEndSide"), 1);
+        check(drawnBounds(run).max.x >= 300.0 - 1e-9,
+              "drawn bounds: a line extended to meet something reaches all the way to it");
+    }
+
+    // Two double runs crossing, and the piece of one line that runs THROUGH the other run's gap taken
+    // out - on BOTH lines, at the same joint. This is the everyday trim on a harness drawing: it is how
+    // a run that passes behind another is shown. A trimmed END cannot say a piece out of the middle of a
+    // line, which is why the second line "did not trim from the joint": its piece was always a middle
+    // one. The line keeps it as a hole instead.
+    {
+        auto makeRun = [](const QString& id, std::vector<Vec2> pts, double gap) {
+            Entity e;
+            e.id = id;
+            e.type = EntityType::Polyline;
+            e.points = std::move(pts);
+            e.meta.insert(QStringLiteral("double"), true);
+            e.meta.insert(QStringLiteral("gap"), gap);
+            return e;
+        };
+        // how much of one physical line is drawn, holes taken off
+        auto drawn = [](const Entity& e, int side) {
+            const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            std::vector<Vec2> rail = offsetPolyline(e.points, side * gap / 2.0);
+            applyDoubleRunCuts(rail, e, side);
+            double total = 0.0;
+            for (const auto& piece : splitRailAtHoles(rail, e, side)) total += polylineLength(piece);
+            return total;
+        };
+        Document d; d.entities().clear();
+        d.entities().push_back(makeRun(QStringLiteral("A"), {{0, 0}, {200, 0}}, 20.0));
+        d.entities().push_back(makeRun(QStringLiteral("B"), {{100, -50}, {100, 50}}, 30.0));
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        auto runA = [&]() -> const Entity& {
+            for (const Entity& e : d.entities())
+                if (e.id == QLatin1String("A")) return e;
+            return d.entities().front();
+        };
+        auto trimAt = [&](const Vec2& at) {
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.selectById(QStringLiteral("B"));
+            ed.setTool(ToolId::Trim);
+            ed.onPointerMove(at);
+            ed.onPointerPress(at, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress(at, Qt::LeftButton, Qt::NoModifier);
+        };
+        check(near(drawn(runA(), +1), 200.0) && near(drawn(runA(), -1), 200.0),
+              "trim-joint: both lines run the whole way to start with");
+        trimAt({100, 10});                       // the top line, inside B's gap
+        check(near(drawn(runA(), +1), 170.0),
+              "trim-joint: the piece of the top line inside the joint comes out");
+        check(near(drawn(runA(), -1), 200.0),
+              "trim-joint: and the other line is untouched by it");
+        trimAt({100, -10});                      // the bottom line, the SAME joint
+        check(near(drawn(runA(), -1), 170.0),
+              "trim-joint: the second line trims at the same joint too");
+        check(near(drawn(runA(), +1), 170.0),
+              "trim-joint: with the first line left as it was");
+        // And what is gone is gone: clicking in the hole says so and changes nothing.
+        QString said;
+        QObject::connect(&ed, &Editor::message, [&said](const QString& m) { said = m; });
+        trimAt({100, 10});
+        check(near(drawn(runA(), +1), 170.0), "trim-joint: clicking the hole again changes nothing");
+        // Nor is there anything there to click: the line is not drawn in the hole, so the pointer is
+        // over empty sheet and the answer says so rather than blaming a cut line that was never drawn.
+        check(said.contains(QStringLiteral("nothing under the pointer")),
+              "trim-joint: and a click in the hole says there is nothing there");
+    }
+
+    // A click trims the line UNDER THE POINTER or explains itself - it never trims something else that
+    // happens to be nearby. This used to report "trimmed one line of a double run" while quietly cutting
+    // a different run a few millimetres away, which is the worst of both: the drawing changed somewhere
+    // the person was not looking, and the line they clicked did not.
+    {
+        Document d; d.entities().clear();
+        Entity lone;                               // nothing crosses this line at all
+        lone.id = QStringLiteral("lone");
+        lone.type = EntityType::Line;
+        lone.a = {0, 0};
+        lone.b = {60, 0};
+        d.entities().push_back(lone);
+        Entity other;                              // ... and this one is crossed, close by
+        other.id = QStringLiteral("other");
+        other.type = EntityType::Line;
+        other.a = {0, 8};
+        other.b = {60, 8};
+        d.entities().push_back(other);
+        Entity edge;
+        edge.id = QStringLiteral("edge");
+        edge.type = EntityType::Line;
+        edge.a = {30, 4};
+        edge.b = {30, 30};                         // crosses `other`, not `lone`
+        d.entities().push_back(edge);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+        ed.selectById(QStringLiteral("edge"));
+        ed.setTool(ToolId::Trim);
+        QString said;
+        QObject::connect(&ed, &Editor::message, [&said](const QString& m) { said = m; });
+        ed.onPointerMove({20, 0});
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);   // on `lone`
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* o = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.id == QLatin1String("other")) o = &e;
+        check(o && near(o->a.x, 0.0) && near(o->b.x, 60.0),
+              "trim-owner: a click that cannot trim what it is on leaves everything else alone");
+        check(said.contains(QStringLiteral("Nothing crosses")),
+              "trim-owner: and says why the line under the pointer could not be trimmed");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

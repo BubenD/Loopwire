@@ -271,7 +271,8 @@ void forEachCutSegmentOf(const Entity& e, std::vector<Vec2>& out) {
         for (int side : {+1, -1}) {
             std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
             applyDoubleRunCuts(rail, e, side);
-            for (size_t i = 1; i < rail.size(); ++i) add(rail[i - 1], rail[i]);
+            for (const auto& piece : splitRailAtHoles(rail, e, side))
+                for (size_t i = 1; i < piece.size(); ++i) add(piece[i - 1], piece[i]);
         }
         break;
     }
@@ -280,8 +281,10 @@ void forEachCutSegmentOf(const Entity& e, std::vector<Vec2>& out) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
                 std::vector<Vec2> run = offsetPolyline(e.points, s);
-                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);
-                for (size_t i = 1; i < run.size(); ++i) add(run[i - 1], run[i]);
+                const int side = s > 0 ? +1 : -1;
+                applyDoubleRunCuts(run, e, side);
+                for (const auto& piece : splitRailAtHoles(run, e, side))
+                    for (size_t i = 1; i < piece.size(); ++i) add(piece[i - 1], piece[i]);
             }
         } else {
             for (size_t i = 1; i < e.points.size(); ++i) add(e.points[i - 1], e.points[i]);
@@ -1154,7 +1157,10 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         for (int side : {+1, -1}) {
             std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
             applyDoubleRunCuts(rail, e, side);
-            for (size_t i = 1; i < rail.size(); ++i) best = std::min(best, segDist(rail[i - 1], rail[i]));
+            // A piece trimmed out of the middle of a line is not there to be picked either.
+            for (const auto& piece : splitRailAtHoles(rail, e, side))
+                for (size_t i = 1; i < piece.size(); ++i)
+                    best = std::min(best, segDist(piece[i - 1], piece[i]));
         }
         break;
     }
@@ -1165,8 +1171,11 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
                 std::vector<Vec2> run = offsetPolyline(e.points, s);
-                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);   // the line as DRAWN, caps included
-                for (size_t i = 1; i < run.size(); ++i) best = std::min(best, segDist(run[i - 1], run[i]));
+                const int side = s > 0 ? +1 : -1;
+                applyDoubleRunCuts(run, e, side);   // the line as DRAWN: caps in, holes out
+                for (const auto& piece : splitRailAtHoles(run, e, side))
+                    for (size_t i = 1; i < piece.size(); ++i)
+                        best = std::min(best, segDist(piece[i - 1], piece[i]));
             }
             break;
         }
@@ -2482,10 +2491,11 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             bool any = false;
             for (double s : {gap / 2.0, -gap / 2.0}) {
                 const std::vector<Vec2> rail = doubleRunRail(e, s);
-                for (size_t i = 1; i < rail.size(); ++i) {
-                    segs.emplace_back(rail[i - 1], rail[i]);
-                    any = true;
-                }
+                for (const auto& piece : splitRailAtHoles(rail, e, s > 0 ? +1 : -1))
+                    for (size_t i = 1; i < piece.size(); ++i) {
+                        segs.emplace_back(piece[i - 1], piece[i]);
+                        any = true;
+                    }
             }
             if (any) break;
         }
@@ -8478,24 +8488,50 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         // That is how trimming is asked for first, and it used to be the one gesture that did nothing.
         if (count == 0) {
             QString why3;
+            bool nothingUnderPointer = false;
             for (const Vec2& at : {b, a}) {
                 // If the pointer is on one of the SELECTED objects, that is the thing being trimmed -
                 // it is what was picked out and then clicked on - and the rest of the drawing bounds
                 // it. Trying it the other way round first trimmed whatever else happened to lie under
                 // the pointer, reported a success, and left the line that was clicked untouched.
-                bool onSelection = false;
-                if (const auto hit = hitTest(at))
-                    onSelection = std::find(trimRefIds_.begin(), trimRefIds_.end(), *hit) !=
-                                  trimRefIds_.end();
-                if (onSelection && trimPickAt(at, others, &why3, &picked)) {
-                    count = 1;
-                    secondWay = true;
-                    break;
+                // The object under the pointer is THE ONE BEING TRIMMED. Everything else bounds it:
+                // the selection when the pointer is not on it, the rest of the drawing when it is.
+                //
+                // Trying one boundary set after another and keeping whatever any of them managed to
+                // trim is what made a click report "trimmed one line of a double run" having quietly
+                // cut a DIFFERENT run a few millimetres away - the clicked line was refused, the next
+                // attempt looked past it, and something else moved. If the line under the pointer
+                // cannot be trimmed, the answer is why, not a different object.
+                const auto hit = hitTest(at);
+                if (!hit) nothingUnderPointer = true;
+                if (hit) {
+                    const QString target = *hit;
+                    const bool targetIsRef = std::find(trimRefIds_.begin(), trimRefIds_.end(),
+                                                       target) != trimRefIds_.end();
+                    std::vector<Entity> bnds;
+                    if (targetIsRef) {
+                        for (const auto& e : doc_->entities())
+                            if (e.id != target) bnds.push_back(e);
+                    } else {
+                        for (const Entity& r : refs)
+                            if (r.id != target) bnds.push_back(r);
+                    }
+                    if (trimPickAt(at, bnds, &why3, &picked, &target)) {
+                        count = 1;
+                        secondWay = targetIsRef;
+                        break;
+                    }
                 }
+                // Only when the thing under the pointer had nothing to say for itself - something that
+                // cannot be trimmed at all, or nothing under the pointer - is anything else tried.
+                if (!why3.isEmpty()) continue;
                 if (trimPickAt(at, refs, &why3, &picked)) { count = 1; break; }
                 if (trimPickAt(at, others, &why3, &picked)) { count = 1; secondWay = true; break; }
             }
-            if (count == 0 && why.isEmpty()) why = why3;
+            if (count == 0 && !why3.isEmpty()) why = why3;
+            if (count == 0 && why.isEmpty() && nothingUnderPointer)
+                why = QStringLiteral("There is nothing under the pointer to trim — click on the piece "
+                                     "of a line you want to take off.");
         }
     }
     if (count == 0) {
@@ -8581,6 +8617,21 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
                 along += distance(rail[i - 1], rail[i]);
             }
         }
+    }
+    // A hole already in this line bounds what is next to it, exactly as a crossing does - it IS where
+    // the line stops - and there is nothing inside it left to take off.
+    for (const auto& hv : ent.meta.value(QStringLiteral("holes")).toArray()) {
+        const QJsonArray h = hv.toArray();
+        if (h.size() < 5 || h[0].toInt() != side) continue;
+        const Vec2 p1{h[1].toDouble(), h[2].toDouble()};
+        const Vec2 p2{h[3].toDouble(), h[4].toDouble()};
+        double d1 = nearestAlong(rail, p1).first, d2 = nearestAlong(rail, p2).first;
+        if (d2 < d1) { std::swap(d1, d2); }
+        if (d2 - d1 < 1e-9) continue;
+        if (alongPick > d1 + 1e-9 && alongPick < d2 - 1e-9)
+            return say(QStringLiteral("That part of the line has already been taken out."));
+        crossings.push_back({d1, p1});
+        crossings.push_back({d2, p2});
     }
     // The part of the line that only a CAP provides - where it was stretched to meet something - is a
     // piece with a definite start: the end of the line's own run. Clicking THERE and trimming means "take
@@ -8673,10 +8724,26 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
         return say(QStringLiteral("That would take the whole of that line: there is no boundary "
                                   "between the point you picked and its ends."));
     }
-    if (!atStart && !atEnd)
-        return say(QStringLiteral("That piece is in the middle of the line, with a boundary either "
-                                  "side of it — a trimmed end cannot say that. Trim the whole run, or "
-                                  "cut it at one end."));
+    if (!atStart && !atEnd) {
+        // A piece out of the MIDDLE of one line, boundary either side of it: the piece of a line that
+        // runs through the gap of the run crossing it, which is the most ordinary trim on a harness
+        // drawing there is. No trimmed end can say it, so the line keeps it as a HOLE - the two points
+        // where it stops and starts again. Both lines of a run can be opened this way, which is what
+        // "the first line trims and the second one does not" was about: the second line's piece was
+        // always the one in the middle.
+        QJsonArray holes = ent.meta.value(QStringLiteral("holes")).toArray();
+        QJsonArray h;
+        h.append(side);
+        h.append(loAt.x);
+        h.append(loAt.y);
+        h.append(hiAt.x);
+        h.append(hiAt.y);
+        holes.append(h);
+        ent.meta.insert(QStringLiteral("holes"), holes);
+        if (why)
+            *why = QStringLiteral("Took that piece out of the middle of the line.");
+        return true;
+    }
     const QString key = atStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
     const Vec2 at = atStart ? hiAt : loAt;
     if (!capDoubleRailAt(ent, key, at, refs, side))
@@ -8714,23 +8781,32 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
 }
 
 bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries, QString* why,
-                        QString* what) {
+                        QString* what, const QString* onlyId) {
     if (!doc_) return false;
+    auto say = [why](const QString& text) {
+        if (why && why->isEmpty()) *why = text;
+        return false;
+    };
     auto isBoundary = [&boundaries](const QString& id) {
         for (const Entity& b : boundaries)
             if (b.id == id) return true;
         return false;
     };
-    // What is under the pointer, ignoring the boundaries themselves.
-    std::vector<QString> skip;
     Entity* obj = nullptr;
-    for (int attempt = 0; attempt < 4 && !obj; ++attempt) {
-        const auto hit = hitTest(pick, skip);
-        if (!hit) break;
-        if (isBoundary(*hit)) { skip.push_back(*hit); continue; }
-        obj = entityById(*hit);
-        if (obj) break;
-        skip.push_back(*hit);
+    if (onlyId) {
+        // The caller has already decided what was clicked, and nothing else may be trimmed instead.
+        obj = entityById(*onlyId);
+    } else {
+        // What is under the pointer, ignoring the boundaries themselves.
+        std::vector<QString> skip;
+        for (int attempt = 0; attempt < 4 && !obj; ++attempt) {
+            const auto hit = hitTest(pick, skip);
+            if (!hit) break;
+            if (isBoundary(*hit)) { skip.push_back(*hit); continue; }
+            obj = entityById(*hit);
+            if (obj) break;
+            skip.push_back(*hit);
+        }
     }
     if (!obj) return false;
 
@@ -8769,9 +8845,13 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
         return trimRailPiece(*obj, rail, side, alongPick, boundaries, why);
     }
     if (obj->type == EntityType::Line) {
-        if (!objectCrosses(*obj, boundaries)) return false;
+        if (!objectCrosses(*obj, boundaries))
+            return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it "
+                                      "back to — select the object you want it to stop at."));
         std::optional<Entity> extra;
-        if (!trimLineQuick(*obj, pick, boundaries, extra)) return false;
+        if (!trimLineQuick(*obj, pick, boundaries, extra))
+            return say(QStringLiteral("There is no boundary between the point you picked and the ends "
+                                      "of that line, so there is no piece to take off."));
         if (extra) addEntity(std::move(*extra));
         return true;
     }
@@ -8783,7 +8863,10 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
         if (run.size() < 2) return false;
         const QString selfId = obj->id;
         auto pieces = trimPolylinePieces(run, pick, boundaries, selfId);
-        if (pieces.empty()) return false;
+        if (pieces.empty())
+            return say(QStringLiteral("Nothing the reference crosses lies either side of the point "
+                                      "you picked, so there is no piece of that polyline to take "
+                                      "off."));
         obj->type = EntityType::Polyline;
         obj->meta.remove(QStringLiteral("cornerRadii"));
         obj->meta.remove(QStringLiteral("cornerRadius"));

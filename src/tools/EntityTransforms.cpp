@@ -69,6 +69,20 @@ void mapPoints(Entity& e, F fn) {
     xf("cutEndBx", "cutEndBy");
     xf("cutStartCx", "cutStartCy"); // circle-cut centre
     xf("cutEndCx", "cutEndCy");
+    // A hole trimmed out of one line of a double run is kept as the two points where the line stops
+    // and starts again ([side, ax, ay, bx, by]); they follow the object like the caps do.
+    if (e.meta.contains(QLatin1String("holes"))) {
+        QJsonArray arr = e.meta.value(QLatin1String("holes")).toArray();
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonArray h = arr[i].toArray();
+            if (h.size() < 5) continue;
+            const Vec2 p1 = fn({h[1].toDouble(), h[2].toDouble()});
+            const Vec2 p2 = fn({h[3].toDouble(), h[4].toDouble()});
+            h[1] = p1.x; h[2] = p1.y; h[3] = p2.x; h[4] = p2.y;
+            arr[i] = h;
+        }
+        e.meta.insert(QLatin1String("holes"), arr);
+    }
     // Extend cut-cap edge sets (flat [ax,ay,bx,by,...]) follow the entity too.
     for (const char* k : {"cutStartPoly", "cutEndPoly"}) {
         if (!e.meta.contains(QLatin1String(k))) continue;

@@ -370,8 +370,12 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
             const Vec2 c1 = vt.toWorld(QPointF(width(), height()));
             double vMinX = std::min(c0.x, c1.x), vMaxX = std::max(c0.x, c1.x);
             double vMinY = std::min(c0.y, c1.y), vMaxY = std::max(c0.y, c1.y);
-            const double mx = (vMaxX - vMinX) * 0.05 + 1.0;
-            const double my = (vMaxY - vMinY) * 0.05 + 1.0;
+            // The margin is a share of what is on screen, so it shrinks as the view zooms in - which
+            // is right for a pen width and wrong for anything measured in world units. It is the
+            // object's own reach that has to cover those (see drawnBounds), with a floor here of a
+            // millimetre or two for the symbols drawn at a fixed size in pixels.
+            const double mx = (vMaxX - vMinX) * 0.05 + 2.0;
+            const double my = (vMaxY - vMinY) * 0.05 + 2.0;
             vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
 
             // Selected entities are drawn live in the overlay (so they can be
@@ -383,7 +387,11 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
                 if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible)
                     continue;
                 if (selected.contains(e.id)) continue;
-                const Bounds b = e.bounds();
+                // Where the object is DRAWN, not where its geometry is: a double run's two lines are
+                // gap/2 either side of the path this used to test, so zooming in on one of those lines
+                // culled the object whose line fills the screen. That is what made lines disappear as
+                // the view zoomed in.
+                const Bounds b = drawnBounds(e);
                 if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX ||
                                 b.max.y < vMinY || b.min.y > vMaxY))
                     continue; // entirely off-screen

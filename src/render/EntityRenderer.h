@@ -34,6 +34,21 @@ struct ViewTransform {
 // that something, because the extension lives in the cap and not in the run's own points.
 void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side);
 
+// The pieces one physical line of a double run is drawn in: the capped line, broken wherever a trim
+// took a piece out of the MIDDLE of it. A middle piece cannot be said with a trimmed end - there is no
+// end there - so it is kept as a hole in that one line, which is also exactly what a run crossing
+// another looks like on a harness drawing. Pass the rail with its caps already applied.
+std::vector<std::vector<Vec2>> splitRailAtHoles(const std::vector<Vec2>& rail, const Entity& e,
+                                                int side);
+
+// How far an object actually REACHES ON THE SHEET, which is not the same thing as Entity::bounds().
+// bounds() answers "where is the object", the question selection and hit-testing ask, and for a double
+// run that is its centreline - a path the drawing never puts a line on. What is drawn is two lines
+// gap/2 either side of it, and further still where a trim cap stretched one out to meet something.
+// Anything deciding whether an object need be PAINTED has to use this instead, or it will throw away
+// an object whose lines are on screen because the path between them is not.
+Bounds drawnBounds(const Entity& e);
+
 // Stateless entity painter. Draws a single entity in screen space using the
 // supplied transform; resolves color/weight against the document's layers.
 class EntityRenderer {

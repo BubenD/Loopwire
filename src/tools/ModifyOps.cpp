@@ -58,7 +58,8 @@ void forEachCutSegment(const Entity& e, F&& f) {
         for (int side : {+1, -1}) {
             std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
             applyDoubleRunCuts(rail, e, side);
-            for (size_t i = 1; i < rail.size(); ++i) f(rail[i - 1], rail[i]);
+            for (const auto& piece : splitRailAtHoles(rail, e, side))
+                for (size_t i = 1; i < piece.size(); ++i) f(piece[i - 1], piece[i]);
         }
         break;
     }
@@ -67,8 +68,10 @@ void forEachCutSegment(const Entity& e, F&& f) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
                 std::vector<Vec2> run = offsetPolyline(e.points, s);
-                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);   // as drawn, caps included
-                for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
+                const int side = s > 0 ? +1 : -1;
+                applyDoubleRunCuts(run, e, side);   // as drawn: caps in, holes out
+                for (const auto& piece : splitRailAtHoles(run, e, side))
+                    for (size_t i = 1; i < piece.size(); ++i) f(piece[i - 1], piece[i]);
             }
         } else {
             for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
