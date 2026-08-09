@@ -7035,6 +7035,145 @@ int run_editor_tests() {
               "dim-override: and an override can add to it");
     }
 
+    // A dimension is moved by its joints - and the ones that matter are at the ARROW ENDS, on the far
+    // side of the extension lines from the geometry, because those are what carry the dimension line off
+    // the object. Every kind of dimension has to have something to take hold of.
+    {
+        auto dim = [](const QString& type) {
+            Entity e;
+            e.id = QStringLiteral("d");
+            e.type = EntityType::Dimension;
+            e.meta.insert(QStringLiteral("dimType"), type);
+            e.meta.insert(QStringLiteral("textHeight"), 5.0);
+            return e;
+        };
+        // press on the joint, drag, let go, and settle it
+        auto dragJoint = [](Editor& ed, const Vec2& from, const Vec2& to) {
+            ed.setTool(ToolId::Select);
+            ed.onPointerMove(from);
+            ed.onPointerPress(from, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove(to);
+            ed.onPointerRelease(to, Qt::LeftButton);
+            ed.onPointerMove(to);
+            ed.onPointerPress(to, Qt::LeftButton, Qt::NoModifier);
+        };
+
+        {   // a horizontal measurement standing 30 off above: its extension lines are vertical and the
+            // arrow ends are at the top of them
+            Document d; d.entities().clear();
+            Entity e = dim(QStringLiteral("linear"));
+            e.a = {40, 20}; e.b = {160, 20};
+            e.points = {{40, 20}, {160, 20}, {100, 50}};
+            d.entities().push_back(e);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            dragJoint(ed, {40, 50}, {40, 85});     // the arrow end at the top of the left ext line
+            const Entity& now = d.entities().front();
+            check(now.points.size() >= 3 && near(now.points[2].y, 85.0),
+                  "dim-joints: the joint at the arrow end carries the dimension line off");
+            check(near(now.a.x, 40.0) && near(now.a.y, 20.0) && near(now.b.x, 160.0) &&
+                      near(now.b.y, 20.0),
+                  "dim-joints: and what it measures between is untouched by that");
+        }
+        {   // a dimension out of a file that saved only a and b has no stand-off point at all; taking
+            // hold of an arrow end must still work, and gives it one
+            Document d; d.entities().clear();
+            Entity e = dim(QStringLiteral("linear"));
+            e.a = {40, 20};
+            e.b = {160, 20};                       // no points
+            d.entities().push_back(e);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            dragJoint(ed, {40, 20}, {40, 60});
+            const Entity& now = d.entities().front();
+            check(now.points.size() >= 3 && near(now.points[2].y, 60.0),
+                  "dim-joints: one saved without a stand-off point gets one from the first drag");
+        }
+        {   // an angular dimension never sets a or b: its joints are its own three points
+            Document d; d.entities().clear();
+            Entity e = dim(QStringLiteral("angular"));
+            e.points = {{100, 40}, {160, 40}, {140, 90}};
+            d.entities().push_back(e);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            dragJoint(ed, {160, 40}, {185, 25});
+            const Entity& now = d.entities().front();
+            check(now.points.size() >= 2 && near(now.points[1].x, 185.0) &&
+                      near(now.points[1].y, 25.0),
+                  "dim-joints: an angular dimension is held by the points its rays run to");
+        }
+        {   // a radius dimension: the leader end is what there is to move, and the file keeps it in
+            // points as well, so the two must not drift apart
+            Document d; d.entities().clear();
+            Entity e = dim(QStringLiteral("radius"));
+            e.center = {100, 40};
+            e.radius = 35.0;
+            e.b = {150, 75};
+            e.points = {{150, 75}};
+            d.entities().push_back(e);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            dragJoint(ed, {150, 75}, {175, 95});
+            const Entity& now = d.entities().front();
+            check(near(now.b.x, 175.0) && near(now.b.y, 95.0),
+                  "dim-joints: a radius dimension's leader end moves");
+            check(now.points.size() == 1 && near(now.points[0].x, 175.0) &&
+                      near(now.points[0].y, 95.0),
+                  "dim-joints: and what the file keeps for it moves with it");
+            check(near(now.center.x, 100.0) && near(now.radius, 35.0),
+                  "dim-joints: the ring it measures is not moved by dragging the leader");
+        }
+    }
+
+    // What a dimension reports as its extent has to cover what it draws, or it is left out of Zoom All
+    // and the canvas is entitled to cull it while part of it is on screen.
+    {
+        auto dim = [](const QString& type) {
+            Entity e;
+            e.id = QStringLiteral("d");
+            e.type = EntityType::Dimension;
+            e.meta.insert(QStringLiteral("dimType"), type);
+            e.meta.insert(QStringLiteral("textHeight"), 5.0);
+            return e;
+        };
+        {   Entity e = dim(QStringLiteral("radius"));
+            e.center = {100, 40};
+            e.radius = 35.0;
+            e.b = {150, 75};
+            e.points = {{150, 75}};
+            const Bounds b = e.bounds();
+            check(b.valid && b.min.x <= 100.0 && b.min.y <= 40.0,
+                  "dim-bounds: a radius dimension reaches back to the centre its leader starts at");
+        }
+        {   Entity e = dim(QStringLiteral("ordinate"));
+            e.a = {70, 30};
+            e.b = {70, 80};
+            const Bounds b = e.bounds();
+            check(b.valid && b.max.y >= 80.0 - 1e-9,
+                  "dim-bounds: an ordinate dimension reaches the end of its leader");
+        }
+        {   Entity e = dim(QStringLiteral("angular"));
+            e.points = {{100, 40}, {160, 40}, {140, 90}};
+            const Bounds b = e.bounds();
+            check(b.valid && b.min.x >= 99.0 && b.max.x <= 161.0 && b.min.y >= 39.0 &&
+                      b.max.y <= 91.0,
+                  "dim-bounds: an angular dimension is its three points, and does not reach the origin");
+        }
+        {   // and the drawn extent covers the dimension LINE, which on an aligned one runs past the
+            // stand-off point it was placed with
+            Entity e = dim(QStringLiteral("aligned"));
+            e.a = {40, 20};
+            e.b = {150, 60};
+            e.points = {{40, 20}, {150, 60}, {80, 70}};
+            const Vec2 n = (e.points[1] - e.points[0]).normalized().perp();
+            const double tt = dot(e.points[2] - e.points[0], n);
+            const Vec2 far = e.points[1] + n * tt;
+            const Bounds b = drawnBounds(e);
+            check(b.valid && b.max.y >= far.y && b.max.x >= far.x,
+                  "dim-bounds: what is painted includes the far end of the dimension line");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

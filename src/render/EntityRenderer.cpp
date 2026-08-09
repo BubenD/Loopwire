@@ -503,10 +503,40 @@ Bounds drawnBounds(const Entity& e) {
         return b;
     }
     if (e.type == EntityType::Dimension) {
-        // The dimension line stands off the measured points, and the text stands off that again.
-        const double pad = std::abs(e.meta.value("offset").toDouble(0.0)) +
-                           e.meta.value("textHeight").toDouble(5.0) * 3.0 +
-                           std::abs(e.meta.value("extOffset").toDouble(2.0));
+        // The dimension LINE, which is where the arrows are: it runs between the two measured points
+        // carried out to the stand-off, and on an aligned one that puts its far end well past the
+        // stand-off point itself. Then the text stands off the line again, and the extension lines
+        // overshoot it.
+        const QString dty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+        if ((dty == QLatin1String("linear") || dty == QLatin1String("aligned") ||
+             dty == QLatin1String("arclength")) &&
+            e.points.size() >= 3) {
+            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
+            if (dty == QLatin1String("linear")) {
+                const Vec2 mid = lerp(p1, p2, 0.5);
+                if (std::abs(off.y - mid.y) >= std::abs(off.x - mid.x)) {
+                    b.expand({p1.x, off.y});
+                    b.expand({p2.x, off.y});
+                } else {
+                    b.expand({off.x, p1.y});
+                    b.expand({off.x, p2.y});
+                }
+            } else {
+                const Vec2 n = (p2 - p1).normalized().perp();
+                const double t = dot(off - p1, n);
+                b.expand(p1 + n * t);
+                b.expand(p2 + n * t);
+            }
+        }
+        if (e.meta.contains("textPosX"))
+            b.expand({e.meta.value("textPosX").toDouble(), e.meta.value("textPosY").toDouble()});
+        // The label is centred on its anchor, so it reaches out sideways by half of its own width -
+        // which is what a radius dimension's "R35.00" does past the end of its leader. Estimated from
+        // the glyph height rather than measured: this is a bound to paint against, and being a little
+        // generous with it only means painting an object that was going to be painted anyway.
+        const double textH2 = e.meta.value("textHeight").toDouble(5.0);
+        const double pad = textH2 * 2.0 + std::abs(e.meta.value("extOffset").toDouble(2.0)) +
+                           EntityRenderer::dimensionText(e).size() * textH2 * 0.6;
         b.expand({b.min.x - pad, b.min.y - pad});
         b.expand({b.max.x + pad, b.max.y + pad});
         return b;

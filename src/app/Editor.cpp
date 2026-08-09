@@ -494,13 +494,17 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         g.push_back({e.b, GripRole::LineB, 0});
         break;
     case EntityType::Dimension: {
-        // Linear/aligned: a grip at each measured point + at both dimension-line
-        // ends (which move the dimension-line offset). Index 2 = the offset point.
+        // A dimension is held by the same joints AutoCAD gives one: the points it measures between, the
+        // two ends of the dimension line - the arrow ends, which is what moves the whole dimension line
+        // off the geometry - and the text.
         const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
-        if ((ty == QLatin1String("linear") || ty == QLatin1String("aligned") ||
-             ty == QLatin1String("arclength")) &&
-            e.points.size() >= 3) {
-            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
+        if (ty == QLatin1String("linear") || ty == QLatin1String("aligned")) {
+            // A dimension saved by a version that wrote only a and b has no stand-off point; it is the
+            // midpoint then, which is where the dimension line is drawn, so the arrow-end joints are
+            // still there to be taken hold of and dragging one gives the dimension its stand-off back.
+            const Vec2 p1 = e.points.size() >= 3 ? e.points[0] : e.a;
+            const Vec2 p2 = e.points.size() >= 3 ? e.points[1] : e.b;
+            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(e.a, e.b, 0.5);
             Vec2 d1, d2;
             if (ty == QLatin1String("linear")) {
                 const Vec2 mid = lerp(p1, p2, 0.5);
@@ -515,7 +519,7 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             }
             g.push_back({p1, GripRole::Vertex, 0});
             g.push_back({p2, GripRole::Vertex, 1});
-            g.push_back({d1, GripRole::Vertex, 2});
+            g.push_back({d1, GripRole::Vertex, 2});   // the arrow ends: both move the dimension line
             g.push_back({d2, GripRole::Vertex, 2});
             // A grip on the dimension TEXT — drag it to reposition the measurement
             // text; a dashed leader then connects it back to the dimension line.
@@ -523,6 +527,19 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             if (e.meta.contains("textPosX"))
                 tpos = {e.meta.value("textPosX").toDouble(), e.meta.value("textPosY").toDouble()};
             g.push_back({tpos, GripRole::DimText, 0});
+        } else if (ty == QLatin1String("angular") && e.points.size() >= 3) {
+            // The corner it is taken about and the two points its rays run to. Without these an angular
+            // dimension had no joint anywhere near it - only the two at a and b, which an angular one
+            // never sets, so they sat at the origin of the drawing.
+            g.push_back({e.points[0], GripRole::Vertex, 0});
+            g.push_back({e.points[1], GripRole::Vertex, 1});
+            g.push_back({e.points[2], GripRole::Vertex, 2});
+        } else if (ty == QLatin1String("radius") || ty == QLatin1String("diameter") ||
+                   ty == QLatin1String("jogged") || ty == QLatin1String("arclength")) {
+            // The end of the leader, where the arrow and the text are: what there is to move on one of
+            // these, since the centre and the radius are the circle's, not the dimension's. `a` is not a
+            // point on these at all, and a joint there put one at the origin of the drawing.
+            g.push_back({e.b, GripRole::LineB, 0});
         } else {
             g.push_back({e.a, GripRole::LineA, 0});
             g.push_back({e.b, GripRole::LineB, 0});
@@ -5342,7 +5359,12 @@ void Editor::applyEditDrag(const Vec2& target) {
         if (e->type == EntityType::LengthBreak && slideBreakAlongHost(*e, delta)) return;
         switch (role) {
         case GripRole::LineA: e->a = solveEnd(true, e, off); break;
-        case GripRole::LineB: e->b = solveEnd(false, e, off); break;
+        case GripRole::LineB:
+            e->b = solveEnd(false, e, off);
+            // On a radius, diameter, jogged or arc-length dimension the leader end is kept in points
+            // too (that is what it was placed with), so the two must not drift apart.
+            if (e->type == EntityType::Dimension && e->points.size() == 1) e->points[0] = e->b;
+            break;
         case GripRole::LineMid:
             // The middle joint moves the whole line (stays straight, no knee).
             translateEntity(*e, delta);
@@ -5387,6 +5409,15 @@ void Editor::applyEditDrag(const Vec2& target) {
             break;
         }
         case GripRole::Vertex:
+            // A linear or aligned dimension from a file that saved only a and b has no points to hold;
+            // the first drag of one of its joints gives it the three it should have had, measured
+            // between a and b with the dimension line on them, so the drag then moves what it took
+            // hold of instead of doing nothing.
+            if (e->type == EntityType::Dimension && e->points.size() < 3) {
+                const QString dty = e->meta.value("dimType").toString(QStringLiteral("linear"));
+                if (dty == QLatin1String("linear") || dty == QLatin1String("aligned"))
+                    e->points = {e->a, e->b, lerp(e->a, e->b, 0.5)};
+            }
             if (index >= 0 && index < static_cast<int>(e->points.size())) {
                 if (e->type == EntityType::Polygon && e->points.size() >= 3)
                     e->points = regularPolygonPoints(polygonCenter(e->points), target,

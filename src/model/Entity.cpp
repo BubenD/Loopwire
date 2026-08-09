@@ -229,6 +229,30 @@ Bounds Entity::bounds() const {
         if (static_cast<int>(points.size()) > k) bnds.expand(points.back()); // drain point
         break;
     }
+    case EntityType::Dimension: {
+        // Which stored points a dimension is made of depends on the kind of one it is. A radius,
+        // diameter or jogged one is a leader from the RING'S CENTRE out, and `points` holds only the far
+        // end of it; an ordinate one runs from a to b and has no points at all; an angular one is its
+        // three points, and never sets a or b - so reading a and b on one of those reaches back to the
+        // origin of the drawing. Answering with less than the object left dimensions out of Zoom All and
+        // let the canvas cull one whose leader was on screen.
+        const QString dty = meta.value("dimType").toString(QStringLiteral("linear"));
+        for (const auto& p : points) bnds.expand(p);
+        if (dty == QLatin1String("angular")) break;
+        bnds.expand(b);
+        if (dty == QLatin1String("radius") || dty == QLatin1String("jogged") ||
+            dty == QLatin1String("diameter")) {
+            bnds.expand(center);
+            // A diameter one is drawn right across the ring, so it reaches as far the other side.
+            if (dty == QLatin1String("diameter") && radius > 0.0) {
+                bnds.expand({center.x - radius, center.y - radius});
+                bnds.expand({center.x + radius, center.y + radius});
+            }
+            break;
+        }
+        bnds.expand(a);
+        break;
+    }
     default:
         for (const auto& p : points) bnds.expand(p);
         if (!points.empty()) break;
