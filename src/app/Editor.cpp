@@ -11676,8 +11676,14 @@ void Editor::setSelectionDimMeta(const QString& key, const QJsonValue& value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;
     pushUndo();
-    for (Entity* e : sel)
-        if (e->type == EntityType::Dimension) e->meta[key] = value;
+    // An emptied text field means "no override", not "an override that is blank" - so the key goes
+    // rather than being written empty, and the dimension reads its measurement again.
+    const bool clear = value.isString() && value.toString().isEmpty();
+    for (Entity* e : sel) {
+        if (e->type != EntityType::Dimension) continue;
+        if (clear) e->meta.remove(key);
+        else e->meta[key] = value;
+    }
     doc_->setDirty(true);
     emit changed();
 }

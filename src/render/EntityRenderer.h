@@ -62,6 +62,13 @@ public:
     // Resolve the effective stroke color for an entity (explicit or ByLayer).
     static QColor resolveColor(const Entity& e, const Document& doc);
 
+    // What a dimension SAYS. Normally the measurement it takes off its own geometry - a length, a
+    // diameter, an angle - and where the object carries a text override, that instead: what the drawing
+    // has to say where the number is not it ("REF", "SEE NOTE 4", "2x 12"). "<>" in an override stands
+    // for the measurement, so "<> REF" is the number followed by REF, which is the convention AutoCAD
+    // uses. The measurement itself is never changed by an override.
+    static QString dimensionText(const Entity& e);
+
     // Shield helpers (shared by the renderer and the live placement preview so they match):
     //   shieldRotation  - angle of the shield's major (ry) axis from the caught-wire spread
     //                     (first->last crossing); vertical when the wires are level.

@@ -6641,6 +6641,15 @@ void MainWindow::refreshProperties() {
                [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("textHeight"), std::max(0.1, v));
                });
+        // What the dimension says instead of what it measures. Empty means the measurement, and
+        // emptying the field again brings it back. "<>" stands in for the measured value, so "<> REF"
+        // reads as the number followed by REF.
+        addText(QStringLiteral("Text override"),
+                mv(QStringLiteral("textOverride")).toString(),
+                [this](const QString& t) {
+                    editor_->setSelectionDimMeta(QStringLiteral("textOverride"), t);
+                },
+                QStringLiteral("the measurement — or <> inside your own text"));
 
         addHeader(QStringLiteral("Primary Units"));
         addCombo(QStringLiteral("Precision"),

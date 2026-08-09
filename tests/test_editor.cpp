@@ -1,5 +1,6 @@
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
+#include "io/Dwx.h"
 #include "geometry/Snap.h"
 #include "model/Document.h"
 #include "model/PartSymbols.h"
@@ -6934,6 +6935,104 @@ int run_editor_tests() {
               "trim-owner: a click that cannot trim what it is on leaves everything else alone");
         check(said.contains(QStringLiteral("Nothing crosses")),
               "trim-owner: and says why the line under the pointer could not be trimmed");
+    }
+
+    // A dimension is saved whole. Where its line stands off the geometry is a third point, an angular
+    // one is three points, a radius or diameter one is a centre and a radius: none of that used to be
+    // written, so a dimension placed and saved came back flattened onto what it measured.
+    {
+        auto dim = [](const QString& id, const QString& type) {
+            Entity e;
+            e.id = id;
+            e.type = EntityType::Dimension;
+            e.meta.insert(QStringLiteral("dimType"), type);
+            e.meta.insert(QStringLiteral("textHeight"), 5.0);
+            return e;
+        };
+        Document d; d.entities().clear();
+        {   Entity e = dim(QStringLiteral("lin"), QStringLiteral("linear"));
+            e.a = {40, 20}; e.b = {160, 20};
+            e.points = {{40, 20}, {160, 20}, {100, 50}};   // the stand-off
+            d.entities().push_back(e); }
+        {   Entity e = dim(QStringLiteral("ang"), QStringLiteral("angular"));
+            e.points = {{100, 40}, {160, 40}, {140, 90}};
+            d.entities().push_back(e); }
+        {   Entity e = dim(QStringLiteral("rad"), QStringLiteral("radius"));
+            e.center = {100, 40}; e.radius = 35.0; e.b = {150, 75};
+            e.points = {{150, 75}};
+            d.entities().push_back(e); }
+        // through the file format and back
+        Document d2;
+        dwx::fromJson(d2, dwx::toJson(d));
+        check(d2.entities().size() == 3, "dim-save: every dimension came back");
+        for (const Entity& was : d.entities()) {
+            const Entity* now = nullptr;
+            for (const Entity& e : d2.entities())
+                if (e.id == was.id) now = &e;
+            if (!now) { check(false, "dim-save: a dimension went missing"); continue; }
+            const QString ty = was.meta.value(QStringLiteral("dimType")).toString();
+            bool same = now->points.size() == was.points.size() &&
+                        near(now->center.x, was.center.x) && near(now->center.y, was.center.y) &&
+                        near(now->radius, was.radius);
+            for (size_t i = 0; i < was.points.size() && same; ++i)
+                same = near(now->points[i].x, was.points[i].x) &&
+                       near(now->points[i].y, was.points[i].y);
+            check(same, ty == QLatin1String("linear")
+                            ? "dim-save: a linear dimension keeps the line it was drawn on"
+                            : ty == QLatin1String("angular")
+                                  ? "dim-save: an angular dimension keeps its three points"
+                                  : "dim-save: a radius dimension keeps its centre and radius");
+        }
+    }
+
+    // The text override: what the dimension SAYS, when that is not what it measures. "<>" stands in
+    // for the measurement, and emptying the field puts the measurement back.
+    {
+        Document d; d.entities().clear();
+        Entity e;
+        e.id = QStringLiteral("dim");
+        e.type = EntityType::Dimension;
+        e.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+        e.meta.insert(QStringLiteral("decimals"), 1);
+        e.a = {40, 20};
+        e.b = {160, 20};
+        e.points = {{40, 20}, {160, 20}, {100, 50}};   // stands off above, so it measures across x
+        d.entities().push_back(e);
+        auto says = [&d]() {
+            return EntityRenderer::dimensionText(d.entities().front());
+        };
+        check(says() == QStringLiteral("120.0"), "dim-override: with none, it says what it measures");
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById(QStringLiteral("dim"));
+        ed.setSelectionDimMeta(QStringLiteral("textOverride"), QStringLiteral("REF"));
+        check(says() == QStringLiteral("REF"), "dim-override: an override says that instead");
+        ed.setSelectionDimMeta(QStringLiteral("textOverride"), QStringLiteral("<>"));
+        check(says() == QStringLiteral("120.0"), "dim-override: <> on its own is the measurement");
+        ed.setSelectionDimMeta(QStringLiteral("textOverride"), QStringLiteral("2x <> REF"));
+        check(says() == QStringLiteral("2x 120.0 REF"),
+              "dim-override: the measurement can be said inside your own text");
+        // The measurement itself is untouched by any of it - the properties panel still reads the
+        // geometry, and moving the object still re-measures.
+        check(near(std::hypot(d.entities().front().b.x - d.entities().front().a.x,
+                              d.entities().front().b.y - d.entities().front().a.y), 120.0),
+              "dim-override: the geometry is not changed by what the dimension says");
+        ed.setSelectionDimMeta(QStringLiteral("textOverride"), QString());
+        check(!d.entities().front().meta.contains(QStringLiteral("textOverride")),
+              "dim-override: emptying the field takes the override off the object");
+        check(says() == QStringLiteral("120.0"), "dim-override: and the measurement is back");
+        // A radius dimension says R and a diameter one says the diameter symbol, override or not.
+        Entity r;
+        r.id = QStringLiteral("rad");
+        r.type = EntityType::Dimension;
+        r.meta.insert(QStringLiteral("dimType"), QStringLiteral("radius"));
+        r.meta.insert(QStringLiteral("decimals"), 1);
+        r.center = {0, 0};
+        r.radius = 12.5;
+        check(EntityRenderer::dimensionText(r) == QStringLiteral("R12.5"),
+              "dim-override: a radius dimension says R and its radius");
+        r.meta.insert(QStringLiteral("textOverride"), QStringLiteral("<> TYP"));
+        check(EntityRenderer::dimensionText(r) == QStringLiteral("R12.5 TYP"),
+              "dim-override: and an override can add to it");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

@@ -268,9 +268,34 @@ QJsonObject Entity::toJson() const {
     switch (type) {
     case EntityType::Line:
     case EntityType::DoubleLine:
-    case EntityType::Dimension:
         obj["a"] = pointToJson(a);
         obj["b"] = pointToJson(b);
+        break;
+    case EntityType::Dimension:
+        // A dimension is more than the two points it measures between. Where its line stands off the
+        // geometry is a third point; an angular one is three points; a radius, diameter or jogged one is
+        // a centre and a radius. Writing only a and b saved none of that, so a dimension placed and
+        // saved came back flattened onto what it measured - the stand-off lost, a radius dimension drawn
+        // at the origin. It only ever looked right on a file it had been RE-saved from, because then the
+        // points came back through the preserved extras.
+        obj["a"] = pointToJson(a);
+        obj["b"] = pointToJson(b);
+        if (!points.empty()) {
+            QJsonArray arr;
+            for (const auto& p : points) arr.append(pointToJson(p));
+            obj["points"] = arr;
+        } else {
+            obj.remove("points");
+        }
+        if (center.x != 0.0 || center.y != 0.0) obj["center"] = pointToJson(center);
+        else obj.remove("center");
+        if (radius != 0.0) obj["radius"] = radius;
+        else obj.remove("radius");
+        if (startAngle != 0.0 || endAngle != 0.0) {
+            obj["start"] = startAngle;
+            obj["end"] = endAngle;
+        }
+        if (rotation != 0.0) obj["rotation"] = rotation;
         break;
     case EntityType::TwistedPair: {
         obj["a"] = pointToJson(a);

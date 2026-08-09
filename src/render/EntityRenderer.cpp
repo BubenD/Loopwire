@@ -806,7 +806,6 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     // Per-dimension style (AutoCAD-like), with sensible defaults.
     const double textH = e.meta.value("textHeight").toDouble(5.0);  // world units
     const double arrowW = e.meta.value("arrowSize").toDouble(3.3);  // world units
-    const int dec = e.meta.contains("decimals") ? e.meta.value("decimals").toInt() : decimals;
     const double arrowPx = std::clamp(arrowW * vt.scale(), 5.0, 40.0);
     const double extOff = e.meta.value("extOffset").toDouble(2.0); // ext-line gap (world)
     // Dimension lines are drawn thin (but clearly visible), independent of weight.
@@ -820,8 +819,12 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const double L = std::hypot(v.x(), v.y());
         return L > 1e-9 ? QPointF(v.x() / L, v.y() / L) : QPointF(1, 0);
     };
-    auto label = [&](const QPointF& at, const QString& s) {
-        drawWorldText(p, at + QPointF(0, -4), s, textH, vt.scale(), color, Qt::AlignHCenter);
+    // What the dimension says is worked out in one place, EntityRenderer::dimensionText - the
+    // measurement, or the text override in place of it - so what is drawn and what anything else
+    // reports are the same words.
+    const QString says = EntityRenderer::dimensionText(e);
+    auto label = [&](const QPointF& at) {
+        drawWorldText(p, at + QPointF(0, -4), says, textH, vt.scale(), color, Qt::AlignHCenter);
     };
 
     if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
@@ -831,7 +834,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         const QPointF on = c + dir * (e.radius * vt.scale());
         p.drawLine(c, tp);
         drawArrowHead(p, on, dir, color, arrowPx); // tip on the ring, pointing outward
-        label(tp, QStringLiteral("R%1").arg(EntityRenderer::formatLength(e.radius, dec)));
+        label(tp);
         return;
     }
     if (ty == QLatin1String("diameter")) {
@@ -843,7 +846,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         p.drawLine(a1, a2);
         drawArrowHead(p, a1, QPointF(-dir.x(), -dir.y()), color, arrowPx); // ring, outward
         drawArrowHead(p, a2, dir, color, arrowPx);
-        label(tp, QString::fromUtf8("\xC3\x98%1").arg(EntityRenderer::formatLength(e.radius * 2.0, dec)));
+        label(tp);
         return;
     }
     if (ty == QLatin1String("angular") && e.points.size() >= 3) {
@@ -857,19 +860,14 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
         QPainterPath arc;
         appendArc(arc, v, rr, a0, a1, vt, true);
         p.drawPath(arc);
-        double deg = (a1 - a0) * 180.0 / M_PI;
-        while (deg < 0) deg += 360.0;
-        while (deg > 360) deg -= 360.0;
         const double am = a0 + (a1 - a0) * 0.5;
-        label(vt.toScreen(pointOnCircle(v, rr, am)),
-              QStringLiteral("%1\xC2\xB0").arg(deg, 0, 'f', 1));
+        label(vt.toScreen(pointOnCircle(v, rr, am)));
         return;
     }
     if (ty == QLatin1String("ordinate")) {
         const QPointF f = vt.toScreen(e.a), le = vt.toScreen(e.b);
         p.drawLine(f, le);
-        const bool xOrd = std::abs(e.b.x - e.a.x) >= std::abs(e.b.y - e.a.y);
-        label(le, EntityRenderer::formatLength(xOrd ? e.a.x : e.a.y, dec));
+        label(le);
         return;
     }
 
@@ -911,9 +909,7 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
     const QPointF measMid((s1.x() + s2.x()) / 2.0, (s1.y() + s2.y()) / 2.0);
     const QPointF nOut = unit(dimMid - measMid);
     const QPointF txtAt = dimMid + nOut * (textH * vt.scale() * 0.5 + 3.0);
-    const QString txt = (ty == QLatin1String("arclength"))
-                            ? QString::fromUtf8("\xE2\x8C\x92%1").arg(EntityRenderer::formatLength(measure, dec))
-                            : EntityRenderer::formatLength(measure, dec);
+    const QString txt = says;
     // If the text was dragged off the dimension line, draw it there and connect it
     // back to the line's midpoint with a dashed leader (AutoCAD-style).
     if (e.meta.contains("textPosX")) {
@@ -1024,6 +1020,46 @@ std::vector<std::vector<Vec2>> clipPolylineByXBands(
 }
 
 } // namespace
+
+QString EntityRenderer::dimensionText(const Entity& e) {
+    const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+    const int dec = e.meta.contains("decimals") ? e.meta.value("decimals").toInt() : g_dimDecimals;
+    QString measured;
+    if (ty == QLatin1String("radius") || ty == QLatin1String("jogged")) {
+        measured = QStringLiteral("R%1").arg(formatLength(e.radius, dec));
+    } else if (ty == QLatin1String("diameter")) {
+        measured = QString::fromUtf8("\xC3\x98%1").arg(formatLength(e.radius * 2.0, dec));
+    } else if (ty == QLatin1String("angular") && e.points.size() >= 3) {
+        const Vec2 v = e.points[0], a = e.points[1], b = e.points[2];
+        double deg = (std::atan2(b.y - v.y, b.x - v.x) - std::atan2(a.y - v.y, a.x - v.x)) * 180.0 /
+                     M_PI;
+        while (deg < 0) deg += 360.0;
+        while (deg > 360) deg -= 360.0;
+        measured = QStringLiteral("%1\xC2\xB0").arg(deg, 0, 'f', 1);
+    } else if (ty == QLatin1String("ordinate")) {
+        const bool xOrd = std::abs(e.b.x - e.a.x) >= std::abs(e.b.y - e.a.y);
+        measured = formatLength(xOrd ? e.a.x : e.a.y, dec);
+    } else {
+        // linear / aligned / arclength: a linear one measures along whichever axis its line stands off
+        // on, the others measure between the points themselves.
+        double measure = 0.0;
+        if (ty == QLatin1String("linear")) {
+            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(e.a, e.b, 0.5);
+            const Vec2 mid = lerp(e.a, e.b, 0.5);
+            measure = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x) ? std::abs(e.b.x - e.a.x)
+                                                                        : std::abs(e.b.y - e.a.y);
+        } else {
+            measure = distance(e.a, e.b);
+        }
+        measured = ty == QLatin1String("arclength")
+                       ? QString::fromUtf8("\xE2\x8C\x92%1").arg(formatLength(measure, dec))
+                       : formatLength(measure, dec);
+    }
+    const QString overrideText = e.meta.value("textOverride").toString();
+    if (overrideText.isEmpty()) return measured;
+    QString said = overrideText;
+    return said.replace(QLatin1String("<>"), measured);
+}
 
 void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                           const ViewTransform& vt, const QColor& overrideColor) {
