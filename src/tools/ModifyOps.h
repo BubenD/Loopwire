@@ -64,6 +64,13 @@ bool whollyInsideCircle(const Entity& e, const Entity& ref);
 // The boundary segment of a cutting edge in `cutters` (physical lines for double
 // entities; `selfId` skipped) that passes through point `p`, or nullopt. Used to
 // record the exact cut line so a trimmed double line's physical runs end on it.
+// Every knee-to-knee segment passing through `p`, nearest first. At a corner two segments pass through
+// one point; which of them is the one wanted depends on what can be reached from it, so the caller
+// chooses rather than being handed the nearest.
+std::vector<std::pair<Vec2, Vec2>> cutSegmentsThrough(const Vec2& p,
+                                                     const std::vector<Entity>& cutters,
+                                                     const QString& selfId);
+
 std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
                                                        const std::vector<Entity>& cutters,
                                                        const QString& selfId);

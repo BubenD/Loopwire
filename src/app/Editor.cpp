@@ -253,6 +253,18 @@ void drawDraftValueBox(QPainter& p, const QPointF& at, const QString& label, con
 // The capped endpoint of a straight physical run — mirrors the renderer's run cut
 // (line / circle / poly), so a double line/polyline's endpoint GRIPS sit on the real
 // (capped) physical-line ends, not the raw centreline offset.
+// Where a rail MEETS a cut segment. The rail's own line is extended as far as it needs to go - a rail
+// that falls short of the line it is meant to start on is the whole point of capping - but the meeting
+// point has to lie ON that segment: between its knees, or between its ends. Past them the rail cannot
+// reach it and nothing is capped, which is what "if it can reach it" means.
+std::optional<Vec2> railMeetsSegment(const Vec2& thisEnd, const Vec2& otherEnd, const Vec2& a,
+                                     const Vec2& b) {
+    const auto x = lineLineIntersection(otherEnd, thisEnd, a, b);
+    if (!x) return std::nullopt;                                   // parallel: never meets
+    if (closestPointOnSegment(*x, a, b).distance > 1e-6) return std::nullopt;
+    return *x;
+}
+
 Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd) {
     if (!e.meta.value(key).toBool()) return thisEnd;
     const QString kind = e.meta.value(key + "Kind").toString();
@@ -287,7 +299,7 @@ Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, cons
     }
     const Vec2 a{e.meta.value(key + "Ax").toDouble(), e.meta.value(key + "Ay").toDouble()};
     const Vec2 b{e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
-    auto x = lineLineIntersection(otherEnd, thisEnd, a, b);
+    const auto x = railMeetsSegment(thisEnd, otherEnd, a, b);
     return x ? *x : thisEnd;
 }
 
@@ -8292,14 +8304,52 @@ void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
         ent.meta.insert(key + "Cx", cc->first.x);
         ent.meta.insert(key + "Cy", cc->first.y);
         ent.meta.insert(key + "R", cc->second);
-    } else if (auto seg = cutSegmentThrough(at, joints, ent.id)) {
-        ent.meta.insert(key, true);
-        ent.meta.insert(key + "Kind", QStringLiteral("line"));
-        ent.meta.insert(key + "Ax", seg->first.x);
-        ent.meta.insert(key + "Ay", seg->first.y);
-        ent.meta.insert(key + "Bx", seg->second.x);
-        ent.meta.insert(key + "By", seg->second.y);
+        return;
     }
+    // A straight cut. At a CORNER two segments pass through the click, and the one that is wanted is
+    // the one BOTH rails can reach within its own length: capping to the other sends the second rail
+    // off to a meeting point past the end of it, which is not a place the drawing has. So every
+    // candidate is tried and the first that both rails reach wins; failing that, one that a single rail
+    // reaches; failing that, nothing is capped and the run starts where it was drawn.
+    const std::vector<std::pair<Vec2, Vec2>> cands = cutSegmentsThrough(at, joints, ent.id);
+    if (cands.empty()) return;
+    const bool startEnd = (key == QLatin1String("cutStart"));
+    const double gap = ent.meta.value(QStringLiteral("gap")).toDouble(10.0);
+    // The two rails, each as (this end, the next point along it).
+    std::vector<std::pair<Vec2, Vec2>> rails;
+    if (ent.type == EntityType::DoubleLine) {
+        const Vec2 off = (ent.b - ent.a).normalized().perp() * (gap / 2.0);
+        for (const Vec2& o : {off, off * -1.0}) {
+            if (startEnd) rails.push_back({ent.a + o, ent.b + o});
+            else rails.push_back({ent.b + o, ent.a + o});
+        }
+    } else if (ent.points.size() >= 2) {
+        for (double s : {gap / 2.0, -gap / 2.0}) {
+            const std::vector<Vec2> run = offsetPolyline(ent.points, s);
+            if (run.size() < 2) continue;
+            if (startEnd) rails.push_back({run.front(), run[1]});
+            else rails.push_back({run.back(), run[run.size() - 2]});
+        }
+    }
+    auto reached = [&rails](const std::pair<Vec2, Vec2>& seg) {
+        int n = 0;
+        for (const auto& r : rails)
+            if (railMeetsSegment(r.first, r.second, seg.first, seg.second)) ++n;
+        return n;
+    };
+    const std::pair<Vec2, Vec2>* pick = nullptr;
+    for (const auto& c : cands)
+        if (reached(c) == static_cast<int>(rails.size())) { pick = &c; break; }
+    if (!pick)
+        for (const auto& c : cands)
+            if (reached(c) > 0) { pick = &c; break; }
+    if (!pick) return;
+    ent.meta.insert(key, true);
+    ent.meta.insert(key + "Kind", QStringLiteral("line"));
+    ent.meta.insert(key + "Ax", pick->first.x);
+    ent.meta.insert(key + "Ay", pick->first.y);
+    ent.meta.insert(key + "Bx", pick->second.x);
+    ent.meta.insert(key + "By", pick->second.y);
 }
 
 void Editor::recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints) {
@@ -12107,6 +12157,48 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (dpolyHasLsRef_ && run.size() >= 2)
                 if (auto x = lineLineIntersection(run[0], run[1], lsRefA_, lsRefB_)) run[0] = *x;
         };
+        // Shift-started run: show BOTH rails reaching the line the run was started on, the way they
+        // will be placed. Only the first rail ever landed on it while drawing - the second one hung in
+        // space, short of the drawing - because the cap was worked out on the click that ends the run
+        // and never on the way there. The segment is chosen once, for both rails together, exactly as
+        // capDoubleEndAt chooses it.
+        std::optional<std::pair<Vec2, Vec2>> shiftStartSeg;
+        if (drawStartShift_ && !draftPts_.empty() &&
+            (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline)) {
+            const std::vector<std::pair<Vec2, Vec2>> cands =
+                cutSegmentsThrough(draftPts_.front(), doc_->entities(), QString());
+            const double h = doubleLineGap_ / 2.0;
+            // The two rail starts, and the direction each runs in.
+            std::vector<std::pair<Vec2, Vec2>> rails;
+            if (pts.size() >= 2) {
+                const std::vector<Vec2> centre =
+                    doubleRunCentre(pts, doubleLineGap_, doubleSecondBelow());
+                for (double s : {h, -h}) {
+                    const std::vector<Vec2> run = offsetPolyline(centre, s);
+                    if (run.size() >= 2) rails.push_back({run.front(), run[1]});
+                }
+            }
+            auto reach = [&rails](const std::pair<Vec2, Vec2>& seg) {
+                int n = 0;
+                for (const auto& r : rails)
+                    if (railMeetsSegment(r.first, r.second, seg.first, seg.second)) ++n;
+                return n;
+            };
+            for (const auto& c : cands)
+                if (reach(c) == static_cast<int>(rails.size()) && !rails.empty()) {
+                    shiftStartSeg = c;
+                    break;
+                }
+            if (!shiftStartSeg)
+                for (const auto& c : cands)
+                    if (reach(c) > 0) { shiftStartSeg = c; break; }
+        }
+        auto capShiftStart = [&](std::vector<Vec2>& run) {
+            if (!shiftStartSeg || run.size() < 2) return;
+            if (auto x = railMeetsSegment(run[0], run[1], shiftStartSeg->first,
+                                          shiftStartSeg->second))
+                run[0] = *x;
+        };
         if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
              tool_ == ToolId::Revision) &&
             pts.size() >= 2) {
@@ -12232,6 +12324,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             std::vector<Vec2> r2 = {pts[0] + shift - off, pts[1] + shift - off};
             extendLsStart(r1);
             extendLsStart(r2);
+            capShiftStart(r1);
+            capShiftStart(r2);
             p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
             p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
@@ -12249,6 +12343,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             std::vector<Vec2> r2 = offsetPolyline(center, -h);
             extendLsStart(r1); // ls: start both runs on the reference line
             extendLsStart(r2);
+            capShiftStart(r1); // Shift: and so does the line the run was started on
+            capShiftStart(r2);
             for (const auto& run : {r1, r2}) {
                 QPolygonF poly;
                 for (const auto& v : run) poly << vt.toScreen(v);

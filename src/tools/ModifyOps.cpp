@@ -969,6 +969,27 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     return false;
 }
 
+std::vector<std::pair<Vec2, Vec2>> cutSegmentsThrough(const Vec2& p,
+                                                     const std::vector<Entity>& cutters,
+                                                     const QString& selfId) {
+    // EVERY knee-to-knee segment through the point, nearest first. At a corner two of them pass
+    // through it, and which one is wanted depends on what can actually be reached from it - a question
+    // only the caller can answer, so it gets the choice rather than the nearest.
+    std::vector<std::pair<double, std::pair<Vec2, Vec2>>> found;
+    for (const auto& c : cutters) {
+        if (!selfId.isEmpty() && c.id == selfId) continue;
+        forEachCutSegment(c, [&](const Vec2& a, const Vec2& b) {
+            const auto cp = closestPointOnSegment(p, a, b);
+            if (cp.distance < 1e-4) found.push_back({cp.distance, {a, b}});
+        });
+    }
+    std::stable_sort(found.begin(), found.end(),
+                     [](const auto& x, const auto& y) { return x.first < y.first; });
+    std::vector<std::pair<Vec2, Vec2>> out;
+    for (const auto& f : found) out.push_back(f.second);
+    return out;
+}
+
 std::optional<std::pair<Vec2, Vec2>> cutSegmentThrough(const Vec2& p,
                                                        const std::vector<Entity>& cutters,
                                                        const QString& selfId) {

@@ -3500,6 +3500,67 @@ int run_editor_tests() {
                       "dpoly-shift-start: no Shift, no cap");
     }
 
+    // --- Shift-starting at a CORNER picks the segment both lines can actually reach, and only within
+    //     that segment's own length - up to its knee or its end.
+    {
+        // A wall with a SHORT step off the top: the run is drawn up-left from the corner, so the far
+        // rail would meet the step's line well past the end of it. The step is the nearest segment to
+        // the click, and it is the wrong one: the vertical is what both rails can reach.
+        auto runFrom = [](double stepLength) {
+            Document d; d.entities().clear();
+            Entity wall;
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Polyline;
+            // The step comes FIRST, so it is also the first candidate found at the corner: the old code
+            // took the first one and capped to it however far past its end the meeting point fell. The
+            // wall runs UP from the corner, which is the side the run is drawn towards - so it is a
+            // segment both rails can reach when the step is too short for them.
+            wall.points = {{stepLength, 0}, {0, 0}, {0, 90}};
+            d.entities().push_back(wall);
+            Editor ed; ed.setDocument(&d);
+            auto& s = ed.snapSettings();
+            s.objectSnap = true; s.gridSnap = false; s.ortho = false; s.polar = false;
+            ed.setPixelTolerance(4);
+            ed.doubleLineGap() = 14.0;
+            ed.setTool(ToolId::DoublePolyline);
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerPress({-120, 55}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            Entity run;
+            for (const Entity& e : d.entities())
+                if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) run = e;
+            return run;
+        };
+        // A step 60 long: the second rail meets it about 33 along, inside it - so the step is used.
+        const Entity wide = runFrom(60.0);
+        check(wide.meta.value(QStringLiteral("cutStart")).toBool(),
+              "dpoly-reach: a long enough step is what the run starts from");
+        check(near(wide.meta.value(QStringLiteral("cutStartAy")).toDouble(), 0.0) &&
+                  near(wide.meta.value(QStringLiteral("cutStartBy")).toDouble(), 0.0),
+              "dpoly-reach: and that is the horizontal step");
+        // The same step only 8 long: the second rail cannot reach it within its length, so the segment
+        // the run starts from is the vertical one instead - the other segment through the same corner.
+        const Entity narrow = runFrom(8.0);
+        check(narrow.meta.value(QStringLiteral("cutStart")).toBool(),
+              "dpoly-reach: a step too short to reach is not the end of it");
+        check(near(narrow.meta.value(QStringLiteral("cutStartAx")).toDouble(), 0.0) &&
+                  near(narrow.meta.value(QStringLiteral("cutStartBx")).toDouble(), 0.0),
+              "dpoly-reach: the segment chosen is the one both lines can reach - the vertical");
+        // Nothing under the click: nothing is capped, and the run simply starts where it was drawn.
+        {
+            Document d; d.entities().clear();
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.setTool(ToolId::DoublePolyline);
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerPress({-120, 55}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            for (const Entity& e : d.entities())
+                if (e.meta.value("double").toBool())
+                    check(!e.meta.value(QStringLiteral("cutStart")).toBool(),
+                          "dpoly-reach: Shift on empty space caps nothing");
+        }
+    }
+
     // --- Pulling a double run tracks along the RAIL that was grabbed, not up the middle of it. The
     //     green polar/ortho lock line is drawn from this point, and the angle is measured from it.
     {
