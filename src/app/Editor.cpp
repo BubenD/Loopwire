@@ -1,5 +1,7 @@
 #include "app/Editor.h"
 
+#include "render/EntityRenderer.h"
+
 #include "model/Block.h"
 #include "model/DrawingTemplate.h"
 #include "model/Picture.h"
@@ -1138,11 +1140,17 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         for (const auto& s : dimensionSegments(e)) best = std::min(best, segDist(s.first, s.second));
         break;
     case EntityType::DoubleLine: {
-        // Only the two VISIBLE parallel lines select the double line — NOT the
-        // centerline / gap between them (clicking the empty middle won't pick it).
+        // Only the two VISIBLE parallel lines select the double line — NOT the centerline / gap between
+        // them (clicking the empty middle won't pick it). Visible includes what a CAP adds: a line
+        // extended to meet something is drawn out to it, and a part of the drawing that cannot be
+        // clicked cannot be selected or trimmed either - which is what made an extended line untouchable.
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-        best = std::min(segDist(e.a + off, e.b + off), segDist(e.a - off, e.b - off));
+        for (int side : {+1, -1}) {
+            std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
+            applyDoubleRunCuts(rail, e, side);
+            for (size_t i = 1; i < rail.size(); ++i) best = std::min(best, segDist(rail[i - 1], rail[i]));
+        }
         break;
     }
     case EntityType::Polyline:
@@ -1151,7 +1159,8 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         if (e.meta.value("double").toBool() && e.points.size() >= 2) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
-                const auto run = offsetPolyline(e.points, s);
+                std::vector<Vec2> run = offsetPolyline(e.points, s);
+                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);   // the line as DRAWN, caps included
                 for (size_t i = 1; i < run.size(); ++i) best = std::min(best, segDist(run[i - 1], run[i]));
             }
             break;
@@ -2406,7 +2415,9 @@ std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
     if (centre.size() < 2) return {};
     if (dbl) {
         const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
-        return {ent.a + off, ent.b + off};
+        std::vector<Vec2> rail = {ent.a + off, ent.b + off};
+        applyDoubleRunCuts(rail, ent, s > 0 ? +1 : -1);
+        return rail;
     }
     if (ent.meta.contains(QStringLiteral("cornerRadii"))) {
         const QJsonArray arr = ent.meta.value(QStringLiteral("cornerRadii")).toArray();
@@ -2421,7 +2432,12 @@ std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
             if (rounded.size() >= 2) centre = rounded;
         }
     }
-    return offsetPolyline(centre, s);
+    std::vector<Vec2> rail = offsetPolyline(centre, s);
+    // ... and the caps, which is where an EXTENDED line's extra length lives. Without them the line this
+    // answers about stops where the run's own points stop, so a line stretched to meet something could
+    // not be trimmed at that something: the crossing was not on the line as far as the trim could see.
+    applyDoubleRunCuts(rail, ent, s > 0 ? +1 : -1);
+    return rail;
 }
 
 std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
@@ -8577,6 +8593,20 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
         if (c.first <= alongPick + 1e-9 && c.first >= lo) { lo = c.first; loAt = c.second; loCut = true; }
         if (c.first >= alongPick - 1e-9 && c.first <= hi) { hi = c.first; hiAt = c.second; hiCut = true; }
     }
+    if (hi - lo < 1e-9) {
+        // The pick landed exactly ON a crossing. That is the normal case rather than a freak one: object
+        // snapping pulls the pointer onto the intersection precisely when you aim at the piece beside it,
+        // so the interval collapses and there is nothing between the bounds. What was meant is the piece
+        // NEXT to that crossing, and the one a trimmed end can say is the one towards the nearer end of
+        // the line - so that is the one taken.
+        if (railLen - hi <= lo) {
+            hi = railLen;
+            hiCut = false;
+        } else {
+            lo = 0.0;
+            loCut = false;
+        }
+    }
     if (hi - lo < 1e-9)
         return say(QStringLiteral("There is nothing of that line to remove where you picked."));
 
@@ -8775,7 +8805,7 @@ std::vector<std::pair<Vec2, Vec2>> railEndsAt(const Entity& ent, bool startEnd, 
     } else if (ent.points.size() >= 2) {
         for (double s : {gap / 2.0, -gap / 2.0}) {
             if (!want(s)) continue;
-            const std::vector<Vec2> run = offsetPolyline(ent.points, s);
+            const std::vector<Vec2> run = doubleRunRail(ent, s);
             if (run.size() < 2) continue;
             if (startEnd) rails.push_back({run.front(), run[1]});
             else rails.push_back({run.back(), run[run.size() - 2]});

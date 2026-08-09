@@ -395,6 +395,18 @@ void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bo
     }
 }
 
+} // namespace
+
+void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side) {
+    if (rail.size() < 2) return;
+    for (const QString& k : {QStringLiteral("cutStart"), QStringLiteral("cutStart2")})
+        applyRunCut(rail, e, k, false, side);
+    for (const QString& k : {QStringLiteral("cutEnd"), QStringLiteral("cutEnd2")})
+        applyRunCut(rail, e, k, true, side);
+}
+
+namespace {
+
 QPolygonF toScreenPoly(const std::vector<Vec2>& pts, const ViewTransform& vt) {
     QPolygonF poly;
     poly.reserve(static_cast<int>(pts.size()));

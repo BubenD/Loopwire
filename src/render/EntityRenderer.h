@@ -7,6 +7,8 @@
 #include <QColor>
 #include <QPointF>
 
+#include <vector>
+
 class QPainter;
 
 namespace Edraw_Desktop {
@@ -25,6 +27,12 @@ struct ViewTransform {
     }
     double scale() const { return view.scale; }
 };
+
+// One physical line of a double run, AS DRAWN: its offset from the centreline with the trim/extend caps
+// applied - both slots, for that side. Anything that has to answer questions about the line has to see
+// the same line the drawing shows: a line the user extended to meet something could not be trimmed AT
+// that something, because the extension lives in the cap and not in the run's own points.
+void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side);
 
 // Stateless entity painter. Draws a single entity in screen space using the
 // supplied transform; resolves color/weight against the document's layers.
