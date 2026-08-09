@@ -303,6 +303,14 @@ std::optional<Vec2> railMeetsSegment(const Vec2& thisEnd, const Vec2& otherEnd, 
     return *x;
 }
 
+// ... or crosses it ANYWHERE along its length, knees included. A cut clips the whole run now, so a
+// boundary that crosses it past a knee is reachable too - it simply takes the knee with it.
+bool railCrossesSegment(const std::vector<Vec2>& rail, const Vec2& a, const Vec2& b) {
+    for (size_t i = 1; i < rail.size(); ++i)
+        if (segmentSegmentIntersection(rail[i - 1], rail[i], a, b)) return true;
+    return false;
+}
+
 // The two cut slots an end has, one per physical line: "cutEnd" and "cutEnd2". A cut with no side on it
 // applies to both lines; a sided one only to its own. Two slots are what lets the two lines of a run
 // come back to different places - which is what trimming one line of it means.
@@ -8676,6 +8684,18 @@ void writeCutSlot(Entity& ent, const QString& base, const CutRecord& cut, int si
     if (side != 0) ent.meta.insert(base + "Side", side);
 }
 
+// The whole physical line(s) named by `onlySide` (0 = both), as drawn.
+std::vector<std::vector<Vec2>> railsOf(const Entity& ent, int onlySide) {
+    std::vector<std::vector<Vec2>> out;
+    const double gap = ent.meta.value(QStringLiteral("gap")).toDouble(10.0);
+    for (double s : {gap / 2.0, -gap / 2.0}) {
+        if (onlySide != 0 && (s > 0 ? +1 : -1) != onlySide) continue;
+        const std::vector<Vec2> r = doubleRunRail(ent, s);
+        if (r.size() >= 2) out.push_back(r);
+    }
+    return out;
+}
+
 // The two physical lines at one end of a run, each as (that end, the next point along it).
 std::vector<std::pair<Vec2, Vec2>> railEndsAt(const Entity& ent, bool startEnd, int onlySide) {
     std::vector<std::pair<Vec2, Vec2>> rails;
@@ -8717,10 +8737,16 @@ std::optional<CutRecord> findCutAt(const Entity& ent, const QString& key, const 
     if (cands.empty()) return std::nullopt;
     const std::vector<std::pair<Vec2, Vec2>> rails =
         railEndsAt(ent, key == QLatin1String("cutStart"), side);
-    auto reached = [&rails](const std::pair<Vec2, Vec2>& seg) {
+    const std::vector<std::vector<Vec2>> whole = railsOf(ent, side);
+    auto reached = [&rails, &whole](const std::pair<Vec2, Vec2>& seg) {
         int n = 0;
         for (const auto& rl : rails)
             if (railMeetsSegment(rl.first, rl.second, seg.first, seg.second)) ++n;
+        if (n > 0) return n;
+        // Or it crosses the line somewhere along its length - past a knee, say. A cut clips the whole
+        // line, so that is reachable too.
+        for (const auto& rl : whole)
+            if (railCrossesSegment(rl, seg.first, seg.second)) ++n;
         return n;
     };
     const std::pair<Vec2, Vec2>* pick = nullptr;

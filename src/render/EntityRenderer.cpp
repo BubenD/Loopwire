@@ -271,16 +271,33 @@ bool lsReferenceLine(const Entity& e, Vec2& a, Vec2& b) {
     b = {e.meta.value("lsRefBx").toDouble(), e.meta.value("lsRefBy").toDouble()};
     return true;
 }
-// Move a run's start vertex onto the reference line (extend along its first segment).
+// Bring a run's START up to the reference line. Where the line actually crosses the run is looked for
+// along the WHOLE run, not only in its first segment: a boundary that cuts a run past one of its knees
+// is an ordinary thing to trim to, and clipping the first segment alone left the knee sitting there
+// beyond the cut - which is why anything further along was refused rather than drawn.
 void extendRunStartToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     if (run.size() < 2) return;
+    for (int i = static_cast<int>(run.size()) - 1; i >= 1; --i) {
+        if (auto x = segmentSegmentIntersection(run[i - 1], run[i], a, b)) {
+            run.erase(run.begin(), run.begin() + i);   // everything before the crossing goes
+            run.insert(run.begin(), *x);
+            return;
+        }
+    }
+    // The line does not cross the run at all: extend the first segment out to meet it, as before.
     if (auto x = lineLineIntersection(run[0], run[1], a, b)) run[0] = *x;
 }
-// Move a run's END vertex onto the reference line (along its last segment), so a
-// trimmed double line's physical runs meet the cutting line exactly (diagonal cap).
+// The same at the other end, so a trimmed run meets the cutting line exactly (a diagonal cap).
 void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     const int n = static_cast<int>(run.size());
     if (n < 2) return;
+    for (int i = 1; i < n; ++i) {
+        if (auto x = segmentSegmentIntersection(run[i - 1], run[i], a, b)) {
+            run.resize(static_cast<size_t>(i));        // everything after the crossing goes
+            run.push_back(*x);
+            return;
+        }
+    }
     if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
 }
 // Trim a run's endpoint to where the run crosses the circle, choosing the crossing

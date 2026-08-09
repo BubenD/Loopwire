@@ -3683,6 +3683,44 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // A boundary that crosses the line PAST A KNEE. A cut used to be able to clip only the line's
+        // last segment, so anything further along was refused - "the boundary does not reach that line"
+        // - and since the runs in a real harness drawing all have knees, that was most of them.
+        {
+            Document d; d.entities().clear();
+            Entity wall;                       // crosses both lines on their FIRST segment
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {50, -40};
+            wall.b = {50, 40};
+            d.entities().push_back(wall);
+            Entity run;                        // an L: lines at +/-10, so a knee between the crossing
+            run.id = QStringLiteral("run");     // and the far end
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {100, 0}, {100, 100}};
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            d.entities().push_back(run);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+            QStringList said;
+            QObject::connect(&ed, &Editor::message, [&said](const QString& m) { said << m; });
+            ed.selectById(QStringLiteral("wall"));
+            ed.setTool(ToolId::Trim);
+            // Click the + line well past the knee: the piece from the wall onwards, knee included, goes.
+            ed.onPointerPress({90, 60}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({90, 60}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool(),
+                  "trim-past-knee: a boundary crossing the line before its knee still trims it");
+            check(r && r->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                  "trim-past-knee: and only the line that was clicked");
+            check(r && near(r->meta.value(QStringLiteral("cutEndAx")).toDouble(), 50.0),
+                  "trim-past-knee: back to the boundary at x=50");
+            check(!said.join(QStringLiteral(" | ")).contains(QLatin1String("does not reach")),
+                  "trim-past-knee: and it is not refused for being out of reach");
+        }
+
         // Two double runs crossing, which is the drawing: the selected run is the boundary and ONE line
         // of the other run - a double polyline with a rounded knee - is cut back to it. Both gestures.
         {
