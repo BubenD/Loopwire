@@ -8366,10 +8366,25 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
     const double gap = ent.meta.value("gap").toDouble(10.0);
     if (gap <= 0.0) return false;
 
-    // The centreline, and the two physical lines either side of it.
-    const std::vector<Vec2> centre =
-        dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
+    // The two physical lines, built the way they are DRAWN: a run with rounded knees rounds its
+    // centreline at radius + half the gap and offsets that, so the lines curve through the bend with a
+    // constant gap. Testing the fence against the mitred offset instead would answer for geometry that
+    // is not on the screen.
+    std::vector<Vec2> centre = dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
     if (centre.size() < 2) return false;
+    if (!dbl && ent.meta.contains(QStringLiteral("cornerRadii"))) {
+        const QJsonArray arr = ent.meta.value(QStringLiteral("cornerRadii")).toArray();
+        std::vector<double> radii(centre.size(), 0.0);
+        bool any = false;
+        for (int i = 0; i < arr.size() && i < static_cast<int>(radii.size()); ++i) {
+            const double r = arr[i].toDouble();
+            if (r > 0.0) { radii[static_cast<size_t>(i)] = r + gap / 2.0; any = true; }
+        }
+        if (any) {
+            const std::vector<Vec2> rounded = roundedPolylinePerCorner(centre, radii);
+            if (rounded.size() >= 2) centre = rounded;
+        }
+    }
     auto railOf = [&](double s) {
         if (!dbl) return offsetPolyline(centre, s);
         const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
@@ -8387,9 +8402,10 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
         return std::nullopt;
     };
 
-    // The fence must cross exactly ONE of the two lines and NOT the centreline: that is the gesture
-    // for "this line only". Crossing the centreline means the whole run, which the caller handles.
-    if (crossOn(centre, fa, fb)) return false;
+    // WHICH LINES the fence crosses decides what is cut: one of them means that line alone, both of them
+    // mean the whole run. The centreline is deliberately not consulted - it is not drawn, and a fence
+    // reaching the far line from inside the run has to cross it on the way, so testing for it sent
+    // exactly the gesture this is for down the whole-run path and nothing happened.
     int side = 0;
     std::optional<std::pair<double, Vec2>> at;
     std::vector<Vec2> rail;

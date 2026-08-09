@@ -3544,6 +3544,45 @@ int run_editor_tests() {
             check(near(run->meta.value(QStringLiteral("cutEndAx")).toDouble(), 100.0),
                   "trim-one-rail: it comes back to the reference line at x=100");
         }
+        // The case from the drawing: the reference is reached by ONE line only - the centreline never
+        // gets near it - and the fence comes at that line from INSIDE the run, so it crosses the
+        // centreline on the way. Both of those used to stop the trim dead: the object was not even
+        // considered (its centreline does not meet the reference) and the gesture was read as a
+        // whole-run trim (the fence crosses the centreline).
+        {
+            Document d3; d3.entities().clear();
+            Entity ref;                        // only the bottom line reaches this
+            ref.id = QStringLiteral("ref");
+            ref.type = EntityType::Line;
+            ref.a = {150, -60};
+            ref.b = {150, -5};                 // stops short of the centreline at y=0
+            d3.entities().push_back(ref);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {200, 0}};   // lines at y=+/-15
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 30.0);
+            d3.entities().push_back(run);
+            Editor e3; e3.setDocument(&d3); noSnap(e3); e3.setPixelTolerance(3);
+            e3.selectById(QStringLiteral("ref"));
+            e3.setTool(ToolId::Trim);
+            // From inside the run (y=5, above the centreline) down across the bottom line only.
+            e3.onPointerPress({120, 5}, Qt::LeftButton, Qt::NoModifier);
+            e3.onPointerMove({180, -20});
+            e3.onPointerPress({180, -20}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d3.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool(),
+                  "trim-one-rail: a reference only one line reaches still trims that line");
+            check(r && r->meta.value(QStringLiteral("cutEndSide")).toInt() == -1,
+                  "trim-one-rail: the bottom line is the one that comes back");
+            check(r && near(r->meta.value(QStringLiteral("cutEndAx")).toDouble(), 150.0),
+                  "trim-one-rail: back to the reference at x=150");
+            check(r && r->points.size() == 2 && near(r->points[1].x, 200.0),
+                  "trim-one-rail: and the top line keeps its full length");
+        }
+
         // A fence across the CENTRELINE still trims the whole run, as it always did.
         Document d2; build(d2);
         Editor e2; e2.setDocument(&d2); noSnap(e2); e2.setPixelTolerance(3);

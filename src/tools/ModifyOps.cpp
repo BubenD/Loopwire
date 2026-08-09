@@ -912,6 +912,43 @@ bool whollyInsideCircle(const Entity& e, const Entity& ref) {
 }
 
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
+    // A DOUBLE run IS its two physical lines: they are what is drawn, and they are what a reference
+    // meets. Asking its centreline instead answers "they do not meet" for a run whose two lines straddle
+    // the reference - which is most of them, the centreline being half a gap away from each line - and
+    // the object was then not even considered for trimming.
+    const bool dbl = e.type == EntityType::DoubleLine ||
+                     (e.type == EntityType::Polyline && e.meta.value("double").toBool());
+    if (dbl) {
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const std::vector<Vec2> centre =
+            e.type == EntityType::DoubleLine ? std::vector<Vec2>{e.a, e.b} : e.points;
+        if (centre.size() >= 2 && gap > 0.0) {
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const std::vector<Vec2> rail = offsetPolyline(centre, s);
+                for (size_t i = 1; i < rail.size(); ++i) {
+                    for (const auto& c : others) {
+                        if (!e.id.isEmpty() && c.id == e.id) continue;
+                        const Vec2 A = rail[i - 1], B = rail[i];
+                        if (isCurvedCutter(c)) {
+                            const Vec2 D = B - A;
+                            const double L2 = D.lengthSq();
+                            if (L2 <= 1e-12) continue;
+                            std::vector<double> ts;
+                            appendCurvedCuts(c, A, D, L2, 0.0, ts);
+                            if (!ts.empty()) return true;
+                            continue;
+                        }
+                        bool hit = false;
+                        forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                            if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;
+                        });
+                        if (hit) return true;
+                    }
+                }
+            }
+        }
+        // Its centreline may still be what meets the reference (a fence inside the gap).
+    }
     if (e.type == EntityType::Line || e.type == EntityType::DoubleLine)
         return !intersectionParams(e, others).empty(); // uses the centreline a,b
     if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
