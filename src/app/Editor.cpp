@@ -367,6 +367,30 @@ std::optional<Vec2> wireGripPoint(const Entity& w, GripRole role, int index) {
     return std::nullopt;
 }
 
+// ---- A double run is drawn ALONG the cursor, not around it ---------------------------------------
+//
+// The clicked points used to be stored as the CENTRELINE, which put the crosshair in the empty gap
+// between the two rails: you were pulling the space between the lines rather than a line. A double run
+// is now drawn on the rail you can see under the crosshair - the one to the left of travel, which for a
+// run drawn left to right is the top one - and the gap goes to the other side of it. AutoCAD's MLINE
+// calls this Top justification and measures the side the same way, from the direction of travel.
+//
+// What is STORED is still the centreline, because everything else - the rails, the joints, trimming,
+// snapping, filleting - is defined from it. Only where the run is created does the shift happen.
+Vec2 doubleRunCentreOffset(const Vec2& from, const Vec2& to, double gap) {
+    const Vec2 d = to - from;
+    if (d.lengthSq() < 1e-18 || gap <= 0.0) return {0.0, 0.0};
+    return d.normalized().perp() * (-gap / 2.0);
+}
+
+std::vector<Vec2> doubleRunCentre(const std::vector<Vec2>& drawn, double gap) {
+    if (drawn.size() < 2 || gap <= 0.0) return drawn;
+    const std::vector<Vec2> centre = offsetPolyline(drawn, -gap / 2.0);
+    // A bend too tight to offset changes the vertex count. Then the drawn line is taken as the
+    // centreline, as it always was, rather than a run with vertices the drawing never had.
+    return centre.size() == drawn.size() ? centre : drawn;
+}
+
 // `doc` is only needed for entities whose handle position is defined by ANOTHER entity
 // (a Wire label attached to a wire sits wherever that wire's fraction lands).
 std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {},
@@ -6479,6 +6503,11 @@ void Editor::finishDraw() {
         e.a = draftPts_[0];
         e.b = draftPts_[1];
         if (e.type == EntityType::DoubleLine) {
+            // Drawn along the cursor: the rail under the crosshair goes through the clicked points and
+            // the gap goes to the other side of it.
+            const Vec2 shift = doubleRunCentreOffset(draftPts_[0], draftPts_[1], doubleLineGap_);
+            e.a = e.a + shift;
+            e.b = e.b + shift;
             e.meta.insert("gap", doubleLineGap_);
             if (dpolyHasLsRef_) {
                 e.meta.insert("lsRef", true);
@@ -6673,6 +6702,7 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
         if (tool_ == ToolId::DoublePolyline) {
+            e.points = doubleRunCentre(draftPts_, doubleLineGap_);
             e.meta.insert("double", true);
             e.meta.insert("gap", doubleLineGap_);
             if (dpolyHasLsRef_) {
@@ -8004,8 +8034,8 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     //
     // It used to be every object on the sheet ("until any joint"), which meant a second circle
     // overlapping the reference cut the removal short: the piece left behind still had material inside
-    // the reference, and its new end sat on a ring nobody had selected. An object's own knees still
-    // bound it (see trimPolylinePieces) - that is the object's own shape, not another object's.
+    // the reference, and its new end sat on a ring nobody had selected. Nor does an object's own corner
+    // bound it (see trimPolylinePieces): a corner is part of the thing being cut, not a cutting edge.
     const std::vector<Entity>& joints = refs;
     pushUndo();
     // Snapshot the ids first so trimming doesn't disturb the iteration.
@@ -12117,10 +12147,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
             EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
+            // One rail runs through the cursor and the gap goes to the other side, which is how it
+            // will be placed - the preview and the result are the same line.
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
             const Vec2 off = perp * (doubleLineGap_ / 2.0);
-            std::vector<Vec2> r1 = {pts[0] + off, pts[1] + off};
-            std::vector<Vec2> r2 = {pts[0] - off, pts[1] - off};
+            const Vec2 shift = doubleRunCentreOffset(pts[0], pts[1], doubleLineGap_);
+            std::vector<Vec2> r1 = {pts[0] + shift + off, pts[1] + shift + off};
+            std::vector<Vec2> r2 = {pts[0] + shift - off, pts[1] + shift - off};
             extendLsStart(r1);
             extendLsStart(r2);
             p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
@@ -12132,8 +12165,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             std::vector<double> centerRadii(previewRadii.size(), 0.0);
             for (size_t i = 0; i < previewRadii.size(); ++i)
                 if (previewRadii[i] > 0) centerRadii[i] = previewRadii[i] + h;
+            const std::vector<Vec2> shifted = doubleRunCentre(pts, doubleLineGap_);
             const std::vector<Vec2> center =
-                previewAnyFillet ? roundedPolylinePerCorner(pts, centerRadii) : pts;
+                previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
             std::vector<Vec2> r2 = offsetPolyline(center, -h);
             extendLsStart(r1); // ls: start both runs on the reference line

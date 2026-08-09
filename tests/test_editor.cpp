@@ -1719,17 +1719,36 @@ int run_editor_tests() {
               "trim-doubleobj: exact cut line (the reference) recorded at the trimmed end");
     }
 
-    // --- Polyline trim stops at the nearest knee and splits into two pieces.
+    // --- A polyline's own CORNER is not a cutting edge: one fence, and everything from it to the end
+    //     of what was picked goes - corner and all. It used to stop at the corner and leave a stub, so
+    //     trimming a bent run took two or three goes and left ends nobody asked for.
     {
-        std::vector<Vec2> pts = {{0, 0}, {100, 0}, {100, 100}}; // an L (knee at 100,0)
+        std::vector<Vec2> pts = {{0, 0}, {100, 0}, {100, 100}}; // an L (corner at 100,0)
         Entity ref; ref.id = "r"; ref.type = EntityType::Line; ref.a = {50, -10}; ref.b = {50, 10};
         std::vector<Entity> cutters = {ref};
         auto pieces = trimPolylinePieces(pts, {70, 0} /* on seg0, past the ref */, cutters, "");
-        check(pieces.size() == 2, "trim-poly-knee: splits into two independent pieces");
-        // Piece 1 = [0..ref(50)], piece 2 = [knee(100,0)..(100,100)] — not the whole tail removed.
-        check(near(pieces[0].back().x, 50.0) && near(pieces[1].front().x, 100.0) &&
-                  near(pieces[1].front().y, 0.0),
-              "trim-poly-knee: removed only ref..knee; the far side survives");
+        check(pieces.size() == 1, "trim-poly-corner: one cutting edge leaves ONE piece");
+        check(pieces.size() == 1 && pieces[0].size() == 2 && near(pieces[0].back().x, 50.0) &&
+                  near(pieces[0].back().y, 0.0),
+              "trim-poly-corner: what is left ends at the fence, not at the corner");
+    }
+
+    // --- The piece BETWEEN two crossings goes even when the run bends inside it, and the cutter can
+    //     itself be a polyline. This is the case that used to come away in parts.
+    {
+        std::vector<Vec2> pts = {{0, 0}, {100, 0}, {200, 60}};   // bends at (100,0)
+        Entity cut; cut.id = "p"; cut.type = EntityType::Polyline;
+        cut.points = {{60, -40}, {60, 40}, {140, 40}, {140, -40}};  // crosses at x=60 and x=140
+        for (const Vec2& pick : {Vec2{80, 0}, Vec2{100, 0}}) {      // before the bend, and at it
+            auto pieces = trimPolylinePieces(pts, pick, {cut}, "");
+            check(pieces.size() == 2, "trim-poly-poly: the picked span comes away in one go");
+            if (pieces.size() != 2) continue;
+            check(near(pieces[0].back().x, 60.0) && near(pieces[0].back().y, 0.0),
+                  "trim-poly-poly: the near piece ends at the first crossing");
+            check(near(pieces[1].front().x, 140.0) && near(pieces[1].front().y, 24.0),
+                  "trim-poly-poly: the far piece starts at the second, and the bend between them "
+                  "went with the span");
+        }
     }
 
     // --- Trim a DOUBLE LINE with a CIRCLE reference: it splits at the ring and each
@@ -1790,18 +1809,19 @@ int run_editor_tests() {
               "trim-thru-circle: one segment crossing a circle twice splits at both crossings");
     }
 
-    // --- A knee INSIDE the circle bounds the trim: the removed span stops at the
-    //     nearest knee, and the rest survives as a separate object.
+    // --- A corner INSIDE the circle goes with the span: trimming to a ring removes what is inside
+    //     THAT ring, which is the whole point of picking it, corner included.
     {
-        std::vector<Vec2> pts = {{0, 0}, {150, 0}, {150, 100}}; // knee at (150,0)
+        std::vector<Vec2> pts = {{0, 0}, {150, 0}, {150, 100}}; // corner at (150,0)
         Entity circ; circ.id = "c"; circ.type = EntityType::Circle; circ.center = {100, 0}; circ.radius = 60;
         std::vector<Entity> cutters = {circ}; // ring crosses seg0 at x=40 and seg1 at (150,~33.2)
-        auto pieces = trimPolylinePieces(pts, {100, 0} /* inside, before the knee */, cutters, "");
+        auto pieces = trimPolylinePieces(pts, {100, 0} /* inside, before the corner */, cutters, "");
         check(pieces.size() == 2 && near(pieces[0].back().x, 40.0),
-              "trim-poly-circle-knee: first piece ends at the ring entry (x=40)");
+              "trim-poly-circle-corner: the first piece ends at the ring entry (x=40)");
         check(pieces.size() == 2 && near(pieces[1].front().x, 150.0) &&
-                  near(pieces[1].front().y, 0.0),
-              "trim-poly-circle-knee: trim stops at the knee (second piece starts at the knee)");
+                  near(pieces[1].front().y, 33.166, 0.01),
+              "trim-poly-circle-corner: and the second starts where the ring leaves, not at the "
+              "corner inside it");
     }
 
     // --- Trim a CIRCLE: two cutting lines through it; the picked quadrant is
@@ -3329,6 +3349,60 @@ int run_editor_tests() {
                       d.entities()[0].type == EntityType::DoubleLine &&
                       near(d.entities()[0].meta.value("gap").toDouble(), 7.0),
                   "dde: double line keeps gap");
+        }
+    }
+
+    // --- A double run is drawn ALONG the cursor: the rail under the crosshair goes through the points
+    //     that were clicked, and the gap goes to the other side of it. The clicked points used to
+    //     become the CENTRELINE, which put the crosshair in the empty space between the two lines.
+    {
+        // A double line, left to right with a 10 mm gap: the top rail is what was drawn.
+        {
+            Document d; d.entities().clear();
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.doubleLineGap() = 10.0;
+            ed.setTool(ToolId::DoubleLine);
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+            check(d.entities().size() == 1, "dline-justify: one entity");
+            const Entity& e = d.entities()[0];
+            // Stored centreline half a gap BELOW the line that was drawn...
+            check(e.type == EntityType::DoubleLine && near(e.a.y, -5.0) && near(e.b.y, -5.0),
+                  "dline-justify: the centreline sits half a gap off the drawn line");
+            // ...so the rail on the cursor's side runs exactly through the clicked points.
+            const double gap = e.meta.value("gap").toDouble();
+            check(near(e.a.y + gap / 2.0, 0.0) && near(e.b.y + gap / 2.0, 0.0),
+                  "dline-justify: the rail the cursor rode is the line that was drawn");
+            check(near(e.a.x, 0.0) && near(e.b.x, 100.0),
+                  "dline-justify: and it is not shifted along its own length");
+        }
+        // The same for a double polyline, with a bend in it.
+        {
+            Document d; d.entities().clear();
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.doubleLineGap() = 10.0;
+            ed.setTool(ToolId::DoublePolyline);
+            const std::vector<Vec2> drawn = {{0, 0}, {100, 0}, {100, 100}};
+            for (const Vec2& v : drawn) ed.onPointerPress(v, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            check(d.entities().size() == 1, "dpoly-justify: one entity");
+            const Entity& e = d.entities()[0];
+            check(e.points.size() == drawn.size(),
+                  "dpoly-justify: a vertex for every point clicked");
+            // The rail on the cursor's side is the polyline that was drawn - mitred corner included.
+            const std::vector<Vec2> rail =
+                offsetPolyline(e.points, e.meta.value("gap").toDouble() / 2.0);
+            bool onIt = rail.size() == drawn.size();
+            for (size_t i = 0; onIt && i < rail.size(); ++i)
+                onIt = near(rail[i].x, drawn[i].x, 1e-6) && near(rail[i].y, drawn[i].y, 1e-6);
+            check(onIt, "dpoly-justify: the rail the cursor rode passes through every clicked point");
+            // And nothing is drawn where the cursor was NOT: the centreline is off to one side.
+            check(!near(e.points[0].y, 0.0), "dpoly-justify: the centreline is not under the cursor");
+            // It is still pickable by clicking the line that was drawn, which is the whole point.
+            Editor pick; pick.setDocument(&d); noSnap(pick); pick.setPixelTolerance(3);
+            pick.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+            check(pick.selection().size() == 1,
+                  "dpoly-justify: and clicking the line that was drawn selects it");
         }
     }
 

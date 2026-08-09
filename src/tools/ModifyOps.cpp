@@ -1033,8 +1033,6 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
         }
     }
     if (crossings.empty()) return result; // nothing actually cut it
-    std::vector<double> knees;
-    for (int i = 1; i < n - 1; ++i) knees.push_back(static_cast<double>(i));
 
     // Where the pick sits along the polyline.
     double gp = 0.0, bestd = std::numeric_limits<double>::max();
@@ -1046,14 +1044,13 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
             gp = i + (L > 1e-9 ? distance(pts[i], c.point) / L : 0.0);
         }
     }
-    // The removed span is bounded on each side of the pick by the NEAREST boundary,
-    // where a boundary is a cutter CROSSING or the polyline's own KNEE (interior
-    // vertex). So a trim STOPS at a knee inside the circle — the rest survives as a
-    // separate object (which may still cross the ring until it's trimmed too). A
-    // cutter crossing must exist (checked above) or nothing trims, so a bare knee
-    // never triggers a trim on its own.
-    std::vector<double> bounds = crossings;
-    bounds.insert(bounds.end(), knees.begin(), knees.end());
+    // The removed span is bounded on each side of the pick by the nearest CUTTER CROSSING, and by
+    // nothing else. A polyline's own corner is not a cutting edge: it is part of the thing being cut.
+    // Bounding the removal at knees as well used to leave a stub every time the piece picked ran past a
+    // bend - the span from the fence to the corner came away and the rest of what was picked stayed
+    // behind - so trimming a bent run took two or three goes and left ends nobody asked for. Where the
+    // removed span crosses a corner, the corner goes with it and the pieces either side keep their own.
+    const std::vector<double>& bounds = crossings;
     auto nearestBelow = [&](double& out) {
         bool found = false;
         for (double g : bounds)
