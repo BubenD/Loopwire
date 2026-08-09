@@ -3690,6 +3690,61 @@ int run_editor_tests() {
         // test can click inside. What the change was verified against instead was the sequence driven on
         // both versions, reading the status line.)
 
+        // Clicking the EXTENSION of a line - the part only a cap provides, where it was stretched to meet
+        // something - takes the extension off. There is nothing out there to cut back to (an extension
+        // reaches something, and between that and the line's own end there is normally nothing at all),
+        // so a trim there used to refuse and the only way back was undo.
+        {
+            Document d; d.entities().clear();
+            Entity wall;
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {160, -50};
+            wall.b = {160, 250};
+            d.entities().push_back(wall);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::DoubleLine;
+            run.a = {0, 0};
+            run.b = {100, 100};                 // 45 degrees, so the extension is a whole gap long
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            // ONE line extended to the wall, the other left where the run ends.
+            run.meta.insert(QStringLiteral("cutEnd"), true);
+            run.meta.insert(QStringLiteral("cutEndKind"), QStringLiteral("line"));
+            run.meta.insert(QStringLiteral("cutEndAx"), 160.0);
+            run.meta.insert(QStringLiteral("cutEndAy"), -50.0);
+            run.meta.insert(QStringLiteral("cutEndBx"), 160.0);
+            run.meta.insert(QStringLiteral("cutEndBy"), 250.0);
+            run.meta.insert(QStringLiteral("cutEndSide"), +1);
+            d.entities().push_back(run);
+            // where that line ends on its own, and where the cap draws it to
+            const Vec2 o = (run.b - run.a).normalized().perp() * 10.0;
+            std::vector<Vec2> rail = {run.a + o, run.b + o};
+            const Vec2 raw = rail.back();
+            applyDoubleRunCuts(rail, run, +1);
+            check(distance(raw, rail.back()) > 10.0, "trim-extension: the line IS extended to start with");
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+            ed.selectById(QStringLiteral("run"));
+            ed.setTool(ToolId::Trim);
+            const Vec2 click = lerp(raw, rail.back(), 0.5);   // half way along the extension
+            ed.onPointerPress(click, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress(click, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && !r->meta.value(QStringLiteral("cutEnd")).toBool(),
+                  "trim-extension: clicking the extension takes it off");
+            if (r) {
+                std::vector<Vec2> after = {r->a + o, r->b + o};
+                applyDoubleRunCuts(after, *r, +1);
+                check(distance(after.back(), raw) < 1e-6,
+                      "trim-extension: that line ends where its own run ends again");
+                std::vector<Vec2> other = {r->a - o, r->b - o};
+                applyDoubleRunCuts(other, *r, -1);
+                check(distance(other.back(), r->b - o) < 1e-6,
+                      "trim-extension: and the other line is untouched");
+            }
+        }
+
         // A line crossed TWICE - once part way along and once at its own end, where it meets the body -
         // and the piece between them picked. This is the case from the real drawing: taking the nearest
         // crossing to the pick found the one at the end, and cutting back to THAT is the whole line, so

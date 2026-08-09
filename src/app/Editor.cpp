@@ -8582,9 +8582,58 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
             }
         }
     }
-    if (crossings.empty())
+    // The part of the line that only a CAP provides - where it was stretched to meet something - is a
+    // piece with a definite start: the end of the line's own run. Clicking THERE and trimming means "take
+    // this extension off". It is the fallback for when there is nothing out on the extension to cut back
+    // to, which is the usual case: an extension reaches something, and between that something and the
+    // line's own end there is normally nothing at all. Without it, extending a line by accident could
+    // only be undone with undo.
+    auto tryDropExtension = [&]() -> bool {
+        const double railLen0 = polylineLength(rail);
+        std::vector<Vec2> bare;
+        {
+            const double gap = ent.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            const double s = (side >= 0 ? 1.0 : -1.0) * gap / 2.0;
+            if (ent.type == EntityType::DoubleLine) {
+                const Vec2 o = (ent.b - ent.a).normalized().perp() * s;
+                bare = {ent.a + o, ent.b + o};
+            } else {
+                bare = offsetPolyline(ent.points, s);
+            }
+        }
+        if (bare.size() < 2 || rail.size() < 2) return false;
+        const double startExt = distance(rail.front(), bare.front());
+        const double endExt = distance(rail.back(), bare.back());
+        const bool inEndExt = endExt > 1e-6 && alongPick > railLen0 - endExt;
+        const bool inStartExt = startExt > 1e-6 && alongPick < startExt;
+        if (!inEndExt && !inStartExt) return false;
+        const QString key = inEndExt ? QStringLiteral("cutEnd") : QStringLiteral("cutStart");
+        // Whichever slot at that end is doing it for THIS line. An unsided one is doing it for both, so
+        // it stays and becomes the other line's.
+        bool dropped = false;
+        for (const QString& base : {key, key + QStringLiteral("2")}) {
+            if (!ent.meta.value(base).toBool()) continue;
+            const int sd = ent.meta.value(base + QStringLiteral("Side")).toInt();
+            if (sd == side) {
+                for (const char* k : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly",
+                                      "Side"})
+                    ent.meta.remove(base + QLatin1String(k));
+                dropped = true;
+            } else if (sd == 0) {
+                ent.meta.insert(base + QStringLiteral("Side"), -side);
+                dropped = true;
+            }
+        }
+        if (dropped && why)
+            *why = QStringLiteral("Took the extension off that line — it ends where its own run ends "
+                                  "again.");
+        return dropped;
+    };
+    if (crossings.empty()) {
+        if (tryDropExtension()) return true;
         return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it back "
                                   "to — select the object you want it to stop at."));
+    }
 
     // The piece the pick is IN: bounded by the nearest crossing on each side of it, and by the line's
     // own ends where there is none. Taking the nearest crossing on either hand instead - one number
@@ -8619,9 +8668,11 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
     // boundary on both sides of the pick, neither at an end - cannot be said by a trimmed end at all.
     const bool atStart = !loCut || lo < 1e-9;
     const bool atEnd = !hiCut || hi > railLen - 1e-9;
-    if (atStart && atEnd)
+    if (atStart && atEnd) {
+        if (tryDropExtension()) return true;
         return say(QStringLiteral("That would take the whole of that line: there is no boundary "
                                   "between the point you picked and its ends."));
+    }
     if (!atStart && !atEnd)
         return say(QStringLiteral("That piece is in the middle of the line, with a boundary either "
                                   "side of it — a trimmed end cannot say that. Trim the whole run, or "
