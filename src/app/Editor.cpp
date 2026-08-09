@@ -2396,6 +2396,34 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     return pts;
 }
 
+// The two physical lines of a double run, built the way they are DRAWN: a run with rounded knees rounds
+// its centreline at radius + half the gap and offsets that, so the lines curve through the bend with a
+// constant gap. Testing against the mitred offset instead would answer for geometry not on the screen.
+std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
+    const bool dbl = ent.type == EntityType::DoubleLine;
+    const double gap = ent.meta.value("gap").toDouble(10.0);
+    std::vector<Vec2> centre = dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
+    if (centre.size() < 2) return {};
+    if (dbl) {
+        const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
+        return {ent.a + off, ent.b + off};
+    }
+    if (ent.meta.contains(QStringLiteral("cornerRadii"))) {
+        const QJsonArray arr = ent.meta.value(QStringLiteral("cornerRadii")).toArray();
+        std::vector<double> radii(centre.size(), 0.0);
+        bool any = false;
+        for (int i = 0; i < arr.size() && i < static_cast<int>(radii.size()); ++i) {
+            const double r = arr[i].toDouble();
+            if (r > 0.0) { radii[static_cast<size_t>(i)] = r + gap / 2.0; any = true; }
+        }
+        if (any) {
+            const std::vector<Vec2> rounded = roundedPolylinePerCorner(centre, radii);
+            if (rounded.size() >= 2) centre = rounded;
+        }
+    }
+    return offsetPolyline(centre, s);
+}
+
 std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     std::vector<std::pair<Vec2, Vec2>> segs;
     auto pts = entitySelectPoints(e);
@@ -2424,6 +2452,22 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     }
     case EntityType::Polyline:
     case EntityType::Wire:
+        // A DOUBLE polyline is picked on its two VISIBLE lines, like a double line - not on the
+        // centreline, which is not drawn. A crossing region over one of its lines used to miss it
+        // entirely: the region was tested against a line the drawing does not have.
+        if (e.type == EntityType::Polyline && e.meta.value("double").toBool() &&
+            e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            bool any = false;
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const std::vector<Vec2> rail = doubleRunRail(e, s);
+                for (size_t i = 1; i < rail.size(); ++i) {
+                    segs.emplace_back(rail[i - 1], rail[i]);
+                    any = true;
+                }
+            }
+            if (any) break;
+        }
         for (size_t i = 1; i < e.points.size(); ++i) segs.emplace_back(e.points[i - 1], e.points[i]);
         break;
     case EntityType::Spline: {
@@ -7218,8 +7262,10 @@ QString Editor::drawCommandHint() const {
     case ToolId::Trim:
         return trimRefIds_.empty()
                    ? QStringLiteral("TRIM: click the REFERENCE object to trim from (it stays selected)")
-                   : QStringLiteral("TRIM: click two points to draw a cut line across objects — each is "
-                                    "trimmed to the next joint; Esc to finish");
+                   // What the command actually does now: a click takes the piece under the pointer, a
+                   // line across several takes them all, and nothing stops at a corner any more.
+                   : QStringLiteral("TRIM: click the piece to remove — or two points to draw a line "
+                                    "across several; Esc to finish");
     case ToolId::Extend:
         return trimRefIds_.empty()
                    ? QStringLiteral("EXTEND: click the boundary object to extend to (it stays selected)")
@@ -8445,34 +8491,6 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
 }
 
 namespace {
-
-// The two physical lines of a double run, built the way they are DRAWN: a run with rounded knees rounds
-// its centreline at radius + half the gap and offsets that, so the lines curve through the bend with a
-// constant gap. Testing against the mitred offset instead would answer for geometry not on the screen.
-std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
-    const bool dbl = ent.type == EntityType::DoubleLine;
-    const double gap = ent.meta.value("gap").toDouble(10.0);
-    std::vector<Vec2> centre = dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
-    if (centre.size() < 2) return {};
-    if (dbl) {
-        const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
-        return {ent.a + off, ent.b + off};
-    }
-    if (ent.meta.contains(QStringLiteral("cornerRadii"))) {
-        const QJsonArray arr = ent.meta.value(QStringLiteral("cornerRadii")).toArray();
-        std::vector<double> radii(centre.size(), 0.0);
-        bool any = false;
-        for (int i = 0; i < arr.size() && i < static_cast<int>(radii.size()); ++i) {
-            const double r = arr[i].toDouble();
-            if (r > 0.0) { radii[static_cast<size_t>(i)] = r + gap / 2.0; any = true; }
-        }
-        if (any) {
-            const std::vector<Vec2> rounded = roundedPolylinePerCorner(centre, radii);
-            if (rounded.size() >= 2) centre = rounded;
-        }
-    }
-    return offsetPolyline(centre, s);
-}
 
 // Where something crosses a run, as a distance along it and the point itself.
 std::optional<std::pair<double, Vec2>> crossAlong(const std::vector<Vec2>& run, const Vec2& p1,

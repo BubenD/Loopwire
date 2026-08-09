@@ -3683,6 +3683,39 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // A crossing region over one LINE of a double polyline selects the run. It is picked on its two
+        // visible lines, like a double line; the centreline between them is not drawn and never was the
+        // thing to test against, so a small green box over a line used to select nothing at all.
+        {
+            Document d; d.entities().clear();
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {100, 0}, {200, 60}};
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 30.0);   // lines at +/-15
+            d.entities().push_back(run);
+            // A region needs press-release-move-press: the release is what arms the rectangle.
+            auto box = [](Editor& ed, Vec2 a, Vec2 b) {
+                ed.setTool(ToolId::Select);
+                ed.onPointerPress(a, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerRelease(a, Qt::LeftButton);
+                ed.onPointerMove(b);
+                ed.onPointerPress(b, Qt::LeftButton, Qt::NoModifier);
+            };
+            // A crossing box (right to left) over the UPPER line only, clear of the centreline: the
+            // line runs through y=15 between x=40 and x=60.
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+            box(ed, {60, 25}, {40, 10});
+            check(ed.selection().size() == 1,
+                  "select-rail: a crossing box over one line of a double polyline selects the run");
+            // And a box entirely inside the GAP still selects nothing: the centreline is not drawn.
+            Editor e2; e2.setDocument(&d); noSnap(e2); e2.setPixelTolerance(3);
+            box(e2, {60, 6}, {40, -6});
+            check(e2.selection().empty(),
+                  "select-rail: and a box in the gap between the lines still selects nothing");
+        }
+
         // A boundary that crosses the line PAST A KNEE. A cut used to be able to clip only the line's
         // last segment, so anything further along was refused - "the boundary does not reach that line"
         // - and since the runs in a real harness drawing all have knees, that was most of them.
