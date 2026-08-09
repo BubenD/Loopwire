@@ -42,6 +42,7 @@
 #include <QButtonGroup>
 #include <QSpinBox>
 #include <QActionGroup>
+#include <QAbstractItemDelegate>
 #include <QApplication>
 #include <QColorDialog>
 #include <QCompleter>
@@ -3748,6 +3749,17 @@ void MainWindow::buildPanels() {
         const QString key = propsTable_->item(item->row(), 0) ? propsTable_->item(item->row(), 0)->text() : QString();
         if (key == "Lineweight") editor_->setSelectionWeight(item->text().toDouble());
     });
+    // Esc in a PROPERTIES field hands the keyboard back to the drawing and puts the editor in Select.
+    // A value is committed with Enter; Esc means "I am done here", and being left with the focus in the
+    // panel - and whatever tool was armed still armed - is not what it means. Two ways in, because Qt
+    // routes the key differently depending on whether a field is open: the delegate says so when Esc
+    // cancels an open field, and the filter below catches it when the panel merely has the focus.
+    propsTable_->installEventFilter(this);
+    if (QAbstractItemDelegate* del = propsTable_->itemDelegate())
+        connect(del, &QAbstractItemDelegate::closeEditor, this,
+                [this](QWidget*, QAbstractItemDelegate::EndEditHint hint) {
+                    if (hint == QAbstractItemDelegate::RevertModelCache) leavePropertiesPanel();
+                });
     connect(propsTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         QTableWidgetItem* key = propsTable_->item(row, 0);
         if (!key) return;
@@ -4543,7 +4555,17 @@ void MainWindow::commitInlineText(bool apply) {
     canvas_->setFocus();
 }
 
+void MainWindow::leavePropertiesPanel() {
+    if (editor_) editor_->setTool(ToolId::Select);
+    if (canvas_) canvas_->setFocus(Qt::OtherFocusReason);
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    if (obj == propsTable_ && e->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape) {
+        leavePropertiesPanel();
+        return true;
+    }
 
     if (obj == inlineEdit_ && e->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(e);

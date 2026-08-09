@@ -8171,6 +8171,9 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     std::vector<QString> ids;
     for (const auto& e : doc_->entities()) ids.push_back(e.id);
     int count = 0;
+    // Why nothing happened, when nothing happens. A trim that quietly does nothing cannot be told from a
+    // trim that is broken, and the difference is usually one sentence.
+    QString why;
     std::vector<Entity> additions; // split pieces, added after the loop
     std::vector<QString> removals; // objects with nothing left, removed after the loop
     for (const QString& id : ids) {
@@ -8220,7 +8223,7 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             }
         } else if (obj->type == EntityType::DoubleLine) {
             // One line of it, when that is what the fence crossed.
-            if (objectCrosses(*obj, refs) && trimOneRailOfDouble(*obj, a, b, refs)) {
+            if (objectCrosses(*obj, refs) && trimOneRailOfDouble(*obj, a, b, refs, &why)) {
                 ++count;
                 continue;
             }
@@ -8273,7 +8276,7 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
             // the reference. Tried first, because the centreline test below would find nothing at all
             // for that gesture - which is why trimming one line of a double run did nothing.
             if (obj->meta.value("double").toBool() && objectCrosses(*obj, refs) &&
-                trimOneRailOfDouble(*obj, a, b, refs)) {
+                trimOneRailOfDouble(*obj, a, b, refs, &why)) {
                 ++count;
                 continue;
             }
@@ -8361,17 +8364,29 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     for (auto& add : additions) addEntity(std::move(add));
     if (count == 0) {
         undo();
-        emit message(QStringLiteral("The cut line crossed nothing that meets the reference."));
+        // Whatever the trim itself worked out, in preference to the general answer. "The cut line
+        // crossed nothing" is true of a great many different mistakes, and the one being made is
+        // usually a sentence away - which line has no boundary on it, which one already ends on the
+        // boundary, which one the reference does not reach.
+        emit message(!why.isEmpty()
+                         ? why
+                         : QStringLiteral("The cut line crossed nothing that meets the reference."));
+        emit changed();
         return;
     }
     doc_->setDirty(true);
     // Keep the reference selected so more cut lines can be drawn; Esc finishes.
-    emit message(QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish").arg(count));
+    emit message(QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish")
+                     .arg(count));
     emit changed();
 }
 
 bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
-                                 const std::vector<Entity>& refs) {
+                                 const std::vector<Entity>& refs, QString* why) {
+    auto say = [why](const QString& text) {
+        if (why && why->isEmpty()) *why = text;
+        return false;
+    };
     const bool dbl = ent.type == EntityType::DoubleLine;
     const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
     if (!dbl && !dpoly) return false;
@@ -8446,14 +8461,36 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
             }
         }
     }
-    if (!best) return false;   // nothing on this line to come back to
+    if (!best)
+        return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it back "
+                                  "to — select the object you want it to stop at."));
 
-    // Which end of the line the removed piece is at: the side the fence was drawn on.
+    // Which end of the line the removed piece is at: the side the fence was drawn on. With one boundary
+    // the piece that goes runs from the fence to the near END of the line, exactly as trimming a single
+    // line does.
     const bool removeStart = at->first < best->first;
-    const QString key = removeStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
-    // Record it as a cap on THIS side only, so the other line keeps its own length. The cap needs the
-    // segment of the reference through the crossing, which is what capDoubleEndAt works out.
-    return capDoubleRailAt(ent, key, best->second, refs, side);
+    auto key = [](bool start) {
+        return start ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
+    };
+    const double railLen = polylineLength(rail);
+    // ... and if that piece is the WHOLE line, there is nothing a trimmed end can say: the line does not
+    // reach past the boundary on the side that was picked. This is the case of a line that already ends
+    // on the reference - a run drawn up to a wall, then fenced between the two - where the removal would
+    // be the entire line. Said out loud, because doing nothing quietly is indistinguishable from a bug,
+    // and collapsing the line to a point is worse than either.
+    const double farEnd = removeStart ? railLen : 0.0;
+    if (std::abs(best->first - farEnd) < 1e-6)
+        return say(QStringLiteral("That would take the whole of that line: it does not reach past the "
+                                  "boundary on the side you picked. Fence the other side of it, or add "
+                                  "a second boundary."));
+    if (std::abs(best->first - (removeStart ? 0.0 : railLen)) < 1e-6)
+        return say(QStringLiteral("That line already ends on the boundary — there is nothing of it "
+                                  "past it to remove."));
+    // Record it as a cap on THIS side only, so the other line keeps its own length.
+    if (!capDoubleRailAt(ent, key(removeStart), best->second, refs, side))
+        return say(QStringLiteral("The boundary does not reach that line where it would have to, so "
+                                  "the line cannot be brought back to it."));
+    return true;
 }
 
 namespace {

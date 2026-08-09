@@ -88,7 +88,9 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
-    bool eventFilter(QObject* obj, QEvent* e) override; // inline text editor keys
+    bool eventFilter(QObject* obj, QEvent* e) override;    // Esc in the PROPERTIES panel: back to Select, with the keyboard on the drawing again.
+    void leavePropertiesPanel();
+ // inline text editor keys
 
 private:
     void buildRibbon();

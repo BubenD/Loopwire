@@ -3683,6 +3683,43 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // A line that already ENDS on the boundary has nothing past it to remove, and the piece the pick
+        // asks for is the whole line. That is refused - and said out loud - rather than recorded as a cap
+        // that collapses the line to a point.
+        {
+            Document d6; d6.entities().clear();
+            Entity wall;
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {200, -100};
+            wall.b = {200, 100};
+            d6.entities().push_back(wall);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {200, 0}};   // both lines end ON the wall
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 30.0);
+            d6.entities().push_back(run);
+            Editor ed; ed.setDocument(&d6); noSnap(ed); ed.setPixelTolerance(3);
+            QStringList said;   // every message, since the command says more than one thing
+            QObject::connect(&ed, &Editor::message, [&said](const QString& m) { said << m; });
+            ed.selectById(QStringLiteral("wall"));
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({190, 5}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({190, 25});
+            ed.onPointerPress({190, 25}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d6.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && !r->meta.value(QStringLiteral("cutStart")).toBool() &&
+                      !r->meta.value(QStringLiteral("cutEnd")).toBool(),
+                  "trim-nothing-past: a line ending on the boundary is left alone, not collapsed");
+            check(r && r->points.size() == 2 && near(r->points[1].x, 200.0),
+                  "trim-nothing-past: and the run itself is untouched");
+            check(said.join(QStringLiteral(" | ")).contains(QLatin1String("whole of that line")),
+                  "trim-nothing-past: and it says why nothing happened");
+        }
+
         // A fence across the CENTRELINE still trims the whole run, as it always did.
         Document d2; build(d2);
         Editor e2; e2.setDocument(&d2); noSnap(e2); e2.setPixelTolerance(3);
