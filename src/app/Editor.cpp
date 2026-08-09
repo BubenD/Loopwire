@@ -303,6 +303,11 @@ std::optional<Vec2> railMeetsSegment(const Vec2& thisEnd, const Vec2& otherEnd, 
     return *x;
 }
 
+// The two cut slots an end has, one per physical line: "cutEnd" and "cutEnd2". A cut with no side on it
+// applies to both lines; a sided one only to its own. Two slots are what lets the two lines of a run
+// come back to different places - which is what trimming one line of it means.
+QString cutSlot2(const QString& key) { return key + QStringLiteral("2"); }
+
 // `side` is which physical run this end belongs to (+1 / -1); a cut recorded for one side only leaves
 // the other alone (see applyRunCut).
 Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd,
@@ -344,6 +349,14 @@ Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, cons
     const Vec2 b{e.meta.value(key + "Bx").toDouble(), e.meta.value(key + "By").toDouble()};
     const auto x = railMeetsSegment(thisEnd, otherEnd, a, b);
     return x ? *x : thisEnd;
+}
+
+// This end, capped by whichever of the two slots applies to this line.
+Vec2 cappedRunEndAny(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd,
+                     int side = 0) {
+    const Vec2 first = cappedRunEnd(e, key, thisEnd, otherEnd, side);
+    if (distance(first, thisEnd) > 1e-12) return first;
+    return cappedRunEnd(e, cutSlot2(key), thisEnd, otherEnd, side);
 }
 
 // Every connector pin-end point in the document (used to tell whether a wire end is
@@ -519,10 +532,10 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         const Vec2 noff = off * -1.0;
         // Endpoints sit on the ACTUAL physical-line ends (after trim/extend caps),
         // so a joint follows the drawn line rather than floating at the raw offset.
-        const Vec2 s1 = cappedRunEnd(e, "cutStart", e.a + off, e.b + off, +1);
-        const Vec2 en1 = cappedRunEnd(e, "cutEnd", e.b + off, e.a + off, +1);
-        const Vec2 s2 = cappedRunEnd(e, "cutStart", e.a + noff, e.b + noff, -1);
-        const Vec2 en2 = cappedRunEnd(e, "cutEnd", e.b + noff, e.a + noff, -1);
+        const Vec2 s1 = cappedRunEndAny(e, "cutStart", e.a + off, e.b + off, +1);
+        const Vec2 en1 = cappedRunEndAny(e, "cutEnd", e.b + off, e.a + off, +1);
+        const Vec2 s2 = cappedRunEndAny(e, "cutStart", e.a + noff, e.b + noff, -1);
+        const Vec2 en2 = cappedRunEndAny(e, "cutEnd", e.b + noff, e.a + noff, -1);
         g.push_back({s1, GripRole::LineA, 0, off});
         g.push_back({s2, GripRole::LineA, 0, noff});
         g.push_back({en1, GripRole::LineB, 0, off});
@@ -549,9 +562,9 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                 // trim/extend boundary (offsets from the centreline are kept for drag).
                 std::vector<Vec2> pos = *run;
                 if (pos.size() >= 2) {
-                    pos.front() = cappedRunEnd(e, "cutStart", pos.front(), (*run)[1], side);
+                    pos.front() = cappedRunEndAny(e, "cutStart", pos.front(), (*run)[1], side);
                     pos.back() =
-                        cappedRunEnd(e, "cutEnd", pos.back(), (*run)[run->size() - 2], side);
+                        cappedRunEndAny(e, "cutEnd", pos.back(), (*run)[run->size() - 2], side);
                 }
                 for (int i = 0; i < static_cast<int>(run->size()); ++i)
                     g.push_back({pos[i], GripRole::Vertex, i, (*run)[i] - e.points[i]});
@@ -5591,12 +5604,11 @@ void Editor::applyEditDrag(const Vec2& target) {
         // the joint then edits as a normal double-polyline vertex.
         for (const auto& eg : editGrips_)
             if (Entity* e = entityById(eg.id)) {
-                for (const char* k :
-                     {"cutStart", "cutStartKind", "cutStartAx", "cutStartAy", "cutStartBx", "cutStartBy",
-                      "cutStartCx", "cutStartCy", "cutStartR", "cutStartPoly", "cutEnd", "cutEndKind",
-                      "cutEndAx", "cutEndAy", "cutEndBx", "cutEndBy", "cutEndCx", "cutEndCy", "cutEndR",
-                      "cutEndPoly"})
-                    e->meta.remove(QLatin1String(k));
+                for (const QString& base : {QStringLiteral("cutStart"), QStringLiteral("cutStart2"),
+                                            QStringLiteral("cutEnd"), QStringLiteral("cutEnd2")})
+                    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly",
+                                          "Side"})
+                        e->meta.remove(base + QLatin1String(s));
                 applyOne(e, static_cast<GripRole>(eg.role), eg.index, eg.offset);
             }
         // With Shift held the rest of the selected wires travel with this one; the moment
@@ -8441,72 +8453,139 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
     const QString key = removeStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
     // Record it as a cap on THIS side only, so the other line keeps its own length. The cap needs the
     // segment of the reference through the crossing, which is what capDoubleEndAt works out.
-    const int keep = ent.meta.value(key + QStringLiteral("Side")).toInt();
-    Q_UNUSED(keep);
-    capDoubleEndAt(ent, key, best->second, refs);
-    if (!ent.meta.value(key).toBool()) return false;
-    ent.meta.insert(key + QStringLiteral("Side"), side);
-    return true;
+    return capDoubleRailAt(ent, key, best->second, refs, side);
 }
 
-void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
-                            const std::vector<Entity>& joints) {
-    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly"})
-        ent.meta.remove(key + s);
-    // Prefer a CIRCLE cut (clip runs onto the true ring) when the cutter through this
-    // point is a circle/arc; otherwise a straight line cut.
-    if (auto cc = cutCircleThrough(at, joints, ent.id)) {
-        ent.meta.insert(key, true);
-        ent.meta.insert(key + "Kind", QStringLiteral("circle"));
-        ent.meta.insert(key + "Cx", cc->first.x);
-        ent.meta.insert(key + "Cy", cc->first.y);
-        ent.meta.insert(key + "R", cc->second);
-        return;
+namespace {
+
+// A cut as the drawing stores it: a ring, or a straight segment.
+struct CutRecord {
+    bool circle = false;
+    Vec2 c{0.0, 0.0};
+    double r = 0.0;
+    Vec2 a{0.0, 0.0}, b{0.0, 0.0};
+};
+
+void clearCutSlot(Entity& ent, const QString& base) {
+    for (const char* s : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly", "Side"})
+        ent.meta.remove(base + QLatin1String(s));
+}
+
+void writeCutSlot(Entity& ent, const QString& base, const CutRecord& cut, int side) {
+    clearCutSlot(ent, base);
+    ent.meta.insert(base, true);
+    if (cut.circle) {
+        ent.meta.insert(base + "Kind", QStringLiteral("circle"));
+        ent.meta.insert(base + "Cx", cut.c.x);
+        ent.meta.insert(base + "Cy", cut.c.y);
+        ent.meta.insert(base + "R", cut.r);
+    } else {
+        ent.meta.insert(base + "Kind", QStringLiteral("line"));
+        ent.meta.insert(base + "Ax", cut.a.x);
+        ent.meta.insert(base + "Ay", cut.a.y);
+        ent.meta.insert(base + "Bx", cut.b.x);
+        ent.meta.insert(base + "By", cut.b.y);
     }
-    // A straight cut. At a CORNER two segments pass through the click, and the one that is wanted is
-    // the one BOTH rails can reach within its own length: capping to the other sends the second rail
-    // off to a meeting point past the end of it, which is not a place the drawing has. So every
-    // candidate is tried and the first that both rails reach wins; failing that, one that a single rail
-    // reaches; failing that, nothing is capped and the run starts where it was drawn.
-    const std::vector<std::pair<Vec2, Vec2>> cands = cutSegmentsThrough(at, joints, ent.id);
-    if (cands.empty()) return;
-    const bool startEnd = (key == QLatin1String("cutStart"));
-    const double gap = ent.meta.value(QStringLiteral("gap")).toDouble(10.0);
-    // The two rails, each as (this end, the next point along it).
+    if (side != 0) ent.meta.insert(base + "Side", side);
+}
+
+// The two physical lines at one end of a run, each as (that end, the next point along it).
+std::vector<std::pair<Vec2, Vec2>> railEndsAt(const Entity& ent, bool startEnd, int onlySide) {
     std::vector<std::pair<Vec2, Vec2>> rails;
+    const double gap = ent.meta.value(QStringLiteral("gap")).toDouble(10.0);
+    auto want = [onlySide](double s) { return onlySide == 0 || (s > 0 ? +1 : -1) == onlySide; };
     if (ent.type == EntityType::DoubleLine) {
         const Vec2 off = (ent.b - ent.a).normalized().perp() * (gap / 2.0);
-        for (const Vec2& o : {off, off * -1.0}) {
+        for (double s : {gap / 2.0, -gap / 2.0}) {
+            if (!want(s)) continue;
+            const Vec2 o = s > 0 ? off : off * -1.0;
             if (startEnd) rails.push_back({ent.a + o, ent.b + o});
             else rails.push_back({ent.b + o, ent.a + o});
         }
     } else if (ent.points.size() >= 2) {
         for (double s : {gap / 2.0, -gap / 2.0}) {
+            if (!want(s)) continue;
             const std::vector<Vec2> run = offsetPolyline(ent.points, s);
             if (run.size() < 2) continue;
             if (startEnd) rails.push_back({run.front(), run[1]});
             else rails.push_back({run.back(), run[run.size() - 2]});
         }
     }
+    return rails;
+}
+
+// The cut through `at`, for the lines named by `side` (0 = both). A ring wins when there is one; among
+// straight candidates - and at a corner there are two through one point - the one every line named can
+// reach within its own length wins, then one that any of them reaches. Nothing reachable, no cut.
+std::optional<CutRecord> findCutAt(const Entity& ent, const QString& key, const Vec2& at,
+                                  const std::vector<Entity>& refs, int side) {
+    if (auto cc = cutCircleThrough(at, refs, ent.id)) {
+        CutRecord r;
+        r.circle = true;
+        r.c = cc->first;
+        r.r = cc->second;
+        return r;
+    }
+    const std::vector<std::pair<Vec2, Vec2>> cands = cutSegmentsThrough(at, refs, ent.id);
+    if (cands.empty()) return std::nullopt;
+    const std::vector<std::pair<Vec2, Vec2>> rails =
+        railEndsAt(ent, key == QLatin1String("cutStart"), side);
     auto reached = [&rails](const std::pair<Vec2, Vec2>& seg) {
         int n = 0;
-        for (const auto& r : rails)
-            if (railMeetsSegment(r.first, r.second, seg.first, seg.second)) ++n;
+        for (const auto& rl : rails)
+            if (railMeetsSegment(rl.first, rl.second, seg.first, seg.second)) ++n;
         return n;
     };
     const std::pair<Vec2, Vec2>* pick = nullptr;
-    for (const auto& c : cands)
-        if (reached(c) == static_cast<int>(rails.size())) { pick = &c; break; }
-    if (!pick)
+    if (!rails.empty()) {
         for (const auto& c : cands)
-            if (reached(c) > 0) { pick = &c; break; }
-    if (!pick) return;
-    ent.meta.insert(key, true);
-    ent.meta.insert(key + "Kind", QStringLiteral("line"));
-    ent.meta.insert(key + "Ax", pick->first.x);
-    ent.meta.insert(key + "Ay", pick->first.y);
-    ent.meta.insert(key + "Bx", pick->second.x);
-    ent.meta.insert(key + "By", pick->second.y);
+            if (reached(c) == static_cast<int>(rails.size())) { pick = &c; break; }
+        if (!pick)
+            for (const auto& c : cands)
+                if (reached(c) > 0) { pick = &c; break; }
+    } else if (!cands.empty()) {
+        pick = &cands.front();
+    }
+    if (!pick) return std::nullopt;
+    CutRecord r;
+    r.a = pick->first;
+    r.b = pick->second;
+    return r;
+}
+
+} // namespace
+
+void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
+                            const std::vector<Entity>& joints) {
+    // A cut for the whole end: it replaces anything either line had there, sides included.
+    clearCutSlot(ent, key);
+    clearCutSlot(ent, cutSlot2(key));
+    if (auto cut = findCutAt(ent, key, at, joints, 0)) writeCutSlot(ent, key, *cut, 0);
+}
+
+bool Editor::capDoubleRailAt(Entity& ent, const QString& key, const Vec2& at,
+                             const std::vector<Entity>& refs, int side) {
+    const auto cut = findCutAt(ent, key, at, refs, side);
+    if (!cut) return false;
+    const QString slotB = cutSlot2(key);
+    const bool haveA = ent.meta.value(key).toBool();
+    const int sideA = ent.meta.value(key + QStringLiteral("Side")).toInt();
+    if (!haveA) {                       // nothing there yet
+        writeCutSlot(ent, key, *cut, side);
+        return true;
+    }
+    if (sideA == side) {                // this line already had one: it moves
+        writeCutSlot(ent, key, *cut, side);
+        return true;
+    }
+    if (sideA == 0) {
+        // What is there applies to BOTH lines. The other line keeps it - so it becomes that line's -
+        // and this line's new cut goes in the second slot. Without this the other line's end would
+        // silently jump to wherever this one was just trimmed to.
+        ent.meta.insert(key + QStringLiteral("Side"), -side);
+    }
+    writeCutSlot(ent, slotB, *cut, side);
+    return true;
 }
 
 void Editor::recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints) {

@@ -927,10 +927,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Trim caps: clip both physical lines onto the cut boundary (line or circle)
         // so a trimmed double line ends flush with the reference, not a perpendicular
         // cap that over/under-shoots it.
-        applyRunCut(run1, e, QStringLiteral("cutStart"), false, +1);
-        applyRunCut(run2, e, QStringLiteral("cutStart"), false, -1);
-        applyRunCut(run1, e, QStringLiteral("cutEnd"), true, +1);
-        applyRunCut(run2, e, QStringLiteral("cutEnd"), true, -1);
+        for (const QString& k : {QStringLiteral("cutStart"), QStringLiteral("cutStart2")}) {
+            applyRunCut(run1, e, k, false, +1);
+            applyRunCut(run2, e, k, false, -1);
+        }
+        for (const QString& k : {QStringLiteral("cutEnd"), QStringLiteral("cutEnd2")}) {
+            applyRunCut(run1, e, k, true, +1);
+            applyRunCut(run2, e, k, true, -1);
+        }
         p.drawLine(vt.toScreen(run1[0]), vt.toScreen(run1[1]));
         p.drawLine(vt.toScreen(run2[0]), vt.toScreen(run2[1]));
         break;
@@ -1011,10 +1015,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // Trim cut boundaries: clip both physical runs so they meet the
                 // cutting edge (line OR circle) exactly, instead of a perpendicular
                 // cap that over/under-shoots it.
-                applyRunCut(run1, e, QStringLiteral("cutStart"), false, +1);
-                applyRunCut(run2, e, QStringLiteral("cutStart"), false, -1);
-                applyRunCut(run1, e, QStringLiteral("cutEnd"), true, +1);
-                applyRunCut(run2, e, QStringLiteral("cutEnd"), true, -1);
+                for (const QString& k : {QStringLiteral("cutStart"), QStringLiteral("cutStart2")}) {
+                    applyRunCut(run1, e, k, false, +1);
+                    applyRunCut(run2, e, k, false, -1);
+                }
+                for (const QString& k : {QStringLiteral("cutEnd"), QStringLiteral("cutEnd2")}) {
+                    applyRunCut(run1, e, k, true, +1);
+                    applyRunCut(run2, e, k, true, -1);
+                }
                 p.drawPolyline(toScreenPoly(run1, vt));
                 p.drawPolyline(toScreenPoly(run2, vt));
             } else if (!bulgeArr.isEmpty()) {

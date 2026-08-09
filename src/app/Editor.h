@@ -1001,6 +1001,11 @@ private:
     // that line alone comes back to the reference and the other keeps its length. True when it did it.
     bool trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
                              const std::vector<Entity>& refs);
+    // Record a cut for ONE physical line at an end, KEEPING whatever cut the other line has there. Each
+    // end has two slots, one per line, so the two lines of a run can come back to different places -
+    // with a single slot the second line to be trimmed simply replaced the first.
+    bool capDoubleRailAt(Entity& ent, const QString& key, const Vec2& at,
+                         const std::vector<Entity>& refs, int side);
     void capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
                         const std::vector<Entity>& joints);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill

@@ -3583,6 +3583,106 @@ int run_editor_tests() {
                   "trim-one-rail: and the top line keeps its full length");
         }
 
+        // One line, then the OTHER: each end has a slot per line, so the second trim does not replace
+        // the first. With a single slot the line trimmed first came back the moment the other was done.
+        {
+            Document d4; d4.entities().clear();
+            Entity wall;                       // both lines run to this
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {200, -80};
+            wall.b = {200, 80};
+            d4.entities().push_back(wall);
+            Entity nearer;                     // and this stands short of it
+            nearer.id = QStringLiteral("nearer");
+            nearer.type = EntityType::Line;
+            nearer.a = {150, -80};
+            nearer.b = {150, 80};
+            d4.entities().push_back(nearer);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {200, 0}};
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 30.0);
+            d4.entities().push_back(run);
+            auto trimRail = [&d4](double fromY, double toY) {
+                Editor ed; ed.setDocument(&d4); noSnap(ed); ed.setPixelTolerance(3);
+                ed.selectById(QStringLiteral("nearer"));
+                ed.setTool(ToolId::Trim);
+                ed.onPointerPress({175, fromY}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerMove({175, toY});
+                ed.onPointerPress({175, toY}, Qt::LeftButton, Qt::NoModifier);
+            };
+            trimRail(5, 25);                   // the top line
+            const Entity* r = nullptr;
+            for (const Entity& e : d4.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                  "trim-both-rails: the top line is capped in the first slot");
+            check(r && !r->meta.value(QStringLiteral("cutEnd2")).toBool(),
+                  "trim-both-rails: and the second slot is still free");
+            trimRail(-5, -25);                 // now the bottom line
+            r = nullptr;
+            for (const Entity& e : d4.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                  "trim-both-rails: the TOP line's cut is still there afterwards");
+            check(r && r->meta.value(QStringLiteral("cutEnd2")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEnd2Side")).toInt() == -1,
+                  "trim-both-rails: and the bottom line has its own, in the other slot");
+            check(r && near(r->meta.value(QStringLiteral("cutEndAx")).toDouble(), 150.0) &&
+                      near(r->meta.value(QStringLiteral("cutEnd2Ax")).toDouble(), 150.0),
+                  "trim-both-rails: both back to the reference");
+        }
+
+        // The case from the drawing: both lines already end on a wall - one cap, for both of them - and
+        // then ONE of them is trimmed back to something nearer. The other must stay on the wall.
+        {
+            Document d5; d5.entities().clear();
+            Entity wall;
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {200, -80};
+            wall.b = {200, 80};
+            d5.entities().push_back(wall);
+            Entity nearer;
+            nearer.id = QStringLiteral("nearer");
+            nearer.type = EntityType::Line;
+            nearer.a = {150, -80};
+            nearer.b = {150, 80};
+            d5.entities().push_back(nearer);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {200, 0}};
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 30.0);
+            // Both lines already capped to the wall, as a Shift-drawn or whole-run-trimmed end is.
+            run.meta.insert(QStringLiteral("cutEnd"), true);
+            run.meta.insert(QStringLiteral("cutEndKind"), QStringLiteral("line"));
+            run.meta.insert(QStringLiteral("cutEndAx"), 200.0);
+            run.meta.insert(QStringLiteral("cutEndAy"), -80.0);
+            run.meta.insert(QStringLiteral("cutEndBx"), 200.0);
+            run.meta.insert(QStringLiteral("cutEndBy"), 80.0);
+            d5.entities().push_back(run);
+            Editor ed; ed.setDocument(&d5); noSnap(ed); ed.setPixelTolerance(3);
+            ed.selectById(QStringLiteral("nearer"));
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({175, -5}, Qt::LeftButton, Qt::NoModifier);   // the bottom line only
+            ed.onPointerMove({175, -25});
+            ed.onPointerPress({175, -25}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d5.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && near(r->meta.value(QStringLiteral("cutEndAx")).toDouble(), 200.0) &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                  "trim-kept-cap: the cap that was there stays, and becomes the OTHER line's");
+            check(r && r->meta.value(QStringLiteral("cutEnd2")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEnd2Side")).toInt() == -1 &&
+                      near(r->meta.value(QStringLiteral("cutEnd2Ax")).toDouble(), 150.0),
+                  "trim-kept-cap: and the trimmed line comes back to the nearer reference");
+        }
+
         // A fence across the CENTRELINE still trims the whole run, as it always did.
         Document d2; build(d2);
         Editor e2; e2.setDocument(&d2); noSnap(e2); e2.setPixelTolerance(3);
