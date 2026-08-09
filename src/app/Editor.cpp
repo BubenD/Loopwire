@@ -8457,6 +8457,19 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         if (count == 0) {
             QString why3;
             for (const Vec2& at : {b, a}) {
+                // If the pointer is on one of the SELECTED objects, that is the thing being trimmed -
+                // it is what was picked out and then clicked on - and the rest of the drawing bounds
+                // it. Trying it the other way round first trimmed whatever else happened to lie under
+                // the pointer, reported a success, and left the line that was clicked untouched.
+                bool onSelection = false;
+                if (const auto hit = hitTest(at))
+                    onSelection = std::find(trimRefIds_.begin(), trimRefIds_.end(), *hit) !=
+                                  trimRefIds_.end();
+                if (onSelection && trimPickAt(at, others, &why3)) {
+                    count = 1;
+                    secondWay = true;
+                    break;
+                }
                 if (trimPickAt(at, refs, &why3)) { count = 1; break; }
                 if (trimPickAt(at, others, &why3)) { count = 1; secondWay = true; break; }
             }
@@ -8526,40 +8539,55 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
         if (why && why->isEmpty()) *why = text;
         return false;
     };
-    // Where the REFERENCE crosses this line, nearest to the pick on either hand. That crossing is what
-    // the line comes back to; the pick says which of the two pieces goes.
-    std::optional<std::pair<double, Vec2>> best;
+    // EVERY crossing of this line by a boundary, as a distance along it. More than one is the normal
+    // case, not a special one: a wire that ends on a body edge is crossed there as well as wherever
+    // else something meets it.
+    std::vector<std::pair<double, Vec2>> crossings;
     for (const Entity& r : refs) {
         std::vector<Vec2> segs;
         forEachCutSegmentOf(r, segs);
         for (size_t k = 1; k < segs.size(); k += 2) {
-            if (auto x = crossAlong(rail, segs[k - 1], segs[k])) {
-                if (!best || std::abs(x->first - alongPick) < std::abs(best->first - alongPick))
-                    best = x;
+            double along = 0.0;
+            for (size_t i = 1; i < rail.size(); ++i) {
+                if (auto x = segmentSegmentIntersection(segs[k - 1], segs[k], rail[i - 1], rail[i]))
+                    crossings.push_back({along + distance(rail[i - 1], *x), *x});
+                along += distance(rail[i - 1], rail[i]);
             }
         }
     }
-    if (!best)
+    if (crossings.empty())
         return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it back "
                                   "to — select the object you want it to stop at."));
 
-    // Which end of the line the removed piece is at: the side the pick is on. With one boundary the
-    // piece that goes runs from the pick to the near END of the line, as trimming a single line does.
-    const bool removeStart = alongPick < best->first;
-    const QString key = removeStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
+    // The piece the pick is IN: bounded by the nearest crossing on each side of it, and by the line's
+    // own ends where there is none. Taking the nearest crossing on either hand instead - one number
+    // rather than two - is what made a line that already ends on something untrimmable: the crossing at
+    // its own end came out nearest, and cutting back to THAT removes the whole line.
     const double railLen = polylineLength(rail);
-    // ... and if that piece is the WHOLE line, there is nothing a trimmed end can say: the line does not
-    // reach past the boundary on the side that was picked. Said out loud, because doing nothing quietly
-    // is indistinguishable from a bug, and collapsing the line to a point is worse than either.
-    const double farEnd = removeStart ? railLen : 0.0;
-    if (std::abs(best->first - farEnd) < 1e-6)
-        return say(QStringLiteral("That would take the whole of that line: it does not reach past the "
-                                  "boundary on the side you picked. Pick the other side of it, or add "
-                                  "a second boundary."));
-    if (std::abs(best->first - (removeStart ? 0.0 : railLen)) < 1e-6)
-        return say(QStringLiteral("That line already ends on the boundary — there is nothing of it "
-                                  "past it to remove."));
-    if (!capDoubleRailAt(ent, key, best->second, refs, side))
+    double lo = 0.0, hi = railLen;
+    bool loCut = false, hiCut = false;
+    Vec2 loAt = rail.front(), hiAt = rail.back();
+    for (const auto& c : crossings) {
+        if (c.first <= alongPick + 1e-9 && c.first >= lo) { lo = c.first; loAt = c.second; loCut = true; }
+        if (c.first >= alongPick - 1e-9 && c.first <= hi) { hi = c.first; hiAt = c.second; hiCut = true; }
+    }
+    if (hi - lo < 1e-9)
+        return say(QStringLiteral("There is nothing of that line to remove where you picked."));
+
+    // Which end of the line the piece is at decides which cap says it. A piece in the MIDDLE - a
+    // boundary on both sides of the pick, neither at an end - cannot be said by a trimmed end at all.
+    const bool atStart = !loCut || lo < 1e-9;
+    const bool atEnd = !hiCut || hi > railLen - 1e-9;
+    if (atStart && atEnd)
+        return say(QStringLiteral("That would take the whole of that line: there is no boundary "
+                                  "between the point you picked and its ends."));
+    if (!atStart && !atEnd)
+        return say(QStringLiteral("That piece is in the middle of the line, with a boundary either "
+                                  "side of it — a trimmed end cannot say that. Trim the whole run, or "
+                                  "cut it at one end."));
+    const QString key = atStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
+    const Vec2 at = atStart ? hiAt : loAt;
+    if (!capDoubleRailAt(ent, key, at, refs, side))
         return say(QStringLiteral("The boundary does not reach that line where it would have to, so "
                                   "the line cannot be brought back to it."));
     return true;

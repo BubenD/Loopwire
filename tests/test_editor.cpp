@@ -3683,6 +3683,56 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // A line crossed TWICE - once part way along and once at its own end, where it meets the body -
+        // and the piece between them picked. This is the case from the real drawing: taking the nearest
+        // crossing to the pick found the one at the end, and cutting back to THAT is the whole line, so
+        // it was refused and something else got trimmed instead. The piece the pick is IN is what goes.
+        {
+            Document d; d.entities().clear();
+            Entity body;                       // the body edge: crosses both lines at their ends
+            body.id = QStringLiteral("body");
+            body.type = EntityType::Line;
+            body.a = {100, -30};
+            body.b = {100, 30};
+            d.entities().push_back(body);
+            Entity fan;                        // and this crosses the LOWER line part way along
+            fan.id = QStringLiteral("fan");
+            fan.type = EntityType::Line;
+            fan.a = {80, -30};
+            fan.b = {80, -5};
+            d.entities().push_back(fan);
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::DoubleLine;
+            run.a = {0, 0};
+            run.b = {100, 0};                  // lines at y=+/-10, both ending on the body
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            d.entities().push_back(run);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+            // The run is what is selected - as it is on screen - and the piece clicked is the last
+            // 20 units of its lower line, between the fan crossing and the body.
+            ed.selectById(QStringLiteral("run"));
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({95, -10}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({95, -10}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == -1,
+                  "trim-two-crossings: the piece between the two crossings comes off the lower line");
+            check(r && near(r->meta.value(QStringLiteral("cutEndAx")).toDouble(), 80.0),
+                  "trim-two-crossings: back to the crossing part way along, not the one at the end");
+            // And nothing else was touched: the fan and the body are as they were.
+            for (const Entity& e : d.entities()) {
+                if (e.id == QLatin1String("fan"))
+                    check(near(e.a.y, -30.0) && near(e.b.y, -5.0),
+                          "trim-two-crossings: the boundary that bounds it is left alone");
+                if (e.id == QLatin1String("body"))
+                    check(near(e.a.y, -30.0) && near(e.b.y, 30.0),
+                          "trim-two-crossings: and so is the body edge");
+            }
+        }
+
         // A crossing region over one LINE of a double polyline selects the run. It is picked on its two
         // visible lines, like a double line; the centreline between them is not drawn and never was the
         // thing to test against, so a small green box over a line used to select nothing at all.
