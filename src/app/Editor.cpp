@@ -2875,6 +2875,33 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
                        gr.role == GripRole::ArcMid || gr.role == GripRole::EllipseMajor ||
                        gr.role == GripRole::EllipseMinor)
                 editAnchor_ = e->center;
+
+            // On a DOUBLE run the joints sit on the two physical rails, and so must the tracking: the
+            // reference is the adjacent point on THE SAME rail. Taken from the centreline it drew the
+            // green lock line up the middle of the run - between the two lines, where nothing is drawn -
+            // and measured the angle from a point that is not on the line being pulled, so a rail
+            // dragged "horizontal" came out at a slight angle to itself.
+            if (gr.off.lengthSq() > 1e-12) {
+                bool onRail = false;
+                if (e->type == EntityType::Polyline && e->meta.value("double").toBool() &&
+                    gr.index >= 0 && gr.index < static_cast<int>(e->points.size())) {
+                    const double gap = e->meta.value("gap").toDouble(10.0);
+                    for (double s : {gap / 2.0, -gap / 2.0}) {
+                        const std::vector<Vec2> run = offsetPolyline(e->points, s);
+                        if (run.size() != e->points.size()) continue;
+                        // The rail this joint belongs to is the one whose offset it carries. Read off
+                        // the run itself rather than added on, so a mitred corner is exact.
+                        if (distance(run[gr.index] - e->points[gr.index], gr.off) > 1e-6) continue;
+                        if (gr.index > 0) editAnchor_ = run[gr.index - 1];
+                        else if (run.size() > 1) editAnchor_ = run[1];
+                        onRail = true;
+                        break;
+                    }
+                }
+                // A double LINE (and a polyline whose bend is too tight to offset): the rails are
+                // parallel to the centreline, so the adjacent rail point is the anchor plus the offset.
+                if (!onRail) editAnchor_ = editAnchor_ + gr.off;
+            }
             // A wire run/knee with several wires selected can pull the whole bundle —
             // say so, since Shift is a live modifier the drag only reveals if you try it.
             const bool bundlePull =
@@ -7755,6 +7782,9 @@ void Editor::handleModifyPress(const Vec2& p) {
     case ToolId::Offset: {
         // Offset each selected entity toward the picked side by the picked dist.
         const Vec2 side = modifyPts_[1];
+        // Built first, added after: `sel` points into the vector being appended to (see commitMirror).
+        std::vector<Entity> clones;
+        clones.reserve(sel.size());
         for (Entity* e : sel) {
             Entity clone = *e;
             clone.id = uid();
@@ -7768,8 +7798,9 @@ void Editor::handleModifyPress(const Vec2& p) {
             } else {
                 continue;
             }
-            doc_->entities().push_back(clone);
+            clones.push_back(std::move(clone));
         }
+        for (Entity& c : clones) doc_->entities().push_back(std::move(c));
         doc_->setDirty(true);
         break;
     }
@@ -11032,14 +11063,24 @@ void Editor::commitMirror(bool copy) {
     pushUndo();
     if (copy) {
         // Keep the originals; add a mirrored copy of each and select the copies.
+        //
+        // Every copy is made BEFORE any of them is added. `sel` holds pointers INTO the document's own
+        // vector, and appending to that vector may reallocate it - after which every pointer still to
+        // be read is dangling. Mirroring two or more objects therefore copied freed memory for the
+        // second one onwards: the ghost was mirrored from the live selection and looked right, and what
+        // was placed was garbage that draws nothing. It had grips, which is how it could be seen to be
+        // there at all.
+        std::vector<Entity> copies;
+        copies.reserve(sel.size());
         std::vector<QString> newSel;
         for (Entity* e : sel) {
             Entity c = *e;
             c.id = uid();
             mirrorEntity(c, mirrorA_, mirrorB_);
             newSel.push_back(c.id);
-            doc_->entities().push_back(std::move(c));
+            copies.push_back(std::move(c));
         }
+        for (Entity& c : copies) doc_->entities().push_back(std::move(c));
         selected_ = newSel;
         emit selectionChanged();
     } else {

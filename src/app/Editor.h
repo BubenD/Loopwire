@@ -130,6 +130,13 @@ public:
     // "x,y" is absolute and "@dx,dy" is relative. Returns true if consumed.
     bool applyDrawInput(const QString& text);
     bool isDrafting() const { return drafting_; }
+    // The point ortho and polar tracking are measured FROM while a joint is being dragged, and where
+    // the green lock line is drawn from. On a double run's rail joint this is the adjacent point on
+    // THAT rail, not the centreline point beside it - the line being pulled is the one to track along.
+    std::optional<Vec2> trackingAnchor() const {
+        if (!editing_ || editMode_ != 1) return std::nullopt;
+        return editAnchor_;
+    }
 
     // Command-line input typed during drawing (AutoCAD-style). Handles the `g`
     // gap option for double line/polyline and direct distance entry. Returns

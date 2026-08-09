@@ -3406,6 +3406,108 @@ int run_editor_tests() {
         }
     }
 
+    // --- Pulling a double run tracks along the RAIL that was grabbed, not up the middle of it. The
+    //     green polar/ortho lock line is drawn from this point, and the angle is measured from it.
+    {
+        Document d; d.entities().clear();
+        Entity dp;
+        dp.id = QStringLiteral("dp");
+        dp.type = EntityType::Polyline;
+        dp.meta.insert(QStringLiteral("double"), true);
+        dp.meta.insert(QStringLiteral("gap"), 10.0);
+        dp.points = {{0, 0}, {200, 0}, {200, 120}};   // centreline; rails at y=+/-5
+        d.entities().push_back(dp);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setPixelTolerance(4);
+        ed.selectById(QStringLiteral("dp"));
+        // Grab the far end of the TOP rail: the run's last vertex offset to +5 across, which on the
+        // vertical leg means x = 200 - 5 = 195.
+        ed.onPointerPress({195, 120}, Qt::LeftButton, Qt::NoModifier);
+        const auto anchor = ed.trackingAnchor();
+        check(anchor.has_value(), "dpoly-track: a joint was grabbed");
+        if (anchor) {
+            // The adjacent point on THE SAME rail - the mitred corner of that rail, at (195, 5) -
+            // and emphatically not the centreline corner at (200, 0).
+            check(near(anchor->x, 195.0) && near(anchor->y, 5.0),
+                  "dpoly-track: tracking is measured from the adjacent point of the rail pulled");
+            check(!near(anchor->x, 200.0) || !near(anchor->y, 0.0),
+                  "dpoly-track: and not from the centreline between the two lines");
+        }
+        // The other rail's joint tracks along the OTHER rail.
+        Editor e2; e2.setDocument(&d); noSnap(e2); e2.setPixelTolerance(4);
+        e2.selectById(QStringLiteral("dp"));
+        e2.onPointerPress({205, 120}, Qt::LeftButton, Qt::NoModifier);
+        const auto a2 = e2.trackingAnchor();
+        check(a2 && near(a2->x, 205.0) && near(a2->y, -5.0),
+              "dpoly-track: the bottom rail tracks from the bottom rail");
+
+        // A double LINE has parallel rails, so the anchor is simply the other end of the same rail.
+        Document d2; d2.entities().clear();
+        Entity dl;
+        dl.id = QStringLiteral("dl");
+        dl.type = EntityType::DoubleLine;
+        dl.a = {0, 0};
+        dl.b = {100, 0};
+        dl.meta.insert(QStringLiteral("gap"), 10.0);
+        d2.entities().push_back(dl);
+        Editor e3; e3.setDocument(&d2); noSnap(e3); e3.setPixelTolerance(4);
+        e3.selectById(QStringLiteral("dl"));
+        e3.onPointerPress({100, 5}, Qt::LeftButton, Qt::NoModifier);   // the top rail's B end
+        const auto a3 = e3.trackingAnchor();
+        check(a3 && near(a3->x, 0.0) && near(a3->y, 5.0),
+              "dline-track: tracking runs along the rail that was grabbed");
+    }
+
+    // --- Mirroring SEVERAL objects as a copy: every copy survives being placed.
+    //     The copies used to be appended one at a time while the code still held pointers into the
+    //     very vector it was appending to; the first reallocation left the rest dangling, so the
+    //     second polyline onwards was copied from freed memory and drew nothing.
+    {
+        Document d; d.entities().clear();
+        // Enough of them that appending is certain to reallocate at some point.
+        const int n = 8;
+        for (int i = 0; i < n; ++i) {
+            Entity pl;
+            pl.id = QStringLiteral("p%1").arg(i);
+            pl.type = EntityType::Polyline;
+            pl.points = {{0, static_cast<double>(i) * 10},
+                         {100, static_cast<double>(i) * 10},
+                         {100, static_cast<double>(i) * 10 + 5}};
+            d.entities().push_back(pl);
+        }
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        for (int i = 0; i < n; ++i) ed.selectById(QStringLiteral("p%1").arg(i), i > 0);
+        check(ed.selection().size() == static_cast<size_t>(n), "mirror-many: all of them selected");
+        ed.setTool(ToolId::Mirror);
+        ed.onPointerPress({200, 0}, Qt::LeftButton, Qt::NoModifier);     // mirror line x=200,
+        ed.onPointerPress({200, 100}, Qt::LeftButton, Qt::NoModifier);   // vertical
+        ed.commitMirror(/*copy=*/true);
+        check(d.entities().size() == static_cast<size_t>(2 * n),
+              "mirror-many: a copy of every one of them is on the drawing");
+        // Every copy is a real polyline, mirrored about x=200 - not garbage that happens to be there.
+        int good = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.points.size() != 3) continue;
+            bool sane = true;
+            for (const Vec2& v : e.points)
+                if (!std::isfinite(v.x) || !std::isfinite(v.y)) sane = false;
+            if (!sane) continue;
+            // A mirrored copy has its long leg running from x=400 back to x=300.
+            if (near(e.points[0].x, 400.0) && near(e.points[1].x, 300.0)) ++good;
+        }
+        check(good == n, qPrintable(QStringLiteral("mirror-many: %1 of %2 copies came out as real "
+                                                  "geometry").arg(good).arg(n)));
+        // And the copies are what is left selected, so the next command acts on them.
+        check(ed.selection().size() == static_cast<size_t>(n),
+              "mirror-many: the copies are the selection");
+        for (const QString& id : ed.selection()) {
+            const Entity* e = nullptr;
+            for (const Entity& x : d.entities()) if (x.id == id) e = &x;
+            check(e && e->points.size() == 3 && near(e->points[0].x, 400.0),
+                  "mirror-many: every selected id names a mirrored copy");
+        }
+    }
+
     // --- Double polyline + "g" gap command.
     {
         // Double polyline records double=true and the gap.
