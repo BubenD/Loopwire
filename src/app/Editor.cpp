@@ -265,17 +265,22 @@ void forEachCutSegmentOf(const Entity& e, std::vector<Vec2>& out) {
         add(e.a, e.b);
         break;
     case EntityType::DoubleLine: {
+        // As drawn, caps included - see forEachCutSegment in ModifyOps for why.
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-        add(e.a + off, e.b + off);
-        add(e.a - off, e.b - off);
+        for (int side : {+1, -1}) {
+            std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
+            applyDoubleRunCuts(rail, e, side);
+            for (size_t i = 1; i < rail.size(); ++i) add(rail[i - 1], rail[i]);
+        }
         break;
     }
     case EntityType::Polyline:
         if (e.meta.value("double").toBool() && e.points.size() >= 2) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
-                const std::vector<Vec2> run = offsetPolyline(e.points, s);
+                std::vector<Vec2> run = offsetPolyline(e.points, s);
+                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);
                 for (size_t i = 1; i < run.size(); ++i) add(run[i - 1], run[i]);
             }
         } else {

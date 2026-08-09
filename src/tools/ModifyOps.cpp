@@ -1,5 +1,9 @@
 #include "tools/ModifyOps.h"
 
+// applyDoubleRunCuts lives with the drawing code because the cap helpers do; it is
+// geometry, not painting, and one definition of where a line IS beats two.
+#include "render/EntityRenderer.h"
+
 #include "geometry/Geometry.h"
 #include "harness/Harness.h"
 #include "tools/EntityTransforms.h"
@@ -45,17 +49,25 @@ void forEachCutSegment(const Entity& e, F&& f) {
         f(e.a, e.b);
         break;
     case EntityType::DoubleLine: {
+        // A double run CUTS with its two visible lines - and "visible" includes what a cap adds. A line
+        // extended to meet something is drawn out to it, so it crosses things out there; leaving the caps
+        // off here meant the cutter stopped short of where the drawing shows it, and a trim against it
+        // answered "nothing crosses that line".
         const double gap = e.meta.value("gap").toDouble(10.0);
         const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-        f(e.a + off, e.b + off);
-        f(e.a - off, e.b - off);
+        for (int side : {+1, -1}) {
+            std::vector<Vec2> rail = {e.a + off * side, e.b + off * side};
+            applyDoubleRunCuts(rail, e, side);
+            for (size_t i = 1; i < rail.size(); ++i) f(rail[i - 1], rail[i]);
+        }
         break;
     }
     case EntityType::Polyline:
         if (e.meta.value("double").toBool() && e.points.size() >= 2) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
-                const auto run = offsetPolyline(e.points, s);
+                std::vector<Vec2> run = offsetPolyline(e.points, s);
+                applyDoubleRunCuts(run, e, s > 0 ? +1 : -1);   // as drawn, caps included
                 for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
             }
         } else {

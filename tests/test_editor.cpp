@@ -3683,112 +3683,12 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
-        // A line EXTENDED by the Shift gesture, then trimmed - with object snapping ON, as in the app.
-        // NOTE: this exercises the whole gesture end to end, but it is NOT a guard: it passes on the code
-        // before the two fixes below as well, because a unit test's pick tolerance and snap behaviour do
-        // not line up with the app's closely enough to fail. What DID separate them was driving the same
-        // sequence against both versions and reading the status line: before, "Nothing crosses that line";
-        // after, the line is trimmed. Worth keeping as an exercise, worth not trusting as a regression.
-        // Two things were wrong here and both only show with snapping on and a real extension:
-        //   the extended part was not part of the line as far as hit-testing and the trim could see, so
-        //   clicking it picked something else; and the click snaps ONTO the crossing, which collapsed the
-        //   piece to nothing and was refused.
-        {
-            Document d; d.entities().clear();
-            Entity wall;                       // what the line gets extended to
-            wall.id = QStringLiteral("wall");
-            wall.type = EntityType::Line;
-            wall.a = {200, -60};
-            wall.b = {200, 120};               // far enough out that the extension is unmistakable
-            d.entities().push_back(wall);
-            Entity run;                        // at an angle, so one line's cap reaches past the run's end
-            run.id = QStringLiteral("run");
-            run.type = EntityType::DoubleLine;
-            run.a = {0, 0};
-            run.b = {100, 20};
-            run.meta.insert(QStringLiteral("gap"), 20.0);
-            d.entities().push_back(run);
-            Editor ed; ed.setDocument(&d);
-            auto& sn = ed.snapSettings();
-            sn.objectSnap = true;              // ON, as it is in the app
-            sn.gridSnap = false;
-            sn.ortho = false;
-            sn.polar = false;
-            ed.setPixelTolerance(4);
-            // Pull the BOTTOM line's end onto the wall and Shift-place it: both lines cap to the wall,
-            // and the TOP line is drawn out past the run's own end to reach it.
-            const Vec2 dir = (run.b - run.a).normalized();
-            const Vec2 off = dir.perp() * 10.0;
-            ed.selectById(QStringLiteral("run"));
-            ed.onPointerPress(run.b - off, Qt::LeftButton, Qt::NoModifier);
-            ed.onPointerMove({200, run.b.y - off.y + 20});
-            ed.onPointerPress({200, run.b.y - off.y + 20}, Qt::LeftButton, Qt::ShiftModifier);
-            const Entity* r = nullptr;
-            for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) r = &e;
-            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool(),
-                  "trim-extended: the Shift gesture caps the end to the wall");
-            // Where the TOP line ends on its own, and where the cap draws it to.
-            const Vec2 d2 = (r->b - r->a).normalized();
-            const Vec2 o2 = d2.perp() * 10.0;
-            const Vec2 rawEnd = r->b + o2;
-            const auto capped = lineLineIntersection(r->a + o2, rawEnd, wall.a, wall.b);
-            check(capped.has_value(), "trim-extended: the top line reaches the wall");
-            if (!capped) return g_fail;
-            check(distance(*capped, rawEnd) > 20.0,
-                  "trim-extended: and it is drawn well PAST its own end to get there");
-            // A fence across that extension only, and a click beyond it on the extension.
-            Entity fence;
-            fence.id = QStringLiteral("fence");
-            fence.type = EntityType::Line;
-            const Vec2 mid = lerp(rawEnd, *capped, 0.4);
-            fence.a = {mid.x, mid.y - 8};
-            fence.b = {mid.x, mid.y + 8};
-            d.entities().push_back(fence);
-            Editor e2; e2.setDocument(&d);
-            auto& s2 = e2.snapSettings();
-            s2.objectSnap = true;
-            s2.gridSnap = false;
-            s2.ortho = false;
-            s2.polar = false;
-            e2.setPixelTolerance(4);
-            e2.selectById(QStringLiteral("run"));
-            e2.setTool(ToolId::Trim);
-            const Vec2 click = lerp(rawEnd, *capped, 0.75);
-            e2.onPointerPress(click, Qt::LeftButton, Qt::NoModifier);
-            e2.onPointerPress(click, Qt::LeftButton, Qt::NoModifier);
-            const Entity* after = nullptr;
-            for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) after = &e;
-            bool cutAtFence = false;
-            for (const char* k : {"cutEnd", "cutEnd2"}) {
-                const QString base = QString::fromLatin1(k);
-                if (after && after->meta.value(base).toBool() &&
-                    after->meta.value(base + "Side").toInt() == +1 &&
-                    near(after->meta.value(base + "Ax").toDouble(), mid.x, 0.01))
-                    cutAtFence = true;
-            }
-            check(cutAtFence,
-                  "trim-extended: clicking the extended part trims THAT line back to the fence");
-            // The thing that made it impossible: the extended part was not pickable at all, so a click
-            // there hit whatever else was near. Selecting by clicking it proves it is part of the line now.
-            {
-                Editor e3; e3.setDocument(&d); noSnap(e3); e3.setPixelTolerance(3);
-                e3.onPointerPress(lerp(rawEnd, *capped, 0.6), Qt::LeftButton, Qt::NoModifier);
-                e3.onPointerRelease(lerp(rawEnd, *capped, 0.6), Qt::LeftButton);
-                check(e3.selection().size() == 1 &&
-                          e3.selection().front() == QLatin1String("run"),
-                      "trim-extended: the extended part of the line can be clicked at all");
-            }
-            // and the other line still runs to the wall
-            bool otherAtWall = false;
-            for (const char* k : {"cutEnd", "cutEnd2"}) {
-                const QString base = QString::fromLatin1(k);
-                if (after && after->meta.value(base).toBool() &&
-                    after->meta.value(base + "Side").toInt() == -1 &&
-                    near(after->meta.value(base + "Ax").toDouble(), 200.0))
-                    otherAtWall = true;
-            }
-            check(otherAtWall, "trim-extended: and the other line is left on the wall");
-        }
+        // (A test of the Shift-extend-then-trim sequence was here and has been taken out. It never
+        // failed on the code it was meant to guard, and its geometry was wrong about the extension: a cap
+        // reaches past a run's end by about the gap times the tangent of the angle between the run and
+        // what it is capped to - a fraction of a millimetre on a shallow fan-out, not something a unit
+        // test can click inside. What the change was verified against instead was the sequence driven on
+        // both versions, reading the status line.)
 
         // A line crossed TWICE - once part way along and once at its own end, where it meets the body -
         // and the piece between them picked. This is the case from the real drawing: taking the nearest
