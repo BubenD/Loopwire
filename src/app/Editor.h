@@ -130,6 +130,8 @@ public:
     // "x,y" is absolute and "@dx,dy" is relative. Returns true if consumed.
     bool applyDrawInput(const QString& text);
     bool isDrafting() const { return drafting_; }
+    // Which side of the drawn line the SECOND line of a double run goes. Ctrl swaps it while drawing.
+    bool doubleSecondBelow() const { return !dpolySwap_; }
     // The point ortho and polar tracking are measured FROM while a joint is being dragged, and where
     // the green lock line is drawn from. On a double run's rail joint this is the adjacent point on
     // THAT rail, not the centreline point beside it - the line being pulled is the one to track along.
@@ -1334,6 +1336,8 @@ private:
     // Double line/polyline "ls" (line-start): the next click picks a reference line
     // that both physical runs are extended to start from. dpolyLsArm_ awaits that
     // pick; lsRefA_/lsRefB_ hold the picked line until the entity is committed.
+    // Ctrl while drawing a double run swaps which side the second line goes.
+    bool dpolySwap_ = false;
     bool dpolyLsArm_ = false;
     bool dpolyHasLsRef_ = false;
     Vec2 lsRefA_;

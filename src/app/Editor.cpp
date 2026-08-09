@@ -377,15 +377,20 @@ std::optional<Vec2> wireGripPoint(const Entity& w, GripRole role, int index) {
 //
 // What is STORED is still the centreline, because everything else - the rails, the joints, trimming,
 // snapping, filleting - is defined from it. Only where the run is created does the shift happen.
-Vec2 doubleRunCentreOffset(const Vec2& from, const Vec2& to, double gap) {
+// `secondBelow` is which side of the drawn line the OTHER line goes: to the right of travel (below, on
+// a run drawn left to right) or to the left of it. Ctrl swaps it while drawing, because which side the
+// second line wants to be on depends on what the run is being drawn against, and that is only obvious
+// once it is on screen.
+Vec2 doubleRunCentreOffset(const Vec2& from, const Vec2& to, double gap, bool secondBelow = true) {
     const Vec2 d = to - from;
     if (d.lengthSq() < 1e-18 || gap <= 0.0) return {0.0, 0.0};
-    return d.normalized().perp() * (-gap / 2.0);
+    return d.normalized().perp() * ((secondBelow ? -1.0 : 1.0) * gap / 2.0);
 }
 
-std::vector<Vec2> doubleRunCentre(const std::vector<Vec2>& drawn, double gap) {
+std::vector<Vec2> doubleRunCentre(const std::vector<Vec2>& drawn, double gap,
+                                  bool secondBelow = true) {
     if (drawn.size() < 2 || gap <= 0.0) return drawn;
-    const std::vector<Vec2> centre = offsetPolyline(drawn, -gap / 2.0);
+    const std::vector<Vec2> centre = offsetPolyline(drawn, (secondBelow ? -1.0 : 1.0) * gap / 2.0);
     // A bend too tight to offset changes the vertex count. Then the drawn line is taken as the
     // centreline, as it always was, rather than a run with vertices the drawing never had.
     return centre.size() == drawn.size() ? centre : drawn;
@@ -1628,7 +1633,9 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Holding Ctrl temporarily suspends ALL snapping (object/grid/polar/ortho) so a
     // point can be placed freely — e.g. picking a hatch location. Snap resumes when
     // Ctrl is released.
-    if (QApplication::keyboardModifiers() & Qt::ControlModifier) {
+    const bool ctrlSwapsSide = drafting_ && (tool_ == ToolId::DoubleLine ||
+                                             tool_ == ToolId::DoublePolyline);
+    if ((QApplication::keyboardModifiers() & Qt::ControlModifier) && !ctrlSwapsSide) {
         snap.objectSnap = false;
         snap.gridSnap = false;
         snap.polar = false;
@@ -6532,7 +6539,8 @@ void Editor::finishDraw() {
         if (e.type == EntityType::DoubleLine) {
             // Drawn along the cursor: the rail under the crosshair goes through the clicked points and
             // the gap goes to the other side of it.
-            const Vec2 shift = doubleRunCentreOffset(draftPts_[0], draftPts_[1], doubleLineGap_);
+            const Vec2 shift = doubleRunCentreOffset(draftPts_[0], draftPts_[1], doubleLineGap_,
+                                                     doubleSecondBelow());
             e.a = e.a + shift;
             e.b = e.b + shift;
             e.meta.insert("gap", doubleLineGap_);
@@ -6729,7 +6737,7 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
         if (tool_ == ToolId::DoublePolyline) {
-            e.points = doubleRunCentre(draftPts_, doubleLineGap_);
+            e.points = doubleRunCentre(draftPts_, doubleLineGap_, doubleSecondBelow());
             e.meta.insert("double", true);
             e.meta.insert("gap", doubleLineGap_);
             if (dpolyHasLsRef_) {
@@ -6867,10 +6875,22 @@ void Editor::finishDraw() {
     // that end flush to the line (both physical runs meet it), like the edit gesture.
     if (e.type == EntityType::DoubleLine ||
         (e.type == EntityType::Polyline && e.meta.value("double").toBool())) {
+        // The line to start flush on is the one under the CLICK - which is on the rail the cursor rode,
+        // not on the centreline the run is stored as. Looking for it under the centreline found nothing
+        // the moment the run stopped being drawn down the middle, so Shift quietly did nothing.
         const bool dbl = e.type == EntityType::DoubleLine;
-        const Vec2 startPt = dbl ? e.a : (e.points.empty() ? Vec2{0, 0} : e.points.front());
-        const Vec2 endPt = dbl ? e.b : (e.points.empty() ? Vec2{0, 0} : e.points.back());
-        if (drawStartShift_) capDoubleEndAt(e, QStringLiteral("cutStart"), startPt, doc_->entities());
+        const Vec2 startPt = draftPts_.empty()
+                                 ? (dbl ? e.a : (e.points.empty() ? Vec2{0, 0} : e.points.front()))
+                                 : draftPts_.front();
+        const Vec2 endPt = draftPts_.empty()
+                               ? (dbl ? e.b : (e.points.empty() ? Vec2{0, 0} : e.points.back()))
+                               : draftPts_.back();
+        if (drawStartShift_) {
+            capDoubleEndAt(e, QStringLiteral("cutStart"), startPt, doc_->entities());
+            if (!e.meta.value(QStringLiteral("cutStart")).toBool())
+                emit message(QStringLiteral("Shift-click landed on nothing, so there is no line for "
+                                            "the run to start from"));
+        }
         if (drawEndShift_) capDoubleEndAt(e, QStringLiteral("cutEnd"), endPt, doc_->entities());
     }
     drawStartShift_ = drawEndShift_ = false;
@@ -6927,6 +6947,7 @@ void Editor::cancelDraw() {
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
     dpolyLsArm_ = false;  // forget a pending/active line-start reference
     dpolyHasLsRef_ = false;
+    dpolySwap_ = false;   // and which side the second line was put on
     draftPts_.clear();
     drafting_ = false;
     drawStartShift_ = false;
@@ -11320,6 +11341,19 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         toggleArcMirror();
         return true;
     }
+    // And Ctrl while drawing a DOUBLE run swaps which side of the drawn line the second line goes.
+    // The run is drawn on the line under the crosshair; which side its partner wants to be on depends
+    // on what the run is being drawn against, and that is only obvious once it is on screen. Allowed
+    // before the first click too, so the side can be set before starting.
+    if (key == Qt::Key_Control &&
+        (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline)) {
+        dpolySwap_ = !dpolySwap_;
+        emit message(dpolySwap_
+                         ? QStringLiteral("Second line ABOVE the line you draw — Ctrl to swap")
+                         : QStringLiteral("Second line BELOW the line you draw — Ctrl to swap"));
+        emit overlayChanged();
+        return true;
+    }
     if (key == Qt::Key_Escape) {
         // Cancel any in-progress operation and clear the whole selection.
         // (Trim finishes here too: setTool(Select) below clears the reference/cut
@@ -12192,7 +12226,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // will be placed - the preview and the result are the same line.
             const Vec2 perp = (pts[1] - pts[0]).normalized().perp();
             const Vec2 off = perp * (doubleLineGap_ / 2.0);
-            const Vec2 shift = doubleRunCentreOffset(pts[0], pts[1], doubleLineGap_);
+            const Vec2 shift =
+                doubleRunCentreOffset(pts[0], pts[1], doubleLineGap_, doubleSecondBelow());
             std::vector<Vec2> r1 = {pts[0] + shift + off, pts[1] + shift + off};
             std::vector<Vec2> r2 = {pts[0] + shift - off, pts[1] + shift - off};
             extendLsStart(r1);
@@ -12206,7 +12241,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             std::vector<double> centerRadii(previewRadii.size(), 0.0);
             for (size_t i = 0; i < previewRadii.size(); ++i)
                 if (previewRadii[i] > 0) centerRadii[i] = previewRadii[i] + h;
-            const std::vector<Vec2> shifted = doubleRunCentre(pts, doubleLineGap_);
+            const std::vector<Vec2> shifted =
+                doubleRunCentre(pts, doubleLineGap_, doubleSecondBelow());
             const std::vector<Vec2> center =
                 previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);

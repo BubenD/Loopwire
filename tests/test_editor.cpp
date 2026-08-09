@@ -3406,6 +3406,100 @@ int run_editor_tests() {
         }
     }
 
+    // --- Ctrl swaps which side the second line of a double run goes.
+    {
+        // Same three clicks twice: once as it comes, once with Ctrl tapped part way through.
+        auto drawIt = [](Document& d, bool tapCtrl) {
+            Editor ed; ed.setDocument(&d); noSnap(ed);
+            ed.doubleLineGap() = 10.0;
+            ed.setTool(ToolId::DoublePolyline);
+            check(ed.doubleSecondBelow(), "dpoly-ctrl: the second line starts out below");
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            if (tapCtrl) {
+                check(ed.onKey(Qt::Key_Control, Qt::ControlModifier),
+                      "dpoly-ctrl: Ctrl is taken while drawing");
+                check(!ed.doubleSecondBelow(), "dpoly-ctrl: and swaps the side");
+            }
+            ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        };
+        Document a; a.entities().clear();
+        Document b; b.entities().clear();
+        drawIt(a, false);
+        drawIt(b, true);
+        check(a.entities().size() == 1 && b.entities().size() == 1, "dpoly-ctrl: one run each");
+        const Entity& below = a.entities()[0];
+        const Entity& above = b.entities()[0];
+        // Either way the line that was DRAWN is a rail: what changes is which side its partner is on.
+        check(near(below.points[0].y, -5.0), "dpoly-ctrl: second line below -> centreline below");
+        check(near(above.points[0].y, 5.0), "dpoly-ctrl: swapped -> centreline above");
+        // So the drawn line y=0 is a rail of both, and the other rail is on opposite sides.
+        const double gap = 10.0;
+        check(near(below.points[0].y + gap / 2.0, 0.0) && near(above.points[0].y - gap / 2.0, 0.0),
+              "dpoly-ctrl: the line under the cursor is a rail either way");
+        // Ctrl again puts it back.
+        {
+            Document c; c.entities().clear();
+            Editor ed; ed.setDocument(&c); noSnap(ed);
+            ed.setTool(ToolId::DoublePolyline);
+            ed.onKey(Qt::Key_Control, Qt::ControlModifier);
+            ed.onKey(Qt::Key_Control, Qt::ControlModifier);
+            check(ed.doubleSecondBelow(), "dpoly-ctrl: twice returns to where it was");
+        }
+    }
+
+    // --- Shift-clicking the start onto a line starts BOTH physical lines flush on it.
+    {
+        Document d; d.entities().clear();
+        // A SLANTED line, deliberately: on a vertical one the shifted centreline still happens to land
+        // on it, so a vertical reference could not tell the fixed code from the broken code.
+        Entity ref;
+        ref.id = QStringLiteral("ref");
+        ref.type = EntityType::Line;
+        ref.a = {-40, -40};
+        ref.b = {40, 40};                 // 45 degrees, through the origin (its midpoint)
+        d.entities().push_back(ref);
+        Editor ed; ed.setDocument(&d);
+        auto& s = ed.snapSettings();      // object snap ON: the click lands on the line
+        s.objectSnap = true; s.gridSnap = false; s.ortho = false; s.polar = false;
+        ed.setPixelTolerance(4);
+        ed.doubleLineGap() = 10.0;
+        ed.setTool(ToolId::DoublePolyline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);   // Shift: start flush on it
+        ed.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* run = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) run = &e;
+        check(run != nullptr, "dpoly-shift-start: the run was placed");
+        if (run) {
+            check(run->meta.value(QStringLiteral("cutStart")).toBool(),
+                  "dpoly-shift-start: the start is capped to something");
+            check(run->meta.value(QStringLiteral("cutStartKind")).toString() ==
+                      QLatin1String("line"),
+                  "dpoly-shift-start: and that something is a line");
+            // The line recorded IS the one clicked, so both rails are clipped onto it.
+            check(near(run->meta.value(QStringLiteral("cutStartAx")).toDouble(), -40.0) &&
+                      near(run->meta.value(QStringLiteral("cutStartBx")).toDouble(), 40.0),
+                  "dpoly-shift-start: the reference is the line that was clicked");
+        }
+        // Without Shift nothing is capped - the run just starts where it was clicked.
+        Document d2; d2.entities().clear();
+        d2.entities().push_back(ref);
+        Editor e2; e2.setDocument(&d2);
+        auto& s2 = e2.snapSettings();
+        s2.objectSnap = true; s2.gridSnap = false; s2.ortho = false; s2.polar = false;
+        e2.setPixelTolerance(4);
+        e2.setTool(ToolId::DoublePolyline);
+        e2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onKey(Qt::Key_Return, Qt::NoModifier);
+        for (const Entity& e : d2.entities())
+            if (e.type == EntityType::Polyline && e.meta.value("double").toBool())
+                check(!e.meta.value(QStringLiteral("cutStart")).toBool(),
+                      "dpoly-shift-start: no Shift, no cap");
+    }
+
     // --- Pulling a double run tracks along the RAIL that was grabbed, not up the middle of it. The
     //     green polar/ortho lock line is drawn from this point, and the angle is measured from it.
     {
