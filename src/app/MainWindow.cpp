@@ -43,6 +43,7 @@
 #include <QSpinBox>
 #include <QActionGroup>
 #include <QAbstractItemDelegate>
+#include <QCoreApplication>
 #include <QApplication>
 #include <QColorDialog>
 #include <QCompleter>
@@ -1420,7 +1421,16 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         Q_ASSERT(startupModules().contains(module));
         if (onModule) onModule(module);
     };
-    setWindowTitle(QStringLiteral("Edraw"));
+    // The title carries WHEN this executable was built. Which build is running is otherwise invisible,
+    // and an application left open across a rebuild looks exactly like one whose fix did not work - a
+    // confusion worth one line of code to end. The file's own timestamp is used rather than __DATE__,
+    // because that only changes when this file itself is recompiled.
+    const QDateTime built =
+        QFileInfo(QCoreApplication::applicationFilePath()).lastModified();
+    setWindowTitle(built.isValid()
+                       ? QStringLiteral("Edraw — build %1").arg(built.toString(
+                             QStringLiteral("yyyy-MM-dd HH:mm")))
+                       : QStringLiteral("Edraw"));
     resize(1340, 860);
 
     note(QStringLiteral("Drawing canvas"));

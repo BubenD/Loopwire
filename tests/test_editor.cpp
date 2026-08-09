@@ -3683,6 +3683,64 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // Two double runs crossing, which is the drawing: the selected run is the boundary and ONE line
+        // of the other run - a double polyline with a rounded knee - is cut back to it. Both gestures.
+        {
+            auto scene = [](Document& d) {
+                d.entities().clear();
+                Entity flat;                       // the selection: lines at y = +/-50
+                flat.id = QStringLiteral("flat");
+                flat.type = EntityType::DoubleLine;
+                flat.a = {-400, 0};
+                flat.b = {400, 0};
+                flat.meta.insert(QStringLiteral("gap"), 100.0);
+                d.entities().push_back(flat);
+                Entity slant;                      // flat, then rising, with a rounded knee
+                slant.id = QStringLiteral("slant");
+                slant.type = EntityType::Polyline;
+                slant.points = {{-900, -500}, {-500, -500}, {400, -20}};
+                slant.meta.insert(QStringLiteral("double"), true);
+                slant.meta.insert(QStringLiteral("gap"), 120.0);
+                QJsonArray radii;
+                radii.append(0.0);
+                radii.append(150.0);
+                radii.append(0.0);
+                slant.meta.insert(QStringLiteral("cornerRadii"), radii);
+                d.entities().push_back(slant);
+            };
+            auto check1 = [](Document& d, const char* what) {
+                const Entity* s = nullptr;
+                for (const Entity& e : d.entities())
+                    if (e.id == QLatin1String("slant")) s = &e;
+                check(s && s->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                          s->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                      what);
+                check(s && near(s->meta.value(QStringLiteral("cutEndAy")).toDouble(), -50.0),
+                      "trim-crossing-runs: back to the boundary's own line, at y=-50");
+            };
+            // With a fence across that line only.
+            Document dA; scene(dA);
+            {
+                Editor ed; ed.setDocument(&dA); noSnap(ed); ed.setPixelTolerance(4);
+                ed.selectById(QStringLiteral("flat"));
+                ed.setTool(ToolId::Trim);
+                ed.onPointerPress({330, 25}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerMove({270, -35});
+                ed.onPointerPress({270, -35}, Qt::LeftButton, Qt::NoModifier);
+            }
+            check1(dA, "trim-crossing-runs: a fence across one line of the other run cuts that line");
+            // And with a single click on it.
+            Document dB; scene(dB);
+            {
+                Editor ed; ed.setDocument(&dB); noSnap(ed); ed.setPixelTolerance(4);
+                ed.selectById(QStringLiteral("flat"));
+                ed.setTool(ToolId::Trim);
+                ed.onPointerPress({300, -8}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerPress({300, -8}, Qt::LeftButton, Qt::NoModifier);
+            }
+            check1(dB, "trim-crossing-runs: and so does a click on it");
+        }
+
         // A plain CLICK on the piece that should be gone - which is how trimming is asked for first, and
         // the one gesture that used to do nothing at all, the command wanting two clicks that straddle
         // something.
