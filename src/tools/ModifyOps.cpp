@@ -936,7 +936,8 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
             e.type == EntityType::DoubleLine ? std::vector<Vec2>{e.a, e.b} : e.points;
         if (centre.size() >= 2 && gap > 0.0) {
             for (double s : {gap / 2.0, -gap / 2.0}) {
-                const std::vector<Vec2> rail = offsetPolyline(centre, s);
+                std::vector<Vec2> rail = offsetPolyline(centre, s);
+                applyDoubleRunCuts(rail, e, s > 0 ? +1 : -1);   // as drawn: the caps count here too
                 for (size_t i = 1; i < rail.size(); ++i) {
                     for (const auto& c : others) {
                         if (!e.id.isEmpty() && c.id == e.id) continue;
