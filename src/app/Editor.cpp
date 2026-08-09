@@ -8432,6 +8432,7 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     const std::vector<Entity>& joints = refs;
     pushUndo();
     QString why;
+    QString picked;      // what a click took, in words, for the message
     int count = trimPass(a, b, {}, refs, &why);
 
     // Nothing? Then the selection is very likely what was MEANT to be trimmed - it is the object the
@@ -8465,13 +8466,13 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 if (const auto hit = hitTest(at))
                     onSelection = std::find(trimRefIds_.begin(), trimRefIds_.end(), *hit) !=
                                   trimRefIds_.end();
-                if (onSelection && trimPickAt(at, others, &why3)) {
+                if (onSelection && trimPickAt(at, others, &why3, &picked)) {
                     count = 1;
                     secondWay = true;
                     break;
                 }
-                if (trimPickAt(at, refs, &why3)) { count = 1; break; }
-                if (trimPickAt(at, others, &why3)) { count = 1; secondWay = true; break; }
+                if (trimPickAt(at, refs, &why3, &picked)) { count = 1; break; }
+                if (trimPickAt(at, others, &why3, &picked)) { count = 1; secondWay = true; break; }
             }
             if (count == 0 && why.isEmpty()) why = why3;
         }
@@ -8495,6 +8496,11 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     }
     doc_->setDirty(true);
     // Keep the reference selected so more cut lines can be drawn; Esc finishes.
+    if (!picked.isEmpty()) {
+        emit message(QStringLiteral("Trimmed %1 — click another piece, or Esc to finish").arg(picked));
+        emit changed();
+        return;
+    }
     emit message(secondWay
                      ? QStringLiteral("Trimmed the selected object against the rest of the drawing "
                                       "(%1) — draw another cut line or Esc to finish").arg(count)
@@ -8621,7 +8627,8 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
     return trimRailPiece(ent, rail, side, alongPick, refs, why);
 }
 
-bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries, QString* why) {
+bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries, QString* why,
+                        QString* what) {
     if (!doc_) return false;
     auto isBoundary = [&boundaries](const QString& id) {
         for (const Entity& b : boundaries)
@@ -8641,6 +8648,16 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
     }
     if (!obj) return false;
 
+    // What is being trimmed, in words. A report that "nothing happened" can then be checked against
+    // what the command thought it was doing, which is the difference between a bug and a mis-click.
+    if (what) {
+        const bool isDbl = obj->type == EntityType::DoubleLine ||
+                           (obj->type == EntityType::Polyline && obj->meta.value("double").toBool());
+        *what = isDbl ? QStringLiteral("one line of a double run")
+                : obj->type == EntityType::Line ? QStringLiteral("a line")
+                : obj->type == EntityType::Polyline ? QStringLiteral("a polyline")
+                                                    : QStringLiteral("an object");
+    }
     const bool dbl = obj->type == EntityType::DoubleLine;
     const bool dpoly = obj->type == EntityType::Polyline && obj->meta.value("double").toBool();
     if (dbl || dpoly) {
