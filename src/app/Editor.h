@@ -1003,6 +1003,13 @@ private:
     // then the selection as the thing to cut - so the command works whichever way round they were picked.
     int trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& onlyIds,
                  const std::vector<Entity>& boundaries, QString* whyOut);
+    // Trim the piece UNDER THE POINTER, which is how trimming is asked for first: click the bit that
+    // should be gone. The fence stays - it is how several objects come off at once - but a click on the
+    // piece did nothing at all unless the two clicks happened to straddle exactly the right things.
+    bool trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries, QString* why);
+    // The shared tail of both: this line, the piece of it the pick is in, back to the boundary.
+    bool trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side, double alongPick,
+                       const std::vector<Entity>& refs, QString* why);
     bool trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
                              const std::vector<Entity>& refs, QString* why = nullptr);
     // Record a cut for ONE physical line at an end, KEEPING whatever cut the other line has there. Each

@@ -8397,6 +8397,17 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
         count = trimPass(a, b, trimRefIds_, others, &why2);
         secondWay = count > 0;
         if (count == 0 && why.isEmpty()) why = why2;
+        // And if the two clicks crossed nothing at all - a click rather than a drag, or a short line
+        // that stayed inside the gap of a run - then what was meant is the piece UNDER the pointer.
+        // That is how trimming is asked for first, and it used to be the one gesture that did nothing.
+        if (count == 0) {
+            QString why3;
+            for (const Vec2& at : {b, a}) {
+                if (trimPickAt(at, refs, &why3)) { count = 1; break; }
+                if (trimPickAt(at, others, &why3)) { count = 1; secondWay = true; break; }
+            }
+            if (count == 0 && why.isEmpty()) why = why3;
+        }
     }
     if (count == 0) {
         // undo() clears the selection, and losing it for a trim that did nothing means re-picking the
@@ -8425,25 +8436,21 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     emit changed();
 }
 
-bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
-                                 const std::vector<Entity>& refs, QString* why) {
-    auto say = [why](const QString& text) {
-        if (why && why->isEmpty()) *why = text;
-        return false;
-    };
-    const bool dbl = ent.type == EntityType::DoubleLine;
-    const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
-    if (!dbl && !dpoly) return false;
-    const double gap = ent.meta.value("gap").toDouble(10.0);
-    if (gap <= 0.0) return false;
+namespace {
 
-    // The two physical lines, built the way they are DRAWN: a run with rounded knees rounds its
-    // centreline at radius + half the gap and offsets that, so the lines curve through the bend with a
-    // constant gap. Testing the fence against the mitred offset instead would answer for geometry that
-    // is not on the screen.
+// The two physical lines of a double run, built the way they are DRAWN: a run with rounded knees rounds
+// its centreline at radius + half the gap and offsets that, so the lines curve through the bend with a
+// constant gap. Testing against the mitred offset instead would answer for geometry not on the screen.
+std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
+    const bool dbl = ent.type == EntityType::DoubleLine;
+    const double gap = ent.meta.value("gap").toDouble(10.0);
     std::vector<Vec2> centre = dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
-    if (centre.size() < 2) return false;
-    if (!dbl && ent.meta.contains(QStringLiteral("cornerRadii"))) {
+    if (centre.size() < 2) return {};
+    if (dbl) {
+        const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
+        return {ent.a + off, ent.b + off};
+    }
+    if (ent.meta.contains(QStringLiteral("cornerRadii"))) {
         const QJsonArray arr = ent.meta.value(QStringLiteral("cornerRadii")).toArray();
         std::vector<double> radii(centre.size(), 0.0);
         bool any = false;
@@ -8456,51 +8463,52 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
             if (rounded.size() >= 2) centre = rounded;
         }
     }
-    auto railOf = [&](double s) {
-        if (!dbl) return offsetPolyline(centre, s);
-        const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
-        return std::vector<Vec2>{ent.a + off, ent.b + off};
-    };
-    // Where a fence crosses a run, as a distance along it (and the point).
-    auto crossOn = [](const std::vector<Vec2>& run, const Vec2& p1, const Vec2& p2)
-        -> std::optional<std::pair<double, Vec2>> {
-        double along = 0.0;
-        for (size_t i = 1; i < run.size(); ++i) {
-            if (auto x = segmentSegmentIntersection(p1, p2, run[i - 1], run[i]))
-                return std::make_pair(along + distance(run[i - 1], *x), *x);
-            along += distance(run[i - 1], run[i]);
-        }
-        return std::nullopt;
-    };
+    return offsetPolyline(centre, s);
+}
 
-    // WHICH LINES the fence crosses decides what is cut: one of them means that line alone, both of them
-    // mean the whole run. The centreline is deliberately not consulted - it is not drawn, and a fence
-    // reaching the far line from inside the run has to cross it on the way, so testing for it sent
-    // exactly the gesture this is for down the whole-run path and nothing happened.
-    int side = 0;
-    std::optional<std::pair<double, Vec2>> at;
-    std::vector<Vec2> rail;
-    for (double s : {gap / 2.0, -gap / 2.0}) {
-        const std::vector<Vec2> r = railOf(s);
-        if (r.size() < 2) continue;
-        if (auto x = crossOn(r, fa, fb)) {
-            if (side != 0) return false;   // both crossed: not this gesture
-            side = s > 0 ? +1 : -1;
-            at = x;
-            rail = r;
-        }
+// Where something crosses a run, as a distance along it and the point itself.
+std::optional<std::pair<double, Vec2>> crossAlong(const std::vector<Vec2>& run, const Vec2& p1,
+                                                 const Vec2& p2) {
+    double along = 0.0;
+    for (size_t i = 1; i < run.size(); ++i) {
+        if (auto x = segmentSegmentIntersection(p1, p2, run[i - 1], run[i]))
+            return std::make_pair(along + distance(run[i - 1], *x), *x);
+        along += distance(run[i - 1], run[i]);
     }
-    if (side == 0 || !at) return false;
+    return std::nullopt;
+}
 
-    // Where the REFERENCE crosses that same line, nearest to the fence on either hand. That crossing is
-    // what the line comes back to; the fence says which of the two pieces goes.
+// How far along a run its nearest point to `p` is, and how far away that is.
+std::pair<double, double> nearestAlong(const std::vector<Vec2>& run, const Vec2& p) {
+    double along = 0.0, bestAlong = 0.0, bestDist = 1e299;
+    for (size_t i = 1; i < run.size(); ++i) {
+        const auto c = closestPointOnSegment(p, run[i - 1], run[i]);
+        if (c.distance < bestDist) {
+            bestDist = c.distance;
+            bestAlong = along + distance(run[i - 1], c.point);
+        }
+        along += distance(run[i - 1], run[i]);
+    }
+    return {bestAlong, bestDist};
+}
+
+} // namespace
+
+bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side, double alongPick,
+                           const std::vector<Entity>& refs, QString* why) {
+    auto say = [why](const QString& text) {
+        if (why && why->isEmpty()) *why = text;
+        return false;
+    };
+    // Where the REFERENCE crosses this line, nearest to the pick on either hand. That crossing is what
+    // the line comes back to; the pick says which of the two pieces goes.
     std::optional<std::pair<double, Vec2>> best;
     for (const Entity& r : refs) {
         std::vector<Vec2> segs;
         forEachCutSegmentOf(r, segs);
         for (size_t k = 1; k < segs.size(); k += 2) {
-            if (auto x = crossOn(rail, segs[k - 1], segs[k])) {
-                if (!best || std::abs(x->first - at->first) < std::abs(best->first - at->first))
+            if (auto x = crossAlong(rail, segs[k - 1], segs[k])) {
+                if (!best || std::abs(x->first - alongPick) < std::abs(best->first - alongPick))
                     best = x;
             }
         }
@@ -8509,32 +8517,130 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
         return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it back "
                                   "to — select the object you want it to stop at."));
 
-    // Which end of the line the removed piece is at: the side the fence was drawn on. With one boundary
-    // the piece that goes runs from the fence to the near END of the line, exactly as trimming a single
-    // line does.
-    const bool removeStart = at->first < best->first;
-    auto key = [](bool start) {
-        return start ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
-    };
+    // Which end of the line the removed piece is at: the side the pick is on. With one boundary the
+    // piece that goes runs from the pick to the near END of the line, as trimming a single line does.
+    const bool removeStart = alongPick < best->first;
+    const QString key = removeStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
     const double railLen = polylineLength(rail);
     // ... and if that piece is the WHOLE line, there is nothing a trimmed end can say: the line does not
-    // reach past the boundary on the side that was picked. This is the case of a line that already ends
-    // on the reference - a run drawn up to a wall, then fenced between the two - where the removal would
-    // be the entire line. Said out loud, because doing nothing quietly is indistinguishable from a bug,
-    // and collapsing the line to a point is worse than either.
+    // reach past the boundary on the side that was picked. Said out loud, because doing nothing quietly
+    // is indistinguishable from a bug, and collapsing the line to a point is worse than either.
     const double farEnd = removeStart ? railLen : 0.0;
     if (std::abs(best->first - farEnd) < 1e-6)
         return say(QStringLiteral("That would take the whole of that line: it does not reach past the "
-                                  "boundary on the side you picked. Fence the other side of it, or add "
+                                  "boundary on the side you picked. Pick the other side of it, or add "
                                   "a second boundary."));
     if (std::abs(best->first - (removeStart ? 0.0 : railLen)) < 1e-6)
         return say(QStringLiteral("That line already ends on the boundary — there is nothing of it "
                                   "past it to remove."));
-    // Record it as a cap on THIS side only, so the other line keeps its own length.
-    if (!capDoubleRailAt(ent, key(removeStart), best->second, refs, side))
+    if (!capDoubleRailAt(ent, key, best->second, refs, side))
         return say(QStringLiteral("The boundary does not reach that line where it would have to, so "
                                   "the line cannot be brought back to it."));
     return true;
+}
+
+bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
+                                 const std::vector<Entity>& refs, QString* why) {
+    const bool dbl = ent.type == EntityType::DoubleLine;
+    const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
+    if (!dbl && !dpoly) return false;
+    const double gap = ent.meta.value("gap").toDouble(10.0);
+    if (gap <= 0.0) return false;
+
+    // WHICH LINES the fence crosses decides what is cut: one of them means that line alone, both of them
+    // mean the whole run. The centreline is deliberately not consulted - it is not drawn, and a fence
+    // reaching the far line from inside the run has to cross it on the way.
+    int side = 0;
+    double alongPick = 0.0;
+    std::vector<Vec2> rail;
+    for (double s : {gap / 2.0, -gap / 2.0}) {
+        const std::vector<Vec2> r = doubleRunRail(ent, s);
+        if (r.size() < 2) continue;
+        if (auto x = crossAlong(r, fa, fb)) {
+            if (side != 0) return false;   // both crossed: not this gesture
+            side = s > 0 ? +1 : -1;
+            alongPick = x->first;
+            rail = r;
+        }
+    }
+    if (side == 0) return false;
+    return trimRailPiece(ent, rail, side, alongPick, refs, why);
+}
+
+bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries, QString* why) {
+    if (!doc_) return false;
+    auto isBoundary = [&boundaries](const QString& id) {
+        for (const Entity& b : boundaries)
+            if (b.id == id) return true;
+        return false;
+    };
+    // What is under the pointer, ignoring the boundaries themselves.
+    std::vector<QString> skip;
+    Entity* obj = nullptr;
+    for (int attempt = 0; attempt < 4 && !obj; ++attempt) {
+        const auto hit = hitTest(pick, skip);
+        if (!hit) break;
+        if (isBoundary(*hit)) { skip.push_back(*hit); continue; }
+        obj = entityById(*hit);
+        if (obj) break;
+        skip.push_back(*hit);
+    }
+    if (!obj) return false;
+
+    const bool dbl = obj->type == EntityType::DoubleLine;
+    const bool dpoly = obj->type == EntityType::Polyline && obj->meta.value("double").toBool();
+    if (dbl || dpoly) {
+        // WHICH line was clicked: the nearer of the two. On a click that is the whole question - there
+        // is no fence to read it from - and it is also the more direct answer.
+        const double gap = obj->meta.value("gap").toDouble(10.0);
+        if (gap <= 0.0) return false;
+        int side = 0;
+        double alongPick = 0.0, bestDist = 1e299;
+        std::vector<Vec2> rail;
+        for (double s : {gap / 2.0, -gap / 2.0}) {
+            const std::vector<Vec2> r = doubleRunRail(*obj, s);
+            if (r.size() < 2) continue;
+            const auto n = nearestAlong(r, pick);
+            if (n.second < bestDist) {
+                bestDist = n.second;
+                alongPick = n.first;
+                side = s > 0 ? +1 : -1;
+                rail = r;
+            }
+        }
+        if (side == 0) return false;
+        return trimRailPiece(*obj, rail, side, alongPick, boundaries, why);
+    }
+    if (obj->type == EntityType::Line) {
+        if (!objectCrosses(*obj, boundaries)) return false;
+        std::optional<Entity> extra;
+        if (!trimLineQuick(*obj, pick, boundaries, extra)) return false;
+        if (extra) addEntity(std::move(*extra));
+        return true;
+    }
+    if (obj->type == EntityType::Polyline || obj->type == EntityType::Rect ||
+        obj->type == EntityType::Polygon) {
+        std::vector<Vec2> run = obj->points;
+        const bool closed = obj->type == EntityType::Rect || obj->type == EntityType::Polygon;
+        if (closed && run.size() >= 3) run.push_back(run.front());
+        if (run.size() < 2) return false;
+        const QString selfId = obj->id;
+        auto pieces = trimPolylinePieces(run, pick, boundaries, selfId);
+        if (pieces.empty()) return false;
+        obj->type = EntityType::Polyline;
+        obj->meta.remove(QStringLiteral("cornerRadii"));
+        obj->meta.remove(QStringLiteral("cornerRadius"));
+        obj->meta.remove(QStringLiteral("bulges"));
+        obj->points = pieces[0];
+        if (pieces.size() == 2) {
+            Entity rem = *obj;
+            rem.id.clear();
+            rem.points = pieces[1];
+            addEntity(std::move(rem));
+        }
+        return true;
+    }
+    return false;
 }
 
 namespace {

@@ -3683,6 +3683,67 @@ int run_editor_tests() {
                   "trim-kept-cap: and the trimmed line comes back to the nearer reference");
         }
 
+        // A plain CLICK on the piece that should be gone - which is how trimming is asked for first, and
+        // the one gesture that used to do nothing at all, the command wanting two clicks that straddle
+        // something.
+        {
+            auto scene = [](Document& d) {
+                d.entities().clear();
+                Entity wall;                   // both lines run up to this
+                wall.id = QStringLiteral("wall");
+                wall.type = EntityType::Line;
+                wall.a = {160, -120};
+                wall.b = {160, 120};
+                d.entities().push_back(wall);
+                Entity slant;                  // crosses the LOWER line at x=110
+                slant.id = QStringLiteral("slant");
+                slant.type = EntityType::Line;
+                slant.a = {60, -60};
+                slant.b = {140, 20};
+                d.entities().push_back(slant);
+                Entity run;
+                run.id = QStringLiteral("run");
+                run.type = EntityType::DoubleLine;
+                run.a = {0, 0};
+                run.b = {160, 0};              // lines at y=+/-10
+                run.meta.insert(QStringLiteral("gap"), 20.0);
+                d.entities().push_back(run);
+            };
+            auto click = [](Document& d, const char* selectId, Vec2 at) {
+                Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+                ed.selectById(QString::fromLatin1(selectId));
+                ed.setTool(ToolId::Trim);
+                ed.onPointerPress(at, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerPress(at, Qt::LeftButton, Qt::NoModifier);   // same point: a click
+            };
+            // Clicking the lower line beyond the slant takes that piece, and only that line.
+            Document d9; scene(d9);
+            click(d9, "slant", {130, -10});
+            const Entity* r = nullptr;
+            for (const Entity& e : d9.entities()) if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() == -1,
+                  "trim-click: clicking one line trims that line back to the boundary");
+            check(r && near(r->b.x, 160.0),
+                  "trim-click: and the run itself is left alone, so the other line is untouched");
+
+            // Clicking the WALL between the two lines opens it, which is what a wire entering a body
+            // needs. The run is the selection here - it is the boundary - and the wall is what goes.
+            Document d10; scene(d10);
+            click(d10, "run", {160, 0});
+            int walls = 0;
+            bool openedAbove = false, openedBelow = false;
+            for (const Entity& e : d10.entities()) {
+                if (e.type != EntityType::Line || e.id == QLatin1String("slant")) continue;
+                ++walls;
+                if (near(e.a.y, 10.0) || near(e.b.y, 10.0)) openedAbove = true;
+                if (near(e.a.y, -10.0) || near(e.b.y, -10.0)) openedBelow = true;
+            }
+            check(walls == 2, "trim-click: the wall between the two lines comes away, leaving two pieces");
+            check(openedAbove && openedBelow,
+                  "trim-click: and the opening is exactly the gap between them");
+        }
+
         // Whichever way round the two are picked. Selecting the RUN and fencing across one of its lines
         // is what a person does - the selection is the thing being worked on - and it used to do nothing
         // at all, the run being taken for the boundary and skipped.
