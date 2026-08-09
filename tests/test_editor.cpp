@@ -3500,6 +3500,68 @@ int run_editor_tests() {
                       "dpoly-shift-start: no Shift, no cap");
     }
 
+    // --- Trimming ONE line of a double run: the fence crosses that line and not the centreline, so
+    //     that line alone comes back to the reference and the other keeps its length. Crossing only one
+    //     line used to find nothing at all - the trim looked at the centreline, which the fence missed.
+    {
+        auto build = [](Document& d) {
+            d.entities().clear();
+            Entity wall;                       // the reference: a vertical line
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {100, -60};
+            wall.b = {100, 60};
+            d.entities().push_back(wall);
+            Entity run;                        // a double run straight through it
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0, 0}, {200, 0}};   // centreline on y=0, lines at y=+/-10
+            run.meta.insert(QStringLiteral("double"), true);
+            run.meta.insert(QStringLiteral("gap"), 20.0);
+            d.entities().push_back(run);
+        };
+        // A fence across the TOP line only (y=10), well clear of the centreline.
+        Document d; build(d);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById(QStringLiteral("wall"));
+        ed.setTool(ToolId::Trim);
+        ed.onPointerPress({150, 4}, Qt::LeftButton, Qt::NoModifier);   // fence from just above centre
+        ed.onPointerMove({150, 16});
+        ed.onPointerPress({150, 16}, Qt::LeftButton, Qt::NoModifier);  // up across the top line
+        const Entity* run = nullptr;
+        for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) run = &e;
+        check(run != nullptr, "trim-one-rail: the run is still there");
+        if (run) {
+            // The centreline is untouched: the other line keeps its full length.
+            check(run->points.size() == 2 && near(run->points[0].x, 0.0) &&
+                      near(run->points[1].x, 200.0),
+                  "trim-one-rail: the centreline is not moved, so the other line is not shortened");
+            // The end that came back is recorded as a cap on ONE side.
+            check(run->meta.value(QStringLiteral("cutEnd")).toBool(),
+                  "trim-one-rail: the far end of that line is capped to the reference");
+            check(run->meta.value(QStringLiteral("cutEndSide")).toInt() == +1,
+                  "trim-one-rail: and the cap belongs to the line that was crossed, not to both");
+            check(near(run->meta.value(QStringLiteral("cutEndAx")).toDouble(), 100.0),
+                  "trim-one-rail: it comes back to the reference line at x=100");
+        }
+        // A fence across the CENTRELINE still trims the whole run, as it always did.
+        Document d2; build(d2);
+        Editor e2; e2.setDocument(&d2); noSnap(e2); e2.setPixelTolerance(3);
+        e2.selectById(QStringLiteral("wall"));
+        e2.setTool(ToolId::Trim);
+        e2.onPointerPress({150, -4}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({150, 4});
+        e2.onPointerPress({150, 4}, Qt::LeftButton, Qt::NoModifier);
+        for (const Entity& e : d2.entities())
+            if (e.id == QLatin1String("run")) {
+                check(near(e.points[1].x, 100.0),
+                      "trim-one-rail: a fence over the centreline still takes the whole run back");
+                check(!e.meta.contains(QStringLiteral("cutEndSide")) ||
+                          e.meta.value(QStringLiteral("cutEndSide")).toInt() == 0,
+                      "trim-one-rail: and that cap belongs to both lines");
+            }
+    }
+
     // --- Shift-starting at a CORNER picks the segment both lines can actually reach, and only within
     //     that segment's own length - up to its knee or its end.
     {

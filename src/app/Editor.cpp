@@ -253,6 +253,44 @@ void drawDraftValueBox(QPainter& p, const QPointF& at, const QString& label, con
 // The capped endpoint of a straight physical run — mirrors the renderer's run cut
 // (line / circle / poly), so a double line/polyline's endpoint GRIPS sit on the real
 // (capped) physical-line ends, not the raw centreline offset.
+// A cutter's straight segments, flattened to consecutive pairs. The physical lines of a double run are
+// what a double run cuts with, which is why this is not simply its points.
+void forEachCutSegmentOf(const Entity& e, std::vector<Vec2>& out) {
+    auto add = [&out](const Vec2& a, const Vec2& b) { out.push_back(a); out.push_back(b); };
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::Dimension:
+        add(e.a, e.b);
+        break;
+    case EntityType::DoubleLine: {
+        const double gap = e.meta.value("gap").toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        add(e.a + off, e.b + off);
+        add(e.a - off, e.b - off);
+        break;
+    }
+    case EntityType::Polyline:
+        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+            const double gap = e.meta.value("gap").toDouble(10.0);
+            for (double s : {gap / 2.0, -gap / 2.0}) {
+                const std::vector<Vec2> run = offsetPolyline(e.points, s);
+                for (size_t i = 1; i < run.size(); ++i) add(run[i - 1], run[i]);
+            }
+        } else {
+            for (size_t i = 1; i < e.points.size(); ++i) add(e.points[i - 1], e.points[i]);
+        }
+        break;
+    case EntityType::Rect:
+    case EntityType::Polygon:
+        for (size_t i = 0; i < e.points.size(); ++i)
+            add(e.points[i], e.points[(i + 1) % e.points.size()]);
+        break;
+    default:
+        for (size_t i = 1; i < e.points.size(); ++i) add(e.points[i - 1], e.points[i]);
+        break;
+    }
+}
+
 // Where a rail MEETS a cut segment. The rail's own line is extended as far as it needs to go - a rail
 // that falls short of the line it is meant to start on is the whole point of capping - but the meeting
 // point has to lie ON that segment: between its knees, or between its ends. Past them the rail cannot
@@ -265,8 +303,13 @@ std::optional<Vec2> railMeetsSegment(const Vec2& thisEnd, const Vec2& otherEnd, 
     return *x;
 }
 
-Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd) {
+// `side` is which physical run this end belongs to (+1 / -1); a cut recorded for one side only leaves
+// the other alone (see applyRunCut).
+Vec2 cappedRunEnd(const Entity& e, const QString& key, const Vec2& thisEnd, const Vec2& otherEnd,
+                  int side = 0) {
     if (!e.meta.value(key).toBool()) return thisEnd;
+    const int onlySide = e.meta.value(key + QStringLiteral("Side")).toInt();
+    if (onlySide != 0 && side != 0 && onlySide != side) return thisEnd;
     const QString kind = e.meta.value(key + "Kind").toString();
     if (kind == QLatin1String("circle")) {
         const Vec2 c{e.meta.value(key + "Cx").toDouble(), e.meta.value(key + "Cy").toDouble()};
@@ -476,10 +519,10 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         const Vec2 noff = off * -1.0;
         // Endpoints sit on the ACTUAL physical-line ends (after trim/extend caps),
         // so a joint follows the drawn line rather than floating at the raw offset.
-        const Vec2 s1 = cappedRunEnd(e, "cutStart", e.a + off, e.b + off);
-        const Vec2 en1 = cappedRunEnd(e, "cutEnd", e.b + off, e.a + off);
-        const Vec2 s2 = cappedRunEnd(e, "cutStart", e.a + noff, e.b + noff);
-        const Vec2 en2 = cappedRunEnd(e, "cutEnd", e.b + noff, e.a + noff);
+        const Vec2 s1 = cappedRunEnd(e, "cutStart", e.a + off, e.b + off, +1);
+        const Vec2 en1 = cappedRunEnd(e, "cutEnd", e.b + off, e.a + off, +1);
+        const Vec2 s2 = cappedRunEnd(e, "cutStart", e.a + noff, e.b + noff, -1);
+        const Vec2 en2 = cappedRunEnd(e, "cutEnd", e.b + noff, e.a + noff, -1);
         g.push_back({s1, GripRole::LineA, 0, off});
         g.push_back({s2, GripRole::LineA, 0, noff});
         g.push_back({en1, GripRole::LineB, 0, off});
@@ -501,12 +544,14 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             for (const auto* run : {&run1, &run2}) {
                 if (run->size() != e.points.size()) continue;
                 mapped = true;
+                const int side = (run == &run1) ? +1 : -1;   // which physical run this is
                 // Marker positions follow the ACTUAL run, with its ends capped to a
                 // trim/extend boundary (offsets from the centreline are kept for drag).
                 std::vector<Vec2> pos = *run;
                 if (pos.size() >= 2) {
-                    pos.front() = cappedRunEnd(e, "cutStart", pos.front(), (*run)[1]);
-                    pos.back() = cappedRunEnd(e, "cutEnd", pos.back(), (*run)[run->size() - 2]);
+                    pos.front() = cappedRunEnd(e, "cutStart", pos.front(), (*run)[1], side);
+                    pos.back() =
+                        cappedRunEnd(e, "cutEnd", pos.back(), (*run)[run->size() - 2], side);
                 }
                 for (int i = 0; i < static_cast<int>(run->size()); ++i)
                     g.push_back({pos[i], GripRole::Vertex, i, (*run)[i] - e.points[i]});
@@ -1647,6 +1692,14 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Ctrl is released.
     const bool ctrlSwapsSide = drafting_ && (tool_ == ToolId::DoubleLine ||
                                              tool_ == ToolId::DoublePolyline);
+    // Shift at ANY point while a double run is being drawn means "start both lines on the line this run
+    // began on". The moment you notice the second line hanging in the air is not the moment you
+    // clicked, so it arms then, and stays armed - pressing it is the answer to what is on screen.
+    if (ctrlSwapsSide && !drawStartShift_ &&
+        (QApplication::keyboardModifiers() & Qt::ShiftModifier)) {
+        drawStartShift_ = true;
+        emit message(QStringLiteral("Both lines will start on the line this run began on"));
+    }
     if ((QApplication::keyboardModifiers() & Qt::ControlModifier) && !ctrlSwapsSide) {
         snap.objectSnap = false;
         snap.gridSnap = false;
@@ -8154,6 +8207,11 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 if (extra) additions.push_back(std::move(*extra));
             }
         } else if (obj->type == EntityType::DoubleLine) {
+            // One line of it, when that is what the fence crossed.
+            if (objectCrosses(*obj, refs) && trimOneRailOfDouble(*obj, a, b, refs)) {
+                ++count;
+                continue;
+            }
             // Trim the CENTERLINE; both physical lines follow. [a,b] is a 2-pt line.
             const std::vector<Vec2> cl = {obj->a, obj->b};
             auto pick = cutCrossOn(cl);
@@ -8199,6 +8257,14 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
                 additions.push_back(std::move(rem));
             }
         } else if (obj->type == EntityType::Polyline) {
+            // A double polyline whose fence crossed ONE of its two lines: that line alone comes back to
+            // the reference. Tried first, because the centreline test below would find nothing at all
+            // for that gesture - which is why trimming one line of a double run did nothing.
+            if (obj->meta.value("double").toBool() && objectCrosses(*obj, refs) &&
+                trimOneRailOfDouble(*obj, a, b, refs)) {
+                ++count;
+                continue;
+            }
             // Trim the polyline centreline (double polylines: both runs follow).
             auto pick = cutCrossOn(obj->points);
             if (!pick || !objectCrosses(*obj, refs)) continue;
@@ -8290,6 +8356,81 @@ void Editor::applyTrimFence(const Vec2& a, const Vec2& b) {
     // Keep the reference selected so more cut lines can be drawn; Esc finishes.
     emit message(QStringLiteral("Trimmed %1 object(s) — draw another cut line or Esc to finish").arg(count));
     emit changed();
+}
+
+bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
+                                 const std::vector<Entity>& refs) {
+    const bool dbl = ent.type == EntityType::DoubleLine;
+    const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
+    if (!dbl && !dpoly) return false;
+    const double gap = ent.meta.value("gap").toDouble(10.0);
+    if (gap <= 0.0) return false;
+
+    // The centreline, and the two physical lines either side of it.
+    const std::vector<Vec2> centre =
+        dbl ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
+    if (centre.size() < 2) return false;
+    auto railOf = [&](double s) {
+        if (!dbl) return offsetPolyline(centre, s);
+        const Vec2 off = (ent.b - ent.a).normalized().perp() * s;
+        return std::vector<Vec2>{ent.a + off, ent.b + off};
+    };
+    // Where a fence crosses a run, as a distance along it (and the point).
+    auto crossOn = [](const std::vector<Vec2>& run, const Vec2& p1, const Vec2& p2)
+        -> std::optional<std::pair<double, Vec2>> {
+        double along = 0.0;
+        for (size_t i = 1; i < run.size(); ++i) {
+            if (auto x = segmentSegmentIntersection(p1, p2, run[i - 1], run[i]))
+                return std::make_pair(along + distance(run[i - 1], *x), *x);
+            along += distance(run[i - 1], run[i]);
+        }
+        return std::nullopt;
+    };
+
+    // The fence must cross exactly ONE of the two lines and NOT the centreline: that is the gesture
+    // for "this line only". Crossing the centreline means the whole run, which the caller handles.
+    if (crossOn(centre, fa, fb)) return false;
+    int side = 0;
+    std::optional<std::pair<double, Vec2>> at;
+    std::vector<Vec2> rail;
+    for (double s : {gap / 2.0, -gap / 2.0}) {
+        const std::vector<Vec2> r = railOf(s);
+        if (r.size() < 2) continue;
+        if (auto x = crossOn(r, fa, fb)) {
+            if (side != 0) return false;   // both crossed: not this gesture
+            side = s > 0 ? +1 : -1;
+            at = x;
+            rail = r;
+        }
+    }
+    if (side == 0 || !at) return false;
+
+    // Where the REFERENCE crosses that same line, nearest to the fence on either hand. That crossing is
+    // what the line comes back to; the fence says which of the two pieces goes.
+    std::optional<std::pair<double, Vec2>> best;
+    for (const Entity& r : refs) {
+        std::vector<Vec2> segs;
+        forEachCutSegmentOf(r, segs);
+        for (size_t k = 1; k < segs.size(); k += 2) {
+            if (auto x = crossOn(rail, segs[k - 1], segs[k])) {
+                if (!best || std::abs(x->first - at->first) < std::abs(best->first - at->first))
+                    best = x;
+            }
+        }
+    }
+    if (!best) return false;   // nothing on this line to come back to
+
+    // Which end of the line the removed piece is at: the side the fence was drawn on.
+    const bool removeStart = at->first < best->first;
+    const QString key = removeStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd");
+    // Record it as a cap on THIS side only, so the other line keeps its own length. The cap needs the
+    // segment of the reference through the crossing, which is what capDoubleEndAt works out.
+    const int keep = ent.meta.value(key + QStringLiteral("Side")).toInt();
+    Q_UNUSED(keep);
+    capDoubleEndAt(ent, key, best->second, refs);
+    if (!ent.meta.value(key).toBool()) return false;
+    ent.meta.insert(key + QStringLiteral("Side"), side);
+    return true;
 }
 
 void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,

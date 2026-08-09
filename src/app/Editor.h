@@ -997,6 +997,10 @@ private:
     void recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints);
     // Cap one end (key = "cutStart" / "cutEnd") of a double entity to whatever cutter
     // (line/circle) passes through world point `at`, so its physical runs clip flush.
+    // Trim ONE physical line of a double run: the fence crossed that line and not the centreline, so
+    // that line alone comes back to the reference and the other keeps its length. True when it did it.
+    bool trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
+                             const std::vector<Entity>& refs);
     void capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
                         const std::vector<Entity>& joints);
     bool tryHatchAt(const Vec2& p); // attempt a hatch/wipeout fill; false if nothing to fill

@@ -349,8 +349,17 @@ void extendRunStartToPoly(std::vector<Vec2>& run, const QJsonArray& poly) {
     if (found) run[0] = bestPt;
 }
 // Clip a run's start/end onto the stored cut boundary (a line, circle, or edge set).
-void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bool atEnd) {
+//
+// `side` is which of the two physical runs this is (+1 / -1). A cut may belong to ONE of them: trimming
+// a single line of a double run back to a reference leaves the other at its own length, and a run whose
+// two lines end in different places cannot be described by a centreline and a gap - so the end that
+// moved is recorded as a cap on that side alone. A cut with no side on it belongs to both, which is
+// what every cut made before this did.
+void applyRunCut(std::vector<Vec2>& run, const Entity& e, const QString& key, bool atEnd,
+                 int side = 0) {
     if (!e.meta.value(key).toBool()) return;
+    const int onlySide = e.meta.value(key + QStringLiteral("Side")).toInt();
+    if (onlySide != 0 && side != 0 && onlySide != side) return;
     const QString kind = e.meta.value(key + "Kind").toString();
     if (kind == QLatin1String("circle")) {
         const Vec2 c{e.meta.value(key + "Cx").toDouble(), e.meta.value(key + "Cy").toDouble()};
@@ -918,10 +927,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Trim caps: clip both physical lines onto the cut boundary (line or circle)
         // so a trimmed double line ends flush with the reference, not a perpendicular
         // cap that over/under-shoots it.
-        applyRunCut(run1, e, QStringLiteral("cutStart"), false);
-        applyRunCut(run2, e, QStringLiteral("cutStart"), false);
-        applyRunCut(run1, e, QStringLiteral("cutEnd"), true);
-        applyRunCut(run2, e, QStringLiteral("cutEnd"), true);
+        applyRunCut(run1, e, QStringLiteral("cutStart"), false, +1);
+        applyRunCut(run2, e, QStringLiteral("cutStart"), false, -1);
+        applyRunCut(run1, e, QStringLiteral("cutEnd"), true, +1);
+        applyRunCut(run2, e, QStringLiteral("cutEnd"), true, -1);
         p.drawLine(vt.toScreen(run1[0]), vt.toScreen(run1[1]));
         p.drawLine(vt.toScreen(run2[0]), vt.toScreen(run2[1]));
         break;
@@ -1002,10 +1011,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // Trim cut boundaries: clip both physical runs so they meet the
                 // cutting edge (line OR circle) exactly, instead of a perpendicular
                 // cap that over/under-shoots it.
-                applyRunCut(run1, e, QStringLiteral("cutStart"), false);
-                applyRunCut(run2, e, QStringLiteral("cutStart"), false);
-                applyRunCut(run1, e, QStringLiteral("cutEnd"), true);
-                applyRunCut(run2, e, QStringLiteral("cutEnd"), true);
+                applyRunCut(run1, e, QStringLiteral("cutStart"), false, +1);
+                applyRunCut(run2, e, QStringLiteral("cutStart"), false, -1);
+                applyRunCut(run1, e, QStringLiteral("cutEnd"), true, +1);
+                applyRunCut(run2, e, QStringLiteral("cutEnd"), true, -1);
                 p.drawPolyline(toScreenPoly(run1, vt));
                 p.drawPolyline(toScreenPoly(run2, vt));
             } else if (!bulgeArr.isEmpty()) {
