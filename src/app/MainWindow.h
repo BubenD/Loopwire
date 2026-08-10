@@ -313,6 +313,8 @@ private:
     void showMechanicalBuilder();
     // The same harness, asked for one step at a time - the way it is built.
     void showHarnessSteps();
+    // Mark (or unmark) the selection as the part's connection line.
+    void markConnectionLine();
     void showMechanicalValidation();
     // The Tools group: the calculations, on both harness tabs because they are asked on one side and
     // checked on the other.
@@ -333,6 +335,7 @@ private:
     QToolButton* makeThermalButton(QWidget* parent);
     // The ribbon button that opens it. The mechanical tab carries it; so does the schematic one,
     // because that is where the harness it reads from is drawn.
+    QToolButton* makeHarnessStepsButton(QWidget* parent);
     QToolButton* makeMechanicalBuilderButton(QWidget* parent);
     // Run the schematic design-rule check and (re)open the validation window. On a
     // fresh open (revalidate=false) the current discrepancies become the tracked set;

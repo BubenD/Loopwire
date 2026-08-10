@@ -366,8 +366,11 @@ void MainWindow::buildHarnessMechanicalTab() {
         auto* ag = new QGridLayout(anW);
         ag->setContentsMargins(0, 0, 0, 0);
         ag->setSpacing(2);
-        ag->addWidget(makeMechanicalBuilderButton(anW), 0, 0);
-        ag->addWidget(makeMechanicalValidationButton(anW), 0, 1);
+        // The guided build first: it is where a harness that does not exist yet is started, and the
+        // builder proper is where one that does is changed.
+        ag->addWidget(makeHarnessStepsButton(anW), 0, 0);
+        ag->addWidget(makeMechanicalBuilderButton(anW), 0, 1);
+        ag->addWidget(makeMechanicalValidationButton(anW), 0, 2);
         mechGroups_ << addGroupKeep(lay, QStringLiteral("Build and check"), anW);
     }
     {

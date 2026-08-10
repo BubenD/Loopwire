@@ -6810,6 +6810,9 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
+        {{"connline", "markconnection", "attach"}, "Harness",
+         "Mark the selection as this part's connection line (where the harness attaches)",
+         [this] { markConnectionLine(); }},
         {{"buildsteps", "guided", "harnesssteps"}, "Harness",
          "Build a harness step by step: one question at a time, from one end to the others",
          [this] { showHarnessSteps(); }},
@@ -8649,6 +8652,35 @@ void MainWindow::showBomDialog() {
     bomDlg_->activateWindow();
 }
 
+QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Build\nstep by step"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setToolTip(QStringLiteral(
+        "Describe a harness one step at a time, from the end in your hand to the ends the branches "
+        "finish at — the order the build sheet numbers them in"));
+    {
+        // Three numbered steps with an arrow through them: a sequence, not a form.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        for (int i = 0; i < 3; ++i) ip.drawRect(3, 3 + i * 8, 8, 6);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.6));
+        ip.drawLine(14, 6, 24, 6);
+        ip.drawLine(14, 14, 24, 14);
+        ip.drawLine(14, 22, 24, 22);
+        ip.setPen(QPen(QColor("#e6b45a"), 1.6));
+        ip.drawLine(12, 6, 12, 22);           // the thread the steps hang on
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showHarnessSteps(); });
+    return btn;
+}
+
 QToolButton* MainWindow::makeMechanicalBuilderButton(QWidget* parent) {
     auto* btn = new QToolButton(parent);
     btn->setText(QStringLiteral("Mechanical\nbuilder"));
@@ -9238,6 +9270,25 @@ void MainWindow::showMechanicalBuilder() {
     mechDlg_->show();
     mechDlg_->raise();
     mechDlg_->activateWindow();
+}
+
+void MainWindow::markConnectionLine() {
+    if (!editor_) return;
+    // A toggle: marked objects are unmarked, unmarked ones are marked, so the one command both puts
+    // the mark on and takes it off - which is how it will be used, a line at a time, while a part's
+    // drawing is being made.
+    const bool already = editor_->selectionIsConnectionLine();
+    const int n = editor_->markSelectionAsConnectionLine(!already);
+    if (n == 0) {
+        statusBar()->showMessage(
+            tr("Select the line the harness attaches to on this part first."), 4000);
+        return;
+    }
+    statusBar()->showMessage(already
+                                 ? tr("%1 object(s) are no longer the connection line").arg(n)
+                                 : tr("%1 object(s) marked as the connection line — a part placed by "
+                                      "the builder is set down across the wires by it").arg(n),
+                             5000);
 }
 
 void MainWindow::showHarnessSteps() {

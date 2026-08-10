@@ -89,6 +89,13 @@ struct Entity {
     static Entity fromJson(const QJsonObject& obj);
 };
 
+// The line on a part's drawing where the harness attaches to it - the face of a connector, the barrel
+// of a terminal - marked in the editor and kept with the drawing. What it is for: a part placed by the
+// generator is turned and set down so that THIS line is across the wires and its centre is on the
+// joint, rather than by the middle of whatever happens to have been drawn. Named here because the
+// editor writes it, the renderer colours it and the harness builder reads it.
+inline constexpr char kConnectionLineKey[] = "connectionLine";
+
 // Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
 // horizontal and it stands off in y. The object remembers it ("dimAcross"), because working it out from
 // the geometry each time meant a dimension turned itself round when the geometry moved; only a drawing

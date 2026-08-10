@@ -757,6 +757,13 @@ void PartsLibraryDialog::buildUi() {
         ins->setToolTip(QStringLiteral("Put this drawing on the sheet — then click where it goes"));
         connect(ins, &QPushButton::clicked, this, [this, mech] { insertIntoDrawing(mech); });
         bl->addWidget(ins);
+        auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
+        edt->setToolTip(QStringLiteral(
+            "Put this drawing on the sheet and select it, to be worked on — add or move lines, and "
+            "mark the line the harness attaches to (Harness ▸ connection line). Capture selection "
+            "puts it back on the part."));
+        connect(edt, &QPushButton::clicked, this, [this, mech] { editDrawing(mech); });
+        bl->addWidget(edt);
         auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
         connect(clr, &QPushButton::clicked, this, [this, mech] { clearDrawing(mech); });
         bl->addWidget(clr);
@@ -1618,6 +1625,29 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     // The click that places it happens on the canvas, so the library gets out of the way.
     hide();
     saveLibrary();
+}
+
+void PartsLibraryDialog::editDrawing(bool mechanical) {
+    LibraryPart* p = current();
+    if (!p || !editor_) return;
+    const QJsonArray drawing = mechanical ? p->mechanical : partSchematicDrawing(*p);
+    if (drawing.isEmpty()) {
+        if (summary_)
+            summary_->setText(QStringLiteral("Nothing captured for that side yet — draw it on the "
+                                             "sheet and press Capture selection"));
+        return;
+    }
+    // Dropped by a click like anything else inserted - and what is dropped stays selected, which is
+    // what makes this different from Insert: the objects are in hand to be worked on and Capture
+    // selection takes them straight back onto the part afterwards.
+    const std::vector<Entity> ents = partDrawingEntities(drawing);
+    editor_->placeEntities(ents);
+    if (summary_)
+        summary_->setText(QStringLiteral(
+            "Click the sheet to put %1 down — it stays selected. Change it, mark the line the harness "
+            "attaches to (Harness ▸ connection line), then press Capture selection here.")
+                              .arg(p->title()));
+    hide();
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {

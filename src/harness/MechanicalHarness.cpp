@@ -1074,12 +1074,12 @@ namespace {
 
 // The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
 std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
-                                      const MechDrawOptions& opt, const QString& role) {
+                                      const MechDrawOptions& opt, const QString& role,
+                                      const Vec2& outward = Vec2{0.0, 0.0}) {
     std::vector<Entity> out;
     if (!part.hasMechanical()) return out;
     out = partDrawingEntities(part.mechanical);
     if (out.empty()) return out;
-    // Centre what was drawn on the point it is fitted at, then turn it along the run.
     Bounds b;
     for (const Entity& e : out) {
         const Bounds eb = e.bounds();
@@ -1087,6 +1087,47 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
     }
     const Vec2 mid = b.valid ? Vec2{(b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0}
                              : Vec2{0.0, 0.0};
+
+    // Where the harness attaches to this part, when the part says: the line marked as its connection
+    // line while it was drawn. Then it is set down BY THAT LINE - its centre on the joint, the line
+    // itself across the wires - rather than by the middle of whatever happens to have been drawn,
+    // which is a point with no meaning on a part whose body is longer one side of the face than the
+    // other. And of the two ways round that leave it across the wires, the one that puts the body on
+    // the far side from them: a connector faces away from the harness it is on the end of.
+    const Entity* conn = nullptr;
+    for (const Entity& e : out)
+        if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) conn = &e;
+    if (conn) {
+        Vec2 ca = conn->a, cb = conn->b;
+        if (conn->points.size() >= 2) {
+            ca = conn->points.front();
+            cb = conn->points.back();
+        }
+        const Vec2 centre = lerp(ca, cb, 0.5);
+        Vec2 along = cb - ca;
+        if (along.length() < 1e-9) along = {0.0, 1.0};
+        along = along.normalized();
+        const Vec2 run{std::cos(dirRad), std::sin(dirRad)};
+        const Vec2 want = run.perp();                       // across the wires
+        double turn = std::atan2(cross(along, want), dot(along, want));
+        if (outward.length() > 1e-9) {
+            // Which way round: turn the body's own offset from the face by the same angle and see
+            // which side of the face it lands on.
+            const Vec2 off = mid - centre;
+            const double c = std::cos(turn), s = std::sin(turn);
+            const Vec2 turned{off.x * c - off.y * s, off.x * s + off.y * c};
+            if (dot(turned, outward) < 0.0) turn += M_PI;
+        }
+        for (Entity& e : out) {
+            if (std::abs(turn) > 1e-9) rotateEntity(e, centre, turn);
+            translateEntity(e, at - centre);
+            e.layer = opt.layer;
+            e.meta.insert(QStringLiteral("mechRole"), role);
+        }
+        return out;
+    }
+
+    // Nothing marked: centre what was drawn on the point it is fitted at, and turn it along the run.
     for (Entity& e : out) {
         translateEntity(e, at - mid);
         if (std::abs(dirRad) > 1e-9) rotateEntity(e, at, dirRad);
@@ -1741,9 +1782,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
 
         const LibraryPart* part = catalog ? catalog->byId(n->libPart) : nullptr;
         if (part && part->hasMechanical()) {
-            // The connector as its own drawing says it looks, placed on the end of the run.
+            // The connector as its own drawing says it looks, placed on the end of the run - and
+            // turned to face AWAY from it, which is the way one goes on. `into` is -1 where the run
+            // arrives here, so the way out of the harness is -into * u.
             for (Entity& e : placedPartDrawing(*part, pn.at, dirRad, opt,
-                                              QStringLiteral("connector")))
+                                              QStringLiteral("connector"), u * -into))
                 out.push_back(e);
         } else {
             // A body proportionate to what arrives at it: wide enough for the pins, deep enough to

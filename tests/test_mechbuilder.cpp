@@ -2,6 +2,7 @@
 // angles, and a drawing generated from both. Every figure here can be checked by hand.
 #include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
+#include "harness/PartsLibrary.h"
 #include "model/Document.h"
 
 #include <QJsonArray>
@@ -1364,6 +1365,130 @@ int run_mechbuilder_tests() {
                     std::abs(figs[a].at.y - figs[b].at.y) < figs[a].h + figs[b].h)
                     ++clashes;
         check(clashes == 0, "spread: no two dimension figures are written across each other");
+    }
+
+    // A part whose drawing says where the harness attaches to it - one line marked as its connection
+    // line - is set down BY THAT LINE: its centre on the joint, the line across the wires, and the body
+    // facing away from the harness. Which is the opposite way round at the two ends of a run, and the
+    // whole point of marking it: the middle of whatever was drawn is a point with no meaning on a part
+    // whose body is longer one side of the face than the other.
+    {
+        auto connectorDrawing = [](bool marked) {
+            std::vector<Entity> ents;
+            Entity face;                          // the face: across the part, at x = 0
+            face.id = QStringLiteral("face");
+            face.type = EntityType::Line;
+            face.a = {0, -6};
+            face.b = {0, 6};
+            if (marked) face.meta.insert(QLatin1String(kConnectionLineKey), true);
+            ents.push_back(face);
+            Entity body;                          // the shell, all of it to ONE side of the face
+            body.id = QStringLiteral("body");
+            body.type = EntityType::Rect;
+            body.points = {{0, -6}, {18, -6}, {18, 6}, {0, 6}};
+            ents.push_back(body);
+            return partDrawingFromEntities(ents);
+        };
+        auto harnessWith = [](const QString& partId) {
+            MechHarnessDef def;
+            MechNode p1;
+            p1.id = QStringLiteral("p1");
+            p1.kind = MechNodeKind::Connector;
+            p1.libPart = partId;
+            p1.openLengthMm = 15.0;
+            def.nodes.push_back(p1);
+            MechNode p2 = p1;
+            p2.id = QStringLiteral("p2");
+            p2.parentSegment = QStringLiteral("s1");
+            def.nodes.push_back(p2);
+            for (int i = 0; i < 4; ++i)
+                def.wires.push_back(wireOf(QStringLiteral("w%1").arg(i + 1), QStringLiteral("0.5")));
+            MechSegment s;
+            s.id = QStringLiteral("s1");
+            s.fromNode = QStringLiteral("p1");
+            s.toNode = QStringLiteral("p2");
+            s.lengthMm = 200.0;
+            for (const MechWire& w : def.wires) s.wireIds.push_back(w.id);
+            def.segments.push_back(s);
+            return def;
+        };
+        // What was placed at a point: where the marked face ended up, and where the body did.
+        struct Placed { Vec2 faceMid, faceDir, bodyMid; bool found = false; };
+        auto placedAt = [](const std::vector<Entity>& ents, const Vec2& at) {
+            Placed pl;
+            Bounds body;
+            for (const Entity& e : ents) {
+                if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+                    continue;
+                const Bounds b = e.bounds();
+                if (!b.valid) continue;
+                const Vec2 mid{(b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0};
+                if (distance(mid, at) > 40.0) continue;   // the copy at the other end
+                if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) {
+                    pl.faceMid = lerp(e.a, e.b, 0.5);
+                    pl.faceDir = (e.b - e.a).normalized();
+                    pl.found = true;
+                } else {
+                    body.expand(b.min);
+                    body.expand(b.max);
+                }
+            }
+            if (body.valid)
+                pl.bodyMid = {(body.min.x + body.max.x) / 2.0, (body.min.y + body.max.y) / 2.0};
+            return pl;
+        };
+
+        PartsCatalog catalog;
+        catalog.setRemembering(false);
+        LibraryPart part;
+        part.id = QStringLiteral("conn-marked");
+        part.kind = PartKind::Connector;
+        part.mechanical = connectorDrawing(true);
+        catalog.active().parts.push_back(part);
+        LibraryPart plain;
+        plain.id = QStringLiteral("conn-plain");
+        plain.kind = PartKind::Connector;
+        plain.mechanical = connectorDrawing(false);
+        catalog.active().parts.push_back(plain);
+
+        const MechHarnessDef def = harnessWith(part.id);
+        const std::vector<Entity> ents = buildMechanicalHarness(def, &catalog);
+        const MechLayout layout = layoutMechanicalHarness(def);
+        const MechPlacedNode* n1 = layout.node(QStringLiteral("p1"));
+        const MechPlacedNode* n2 = layout.node(QStringLiteral("p2"));
+        const Placed a = n1 ? placedAt(ents, n1->at) : Placed{};
+        const Placed b = n2 ? placedAt(ents, n2->at) : Placed{};
+        check(a.found && b.found, "connection line: the marked line is placed with the part");
+        if (a.found && b.found && n1 && n2) {
+            check(near(distance(a.faceMid, n1->at), 0.0),
+                  "connection line: its centre is on the joint");
+            check(near(distance(b.faceMid, n2->at), 0.0),
+                  "connection line: at the other end of the run as well");
+            // The run is horizontal here, so a line across it is vertical.
+            check(std::abs(a.faceDir.x) < 1e-6 && std::abs(b.faceDir.x) < 1e-6,
+                  "connection line: it lies across the wires at both ends");
+            check(a.bodyMid.x < n1->at.x,
+                  "connection line: the body faces away from the harness at the start");
+            check(b.bodyMid.x > n2->at.x,
+                  "connection line: and the opposite way round at the far end");
+        }
+
+        // Nothing marked: centred on the joint, the way it was before any of this.
+        const MechHarnessDef def2 = harnessWith(plain.id);
+        const std::vector<Entity> ents2 = buildMechanicalHarness(def2, &catalog);
+        Bounds all;
+        for (const Entity& e : ents2) {
+            if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+                continue;
+            const Bounds eb = e.bounds();
+            if (!eb.valid) continue;
+            const Vec2 mid{(eb.min.x + eb.max.x) / 2.0, (eb.min.y + eb.max.y) / 2.0};
+            if (!n1 || distance(mid, n1->at) > 40.0) continue;
+            all.expand(eb.min);
+            all.expand(eb.max);
+        }
+        check(all.valid && n1 && std::abs((all.min.x + all.max.x) / 2.0 - n1->at.x) < 1.0,
+              "connection line: with none marked the part is centred on the joint as before");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

@@ -293,6 +293,14 @@ public:
     void setSelectionColor(const QString& hex); // empty => ByLayer
     void setSelectionWeight(double weight);      // 0 => ByLayer
     void setSelectionMeta(const QString& key, const QString& value);
+    // Mark what is selected as the line the HARNESS ATTACHES TO on this part - the face of a
+    // connector, the barrel of a terminal. It is drawn orange from then on, travels with the drawing
+    // into the library, and is what the generator sets the part down by: the marked line goes across
+    // the wires with its centre on the joint. Called again with the same objects, it takes the mark
+    // off. Answers how many objects it marked, so a caller can say so.
+    int markSelectionAsConnectionLine(bool on);
+    // Whether everything selected carries the mark (for a toggle to show its state).
+    bool selectionIsConnectionLine() const;
     // Which side of a screen its drain leaves from. Not setSelectionMeta: the leg is GEOMETRY - the
     // last point of the entity - so the side has to move it, or the drawing keeps the old leg.
     void setSelectionScreenLegDir(const QString& dir); // linetype, plot style, ...

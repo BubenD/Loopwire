@@ -116,6 +116,11 @@ QString EntityRenderer::formatLength(double world, int decimals) {
 }
 
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
+    // The line on a part's drawing that the WIRES meet, marked as such: drawn in orange whatever layer
+    // it is on and whatever colour it was given, because what it says is not "this line is orange" but
+    // "this is where the harness attaches". A part is drawn once and placed a hundred times; the mark
+    // has to be visible on it at a glance, in the library preview as much as on the sheet.
+    if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) return QColor("#ff9f40");
     QString layerHex = QStringLiteral("#ffffff");
     if (const Layer* layer = doc.findLayer(e.layer); layer && QColor(layer->color).isValid())
         layerHex = layer->color;

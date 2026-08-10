@@ -56,6 +56,10 @@ public:
     void cancelCaptureFromSheet();
     bool capturing() const { return !capturingPart_.isEmpty(); }
     void insertIntoDrawing(bool mechanical);    // this drawing goes onto the sheet
+    // Onto the sheet AND selected, to be worked on: lines added or moved, and the one the harness
+    // attaches to marked as such (Harness ▸ connection line, or the `connline` command). Pressing
+    // Capture selection afterwards puts the edited drawing back on this part.
+    void editDrawing(bool mechanical);
     void clearDrawing(bool mechanical);
     bool saveLibrary();
     // Write the current part's description from its technical parameters.

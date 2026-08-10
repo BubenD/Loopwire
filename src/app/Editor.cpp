@@ -11715,6 +11715,35 @@ void Editor::setSelectionHatchMeta(const QString& key, const QJsonValue& value) 
     emit changed();
 }
 
+int Editor::markSelectionAsConnectionLine(bool on) {
+    auto sel = selectedEntities();
+    if (sel.empty() || !doc_) return 0;
+    pushUndo();
+    int n = 0;
+    for (Entity* e : sel) {
+        if (on) e->meta.insert(QLatin1String(kConnectionLineKey), true);
+        else e->meta.remove(QLatin1String(kConnectionLineKey));
+        ++n;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    return n;
+}
+
+bool Editor::selectionIsConnectionLine() const {
+    if (!doc_) return false;
+    bool any = false;
+    for (const QString& id : selected_) {
+        const Entity* e = nullptr;
+        for (const Entity& x : doc_->entities())
+            if (x.id == id) e = &x;
+        if (!e) continue;
+        any = true;
+        if (!e->meta.value(QLatin1String(kConnectionLineKey)).toBool()) return false;
+    }
+    return any;
+}
+
 void Editor::setSelectionDimMeta(const QString& key, const QJsonValue& value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;

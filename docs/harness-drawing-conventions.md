@@ -244,3 +244,23 @@ is where you are in the list. Asking for another branch in step 6 brings its fiv
 drawing is built beside the questions - the same generator, the same renderer, so what is shown is what
 will be placed - and every figure asked for is a figure of the part, not of the picture: a length, a
 diameter, a cross-section, a count.
+
+## Where a part attaches: the connection line
+
+A part's mechanical drawing is drawn once and placed a hundred times, and the generator has to know
+which way round to put it down. Centring it on the joint is a guess that only works when the part is
+symmetrical about its own face - a connector whose shell is 18 mm one side of the face and nothing the
+other lands half inside the harness.
+
+So a part can say where the harness attaches to it: select that line while the drawing is being made
+and mark it (Harness ▸ connection line, or the `connline` command). It is drawn ORANGE from then on -
+on the sheet, in the library preview, wherever the part is shown - and travels with the drawing into
+the library.
+
+A part with one is set down by it: the centre of the marked line on the joint, the line itself across
+the wires, and the body on the far side from them - which is the opposite way round at the two ends of
+a run, because a connector faces away from the harness it is on the end of. A part without one is
+centred on the joint as before, so nothing that was drawn before this changes.
+
+The library's Edit button puts a part's drawing on the sheet and leaves it selected, to be worked on
+and marked; Capture selection then puts it back on the part.
