@@ -6635,6 +6635,19 @@ void MainWindow::refreshProperties() {
                mv(QStringLiteral("extOffset")).toDouble(2.0), [this](double v) {
                    editor_->setSelectionDimMeta(QStringLiteral("extOffset"), std::max(0.0, v));
                });
+        // Which axis a linear dimension measures along. Dragging it about cannot change this - a height
+        // that turned into a length while it was being moved clear of the drawing was a bug, not a
+        // feature - so here is where it is changed on purpose.
+        if (mv(QStringLiteral("dimType")).toString(QStringLiteral("linear")) ==
+            QLatin1String("linear")) {
+            addCombo(QStringLiteral("Direction"), {"Horizontal", "Vertical"},
+                     dimensionAcrossX(*e) ? QStringLiteral("Horizontal")
+                                          : QStringLiteral("Vertical"),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionDimMeta(QStringLiteral("dimAcross"),
+                                                      t == QLatin1String("Horizontal"));
+                     });
+        }
 
         addHeader(QStringLiteral("Text"));
         addNum(QStringLiteral("Text height"), mv(QStringLiteral("textHeight")).toDouble(5.0),

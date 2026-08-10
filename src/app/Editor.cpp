@@ -6766,6 +6766,11 @@ void Editor::finishDraw() {
             e.a = draftPts_[0];
             e.b = draftPts_[1];
             e.points = {draftPts_[0], draftPts_[1], draftPts_[2]};
+            // Which axis a linear one was placed measuring along is written down here, once, from where
+            // the stand-off point was put. Everything afterwards reads it rather than working it out
+            // again, so the dimension cannot turn from a height into a length while it is being moved.
+            if (dimMode_ == DimMode::Linear)
+                e.meta.insert("dimAcross", dimensionAcrossX(e));
             break;
         case DimMode::Angular:
             if (draftPts_.size() < 3) { cancelDraw(); return; }

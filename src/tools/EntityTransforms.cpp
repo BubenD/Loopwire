@@ -105,6 +105,11 @@ void translateEntity(Entity& e, const Vec2& delta) {
 void rotateEntity(Entity& e, const Vec2& pivot, double angle) {
     const double c = std::cos(angle), s = std::sin(angle);
     mapPoints(e, [&](const Vec2& p) { return rotatePoint(p, pivot, c, s); });
+    // A linear dimension measures along an axis of the sheet and remembers which; turning it a quarter
+    // turn turns which axis that is, so the note of it turns with the object.
+    if (e.type == EntityType::Dimension && e.meta.contains(QLatin1String("dimAcross")) &&
+        std::abs(c) < std::abs(s))
+        e.meta.insert(QLatin1String("dimAcross"), !e.meta.value(QLatin1String("dimAcross")).toBool());
     e.rotation += angle;
     e.startAngle += angle;
     e.endAngle += angle;
@@ -193,6 +198,15 @@ void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
         const double ne = -e.startAngle;
         e.startAngle = ns;
         e.endAngle = ne;
+    }
+    // A linear dimension measures along an axis of the sheet and remembers which. A mirror line that is
+    // itself along an axis reflects x onto x and y onto y, so it stays as it was; one at a diagonal maps
+    // the x axis onto the y, and then the dimension measures the other way about.
+    if (e.type == EntityType::Dimension && e.meta.contains(QLatin1String("dimAcross"))) {
+        const Vec2 mx = mirrorPoint({1, 0}, {0, 0}, u); // where the x axis lands
+        if (std::abs(mx.x) < std::abs(mx.y))
+            e.meta.insert(QLatin1String("dimAcross"),
+                          !e.meta.value(QLatin1String("dimAcross")).toBool());
     }
     e.rotation = 2.0 * axis - e.rotation;
 }

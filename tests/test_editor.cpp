@@ -7269,6 +7269,116 @@ int run_editor_tests() {
         }
     }
 
+    // A dimension does not turn from vertical to horizontal while it is being handled. Which axis it
+    // measures along is the object's own, written down when it is placed, and nothing about dragging it
+    // changes it - not the joint by the arrow, not the points it measures between, not the text.
+    {
+        auto dragJoint = [](Editor& ed, const Vec2& from, const Vec2& to) {
+            ed.setTool(ToolId::Select);
+            ed.onPointerMove(from);
+            ed.onPointerPress(from, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove(to);
+            ed.onPointerRelease(to, Qt::LeftButton);
+            ed.onPointerMove(to);
+            ed.onPointerPress(to, Qt::LeftButton, Qt::NoModifier);
+        };
+        // a HEIGHT placed with the tool: up the y axis, standing off to the right
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+        ed.setTool(ToolId::Dimension);
+        ed.setDimMode(Editor::DimMode::Linear);
+        for (const Vec2& p : {Vec2{40, 20}, Vec2{40, 120}, Vec2{90, 70}}) {
+            ed.onPointerMove(p);
+            ed.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+        }
+        check(d.entities().size() == 1, "dim-axis: the tool placed a dimension");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.meta.contains(QStringLiteral("dimAcross")),
+                  "dim-axis: a placed dimension writes down which way it measures");
+            check(!dimensionAcrossX(e), "dim-axis: and this one is a height, not a length");
+
+            // the pull that used to turn it round: one measured point dragged past the other
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.selectById(e.id);
+            dragJoint(ed, {40, 20}, {40, 200});
+            const Entity& now = d.entities().front();
+            check(!dimensionAcrossX(now),
+                  "dim-axis: dragging a measured point past the other leaves it a height");
+            check(EntityRenderer::dimensionText(now).startsWith(QStringLiteral("80")),
+                  "dim-axis: and it measures the height it now spans");
+        }
+    }
+
+    // An older drawing never wrote the axis down. Reading one works it out and writes it on, so those
+    // dimensions are as steady as newly placed ones from then on.
+    {
+        Document d; d.entities().clear();
+        Entity e;
+        e.id = QStringLiteral("d");
+        e.type = EntityType::Dimension;
+        e.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+        e.meta.insert(QStringLiteral("decimals"), 1);
+        e.a = {40, 20};
+        e.b = {40, 120};
+        e.points = {{40, 20}, {40, 120}, {90, 70}};   // a height, standing off to the right
+        d.entities().push_back(e);
+        QJsonObject obj = dwx::toJson(d);
+        QJsonArray ents = obj.value(QStringLiteral("entities")).toArray();
+        QJsonObject first = ents[0].toObject();
+        first.remove(QStringLiteral("dimAcross"));     // the way an older file has it
+        ents[0] = first;
+        obj.insert(QStringLiteral("entities"), ents);
+        Document read;
+        dwx::fromJson(read, obj);
+        check(read.entities().size() == 1 &&
+                  read.entities().front().meta.contains(QStringLiteral("dimAcross")),
+              "dim-axis: reading an older drawing writes the axis down for its dimensions");
+        check(!read.entities().empty() && !dimensionAcrossX(read.entities().front()),
+              "dim-axis: and works out that this one was placed as a height");
+    }
+
+    // Changed on purpose, in Properties - and turned with the object when the object is turned.
+    {
+        Document d; d.entities().clear();
+        Entity e;
+        e.id = QStringLiteral("d");
+        e.type = EntityType::Dimension;
+        e.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+        e.meta.insert(QStringLiteral("decimals"), 1);
+        e.a = {40, 20};
+        e.b = {40, 120};
+        e.points = {{40, 20}, {40, 120}, {90, 70}};
+        e.meta.insert(QStringLiteral("dimAcross"), false);
+        d.entities().push_back(e);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById(QStringLiteral("d"));
+        ed.setSelectionDimMeta(QStringLiteral("dimAcross"), true);
+        check(dimensionAcrossX(d.entities().front()),
+              "dim-axis: Properties can turn it the other way about on purpose");
+
+        Entity turned = d.entities().front();
+        turned.meta.insert(QStringLiteral("dimAcross"), false);
+        rotateEntity(turned, {40, 20}, M_PI / 2.0);
+        check(dimensionAcrossX(turned),
+              "dim-axis: a quarter turn turns which axis it measures along");
+        Entity nudged = d.entities().front();
+        nudged.meta.insert(QStringLiteral("dimAcross"), false);
+        rotateEntity(nudged, {40, 20}, 0.2);
+        check(!dimensionAcrossX(nudged), "dim-axis: a small turn does not");
+
+        Entity flat = d.entities().front();
+        flat.meta.insert(QStringLiteral("dimAcross"), false);
+        mirrorEntity(flat, {0, 0}, {0, 100});         // mirrored across a vertical line
+        check(!dimensionAcrossX(flat), "dim-axis: mirroring along an axis leaves it as it was");
+        Entity diag = d.entities().front();
+        diag.meta.insert(QStringLiteral("dimAcross"), false);
+        mirrorEntity(diag, {0, 0}, {100, 100});       // ... and across a diagonal
+        check(dimensionAcrossX(diag),
+              "dim-axis: mirroring across a diagonal swaps the axes, and it follows");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

@@ -89,4 +89,15 @@ struct Entity {
     static Entity fromJson(const QJsonObject& obj);
 };
 
+// Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
+// horizontal and it stands off in y. The object remembers it ("dimAcross"), because working it out from
+// the geometry each time meant a dimension turned itself round when the geometry moved; only a drawing
+// saved before that was written has to have it worked out, and reading one stamps it on.
+bool dimensionAcrossX(const Entity& e);
+
+// The two ends of a linear or aligned dimension's line: the points the arrows are at, which is also
+// where its joints for moving the dimension line are. False when the object is not one of those kinds,
+// so the caller can leave it alone.
+bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2);
+
 } // namespace Edraw_Desktop

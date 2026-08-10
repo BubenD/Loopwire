@@ -41,17 +41,6 @@ void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side);
 std::vector<std::vector<Vec2>> splitRailAtHoles(const std::vector<Vec2>& rail, const Entity& e,
                                                 int side);
 
-// Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
-// horizontal and it stands off in y. Where the stand-off point sits says which; on the midpoint it says
-// nothing - a dimension out of a file that never saved that point - and then the longer way between the
-// measured points is taken to be the one being measured.
-bool dimensionAcrossX(const Entity& e);
-
-// The two ends of a linear or aligned dimension's line: the points the arrows are at, which is also
-// where its joints for moving the dimension line are. False when the object is not one of those kinds,
-// so the caller can leave it alone.
-bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2);
-
 // How far an object actually REACHES ON THE SHEET, which is not the same thing as Entity::bounds().
 // bounds() answers "where is the object", the question selection and hit-testing ask, and for a double
 // run that is its centreline - a path the drawing never puts a line on. What is drawn is two lines

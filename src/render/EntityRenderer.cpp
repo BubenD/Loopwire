@@ -1024,57 +1024,6 @@ std::vector<std::vector<Vec2>> clipPolylineByXBands(
 
 } // namespace
 
-namespace {
-// The three points a linear or aligned dimension is built from: the two it measures between and the one
-// its line stands off through. A dimension saved before those were written has only a and b, and then
-// the stand-off point is the midpoint - the dimension line lying on what it measures.
-bool dimStandOff(const Entity& e, Vec2& p1, Vec2& p2, Vec2& off) {
-    const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
-    if (ty != QLatin1String("linear") && ty != QLatin1String("aligned") &&
-        ty != QLatin1String("arclength"))
-        return false;
-    if (e.points.size() >= 3) {
-        p1 = e.points[0];
-        p2 = e.points[1];
-        off = e.points[2];
-    } else {
-        p1 = e.a;
-        p2 = e.b;
-        off = lerp(e.a, e.b, 0.5);
-    }
-    return true;
-}
-} // namespace
-
-bool dimensionAcrossX(const Entity& e) {
-    Vec2 p1, p2, off;
-    if (!dimStandOff(e, p1, p2, off)) return true;
-    const Vec2 mid = lerp(p1, p2, 0.5);
-    const double dx = std::abs(off.x - mid.x), dy = std::abs(off.y - mid.y);
-    if (dx < 1e-9 && dy < 1e-9) return std::abs(p2.x - p1.x) >= std::abs(p2.y - p1.y);
-    return dy >= dx;
-}
-
-bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
-    Vec2 p1, p2, off;
-    if (!dimStandOff(e, p1, p2, off)) return false;
-    if (e.meta.value("dimType").toString(QStringLiteral("linear")) == QLatin1String("linear")) {
-        if (dimensionAcrossX(e)) {
-            d1 = {p1.x, off.y};
-            d2 = {p2.x, off.y};
-        } else {
-            d1 = {off.x, p1.y};
-            d2 = {off.x, p2.y};
-        }
-    } else {
-        const Vec2 n = (p2 - p1).normalized().perp();
-        const double t = dot(off - p1, n);
-        d1 = p1 + n * t;
-        d2 = p2 + n * t;
-    }
-    return true;
-}
-
 QString EntityRenderer::dimensionText(const Entity& e) {
     const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
     const int dec = e.meta.contains("decimals") ? e.meta.value("decimals").toInt() : g_dimDecimals;
