@@ -48,6 +48,9 @@ public:
     void captureFromSheet();
     void insertIntoDrawing();
     void clearModel();
+    // Draw it on a canvas of its own: the same canvas the application draws on, over a scratch drawing
+    // that holds nothing else, with the ends that must not stretch marked on it while you work.
+    void editOnCanvas();
 
 private:
     void buildUi();

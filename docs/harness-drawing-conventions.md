@@ -314,8 +314,15 @@ those, it has one, and every drawing it releases uses it.
 
 So they are drawn once — **Harness mechanical ▸ Default models** — and stored as a set (one file,
 `mech-models.json`, in the application's data folder, which is how a house style moves from machine to
-machine). Each is drawn on the sheet with the ordinary tools and captured, so whatever can be drawn can
-be a model.
+machine). Each is drawn on **a canvas of its own** — the Edit button — which is the same canvas the application
+draws on, with the same tools (line, polyline, rectangle, circle, arc, plus snapping, the grid, zoom and
+undo), over a scratch drawing that holds nothing else. The sheet is a drawing of a harness; a model is a
+piece of the vocabulary those drawings are written in, and mixing the two means finding somewhere clear
+to work and remembering to clear up afterwards. The two ends that must not stretch are marked on the
+canvas as dashed lines while you draw, so a boot's taper or a wire's flush end is drawn UP TO the mark
+rather than measured afterwards; what is kept is moved so it starts at x = 0 and is centred across, and
+the marks are left behind. Capturing a selection off the sheet still works, for a model that already
+exists there.
 
 **Length is not part of a model.** A wire is drawn at whatever length suits and the harness says how
 long the wire is, so each model carries the two ends that must NOT stretch — the flush end of a wire,

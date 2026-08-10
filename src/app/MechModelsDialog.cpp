@@ -1,6 +1,7 @@
 #include "app/MechModelsDialog.h"
 
 #include "app/DrawingPreview.h"
+#include "app/MechModelCanvasDialog.h"
 #include "app/Editor.h"
 #include "harness/PartsLibrary.h"
 
@@ -176,6 +177,12 @@ void MechModelsDialog::buildUi() {
         "is in millimetres"));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
+    auto* edit = new QPushButton(QStringLiteral("Edit"));
+    edit->setToolTip(QStringLiteral(
+        "Draw it on a canvas of its own — lines, polylines, rectangles, circles and arcs, with the ends "
+        "that must not stretch marked while you work"));
+    connect(edit, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
+    buttons->addWidget(edit);
     auto* ins = new QPushButton(QStringLiteral("Put on the sheet"));
     ins->setToolTip(QStringLiteral("Draw it on the sheet to change it, then capture it again"));
     connect(ins, &QPushButton::clicked, this, &MechModelsDialog::insertIntoDrawing);
@@ -345,6 +352,38 @@ void MechModelsDialog::insertIntoDrawing() {
         summary_->setText(QStringLiteral("Click the sheet to put it down — change it there and press "
                                          "Capture selection to take it back"));
     hide();
+}
+
+void MechModelsDialog::editOnCanvas() {
+    const MechModelKind kind = currentKind();
+    MechModel m;
+    m.kind = kind;
+    if (const MechModel* had = set_.of(kind)) m = *had;   // what is there, to be changed
+    MechModelCanvasDialog dlg(m, this);
+    if (dlg.exec() != QDialog::Accepted) {
+        if (summary_) summary_->setText(QStringLiteral("Left as it was"));
+        return;
+    }
+    const QJsonArray drawn = dlg.drawing();
+    if (drawn.isEmpty()) {
+        if (summary_) summary_->setText(QStringLiteral("Nothing was drawn — left as it was"));
+        return;
+    }
+    m.drawing = drawn;
+    // Measured off what was drawn, so the figures are the drawing's own rather than something typed
+    // that has to be kept in step with it by hand. The ends that must not stretch stay as they were:
+    // they are a decision about the model, not a measurement of it.
+    m.drawnLengthMm = dlg.drawnLengthMm();
+    m.drawnAcrossMm = dlg.drawnAcrossMm();
+    set_.set(m);
+    set_.save();
+    refreshList();
+    refreshDetails();
+    if (summary_)
+        summary_->setText(QStringLiteral("Drawn %1 mm long and %2 mm across — now say which ends must "
+                                         "not stretch")
+                              .arg(m.drawnLengthMm, 0, 'f', 1)
+                              .arg(m.drawnAcrossMm, 0, 'f', 1));
 }
 
 void MechModelsDialog::clearModel() {
