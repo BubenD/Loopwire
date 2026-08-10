@@ -123,6 +123,10 @@ private:
     void setBranchCount(int count);
     int branchCount() const;
     MechSegment* branchRun(int branch);
+    // The short leg that turns a branch off the trunk, before its straight run.
+    MechSegment* branchSpread(int branch);
+    // Which way branch `index` of `count` leaves the split.
+    static double branchAngleFor(int index, int count);
     MechNode* branchTip(int branch);
 
     Editor* editor_ = nullptr;
@@ -131,6 +135,11 @@ private:
     std::vector<StepRef> steps_;
     int current_ = 0;
     bool syncing_ = false;
+    // Nothing is drawn until something has been SAID. The window opens on step 1 with an empty canvas
+    // beside it - the harness does not exist yet, and a drawing of a harness nobody has described is a
+    // drawing of the defaults, which is worse than nothing because it looks like an answer. The first
+    // field changed, or the first step moved on from, starts it.
+    bool started_ = false;
 
     QListWidget* list_ = nullptr;
     QStackedWidget* pages_ = nullptr;

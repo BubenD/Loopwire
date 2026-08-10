@@ -277,3 +277,29 @@ A part goes onto the sheet as a BLOCK - inserted from the library or put down by
 way. A part is a block by definition: drawn once, dropped in wherever it is wanted. As one it stays one
 thing - picked in a click, moved in a piece, and rebuilt everywhere on the sheet when the part's drawing
 is edited. As loose lines it was none of that the moment it landed.
+
+### What the guided build draws, and from what
+
+The canvas beside the questions opens **empty**. A harness does not exist until something has been said
+about it, and a drawing of the defaults looks like an answer when it is not one; the first field changed
+or step moved on from starts it.
+
+A **branch is two legs**: a short one turning it off the trunk, then a straight one parallel to the trunk
+again — a quarter of the branch and three quarters of it, bounded so a short branch is not all corner.
+The fan is symmetric about the trunk and includes the straight-through when the count is odd, so two
+branches make a Y and three make a Y with a straight through the middle, which is the shape a harness of
+three has.
+
+**Drawn from the library, or drawn from its figures.** A connector, a backshell, a Y- or T-split and a
+terminal are drawn from their own mechanical drawing: what those look like is the point of them, their
+shape is particular, and it is what a person recognises on the sheet. Heatshrink, braid, a boot, a
+sleeve, a conduit, a tie, a grommet are drawn by the generator from their numbers — how long, how wide,
+where it starts — all of them the same way. A dozen sleeves each drawn in whatever style whoever captured
+it happened to use is harder to read, not easier. Only the mechanical drawing is ever used for this; a
+part chosen for a connector that has none says so in the list, and comes out as a plain body sized on
+what arrives at it.
+
+**To scale, both ways.** Widths and lengths at the same scale, so a width taken off the drawing is the
+width of the thing: a bar across the outline measures the diameter itself. The builder proper can
+exaggerate the bodies to make a formboard sheet readable, and says so on the drawing when it does; a
+harness being described for the first time is drawn as it is.

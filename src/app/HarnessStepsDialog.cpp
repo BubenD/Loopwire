@@ -76,12 +76,21 @@ StepText textFor(HarnessStepsDialog::Step s) {
     return {"", ""};
 }
 
-void fillParts(QComboBox* box, const PartsCatalog& catalog, PartKind kind) {
+// The parts of a kind, for a step to choose from. `needsDrawing` marks the ones with no mechanical
+// drawing of their own: for a connector or a backshell that is what will be drawn, so a part without one
+// says so in the list rather than quietly coming out as a plain body.
+void fillParts(QComboBox* box, const PartsCatalog& catalog, PartKind kind, bool needsDrawing = false) {
     if (!box) return;
     const QString had = box->currentData().toString();
     box->clear();
     box->addItem(QStringLiteral("— typed in below —"), QString());
-    for (const LibraryPart* p : catalog.ofKind(kind)) box->addItem(p->title(), p->id);
+    for (const LibraryPart* p : catalog.ofKind(kind)) {
+        const bool drawn = p->hasMechanical();
+        box->addItem(needsDrawing && !drawn
+                         ? QStringLiteral("%1  (no mechanical drawing)").arg(p->title())
+                         : p->title(),
+                     p->id);
+    }
     const int at = box->findData(had);
     box->setCurrentIndex(at >= 0 ? at : 0);
 }
@@ -141,6 +150,11 @@ HarnessStepsDialog::HarnessStepsDialog(Editor* editor, QWidget* parent)
     split.name = QStringLiteral("BR1");
     split.parentSegment = QStringLiteral("main");
     def_.nodes.push_back(split);
+    // To scale in both directions: a width taken off this drawing is the width of the thing. The
+    // builder proper can exaggerate the bodies to make a formboard sheet readable, and says so on the
+    // drawing when it does; a harness being described for the first time is drawn as it is.
+    def_.draw.diameterExaggeration = 1.0;
+    def_.draw.scale = 1.0;
     setConductors(4, QStringLiteral("0.5"));
     setBranchCount(2);
 
@@ -574,7 +588,12 @@ void HarnessStepsDialog::goToStep(int index) {
     showStep();
 }
 
-void HarnessStepsDialog::next() { goToStep(current_ + 1); }
+void HarnessStepsDialog::next() {
+    // Moving on is taking the step as answered - by its defaults, if they were not changed - so the
+    // drawing starts here too.
+    started_ = true;
+    goToStep(current_ + 1);
+}
 void HarnessStepsDialog::back() { goToStep(current_ - 1); }
 
 // ---------------------------------------------------------------------------------------------------
@@ -584,18 +603,18 @@ void HarnessStepsDialog::back() { goToStep(current_ - 1); }
 int HarnessStepsDialog::branchCount() const {
     int n = 0;
     for (const MechSegment& s : def_.segments)
-        if (s.fromNode == QLatin1String("split")) ++n;
+        if (s.fromNode == QLatin1String("split")) ++n;   // one spread leg per branch
     return n;
 }
 
 MechSegment* HarnessStepsDialog::branchRun(int branch) {
-    int n = 0;
-    for (MechSegment& s : def_.segments) {
-        if (s.fromNode != QLatin1String("split")) continue;
-        if (n == branch) return &s;
-        ++n;
-    }
-    return nullptr;
+    // The straight leg: what the branch's length and its coverings are about. The spread leg beside it
+    // is the short piece that turns it off the trunk.
+    return segmentIn(def_, QStringLiteral("br%1").arg(branch + 1));
+}
+
+MechSegment* HarnessStepsDialog::branchSpread(int branch) {
+    return segmentIn(def_, QStringLiteral("sp%1").arg(branch + 1));
 }
 
 MechNode* HarnessStepsDialog::branchTip(int branch) {
@@ -603,28 +622,62 @@ MechNode* HarnessStepsDialog::branchTip(int branch) {
     return run ? nodeIn(def_, run->toNode) : nullptr;
 }
 
+// Which way each branch leaves the split, for a fan of this many: symmetric about the trunk, and with
+// the middle one carrying straight on when there is an odd number of them. Two branches make a Y; three
+// make a Y with a straight through the middle of it, which is what a harness of three actually looks
+// like and what the sample drawing draws.
+double HarnessStepsDialog::branchAngleFor(int index, int count) {
+    if (count <= 1) return 0.0;
+    const double spread = 35.0;
+    return spread - 2.0 * spread * index / (count - 1);
+}
+
 void HarnessStepsDialog::setBranchCount(int count) {
     count = std::clamp(count, 1, 12);
     // Away with the ones no longer wanted, from the end, so the branches already described keep their
     // figures rather than being renumbered under the person's hands.
     while (branchCount() > count) {
-        MechSegment* run = branchRun(branchCount() - 1);
-        if (!run) break;
-        const QString runId = run->id, tipId = run->toNode;
+        const int last = branchCount() - 1;
+        const QString sp = QStringLiteral("sp%1").arg(last + 1);
+        const QString el = QStringLiteral("el%1").arg(last + 1);
+        const QString br = QStringLiteral("br%1").arg(last + 1);
+        const QString tip = QStringLiteral("tip%1").arg(last + 1);
+        const int before = branchCount();
         def_.segments.erase(std::remove_if(def_.segments.begin(), def_.segments.end(),
-                                           [&](const MechSegment& s) { return s.id == runId; }),
+                                           [&](const MechSegment& s) {
+                                               return s.id == sp || s.id == br;
+                                           }),
                             def_.segments.end());
         def_.nodes.erase(std::remove_if(def_.nodes.begin(), def_.nodes.end(),
-                                        [&](const MechNode& n) { return n.id == tipId; }),
+                                        [&](const MechNode& n) {
+                                            return n.id == el || n.id == tip;
+                                        }),
                          def_.nodes.end());
+        if (branchCount() >= before) break;   // nothing came off: stop rather than spin
     }
     while (branchCount() < count) {
         const int index = branchCount();
+        // TWO legs, not one: a short piece out of the split at an angle, then a straight one parallel
+        // to the trunk again. That is the shape a branch has - it comes off the trunk and then runs -
+        // and a single leg at an angle draws a harness whose branches spread for ever.
+        MechSegment spread;
+        spread.id = QStringLiteral("sp%1").arg(index + 1);
+        spread.fromNode = QStringLiteral("split");
+        spread.toNode = QStringLiteral("el%1").arg(index + 1);
+        spread.lengthMm = 50.0;
+        def_.segments.push_back(spread);
+        MechNode elbow;
+        elbow.id = spread.toNode;
+        elbow.kind = MechNodeKind::Breakout;      // a bend, not a junction: two legs meet here
+        elbow.name = QStringLiteral("K%1").arg(index + 1);
+        elbow.parentSegment = spread.id;
+        elbow.angleDeg = 0.0;                     // set below, with the rest of the fan
+        def_.nodes.push_back(elbow);
         MechSegment run;
         run.id = QStringLiteral("br%1").arg(index + 1);
-        run.fromNode = QStringLiteral("split");
+        run.fromNode = elbow.id;
         run.toNode = QStringLiteral("tip%1").arg(index + 1);
-        run.lengthMm = 200.0;
+        run.lengthMm = 150.0;
         def_.segments.push_back(run);
         MechNode tip;
         tip.id = run.toNode;
@@ -632,10 +685,15 @@ void HarnessStepsDialog::setBranchCount(int count) {
         tip.name = QStringLiteral("P%1").arg(index + 2);
         tip.pinCount = 4;
         tip.parentSegment = run.id;
-        // Fanned out either side of the trunk, so a new branch is visible the moment it is added
-        // rather than lying under the one before it.
-        tip.angleDeg = count == 1 ? 0.0 : -35.0 + 70.0 * index / std::max(1, count - 1);
+        tip.angleDeg = 0.0;                       // the straight leg carries on the way the spread went
         def_.nodes.push_back(tip);
+    }
+    // The fan, set on every branch: the spread leg turns off the trunk, and the straight leg turns
+    // back by the same amount so it runs parallel to it again.
+    for (int b = 0; b < count; ++b) {
+        const double angle = branchAngleFor(b, count);
+        if (MechNode* elbow = nodeIn(def_, QStringLiteral("el%1").arg(b + 1))) elbow->angleDeg = angle;
+        if (MechNode* tip = nodeIn(def_, QStringLiteral("tip%1").arg(b + 1))) tip->angleDeg = -angle;
     }
     // The conductors are shared out among the branches: whatever is not said, evenly.
     const int branches = branchCount();
@@ -651,6 +709,8 @@ void HarnessStepsDialog::setBranchCount(int count) {
             ids << def_.wires[static_cast<size_t>(given + k)].id;
         given += ids.size();
         run->wireIds = ids;
+        // Both legs of the branch carry the same conductors: they are one branch drawn in two pieces.
+        if (MechSegment* spread = branchSpread(b)) spread->wireIds = ids;
     }
 }
 
@@ -745,7 +805,8 @@ void HarnessStepsDialog::showStep() {
         pages_->setCurrentIndex(0);
         MechNode* n = nodeForStep(ref);
         fillParts(endPart_, catalog_,
-                  n && n->kind == MechNodeKind::Connector ? PartKind::Connector : PartKind::Terminal);
+                  n && n->kind == MechNodeKind::Connector ? PartKind::Connector : PartKind::Terminal,
+                  /*needsDrawing=*/true);
         if (n) {
             const bool leads = n->kind == MechNodeKind::FreeEnd;
             const bool terminal = n->kind == MechNodeKind::Connector &&
@@ -771,7 +832,9 @@ void HarnessStepsDialog::showStep() {
     case Step::StartDress:
     case Step::BranchDress: {
         pages_->setCurrentIndex(1);
-        fillParts(dressBackshellPart_, catalog_, PartKind::Backshell);
+        fillParts(dressBackshellPart_, catalog_, PartKind::Backshell, /*needsDrawing=*/true);
+        // A boot is heatshrink: drawn from its figures, as a taper over what it goes on, so its own
+        // picture is not wanted and not asked for.
         fillParts(dressBootPart_, catalog_, PartKind::HeatshrinkBoot);
         MechNode* n = nodeForStep(ref);
         if (n) {
@@ -850,9 +913,10 @@ void HarnessStepsDialog::showStep() {
             runJacket_->setValue(run->jacketOdMm);
             runCablePart_->setEnabled(cable);
             runJacket_->setEnabled(cable);
-            runLength_->setValue(run->lengthMm);
-            MechNode* tip = nodeIn(def_, run->toNode);
-            runAngle_->setValue(tip ? tip->angleDeg : 0.0);
+            const MechSegment* sp = main ? nullptr : branchSpread(ref.branch);
+            runLength_->setValue(run->lengthMm + (sp ? sp->lengthMm : 0.0));
+            const MechNode* elbow = sp ? def_.node(sp->toNode) : nullptr;
+            runAngle_->setValue(elbow ? elbow->angleDeg : 0.0);
             runAngle_->setEnabled(!main);
             const double dia = segmentBodyDiameterMm(def_, *run);
             runBundle_->setText(
@@ -903,7 +967,8 @@ void HarnessStepsDialog::showStep() {
         const MechFitting* y = n ? fittingOn(n->fittings, PartKind::YSplit, false) : nullptr;
         const MechFitting* hs = n ? fittingOn(n->fittings, PartKind::Heatshrink, false) : nullptr;
         splitKind_->setCurrentIndex(y ? 2 : hs ? 1 : 0);
-        fillParts(splitPart_, catalog_, y ? PartKind::YSplit : PartKind::Heatshrink);
+        fillParts(splitPart_, catalog_, y ? PartKind::YSplit : PartKind::Heatshrink,
+                  /*needsDrawing=*/y != nullptr);
         const MechFitting* f = y ? y : hs;
         if (f) {
             const int at = splitPart_->findData(f->libPart);
@@ -925,6 +990,7 @@ void HarnessStepsDialog::showStep() {
 
 void HarnessStepsDialog::apply() {
     if (steps_.empty()) return;
+    started_ = true;   // something has been said: the harness exists from here on
     const StepRef ref = steps_[static_cast<size_t>(current_)];
     switch (ref.step) {
     case Step::StartEnd:
@@ -988,6 +1054,16 @@ void HarnessStepsDialog::apply() {
         if (!run) break;
         const bool cable = runMake_->currentIndex() == 1;
         run->lengthMm = runLength_->value();
+        // On a branch the figure asked for is how long the BRANCH is, and it is drawn in two pieces:
+        // the piece that turns it off the trunk and the straight piece after it. A quarter and
+        // three quarters, which is about what the sample drawings use, bounded so a short branch is
+        // not all corner and a long one does not spread half way across the sheet.
+        if (ref.step == Step::BranchRun) {
+            const double total = std::max(1.0, runLength_->value());
+            const double spread = std::clamp(total * 0.25, 10.0, 150.0);
+            if (MechSegment* sp = branchSpread(ref.branch)) sp->lengthMm = spread;
+            run->lengthMm = std::max(1.0, total - spread);
+        }
         if (cable) {
             run->cablePart = runCablePart_->currentData().toString();
             run->jacketOdMm = runJacket_->value();
@@ -999,14 +1075,22 @@ void HarnessStepsDialog::apply() {
         }
         if (ref.step == Step::MainRun) {
             setConductors(runCount_->value(), runGauge_->currentText().trimmed());
-        } else {
+        } else if (true) {
             // How many of the conductors go this way. The rest stay with the other branches.
             const int want = std::clamp(runCount_->value(), 0,
                                         static_cast<int>(def_.wires.size()));
             QStringList ids;
             for (int i = 0; i < want; ++i) ids << def_.wires[static_cast<size_t>(i)].id;
             run->wireIds = ids;
-            if (MechNode* tip = nodeIn(def_, run->toNode)) tip->angleDeg = runAngle_->value();
+            // Down both legs of the branch: they are one branch drawn in two pieces, and a leg with
+            // different conductors in it would be drawn at a different width from the piece beside it.
+            if (MechSegment* sp = branchSpread(ref.branch)) sp->wireIds = ids;
+            // The angle is the spread leg's; the straight leg turns back by as much, so it stays
+            // parallel to the trunk however the branch is aimed.
+            if (MechSegment* sp = branchSpread(ref.branch)) {
+                if (MechNode* elbow = nodeIn(def_, sp->toNode)) elbow->angleDeg = runAngle_->value();
+                if (MechNode* tip = nodeIn(def_, run->toNode)) tip->angleDeg = -runAngle_->value();
+            }
         }
         break;
     }
@@ -1056,6 +1140,11 @@ void HarnessStepsDialog::apply() {
 
 void HarnessStepsDialog::refreshPreview() {
     if (!preview_) return;
+    if (!started_) {
+        preview_->setEntities({});
+        preview_->setEmptyText(QStringLiteral("nothing yet — answer the step beside this"));
+        return;
+    }
     preview_->setEntities(buildMechanicalHarness(def_, &catalog_));
 }
 
@@ -1070,11 +1159,15 @@ void HarnessStepsDialog::refreshSummary() {
             if (run) longest = std::max(longest, main->lengthMm + run->lengthMm);
         }
     }
-    summary_->setText(QStringLiteral("%1 conductor(s), %2 branch(es), longest way through "
-                                     "%3 mm — step %4 of %5")
+    summary_->setText(QStringLiteral("%1 conductor(s), %2 branch(es), longest way through %3 mm — "
+                                     "drawn to scale, %4 — step %5 of %6")
                           .arg(def_.wires.size())
                           .arg(branchCount())
                           .arg(longest, 0, 'f', 0)
+                          .arg(std::abs(def_.draw.diameterExaggeration - 1.0) < 1e-9
+                                   ? QStringLiteral("widths and lengths alike")
+                                   : QStringLiteral("widths ×%1")
+                                         .arg(def_.draw.diameterExaggeration, 0, 'f', 1))
                           .arg(current_ + 1)
                           .arg(steps_.size()));
 }

@@ -1074,6 +1074,29 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 namespace {
 
 // The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
+// Which parts are drawn from their OWN drawing, and which are drawn from their numbers.
+//
+// A connector, a backshell, a Y- or T-split: what those look like is the point of them. Their shape is
+// particular, it is what a person recognises on the sheet, and it comes out of the library as a drawing
+// made for the purpose.
+//
+// Everything else - heatshrink, braid, a sleeve, a conduit, a tie, a grommet - is a length of something
+// over the bundle. What matters about one is its figures: how long, how wide, where it starts. Drawn
+// from its own picture, a dozen of them would each be drawn in whatever style whoever captured it
+// happened to use, and a drawing where every sleeve looks different is harder to read, not easier. So
+// they are drawn by this generator, all in one way, from the numbers.
+bool mechDrawsFromLibrary(PartKind kind) {
+    switch (kind) {
+    case PartKind::Connector:
+    case PartKind::Backshell:
+    case PartKind::YSplit:
+    case PartKind::Terminal:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // A part put down by the generator is one THING on the sheet, not a handful of lines: stamped as a copy
 // of the block the part is, so a click picks the whole connector, moving it moves all of it, and editing
 // the part's drawing rebuilds every copy already generated. The same block a part inserted from the
@@ -1522,7 +1545,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const double startMm = std::clamp(f.atMm, 0.0, std::max(0.0, seg->lengthMm - 1e-9));
             const double runMm = std::min(lengthMm, std::max(0.0, seg->lengthMm - startMm));
             const Vec2 c = ps.a + u * along(startMm + runMm / 2.0);
-            if (part && part->hasMechanical()) {
+            if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
@@ -1669,7 +1692,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 ++stacked;
             }
             const Vec2 c = pn.at + u * (into * along(startMm + lengthMm / 2.0));
-            if (part && part->hasMechanical()) {
+            if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
                 for (Entity& e : placedPartDrawing(*part, c, dirRad, opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
