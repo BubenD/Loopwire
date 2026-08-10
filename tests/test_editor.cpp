@@ -7174,6 +7174,101 @@ int run_editor_tests() {
         }
     }
 
+    // The joint by the arrow carries the dimension line off the geometry THE WAY THE DIMENSION STANDS
+    // OFF, and no other way. A length stays a length: dragging that joint sideways used to swing the
+    // dimension line round past the middle and leave the object measuring its height instead, which is
+    // not something anyone asks for by dragging an arrow.
+    {
+        auto dim = [](const QString& type, Vec2 a, Vec2 b, Vec2 off) {
+            Entity e;
+            e.id = QStringLiteral("d");
+            e.type = EntityType::Dimension;
+            e.meta.insert(QStringLiteral("dimType"), type);
+            e.meta.insert(QStringLiteral("textHeight"), 5.0);
+            e.meta.insert(QStringLiteral("decimals"), 1);
+            e.a = a;
+            e.b = b;
+            e.points = {a, b, off};
+            return e;
+        };
+        auto dragJoint = [](Editor& ed, const Vec2& from, const Vec2& to) {
+            ed.setTool(ToolId::Select);
+            ed.onPointerMove(from);
+            ed.onPointerPress(from, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove(to);
+            ed.onPointerRelease(to, Qt::LeftButton);
+            ed.onPointerMove(to);
+            ed.onPointerPress(to, Qt::LeftButton, Qt::NoModifier);
+        };
+
+        {   // a length: measured across x, standing off above, arrow ends at y = 50
+            Document d; d.entities().clear();
+            d.entities().push_back(dim(QStringLiteral("linear"), {40, 20}, {160, 20}, {100, 50}));
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            const QString said = EntityRenderer::dimensionText(d.entities().front());
+            check(said == QStringLiteral("120.0"), "dim-standoff: it measures the length to start with");
+            Vec2 d1, d2;
+
+            dragJoint(ed, {40, 50}, {40, 90});         // straight out: the way it stands off
+            dimensionLineEnds(d.entities().front(), d1, d2);
+            check(near(d1.y, 90.0) && near(d2.y, 90.0),
+                  "dim-standoff: dragged outwards, the whole dimension line goes with it");
+            check(EntityRenderer::dimensionText(d.entities().front()) == said,
+                  "dim-standoff: measuring the same length");
+
+            dragJoint(ed, {40, 90}, {300, 90});        // sideways, well past the middle
+            dimensionLineEnds(d.entities().front(), d1, d2);
+            check(near(d1.y, 90.0) && near(d2.y, 90.0) && near(d1.x, 40.0) && near(d2.x, 160.0),
+                  "dim-standoff: dragged sideways, nothing moves");
+            check(EntityRenderer::dimensionText(d.entities().front()) == said,
+                  "dim-standoff: and it is still the length that is measured, not the height");
+
+            dragJoint(ed, {40, 90}, {40, -30});        // out the other side of the object
+            dimensionLineEnds(d.entities().front(), d1, d2);
+            check(near(d1.y, -30.0), "dim-standoff: it may stand off on the other side");
+            check(EntityRenderer::dimensionText(d.entities().front()) == said,
+                  "dim-standoff: measuring the same length there too");
+        }
+        {   // a height: measured up y, standing off to the right
+            Document d; d.entities().clear();
+            d.entities().push_back(dim(QStringLiteral("linear"), {40, 20}, {40, 120}, {90, 70}));
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            const QString said = EntityRenderer::dimensionText(d.entities().front());
+            check(said == QStringLiteral("100.0"), "dim-standoff: a height measures up y");
+            Vec2 d1, d2;
+            dragJoint(ed, {90, 20}, {130, 300});   // outwards AND a long way along at the same time
+            dimensionLineEnds(d.entities().front(), d1, d2);
+            check(near(d1.x, 130.0) && near(d2.x, 130.0) && near(d1.y, 20.0) && near(d2.y, 120.0),
+                  "dim-standoff: only the standing-off part of the drag is taken");
+            check(EntityRenderer::dimensionText(d.entities().front()) == said,
+                  "dim-standoff: the height is still the height");
+        }
+        {   // an aligned one stands off along the perpendicular to what it measures
+            Document d; d.entities().clear();
+            d.entities().push_back(dim(QStringLiteral("aligned"), {40, 20}, {150, 60}, {80, 70}));
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(6);
+            ed.selectById(QStringLiteral("d"));
+            const QString said = EntityRenderer::dimensionText(d.entities().front());
+            Vec2 d1, d2;
+            dimensionLineEnds(d.entities().front(), d1, d2);
+            const Vec2 dir = (Vec2{150, 60} - Vec2{40, 20}).normalized();
+            dragJoint(ed, d1, d1 + dir * 60.0);            // along the line
+            Vec2 a1, a2;
+            dimensionLineEnds(d.entities().front(), a1, a2);
+            check(near(a1.x, d1.x) && near(a1.y, d1.y),
+                  "dim-standoff: an aligned one does not slide along its own line");
+            dragJoint(ed, a1, a1 + dir.perp() * 25.0);     // across it
+            Vec2 b1, b2;
+            dimensionLineEnds(d.entities().front(), b1, b2);
+            check(near(distance(b1, a1), 25.0),
+                  "dim-standoff: across the line it stands off by just that much");
+            check(EntityRenderer::dimensionText(d.entities().front()) == said,
+                  "dim-standoff: and measures the same either way");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

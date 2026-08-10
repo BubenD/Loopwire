@@ -507,26 +507,10 @@ Bounds drawnBounds(const Entity& e) {
         // carried out to the stand-off, and on an aligned one that puts its far end well past the
         // stand-off point itself. Then the text stands off the line again, and the extension lines
         // overshoot it.
-        const QString dty = e.meta.value("dimType").toString(QStringLiteral("linear"));
-        if ((dty == QLatin1String("linear") || dty == QLatin1String("aligned") ||
-             dty == QLatin1String("arclength")) &&
-            e.points.size() >= 3) {
-            const Vec2 p1 = e.points[0], p2 = e.points[1], off = e.points[2];
-            if (dty == QLatin1String("linear")) {
-                const Vec2 mid = lerp(p1, p2, 0.5);
-                if (std::abs(off.y - mid.y) >= std::abs(off.x - mid.x)) {
-                    b.expand({p1.x, off.y});
-                    b.expand({p2.x, off.y});
-                } else {
-                    b.expand({off.x, p1.y});
-                    b.expand({off.x, p2.y});
-                }
-            } else {
-                const Vec2 n = (p2 - p1).normalized().perp();
-                const double t = dot(off - p1, n);
-                b.expand(p1 + n * t);
-                b.expand(p2 + n * t);
-            }
+        Vec2 d1, d2;
+        if (dimensionLineEnds(e, d1, d2)) {
+            b.expand(d1);
+            b.expand(d2);
         }
         if (e.meta.contains("textPosX"))
             b.expand({e.meta.value("textPosX").toDouble(), e.meta.value("textPosY").toDouble()});
@@ -903,21 +887,10 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
 
     // ---- linear / aligned / arclength: extension lines + dim line + arrows ----
     const Vec2 p1 = e.a, p2 = e.b;
-    Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
     Vec2 d1, d2;
-    double measure = 0.0;
-    if (ty == QLatin1String("linear")) {
-        const Vec2 mid = lerp(p1, p2, 0.5);
-        const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
-        if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; measure = std::abs(p2.x - p1.x); }
-        else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; measure = std::abs(p2.y - p1.y); }
-    } else { // aligned (and arclength as a chord)
-        const Vec2 dir = (p2 - p1).normalized();
-        const Vec2 n = dir.perp();
-        const double t = dot(off - p1, n);
-        d1 = p1 + n * t;
-        d2 = p2 + n * t;
-        measure = distance(p1, p2);
+    if (!dimensionLineEnds(e, d1, d2)) {
+        d1 = p1;
+        d2 = p2;
     }
     const QPointF s1 = vt.toScreen(p1), s2 = vt.toScreen(p2);
     const QPointF e1 = vt.toScreen(d1), e2 = vt.toScreen(d2);
@@ -1051,6 +1024,57 @@ std::vector<std::vector<Vec2>> clipPolylineByXBands(
 
 } // namespace
 
+namespace {
+// The three points a linear or aligned dimension is built from: the two it measures between and the one
+// its line stands off through. A dimension saved before those were written has only a and b, and then
+// the stand-off point is the midpoint - the dimension line lying on what it measures.
+bool dimStandOff(const Entity& e, Vec2& p1, Vec2& p2, Vec2& off) {
+    const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
+    if (ty != QLatin1String("linear") && ty != QLatin1String("aligned") &&
+        ty != QLatin1String("arclength"))
+        return false;
+    if (e.points.size() >= 3) {
+        p1 = e.points[0];
+        p2 = e.points[1];
+        off = e.points[2];
+    } else {
+        p1 = e.a;
+        p2 = e.b;
+        off = lerp(e.a, e.b, 0.5);
+    }
+    return true;
+}
+} // namespace
+
+bool dimensionAcrossX(const Entity& e) {
+    Vec2 p1, p2, off;
+    if (!dimStandOff(e, p1, p2, off)) return true;
+    const Vec2 mid = lerp(p1, p2, 0.5);
+    const double dx = std::abs(off.x - mid.x), dy = std::abs(off.y - mid.y);
+    if (dx < 1e-9 && dy < 1e-9) return std::abs(p2.x - p1.x) >= std::abs(p2.y - p1.y);
+    return dy >= dx;
+}
+
+bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
+    Vec2 p1, p2, off;
+    if (!dimStandOff(e, p1, p2, off)) return false;
+    if (e.meta.value("dimType").toString(QStringLiteral("linear")) == QLatin1String("linear")) {
+        if (dimensionAcrossX(e)) {
+            d1 = {p1.x, off.y};
+            d2 = {p2.x, off.y};
+        } else {
+            d1 = {off.x, p1.y};
+            d2 = {off.x, p2.y};
+        }
+    } else {
+        const Vec2 n = (p2 - p1).normalized().perp();
+        const double t = dot(off - p1, n);
+        d1 = p1 + n * t;
+        d2 = p2 + n * t;
+    }
+    return true;
+}
+
 QString EntityRenderer::dimensionText(const Entity& e) {
     const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
     const int dec = e.meta.contains("decimals") ? e.meta.value("decimals").toInt() : g_dimDecimals;
@@ -1074,10 +1098,7 @@ QString EntityRenderer::dimensionText(const Entity& e) {
         // on, the others measure between the points themselves.
         double measure = 0.0;
         if (ty == QLatin1String("linear")) {
-            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(e.a, e.b, 0.5);
-            const Vec2 mid = lerp(e.a, e.b, 0.5);
-            measure = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x) ? std::abs(e.b.x - e.a.x)
-                                                                        : std::abs(e.b.y - e.a.y);
+            measure = dimensionAcrossX(e) ? std::abs(e.b.x - e.a.x) : std::abs(e.b.y - e.a.y);
         } else {
             measure = distance(e.a, e.b);
         }

@@ -504,19 +504,8 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             // still there to be taken hold of and dragging one gives the dimension its stand-off back.
             const Vec2 p1 = e.points.size() >= 3 ? e.points[0] : e.a;
             const Vec2 p2 = e.points.size() >= 3 ? e.points[1] : e.b;
-            const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(e.a, e.b, 0.5);
-            Vec2 d1, d2;
-            if (ty == QLatin1String("linear")) {
-                const Vec2 mid = lerp(p1, p2, 0.5);
-                const bool h = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
-                if (h) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
-                else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
-            } else {
-                const Vec2 n = (p2 - p1).normalized().perp();
-                const double t = dot(off - p1, n);
-                d1 = p1 + n * t;
-                d2 = p2 + n * t;
-            }
+            Vec2 d1 = p1, d2 = p2;
+            dimensionLineEnds(e, d1, d2);   // where the arrows are, worked out where the drawing does
             g.push_back({p1, GripRole::Vertex, 0});
             g.push_back({p2, GripRole::Vertex, 1});
             g.push_back({d1, GripRole::Vertex, 2});   // the arrow ends: both move the dimension line
@@ -5417,6 +5406,24 @@ void Editor::applyEditDrag(const Vec2& target) {
                 const QString dty = e->meta.value("dimType").toString(QStringLiteral("linear"));
                 if (dty == QLatin1String("linear") || dty == QLatin1String("aligned"))
                     e->points = {e->a, e->b, lerp(e->a, e->b, 0.5)};
+            }
+            // The joint by the ARROW moves the dimension line the way the dimension stands off and no
+            // other way. A dimension placed across a length stays across it: dragging that joint changes
+            // how far off the geometry the line sits, not what is measured. Following the pointer freely
+            // meant a sideways drag past the middle turned a length into a height - the dimension
+            // suddenly measuring something else, without being asked to.
+            if (e->type == EntityType::Dimension && index == 2 && e->points.size() >= 3) {
+                const Vec2 dp1 = e->points[0], dp2 = e->points[1], cur = e->points[2];
+                if (e->meta.value("dimType").toString(QStringLiteral("linear")) ==
+                    QLatin1String("linear")) {
+                    e->points[2] = dimensionAcrossX(*e) ? Vec2{cur.x, target.y}
+                                                        : Vec2{target.x, cur.y};
+                } else {
+                    // An aligned one stands off along the perpendicular to what it measures.
+                    const Vec2 n = (dp2 - dp1).normalized().perp();
+                    e->points[2] = dp1 + n * dot(target - dp1, n);
+                }
+                break;   // a and b are what it measures between, and this joint does not touch them
             }
             if (index >= 0 && index < static_cast<int>(e->points.size())) {
                 if (e->type == EntityType::Polygon && e->points.size() >= 3)
