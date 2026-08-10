@@ -12,8 +12,10 @@ add_executable(edraw_tests
     test_pdftext.cpp
     test_sizetable.cpp
     test_cable.cpp
+    test_stepsbuilder.cpp
     test_main.cpp
 )
-target_link_libraries(edraw_tests PRIVATE edraw_core Qt6::Core)
+# Widgets, because the step builder is a window and is tested as one.
+target_link_libraries(edraw_tests PRIVATE edraw_core Qt6::Core Qt6::Gui Qt6::Widgets)
 
 add_test(NAME edraw_tests COMMAND edraw_tests)

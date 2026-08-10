@@ -47,6 +47,7 @@ class HarnessBuilderDialog;
 class PartsLibraryDialog;
 class BomDialog;
 class VoltageDropDialog;
+class HarnessStepsDialog;
 class MechanicalBuilderDialog;
 class MechanicalValidationDialog;
 class BundleDiameterDialog;
@@ -251,6 +252,7 @@ private:
     BomDialog* bomDlg_ = nullptr;
     VoltageDropDialog* voltageDropDlg_ = nullptr;
     MechanicalBuilderDialog* mechDlg_ = nullptr;
+    HarnessStepsDialog* stepsDlg_ = nullptr;
     // Which open documents are template-edit sessions, and the template each is drawing. A template
     // edit is a document like a block edit is: its own tab, its own undo, its own canvas colour.
     QHash<Document*, QString> templateEdits_;
@@ -309,6 +311,8 @@ private:
     void showBomDialog();
     void showVoltageDropDialog();
     void showMechanicalBuilder();
+    // The same harness, asked for one step at a time - the way it is built.
+    void showHarnessSteps();
     void showMechanicalValidation();
     // The Tools group: the calculations, on both harness tabs because they are asked on one side and
     // checked on the other.

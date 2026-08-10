@@ -10,6 +10,7 @@
 #include "app/PartViewDialog.h"
 #include "app/BlockDialog.h"
 #include "app/BundleDiameterDialog.h"
+#include "app/HarnessStepsDialog.h"
 #include "app/MechanicalBuilderDialog.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/TemplateDialog.h"
@@ -6809,6 +6810,9 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
+        {{"buildsteps", "guided", "harnesssteps"}, "Harness",
+         "Build a harness step by step: one question at a time, from one end to the others",
+         [this] { showHarnessSteps(); }},
         {{"voltagedrop", "vdrop", "vd"}, "Harness",
          "Voltage drop: what arrives at the load, wire by wire",
          [this] { showVoltageDropDialog(); }},
@@ -9234,6 +9238,15 @@ void MainWindow::showMechanicalBuilder() {
     mechDlg_->show();
     mechDlg_->raise();
     mechDlg_->activateWindow();
+}
+
+void MainWindow::showHarnessSteps() {
+    // Modeless and kept alive, like the builder it shares its model with: a harness is described over
+    // several sittings, and closing the window to look at the sheet must not throw the answers away.
+    if (!stepsDlg_) stepsDlg_ = new HarnessStepsDialog(editor_, this);
+    stepsDlg_->show();
+    stepsDlg_->raise();
+    stepsDlg_->activateWindow();
 }
 
 void MainWindow::showVoltageDropDialog() {

@@ -101,6 +101,7 @@ add_library(edraw_core STATIC
     src/app/DrawingPreview.h
     src/app/DrawingPreview.cpp
     src/app/MechanicalBuilderDialog.h
+    src/app/HarnessStepsDialog.cpp
     src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp

@@ -219,3 +219,28 @@ And no two dimension figures are written across each other. Each dimension alrea
 geometry in a known direction, so where a figure would land on one already placed it is stood further
 off along that same direction until it is clear - decided once every dimension is made, because only
 then can it be seen which of them collide.
+
+## Describing a harness: the steps
+
+A harness is built from one end to the others, and the window that asks for one asks in that order -
+the numbering is the build sheet's:
+
+| # | The step | What it asks for |
+|---|----------|------------------|
+| 1 | the end you start from | open leads, a connector (with or without a cap), or a terminal; its part, its ways, its body |
+| 2 | backshell / wires without jacket | the backshell and the boot behind it, each with a part, a length and an outside diameter, and how far the conductors run bare |
+| 3 | transition heatshrink | over the step from the cable to the conductors coming out of it, and how far the jacket is cut back |
+| 4 | the main run | loose conductors (how many, what cross-section) or a cable (which one, over the jacket), and how long |
+| 5 | over the main run | braid, heatshrink, either or both, each from a point along the run for a length |
+| 6 | the split | how many branches, and whether the split is nothing, heatshrink, or a Y-split boot |
+| 7 | each branch | which conductors go that way, how long it is, which way it leaves the split |
+| 8 | over each branch | braid, heatshrink |
+| 9 | transition heatshrink | at the far end of the branch |
+| 10 | backshell / wires without jacket | dressing that end |
+| 11 | the end it finishes at | as step 1 |
+
+Steps 7 to 11 repeat for every branch, under that branch's own heading, so where you are in the build
+is where you are in the list. Asking for another branch in step 6 brings its five steps with it. The
+drawing is built beside the questions - the same generator, the same renderer, so what is shown is what
+will be placed - and every figure asked for is a figure of the part, not of the picture: a length, a
+diameter, a cross-section, a count.
