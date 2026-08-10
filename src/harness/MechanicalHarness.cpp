@@ -1202,6 +1202,126 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         std::sort(legs.begin(), legs.end(),
                   [](const Leg& a, const Leg& b) { return a.angle < b.angle; });
 
+        // ---- A breakout is a SPREAD CONE, not a set of mitred corners ----
+        // Where one run arrives and two or more leave, the accurate drawing is a funnel: the run stops
+        // short and is closed off across its width, two lines converge from that bar to a narrower bar
+        // at the junction - the throat, as wide as the runs leaving it laid side by side - and the
+        // branches start on that bar. Mitring the outlines into one another instead drew the branches
+        // as a sharp V from a single point with their inner edges CROSSING behind it, which is not a
+        // shape a harness has.
+        {
+            const MechNode* node = def.node(pn.id);
+            const Leg* in = nullptr;
+            int leaving = 0;
+            for (const Leg& l : legs) {
+                if (l.atFrom) ++leaving;
+                else in = &l;
+            }
+            if (node && in && leaving >= 2 && node->kind != MechNodeKind::Connector) {
+                double throat = 0.0;
+                for (const Leg& l : legs)
+                    if (l.atFrom) throat += l.half * 2.0;
+                throat = std::min(throat, in->half * 2.0);       // never wider than what arrives
+                const Vec2 vin = in->dir.perp();
+                const Vec2 t0 = pn.at + vin * (throat / 2.0);
+                const Vec2 t1 = pn.at - vin * (throat / 2.0);
+
+                // Pull the run that arrives back by the length of the funnel. Three times its own width
+                // is what the released drawings use, bounded so a short run is not swallowed by it.
+                const MechSegment* inSeg = def.segment(in->segId);
+                const double inDiaMm = inSeg ? segmentEndDiameterMm(def, *inSeg, true) : 0.0;
+                double spreadMm = std::clamp(3.0 * inDiaMm, 6.0, 40.0);
+                if (inSeg) spreadMm = std::min(spreadMm, inSeg->lengthMm * 0.3);
+                Body& bi = bodies[in->segId];
+                if (!bi.plus.empty() && !bi.minus.empty() && spreadMm > 0.0) {
+                    // in->dir points away from the node, back along the run that arrives.
+                    const Vec2 back = in->dir * along(spreadMm);
+                    // Whichever end of that body is here is the one that moves; a knee left beyond the
+                    // new end goes with it, so the outline does not double back on itself.
+                    const bool hereIsEnd = !in->atFrom;
+                    if (hereIsEnd) {
+                        const Vec2 np = bi.plus.back() + back, nm = bi.minus.back() + back;
+                        // in->dir runs back along the arriving run, so a station the new end has moved
+                        // PAST lies in that direction from it - and it is that one that goes.
+                        while (bi.plus.size() > 2 &&
+                               dot(np - bi.plus[bi.plus.size() - 2], in->dir) > 0.0) {
+                            bi.plus.pop_back();
+                            bi.minus.pop_back();
+                        }
+                        bi.plus.back() = np;
+                        bi.minus.back() = nm;
+                    }
+                }
+                // The cone itself: from the bar across the run to the bar across the throat.
+                for (int side : {+1, -1}) {
+                    const Vec2 from = side > 0 ? bi.plus.back() : bi.minus.back();
+                    const Vec2 to = side > 0 ? t0 : t1;
+                    Entity e = baseEntity(opt, QStringLiteral("bundle"));
+                    e.type = EntityType::Line;
+                    e.a = from;
+                    e.b = to;
+                    e.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    e.meta.insert(QStringLiteral("spread"), true);
+                    e.meta.insert(QStringLiteral("side"), side);
+                    out.push_back(e);
+                }
+                // The bar across the throat, once for the whole junction.
+                {
+                    Entity e = baseEntity(opt, QStringLiteral("bar"));
+                    e.type = EntityType::Line;
+                    e.a = t0;
+                    e.b = t1;
+                    e.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    e.meta.insert(QStringLiteral("sectionEnd"), true);
+                    e.meta.insert(QStringLiteral("throat"), true);
+                    out.push_back(e);
+                }
+                // Every branch starts ON that bar, and each has its OWN STRETCH of it: the runs come
+                // out of the throat side by side, in the order they fan out, so a branch going one way
+                // takes the near side of the bar and a branch going the other takes the far side.
+                // Starting them all on the middle of the bar - which is where the junction point is -
+                // put half of each branch on the wrong side of the other, and their outlines crossed.
+                std::vector<const Leg*> outLegs;
+                for (const Leg& l : legs)
+                    if (l.atFrom) outLegs.push_back(&l);
+                // Ordered across the bar the way they head off it.
+                std::sort(outLegs.begin(), outLegs.end(), [&vin](const Leg* a, const Leg* b) {
+                    return dot(a->dir, vin) > dot(b->dir, vin);
+                });
+                double wanted = 0.0;
+                for (const Leg* l : outLegs) wanted += l->half * 2.0;
+                const double barLen = distance(t0, t1);
+                // The throat is never wider than the run that arrives, so where the branches laid side
+                // by side would be wider than that they share it in proportion instead.
+                const double squeeze = wanted > barLen && wanted > 1e-9 ? barLen / wanted : 1.0;
+                double at = 0.0;   // how much of the bar is taken, measured from t0
+                for (const Leg* l : outLegs) {
+                    Body& bl = bodies[l->segId];
+                    const double slot = l->half * 2.0 * squeeze;
+                    const double slotFrom = at, slotTo = at + slot;
+                    at += slot;
+                    if (bl.plus.empty() || bl.minus.empty()) continue;
+                    const Vec2 vl = l->dir.perp();
+                    // Where a point lands on the bar, and kept WITHIN THIS BRANCH'S OWN STRETCH of it.
+                    // Projecting onto the bar's line is not enough on its own: a branch leaving at an
+                    // angle meets that line a little past its own stretch, and the two branches then
+                    // overlap across the throat by that much - a millimetre of one drawn inside the
+                    // other, which is exactly the crossing the funnel is there to do away with.
+                    auto onBar = [&](const Vec2& railPoint) {
+                        Vec2 hit = railPoint;
+                        lineCross(railPoint, l->dir, t0, (t1 - t0).normalized(), 0.0, hit);
+                        const double s = std::clamp(dot(t0 - hit, vin), slotFrom, slotTo);
+                        return t0 - vin * s;
+                    };
+                    const Vec2 centre = t0 - vin * ((slotFrom + slotTo) / 2.0);
+                    bl.plus.front() = onBar(centre + vl * (l->half * squeeze));
+                    bl.minus.front() = onBar(centre - vl * (l->half * squeeze));
+                    bl.mitredStart = true;   // the throat bar closes them, not a bar of their own
+                }
+                continue;   // no mitring at a junction that spreads
+            }
+        }
+
         double maxHalf = 0.0;
         for (const Leg& l : legs) maxHalf = std::max(maxHalf, l.half);
         // Going round the node, each leg's anticlockwise edge meets the next leg's clockwise one.
@@ -1764,6 +1884,58 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     .arg(xg, 0, 'g', 3),
                 opt.textHeight, 0.0, QStringLiteral("note")));
     }
+    // ---- Keeping the figures apart ----
+    // Two dimensions whose figures land on top of one another say nothing: "8.18" and "11.76" written
+    // across each other is worse than either alone. Each one already stands off its geometry in a known
+    // direction, so where a figure would sit on one already placed it is stood further off along that
+    // same direction until it is clear. Done at the end, because it is only when they are all made that
+    // it can be seen which of them collide.
+    if (opt.dimensions) {
+        std::vector<Entity*> dims;
+        for (Entity& e : out)
+            if (e.type == EntityType::Dimension &&
+                e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("dim"))
+                dims.push_back(&e);
+        // Where the figure sits, and how much room it takes: estimated off the glyph height, which is
+        // all that is available without a font to measure with.
+        auto figure = [](const Entity& e, Vec2& at, double& halfW, double& halfH) {
+            Vec2 d1, d2;
+            if (dimensionLineEnds(e, d1, d2)) at = lerp(d1, d2, 0.5);
+            else at = lerp(e.a, e.b, 0.5);
+            const double h = e.meta.value(QStringLiteral("textHeight")).toDouble(5.0);
+            // How many characters the figure will be: the length it measures, to the decimals it is
+            // set to. The renderer works the same figure out from the same geometry.
+            const int dec = e.meta.value(QStringLiteral("decimals")).toInt(1);
+            const int chars = QString::number(distance(e.a, e.b), 'f', dec).size();
+            halfW = std::max(1, chars) * h * 0.62 / 2.0;
+            halfH = h * 0.9;
+        };
+        auto standOff = [](const Entity& e) {
+            // The way it is already standing off: from what it measures towards where its line is.
+            if (e.points.size() < 3) return Vec2{0.0, 1.0};
+            const Vec2 v = e.points[2] - lerp(e.points[0], e.points[1], 0.5);
+            if (v.length() < 1e-9) return (e.b - e.a).normalized().perp();
+            return v.normalized();
+        };
+        for (size_t i = 0; i < dims.size(); ++i) {
+            for (int guard = 0; guard < 8; ++guard) {
+                Vec2 ai;
+                double wi = 0.0, hi = 0.0;
+                figure(*dims[i], ai, wi, hi);
+                bool clash = false;
+                for (size_t j = 0; j < i && !clash; ++j) {
+                    Vec2 aj;
+                    double wj = 0.0, hj = 0.0;
+                    figure(*dims[j], aj, wj, hj);
+                    clash = std::abs(ai.x - aj.x) < wi + wj && std::abs(ai.y - aj.y) < hi + hj;
+                }
+                if (!clash) break;
+                const Vec2 push = standOff(*dims[i]) * (hi * 2.4);
+                dims[i]->points[2] = dims[i]->points[2] + push;
+            }
+        }
+    }
+
     return out;
 }
 

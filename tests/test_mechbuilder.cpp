@@ -1251,6 +1251,121 @@ int run_mechbuilder_tests() {
         }
     }
 
+    // A breakout is drawn as the funnel it is: the run that arrives stops short and is barred, two lines
+    // close in to a narrower bar across the throat, and the branches start on that bar - each on its own
+    // stretch of it, side by side, in the order they fan out. Mitred into one another instead they came
+    // out as a sharp V from a single point with their inner edges crossing behind it.
+    {
+        MechHarnessDef def;
+        MechNode p1;
+        p1.id = QStringLiteral("p1");
+        p1.kind = MechNodeKind::Connector;
+        p1.pinCount = 8;
+        p1.openLengthMm = 20.0;
+        def.nodes.push_back(p1);
+        MechNode bo;
+        bo.id = QStringLiteral("bo");
+        bo.kind = MechNodeKind::Breakout;
+        bo.parentSegment = QStringLiteral("trunk");
+        def.nodes.push_back(bo);
+        for (int k = 0; k < 2; ++k) {
+            MechNode end;
+            end.id = k == 0 ? QStringLiteral("p2") : QStringLiteral("p3");
+            end.kind = MechNodeKind::Connector;
+            end.pinCount = 4;
+            end.openLengthMm = 20.0;
+            end.parentSegment = k == 0 ? QStringLiteral("br1") : QStringLiteral("br2");
+            end.angleDeg = k == 0 ? 40.0 : -40.0;
+            def.nodes.push_back(end);
+        }
+        for (int k = 0; k < 6; ++k)
+            def.wires.push_back(wireOf(QStringLiteral("w%1").arg(k + 1), QStringLiteral("0.5")));
+        MechSegment trunk;
+        trunk.id = QStringLiteral("trunk");
+        trunk.fromNode = QStringLiteral("p1");
+        trunk.toNode = QStringLiteral("bo");
+        trunk.lengthMm = 300.0;
+        for (const MechWire& w : def.wires) trunk.wireIds.push_back(w.id);
+        def.segments.push_back(trunk);
+        MechSegment br1;
+        br1.id = QStringLiteral("br1");
+        br1.fromNode = QStringLiteral("bo");
+        br1.toNode = QStringLiteral("p2");
+        br1.lengthMm = 180.0;
+        br1.wireIds = {QStringLiteral("w1"), QStringLiteral("w2"), QStringLiteral("w3")};
+        def.segments.push_back(br1);
+        MechSegment br2;
+        br2.id = QStringLiteral("br2");
+        br2.fromNode = QStringLiteral("bo");
+        br2.toNode = QStringLiteral("p3");
+        br2.lengthMm = 150.0;
+        br2.wireIds = {QStringLiteral("w4"), QStringLiteral("w5"), QStringLiteral("w6")};
+        def.segments.push_back(br2);
+
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        const MechLayout layout = layoutMechanicalHarness(def);
+        const MechPlacedNode* at = layout.node(QStringLiteral("bo"));
+        int cone = 0, throat = 0;
+        const Entity* throatBar = nullptr;
+        for (const Entity& e : ents) {
+            if (e.meta.value(QStringLiteral("spread")).toBool()) ++cone;
+            if (e.meta.value(QStringLiteral("throat")).toBool()) {
+                ++throat;
+                throatBar = &e;
+            }
+        }
+        check(cone == 2, "spread: two lines close in from the run that arrives");
+        check(throat == 1, "spread: and a bar across the throat");
+        // The run that arrives stops SHORT of the junction, which is what leaves room for the funnel.
+        const Entity* trunkEdge = nullptr;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechSeg")).toString() == QLatin1String("trunk") &&
+                e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("bundle"))
+                trunkEdge = &e;
+        check(at && trunkEdge && !trunkEdge->points.empty() &&
+                  trunkEdge->points.back().x < at->at.x - 1.0,
+              "spread: the run that arrives stops short of the junction");
+        // Neither branch is drawn on the other's side of it.
+        bool crossed = false;
+        for (const Entity& e : ents) {
+            const QString seg = e.meta.value(QStringLiteral("mechSeg")).toString();
+            if (seg != QLatin1String("br1") && seg != QLatin1String("br2")) continue;
+            if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("bundle"))
+                continue;
+            const double side = seg == QLatin1String("br1") ? 1.0 : -1.0;
+            for (const Vec2& q : e.points)
+                if (at && (q.y - at->at.y) * side < -1e-6) crossed = true;
+        }
+        check(!crossed, "spread: neither branch crosses to the other's side of the throat");
+        if (throatBar && at) {
+            const double half = distance(throatBar->a, throatBar->b) / 2.0;
+            check(half > 0.5, "spread: the throat has a width");
+            check(std::abs((throatBar->a.y + throatBar->b.y) / 2.0 - at->at.y) < 1e-6,
+                  "spread: the throat is centred on the junction");
+        }
+
+        // And no two figures are written across one another - the thing that made a preview unreadable
+        // where two short dimensions met at the same end.
+        struct Fig { Vec2 at; double w, h; };
+        std::vector<Fig> figs;
+        for (const Entity& e : ents) {
+            if (e.type != EntityType::Dimension) continue;
+            Vec2 d1, d2, anchor = lerp(e.a, e.b, 0.5);
+            if (dimensionLineEnds(e, d1, d2)) anchor = lerp(d1, d2, 0.5);
+            const double h = e.meta.value(QStringLiteral("textHeight")).toDouble(5.0);
+            const int dec = e.meta.value(QStringLiteral("decimals")).toInt(1);
+            const int chars = QString::number(distance(e.a, e.b), 'f', dec).size();
+            figs.push_back({anchor, chars * h * 0.62 / 2.0, h * 0.9});
+        }
+        int clashes = 0;
+        for (size_t a = 0; a < figs.size(); ++a)
+            for (size_t b = a + 1; b < figs.size(); ++b)
+                if (std::abs(figs[a].at.x - figs[b].at.x) < figs[a].w + figs[b].w &&
+                    std::abs(figs[a].at.y - figs[b].at.y) < figs[a].h + figs[b].h)
+                    ++clashes;
+        check(clashes == 0, "spread: no two dimension figures are written across each other");
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;

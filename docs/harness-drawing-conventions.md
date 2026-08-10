@@ -203,3 +203,19 @@ cone, and one overall length from the first connector to the last.
 
 **Nothing else.** No diameter labels, no balloons, no notes on this view — the callouts belong to the
 released sheet, and the view itself is geometry and dimensions.
+
+### The funnel, in the generator
+
+A breakout is drawn as the funnel it is rather than as mitred corners: the run that arrives stops
+short of the junction by three times its own width (bounded, and never more than a third of the run),
+is closed off across its width there, and two lines close in to a narrower bar across the throat. The
+throat is as wide as the runs leaving it laid side by side, and never wider than what arrives - where
+they would be wider they share it in proportion. Each branch starts on its own stretch of that bar,
+in the order they fan out, so a branch heading one way takes the near side and one heading the other
+takes the far side. Mitring the outlines into one another drew the branches as a sharp V from a single
+point with their inner edges crossing behind it, which is not a shape a harness has.
+
+And no two dimension figures are written across each other. Each dimension already stands off its
+geometry in a known direction, so where a figure would land on one already placed it is stood further
+off along that same direction until it is clear - decided once every dimension is made, because only
+then can it be seen which of them collide.
