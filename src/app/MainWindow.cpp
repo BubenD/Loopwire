@@ -11,6 +11,7 @@
 #include "app/BlockDialog.h"
 #include "app/BundleDiameterDialog.h"
 #include "app/HarnessStepsDialog.h"
+#include "app/MechModelsDialog.h"
 #include "app/MechanicalBuilderDialog.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/TemplateDialog.h"
@@ -6810,11 +6811,14 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
+        {{"mechmodels", "models", "defaults"}, "Harness",
+         "Default mechanical models: how this office draws a wire, a cable, heatshrink, a ferrule",
+         [this] { showMechModels(); }},
         {{"connline", "markconnection", "attach"}, "Harness",
          "Mark the selection as this part's connection line (where the harness attaches)",
          [this] { markConnectionLine(); }},
         {{"buildsteps", "guided", "harnesssteps"}, "Harness",
-         "Build a harness step by step: one question at a time, from one end to the others",
+         "Harness build wizard: the harness asked for one step at a time, from one end to the others",
          [this] { showHarnessSteps(); }},
         {{"voltagedrop", "vdrop", "vd"}, "Harness",
          "Voltage drop: what arrives at the load, wire by wire",
@@ -8654,7 +8658,7 @@ void MainWindow::showBomDialog() {
 
 QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
     auto* btn = new QToolButton(parent);
-    btn->setText(QStringLiteral("Build\nstep by step"));
+    btn->setText(QStringLiteral("Harness build\nwizard"));
     btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     btn->setIconSize(QSize(26, 26));
     btn->setToolTip(QStringLiteral(
@@ -9270,6 +9274,48 @@ void MainWindow::showMechanicalBuilder() {
     mechDlg_->show();
     mechDlg_->raise();
     mechDlg_->activateWindow();
+}
+
+void MainWindow::showMechModels() {
+    // Modeless and kept alive: a model is drawn on the sheet, captured, tried at a length, drawn again.
+    // Closing the window between those would throw away where you were.
+    if (!modelsDlg_) modelsDlg_ = new MechModelsDialog(editor_, this);
+    modelsDlg_->show();
+    modelsDlg_->raise();
+    modelsDlg_->activateWindow();
+}
+
+QToolButton* MainWindow::makeMechModelsButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Default\nmodels"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setToolTip(QStringLiteral(
+        "How this office draws the standard pieces — a wire, a cable, heatshrink, a ferrule, a ring, a "
+        "boot, a Y-split. Drawn once here and used by every harness drawing generated."));
+    {
+        // A length with an end on it, and the arrows that say the middle is what stretches.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+        ip.drawLine(4, 10, 24, 10);
+        ip.drawLine(4, 16, 24, 16);
+        ip.setPen(QPen(QColor("#e6b45a"), 1.6));
+        ip.drawLine(4, 7, 4, 19);              // the end that does not stretch
+        ip.drawLine(24, 7, 24, 19);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
+        ip.drawLine(9, 13, 19, 13);            // and the middle that does
+        ip.drawLine(9, 13, 12, 11);
+        ip.drawLine(9, 13, 12, 15);
+        ip.drawLine(19, 13, 16, 11);
+        ip.drawLine(19, 13, 16, 15);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showMechModels(); });
+    return btn;
 }
 
 void MainWindow::markConnectionLine() {

@@ -303,3 +303,34 @@ what arrives at it.
 width of the thing: a bar across the outline measures the diameter itself. The builder proper can
 exaggerate the bodies to make a formboard sheet readable, and says so on the drawing when it does; a
 harness being described for the first time is drawn as it is.
+
+## The default mechanical models
+
+A part in the library is a thing you buy, and its drawing is its own. The other half of a harness
+drawing is the pieces that are a KIND of thing rather than a part number: a length of wire, a cable,
+heatshrink over a transition, the wires between a connector and the cable they come out of, a ring
+terminal, a ferrule, a boot, a Y-split, the body of a cable. Whatever house style an office has for
+those, it has one, and every drawing it releases uses it.
+
+So they are drawn once — **Harness mechanical ▸ Default models** — and stored as a set (one file,
+`mech-models.json`, in the application's data folder, which is how a house style moves from machine to
+machine). Each is drawn on the sheet with the ordinary tools and captured, so whatever can be drawn can
+be a model.
+
+**Length is not part of a model.** A wire is drawn at whatever length suits and the harness says how
+long the wire is, so each model carries the two ends that must NOT stretch — the flush end of a wire,
+the crimp of a ferrule, the taper of a boot — and everything between them makes up the difference. A
+wire drawn 60 long with 4 mm ends, asked for at 500, keeps those two ends and puts 492 of wire between
+them. Asked for shorter than its own two ends, they shrink in proportion rather than crossing over one
+another. A model can also say what diameter it was drawn at, and is then scaled across to whatever it
+goes over.
+
+The ones that are **not** stretched — a ring terminal, a ferrule, a Y-split — are placed at their own
+size, because a bigger terminal is a different terminal.
+
+Two of them are drawn **per conductor**: the open wires, and the wires between a connector and its
+cable. Draw one conductor and say how many the drawing shows; the harness says how many there really
+are, and they are spaced across rather than the picture being squashed to fit.
+
+The generator uses a model wherever there is one for the kind of thing it is drawing, and draws its own
+shape where there is not — so an office that has captured nothing sees exactly what it saw before.

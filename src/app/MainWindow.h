@@ -48,6 +48,7 @@ class PartsLibraryDialog;
 class BomDialog;
 class VoltageDropDialog;
 class HarnessStepsDialog;
+class MechModelsDialog;
 class MechanicalBuilderDialog;
 class MechanicalValidationDialog;
 class BundleDiameterDialog;
@@ -253,6 +254,7 @@ private:
     VoltageDropDialog* voltageDropDlg_ = nullptr;
     MechanicalBuilderDialog* mechDlg_ = nullptr;
     HarnessStepsDialog* stepsDlg_ = nullptr;
+    MechModelsDialog* modelsDlg_ = nullptr;
     // Which open documents are template-edit sessions, and the template each is drawing. A template
     // edit is a document like a block edit is: its own tab, its own undo, its own canvas colour.
     QHash<Document*, QString> templateEdits_;
@@ -313,6 +315,8 @@ private:
     void showMechanicalBuilder();
     // The same harness, asked for one step at a time - the way it is built.
     void showHarnessSteps();
+    // The default mechanical models: the house style, drawn once.
+    void showMechModels();
     // Mark (or unmark) the selection as the part's connection line.
     void markConnectionLine();
     void showMechanicalValidation();
@@ -336,6 +340,7 @@ private:
     // The ribbon button that opens it. The mechanical tab carries it; so does the schematic one,
     // because that is where the harness it reads from is drawn.
     QToolButton* makeHarnessStepsButton(QWidget* parent);
+    QToolButton* makeMechModelsButton(QWidget* parent);
     QToolButton* makeMechanicalBuilderButton(QWidget* parent);
     // Run the schematic design-rule check and (re)open the validation window. On a
     // fresh open (revalidate=false) the current discrepancies become the tracked set;

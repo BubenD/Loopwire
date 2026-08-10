@@ -2,6 +2,7 @@
 
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
+#include "harness/MechModels.h"
 #include "model/Block.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
@@ -1074,6 +1075,32 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 namespace {
 
 // The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
+// The office's own drawing of a standard piece, where there is one. A part number's shape comes out of
+// the library; a KIND of thing - heatshrink, a boot, a ferrule, a length of wire - comes out of the
+// default models, drawn once by whoever decides how this office's drawings look. Nothing captured for a
+// kind means the generator draws its own, which is what it did before there were any.
+const MechModelSet& mechModels() {
+    static MechModelSet set = [] {
+        MechModelSet s;
+        s.load();
+        return s;
+    }();
+    return set;
+}
+
+// Which model draws a fitting of this kind. Nothing for the ones the generator has no standard drawing
+// of - a sleeve, a conduit, a tie - which are drawn as a plain body of the size they say.
+bool mechModelForFitting(PartKind kind, MechModelKind& out) {
+    switch (kind) {
+    case PartKind::Heatshrink: out = MechModelKind::Heatshrink; return true;
+    case PartKind::HeatshrinkBoot: out = MechModelKind::Boot; return true;
+    case PartKind::YSplit: out = MechModelKind::YSplit; return true;
+    case PartKind::Ferrule: out = MechModelKind::FerruleInsulated; return true;
+    case PartKind::Crimp: out = MechModelKind::RingInsulated; return true;
+    default: return false;
+    }
+}
+
 // Which parts are drawn from their OWN drawing, and which are drawn from their numbers.
 //
 // A connector, a backshell, a Y- or T-split: what those look like is the point of them. Their shape is
@@ -1549,6 +1576,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
+            } else if (MechModelKind mk; mechModelForFitting(f.kind, mk) && mechModels().of(mk)) {
+                const Vec2 from = ps.a + u * along(startMm);
+                for (Entity& e : mechModelEntities(*mechModels().of(mk), from, rad(ps.dirDeg),
+                                                   along(runMm), across(odMm), 0)) {
+                    e.layer = opt.layer;
+                    e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
+                    e.meta.insert(QStringLiteral("mechSeg"), ps.id);
+                    e.meta.insert(QStringLiteral("mechModel"), mechModelKey(mk));
+                    out.push_back(e);
+                }
             } else {
                 Entity box = makeBox(opt, c, rad(ps.dirDeg), along(runMm), across(odMm),
                                      QStringLiteral("fitting"));
@@ -1722,6 +1759,19 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     arm.meta.insert(QStringLiteral("ysplitLeg"), leg->id);
                     out.push_back(arm);
                 }
+            } else if (MechModelKind mk; mechModelForFitting(f.kind, mk) && mechModels().of(mk)) {
+                // Drawn the way this office draws that kind of thing, stretched to the length it is
+                // here and scaled across to what it goes over.
+                const Vec2 from = pn.at + u * (into * along(startMm));
+                const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
+                for (Entity& e : mechModelEntities(*mechModels().of(mk), from, dir, along(lengthMm),
+                                                   across(odMm), 0)) {
+                    e.layer = opt.layer;
+                    e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
+                    e.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    e.meta.insert(QStringLiteral("mechModel"), mechModelKey(mk));
+                    out.push_back(e);
+                }
             } else if (!overTheWires && lengthMm > 0.0 && odMm > endMm) {
                 // A shell or a boot: tapered, neck towards the connector. What passes through the neck
                 // is the conductors at that end, so that is what the neck is sized on.
@@ -1755,7 +1805,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             (n->kind == MechNodeKind::Connector || n->kind == MechNodeKind::FreeEnd)) {
             const int count = static_cast<int>(seg->wireIds.size());
             // Every conductor, up to the point where drawing more lines says less rather than more.
-            const int drawn = std::min(count, 24);
+            int drawn = std::min(count, 24);
             // At the connector they are spread across its face; at the far end they close into the
             // bundle they come out of.
             const double faceHalf =
@@ -1770,6 +1820,24 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // (cornerRadii [0, r, 0]) - rather than a bare line from the bundle to the contact, which
             // says nothing about the size of the wire or how it is dressed into the shell.
             const double straightMm = openMm * 0.45;                     // the run straight into the face
+            // Where this office has drawn what open conductors look like, that is what they look like:
+            // stretched to the length they run bare for and repeated for as many as there are.
+            const MechModelKind openKind = n->kind == MechNodeKind::Connector
+                                               ? MechModelKind::ConnectorToCableWires
+                                               : MechModelKind::OpenWires;
+            if (const MechModel* om = mechModels().of(openKind)) {
+                const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
+                for (Entity& e : mechModelEntities(*om, pn.at, dir, along(openMm),
+                                                   across(endMm), drawn)) {
+                    e.layer = opt.layer;
+                    e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("wires"));
+                    e.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    e.meta.insert(QStringLiteral("mechSeg"), seg->id);
+                    e.meta.insert(QStringLiteral("mechModel"), mechModelKey(openKind));
+                    out.push_back(e);
+                }
+                drawn = 0;   // drawn from the model: the generator's own fan is not wanted as well
+            }
             for (int i = 0; i < drawn; ++i) {
                 // Evenly spaced across each end, so two wires do not lie on top of one another.
                 const double t = drawn == 1 ? 0.0

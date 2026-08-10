@@ -126,7 +126,7 @@ MechSegment* segmentIn(MechHarnessDef& def, const QString& id) {
 
 HarnessStepsDialog::HarnessStepsDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
-    setWindowTitle(QStringLiteral("Build a harness — step by step"));
+    setWindowTitle(QStringLiteral("Harness build wizard"));
     setModal(false);
     catalog_.openRemembered();
 

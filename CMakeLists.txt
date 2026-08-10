@@ -65,6 +65,7 @@ add_library(edraw_core STATIC
     src/harness/Datasheet.cpp
     src/harness/PartsLibrary.cpp
     src/harness/MechanicalHarness.h
+    src/harness/MechModels.cpp
     src/harness/MechanicalHarness.cpp
     src/harness/Bom.h
     src/harness/Bom.cpp
@@ -102,6 +103,7 @@ add_library(edraw_core STATIC
     src/app/DrawingPreview.cpp
     src/app/MechanicalBuilderDialog.h
     src/app/HarnessStepsDialog.cpp
+    src/app/MechModelsDialog.cpp
     src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp

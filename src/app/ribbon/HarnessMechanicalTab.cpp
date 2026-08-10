@@ -359,6 +359,9 @@ void MainWindow::buildHarnessMechanicalTab() {
         connect(bomBtn, &QToolButton::clicked, this, [this] { showBomDialog(); });
         dg->addWidget(bomBtn, 0, 0);
         dg->addWidget(makePartsLibraryButton(dataW), 0, 1);
+        // The house style sits with the library: both are what the drawings are made OF, as against
+        // the windows that make a drawing.
+        dg->addWidget(makeMechModelsButton(dataW), 0, 2);
         mechGroups_ << addGroupKeep(lay, QStringLiteral("Data"), dataW);
     }
     {
