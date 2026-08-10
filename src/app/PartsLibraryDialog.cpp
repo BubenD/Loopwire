@@ -7,8 +7,10 @@
 #include "harness/Datasheet.h"
 #include "io/AppPaths.h"
 #include "app/Editor.h"
+#include "model/Block.h"
 #include "model/Document.h"
 
+#include <QDialog>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -1619,7 +1621,11 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
             summary_->setText(QStringLiteral("Nothing captured for that side yet"));
         return;
     }
-    editor_->placeEntities(partDrawingEntities(drawing));
+    // As a BLOCK, not as loose lines. A part is a block by definition - drawn once, dropped in wherever
+    // it is wanted - and put down as one it stays one thing: picked in a click, moved in a piece, and
+    // rebuilt everywhere on the sheet when the part's drawing is changed. Loose lines were none of that
+    // the moment they landed.
+    editor_->placeEntities(partBlockInstance(*p, mechanical, Vec2{0.0, 0.0}));
     if (summary_)
         summary_->setText(QStringLiteral("Click the sheet to place %1").arg(p->title()));
     // The click that places it happens on the canvas, so the library gets out of the way.
@@ -1637,17 +1643,77 @@ void PartsLibraryDialog::editDrawing(bool mechanical) {
                                              "sheet and press Capture selection"));
         return;
     }
-    // Dropped by a click like anything else inserted - and what is dropped stays selected, which is
-    // what makes this different from Insert: the objects are in hand to be worked on and Capture
-    // selection takes them straight back onto the part afterwards.
-    const std::vector<Entity> ents = partDrawingEntities(drawing);
-    editor_->placeEntities(ents);
+
+    // Its own canvas, not the sheet: this is not "insert a copy to use", it is "look at the part and
+    // say where the harness attaches to it". One line, picked by clicking it, marked orange - and
+    // clicking another moves the mark rather than adding a second, because a part has one place the
+    // harness meets it.
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("%1 — connection source").arg(p->title()));
+    dlg.setModal(true);
+    auto* v = new QVBoxLayout(&dlg);
+    auto* what = new QLabel(QStringLiteral(
+        "Click the line the harness attaches to — the face of a connector, the barrel of a terminal. "
+        "It is marked orange, and a part placed by the builder is set down by it: that line across the "
+        "wires, its centre on the joint, the body facing away from the harness."), &dlg);
+    what->setWordWrap(true);
+    v->addWidget(what);
+
+    auto* canvas = new DrawingPreview(
+        mechanical ? QStringLiteral("Mechanical drawing — connection source")
+                   : QStringLiteral("Schematic symbol — connection source"), &dlg);
+    canvas->setMinimumSize(560, 380);
+    canvas->setDrawing(drawing);
+    canvas->setPickable(true);
+    canvas->setPickedIndex(partDrawingConnectionLine(drawing));
+    v->addWidget(canvas, 1);
+
+    auto* said = new QLabel(&dlg);
+    said->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+    v->addWidget(said);
+    auto sayPicked = [said, canvas] {
+        said->setText(canvas->pickedIndex() >= 0
+                          ? QStringLiteral("Object %1 is the connection source")
+                                .arg(canvas->pickedIndex() + 1)
+                          : QStringLiteral("Nothing marked — the part will be centred on the joint"));
+    };
+    connect(canvas, &DrawingPreview::pickedChanged, &dlg, sayPicked);
+    sayPicked();
+
+    auto* row = new QHBoxLayout;
+    auto* none = new QPushButton(QStringLiteral("Nothing marked"), &dlg);
+    connect(none, &QPushButton::clicked, canvas, [canvas] { canvas->setPickedIndex(-1); });
+    row->addWidget(none);
+    row->addStretch(1);
+    auto* ok = new QPushButton(QStringLiteral("Keep"), &dlg);
+    ok->setDefault(true);
+    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+    row->addWidget(ok);
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"), &dlg);
+    connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    row->addWidget(cancel);
+    v->addLayout(row);
+
+    if (dlg.exec() != QDialog::Accepted) {
+        if (summary_) summary_->setText(QStringLiteral("Left as it was"));
+        return;
+    }
+    const QJsonArray marked = partDrawingWithConnectionLine(drawing, canvas->pickedIndex());
+    if (mechanical) {
+        p->mechanical = marked;
+        if (mechPreview_) mechPreview_->setDrawing(marked);
+    } else {
+        p->schematic = marked;
+        if (schemPreview_) schemPreview_->setDrawing(marked);
+    }
+    touched();
+    saveLibrary();
     if (summary_)
-        summary_->setText(QStringLiteral(
-            "Click the sheet to put %1 down — it stays selected. Change it, mark the line the harness "
-            "attaches to (Harness ▸ connection line), then press Capture selection here.")
-                              .arg(p->title()));
-    hide();
+        summary_->setText(canvas->pickedIndex() >= 0
+                              ? QStringLiteral("The connection source is marked — shown orange here, "
+                                               "and on the sheet whenever the part is selected")
+                              : QStringLiteral("No connection source: the part will be centred on the "
+                                               "joint"));
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {

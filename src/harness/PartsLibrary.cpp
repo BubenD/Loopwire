@@ -1,5 +1,7 @@
 #include "harness/PartsLibrary.h"
 
+#include "model/Entity.h"
+
 #include "io/AppPaths.h"
 
 #include <QDir>
@@ -194,6 +196,23 @@ QStringList partFieldChoices(PartKind kind, const QString& key) {
     for (const PartField& f : partFields(kind))
         if (f.key == key) return f.choices;
     return {};
+}
+
+QJsonArray partDrawingWithConnectionLine(const QJsonArray& drawing, int index) {
+    QJsonArray out;
+    for (int i = 0; i < drawing.size(); ++i) {
+        QJsonObject o = drawing[i].toObject();
+        if (i == index) o.insert(QLatin1String(kConnectionLineKey), true);
+        else o.remove(QLatin1String(kConnectionLineKey));
+        out.append(o);
+    }
+    return out;
+}
+
+int partDrawingConnectionLine(const QJsonArray& drawing) {
+    for (int i = 0; i < drawing.size(); ++i)
+        if (drawing[i].toObject().value(QLatin1String(kConnectionLineKey)).toBool()) return i;
+    return -1;
 }
 
 std::vector<PartKind> allPartKinds() {

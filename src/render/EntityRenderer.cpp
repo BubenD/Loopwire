@@ -116,11 +116,6 @@ QString EntityRenderer::formatLength(double world, int decimals) {
 }
 
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
-    // The line on a part's drawing that the WIRES meet, marked as such: drawn in orange whatever layer
-    // it is on and whatever colour it was given, because what it says is not "this line is orange" but
-    // "this is where the harness attaches". A part is drawn once and placed a hundred times; the mark
-    // has to be visible on it at a glance, in the library preview as much as on the sheet.
-    if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) return QColor("#ff9f40");
     QString layerHex = QStringLiteral("#ffffff");
     if (const Layer* layer = doc.findLayer(e.layer); layer && QColor(layer->color).isValid())
         layerHex = layer->color;
@@ -1068,7 +1063,14 @@ QString EntityRenderer::dimensionText(const Entity& e) {
 
 void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                           const ViewTransform& vt, const QColor& overrideColor) {
-    const QColor color = overrideColor.isValid() ? overrideColor : resolveColor(e, doc);
+    // The line a part is attached to the harness by shows ORANGE WHILE THE PART IS SELECTED, and is an
+    // ordinary line the rest of the time. It is a note about the part, not a feature of the drawing:
+    // orange at all times would put a coloured line through every connector on a finished sheet, and
+    // nowhere is it more wanted than when the connector it belongs to has just been picked.
+    const bool connLine = e.meta.value(QLatin1String(kConnectionLineKey)).toBool();
+    const QColor color = connLine && overrideColor.isValid()
+                             ? QColor("#ff9f40")
+                             : (overrideColor.isValid() ? overrideColor : resolveColor(e, doc));
     QPen pen(color);
     pen.setCosmetic(true); // width is set in screen px; for a wire it is derived from the zoom
     const double px = penPixels(e.type == EntityType::Wire ? wireDrawWidth(e, doc)

@@ -262,5 +262,18 @@ the wires, and the body on the far side from them - which is the opposite way ro
 a run, because a connector faces away from the harness it is on the end of. A part without one is
 centred on the joint as before, so nothing that was drawn before this changes.
 
-The library's Edit button puts a part's drawing on the sheet and leaves it selected, to be worked on
-and marked; Capture selection then puts it back on the part.
+Marking it: the library's **Edit** button opens the part on a canvas of its own - not the sheet, because
+this is not "insert a copy to use", it is "look at the part and say where the harness attaches to it".
+Click the line; it turns orange. Clicking another MOVES the mark rather than adding a second, because a
+part has one place the harness meets it. Keep writes it onto the part and the library preview shows it
+orange from then on.
+
+On the sheet the marked line is an ordinary line until the part is SELECTED, and orange while it is. It
+is a note about the part, not a feature of the drawing: orange at all times would put a coloured line
+through every connector on a finished sheet, and nowhere is it more wanted than when the connector it
+belongs to has just been picked.
+
+A part goes onto the sheet as a BLOCK - inserted from the library or put down by the builder, either
+way. A part is a block by definition: drawn once, dropped in wherever it is wanted. As one it stays one
+thing - picked in a click, moved in a piece, and rebuilt everywhere on the sheet when the part's drawing
+is edited. As loose lines it was none of that the moment it landed.

@@ -2,6 +2,7 @@
 
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
+#include "model/Block.h"
 #include "model/Document.h"
 #include "tools/EntityTransforms.h"
 
@@ -1073,6 +1074,27 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 namespace {
 
 // The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
+// A part put down by the generator is one THING on the sheet, not a handful of lines: stamped as a copy
+// of the block the part is, so a click picks the whole connector, moving it moves all of it, and editing
+// the part's drawing rebuilds every copy already generated. The same block a part inserted from the
+// library becomes, so the two arrive on the sheet as the same kind of object.
+void stampAsBlockCopy(std::vector<Entity>& ents, const LibraryPart& part, const Vec2& at) {
+    if (ents.empty()) return;
+    const std::vector<Entity> stamped =
+        partBlockInstance(part, /*mechanical=*/true, Vec2{0.0, 0.0}, QString());
+    if (stamped.empty()) return;
+    // The block's name and this copy's key, taken off a copy made for the purpose: what identifies the
+    // block is the part, and what identifies the copy is one key shared by everything in it.
+    const QString block = entityBlockName(stamped.front());
+    const QString key = entityBlockInstance(stamped.front());
+    for (Entity& e : ents) {
+        e.meta.insert(QStringLiteral("block"), block);
+        e.meta.insert(QStringLiteral("blockInst"), key);
+        e.meta.insert(QStringLiteral("blockOriginX"), at.x);
+        e.meta.insert(QStringLiteral("blockOriginY"), at.y);
+    }
+}
+
 std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
                                       const MechDrawOptions& opt, const QString& role,
                                       const Vec2& outward = Vec2{0.0, 0.0}) {
@@ -1124,6 +1146,7 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
             e.layer = opt.layer;
             e.meta.insert(QStringLiteral("mechRole"), role);
         }
+        stampAsBlockCopy(out, part, at);
         return out;
     }
 
@@ -1134,6 +1157,7 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
         e.layer = opt.layer;
         e.meta.insert(QStringLiteral("mechRole"), role);
     }
+    stampAsBlockCopy(out, part, at);
     return out;
 }
 

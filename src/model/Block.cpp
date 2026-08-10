@@ -135,6 +135,23 @@ std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
 
 // ---- The library's drawings are blocks too -------------------------------------------------------
 
+std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, const Vec2& at,
+                                      const QString& instanceKey) {
+    const QJsonArray drawing = mechanical ? part.mechanical : partSchematicDrawing(part);
+    if (drawing.isEmpty()) return {};
+    // The same block libraryBlocks() offers, built here rather than searched for: a part's drawing IS
+    // the block, and naming it the same way is what lets every copy already on a sheet be rebuilt when
+    // the part is edited.
+    BlockDef b;
+    b.name = QStringLiteral("%1 (%2)")
+                 .arg(part.title(), mechanical ? QStringLiteral("mechanical")
+                                               : QStringLiteral("schematic"));
+    b.description = part.description.isEmpty() ? partKindName(part.kind) : part.description;
+    b.source = QStringLiteral("library:%1").arg(part.id);
+    b.entities = drawing;
+    return blockInstanceEntities(b, at, instanceKey);
+}
+
 std::vector<BlockDef> libraryBlocks(const PartsCatalog& catalog) {
     std::vector<BlockDef> out;
     const PartsLibrary merged = catalog.merged();

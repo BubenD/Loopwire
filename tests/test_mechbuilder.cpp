@@ -3,6 +3,8 @@
 #include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
+#include <QJsonObject>
+#include "model/Block.h"
 #include "model/Document.h"
 
 #include <QJsonArray>
@@ -1489,6 +1491,83 @@ int run_mechbuilder_tests() {
         }
         check(all.valid && n1 && std::abs((all.min.x + all.max.x) / 2.0 - n1->at.x) < 1.0,
               "connection line: with none marked the part is centred on the joint as before");
+    }
+
+    // A part has ONE place the harness meets it, so marking a line as the connection source takes the
+    // mark off whatever had it. Exclusive by construction rather than by asking whoever is clicking to
+    // be careful.
+    {
+        std::vector<Entity> lines;
+        for (int i = 0; i < 3; ++i) {
+            Entity e;
+            e.id = QStringLiteral("l%1").arg(i);
+            e.type = EntityType::Line;
+            e.a = {0, -6.0 + 6.0 * i};
+            e.b = {12, -6.0 + 6.0 * i};
+            lines.push_back(e);
+        }
+        QJsonArray drawing = partDrawingFromEntities(lines);
+        check(partDrawingConnectionLine(drawing) == -1,
+              "connection source: a drawing starts with none marked");
+        drawing = partDrawingWithConnectionLine(drawing, 1);
+        check(partDrawingConnectionLine(drawing) == 1,
+              "connection source: the line picked becomes it");
+        drawing = partDrawingWithConnectionLine(drawing, 2);
+        int marked = 0;
+        for (const auto v : drawing)
+            if (v.toObject().value(QLatin1String(kConnectionLineKey)).toBool()) ++marked;
+        check(partDrawingConnectionLine(drawing) == 2 && marked == 1,
+              "connection source: picking another moves the mark rather than adding a second");
+        drawing = partDrawingWithConnectionLine(drawing, -1);
+        check(partDrawingConnectionLine(drawing) == -1, "connection source: and it can be cleared");
+
+        // A part goes onto the sheet as a BLOCK COPY - one thing, picked and moved in a piece, and
+        // rebuilt everywhere when the part's drawing changes. The builder puts one down the same way.
+        LibraryPart part;
+        part.id = QStringLiteral("conn-block");
+        part.kind = PartKind::Connector;
+        part.mfrPn = QStringLiteral("X-8");
+        part.mechanical = partDrawingWithConnectionLine(partDrawingFromEntities(lines), 1);
+        const std::vector<Entity> copy = partBlockInstance(part, true, Vec2{50.0, 50.0});
+        check(copy.size() == lines.size(), "as a block: the whole drawing is put down");
+        if (!copy.empty()) {
+            const QString name = entityBlockName(copy.front());
+            const QString inst = entityBlockInstance(copy.front());
+            bool oneThing = !name.isEmpty() && !inst.isEmpty();
+            for (const Entity& e : copy)
+                if (entityBlockName(e) != name || entityBlockInstance(e) != inst) oneThing = false;
+            check(oneThing, "as a block: all of it is one copy of one block, named after the part");
+        }
+
+        PartsCatalog catalog;
+        catalog.setRemembering(false);
+        catalog.active().parts.push_back(part);
+        MechHarnessDef def;
+        MechNode p1;
+        p1.id = QStringLiteral("p1");
+        p1.kind = MechNodeKind::Connector;
+        p1.libPart = part.id;
+        def.nodes.push_back(p1);
+        MechNode p2 = p1;
+        p2.id = QStringLiteral("p2");
+        p2.parentSegment = QStringLiteral("s1");
+        def.nodes.push_back(p2);
+        for (int i = 0; i < 3; ++i)
+            def.wires.push_back(wireOf(QStringLiteral("w%1").arg(i + 1), QStringLiteral("0.5")));
+        MechSegment s;
+        s.id = QStringLiteral("s1");
+        s.fromNode = QStringLiteral("p1");
+        s.toNode = QStringLiteral("p2");
+        s.lengthMm = 150.0;
+        for (const MechWire& w : def.wires) s.wireIds.push_back(w.id);
+        def.segments.push_back(s);
+        QStringList instances;
+        for (const Entity& e : buildMechanicalHarness(def, &catalog)) {
+            const QString inst = entityBlockInstance(e);
+            if (!inst.isEmpty() && !instances.contains(inst)) instances << inst;
+        }
+        check(instances.size() == 2,
+              "as a block: the builder puts each connector down as its own copy");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

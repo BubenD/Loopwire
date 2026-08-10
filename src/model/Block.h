@@ -12,6 +12,7 @@ namespace Edraw_Desktop {
 
 class Document;
 class PartsCatalog;
+struct LibraryPart;
 
 // ---- Blocks -------------------------------------------------------------------------------------
 // A named piece of drawing, defined once and dropped in wherever it is wanted: a symbol, a title
@@ -64,6 +65,12 @@ BlockDef blockFromEntities(const QString& name, const std::vector<Entity>& ents,
 // again and rebuilt when the definition changes.
 std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
                                           const QString& instanceKey);
+
+// One copy of a library part's drawing, stamped as a block copy: what goes on the sheet when a part is
+// inserted, or when the harness builder puts one down. The block is the part - the same name
+// libraryBlocks() gives it - so editing the part's drawing rebuilds every copy already placed.
+std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, const Vec2& at,
+                                      const QString& instanceKey = QString());
 
 // Every block there is, in one list: the ones saved as files, and every drawing in the connected
 // part libraries. A library part IS a block - a symbol drawn once and dropped in wherever it is

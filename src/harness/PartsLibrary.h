@@ -52,6 +52,14 @@ enum class PartKind {
     Other
 };
 
+// The part's drawing with ONE of its objects marked as the connection line - where the harness attaches
+// to it - and the mark taken off everything else. A part has one place the harness meets it, so this is
+// exclusive by construction rather than by asking whoever is clicking to be careful. An index outside
+// the drawing leaves nothing marked, which is how the mark is cleared.
+QJsonArray partDrawingWithConnectionLine(const QJsonArray& drawing, int index);
+// Which object of the drawing is marked, or -1.
+int partDrawingConnectionLine(const QJsonArray& drawing);
+
 // Every kind, in the order the library lists them.
 std::vector<PartKind> allPartKinds();
 // "Heatshrink boot", "Y-split heatshrink", ... - what the UI shows.
