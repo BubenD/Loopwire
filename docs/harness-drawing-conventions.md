@@ -161,3 +161,45 @@ Implemented against the above:
   A harness of nothing but wire would otherwise have a table and no callouts at all.
 - The open length starts at 20 mm on every connector — a starting figure in the same sense as a run's
   starting length, because zero would mean heatshrink hard against the contacts, which is never right.
+
+## How test1.dwx builds its mechanical view
+
+`test1.dwx` carries both sheets of one harness: the schematic below the origin (wires, screens,
+twists, connectors on the `Wires` / `Connectors` layers) and a mechanical view above it, drawn by
+hand on layer `0`. The harness is the same one either way — read the schematic back with
+`mechFromDrawing()` and you get the trunk, the breakout and the two branches that the mechanical view
+draws. So the mechanical view is a worked example of the drawing the builder has to produce, measured
+in the same units as the model. What it does, feature by feature:
+
+**Every section is an outline of two lines at its true diameter, and is closed off across its width
+wherever it stops.** The trunk is a double run Ø10 from x=170 to x=410. At x=170 there is a bar
+across Ø13.1, at x=141.8 another across Ø8.6, at x=410 one across Ø10, at x=439 one across Ø7.4.
+Ten of the drawing's forty-one objects are those bars. Without them the outline reads as two loose
+lines running off the end of the object.
+
+**A boot or backshell is a taper, not a box.** From the connector end: a bar at the neck (Ø8.6), a
+straight neck to x=147.6, a cone out to Ø13.1 by x=151.5, then a straight body to x=170.4 where it is
+barred. Its wide end lies over the cable, its neck faces the connector — the conductors are squeezed
+together going into the shell, so the shape narrows towards it. The trunk's own Ø10 outline runs on
+underneath.
+
+**Open conductors are drawn as conductors, each at its own diameter.** Between the neck and the
+connector body every wire is a double run of Ø1.5 with a rounded knee: out of the neck at an angle,
+then straight into the face. Eleven of the objects in the view are those wires. The knee radius is 5
+and it is set per corner (`cornerRadii: [0, 5, 0]`), so the middle vertex is rounded and the ends are
+not. They are trimmed against the boot's cone where they meet it, which is why the trim caps matter.
+
+**A breakout is a cone between two bars.** The trunk ends at x=410 barred at Ø10; two lines run out
+to x=439 where a bar closes Ø7.4; the two branches leave from x=440.5, each a double run, each with
+its start trimmed to the cone it comes out of.
+
+**Connectors are plain rectangles** sized to the part — 12 × 22.9 for the 8-way, 8.7 × 14.7 for the
+small ones — with the wires running to the face.
+
+**Dimensions are linear, and there is one for every length the harness is built to**: textHeight 5,
+arrowSize 3.3, extOffset 2, two decimals, standing 20 to 60 mm clear of the geometry. Eleven of them:
+the open-wire length at each of the three connectors, the boot length at each, each run, the spread
+cone, and one overall length from the first connector to the last.
+
+**Nothing else.** No diameter labels, no balloons, no notes on this view — the callouts belong to the
+released sheet, and the view itself is geometry and dimensions.

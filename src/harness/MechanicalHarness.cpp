@@ -185,6 +185,24 @@ Entity makeBox(const MechDrawOptions& opt, const Vec2& mid, double dirRad, doubl
     return e;
 }
 
+// A body fitted at an end - a backshell, a boot - as the shape one actually is: a neck the conductors
+// are squeezed into facing the connector, a cone, then the body over the cable behind it. Drawn as one
+// closed outline, so the two bars that close it (across the neck and across the back) come with it.
+// A box would be the same size and say nothing about which way round it goes on.
+Entity makeTaperBody(const MechDrawOptions& opt, const Vec2& neckAt, const Vec2& u, double lengthAlong,
+                     double neckAcross, double bodyAcross, const QString& role) {
+    Entity e = baseEntity(opt, role);
+    e.type = EntityType::Polygon;
+    const Vec2 v = u.perp();
+    // Stations along it: the neck, the end of the straight neck, the top of the cone, the back.
+    const double s1 = lengthAlong * 0.25, s2 = lengthAlong * 0.55;
+    const double hn = neckAcross / 2.0, hb = bodyAcross / 2.0;
+    const Vec2 p0 = neckAt, p1 = neckAt + u * s1, p2 = neckAt + u * s2, p3 = neckAt + u * lengthAlong;
+    e.points = {p0 + v * hn, p1 + v * hn, p2 + v * hb, p3 + v * hb,
+                p3 - v * hb, p2 - v * hb, p1 - v * hn, p0 - v * hn};
+    return e;
+}
+
 Entity makeBalloon(const MechDrawOptions& opt, const Vec2& tip, const Vec2& at,
                    const QString& text) {
     Entity e = baseEntity(opt, QStringLiteral("balloon"));
@@ -1128,6 +1146,9 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     struct Body {
         std::vector<Vec2> plus, minus;   // from the run's start to its end
         double gap;                      // across the body, for placing what is written beside it
+        // Whether each end runs on into another run. An end that does is not closed off across its
+        // width; an end that stops is (see the bars below).
+        bool mitredStart = false, mitredEnd = false;
     };
     QHash<QString, Body> bodies;
     for (const MechPlacedSegment& ps : layout.segments) {
@@ -1196,16 +1217,49 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             Body& ba = bodies[a.segId];
             Body& bb = bodies[b.segId];
             if (ba.plus.empty() || bb.plus.empty()) continue;
-            if (a.atFrom) ba.plus.front() = v;
-            else ba.minus.back() = v;
-            if (b.atFrom) bb.minus.front() = v;
-            else bb.plus.back() = v;
+            if (a.atFrom) { ba.plus.front() = v; ba.mitredStart = true; }
+            else { ba.minus.back() = v; ba.mitredEnd = true; }
+            if (b.atFrom) { bb.minus.front() = v; bb.mitredStart = true; }
+            else { bb.plus.back() = v; bb.mitredEnd = true; }
         }
     }
     for (const MechPlacedSegment& ps : layout.segments) {
         const Body& b = bodies.value(ps.id);
         out.push_back(makeBundleEdge(opt, b.plus, ps.diameterMm, ps.id, +1));
         out.push_back(makeBundleEdge(opt, b.minus, ps.diameterMm, ps.id, -1));
+        // A section of the outline is closed off ACROSS ITS WIDTH wherever it stops: at the end of a
+        // cable, at the neck a boot squeezes the conductors down to, at the small end of a spread cone.
+        // A released drawing has a bar at every one of them - a quarter of the objects in the hand-drawn
+        // view of test1.dwx are these - and without them the outline reads as two loose lines running
+        // off the end of the object. An end that runs ON into another run is not barred: there is
+        // nothing there to close, the outline carries through the junction.
+        if (b.plus.size() == b.minus.size() && b.plus.size() >= 2) {
+            auto bar = [&](const Vec2& p, const Vec2& q) {
+                if (distance(p, q) < 1e-9) return;
+                // Its own role: a bar is a feature of the drawing in its own right, not another length
+                // of the body, and anything counting bodies should not have to sort them out again.
+                Entity e = baseEntity(opt, QStringLiteral("bar"));
+                e.type = EntityType::Line;
+                e.a = p;
+                e.b = q;
+                e.meta.insert(QStringLiteral("mechSeg"), ps.id);
+                e.meta.insert(QStringLiteral("sectionEnd"), true);
+                out.push_back(e);
+            };
+            if (!b.mitredStart) bar(b.plus.front(), b.minus.front());
+            if (!b.mitredEnd) bar(b.plus.back(), b.minus.back());
+            // And at a STEP in the diameter - two stations at the same place along the run, one wider
+            // than the other. A change with a cone between them needs no bar: the cone closes it.
+            for (size_t i = 1; i < b.plus.size(); ++i) {
+                const Vec2 c0 = lerp(b.plus[i - 1], b.minus[i - 1], 0.5);
+                const Vec2 c1 = lerp(b.plus[i], b.minus[i], 0.5);
+                if (distance(c0, c1) > 1e-6) continue;                   // there is a cone here
+                if (std::abs(distance(b.plus[i], b.minus[i]) -
+                             distance(b.plus[i - 1], b.minus[i - 1])) < 1e-6)
+                    continue;                                            // same width: nothing to close
+                bar(b.plus[i], b.minus[i]);
+            }
+        }
     }
 
     // ---- What is written on each run, and what is fitted to it ----
@@ -1460,6 +1514,17 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     arm.meta.insert(QStringLiteral("ysplitLeg"), leg->id);
                     out.push_back(arm);
                 }
+            } else if (!overTheWires && lengthMm > 0.0 && odMm > endMm) {
+                // A shell or a boot: tapered, neck towards the connector. What passes through the neck
+                // is the conductors at that end, so that is what the neck is sized on.
+                const Vec2 neck = pn.at + u * (into * along(startMm));
+                Entity body = makeTaperBody(opt, neck, u * into, along(lengthMm),
+                                            std::max(across(endMm), across(odMm) * 0.45),
+                                            across(odMm), QStringLiteral("fitting"));
+                body.meta.insert(QStringLiteral("mechNode"), pn.id);
+                body.meta.insert(QStringLiteral("neckDia"), endMm);
+                body.meta.insert(QStringLiteral("bodyDia"), odMm);
+                out.push_back(body);
             } else {
                 Entity box = makeBox(opt, c, dirRad, along(lengthMm), across(odMm),
                                      QStringLiteral("fitting"));
@@ -1491,16 +1556,37 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const double bundleHalf = across(endMm) / 2.0;
             const Vec2 a = pn.at;                                        // the connector face
             const Vec2 b = pn.at + u * (into * along(openMm));           // where the body starts
+            // Each conductor at ITS OWN diameter, with a knee where it fans: out of the bundle at an
+            // angle, then straight into the face. That is what a released drawing shows and what the
+            // hand-drawn view of test1.dwx has - a double run per wire with the middle vertex rounded
+            // (cornerRadii [0, r, 0]) - rather than a bare line from the bundle to the contact, which
+            // says nothing about the size of the wire or how it is dressed into the shell.
+            const double straightMm = openMm * 0.45;                     // the run straight into the face
             for (int i = 0; i < drawn; ++i) {
                 // Evenly spaced across each end, so two wires do not lie on top of one another.
                 const double t = drawn == 1 ? 0.0
                                             : (static_cast<double>(i) / (drawn - 1)) * 2.0 - 1.0;
+                const MechWire* mw = def.wire(seg->wireIds[i]);
+                const double odMm = mw ? wireOuterDiameterMm(mw->gauge) : 1.5;
+                const Vec2 face = a + v * (t * faceHalf * 0.8);
+                const Vec2 knee = face + u * (into * along(straightMm));
                 Entity w = baseEntity(opt, QStringLiteral("wires"));
-                w.type = EntityType::Line;
-                w.a = a + v * (t * faceHalf * 0.8);
-                w.b = b + v * (t * bundleHalf);
+                w.type = EntityType::Polyline;
+                w.points = {b + v * (t * bundleHalf), knee, face};
+                w.a = w.points.front();
+                w.b = w.points.back();
+                w.meta.insert(QStringLiteral("double"), true);
+                w.meta.insert(QStringLiteral("gap"), std::max(0.4, across(odMm)));
+                // Rounded at the knee and nowhere else, so the ends stay square on the bundle and on
+                // the face. The radius is kept inside the fan it is turning through.
+                QJsonArray radii;
+                radii.append(0.0);
+                radii.append(std::max(1.0, std::min(along(straightMm), across(odMm) * 3.0)));
+                radii.append(0.0);
+                w.meta.insert(QStringLiteral("cornerRadii"), radii);
                 w.meta.insert(QStringLiteral("mechNode"), pn.id);
                 w.meta.insert(QStringLiteral("mechSeg"), seg->id);
+                w.meta.insert(QStringLiteral("wireOd"), odMm);
                 out.push_back(w);
             }
             if (drawn < count)
@@ -1526,16 +1612,6 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         }
 
         if (n->kind != MechNodeKind::Connector) {
-            if (n->kind == MechNodeKind::FreeEnd && ps) {
-                // A cut end: a bar across the bundle, so the drawing does not read as unfinished.
-                const double half = across(bundleMm) / 2.0;
-                Entity cap = baseEntity(opt, QStringLiteral("end"));
-                cap.type = EntityType::Line;
-                cap.a = pn.at + v * half;
-                cap.b = pn.at - v * half;
-                cap.meta.insert(QStringLiteral("mechNode"), pn.id);
-                out.push_back(cap);
-            }
             if (!n->name.isEmpty() && n->kind != MechNodeKind::Root)
                 out.push_back(makeText(opt, pn.at + v * (across(bundleMm) / 2.0 + 4.0), n->name,
                                        opt.textHeight, 0.0, QStringLiteral("label")));
@@ -1574,6 +1650,42 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(makeText(opt, pn.at - u * (into * along(26.0)) +
                                             v * (across(h) / 2.0 + 3.0),
                                    n->name, opt.textHeight * 1.2, 0.0, QStringLiteral("label")));
+        }
+    }
+
+    // ---- The overall length ----
+    // The figure the harness is bought and inspected by, from the first end to the last. The per-run
+    // dimensions say how the inside of it is built; none of them says how long the thing is, and a
+    // released drawing always carries that - it is the one dimension on the sheet a stores man reads.
+    if (opt.dimensions && layout.segments.size() >= 2) {
+        const MechPlacedNode* fa = nullptr;
+        const MechPlacedNode* fb = nullptr;
+        double best = 0.0;
+        for (const MechPlacedNode& p1 : layout.nodes) {
+            const MechNode* n1 = def.node(p1.id);
+            if (!n1 || (n1->kind != MechNodeKind::Connector && n1->kind != MechNodeKind::FreeEnd))
+                continue;
+            for (const MechPlacedNode& p2 : layout.nodes) {
+                const MechNode* n2 = def.node(p2.id);
+                if (&p2 == &p1 || !n2 ||
+                    (n2->kind != MechNodeKind::Connector && n2->kind != MechNodeKind::FreeEnd))
+                    continue;
+                const double d = distance(p1.at, p2.at);
+                if (d > best) { best = d; fa = &p1; fb = &p2; }
+            }
+        }
+        if (fa && fb && best > 1e-6) {
+            // Below everything on the sheet, clear of the per-run dimensions that already stand off it.
+            double lowest = std::min(fa->at.y, fb->at.y);
+            for (const MechPlacedSegment& ps : layout.segments) {
+                const Body& b = bodies.value(ps.id);
+                for (const Vec2& q : b.plus) lowest = std::min(lowest, q.y);
+                for (const Vec2& q : b.minus) lowest = std::min(lowest, q.y);
+            }
+            const Vec2 textAt{(fa->at.x + fb->at.x) / 2.0, lowest - opt.textHeight * 8.0};
+            Entity dim = makeDimension(opt, fa->at, fb->at, textAt, QString());
+            dim.meta.insert(QStringLiteral("overall"), true);
+            out.push_back(dim);
         }
     }
 

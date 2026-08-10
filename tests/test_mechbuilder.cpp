@@ -4,6 +4,8 @@
 #include "harness/MechanicalHarness.h"
 #include "model/Document.h"
 
+#include <QJsonArray>
+
 #include <cmath>
 #include <cstdio>
 
@@ -241,16 +243,27 @@ int run_mechbuilder_tests() {
         check(countRole(ents, "connector") == 2, "drawing: a body at each connector");
         // A length dimension on every run - plus one per connector for the open conductors behind it,
         // which is a figure in its own right and is counted separately here.
-        int runDims = 0;
-        for (const Entity& e : ents)
-            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("dim") &&
-                !e.meta.value(QStringLiteral("openWires")).toBool())
-                ++runDims;
+        int runDims = 0, overall = 0;
+        for (const Entity& e : ents) {
+            if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("dim")) continue;
+            if (e.meta.value(QStringLiteral("overall")).toBool()) { ++overall; continue; }
+            if (!e.meta.value(QStringLiteral("openWires")).toBool()) ++runDims;
+        }
         check(runDims == 3, "drawing: a length dimension on every run");
+        // And one across the whole thing: how long the harness IS, which no per-run figure says and
+        // which a released drawing always carries.
+        check(overall == 1, "drawing: an overall length from one end to the other");
         check(countRole(ents, "dia") == 3, "drawing: the bundle diameter written on every run");
         check(countRole(ents, "breakout") == 1,
               "drawing: the point three runs meet at is an object of its own");
-        check(countRole(ents, "end") == 1, "drawing: a cut end is capped");
+        // Every place the outline stops is closed off across its width - the cut end among them - and
+        // those bars are what a released drawing has at the end of a cable or the neck of a boot.
+        int bars = 0;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("bar") &&
+                e.meta.value(QStringLiteral("sectionEnd")).toBool())
+                ++bars;
+        check(bars >= 1, "drawing: the ends of the outline are closed off across it");
 
         // The trunk's edges sit half the bundle either side of its centreline, and carry that
         // diameter as a figure.
@@ -1150,6 +1163,92 @@ int run_mechbuilder_tests() {
         for (const Entity& e : buildMechanicalHarness(quiet, nullptr))
             if (e.meta.contains(QStringLiteral("deltaNote"))) ++quietTriangles;
         check(quietTriangles == 0, "notes: they can be turned off");
+    }
+
+    // The mechanical view in test1.dwx is a worked example of the drawing this has to produce, drawn by
+    // hand in the same units as the model. What it is made of, feature by feature (see
+    // docs/harness-drawing-conventions.md): sections closed off across their width wherever they stop,
+    // boots that taper to a neck facing the connector, and open conductors drawn as conductors - each a
+    // double run at its own diameter with a knee where it fans into the shell.
+    {
+        MechHarnessDef def;
+        MechNode p1;
+        p1.id = QStringLiteral("p1");
+        p1.kind = MechNodeKind::Connector;
+        p1.name = QStringLiteral("P1");
+        p1.pinCount = 8;
+        p1.openLengthMm = 20.0;
+        MechFitting boot;
+        boot.kind = PartKind::HeatshrinkBoot;
+        boot.name = QStringLiteral("Boot");
+        boot.lengthMm = 28.0;
+        boot.odMm = 13.1;                       // the figure the hand-drawn view uses
+        p1.fittings.push_back(boot);
+        def.nodes.push_back(p1);
+        MechNode p2;
+        p2.id = QStringLiteral("p2");
+        p2.kind = MechNodeKind::Connector;
+        p2.name = QStringLiteral("P2");
+        p2.pinCount = 4;
+        p2.openLengthMm = 20.0;
+        p2.parentSegment = QStringLiteral("s1");
+        def.nodes.push_back(p2);
+        for (int i = 0; i < 4; ++i) def.wires.push_back(wireOf(QStringLiteral("w%1").arg(i + 1),
+                                                              QStringLiteral("0.08")));
+        MechSegment s;
+        s.id = QStringLiteral("s1");
+        s.fromNode = QStringLiteral("p1");
+        s.toNode = QStringLiteral("p2");
+        s.lengthMm = 240.0;
+        for (const MechWire& w : def.wires) s.wireIds.push_back(w.id);
+        def.segments.push_back(s);
+
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        int bars = 0, wires = 0, tapers = 0;
+        const Entity* bootBody = nullptr;
+        const Entity* aWire = nullptr;
+        for (const Entity& e : ents) {
+            const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+            if (role == QLatin1String("bar")) ++bars;
+            if (role == QLatin1String("wires")) {
+                ++wires;
+                if (!aWire) aWire = &e;
+            }
+            if (role == QLatin1String("fitting") && e.type == EntityType::Polygon) {
+                ++tapers;
+                bootBody = &e;
+            }
+        }
+        // The body stops short of both connectors by the open length, and both of those ends are barred.
+        check(bars == 2, "test1 style: the outline is closed off across it wherever it stops");
+        check(wires == 8, "test1 style: every conductor is drawn where the wires run open");
+        check(tapers == 1, "test1 style: a boot is drawn as a tapered body, not a box");
+        if (bootBody && bootBody->points.size() == 8) {
+            const auto& q = bootBody->points;
+            const double neck = distance(q[0], q[7]);   // across the front of it
+            const double body = distance(q[3], q[4]);   // across the back
+            check(neck < body, "test1 style: the boot narrows towards the connector");
+            check(std::abs(q[0].x) < std::abs(q[3].x),
+                  "test1 style: and it is the neck that faces the connector");
+        } else {
+            check(false, "test1 style: the boot outline has a neck and a body");
+        }
+        if (aWire) {
+            check(aWire->type == EntityType::Polyline &&
+                      aWire->meta.value(QStringLiteral("double")).toBool(),
+                  "test1 style: a conductor is a double run, like the hand-drawn ones");
+            check(std::abs(aWire->meta.value(QStringLiteral("gap")).toDouble() -
+                           wireOuterDiameterMm(QStringLiteral("0.08"))) < 0.2,
+                  "test1 style: drawn at the diameter its gauge actually is");
+            const QJsonArray radii = aWire->meta.value(QStringLiteral("cornerRadii")).toArray();
+            check(radii.size() == 3 && radii[0].toDouble() == 0.0 && radii[1].toDouble() > 0.0 &&
+                      radii[2].toDouble() == 0.0,
+                  "test1 style: rounded at the knee where it fans, square on the bundle and the face");
+            check(aWire->points.size() == 3,
+                  "test1 style: out of the bundle, round the knee, straight into the face");
+        } else {
+            check(false, "test1 style: there are conductors to look at");
+        }
     }
 
     if (failures == 0) std::printf("  -> ok\n");
