@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Entity.h"
+#include "model/PageSetup.h"
 #include "model/Layer.h"
 
 #include <QJsonObject>
@@ -36,6 +37,9 @@ struct DrawingLayout {
     QString templateName;
     std::vector<Entity> paperEntities;
     std::vector<LayoutViewport> viewports;
+    // How this sheet plots: the paper, the way round, the scale, the ink. Its own, and saved with the
+    // drawing - a sheet that plots correctly today must plot the same for whoever opens the file next.
+    PageSetup pageSetup;
 
     QJsonObject toJson() const;
     static DrawingLayout fromJson(const QJsonObject& obj);
@@ -54,6 +58,11 @@ public:
 
     std::vector<Entity>& entities() { return entities_; }
     const std::vector<Entity>& entities() const { return entities_; }
+
+    // Named page setups: a paper, a scale and a set of plot options settled once and then set on any
+    // sheet. They live beside the layouts because they belong to the drawing, not to one sheet of it.
+    std::vector<PageSetup>& pageSetups() { return pageSetups_; }
+    const std::vector<PageSetup>& pageSetups() const { return pageSetups_; }
 
     std::vector<Layer>& layers() { return layers_; }
     const std::vector<Layer>& layers() const { return layers_; }
@@ -105,6 +114,7 @@ private:
     std::vector<Entity> entities_;
     std::vector<Layer> layers_;
     QString activeLayer_ = "0";
+    std::vector<PageSetup> pageSetups_;
     ViewState view_;
     QString unit_ = "mm";
     double doubleLineGap_ = 10.0;

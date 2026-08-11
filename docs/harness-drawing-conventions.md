@@ -457,3 +457,38 @@ as on the screen.
 Sheets are flushed out of paper space before anything is written, so a line drawn a moment ago is on the
 page. The two **Export PDF** entries above it in the menu stay as they are — one quick page of whatever is
 showing, and one of a dragged window.
+
+## Page setup: what a sheet plots on
+
+Right-click a layout's tab: **Duplicate**, **Rename**, **Print / PDF**, **Page setup**, **Delete**. That
+is the menu for what is done TO a sheet, as against what is drawn on it, and the tab is the thing being
+talked about. Duplicating copies the paper geometry, the windows and the page setup, gives the windows
+fresh ids (two windows with one id are one window to anything that looks them up) and names the copy after
+its original. Model space's menu has only the plotting entries: there is one model, it has no name to
+change and no paper of its own.
+
+**Page setup** opens the **Page Setup Manager**. Two kinds of setup are on its list: the layout's own,
+written `*Layout1*` the way a plot dialog writes it, and **named** setups, which live on the drawing beside
+the layouts so a paper, a scale and a set of plot options can be settled once and set on every sheet of a
+pack. *Modify* edits whichever is picked, *New* makes a named one from it, *Set current* copies a named
+one onto the sheet, and *Import* reads the setups out of another drawing — both its named ones and each of
+its layouts' own, since most offices keep their paper and scale on the sheets. A layout always plots by its
+own setup: a named setup that is later renamed or deleted must not be able to change how a sheet plots,
+which is why *Set current* copies rather than references.
+
+A setup holds the device (a printer by name, or none — meaning a PDF), the paper, portrait or landscape,
+upside-down, what to plot (the sheet, or the extents), the scale or *fit to paper*, the offset or *centre*,
+and how the ink comes out: black or the drawing's own colours, with or without object lineweights, paper
+space last. It is **saved with the drawing**, because a sheet that plots correctly today must plot the same
+for whoever opens the file next; a drawing written before page setups existed gets its own sheet size, full
+bleed, at 1:1 — which is how it was being plotted all along.
+
+**Full bleed is the one worth understanding.** A printer will not put ink within a few millimetres of the
+paper's edge, so every plain size keeps a margin: a plain A3 is 420 × 297 of paper but only 410 × 287 of
+ink, and a 420 × 297 sheet does not fit on it. A full-bleed size has no margin — the printable area *is*
+the page — so the sheet comes out at true size, which is what a plotter and a PDF can do and what a drawing
+that will be measured needs. Every size is offered both ways (ISO A, B and C, ANSI, ARCH, Letter and
+Legal), and the dialog shows the printable area in millimetres so the difference is a figure rather than a
+guess. Nothing is printed in the margin by anything: a sheet plotted at 1:1 on paper too small for it is
+clipped at the printable edge, exactly as it would come out of the machine, rather than being quietly
+shrunk. *Fit to paper* is how a sheet is made to go on paper that will not hold it.

@@ -99,6 +99,10 @@ public:
     static QColor backgroundColor();
     static void setMonochrome(bool on);
     static bool monochrome();
+    // Whether object lineweights are drawn at all. Off for a check print, where the geometry is what is
+    // wanted and every line comes out the same thin one.
+    static void setPlotLineweights(bool on);
+    static bool plotLineweights();
     // On a white export page, a white drawing stroke must remain visible. It is
     // treated as black in color mode; other colors remain unchanged.
     static void setWhitePaper(bool on);

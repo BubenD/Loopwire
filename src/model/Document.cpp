@@ -40,7 +40,8 @@ QJsonObject DrawingLayout::toJson() const {
             {QStringLiteral("paperHeight"), paperHeight},
             {QStringLiteral("templateName"), templateName},
             {QStringLiteral("paperEntities"), entities},
-            {QStringLiteral("viewports"), viewportArray}};
+            {QStringLiteral("viewports"), viewportArray},
+            {QStringLiteral("pageSetup"), pageSetup.toJson()}};
 }
 
 DrawingLayout DrawingLayout::fromJson(const QJsonObject& obj) {
@@ -53,6 +54,14 @@ DrawingLayout DrawingLayout::fromJson(const QJsonObject& obj) {
         layout.paperEntities.push_back(Entity::fromJson(value.toObject()));
     for (const QJsonValue& value : obj.value(QStringLiteral("viewports")).toArray())
         layout.viewports.push_back(LayoutViewport::fromJson(value.toObject()));
+    if (obj.contains(QStringLiteral("pageSetup"))) {
+        layout.pageSetup = PageSetup::fromJson(obj.value(QStringLiteral("pageSetup")).toObject());
+    } else {
+        // A drawing written before page setups existed: the sheet's own size, full bleed, at 1:1 - which
+        // is how it was being plotted, so nothing about it changes by being written down.
+        layout.pageSetup.paper = paperSizeFor(layout.paperWidth, layout.paperHeight, true);
+        layout.pageSetup.landscape = layout.paperWidth >= layout.paperHeight;
+    }
     return layout;
 }
 

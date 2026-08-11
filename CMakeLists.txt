@@ -117,6 +117,12 @@ add_library(edraw_core STATIC
     src/app/MechModelsDialog.cpp
     src/app/OutputDialog.h
     src/app/OutputDialog.cpp
+    src/app/PageSetupDialog.h
+    src/app/PageSetupDialog.cpp
+    src/app/PageSetupManagerDialog.h
+    src/app/PageSetupManagerDialog.cpp
+    src/model/PageSetup.h
+    src/model/PageSetup.cpp
     src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp

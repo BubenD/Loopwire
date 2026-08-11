@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 #include "app/OutputDialog.h"
+#include "app/PageSetupManagerDialog.h"
 
 #include "app/ribbon/RibbonIcons.h"
 
@@ -1944,6 +1945,11 @@ void MainWindow::buildDocumentArea() {
     connect(addSpace, &QToolButton::clicked, this, [this] { addDrawingLayout(); });
     connect(drawingSpaceTabs_, &QTabBar::tabCloseRequested, this,
             [this](int i) { closeDrawingSpace(i); });
+    // A right-click on a tab: what is done TO a sheet - copied, renamed, plotted, set up - as against what
+    // is drawn on it. On the tab, because that is the thing being talked about.
+    drawingSpaceTabs_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(drawingSpaceTabs_, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& at) { showDrawingSpaceMenu(at); });
     if (canvas_)
         connect(canvas_, &CanvasWidget::viewportEntered, this,
                 [this](bool inside) { enteredLayoutViewport(inside); });
@@ -2051,6 +2057,122 @@ void MainWindow::enteredLayoutViewport(bool inside) {
         statusBar()->showMessage(tr("Back on the paper."), 3000);
     }
     refreshProperties();
+}
+
+void MainWindow::showDrawingSpaceMenu(const QPoint& at) {
+    if (!drawingSpaceTabs_ || !doc_) return;
+    const int space = drawingSpaceTabs_->tabAt(at);
+    if (space < 0) return;
+    QMenu menu(this);
+    const QString name = spaceName(space);
+    menu.addAction(name)->setEnabled(false);
+    menu.addSeparator();
+    if (space == 0) {
+        // Model space: there is one of it, it has no name to change and no paper to set up. What is left
+        // is putting it out, which is the same Output the sheets use, opened on the model.
+        menu.addAction(tr("Print / PDF..."), this, [this] { printLayout(0); });
+        menu.addAction(tr("Output... (every space, in order)"), this, [this] { showOutput(); });
+        menu.exec(drawingSpaceTabs_->mapToGlobal(at));
+        return;
+    }
+    menu.addAction(tr("Duplicate"), this, [this, space] { duplicateLayout(space); });
+    menu.addAction(tr("Rename..."), this, [this, space] { renameLayout(space); });
+    menu.addSeparator();
+    menu.addAction(tr("Print / PDF..."), this, [this, space] { printLayout(space); });
+    menu.addAction(tr("Page setup..."), this, [this, space] { showPageSetup(space); });
+    menu.addSeparator();
+    QAction* close = menu.addAction(tr("Delete"), this, [this, space] { closeDrawingSpace(space); });
+    close->setEnabled(doc_->layouts().size() > 1);
+    menu.exec(drawingSpaceTabs_->mapToGlobal(at));
+}
+
+void MainWindow::duplicateLayout(int space) {
+    if (!doc_ || space <= 0) return;
+    flushPaperSpace();   // the sheet being copied is copied as it stands, not as it was last saved
+    auto& layouts = doc_->layouts();
+    const int at = space - 1;
+    if (at < 0 || at >= static_cast<int>(layouts.size())) return;
+    DrawingLayout copy = layouts[static_cast<size_t>(at)];   // paper, geometry, windows, page setup
+    // A name that is not taken: "Layout2 (2)", then "(3)", the way a copy is named everywhere else.
+    const QString base = copy.name;
+    int suffix = 2;
+    auto taken = [&](const QString& candidate) {
+        for (const DrawingLayout& l : layouts)
+            if (l.name.compare(candidate, Qt::CaseInsensitive) == 0) return true;
+        return false;
+    };
+    QString name = QStringLiteral("%1 (%2)").arg(base).arg(suffix);
+    while (taken(name)) name = QStringLiteral("%1 (%2)").arg(base).arg(++suffix);
+    copy.name = name;
+    // The windows get fresh ids: two windows with the same id are one window as far as anything that
+    // looks them up is concerned.
+    for (LayoutViewport& viewport : copy.viewports)
+        viewport.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    layouts.insert(layouts.begin() + at + 1, std::move(copy));
+    doc_->setDirty(true);
+    syncDrawingSpaceTabs();
+    drawingSpaceTabs_->setCurrentIndex(space + 1);
+    statusBar()->showMessage(tr("%1 copied to %2").arg(base, name), 4000);
+}
+
+void MainWindow::renameLayout(int space) {
+    if (!doc_ || space <= 0) return;
+    auto& layouts = doc_->layouts();
+    const int at = space - 1;
+    if (at < 0 || at >= static_cast<int>(layouts.size())) return;
+    bool ok = false;
+    const QString was = layouts[static_cast<size_t>(at)].name;
+    const QString name = QInputDialog::getText(this, tr("Rename layout"), tr("Name:"),
+                                               QLineEdit::Normal, was, &ok);
+    if (!ok || name.trimmed().isEmpty() || name.trimmed() == was) return;
+    for (int i = 0; i < static_cast<int>(layouts.size()); ++i)
+        if (i != at && layouts[static_cast<size_t>(i)].name.compare(name.trimmed(),
+                                                                    Qt::CaseInsensitive) == 0) {
+            QMessageBox::information(this, tr("Rename layout"),
+                                     tr("There is already a layout called %1.").arg(name.trimmed()));
+            return;
+        }
+    layouts[static_cast<size_t>(at)].name = name.trimmed();
+    doc_->setDirty(true);
+    syncDrawingSpaceTabs();
+    statusBar()->showMessage(tr("%1 is now %2").arg(was, name.trimmed()), 4000);
+}
+
+void MainWindow::printLayout(int space) {
+    if (!doc_) return;
+    flushPaperSpace();
+    double w = 0.0, h = 0.0;
+    if (!spacePageSizeMm(space, w, h)) {
+        QMessageBox::information(this, tr("Print"),
+                                 tr("There is nothing on %1 — nothing to print.").arg(spaceName(space)));
+        return;
+    }
+    // One sheet, by its own page setup: the paper it says, the scale it says, the ink it says. A printer
+    // if it names one, a PDF if it does not - which is the choice a page setup exists to record.
+    const PageSetup setup = pageSetupFor(space);
+    if (!setup.device.isEmpty()) {
+        printSpaces({space});
+        return;
+    }
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Print %1 to PDF").arg(spaceName(space)),
+        QStringLiteral("%1.pdf").arg(spaceName(space)), QStringLiteral("PDF (*.pdf)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) path += QStringLiteral(".pdf");
+    if (writeSpacePdf(path, {space}, setup.monochrome, setup.fitToPaper))
+        statusBar()->showMessage(tr("%1 written to %2").arg(spaceName(space),
+                                                            QFileInfo(path).fileName()), 6000);
+}
+
+void MainWindow::showPageSetup(int space) {
+    if (!doc_ || space <= 0) return;
+    PageSetupManagerDialog dlg(*doc_, space - 1, this);
+    dlg.exec();
+    if (dlg.changed()) {
+        doc_->setDirty(true);
+        if (canvas_) canvas_->invalidateScene();
+        statusBar()->showMessage(tr("Page setup changed for %1").arg(spaceName(space)), 4000);
+    }
 }
 
 void MainWindow::addLayoutWindow() {
@@ -10440,15 +10562,33 @@ void MainWindow::exportPdf(bool windowSelect) {
     exportPdfRegion({ext.min.x - mx, ext.min.y - my}, {ext.max.x + mx, ext.max.y + my});
 }
 
+PageSetup MainWindow::pageSetupFor(int space) const {
+    if (doc_ && space > 0) {
+        const auto& layouts = doc_->layouts();
+        const int at = space - 1;
+        if (at >= 0 && at < static_cast<int>(layouts.size()))
+            return layouts[static_cast<size_t>(at)].pageSetup;
+    }
+    // Model space has no sheet, so it has no paper of its own to plot on: the drawing is fitted to the
+    // page, which is what Export PDF has always done with it.
+    PageSetup model;
+    model.area = PlotArea::Extents;
+    model.fitToPaper = true;
+    return model;
+}
+
 bool MainWindow::spacePageSizeMm(int space, double& widthMm, double& heightMm) const {
     if (!doc_) return false;
     if (space > 0) {
-        // A sheet is its own size. That is the whole point of having laid it out.
+        // The PAGE the sheet is plotted on, which is what the sheet's page setup says. A new layout is set
+        // up on full-bleed paper of its own size, so by default the page is the sheet - but a sheet set up
+        // for plain A4 comes out A4, and that is the setting's whole purpose.
         const auto& layouts = doc_->layouts();
         const int at = space - 1;
         if (at < 0 || at >= static_cast<int>(layouts.size())) return false;
-        widthMm = std::max(10.0, layouts[static_cast<size_t>(at)].paperWidth);
-        heightMm = std::max(10.0, layouts[static_cast<size_t>(at)].paperHeight);
+        const PageSetup setup = layouts[static_cast<size_t>(at)].pageSetup;
+        widthMm = std::max(10.0, setup.pageWidthMm());
+        heightMm = std::max(10.0, setup.pageHeightMm());
         return true;
     }
     // Model space: what is drawn, with a margin round it, as Export PDF has always taken it.
@@ -10470,28 +10610,56 @@ void MainWindow::renderSpaceToPage(QPainter& painter, int space, bool monochrome
     const QColor oldBackground = EntityRenderer::backgroundColor();
     const bool oldMonochrome = EntityRenderer::monochrome();
     const bool oldWhitePaper = EntityRenderer::whitePaper();
+    const bool oldWeights = EntityRenderer::plotLineweights();
     EntityRenderer::setBackgroundColor(Qt::white);
     EntityRenderer::setMonochrome(monochrome);
     EntityRenderer::setWhitePaper(true);
+    EntityRenderer::setPlotLineweights(pageSetupFor(space).plotLineweights);
     painter.fillRect(page, Qt::white);
 
     Bounds model;
     for (const Entity& e : doc_->entities()) model.expand(e.bounds());
 
     if (space > 0 && space - 1 < static_cast<int>(doc_->layouts().size())) {
-        // A SHEET. The page is the sheet, so the sheet's own millimetres map onto the paper: the paper
-        // space geometry at 1:1, and each window showing the model at the scale that window was given -
-        // the same arithmetic the canvas uses, so what comes out is what was laid out. The frames
-        // themselves are not printed: a window is a hole to see the drawing through, not a rectangle in
-        // the drawing.
+        // A SHEET, laid on the paper its page setup names. The paper space geometry goes on at the plot
+        // scale, and each window shows the model at the scale that window was given - the same arithmetic
+        // the canvas uses, so what comes out is what was laid out. The frames themselves are not printed:
+        // a window is a hole to see the drawing through, not a rectangle in the drawing.
         const DrawingLayout& layout = doc_->layouts()[static_cast<size_t>(space - 1)];
+        const PageSetup setup = layout.pageSetup;
         const double sheetW = std::max(10.0, layout.paperWidth);
         const double sheetH = std::max(10.0, layout.paperHeight);
-        const double scale = std::min(page.width() / sheetW, page.height() / sheetH);
+        // How many device units a millimetre of paper is, and the printable rectangle inside the margin.
+        // A full-bleed size has no margin, so the printable area IS the page and the sheet comes out at
+        // true size; a plain size keeps its margin unprinted, as an office printer needs.
+        const double pxPerMm = std::min(page.width() / std::max(1.0, setup.pageWidthMm()),
+                                        page.height() / std::max(1.0, setup.pageHeightMm()));
+        const double margin = setup.marginMm() * pxPerMm;
+        const QRectF printable = page.adjusted(margin, margin, -margin, -margin);
+        if (setup.upsideDown) {
+            // Plotted the other way up: the whole page turned about its middle, which is what the setting
+            // means on a plotter that feeds the paper the other way.
+            painter.translate(page.center());
+            painter.rotate(180.0);
+            painter.translate(-page.center());
+        }
+        const double scale = setup.fitToPaper
+                                 ? std::min(printable.width() / sheetW, printable.height() / sheetH)
+                                 : setup.scale * pxPerMm;
+        // Where the middle of the sheet lands: the middle of the printable area, or the offset from its
+        // lower-left corner (paper y measured up, as everywhere else).
+        const QPointF centre =
+            setup.centred
+                ? printable.center()
+                : QPointF(printable.left() + setup.offsetXMm * pxPerMm + sheetW * scale / 2.0,
+                          printable.bottom() - setup.offsetYMm * pxPerMm - sheetH * scale / 2.0);
         ViewTransform paper;
         paper.view.scale = scale;
-        paper.view.x = page.center().x() - sheetW / 2.0 * scale;
-        paper.view.y = page.center().y() + sheetH / 2.0 * scale;
+        paper.view.x = centre.x() - sheetW / 2.0 * scale;
+        paper.view.y = centre.y() + sheetH / 2.0 * scale;
+        // The margin is not printed in - by anything. A sheet plotted at true size on paper too small for
+        // it is clipped at the printable edge, which is exactly what would come out of the machine.
+        painter.setClipRect(printable, Qt::IntersectClip);
         for (const LayoutViewport& viewport : layout.viewports) {
             const QRectF rect = CanvasWidget::layoutViewportRect(viewport, paper);
             const ViewTransform view =
@@ -10511,7 +10679,6 @@ void MainWindow::renderSpaceToPage(QPainter& painter, int space, bool monochrome
                 ? paperDocs_[paperLoaded_]->entities()
                 : layout.paperEntities;
         painter.save();
-        painter.setClipRect(page, Qt::IntersectClip);
         for (const Entity& e : onPaper) EntityRenderer::draw(painter, e, *doc_, paper);
         painter.restore();
     } else {
@@ -10530,6 +10697,7 @@ void MainWindow::renderSpaceToPage(QPainter& painter, int space, bool monochrome
             }
         }
     }
+    EntityRenderer::setPlotLineweights(oldWeights);
     EntityRenderer::setWhitePaper(oldWhitePaper);
     EntityRenderer::setMonochrome(oldMonochrome);
     EntityRenderer::setBackgroundColor(oldBackground);
@@ -10564,32 +10732,7 @@ void MainWindow::showOutput() {
     const bool fit = dlg.fitToPage();
 
     if (dlg.toPrinter()) {
-        QPrinter printer(QPrinter::HighResolution);
-        QPrintDialog print(&printer, this);
-        print.setWindowTitle(tr("Print %1 page(s)").arg(pages.size()));
-        if (print.exec() != QDialog::Accepted) return;
-        QPainter painter(&printer);
-        if (!painter.isActive()) {
-            QMessageBox::warning(this, tr("Print failed"), tr("Could not start the print job."));
-            return;
-        }
-        for (size_t i = 0; i < pages.size(); ++i) {
-            if (i > 0 && !printer.newPage()) break;
-            double w = 0.0, h = 0.0;
-            spacePageSizeMm(pages[i], w, h);
-            // The printer's paper is whatever the print dialog was left on: the page is laid out to fill
-            // it, and "fit" only decides whether the sheet may be blown up to do so.
-            if (!fit) {
-                const double dpm = printer.resolution() / 25.4;   // dots per millimetre
-                painter.setViewport(QRect(painter.viewport().topLeft(),
-                                          QSize(static_cast<int>(w * dpm),
-                                                static_cast<int>(h * dpm))
-                                              .boundedTo(painter.viewport().size())));
-            }
-            renderSpaceToPage(painter, pages[i], monochrome);
-        }
-        painter.end();
-        statusBar()->showMessage(tr("Printed %1 page(s)").arg(pages.size()), 5000);
+        printSpaces(pages);
         return;
     }
 
@@ -10623,6 +10766,34 @@ QString MainWindow::spaceName(int space) const {
     if (at >= 0 && at < static_cast<int>(layouts.size()))
         return layouts[static_cast<size_t>(at)].name;
     return tr("Layout%1").arg(space);
+}
+
+bool MainWindow::printSpaces(const std::vector<int>& spaces) {
+    if (!doc_ || spaces.empty()) return false;
+    QPrinter printer(QPrinter::HighResolution);
+    // The printer the first page's setup names, if it names one and the machine is still there: a page
+    // setup that says which plotter it is for should not have to be repeated in the print dialog.
+    const PageSetup first = pageSetupFor(spaces.front());
+    if (!first.device.isEmpty()) printer.setPrinterName(first.device);
+    QPrintDialog print(&printer, this);
+    print.setWindowTitle(tr("Print %1 page(s)").arg(spaces.size()));
+    if (print.exec() != QDialog::Accepted) return false;
+    QPainter painter(&printer);
+    if (!painter.isActive()) {
+        QMessageBox::warning(this, tr("Print failed"), tr("Could not start the print job."));
+        return false;
+    }
+    for (size_t i = 0; i < spaces.size(); ++i) {
+        if (i > 0 && !printer.newPage()) break;
+        // Each page by its own setup: the ink it says, and the paper it says as far as the printer's own
+        // paper allows. The page is laid out to fill what the printer gives; the setup's scale and offset
+        // are honoured inside it by renderSpaceToPage.
+        const PageSetup setup = pageSetupFor(spaces[i]);
+        renderSpaceToPage(painter, spaces[i], setup.monochrome);
+    }
+    painter.end();
+    statusBar()->showMessage(tr("Printed %1 page(s)").arg(spaces.size()), 5000);
+    return true;
 }
 
 bool MainWindow::writeSpacePdf(const QString& path, const std::vector<int>& spaces, bool monochrome,

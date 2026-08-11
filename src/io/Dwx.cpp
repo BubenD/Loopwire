@@ -28,6 +28,9 @@ QJsonObject toJson(const Document& doc) {
     QJsonArray layouts;
     for (const DrawingLayout& layout : doc.layouts()) layouts.append(layout.toJson());
     root["layouts"] = layouts;
+    QJsonArray setups;
+    for (const PageSetup& setup : doc.pageSetups()) setups.append(setup.toJson());
+    root["pageSetups"] = setups;
     return root;
 }
 
@@ -50,6 +53,9 @@ void fromJson(Document& doc, const QJsonObject& obj) {
     for (const QJsonValue& value : obj.value(QStringLiteral("layouts")).toArray())
         layouts.push_back(DrawingLayout::fromJson(value.toObject()));
     if (!layouts.empty()) doc.layouts() = std::move(layouts);
+    doc.pageSetups().clear();
+    for (const QJsonValue& value : obj.value(QStringLiteral("pageSetups")).toArray())
+        doc.pageSetups().push_back(PageSetup::fromJson(value.toObject()));
 
     doc.setActiveLayer(doc.layers().empty() ? QStringLiteral("0")
                                             : doc.layers().front().name);

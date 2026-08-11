@@ -6,6 +6,7 @@
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include "model/Document.h"
+#include "model/PageSetup.h"
 #include "model/DrawingTemplate.h"   // tplBeingDrawn_ is held by value
 #include "tools/ToolId.h"
 
@@ -87,6 +88,18 @@ public:
     // The pages, in order, into one PDF.
     bool writeSpacePdf(const QString& path, const std::vector<int>& spaces, bool monochrome,
                        bool fitToPage);
+
+    // The menu on a layout's tab: what is done TO a sheet rather than on it.
+    void showDrawingSpaceMenu(const QPoint& at);
+    void duplicateLayout(int space);
+    void renameLayout(int space);
+    void printLayout(int space);
+    void showPageSetup(int space);
+    // The page setup a space plots by: the layout's own, or - for model space, which has no sheet and so
+    // no setup - one that fits the drawing to the paper.
+    PageSetup pageSetupFor(int space) const;
+    // Print these spaces, in order, on the printer chosen in the print dialog.
+    bool printSpaces(const std::vector<int>& spaces);
 
     // Blocks, as operations the host can be asked to perform - each is also reachable by name from
     // the command line. Opening one for editing puts it in a tab of its own on a grey canvas.

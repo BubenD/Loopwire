@@ -23,6 +23,7 @@ namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 bool g_monochrome = false;
+bool g_plotLineweights = true;   // a plot may be asked for without them
 bool g_whitePaper = false;
 bool g_lengthInch = false;   // dimension unit: false = mm (world), true = inch
 bool g_dualUnits = false;    // append the other unit in parentheses
@@ -102,6 +103,8 @@ std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, d
 void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
 void EntityRenderer::setMonochrome(bool on) { g_monochrome = on; }
+void EntityRenderer::setPlotLineweights(bool on) { g_plotLineweights = on; }
+bool EntityRenderer::plotLineweights() { return g_plotLineweights; }
 bool EntityRenderer::monochrome() { return g_monochrome; }
 void EntityRenderer::setWhitePaper(bool on) { g_whitePaper = on; }
 bool EntityRenderer::whitePaper() { return g_whitePaper; }
@@ -164,7 +167,12 @@ double effectiveWeight(const Entity& e, const Document& doc) {
 //
 // So: a line is never drawn narrower than one whole pixel. Thinner than that is not thinner, it is
 // fainter, and a drawing is meant to be read.
-double penPixels(double weight) { return std::max(1.0, weight); }
+double penPixels(double weight) {
+    // A plot can be asked NOT to plot object lineweights - a check print, where what is wanted is the
+    // geometry and not the emphasis. Then every line is the same thin one.
+    if (!EntityRenderer::plotLineweights()) return 1.0;
+    return std::max(1.0, weight);
+}
 
 // Is this shape made of straight edges? A hairline one is drawn without antialiasing (see the guard
 // below); a curve is not, because a jagged circle is worse than a slightly soft one.
