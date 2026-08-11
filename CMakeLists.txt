@@ -177,6 +177,32 @@ if(WIN32)
                  PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/edraw.ico)
 endif()
 
+# The Qt runtime is deployed beside Edraw.exe by every build.
+#
+# It used to be deployed by hand, once, by whoever set the machine up - and that holds only until the
+# application starts using a Qt module it did not use before. Adding Qt6::PrintSupport (for printing) left
+# a build that compiled, linked and then would not start: "Qt6PrintSupport.dll was not found". Nothing in
+# the build said anything was wrong, because from the build's point of view nothing was. windeployqt knows
+# exactly which DLLs and plugins the binary needs; it is asked after every link, and it copies only what is
+# missing or out of date, so the cost is a second and the failure cannot come back.
+if(WIN32)
+    get_target_property(_edraw_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_edraw_qt_bin "${_edraw_qmake}" DIRECTORY)
+    find_program(EDRAW_WINDEPLOYQT windeployqt HINTS "${_edraw_qt_bin}")
+    if(EDRAW_WINDEPLOYQT)
+        add_custom_command(TARGET Edraw POST_BUILD
+            COMMAND "${EDRAW_WINDEPLOYQT}"
+                    "--$<IF:$<CONFIG:Debug>,debug,release>"
+                    --no-translations --no-compiler-runtime --verbose 0
+                    "$<TARGET_FILE:Edraw>"
+            COMMENT "Deploying the Qt runtime beside Edraw.exe")
+    else()
+        message(WARNING
+            "windeployqt was not found next to qmake (${_edraw_qt_bin}). The Qt DLLs will not be kept up "
+            "to date beside Edraw.exe, so adding a Qt module can leave an executable that will not start.")
+    endif()
+endif()
+
 # --- Scratch GUI smoke target (only when a source is pointed at it) ----------
 if(EDRAW_SMOKE_SRC)
     qt_add_executable(hb_smoke ${EDRAW_SMOKE_SRC} resources/edraw.qrc)

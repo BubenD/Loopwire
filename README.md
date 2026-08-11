@@ -37,7 +37,9 @@ Add `-DEWIRE_BUILD_TESTS=ON` to also build the unit tests
 
 ## Running
 
-For a standalone run, deploy the Qt runtime next to the executable once:
+The Qt runtime is deployed beside `build\Edraw.exe` by every build (windeployqt runs after the link), so
+the executable is always startable — adding a Qt module cannot leave a binary that compiles and then
+refuses to run. To deploy by hand, or to a folder of your own:
 
 ```powershell
 & "C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe" --release "C:\Whatson\ETS\Software\EdrawDesktop\build\Edraw.exe"
