@@ -178,6 +178,8 @@ private:
     void setDrawingSpaceScale(double paperPerModel);
     // Cut a window onto the drawing in the sheet showing.
     void addLayoutWindow();
+    // Stepped into a window on a layout, or back out: which document the editor works in follows.
+    void enteredLayoutViewport(bool inside);
 
     // Paper space. A layout is drawn on with the same tools as the model, and the way that is had without
     // a second set of tools is to give the sheet a document of its own: the editor is pointed at it and

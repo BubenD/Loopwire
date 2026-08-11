@@ -1941,6 +1941,9 @@ void MainWindow::buildDocumentArea() {
     connect(addSpace, &QToolButton::clicked, this, [this] { addDrawingLayout(); });
     connect(drawingSpaceTabs_, &QTabBar::tabCloseRequested, this,
             [this](int i) { closeDrawingSpace(i); });
+    if (canvas_)
+        connect(canvas_, &CanvasWidget::viewportEntered, this,
+                [this](bool inside) { enteredLayoutViewport(inside); });
 }
 
 void MainWindow::syncDrawingSpaceTabs() {
@@ -2028,6 +2031,25 @@ void MainWindow::setDrawingSpaceScale(double paperPerModel) {
         3000);
 }
 
+void MainWindow::enteredLayoutViewport(bool inside) {
+    if (!editor_ || !canvas_) return;
+    if (inside) {
+        // Inside the window the harness is what is being drawn on, at its own size: the window only
+        // decides how much of it is seen and how big it is shown. So the editor is pointed at the
+        // drawing, and the canvas hands it that window's coordinates.
+        editor_->setDocument(doc_);
+        statusBar()->showMessage(
+            tr("Inside the window — drawing, selecting and moving here is the model itself. Middle-drag "
+               "or the wheel moves what the window looks at. Esc, or a click on the paper, steps out."),
+            8000);
+    } else {
+        Document* paper = paperSpaceFor(doc_, canvas_->layoutIndex());
+        editor_->setDocument(paper ? paper : doc_);
+        statusBar()->showMessage(tr("Back on the paper."), 3000);
+    }
+    refreshProperties();
+}
+
 void MainWindow::addLayoutWindow() {
     if (!canvas_ || !canvas_->layoutMode()) {
         statusBar()->showMessage(
@@ -2067,6 +2089,9 @@ void MainWindow::applyLayoutTemplate() {
 }
 
 Document* MainWindow::editDoc() const {
+    // Whatever the editor is pointed at: the drawing in model space, the sheet on a layout, and the
+    // drawing again inside a window on a layout - where what is drawn is the harness, seen through it.
+    if (editor_ && editor_->document()) return editor_->document();
     return canvas_ && canvas_->document() ? canvas_->document() : doc_;
 }
 
@@ -5130,6 +5155,26 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
 
     QMenu menu(this);
     const bool hasSel = !editor_->selection().empty();
+
+    // On a sheet, the windows come first. A window is added here, or with "+ window" in the corner of the
+    // strip, or by typing LAYOUTWINDOW - three ways, because it was not found the first time.
+    if (canvas_->layoutMode()) {
+        menu.addAction(QStringLiteral("Add a window onto the drawing"), this,
+                       [this] { addLayoutWindow(); });
+        const int picked = canvas_->selectedLayoutViewport();
+        const int inside = canvas_->activeLayoutViewport();
+        if (inside >= 0) {
+            menu.addAction(QStringLiteral("Step out onto the paper"), this,
+                           [this] { canvas_->leaveLayoutViewport(); });
+        } else if (picked >= 0) {
+            menu.addAction(QStringLiteral("Step into this window"), this,
+                           [this, picked] { canvas_->enterLayoutViewport(picked); });
+        }
+        if (picked >= 0)
+            menu.addAction(QStringLiteral("Take this window off the sheet"), this,
+                           [this, picked] { canvas_->removeLayoutViewport(picked); });
+        menu.addSeparator();
+    }
 
     // Anything drawn FROM a library part carries its id, so the sheet can answer the same question the
     // builder's tables answer: what is that thing? A cable's wires, a connector, a braid - the entry is

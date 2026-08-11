@@ -17,6 +17,8 @@
 #include <QToolButton>
 #include <QApplication>
 
+#include <QLineF>
+
 #include <cmath>
 #include <cstdio>
 
@@ -228,6 +230,124 @@ int run_drawingspace_tests() {
                 check(paper->entities().size() == sheetBefore + 1,
                       "paper: a window is not a hole - a line can be drawn across one");
             }
+        }
+    }
+
+    // ---- a window is a way into the model: stepped into, drawn in, moved, resized ----------------
+    if (canvas && editor) {
+        spaces->setCurrentIndex(1);
+        Document* drawing = canvas->drawingDocument();
+        Document* paper = canvas->document();
+        if (drawing && paper && !drawing->layouts().empty() &&
+            !drawing->layouts()[0].viewports.empty()) {
+            auto press = [&](const QPointF& at, Qt::MouseButton button = Qt::LeftButton) {
+                QMouseEvent ev(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), button, button,
+                               Qt::NoModifier);
+                QApplication::sendEvent(canvas, &ev);
+            };
+            auto moveTo = [&](const QPointF& at) {
+                QMouseEvent ev(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton,
+                               Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &ev);
+            };
+            auto release = [&](const QPointF& at) {
+                QMouseEvent ev(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton,
+                               Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &ev);
+            };
+
+            // One window on the sheet for this, so "the window" is unambiguous: the + window test above
+            // left a second one lying exactly over the first.
+            while (drawing->layouts()[0].viewports.size() > 1)
+                canvas->removeLayoutViewport(
+                    static_cast<int>(drawing->layouts()[0].viewports.size()) - 1);
+            win.resize(1400, 900);
+            win.show();
+            QApplication::processEvents();
+            canvas->fitView();
+            const LayoutViewport vp0 = drawing->layouts()[0].viewports.front();
+            const QPointF middle =
+                canvas->mapToScreen(Vec2{vp0.x + vp0.width * 0.5, vp0.y + vp0.height * 0.5});
+
+            // Double-clicking a window steps into it - and inside, the model is what is being drawn on.
+            QMouseEvent dbl(QEvent::MouseButtonDblClick, middle, canvas->mapToGlobal(middle),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &dbl);
+            check(canvas->activeLayoutViewport() == 0, "window: a double click steps into it");
+            check(editor->document() == drawing,
+                  "window: inside it the editor works in the model, not on the sheet");
+
+            const size_t inModel = drawing->entities().size();
+            const size_t onSheet = paper->entities().size();
+            editor->setTool(ToolId::Line);
+            editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->onPointerPress(Vec2{100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            check(drawing->entities().size() == inModel + 1,
+                  "window: what is drawn inside a window is drawn in the model");
+            check(paper->entities().size() == onSheet,
+                  "window: and not on the sheet the window is cut in");
+            if (drawing->entities().size() == inModel + 1) {
+                const Entity& drawn = drawing->entities().back();
+                check(near(std::hypot(drawn.b.x - drawn.a.x, drawn.b.y - drawn.a.y), 100.0, 1e-6),
+                      "window: at model size - 100 means 100 in the harness, whatever the window shows");
+            }
+
+            // Stepping out puts the sheet back under the tools.
+            canvas->leaveLayoutViewport();
+            check(canvas->activeLayoutViewport() < 0 && editor->document() == paper,
+                  "window: stepping out gives the sheet back");
+
+            // Resizing a window changes the window, not what is inside it. Checked where a model point
+            // lands on the screen: with the window cropped, it must not have moved.
+            press(canvas->mapToScreen(Vec2{vp0.x + vp0.width * 0.5, vp0.y}));   // the bottom edge: picks
+            release(canvas->mapToScreen(Vec2{vp0.x + vp0.width * 0.5, vp0.y}));
+            canvas->enterLayoutViewport(0);
+            const Vec2 mark{50.0, 25.0};
+            const QPointF markBefore = canvas->inputTransform().toScreen(mark);
+            const double scaleBefore = canvas->inputTransform().scale();
+            canvas->leaveLayoutViewport();
+            const QPointF corner = canvas->mapToScreen(Vec2{vp0.x + vp0.width, vp0.y + vp0.height});
+            const QPointF cornerTo = canvas->mapToScreen(
+                Vec2{vp0.x + vp0.width * 0.75, vp0.y + vp0.height * 0.75});
+            press(corner);
+            moveTo(cornerTo);
+            release(cornerTo);
+            const LayoutViewport& sized = drawing->layouts()[0].viewports.front();
+            check(sized.width < vp0.width - 1.0 && sized.height < vp0.height - 1.0,
+                  "resize: a corner drag makes the window smaller");
+            canvas->enterLayoutViewport(0);
+            check(near(canvas->inputTransform().scale(), scaleBefore, 1e-6),
+                  "resize: the drawing inside is not rescaled - only the window changed");
+            const QPointF markAfter = canvas->inputTransform().toScreen(mark);
+            check(QLineF(markBefore, markAfter).length() < 1.0,
+                  "resize: and it stays where it was on the paper, so the window crops");
+            canvas->leaveLayoutViewport();
+
+            // A window is carried about by an edge, and may be taken off the paper altogether.
+            const LayoutViewport before = drawing->layouts()[0].viewports.front();
+            const QPointF edge =
+                canvas->mapToScreen(Vec2{before.x + before.width * 0.5, before.y + before.height});
+            const QPointF edgeTo = canvas->mapToScreen(
+                Vec2{before.x + before.width * 0.5 + 30.0, before.y + before.height});
+            press(edge);
+            moveTo(edgeTo);
+            release(edgeTo);
+            const LayoutViewport& moved = drawing->layouts()[0].viewports.front();
+            check(moved.x > before.x + 1.0, "move: dragging an edge carries the window across the sheet");
+            check(near(moved.width, before.width, 1e-6) && near(moved.height, before.height, 1e-6),
+                  "move: and only carries it - the window keeps its size");
+            const double sheetWidth = drawing->layouts()[0].paperWidth;
+            press(canvas->mapToScreen(Vec2{moved.x + moved.width * 0.5, moved.y + moved.height}));
+            moveTo(canvas->mapToScreen(Vec2{sheetWidth + 200.0, moved.y + moved.height}));
+            release(canvas->mapToScreen(Vec2{sheetWidth + 200.0, moved.y + moved.height}));
+            check(drawing->layouts()[0].viewports.front().x > sheetWidth,
+                  "move: right off the paper, if that is where it is wanted - nothing clamps it");
+
+            // And taken off the sheet again.
+            const size_t windows = drawing->layouts()[0].viewports.size();
+            canvas->removeLayoutViewport(0);
+            check(drawing->layouts()[0].viewports.size() == windows - 1,
+                  "window: it can be taken off the sheet");
         }
     }
 

@@ -364,8 +364,26 @@ Two things follow from that, and both are deliberate:
 - **A window is taken hold of by its frame** — its edge, or one of its corner handles. Its inside is
   paper like the rest of the sheet, so a line can be drawn across a window, something can be selected
   through one and a note can be moved over one. Were the whole rectangle a handle, a window would be a
-  hole in the sheet that nothing could be put on. Double-clicking a picked-out window steps *inside* it,
-  where dragging moves what it looks at and the wheel zooms it; a press on the paper steps back out.
+  hole in the sheet that nothing could be put on.
+
+  Dragging an **edge carries the window** about the sheet, and nothing clamps it to the paper: a window
+  is often parked half off the edge while a sheet is being laid out. Dragging a **corner resizes the
+  window only** — what it looks at stays where it is on the paper, so the window crops rather than the
+  drawing inside it changing size. A window with no scale of its own fits the drawing to its rectangle,
+  so that fit is pinned as a scale of its own the moment the rectangle is taken hold of; otherwise
+  resizing would rescale what is inside.
+
+  **Double-clicking a window steps inside it**, and inside, the harness is what is being drawn on: the
+  editor is pointed at the drawing and handed that window's own coordinates, so a 100 mm line drawn
+  through a window is 100 mm in the model however small the window shows it. The selection and the grips
+  are the model's too, drawn through the window and kept inside its frame. A middle-drag or the wheel
+  moves and zooms what the window looks at, as in model space. Esc, or a press on the paper, steps back
+  out. Stepping in and out is announced with `viewportEntered()`, because that is what decides which
+  document the editor is working in.
+
+  A window is added with **+ window** beside the scale, with **Add a window onto the drawing** in the
+  right-click menu on a sheet, or by typing `LAYOUTWINDOW`; the same menu steps into a picked window and
+  takes one off the sheet.
 - **What is drawn on the sheet is drawn last, over the windows.** A window is filled with the view
   through it, so anything under one would be painted out — and a note, a leader or a border drawn on a
   sheet is meant to be read across the view it points at.

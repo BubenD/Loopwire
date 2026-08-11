@@ -48,6 +48,18 @@ public:
     void setLayoutIndex(int index);
     int layoutIndex() const { return layoutIndex_; }
     void addLayoutViewport();
+    // Take a window off the sheet. -1 means the one picked out.
+    void removeLayoutViewport(int index = -1);
+    int selectedLayoutViewport() const { return selectedViewport_; }
+    int activeLayoutViewport() const { return activeViewport_; }
+    // Step into a window (so what is drawn goes into the model, seen through it) or back out onto the
+    // paper. Stepping in and out is what changes which document the editor is working in, so it is
+    // announced with viewportEntered().
+    void enterLayoutViewport(int index);
+    void leaveLayoutViewport();
+    // Where the editor's coordinates come from: the paper, or - inside a window that has been stepped
+    // into - the model as that window sees it.
+    ViewTransform inputTransform() const;
     void setBottomOverlay(QWidget* overlay);
 
     // The editor receives input and paints interaction overlays.
@@ -117,6 +129,9 @@ signals:
     void rightDragDropped(const QPoint& globalPos);
     // Bare-canvas click while the on-canvas text editor is open -> commit it.
     void inlineCommit();
+    // Stepped into a window on a layout (true), or back out onto the paper (false). The host points the
+    // editor at the model or at the sheet accordingly: inside a window, what is drawn is the harness.
+    void viewportEntered(bool inside);
     // The view changed (pan/zoom) — overlays anchored to world coords re-position.
     void viewChanged();
     // Tab pressed while placing a connector: pause placement and let the host focus
@@ -148,8 +163,10 @@ public:
     }
 
     // World point under a GLOBAL screen position (e.g. a context-menu request point).
+    // Inside a window on a layout that is the MODEL's world point, seen through that window - so the
+    // context menu and the coordinate readout answer about the thing being worked on.
     Vec2 worldFromGlobal(const QPoint& globalPos) const {
-        return transform().toWorld(QPointF(mapFromGlobal(globalPos)));
+        return inputTransform().toWorld(QPointF(mapFromGlobal(globalPos)));
     }
 
 protected:
@@ -229,7 +246,11 @@ private:
     int activeViewport_ = -1;
     int viewportDragCorner_ = -1;
     bool viewportPanning_ = false;
+    bool viewportMoving_ = false;   // dragging a window's edge: the window moves on the paper
     QPoint viewportLastPos_;
+    // Pin the view a window shows before its rectangle is changed, so resizing the window crops the
+    // drawing rather than rescaling it.
+    void freezeViewportView(LayoutViewport& viewport);
     QColor gridMajor_{"#394856"};
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change
