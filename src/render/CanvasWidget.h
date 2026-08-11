@@ -77,6 +77,9 @@ public:
     // the editor's own world is, so that inside a window on a layout it stays where the cursor is instead
     // of jumping off to wherever that model point would fall if it were paper.
     QPointF crosshairScreenPos() const;
+    // Tell the editor how big its world is on the screen, so a pick or a snap covers the same few pixels
+    // wherever it is made. Called wherever the transform in use can have changed.
+    void syncEditorScale();
     void setBottomOverlay(QWidget* overlay);
 
     // The editor receives input and paints interaction overlays.

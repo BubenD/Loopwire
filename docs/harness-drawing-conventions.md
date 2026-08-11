@@ -403,6 +403,14 @@ Two things follow from the editor working in the model while the canvas is showi
   one, as paper outside. Mapped as paper while working inside a window, the crosshair (and the flying
   input field, which anchors to it) jumped off to wherever that model point would fall on the sheet the
   moment a snap caught. Both now ask `crosshairScreenPos()`, which is that rule in one place.
+- **The pick and snap tolerances are sized by the scale in use** (`Editor::setInputScale`, fed by
+  `CanvasWidget::syncEditorScale`). A pick is so many pixels of screen, turned into world by dividing by
+  how big the world is being shown; the editor took that from its document's own view, which inside a
+  window is model space's zoom and has nothing to do with how the window shows the model. So the catch
+  radius came out wrong by whatever the two zooms differed by, and grew with every step of zoom inside the
+  window: at a 4:1 window with model space left zoomed out it reached over a thousand pixels and snapped
+  to whatever it found. It is now a steady ten pixels at every window zoom, measured.
+
 - **The overlay's ink is darkened on a white sheet** (`Editor::paperInk`). Every colour in the overlay —
   the line being drawn, the ghosts, the guides, the grips, the selection — was chosen to read on the dark
   canvas of model space, where pale blue on near-black is exactly right. Laid on white paper the same ink

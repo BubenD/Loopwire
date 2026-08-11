@@ -1035,7 +1035,10 @@ void Editor::repeatLastTool() {
 }
 
 double Editor::worldTolerance() const {
-    const double scale = doc_ ? doc_->view().scale : 1.0;
+    // The scale the world is actually being seen at. Inside a window on a layout that is the window's,
+    // not the model view's - a pick is so many pixels of screen wherever it is made, and the world it
+    // covers follows what is on the screen.
+    const double scale = inputScale_ > 0.0 ? inputScale_ : (doc_ ? doc_->view().scale : 1.0);
     return pixelTol_ / std::max(1e-9, scale);
 }
 

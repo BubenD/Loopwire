@@ -476,6 +476,7 @@ void CanvasWidget::enterLayoutViewport(int index) {
     viewportPanning_ = false;
     viewportMoving_ = false;
     viewportDragCorner_ = -1;
+    syncEditorScale();
     invalidateScene();
     emit viewportEntered(true);
 }
@@ -484,6 +485,7 @@ void CanvasWidget::leaveLayoutViewport() {
     if (activeViewport_ < 0) return;
     activeViewport_ = -1;
     viewportPanning_ = false;
+    syncEditorScale();
     invalidateScene();
     emit viewportEntered(false);
 }
@@ -759,6 +761,13 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
 
 // Full-viewport crosshair with a central pick box, AutoCAD style. Tracks the
 // snapped cursor so it locks visibly onto snap points.
+void CanvasWidget::syncEditorScale() {
+    if (!editor_) return;
+    // Inside a window the model is shown at the window's scale; anywhere else the document's own view is
+    // the whole story, and zero says so.
+    editor_->setInputScale(layoutMode_ && activeViewport_ >= 0 ? inputTransform().scale() : 0.0);
+}
+
 QPointF CanvasWidget::crosshairScreenPos() const {
     // The snapped point comes from whatever the editor is working in, so it must be put on the screen the
     // same way: inside a window on a layout that is the MODEL through that window. Mapped as paper, the
@@ -838,6 +847,7 @@ void CanvasWidget::wheelEvent(QWheelEvent* e) {
                                                      std::pow(1.0015, e->angleDelta().y()),
                                                  0.0001, 10000.0);
                 drawingDocument()->setDirty(true);
+                syncEditorScale();   // a step of zoom inside the window changes what a pick covers
                 invalidateScene();
                 e->accept();
                 return;
@@ -878,6 +888,7 @@ void CanvasWidget::beginWindowCapture(std::function<void(Vec2, Vec2)> onDone) {
 }
 
 void CanvasWidget::mousePressEvent(QMouseEvent* e) {
+    syncEditorScale();
     // Rubber-band window capture (Export PDF window): the left press anchors the rect.
     if (capturing_ && e->button() == Qt::LeftButton) {
         captureActive_ = true;
@@ -984,6 +995,7 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
 
 void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     lastMousePos_ = e->pos();
+    syncEditorScale();
     if (capturing_) {
         if (captureActive_) { captureCur_ = e->pos(); update(); }
         e->accept();
@@ -1109,6 +1121,7 @@ void CanvasWidget::leaveEvent(QEvent* e) {
 }
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
+    syncEditorScale();
     if (capturing_ && e->button() == Qt::LeftButton) {
         const ViewTransform vt = transform();
         const Vec2 a = vt.toWorld(QPointF(captureStart_));
@@ -1165,6 +1178,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
+    syncEditorScale();
     if (layoutMode_ && e->button() == Qt::LeftButton) {
         DrawingLayout* layout = currentLayout();
         int corner = -1;
@@ -1186,6 +1200,7 @@ void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
 }
 
 void CanvasWidget::keyPressEvent(QKeyEvent* e) {
+    syncEditorScale();
     // Esc steps back out of a window onto the paper - the way out of anything else here.
     if (layoutMode_ && activeViewport_ >= 0 && e->key() == Qt::Key_Escape) {
         leaveLayoutViewport();

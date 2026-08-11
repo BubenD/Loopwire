@@ -898,6 +898,15 @@ public:
 
     // Pixel tolerance (screen px) for snapping/hit testing.
     void setPixelTolerance(double px) { pixelTol_ = px; }
+    // How big the editor's world is being SHOWN, in pixels per world unit, when that is not the
+    // document's own view: inside a window on a layout the model is shown at the WINDOW's scale, and the
+    // pick and snap tolerances - a few pixels of screen turned into world - must be turned with that
+    // scale. Taken from the document's view (the model's own zoom, which has nothing to do with how the
+    // window shows it), the catch radius came out wrong by whatever the two zooms differed by, and grew
+    // with every step of zoom inside the window: the snap reached far across the drawing and jumped.
+    // Zero puts it back to the document's own view.
+    void setInputScale(double pxPerWorld) { inputScale_ = pxPerWorld > 0.0 ? pxPerWorld : 0.0; }
+    double inputScale() const { return inputScale_; }
 
 signals:
     void changed();              // geometry/document mutated -> repaint + panels
@@ -1187,6 +1196,7 @@ private:
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
     double pixelTol_ = 10.0;
+    double inputScale_ = 0.0;   // 0 = the document's own view; otherwise px per world unit in use
 
     // In-progress draw state.
     std::vector<Vec2> draftPts_;

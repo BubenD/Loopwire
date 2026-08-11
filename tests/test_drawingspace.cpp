@@ -506,6 +506,84 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- how far the snap reaches inside a window --------------------------------------------------
+    if (canvas && editor) {
+        spaces->setCurrentIndex(1);
+        Document* drawing = canvas->drawingDocument();
+        if (drawing && !drawing->layouts().empty()) {
+            DrawingLayout& sheet = drawing->layouts()[0];
+            sheet.viewports.clear();
+            LayoutViewport only;
+            only.id = QStringLiteral("reach");
+            only.x = 40.0; only.y = 40.0; only.width = 260.0; only.height = 180.0;
+            only.modelCenter = Vec2{200.0, 100.0};
+            sheet.viewports.push_back(only);
+            win.resize(1400, 900);
+            win.show();
+            QApplication::processEvents();
+            canvas->fitView();
+
+            // A line in the model with an end to catch. (One is there from the tests above; another does
+            // no harm and makes this block stand on its own.)
+            spaces->setCurrentIndex(0);
+            editor->setTool(ToolId::Line);
+            editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->onPointerPress(Vec2{200.0, 100.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->setTool(ToolId::Select);
+            spaces->setCurrentIndex(1);
+            canvas->fitView();
+
+            const Vec2 end{200.0, 100.0};
+            auto catches = [&](const QPointF& at) {
+                QMouseEvent ev(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &ev);
+                const auto snap = editor->currentSnap();
+                return snap.snapped && std::abs(snap.point.x - end.x) < 1e-6 &&
+                       std::abs(snap.point.y - end.y) < 1e-6;
+            };
+            // The furthest the cursor can be from that end, in pixels of screen, and still be caught.
+            auto reachPx = [&]() {
+                const QPointF at = canvas->inputTransform().toScreen(end);
+                const QPointF dir(0.894, -0.447);   // out past the end, along the line's own direction
+                if (!catches(at)) return -1.0;
+                double lo = 0.0, hi = 400.0;
+                if (catches(at + dir * hi)) return hi;
+                for (int i = 0; i < 20; ++i) {
+                    const double mid = (lo + hi) * 0.5;
+                    if (catches(at + dir * mid)) lo = mid; else hi = mid;
+                }
+                return lo;
+            };
+
+            // Model space left at a scale that has nothing to do with the window's, which is the whole
+            // point: the pick used to be sized by THIS and then seen at the window's scale, so it reached
+            // hundreds of pixels across the drawing and snapped to whatever it found - worse with every
+            // step of zoom inside the window.
+            drawing->view().scale = 0.05;
+            sheet.viewports.front().modelScale = 0.5;
+            canvas->leaveLayoutViewport();
+            canvas->enterLayoutViewport(0);
+            QApplication::processEvents();
+            const double reachOut = reachPx();
+            sheet.viewports.front().modelScale = 4.0;
+            canvas->leaveLayoutViewport();
+            canvas->enterLayoutViewport(0);
+            QApplication::processEvents();
+            const double reachIn = reachPx();
+            std::printf("  snap reach inside a window: %.1f px at 1:2, %.1f px at 4:1\n", reachOut,
+                        reachIn);
+            check(reachOut > 4.0 && reachOut < 20.0,
+                  "snap: inside a window the snap reaches a few pixels of screen, not a distance in the "
+                  "model");
+            check(reachIn > 4.0 && reachIn < 20.0,
+                  "snap: and zooming the window in does not make it reach further");
+            check(std::abs(reachIn - reachOut) < 3.0,
+                  "snap: the same few pixels at either zoom - which is what stops it jumping");
+            canvas->leaveLayoutViewport();
+        }
+    }
+
     // ---- the overlay's ink, on a white sheet ------------------------------------------------------
     {
         const QColor pale(120, 200, 255, 170);   // the ink the line being drawn is made of
