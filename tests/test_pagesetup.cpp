@@ -320,8 +320,11 @@ int run_pagesetup_tests() {
             spaces->setCurrentIndex(1);
             QApplication::processEvents();
             Document* paper = canvas->document();
-            const Vec2 corners[5] = {{40.0, 30.0}, {260.0, 30.0}, {260.0, 190.0}, {40.0, 190.0},
-                                     {40.0, 30.0}};
+            // Clear of the window's frame on purpose. A sheet now snaps to its own edge and to the frames
+            // of the windows on it, so a rectangle drawn with a corner 5 mm off a frame would be drawn ON
+            // the frame - which is right, and would make this test measure the wrong thing.
+            const Vec2 corners[5] = {{100.0, 100.0}, {300.0, 100.0}, {300.0, 200.0}, {100.0, 200.0},
+                                     {100.0, 100.0}};
             for (int i = 0; i < 4; ++i) {
                 editor->setTool(ToolId::Line);
                 editor->onPointerPress(corners[i], Qt::LeftButton, Qt::NoModifier);
@@ -351,10 +354,62 @@ int run_pagesetup_tests() {
             clickNear(corners[2], -1.4, 0.9);
             check(done && !cancelled, "pick: two clicks and the rectangle comes back");
             check(!editor->pickingRectangle(), "pick: and the pick is over");
-            check(near(gotA.x, 40.0, 0.05) && near(gotA.y, 30.0, 0.05) &&
-                      near(gotB.x, 260.0, 0.05) && near(gotB.y, 190.0, 0.05),
+            std::printf("  pick came back (%.2f,%.2f) and (%.2f,%.2f)\n", gotA.x, gotA.y, gotB.x, gotB.y);
+            check(near(gotA.x, 100.0, 0.05) && near(gotA.y, 100.0, 0.05) &&
+                      near(gotB.x, 300.0, 0.05) && near(gotB.y, 200.0, 0.05),
                   "pick: the corners come back SNAPPED to the drawing - clicked a millimetre off and the "
                   "window still lines up with what is on the sheet");
+
+            // THE PAPER ITSELF, and the windows on it. Neither is an entity, so nothing in the snap
+            // search would find them - and lining a plot window up with the sheet's corner, or with a
+            // view already on the sheet, is the commonest thing anyone does with one.
+            {
+                Document* drawing = canvas->drawingDocument();
+                const DrawingLayout& sheet = drawing->layouts()[0];
+                Vec2 cornerA{}, cornerB{};
+                bool cornersDone = false;
+                editor->beginRectanglePick(
+                    [&](Vec2 a, Vec2 b) { cornerA = a; cornerB = b; cornersDone = true; });
+                // Near the sheet's own bottom-left corner, and near the top-right corner of the window
+                // on it - a couple of millimetres off both.
+                const Vec2 paperCorner{0.0, 0.0};
+                const Vec2 windowCorner{sheet.viewports.front().x + sheet.viewports.front().width,
+                                        sheet.viewports.front().y + sheet.viewports.front().height};
+                clickNear(paperCorner, 1.5, 1.3);
+                clickNear(windowCorner, -1.6, -1.2);
+                check(cornersDone, "paper snap: the two corners are taken");
+                check(cornersDone && near(cornerA.x, 0.0, 0.05) && near(cornerA.y, 0.0, 0.05),
+                      "paper snap: the sheet's own corner catches the cursor, though the paper is not an "
+                      "entity and nothing is drawn there");
+                check(cornersDone && near(cornerB.x, windowCorner.x, 0.05) &&
+                          near(cornerB.y, windowCorner.y, 0.05),
+                      "paper snap: and so does the corner of a window on the sheet");
+
+                // The middle of an edge, and a point along one: midpoint and nearest, like any other
+                // geometry - each only if that snap is on.
+                bool edgeDone = false;
+                Vec2 midGot{}, alongGot{};
+                editor->beginRectanglePick(
+                    [&](Vec2 a, Vec2 b) { midGot = a; alongGot = b; edgeDone = true; });
+                clickNear(Vec2{sheet.paperWidth * 0.5, 0.0}, 0.8, 1.4);       // middle of the bottom edge
+                clickNear(Vec2{sheet.paperWidth * 0.25, sheet.paperHeight}, 0.0, -1.5);   // along the top
+                check(edgeDone && near(midGot.x, sheet.paperWidth * 0.5, 0.2) &&
+                          near(midGot.y, 0.0, 0.05),
+                      "paper snap: the middle of the sheet's edge catches as a midpoint");
+                check(edgeDone && near(alongGot.y, sheet.paperHeight, 0.05),
+                      "paper snap: and anywhere along an edge catches as nearest, so a window can be "
+                      "lined up with the paper without being cornered on it");
+
+                // In model space there is no paper, so there is nothing of the sort to snap to.
+                spaces->setCurrentIndex(0);
+                QApplication::processEvents();
+                check(editor->snapRectangles().empty(),
+                      "paper snap: in model space the list is empty - there is no sheet there to snap to");
+                spaces->setCurrentIndex(1);
+                QApplication::processEvents();
+                check(!editor->snapRectangles().empty(),
+                      "paper snap: and on a sheet it is the sheet and its windows");
+            }
 
             // And the snap list governs it, as it governs everything else picked: with object snap turned
             // off at the status bar, the same click lands where it was made. (Turning off Endpoint alone
@@ -370,7 +425,7 @@ int run_pagesetup_tests() {
             clickNear(corners[0], 1.2, -1.1);
             clickNear(corners[2], -1.4, 0.9);
             check(rawDone, "snap menu: the pick still takes two clicks");
-            check(rawDone && !near(rawA.x, 40.0, 0.05),
+            check(rawDone && !near(rawA.x, 100.0, 0.05),
                   "snap menu: with object snap off the corner is taken where it was clicked - the pick "
                   "obeys the same snap list as everything else");
             editor->snapSettings().objectSnap = wasObjectSnap;

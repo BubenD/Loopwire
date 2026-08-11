@@ -561,6 +561,32 @@ void PartsLibraryDialog::buildUi() {
                                    QStringLiteral("Take this part out of the library"), true);
     connect(delBtn, &QPushButton::clicked, this, [this] { deleteCurrentPart(); });
     ar->addWidget(delBtn);
+    // The heat-shrink families a harness shop keeps on the shelf, in every size they are made in. Offered
+    // to a library that already exists as well as seeded into a new one, and it adds only what is missing,
+    // so pressing it twice does not put a second DR-25 3/8 on every bill of materials.
+    auto* shrinkBtn = new QPushButton(QStringLiteral("Add heatshrink range"), addRow);
+    shrinkBtn->setToolTip(QStringLiteral(
+        "DR-25, RNF-100, RT-375 clear and ATUM adhesive-lined tubing, and TMS-SCE identification sleeve "
+        "in white and yellow — every size, added if it is not there already.\n"
+        "Diameters are nominal, from the size designation; check the datasheet before a build is held to "
+        "a tolerance."));
+    connect(shrinkBtn, &QPushButton::clicked, this, [this] {
+        const int added = addStandardHeatshrink(catalog_.active());
+        if (added > 0) {
+            saveLibrary();
+            refreshLibraryList();
+        }
+        QMessageBox::information(
+            this, QStringLiteral("Heatshrink"),
+            added > 0 ? QStringLiteral("%1 part%2 added — DR-25, RNF-100, RT-375, ATUM and TMS-SCE, in "
+                                       "every size they are made in.\n\nDiameters are nominal, from the "
+                                       "size designation and the shrink ratio; wall thickness is left "
+                                       "blank. Check the datasheet before holding a build to a tolerance.")
+                            .arg(added)
+                            .arg(added == 1 ? QString() : QStringLiteral("s"))
+                      : QStringLiteral("They are all in the library already."));
+    });
+    ar->addWidget(shrinkBtn);
     lv->addWidget(addRow);
     split->addWidget(left);
 

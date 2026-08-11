@@ -24,6 +24,7 @@ int run_mechmodelcanvas_tests();
 int run_drawingspace_tests();
 int run_output_tests();
 int run_pagesetup_tests();
+int run_heatshrink_tests();
 int run_stepsbuilder_tests();
 
 int main(int argc, char** argv) {
@@ -55,6 +56,7 @@ int main(int argc, char** argv) {
     failures += run_drawingspace_tests();
     failures += run_output_tests();
     failures += run_pagesetup_tests();
+    failures += run_heatshrink_tests();
     failures += run_stepsbuilder_tests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d TEST(S) FAILED\n", failures);

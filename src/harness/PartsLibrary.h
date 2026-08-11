@@ -240,6 +240,18 @@ QString describePart(const LibraryPart& part);
 // figures its data sheets give.
 PartsLibrary seedLibrary();
 
+// The heat-shrink families a harness shop keeps on the shelf, in every size they are made in: DR-25 and
+// RT-375 and RNF-100 tubing, ATUM adhesive-lined, and TMS-SCE identification sleeve in white and yellow.
+// Adds only what is not there already (matched on manufacturer part number), and returns how many it
+// added, so it can be offered to a library that already exists as well as seeded into a new one.
+//
+// The sizes and the designations are the manufacturers' own. The DIMENSIONS are nominal - taken from the
+// size designation itself, which is what the size means: an expanded inside diameter that recovers by the
+// family's ratio. Wall thickness is left blank rather than guessed at, and every part says in its notes
+// that the figures are nominal and the datasheet is the authority. A harness that must hold a tolerance is
+// checked against the datasheet, not against a starter library.
+int addStandardHeatshrink(PartsLibrary& lib);
+
 // The standard schematic symbol for the kinds that have one - the components a harness carries in
 // line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the
 // schematic, so a part of one of those kinds shows a symbol and can be dropped on a sheet without

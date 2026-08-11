@@ -103,6 +103,16 @@ public:
                             std::function<void()> onCancel = {});
     bool pickingRectangle() const { return rectPick_; }
 
+    // Rectangles that are not entities but are still there to be snapped to: on a layout, the sheet's own
+    // edge and the frame of every window on it. Lining a plot window up with the paper, or with a view
+    // already on the paper, is the commonest thing anyone does with one - and neither the sheet nor a
+    // window is an entity, so nothing in the snap search would ever find them.
+    //
+    // Corners snap as endpoints, the middle of each edge as a midpoint, and anywhere along an edge as
+    // nearest - each only if that snap is switched on, like any other.
+    void setSnapRectangles(std::vector<Bounds> rects);
+    const std::vector<Bounds>& snapRectangles() const { return snapRects_; }
+
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
     void onPointerPress(const Vec2& raw, Qt::MouseButton button,
@@ -1208,6 +1218,11 @@ private:
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
+    // The sheet and its windows, as things to snap to. Empty in model space.
+    std::vector<Bounds> snapRects_;
+    // The best of them for a point, or nothing within tolerance.
+    SnapResult snapToRectangles(const Vec2& raw, double tol) const;
+
     // A rectangle being picked for something outside the editor (the plot window).
     void endRectanglePick();
     bool rectPick_ = false;

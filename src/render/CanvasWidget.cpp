@@ -192,6 +192,8 @@ void CanvasWidget::setLayoutMode(bool on) {
     EntityRenderer::setWhitePaper(on);
     EntityRenderer::setBackgroundColor(on ? QColor(Qt::white) : bgColor_);
     invalidateScene();
+    syncEditorScale();   // the sheet and its windows are what there is to snap to now
+
 }
 
 void CanvasWidget::setLayoutIndex(int index) {
@@ -199,6 +201,8 @@ void CanvasWidget::setLayoutIndex(int index) {
     selectedViewports_.clear();
     activeViewport_ = -1;
     invalidateScene();
+    syncEditorScale();   // a different sheet, a different edge and different windows
+
 }
 
 DrawingLayout* CanvasWidget::currentLayout() {
@@ -777,6 +781,27 @@ void CanvasWidget::syncEditorScale() {
     // Inside a window the model is shown at the window's scale; anywhere else the document's own view is
     // the whole story, and zero says so.
     editor_->setInputScale(layoutMode_ && activeViewport_ >= 0 ? inputTransform().scale() : 0.0);
+
+    // And what there is to snap to that is not an entity. On a sheet that is the sheet's own edge and the
+    // frame of every window on it: a plot window, a border, a note is lined up against those far more
+    // often than against anything drawn. Inside a window the work is in the model, where the paper's edge
+    // means nothing, so the list is emptied.
+    std::vector<Bounds> rects;
+    if (layoutMode_ && activeViewport_ < 0) {
+        if (const DrawingLayout* layout = currentLayout()) {
+            Bounds sheet;
+            sheet.expand(Vec2{0.0, 0.0});
+            sheet.expand(Vec2{layout->paperWidth, layout->paperHeight});
+            rects.push_back(sheet);
+            for (const LayoutViewport& viewport : layout->viewports) {
+                Bounds frame;
+                frame.expand(Vec2{viewport.x, viewport.y});
+                frame.expand(Vec2{viewport.x + viewport.width, viewport.y + viewport.height});
+                rects.push_back(frame);
+            }
+        }
+    }
+    editor_->setSnapRectangles(std::move(rects));
 }
 
 QPointF CanvasWidget::crosshairScreenPos() const {

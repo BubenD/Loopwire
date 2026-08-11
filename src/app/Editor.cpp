@@ -1760,6 +1760,17 @@ void Editor::onPointerMove(const Vec2& raw) {
         snap.ortho = false;
     }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
+    // The sheet's own edge and the frames of the windows on it, which are not entities and so are not in
+    // the search above. Taken only when nothing else was caught, or when one of them is CLOSER than what
+    // was - the drawing itself still wins a tie, since that is what is usually being lined up with.
+    if (const SnapResult rect = snapToRectangles(raw, worldTolerance()); rect.snapped) {
+        const double toRect = std::hypot(rect.point.x - raw.x, rect.point.y - raw.y);
+        const double toFound = snapResult_.snapped
+                                   ? std::hypot(snapResult_.point.x - raw.x,
+                                                snapResult_.point.y - raw.y)
+                                   : 1e300;
+        if (toRect < toFound) snapResult_ = rect;
+    }
     cursor_ = snapResult_.point;
 
     // Dragging across a table's cells picks the block between the cell the drag started on and the
@@ -1868,6 +1879,58 @@ void Editor::onDragTick() {
         dragTimer_->stop(); // cursor moves drive the repaint from here
     }
     emit overlayChanged(); // animate the countdown while still deciding (repaint only)
+}
+
+void Editor::setSnapRectangles(std::vector<Bounds> rects) { snapRects_ = std::move(rects); }
+
+SnapResult Editor::snapToRectangles(const Vec2& raw, double tol) const {
+    SnapResult best;
+    if (!snap_.objectSnap || snapRects_.empty()) return best;
+    // A CORNER beats the middle of an edge, and either beats a point somewhere along one - by KIND, not by
+    // which happens to be a millimetre nearer. Ranked by distance alone, a click 1.5 mm along the bottom
+    // edge and 1.3 mm up from it caught the edge rather than the corner it was plainly aiming at, which is
+    // not how a snap is meant to behave: the definite point wins.
+    for (int pass = 0; pass < 3; ++pass) {
+        const SnapKind kind = pass == 0 ? SnapKind::Endpoint
+                              : pass == 1 ? SnapKind::Midpoint
+                                          : SnapKind::Nearest;
+        if (pass == 0 && !snap_.snapEndpoint) continue;
+        if (pass == 1 && !snap_.snapMidpoint) continue;
+        if (pass == 2 && !(snap_.snapNearest || snap_.snapPerpendicular)) continue;
+        double bestDist = tol;
+        for (const Bounds& b : snapRects_) {
+            if (!b.valid) continue;
+            const Vec2 corners[4] = {{b.min.x, b.min.y}, {b.max.x, b.min.y},
+                                     {b.max.x, b.max.y}, {b.min.x, b.max.y}};
+            auto consider = [&](const Vec2& candidate) {
+                const double d = std::hypot(candidate.x - raw.x, candidate.y - raw.y);
+                if (d > bestDist) return;
+                bestDist = d;
+                best.snapped = true;
+                best.point = candidate;
+                best.kind = kind;
+            };
+            if (pass == 0) {
+                for (const Vec2& c : corners) consider(c);
+                continue;
+            }
+            for (int i = 0; i < 4; ++i) {
+                const Vec2 a = corners[i], c = corners[(i + 1) % 4];
+                if (pass == 1) {
+                    consider(Vec2{(a.x + c.x) * 0.5, (a.y + c.y) * 0.5});
+                    continue;
+                }
+                const double dx = c.x - a.x, dy = c.y - a.y;
+                const double len2 = dx * dx + dy * dy;
+                if (len2 < 1e-12) continue;
+                double u = ((raw.x - a.x) * dx + (raw.y - a.y) * dy) / len2;
+                u = std::clamp(u, 0.0, 1.0);
+                consider(Vec2{a.x + dx * u, a.y + dy * u});
+            }
+        }
+        if (best.snapped) break;   // this kind caught: no need of a looser one
+    }
+    return best;
 }
 
 void Editor::beginRectanglePick(std::function<void(Vec2, Vec2)> onDone,

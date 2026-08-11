@@ -539,3 +539,40 @@ discussed with whoever runs the plotter.
 The one place plain words are kept is the line under each field, which explains what the term does: "the
 sheet as laid out, edge to edge", "the view on screen at the moment of plotting". A name should be the
 trade's; an explanation should be anybody's.
+
+### Snapping to the paper and to the windows on it
+
+A sheet's own edge and the frame of every window on it are **snap targets**, though neither is an entity:
+corners catch as endpoints, the middle of each edge as a midpoint, and anywhere along an edge as nearest,
+each only if that snap is switched on. Lining a plot window, a border or a note up against the paper's
+corner or against a view already on the sheet is the commonest thing anyone does on a layout, and nothing in
+the snap search over the drawing's entities would ever find either of them.
+
+They are ranked **by kind before distance**: a corner beats the middle of an edge, and either beats a point
+somewhere along one. Ranked by distance alone, a click 1.5 mm along the bottom edge and 1.3 mm up from it
+caught the edge rather than the corner it was plainly aiming at. The drawing still wins a tie against the
+paper, since geometry is what is usually being lined up with. In model space the list is empty — there is no
+sheet there — and inside a window the work is in the model, where the paper's edge means nothing.
+
+Two consequences worth knowing: geometry drawn a millimetre or two off a window's frame will land **on** the
+frame, which is the point of the feature; and while a rectangle is being picked the windows stand aside, so
+a corner on a frame is picked rather than taking hold of the window.
+
+### The heat-shrink shelf
+
+`addStandardHeatshrink()` puts the families a harness shop keeps on the shelf into a library, in every size
+they are made in — 67 parts: **DR-25** (2:1, fluid-resistant elastomer, the aerospace default), **RNF-100**
+(2:1, thin wall, flame retardant), **RT-375** (2:1, clear, so a joint can be inspected through it), **ATUM**
+(4:1, adhesive lined, sized in millimetres as expanded/recovered), and **TMS-SCE** identification sleeve in
+white and yellow, filed as a *marker* rather than as tubing because it goes on to be printed and that is
+what it is on a drawing and on a bill of materials.
+
+It is seeded into a new library and offered to an existing one by **Add heatshrink range** in the parts
+library, and it adds only what is missing: a second DR-25 3/8 would be a second line on every bill of
+materials that used it.
+
+The sizes and the designations are the manufacturers' own. The **dimensions are nominal** — what a bundle it
+fits is worked out from the size designation and the family's shrink ratio, which is what a size means —
+wall thickness is left **blank** rather than guessed at, and every part says in its notes that the figures
+are nominal and the datasheet is the authority. A starter library is a starting point; a build held to a
+tolerance is checked against the current datasheet.

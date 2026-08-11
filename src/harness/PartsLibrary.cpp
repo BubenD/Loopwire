@@ -1095,6 +1095,182 @@ PartsLibrary PartsCatalog::merged() const {
 // against DigiKey's listings). Alpha Wire's premium hook-up wire covers 16 to 30 AWG as the 3050
 // family - tinned copper, PVC, 300 V, -40 to +105 C - and 14 AWG comes from the 891441 and 7035
 // series, so the range asked for is covered end to end.
+namespace {
+
+// An imperial size as it is written on the reel, and what it comes to in millimetres.
+struct ShrinkSize {
+    const char* designation;   // "3/16", "1-1/2"
+    double expandedMm;         // the size itself: the inside diameter as supplied
+};
+
+// The imperial sizes the tubing families are made in. Which of them a given family covers differs, so each
+// family names the range it uses out of this list.
+const ShrinkSize kImperial[] = {
+    {"3/64", 1.2},  {"1/16", 1.6},  {"3/32", 2.4},  {"1/8", 3.2},   {"3/16", 4.8},
+    {"1/4", 6.4},   {"3/8", 9.5},   {"1/2", 12.7},  {"3/4", 19.1},  {"1", 25.4},
+    {"1-1/4", 31.8},{"1-1/2", 38.1},{"2", 50.8},    {"2-1/2", 63.5},{"3", 76.2},
+    {"4", 101.6}};
+
+// A part number already in the library? Families are added by the shopfloor as well, and adding a second
+// DR-25 3/8 would be a second line on every bill of materials that used it.
+bool hasPn(const PartsLibrary& lib, const QString& pn) {
+    for (const LibraryPart& part : lib.parts)
+        if (part.mfrPn.compare(pn, Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
+} // namespace
+
+int addStandardHeatshrink(PartsLibrary& lib) {
+    int added = 0;
+    const QString nominal =
+        QStringLiteral("Sizes and designations are the manufacturer's. Diameters are NOMINAL, from the "
+                       "size designation and the shrink ratio; wall thickness is not filled in. Check the "
+                       "current datasheet before committing a build to a tolerance.");
+
+    // ---- tubing, by family ---------------------------------------------------------------------------
+    struct Family {
+        const char* pn;          // how the part number is written, with %1 for the size
+        const char* mfr;
+        const char* what;        // the description, with %1 for the size
+        const char* material;
+        const char* ratio;
+        double ratioValue;
+        bool adhesive;
+        const char* colour;
+        const char* temp;        // continuous operating range, as the family is published
+        const char* shrinkTemp;  // minimum temperature for full recovery, blank if not certain
+        const char* spec;
+        const char* firstSize;   // the smallest size the family is made in
+        const char* lastSize;    // and the largest
+    };
+    const Family families[] = {
+        // Flexible, fluid-resistant elastomeric tubing - the aerospace harness default.
+        {"DR-25-%1-0", "TE Connectivity (Raychem)",
+         "Heatshrink tubing DR-25, %1, 2:1, fluid resistant, black", "Elastomer", "2:1", 2.0, false,
+         "Black", "-75 to +150", "175", "SAE-AMS-DTL-23053/16", "3/16", "3"},
+        // General purpose thin wall, flame retardant.
+        {"RNF-100-%1-0", "TE Connectivity (Raychem)",
+         "Heatshrink tubing RNF-100, %1, 2:1, thin wall, flame retardant, black", "Polyolefin", "2:1",
+         2.0, false, "Black", "-55 to +135", "100", "SAE-AMS-DTL-23053/5", "3/64", "2"},
+        // Clear, so a joint can be inspected through it after it is covered.
+        {"RT-375-%1-C", "TE Connectivity (Raychem)",
+         "Heatshrink tubing RT-375, %1, 2:1, clear — the joint stays visible", "Fluoropolymer", "2:1",
+         2.0, false, "Clear", "-55 to +150", "", "Raychem RT-375", "1/16", "2"},
+    };
+    for (const Family& f : families) {
+        bool inRange = false;
+        for (const ShrinkSize& s : kImperial) {
+            if (!inRange && QLatin1String(s.designation) == QLatin1String(f.firstSize)) inRange = true;
+            if (!inRange) continue;
+            const QString size = QString::fromLatin1(s.designation);
+            const QString pn = QString::fromLatin1(f.pn).arg(size);
+            if (!hasPn(lib, pn)) {
+                LibraryPart& part = lib.add(PartKind::Heatshrink);
+                part.description = QString::fromLatin1(f.what).arg(size);
+                part.mfrName = QString::fromLatin1(f.mfr);
+                part.mfrPn = pn;
+                part.unit = QStringLiteral("m");
+                part.params.insert(QStringLiteral("material"), QString::fromLatin1(f.material));
+                // What bundle it fits: from fully recovered up to as supplied.
+                part.params.insert(QStringLiteral("entryMin"),
+                                   QString::number(s.expandedMm / f.ratioValue, 'f', 1));
+                part.params.insert(QStringLiteral("entryMax"), QString::number(s.expandedMm, 'f', 1));
+                part.params.insert(QStringLiteral("adhesive"),
+                                   f.adhesive ? QStringLiteral("1") : QStringLiteral("0"));
+                part.params.insert(QStringLiteral("ratio"), QString::fromLatin1(f.ratio));
+                if (*f.shrinkTemp)
+                    part.params.insert(QStringLiteral("shrinkTemp"),
+                                       QString::fromLatin1(f.shrinkTemp));
+                part.params.insert(QStringLiteral("colour"), QString::fromLatin1(f.colour));
+                part.params.insert(QStringLiteral("temp"), QString::fromLatin1(f.temp));
+                part.params.insert(QStringLiteral("spec"), QString::fromLatin1(f.spec));
+                part.params.insert(QStringLiteral("notes"),
+                                   QStringLiteral("Size %1 in (%2 mm as supplied, %3 mm recovered). %4")
+                                       .arg(size)
+                                       .arg(s.expandedMm, 0, 'f', 1)
+                                       .arg(s.expandedMm / f.ratioValue, 0, 'f', 1)
+                                       .arg(nominal));
+                ++added;
+            }
+            if (QLatin1String(s.designation) == QLatin1String(f.lastSize)) break;
+        }
+    }
+
+    // ---- ATUM: adhesive lined, 4:1, and sized in millimetres as expanded/recovered -------------------
+    struct AtumSize { const char* designation; double expandedMm; double recoveredMm; };
+    const AtumSize atum[] = {{"4/1", 4.0, 1.0},    {"6/2", 6.0, 2.0},    {"8/2", 8.0, 2.0},
+                             {"10/3", 10.0, 3.0},  {"12/3", 12.0, 3.0},  {"16/4", 16.0, 4.0},
+                             {"20/6", 20.0, 6.0},  {"24/6", 24.0, 6.0},  {"32/8", 32.0, 8.0},
+                             {"40/12", 40.0, 12.0},{"52/16", 52.0, 16.0}};
+    for (const AtumSize& a : atum) {
+        const QString pn = QStringLiteral("ATUM-%1-0").arg(QString::fromLatin1(a.designation));
+        if (hasPn(lib, pn)) continue;
+        LibraryPart& part = lib.add(PartKind::Heatshrink);
+        part.description =
+            QStringLiteral("Heatshrink tubing ATUM %1, 4:1, adhesive lined, black")
+                .arg(QString::fromLatin1(a.designation));
+        part.mfrName = QStringLiteral("TE Connectivity (Raychem)");
+        part.mfrPn = pn;
+        part.unit = QStringLiteral("m");
+        part.params.insert(QStringLiteral("material"), QStringLiteral("Polyolefin"));
+        part.params.insert(QStringLiteral("entryMin"), QString::number(a.recoveredMm, 'f', 1));
+        part.params.insert(QStringLiteral("entryMax"), QString::number(a.expandedMm, 'f', 1));
+        part.params.insert(QStringLiteral("adhesive"), QStringLiteral("1"));
+        part.params.insert(QStringLiteral("ratio"), QStringLiteral("4:1"));
+        part.params.insert(QStringLiteral("colour"), QStringLiteral("Black"));
+        part.params.insert(QStringLiteral("temp"), QStringLiteral("-55 to +110"));
+        part.params.insert(QStringLiteral("spec"), QStringLiteral("Raychem ATUM"));
+        part.params.insert(
+            QStringLiteral("notes"),
+            QStringLiteral("The designation IS the size: %1 mm as supplied, %2 mm recovered. Adhesive "
+                           "lined, so it seals as well as covers. %3")
+                .arg(a.expandedMm, 0, 'f', 0)
+                .arg(a.recoveredMm, 0, 'f', 0)
+                .arg(nominal));
+        ++added;
+    }
+
+    // ---- TMS-SCE: the identification sleeve, in white and in yellow ----------------------------------
+    //
+    // A marker, not tubing: it is put on to be PRINTED, and what matters about it is what it fits and how
+    // much room there is to print on. Which is why it goes in as a Marker - it appears on a drawing as a
+    // wire marking, and on a bill of materials as a sleeve.
+    struct SleeveColour { const char* code; const char* name; };
+    const SleeveColour sleeveColours[] = {{"9", "White"}, {"4", "Yellow"}};
+    const ShrinkSize sleeveSizes[] = {{"3/32", 2.4}, {"1/8", 3.2},   {"3/16", 4.8}, {"1/4", 6.4},
+                                      {"3/8", 9.5},  {"1/2", 12.7},  {"3/4", 19.1}, {"1", 25.4},
+                                      {"1-1/2", 38.1}, {"2", 50.8}};
+    for (const SleeveColour& c : sleeveColours) {
+        for (const ShrinkSize& s : sleeveSizes) {
+            const QString size = QString::fromLatin1(s.designation);
+            // The middle figure is the printed length of the sleeve; 2.0 in is the usual stock length.
+            const QString pn = QStringLiteral("TMS-SCE-%1-2.0-%2")
+                                   .arg(size, QString::fromLatin1(c.code));
+            if (hasPn(lib, pn)) continue;
+            LibraryPart& part = lib.add(PartKind::Marker);
+            part.description = QStringLiteral("Identification sleeve TMS-SCE %1, 2:1, %2, printable")
+                                   .arg(size, QString::fromLatin1(c.name).toLower());
+            part.mfrName = QStringLiteral("TE Connectivity (Raychem)");
+            part.mfrPn = pn;
+            part.unit = QStringLiteral("ea");
+            part.params.insert(QStringLiteral("type"), QStringLiteral("Heatshrink sleeve"));
+            part.params.insert(QStringLiteral("entryMin"), QString::number(s.expandedMm / 2.0, 'f', 1));
+            part.params.insert(QStringLiteral("entryMax"), QString::number(s.expandedMm, 'f', 1));
+            part.params.insert(QStringLiteral("material"), QStringLiteral("Polyolefin"));
+            part.params.insert(QStringLiteral("width"), QStringLiteral("50.8"));   // 2.0 in of print
+            part.params.insert(QStringLiteral("spec"), QStringLiteral("SAE-AMS-DTL-23053/5"));
+            part.params.insert(
+                QStringLiteral("notes"),
+                QStringLiteral("%1 sleeve, size %2 in, 2.0 in printed length (other lengths are ordered "
+                               "by changing the middle figure of the part number). %3")
+                    .arg(QString::fromLatin1(c.name), size, nominal));
+            ++added;
+        }
+    }
+    return added;
+}
+
 PartsLibrary seedLibrary() {
     PartsLibrary lib;
     struct WireRow {
@@ -1329,6 +1505,8 @@ PartsLibrary seedLibrary() {
                             : QStringLiteral("No"));
         p.params.insert(QStringLiteral("spec"), QStringLiteral("TE / AMP ring tongue terminal"));
     }
+    // And the heat-shrink shelf: DR-25, RNF-100, RT-375, ATUM and TMS-SCE, every size.
+    addStandardHeatshrink(lib);
     return lib;
 }
 
