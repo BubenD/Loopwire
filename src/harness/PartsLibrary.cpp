@@ -632,6 +632,7 @@ QJsonObject PartsLibrary::toJson() const {
     QJsonObject root;
     root[QStringLiteral("format")] = QStringLiteral("edraw-parts-library");
     root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("standardHeatshrink")] = standardHeatshrink;
     QJsonArray arr;
     for (const LibraryPart& p : parts) {
         QJsonObject o;
@@ -664,6 +665,7 @@ QJsonObject PartsLibrary::toJson() const {
 
 void PartsLibrary::fromJson(const QJsonObject& root) {
     parts.clear();
+    standardHeatshrink = root.value(QStringLiteral("standardHeatshrink")).toBool(false);
     for (const auto& v : root.value(QStringLiteral("parts")).toArray()) {
         const QJsonObject o = v.toObject();
         LibraryPart p;
@@ -1014,6 +1016,11 @@ void PartsCatalog::openRemembered() {
             lib = seedLibrary();
             lib.save(p);
         }
+        // The heat-shrink shelf, in a library that was made before the shelf was: DR-25, RNF-100, RT-375,
+        // ATUM and TMS-SCE, in every size. Done ONCE and recorded in the file, so a size somebody
+        // deliberately deleted does not come back the next time the library is opened - and so a library
+        // that has had them since it was seeded is left alone.
+        if (p == def && ensureStandardHeatshrink(lib) > 0) lib.save(p);
         paths_ << p;
         libs_.push_back(lib);
     }
@@ -1120,6 +1127,13 @@ bool hasPn(const PartsLibrary& lib, const QString& pn) {
 }
 
 } // namespace
+
+int ensureStandardHeatshrink(PartsLibrary& lib) {
+    if (lib.standardHeatshrink) return 0;
+    const int added = addStandardHeatshrink(lib);
+    lib.standardHeatshrink = true;   // done, and recorded in the file: a deleted size stays deleted
+    return added;
+}
 
 int addStandardHeatshrink(PartsLibrary& lib) {
     int added = 0;
@@ -1506,7 +1520,7 @@ PartsLibrary seedLibrary() {
         p.params.insert(QStringLiteral("spec"), QStringLiteral("TE / AMP ring tongue terminal"));
     }
     // And the heat-shrink shelf: DR-25, RNF-100, RT-375, ATUM and TMS-SCE, every size.
-    addStandardHeatshrink(lib);
+    ensureStandardHeatshrink(lib);
     return lib;
 }
 

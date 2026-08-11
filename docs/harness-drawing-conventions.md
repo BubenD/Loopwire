@@ -567,9 +567,14 @@ they are made in — 67 parts: **DR-25** (2:1, fluid-resistant elastomer, the ae
 white and yellow, filed as a *marker* rather than as tubing because it goes on to be printed and that is
 what it is on a drawing and on a bill of materials.
 
-It is seeded into a new library and offered to an existing one by **Add heatshrink range** in the parts
-library, and it adds only what is missing: a second DR-25 3/8 would be a second line on every bill of
-materials that used it.
+It is seeded into a new library, **put into an existing one the first time that library is opened**, and
+offered any time by **Add heatshrink range** in the parts library. It adds only what is missing: a second
+DR-25 3/8 would be a second line on every bill of materials that used it.
+
+Once, and once only — `ensureStandardHeatshrink()` records `standardHeatshrink` **in the library file**, so
+a size somebody deliberately deleted does not come back the next time the library is opened, and a library
+that has had the shelf since it was seeded is left alone. A library written before the flag existed reads as
+not done, which is what brings the shelf to a library that was made before the shelf was.
 
 The sizes and the designations are the manufacturers' own. The **dimensions are nominal** — what a bundle it
 fits is worked out from the size designation and the family's shrink ratio, which is what a size means —

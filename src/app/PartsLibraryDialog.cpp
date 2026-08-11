@@ -571,10 +571,15 @@ void PartsLibraryDialog::buildUi() {
         "Diameters are nominal, from the size designation; check the datasheet before a build is held to "
         "a tolerance."));
     connect(shrinkBtn, &QPushButton::clicked, this, [this] {
+        // reloadTree() is the PARTS list. refreshLibraryList() is the list of library files - refreshing
+        // that one left the parts in the file and off the screen, which is exactly how this looked like
+        // nothing having happened.
         const int added = addStandardHeatshrink(catalog_.active());
         if (added > 0) {
+            catalog_.active().standardHeatshrink = true;
             saveLibrary();
-            refreshLibraryList();
+            reloadTree();
+            refreshLibraryList();   // the count beside the library changes too
         }
         QMessageBox::information(
             this, QStringLiteral("Heatshrink"),

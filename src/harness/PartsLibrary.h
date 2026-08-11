@@ -155,6 +155,11 @@ struct LibraryPart {
 // The library itself: parts, plus where they are kept.
 struct PartsLibrary {
     std::vector<LibraryPart> parts;
+    // Whether the standard heat-shrink shelf has been put in this library. Recorded IN THE FILE, so it
+    // happens once: a size somebody deliberately deleted must not come back every time the library is
+    // opened. A library written before this existed has it false, which is what brings the shelf to a
+    // library that was made before the shelf did.
+    bool standardHeatshrink = false;
 
     // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
@@ -251,6 +256,10 @@ PartsLibrary seedLibrary();
 // that the figures are nominal and the datasheet is the authority. A harness that must hold a tolerance is
 // checked against the datasheet, not against a starter library.
 int addStandardHeatshrink(PartsLibrary& lib);
+
+// Put the shelf in if it has never been put in. Returns how many parts it added, and marks the library so
+// that it is not done again - which is what makes it safe to call every time a library is opened.
+int ensureStandardHeatshrink(PartsLibrary& lib);
 
 // The standard schematic symbol for the kinds that have one - the components a harness carries in
 // line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the

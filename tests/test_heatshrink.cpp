@@ -6,8 +6,10 @@
 // tubing - and that adding the range twice does not put a second DR-25 3/8 on every bill of materials.
 #include "harness/PartsLibrary.h"
 
+#include <QJsonObject>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -154,6 +156,48 @@ int run_heatshrink_tests() {
                         lib.parts.end());
         const int back = addStandardHeatshrink(lib);
         check(back == 1, "twice: and one that was taken out comes back, and only that one");
+    }
+
+    // ---- a library that already existed gets them, once ------------------------------------------
+    {
+        // This is the case that matters: a library made before the shelf existed. It has no flag, so the
+        // shelf goes in the first time it is opened - and the flag it then carries means a size somebody
+        // deliberately deleted does not come back the next time.
+        PartsLibrary old;
+        LibraryPart& mine = old.add(PartKind::Wire);
+        mine.description = QStringLiteral("Something the shop put in itself");
+        mine.mfrPn = QStringLiteral("HOUSE-1");
+        check(!old.standardHeatshrink, "existing: a library written before the shelf has no flag");
+        const int first = ensureStandardHeatshrink(old);
+        check(first > 60, "existing: opening it puts the shelf in");
+        check(old.standardHeatshrink, "existing: and records that it was done");
+        check(!family(old, QStringLiteral("HOUSE-1")).empty(),
+              "existing: what the shop put in itself is still there");
+        const size_t after = old.parts.size();
+        check(ensureStandardHeatshrink(old) == 0 && old.parts.size() == after,
+              "existing: opening it again adds nothing");
+        // A size taken out on purpose stays out.
+        old.parts.erase(std::remove_if(old.parts.begin(), old.parts.end(),
+                                       [](const LibraryPart& p) {
+                                           return p.mfrPn == QStringLiteral("ATUM-12/3-0");
+                                       }),
+                        old.parts.end());
+        check(ensureStandardHeatshrink(old) == 0,
+              "existing: and a size deleted on purpose is not put back");
+
+        // The flag travels in the file, or none of the above holds after a save and a load.
+        PartsLibrary back;
+        back.fromJson(old.toJson());
+        check(back.standardHeatshrink,
+              "existing: the flag is written to the file and read back - otherwise the shelf would be "
+              "put back every time the library was opened");
+        PartsLibrary older;
+        QJsonObject noFlag = old.toJson();
+        noFlag.remove(QStringLiteral("standardHeatshrink"));
+        older.fromJson(noFlag);
+        check(!older.standardHeatshrink,
+              "existing: a file written before the flag existed reads as not done, which is what brings "
+              "the shelf to it");
     }
 
     // ---- a new library has them from the start ----------------------------------------------------
