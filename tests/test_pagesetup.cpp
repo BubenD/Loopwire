@@ -13,7 +13,10 @@
 #include "render/CanvasWidget.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QDir>
 #include <QImage>
 #include <QListWidget>
@@ -211,18 +214,57 @@ int run_pagesetup_tests() {
         check(out.paper == setup.paper && out.landscape == false && near(out.scale, 0.1) &&
                   out.monochrome == false,
               "dialog: what it opens on is what it gives back when nothing is touched");
-        // Every paper size is on the combo, full-bleed ones included: that is where they are chosen.
+        // The paper list holds each size ONCE - the plain one - and a tick turns whichever is chosen
+        // into its full-bleed twin. Every size listed twice over is where the two get confused.
+        int plainCount = 0;
+        for (const PaperSize& size : paperSizes())
+            if (size.marginMm > 0.0) ++plainCount;
         QComboBox* papers = nullptr;
         for (QComboBox* box : dlg.findChildren<QComboBox*>())
-            if (box->count() == static_cast<int>(paperSizes().size())) papers = box;
-        check(papers != nullptr, "dialog: the paper list is the whole list");
-        if (papers) {
-            const int bleedA3 =
-                papers->findData(QStringLiteral("ISO full bleed A3 (420.00 x 297.00 MM)"));
-            check(bleedA3 >= 0, "dialog: full-bleed A3 can be picked");
-            papers->setCurrentIndex(bleedA3);
-            check(dlg.setup().paper.contains(QStringLiteral("full bleed A3")),
-                  "dialog: and picking it is what the setup then says");
+            if (box->count() == plainCount) papers = box;
+        check(papers != nullptr, "dialog: every size is on the paper list, once each");
+        QCheckBox* bleed = nullptr;
+        for (QCheckBox* box : dlg.findChildren<QCheckBox*>())
+            if (box->text().contains(QStringLiteral("full bleed"))) bleed = box;
+        check(bleed != nullptr, "dialog: and a tick for printing to the paper's edges");
+        if (papers && bleed) {
+            const int a3 = papers->findData(QStringLiteral("ISO A3 (420.00 x 297.00 MM)"));
+            check(a3 >= 0, "dialog: A3 can be picked");
+            papers->setCurrentIndex(a3);
+            bleed->setChecked(false);
+            check(dlg.setup().paper == QStringLiteral("ISO A3 (420.00 x 297.00 MM)") &&
+                      dlg.setup().marginMm() > 0.0,
+                  "dialog: unticked, it is the plain size with its margin");
+            bleed->setChecked(true);
+            check(dlg.setup().paper.contains(QStringLiteral("full bleed A3")) &&
+                      dlg.setup().marginMm() == 0.0,
+                  "dialog: ticked, it is the same size printed to its edges");
+        }
+        // The four things that can go on a page are all offered.
+        QComboBox* areas = nullptr;
+        for (QComboBox* box : dlg.findChildren<QComboBox*>())
+            if (box->count() == 4 && box->itemData(0).toInt() == static_cast<int>(PlotArea::Layout))
+                areas = box;
+        check(areas != nullptr,
+              "dialog: the whole sheet, everything on it, what is on screen, or a window of it");
+        if (areas) {
+            areas->setCurrentIndex(3);
+            check(dlg.setup().area == PlotArea::Window, "dialog: and choosing one is what it says");
+        }
+        // The page preview is there, and draws something: the paper, its margin and what lands on it.
+        QWidget* preview = nullptr;
+        for (QWidget* w : dlg.findChildren<QWidget*>())
+            if (w->minimumWidth() == 240 && w->minimumHeight() == 200) preview = w;
+        check(preview != nullptr, "dialog: the page is shown beside the choices");
+        if (preview) {
+            preview->resize(260, 220);
+            const QPixmap shot = preview->grab();
+            QImage img = shot.toImage();
+            int ink = 0;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = 0; x < img.width(); ++x)
+                    if (qRed(img.pixel(x, y)) < 200) ++ink;
+            check(ink > 100, "dialog: and it really draws the page, not an empty panel");
         }
     }
     {
@@ -243,8 +285,8 @@ int run_pagesetup_tests() {
             check(list->item(1)->text() == named.name, "manager: the named one by its name");
             QPushButton* setCurrent = nullptr;
             for (QPushButton* b : manager.findChildren<QPushButton*>())
-                if (b->text() == QStringLiteral("Set current")) setCurrent = b;
-            check(setCurrent != nullptr, "manager: Set current is there");
+                if (b->text() == QStringLiteral("Use for this sheet")) setCurrent = b;
+            check(setCurrent != nullptr, "manager: the button that puts a setup on this sheet is there");
             if (setCurrent) {
                 check(!setCurrent->isEnabled(),
                       "manager: with the sheet's own setup picked there is nothing to set");
@@ -253,7 +295,7 @@ int run_pagesetup_tests() {
                 setCurrent->click();
                 check(doc.layouts()[0].pageSetup.paper == named.paper &&
                           doc.layouts()[0].pageSetup.monochrome == false,
-                      "manager: Set current puts the named setup's paper and options on the sheet");
+                      "manager: it puts the named setup's paper and options on the sheet");
                 check(manager.changed(), "manager: and says the drawing was changed");
             }
         }
@@ -271,10 +313,53 @@ int run_pagesetup_tests() {
             std::printf("  -> %d failed\n", ++setupFailures);
             return setupFailures;
         }
-        check(spaces->contextMenuPolicy() == Qt::CustomContextMenu,
-              "tabs: a right-click on a tab is ours to answer - that is where the sheet's own menu is");
+        // A right-click on a layout tab must open THAT SHEET's menu. It used to open the drawing's -
+        // Copy, Cut, Quick Select - because a QTabBar ignores a right press and it travelled up to the
+        // canvas the strip is laid over. The press is caught and stops there now.
+        win.resize(1300, 850);
+        win.show();
+        QApplication::processEvents();
+        spaces->setCurrentIndex(1);
+        const QRect tab = spaces->tabRect(1);
+        const QPointF onTab(tab.center());
+        QMouseEvent rightPress(QEvent::MouseButtonPress, onTab, spaces->mapToGlobal(onTab),
+                               Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        const bool taken = QApplication::sendEvent(spaces, &rightPress) && rightPress.isAccepted();
+        check(taken, "tabs: the right press on a tab is taken by the strip, not passed to the canvas");
+        QMenu* opened = nullptr;
+        for (QMenu* menu : win.findChildren<QMenu*>())
+            if (menu->isVisible()) opened = menu;
+        check(opened != nullptr, "tabs: and a menu opens");
+        if (opened) {
+            QStringList items;
+            for (QAction* a : opened->actions())
+                if (!a->isSeparator()) items << a->text();
+            std::printf("  tab menu: %s\n", items.join(QStringLiteral(" / ")).toUtf8().constData());
+            check(items.filter(QStringLiteral("Duplicate")).size() == 1 &&
+                      items.filter(QStringLiteral("Rename")).size() == 1 &&
+                      items.filter(QStringLiteral("Page setup")).size() == 1 &&
+                      items.filter(QStringLiteral("Print")).size() == 1,
+                  "tabs: it is the sheet's menu - duplicate, rename, print, page setup");
+            check(items.filter(QStringLiteral("Quick Select")).isEmpty() &&
+                      items.filter(QStringLiteral("Copy")).isEmpty(),
+                  "tabs: and not the drawing's, which is what used to come up");
+            opened->close();
+        }
 
-        Document* drawing = canvas->document();
+        // Back to the model first. While a sheet is open, what is ON it is the live paper space - the
+        // document the editor is drawing in - and a plot of that sheet takes it from there. This block
+        // sets the sheet up through the layout itself, as a drawing loaded from a file would be, so the
+        // canvas is stood off it.
+        spaces->setCurrentIndex(0);
+        QApplication::processEvents();
+        // The DRAWING, by name: on a sheet, what is being drawn in is that sheet's paper space, which has
+        // no layouts of its own.
+        Document* drawing = canvas->drawingDocument();
+        check(drawing && !drawing->layouts().empty(), "plot: the drawing has a sheet to plot");
+        if (!drawing || drawing->layouts().empty()) {
+            std::printf("  -> %d failed\n", ++setupFailures);
+            return setupFailures;
+        }
         DrawingLayout& sheet = drawing->layouts()[0];
         sheet.paperWidth = 420.0;
         sheet.paperHeight = 297.0;
@@ -336,6 +421,69 @@ int run_pagesetup_tests() {
         double w = 0.0, h = 0.0;
         check(win.spacePageSizeMm(1, w, h) && near(w, 297.0) && near(h, 210.0),
               "plot: a sheet set up for A4 plots on A4, whatever size the sheet itself is");
+
+        // ---- what goes on the page: a window of the sheet, and nothing else ----------------------
+        {
+            // Two marks on the sheet: one across the middle of its lower-left quarter, one up near the
+            // top. A window over the lower-left quarter must print the first and not the second - that
+            // is the whole of what "a window of it" means.
+            sheet.paperEntities.clear();
+            Entity low;
+            low.type = EntityType::Line;
+            low.id = QStringLiteral("low");
+            low.layer = QStringLiteral("0");
+            low.a = Vec2{10.0, 74.0};
+            low.b = Vec2{200.0, 74.0};
+            Entity high = low;
+            high.id = QStringLiteral("high");
+            high.a = Vec2{10.0, 250.0};
+            high.b = Vec2{400.0, 250.0};
+            sheet.paperEntities.push_back(low);
+            sheet.paperEntities.push_back(high);
+            sheet.pageSetup.paper = QStringLiteral("ISO full bleed A3 (420.00 x 297.00 MM)");
+            sheet.pageSetup.landscape = true;
+            sheet.pageSetup.fitToPaper = true;
+            sheet.pageSetup.centred = true;
+
+            auto pageOf = [&]() {
+                QImage img(840, 594, QImage::Format_RGB32);
+                img.fill(Qt::white);
+                QPainter p(&img);
+                win.renderSpaceToPage(p, 1, true);
+                p.end();
+                return img;
+            };
+            const QRect topBand(0, 0, 840, 120);
+            const QRect middleBand(0, 250, 840, 90);
+
+            sheet.pageSetup.area = PlotArea::Layout;
+            const QImage whole = pageOf();
+            check(inkIn(whole, topBand) > 20,
+                  "area: the whole sheet puts the mark near its top on the page");
+
+            sheet.pageSetup.area = PlotArea::Window;
+            sheet.pageSetup.windowX1Mm = 0.0;
+            sheet.pageSetup.windowY1Mm = 0.0;
+            sheet.pageSetup.windowX2Mm = 210.0;
+            sheet.pageSetup.windowY2Mm = 148.5;
+            check(sheet.pageSetup.windowValid(), "area: the window is a real rectangle");
+            const QImage windowed = pageOf();
+            check(inkIn(windowed, middleBand) > 20,
+                  "area: a window of the sheet prints what is inside it, blown up to the paper");
+            check(inkIn(windowed, topBand) == 0,
+                  "area: and nothing that is outside it - which is what choosing a window is for");
+
+            // Display, with the canvas standing on the model rather than on this sheet: there is no
+            // screen view of it to take, so the whole sheet is printed rather than nothing at all.
+            sheet.pageSetup.area = PlotArea::Display;
+            const QImage displayed = pageOf();
+            check(inkIn(displayed, topBand) > 20,
+                  "area: what is on screen falls back to the whole sheet when the sheet is not the one "
+                  "being looked at");
+            sheet.pageSetup.area = PlotArea::Layout;
+            sheet.pageSetup.fitToPaper = false;
+            borderTheSheet(sheet);
+        }
 
         // ---- duplicate ---------------------------------------------------------------------------
         const size_t was = drawing->layouts().size();

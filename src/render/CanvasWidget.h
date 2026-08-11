@@ -227,8 +227,11 @@ public:
     // is called with its two opposite world corners. Esc cancels (onDone not called).
     void beginWindowCapture(std::function<void(Vec2, Vec2)> onDone);
 
-private:
+    // How the canvas is mapping the space it is showing onto itself. Public because printing "what is on
+    // screen" has to ask that question: the view is the canvas's, and nobody else can answer it.
     ViewTransform transform() const;
+
+private:
     DrawingLayout* currentLayout();
     const DrawingLayout* currentLayout() const;
     QRectF viewportScreenRect(const LayoutViewport& viewport, const ViewTransform& paper) const;

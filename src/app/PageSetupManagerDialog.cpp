@@ -5,6 +5,7 @@
 
 #include <QCheckBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -13,6 +14,8 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace Edraw_Desktop {
 
@@ -27,14 +30,14 @@ QString rowLabel(const PageSetup& setup, bool layoutOwn, const QString& layoutNa
 
 PageSetupManagerDialog::PageSetupManagerDialog(Document& doc, int layoutIndex, QWidget* parent)
     : QDialog(parent), doc_(doc), layoutIndex_(layoutIndex) {
-    setWindowTitle(QStringLiteral("Page Setup Manager"));
+    setWindowTitle(QStringLiteral("Print setups"));
     setModal(true);
 
     auto* outer = new QVBoxLayout(this);
     current_ = new QLabel(this);
     outer->addWidget(current_);
 
-    auto* box = new QGroupBox(QStringLiteral("Page setups"), this);
+    auto* box = new QGroupBox(QStringLiteral("Setups in this drawing"), this);
     auto* boxRow = new QHBoxLayout(box);
     list_ = new QListWidget(box);
     list_->setMinimumWidth(280);
@@ -42,10 +45,10 @@ PageSetupManagerDialog::PageSetupManagerDialog(Document& doc, int layoutIndex, Q
     boxRow->addWidget(list_, 1);
 
     auto* side = new QVBoxLayout();
-    setCurrentBtn_ = new QPushButton(QStringLiteral("Set current"), box);
-    auto* newBtn = new QPushButton(QStringLiteral("New..."), box);
-    auto* modifyBtn = new QPushButton(QStringLiteral("Modify..."), box);
-    auto* importBtn = new QPushButton(QStringLiteral("Import..."), box);
+    setCurrentBtn_ = new QPushButton(QStringLiteral("Use for this sheet"), box);
+    auto* newBtn = new QPushButton(QStringLiteral("Copy as new..."), box);
+    auto* modifyBtn = new QPushButton(QStringLiteral("Edit..."), box);
+    auto* importBtn = new QPushButton(QStringLiteral("Bring in from a drawing..."), box);
     side->addWidget(setCurrentBtn_);
     side->addWidget(newBtn);
     side->addWidget(modifyBtn);
@@ -54,7 +57,7 @@ PageSetupManagerDialog::PageSetupManagerDialog(Document& doc, int layoutIndex, Q
     boxRow->addLayout(side);
     outer->addWidget(box);
 
-    auto* detailBox = new QGroupBox(QStringLiteral("Selected page setup details"), this);
+    auto* detailBox = new QGroupBox(QStringLiteral("What the one picked says"), this);
     auto* detailCol = new QVBoxLayout(detailBox);
     details_ = new QLabel(detailBox);
     details_->setWordWrap(true);
@@ -62,7 +65,7 @@ PageSetupManagerDialog::PageSetupManagerDialog(Document& doc, int layoutIndex, Q
     detailCol->addWidget(details_);
     outer->addWidget(detailBox);
 
-    showOnNew_ = new QCheckBox(QStringLiteral("Display when creating a new layout"), this);
+    showOnNew_ = new QCheckBox(QStringLiteral("Ask for a setup when a sheet is added"), this);
     showOnNew_->setToolTip(QStringLiteral(
         "Not yet: a new layout takes the drawing's default paper. Left here because it is where the "
         "setting belongs when it arrives."));
@@ -135,21 +138,34 @@ void PageSetupManagerDialog::updateDetails() {
         return;
     }
     const PaperSize& size = paperSizeByName(setup->paper);
+    const QString what = setup->area == PlotArea::Extents  ? QStringLiteral("everything drawn on it")
+                         : setup->area == PlotArea::Display ? QStringLiteral("what is on screen")
+                         : setup->area == PlotArea::Window
+                             ? QStringLiteral("a window of %1 × %2 mm")
+                                   .arg(std::abs(setup->windowX2Mm - setup->windowX1Mm), 0, 'f', 1)
+                                   .arg(std::abs(setup->windowY2Mm - setup->windowY1Mm), 0, 'f', 1)
+                             : QStringLiteral("the whole sheet");
     details_->setText(
-        QStringLiteral("Device name:   %1\nPaper:   %2\nPlot size:   %3 × %4 mm (%5)\n"
-                       "Printable:   %6 × %7 mm (%8)\nWhat to plot:   %9\nScale:   %10\nLines:   %11")
-            .arg(setup->device.isEmpty() ? QStringLiteral("None — plots to a PDF") : setup->device)
+        QStringLiteral("Prints on:   %1\nPaper:   %2, %3 mm %4\nInk goes:   %5\n"
+                       "What prints:   %6, at %7\nLines:   %8, %9")
+            .arg(setup->device.isEmpty() ? QStringLiteral("no printer — a PDF is written")
+                                         : setup->device)
             .arg(setup->paper)
-            .arg(setup->pageWidthMm(), 0, 'f', 2)
-            .arg(setup->pageHeightMm(), 0, 'f', 2)
-            .arg(setup->landscape ? QStringLiteral("Landscape") : QStringLiteral("Portrait"))
-            .arg(setup->printableWidthMm(), 0, 'f', 2)
-            .arg(setup->printableHeightMm(), 0, 'f', 2)
-            .arg(size.marginMm <= 0.0 ? QStringLiteral("full bleed — to the paper's edge")
-                                      : QStringLiteral("%1 mm margin").arg(size.marginMm, 0, 'f', 1))
-            .arg(setup->area == PlotArea::Extents ? QStringLiteral("Extents") : QStringLiteral("Layout"))
+            .arg(QStringLiteral("%1 × %2")
+                     .arg(setup->pageWidthMm(), 0, 'f', 0)
+                     .arg(setup->pageHeightMm(), 0, 'f', 0))
+            .arg(setup->landscape ? QStringLiteral("across") : QStringLiteral("upright"))
+            .arg(size.marginMm <= 0.0
+                     ? QStringLiteral("right to the paper's edges")
+                     : QStringLiteral("inside a %1 mm margin, so %2 × %3 mm of it can be printed")
+                           .arg(size.marginMm, 0, 'f', 1)
+                           .arg(setup->printableWidthMm(), 0, 'f', 0)
+                           .arg(setup->printableHeightMm(), 0, 'f', 0))
+            .arg(what)
             .arg(setup->scaleLabel())
-            .arg(setup->monochrome ? QStringLiteral("black") : QStringLiteral("the drawing's own")));
+            .arg(setup->monochrome ? QStringLiteral("black") : QStringLiteral("the drawing's own colours"))
+            .arg(setup->plotLineweights ? QStringLiteral("weights as drawn")
+                                        : QStringLiteral("all the same thin one")));
     // The layout's own setup is already current: there is nothing to set.
     const bool isOwn = list_ && list_->currentRow() >= 0 &&
                        list_->item(list_->currentRow())->data(Qt::UserRole).toInt() < 0;
@@ -186,7 +202,12 @@ void PageSetupManagerDialog::makeNew() {
     PageSetup start;
     if (const PageSetup* from = setupAt(list_ ? list_->currentRow() : -1)) start = *from;
     start.name = name.trimmed();
-    PageSetupDialog dlg(start, start.name, this);
+    double sheetW = 0.0, sheetH = 0.0;
+    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(doc_.layouts().size())) {
+        sheetW = doc_.layouts()[static_cast<size_t>(layoutIndex_)].paperWidth;
+        sheetH = doc_.layouts()[static_cast<size_t>(layoutIndex_)].paperHeight;
+    }
+    PageSetupDialog dlg(start, start.name, sheetW, sheetH, this);
     if (dlg.exec() != QDialog::Accepted) return;
     PageSetup made = dlg.setup();
     made.name = start.name;
@@ -206,7 +227,12 @@ void PageSetupManagerDialog::modify() {
         isOwn && layoutIndex_ < static_cast<int>(layouts.size())
             ? layouts[static_cast<size_t>(layoutIndex_)].name
             : setup->name;
-    PageSetupDialog dlg(*setup, title, this);
+    double sheetW = 0.0, sheetH = 0.0;
+    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(layouts.size())) {
+        sheetW = layouts[static_cast<size_t>(layoutIndex_)].paperWidth;
+        sheetH = layouts[static_cast<size_t>(layoutIndex_)].paperHeight;
+    }
+    PageSetupDialog dlg(*setup, title, sheetW, sheetH, this);
     if (dlg.exec() != QDialog::Accepted) return;
     const QString keepName = setup->name;
     *setup = dlg.setup();

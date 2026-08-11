@@ -30,10 +30,12 @@ const PaperSize& paperSizeByName(const QString& name);
 // that will hold it. `preferFullBleed` picks the bleed twin, for a sheet that must come out at true size.
 QString paperSizeFor(double widthMm, double heightMm, bool preferFullBleed);
 
-// What the plot area is taken from.
+// What is put on the page.
 enum class PlotArea {
-    Layout,    // the sheet itself, at its own size - what a laid-out sheet wants
-    Extents,   // everything drawn, fitted to the page
+    Layout,    // the sheet itself, edge to edge - what a laid-out sheet usually wants
+    Extents,   // everything drawn on it, and no more of the paper than that needs
+    Display,   // what the canvas is showing at the moment it is printed
+    Window,    // a rectangle of the sheet, given below
 };
 
 // How a layout is plotted: the paper, which way round, at what scale, and how the ink comes out.
@@ -50,6 +52,12 @@ struct PageSetup {
     PlotArea area = PlotArea::Layout;
     bool fitToPaper = false;         // else `scale` is used
     double scale = 1.0;              // paper mm per drawing mm: 1 = 1:1, 0.5 = 1:2
+    // The window to print, in the sheet's own millimetres, when `area` is Window. Left as a zero-area
+    // rectangle until one is set, and then it means nothing and the whole sheet prints.
+    double windowX1Mm = 0.0;
+    double windowY1Mm = 0.0;
+    double windowX2Mm = 0.0;
+    double windowY2Mm = 0.0;
     double offsetXMm = 0.0;
     double offsetYMm = 0.0;
     bool centred = true;
@@ -65,6 +73,8 @@ struct PageSetup {
     double printableHeightMm() const;
     double marginMm() const;
 
+    // Whether the window is a real rectangle rather than the empty one a setup starts with.
+    bool windowValid() const;
     // "1:1", "1:2", "2:1", "Fit to paper" - what the scale is called.
     QString scaleLabel() const;
     // The ratios a plot dialog offers, as (label, paper mm per drawing mm).

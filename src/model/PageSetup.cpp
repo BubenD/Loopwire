@@ -123,6 +123,10 @@ QString paperSizeFor(double widthMm, double heightMm, bool preferFullBleed) {
 
 double PageSetup::marginMm() const { return paperSizeByName(paper).marginMm; }
 
+bool PageSetup::windowValid() const {
+    return std::abs(windowX2Mm - windowX1Mm) > 1e-6 && std::abs(windowY2Mm - windowY1Mm) > 1e-6;
+}
+
 double PageSetup::pageWidthMm() const {
     const PaperSize& size = paperSizeByName(paper);
     const double longEdge = std::max(size.widthMm, size.heightMm);
@@ -171,8 +175,14 @@ QJsonObject PageSetup::toJson() const {
             {QStringLiteral("paper"), paper},
             {QStringLiteral("landscape"), landscape},
             {QStringLiteral("upsideDown"), upsideDown},
-            {QStringLiteral("area"), area == PlotArea::Extents ? QStringLiteral("extents")
-                                                              : QStringLiteral("layout")},
+            {QStringLiteral("area"), area == PlotArea::Extents   ? QStringLiteral("extents")
+                                     : area == PlotArea::Display ? QStringLiteral("display")
+                                     : area == PlotArea::Window  ? QStringLiteral("window")
+                                                                 : QStringLiteral("layout")},
+            {QStringLiteral("windowX1"), windowX1Mm},
+            {QStringLiteral("windowY1"), windowY1Mm},
+            {QStringLiteral("windowX2"), windowX2Mm},
+            {QStringLiteral("windowY2"), windowY2Mm},
             {QStringLiteral("fitToPaper"), fitToPaper},
             {QStringLiteral("scale"), scale},
             {QStringLiteral("offsetX"), offsetXMm},
@@ -190,9 +200,15 @@ PageSetup PageSetup::fromJson(const QJsonObject& obj) {
     setup.paper = obj.value(QStringLiteral("paper")).toString(setup.paper);
     setup.landscape = obj.value(QStringLiteral("landscape")).toBool(true);
     setup.upsideDown = obj.value(QStringLiteral("upsideDown")).toBool(false);
-    setup.area = obj.value(QStringLiteral("area")).toString() == QLatin1String("extents")
-                     ? PlotArea::Extents
-                     : PlotArea::Layout;
+    const QString area = obj.value(QStringLiteral("area")).toString();
+    setup.area = area == QLatin1String("extents")  ? PlotArea::Extents
+                 : area == QLatin1String("display") ? PlotArea::Display
+                 : area == QLatin1String("window")  ? PlotArea::Window
+                                                    : PlotArea::Layout;
+    setup.windowX1Mm = obj.value(QStringLiteral("windowX1")).toDouble(0.0);
+    setup.windowY1Mm = obj.value(QStringLiteral("windowY1")).toDouble(0.0);
+    setup.windowX2Mm = obj.value(QStringLiteral("windowX2")).toDouble(0.0);
+    setup.windowY2Mm = obj.value(QStringLiteral("windowY2")).toDouble(0.0);
     setup.fitToPaper = obj.value(QStringLiteral("fitToPaper")).toBool(false);
     setup.scale = obj.value(QStringLiteral("scale")).toDouble(1.0);
     if (setup.scale <= 0.0) setup.scale = 1.0;

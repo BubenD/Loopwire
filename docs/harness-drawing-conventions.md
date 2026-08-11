@@ -462,7 +462,14 @@ showing, and one of a dragged window.
 
 Right-click a layout's tab: **Duplicate**, **Rename**, **Print / PDF**, **Page setup**, **Delete**. That
 is the menu for what is done TO a sheet, as against what is drawn on it, and the tab is the thing being
-talked about. Duplicating copies the paper geometry, the windows and the page setup, gives the windows
+talked about.
+
+It is taken through an **event filter** on the strip rather than through the context-menu signal, because a
+`QTabBar` *ignores* a right-button press: the press then travels up the parents — the strip, and the canvas
+the strip is laid over — and the canvas answers it with the drawing's own menu. Which is exactly what
+happened at first: right-clicking a layout tab offered Copy, Cut, Quick Select. The press is now caught on
+the tab bar and on the strip, and stops there. The menu is `popup()`ed rather than `exec()`ed, so the
+handler returns at once and the menu owns itself. Duplicating copies the paper geometry, the windows and the page setup, gives the windows
 fresh ids (two windows with one id are one window to anything that looks them up) and names the copy after
 its original. Model space's menu has only the plotting entries: there is one model, it has no name to
 change and no paper of its own.
@@ -476,10 +483,22 @@ its layouts' own, since most offices keep their paper and scale on the sheets. A
 own setup: a named setup that is later renamed or deleted must not be able to change how a sheet plots,
 which is why *Set current* copies rather than references.
 
-A setup holds the device (a printer by name, or none — meaning a PDF), the paper, portrait or landscape,
-upside-down, what to plot (the sheet, or the extents), the scale or *fit to paper*, the offset or *centre*,
-and how the ink comes out: black or the drawing's own colours, with or without object lineweights, paper
-space last. It is **saved with the drawing**, because a sheet that plots correctly today must plot the same
+A setup holds the device (a printer by name, or none — meaning a PDF), the paper, across or upright,
+upside-down, the scale or *fit to paper*, the offset or *centre*, and how the ink comes out: black or the
+drawing's own colours, with or without object lineweights, sheet over the windows.
+
+**What goes on the page** is one of four. *The whole sheet*, edge to edge. *Everything drawn on it* — the
+bounds of the paper geometry and the windows, and no more of the paper than that needs. *What is on screen
+now*, taken from the canvas's own view of that sheet at the moment it prints (and, when the canvas is
+standing somewhere else, the whole sheet rather than nothing). Or *a window of it*: a rectangle in the
+sheet's own millimetres, typed rather than dragged, because this dialog stands in front of the drawing and
+a window that has to be exact — one view of three, a title block on its own — is a figure anyway. Whatever
+is chosen, the plot is clipped to the printable area, so nothing lands in the margin.
+
+Beside the choices is a **picture of the page**: the paper, the margin as a dashed rectangle, and what will
+actually land on it as a blue one. Full bleed, fit-to-paper and an offset stop being words — a sheet
+hanging over the printable area visibly hangs over it, and says so in red, before it is printed rather than
+after. It is **saved with the drawing**, because a sheet that plots correctly today must plot the same
 for whoever opens the file next; a drawing written before page setups existed gets its own sheet size, full
 bleed, at 1:1 — which is how it was being plotted all along.
 

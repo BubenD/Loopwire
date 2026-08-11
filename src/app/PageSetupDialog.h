@@ -8,33 +8,48 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QPushButton;
 class QRadioButton;
 
 namespace Edraw_Desktop {
 
-// Page setup: the paper a layout is plotted on, which way round, at what scale, and how the ink comes out.
+// What a sheet is printed on: the machine, the paper, how much of the sheet goes on it, where, and in what
+// ink. Our own arrangement, and our own words - a print setup is a short list of decisions and it reads
+// better as one, with a picture of the page beside it so the effect of each is visible rather than
+// imagined.
 //
-// The one thing here that is not obvious is FULL BLEED. A printer will not put ink within a few
-// millimetres of the paper's edge, so a plain size has a margin and a 420 x 297 sheet plotted on plain A3
-// must shrink slightly to fit inside it. A full-bleed size has no margin: the sheet comes out at true
-// size, which is what a plotter or a PDF can do and what a drawing that will be measured needs. Every size
-// is offered both ways, and the printable area is shown so the difference is a figure and not a guess.
+// The one decision that is not obvious is FULL BLEED. A printer will not put ink within a few millimetres
+// of the paper's edge, so a plain size keeps a margin and a 420 x 297 sheet does not fit on plain A3. A
+// full-bleed size has no margin: the sheet comes out at true size, which is what a plotter or a PDF can do
+// and what a drawing that will be measured with a rule needs. The preview shows the margin, so the
+// difference is something seen rather than a word on a list.
 class PageSetupDialog : public QDialog {
     Q_OBJECT
 public:
-    // `title` names what is being set up - a layout, or a named setup.
-    PageSetupDialog(const PageSetup& setup, const QString& title, QWidget* parent = nullptr);
+    // `sheetWidthMm`/`sheetHeightMm` are the sheet this setup is for, so the preview can show where it
+    // lands on the page. Zero for a setup that belongs to no particular sheet (a named one).
+    PageSetupDialog(const PageSetup& setup, const QString& title, double sheetWidthMm = 0.0,
+                    double sheetHeightMm = 0.0, QWidget* parent = nullptr);
 
     PageSetup setup() const;
 
 private:
-    void refreshPaperDetail();
+    void refresh();          // the preview and the figures under it
+    void pickWindow();       // the corners of the window to print, in sheet millimetres
 
     PageSetup setup_;
+    double sheetW_ = 0.0;
+    double sheetH_ = 0.0;
+
+    class Preview;             // the page, drawn small (defined in the .cpp)
+    Preview* preview_ = nullptr;
     QComboBox* device_ = nullptr;
     QComboBox* paper_ = nullptr;
-    QLabel* paperDetail_ = nullptr;
+    QCheckBox* bleed_ = nullptr;
+    QLabel* figures_ = nullptr;
     QComboBox* area_ = nullptr;
+    QPushButton* windowBtn_ = nullptr;
+    QLabel* windowLabel_ = nullptr;
     QCheckBox* fit_ = nullptr;
     QComboBox* scale_ = nullptr;
     QDoubleSpinBox* offsetX_ = nullptr;

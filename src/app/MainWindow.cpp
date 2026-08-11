@@ -1947,9 +1947,17 @@ void MainWindow::buildDocumentArea() {
             [this](int i) { closeDrawingSpace(i); });
     // A right-click on a tab: what is done TO a sheet - copied, renamed, plotted, set up - as against what
     // is drawn on it. On the tab, because that is the thing being talked about.
-    drawingSpaceTabs_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(drawingSpaceTabs_, &QWidget::customContextMenuRequested, this,
-            [this](const QPoint& at) { showDrawingSpaceMenu(at); });
+    //
+    // Taken through an event filter rather than the context-menu signal, because a QTabBar IGNORES a
+    // right-button press: the press then travels up the parents - the strip, and the canvas the strip is
+    // laid over - and the canvas answers it with the drawing's own menu. Which is what was happening: a
+    // right-click on a layout tab offered Copy, Cut, Quick Select. The press is caught here and stops
+    // here, on both the tabs and the strip they sit on.
+    drawingSpaceTabs_->setContextMenuPolicy(Qt::PreventContextMenu);
+    drawingSpaceTabs_->installEventFilter(this);
+    drawingSpaceStrip_ = spaceRow;
+    spaceRow->setContextMenuPolicy(Qt::PreventContextMenu);
+    spaceRow->installEventFilter(this);
     if (canvas_)
         connect(canvas_, &CanvasWidget::viewportEntered, this,
                 [this](bool inside) { enteredLayoutViewport(inside); });
@@ -2063,27 +2071,29 @@ void MainWindow::showDrawingSpaceMenu(const QPoint& at) {
     if (!drawingSpaceTabs_ || !doc_) return;
     const int space = drawingSpaceTabs_->tabAt(at);
     if (space < 0) return;
-    QMenu menu(this);
+    // Popped rather than exec'd, so this returns at once: the menu owns itself and goes when it closes.
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
     const QString name = spaceName(space);
-    menu.addAction(name)->setEnabled(false);
-    menu.addSeparator();
+    menu->addAction(name)->setEnabled(false);
+    menu->addSeparator();
     if (space == 0) {
         // Model space: there is one of it, it has no name to change and no paper to set up. What is left
         // is putting it out, which is the same Output the sheets use, opened on the model.
-        menu.addAction(tr("Print / PDF..."), this, [this] { printLayout(0); });
-        menu.addAction(tr("Output... (every space, in order)"), this, [this] { showOutput(); });
-        menu.exec(drawingSpaceTabs_->mapToGlobal(at));
+        menu->addAction(tr("Print / PDF..."), this, [this] { printLayout(0); });
+        menu->addAction(tr("Output... (every space, in order)"), this, [this] { showOutput(); });
+        menu->popup(drawingSpaceTabs_->mapToGlobal(at));
         return;
     }
-    menu.addAction(tr("Duplicate"), this, [this, space] { duplicateLayout(space); });
-    menu.addAction(tr("Rename..."), this, [this, space] { renameLayout(space); });
-    menu.addSeparator();
-    menu.addAction(tr("Print / PDF..."), this, [this, space] { printLayout(space); });
-    menu.addAction(tr("Page setup..."), this, [this, space] { showPageSetup(space); });
-    menu.addSeparator();
-    QAction* close = menu.addAction(tr("Delete"), this, [this, space] { closeDrawingSpace(space); });
+    menu->addAction(tr("Duplicate"), this, [this, space] { duplicateLayout(space); });
+    menu->addAction(tr("Rename..."), this, [this, space] { renameLayout(space); });
+    menu->addSeparator();
+    menu->addAction(tr("Print / PDF..."), this, [this, space] { printLayout(space); });
+    menu->addAction(tr("Page setup..."), this, [this, space] { showPageSetup(space); });
+    menu->addSeparator();
+    QAction* close = menu->addAction(tr("Delete"), this, [this, space] { closeDrawingSpace(space); });
     close->setEnabled(doc_->layouts().size() > 1);
-    menu.exec(drawingSpaceTabs_->mapToGlobal(at));
+    menu->popup(drawingSpaceTabs_->mapToGlobal(at));
 }
 
 void MainWindow::duplicateLayout(int space) {
@@ -5235,6 +5245,19 @@ void MainWindow::leavePropertiesPanel() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // The strip along the bottom of the canvas. A right press on a tab opens that sheet's own menu; a
+    // right press anywhere else on the strip does nothing at all. Either way it stops here rather than
+    // falling through to the canvas, which would answer with the menu for the drawing.
+    if ((obj == drawingSpaceTabs_ || obj == drawingSpaceStrip_) &&
+        (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease ||
+         e->type() == QEvent::ContextMenu)) {
+        if (e->type() == QEvent::ContextMenu) return true;
+        auto* me = static_cast<QMouseEvent*>(e);
+        if (me->button() != Qt::RightButton) return false;
+        if (e->type() == QEvent::MouseButtonPress && obj == drawingSpaceTabs_ && drawingSpaceTabs_)
+            showDrawingSpaceMenu(me->pos());
+        return true;
+    }
     if (obj == propsTable_ && e->type() == QEvent::KeyPress &&
         static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape) {
         leavePropertiesPanel();
@@ -10643,20 +10666,57 @@ void MainWindow::renderSpaceToPage(QPainter& painter, int space, bool monochrome
             painter.rotate(180.0);
             painter.translate(-page.center());
         }
+        // WHAT of the sheet goes on the page. The whole of it, edge to edge; or only as much as has
+        // something on it; or the window that was set; or whatever the canvas is showing at this moment,
+        // for a print of the thing being looked at.
+        double partX = 0.0, partY = 0.0, partW = sheetW, partH = sheetH;
+        if (setup.area == PlotArea::Window && setup.windowValid()) {
+            partX = std::min(setup.windowX1Mm, setup.windowX2Mm);
+            partY = std::min(setup.windowY1Mm, setup.windowY2Mm);
+            partW = std::abs(setup.windowX2Mm - setup.windowX1Mm);
+            partH = std::abs(setup.windowY2Mm - setup.windowY1Mm);
+        } else if (setup.area == PlotArea::Extents) {
+            Bounds on;
+            for (const Entity& e : layout.paperEntities) on.expand(e.bounds());
+            for (const LayoutViewport& v : layout.viewports) {
+                on.expand(Vec2{v.x, v.y});
+                on.expand(Vec2{v.x + v.width, v.y + v.height});
+            }
+            if (on.valid && on.width() > 1e-6 && on.height() > 1e-6) {
+                partX = on.min.x;
+                partY = on.min.y;
+                partW = on.width();
+                partH = on.height();
+            }
+        } else if (setup.area == PlotArea::Display && canvas_ && canvas_->layoutMode() &&
+                   canvas_->layoutIndex() == space - 1) {
+            // What is on screen: the canvas's own view of this sheet, corner to corner.
+            const ViewTransform view = canvas_->transform();
+            const Vec2 a = view.toWorld(QPointF(0, 0));
+            const Vec2 b = view.toWorld(QPointF(canvas_->width(), canvas_->height()));
+            const double x1 = std::min(a.x, b.x), x2 = std::max(a.x, b.x);
+            const double y1 = std::min(a.y, b.y), y2 = std::max(a.y, b.y);
+            if (x2 - x1 > 1e-6 && y2 - y1 > 1e-6) {
+                partX = x1;
+                partY = y1;
+                partW = x2 - x1;
+                partH = y2 - y1;
+            }
+        }
         const double scale = setup.fitToPaper
-                                 ? std::min(printable.width() / sheetW, printable.height() / sheetH)
+                                 ? std::min(printable.width() / partW, printable.height() / partH)
                                  : setup.scale * pxPerMm;
-        // Where the middle of the sheet lands: the middle of the printable area, or the offset from its
-        // lower-left corner (paper y measured up, as everywhere else).
+        // Where the middle of what is being printed lands: the middle of the printable area, or the offset
+        // from its lower-left corner (paper y measured up, as everywhere else).
         const QPointF centre =
             setup.centred
                 ? printable.center()
-                : QPointF(printable.left() + setup.offsetXMm * pxPerMm + sheetW * scale / 2.0,
-                          printable.bottom() - setup.offsetYMm * pxPerMm - sheetH * scale / 2.0);
+                : QPointF(printable.left() + setup.offsetXMm * pxPerMm + partW * scale / 2.0,
+                          printable.bottom() - setup.offsetYMm * pxPerMm - partH * scale / 2.0);
         ViewTransform paper;
         paper.view.scale = scale;
-        paper.view.x = centre.x() - sheetW / 2.0 * scale;
-        paper.view.y = centre.y() + sheetH / 2.0 * scale;
+        paper.view.x = centre.x() - (partX + partW / 2.0) * scale;
+        paper.view.y = centre.y() + (partY + partH / 2.0) * scale;
         // The margin is not printed in - by anything. A sheet plotted at true size on paper too small for
         // it is clipped at the printable edge, which is exactly what would come out of the machine.
         painter.setClipRect(printable, Qt::IntersectClip);

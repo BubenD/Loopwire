@@ -91,6 +91,7 @@ public:
 
     // The menu on a layout's tab: what is done TO a sheet rather than on it.
     void showDrawingSpaceMenu(const QPoint& at);
+    QWidget* drawingSpaceStrip_ = nullptr;   // the strip the tabs sit on, so its right-clicks stay put
     void duplicateLayout(int space);
     void renameLayout(int space);
     void printLayout(int space);
