@@ -202,12 +202,19 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
                static_cast<int>(PlotArea::Window));
     for (int i = 0; i < area_->count(); ++i)
         if (area_->itemData(i).toInt() == static_cast<int>(setup_.area)) area_->setCurrentIndex(i);
-    windowBtn_ = new QPushButton(QStringLiteral("Define window..."), what);
+    windowBtn_ = new QPushButton(QStringLiteral("Pick window..."), what);
+    windowBtn_->setToolTip(QStringLiteral(
+        "This closes, you pick the two corners on the sheet with the snaps running, and it opens again "
+        "with the window in it."));
+    typeWindowBtn_ = new QPushButton(QStringLiteral("Type it instead..."), what);
+    typeWindowBtn_->setToolTip(
+        QStringLiteral("Give the corners as figures, for a window that has to be exact."));
     windowLabel_ = new QLabel(what);
     windowLabel_->setWordWrap(true);
     whatGrid->addWidget(area_, 0, 0);
     whatGrid->addWidget(windowBtn_, 0, 1);
-    whatGrid->addWidget(windowLabel_, 1, 0, 1, 2);
+    whatGrid->addWidget(typeWindowBtn_, 0, 2);
+    whatGrid->addWidget(windowLabel_, 1, 0, 1, 3);
     whatGrid->setColumnStretch(0, 1);
     outer->addWidget(what);
 
@@ -288,6 +295,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     connect(upsideDown_, &QCheckBox::toggled, this, [this] { refresh(); });
     connect(area_, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
     connect(windowBtn_, &QPushButton::clicked, this, [this] { pickWindow(); });
+    connect(typeWindowBtn_, &QPushButton::clicked, this, [this] { typeWindow(); });
     connect(scale_, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
     connect(fit_, &QCheckBox::toggled, this, [this](bool on) {
         if (scale_) scale_->setEnabled(!on);
@@ -305,7 +313,29 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     refresh();
 }
 
+void PageSetupDialog::applyPickedWindow(double x1, double y1, double x2, double y2) {
+    setup_.windowX1Mm = std::min(x1, x2);
+    setup_.windowY1Mm = std::min(y1, y2);
+    setup_.windowX2Mm = std::max(x1, x2);
+    setup_.windowY2Mm = std::max(y1, y2);
+    setup_.area = PlotArea::Window;
+    if (area_)
+        for (int i = 0; i < area_->count(); ++i)
+            if (area_->itemData(i).toInt() == static_cast<int>(PlotArea::Window))
+                area_->setCurrentIndex(i);
+    refresh();
+}
+
 void PageSetupDialog::pickWindow() {
+    // Out of the way, and pick it off the sheet. A plot window is a rectangle ON the drawing, so it is
+    // pointed at rather than typed: the dialog closes, the corners are picked with every snap running, and
+    // the dialog comes back with the window in it. Typed corners are still there, under Type it instead,
+    // for a window that has to be an exact figure.
+    setup_ = setup();               // keep everything else the user has set
+    done(PickWindowResult);
+}
+
+void PageSetupDialog::typeWindow() {
     // The corners, in the sheet's own millimetres. Typed rather than dragged: this dialog stands in front
     // of the drawing, and a window that has to be exact - one view of three, a title block on its own - is
     // a figure anyway. The whole sheet is one button away, for when the window was a mistake.
@@ -382,7 +412,7 @@ void PageSetupDialog::refresh() {
                                       .arg(live.windowY2Mm, 0, 'f', 1));
         else
             windowLabel_->setText(
-                QStringLiteral("No window defined — the whole sheet will plot. Press Define window."));
+                QStringLiteral("No window yet — the whole sheet will plot. Pick one on the sheet."));
     }
     if (figures_) {
         const PaperSize& size = paperSizeByName(live.paper);

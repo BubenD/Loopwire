@@ -31,6 +31,19 @@ public:
     // Whether anything was changed, so the caller knows to mark the drawing dirty and repaint.
     bool changed() const { return changed_; }
 
+    // Closing with this means: the plot window is to be picked on the drawing. The manager and the setup
+    // dialog both have to be out of the way for that - a modal dialog blocks the canvas - so the request
+    // travels up to whoever opened the manager, which picks the window and then opens the manager again
+    // with `resumeEditing`, straight back into the setup that was being edited.
+    static constexpr int PickWindowResult = 3;
+    int pickTarget() const { return pickTarget_; }          // -1 = the layout's own, else a named index
+    const PageSetup& pickWorking() const { return pickWorking_; }
+    // Open the edit dialog again on that setup, with these values, as soon as the manager is shown.
+    void resumeEditing(int target, const PageSetup& working);
+
+protected:
+    void showEvent(QShowEvent* e) override;   // a resumed edit reopens as soon as this is on screen
+
 private:
     void rebuild();
     void updateDetails();
@@ -38,6 +51,9 @@ private:
     PageSetup* setupAt(int row);
 
     void setCurrent();
+    // The edit dialog, on the row given. Returns false if the window is to be picked, having recorded
+    // what to come back to.
+    bool editSetup(int row, PageSetup start, bool asNew, const QString& newName);
     void makeNew();
     void modify();
     void importFrom();
@@ -51,6 +67,11 @@ private:
     QLabel* details_ = nullptr;
     QPushButton* setCurrentBtn_ = nullptr;
     QCheckBox* showOnNew_ = nullptr;
+    int pickTarget_ = -1;
+    PageSetup pickWorking_;
+    bool resume_ = false;
+    int resumeTarget_ = -1;
+    PageSetup resumeWorking_;
 };
 
 } // namespace Edraw_Desktop

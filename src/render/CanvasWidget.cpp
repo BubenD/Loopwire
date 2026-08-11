@@ -922,6 +922,10 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
     // falls through to the editor below.
     if (layoutMode_ && e->button() == Qt::LeftButton) {
         DrawingLayout* layout = currentLayout();
+        // While a rectangle is being picked - the plot window - the windows on the sheet stand aside. The
+        // corner being picked is often ON a window's frame, and taking hold of the window instead would
+        // eat the very click that was asked for.
+        if (editor_ && editor_->pickingRectangle()) layout = nullptr;
         if (layout) {
             if (activeViewport_ >= 0) {
                 // Stepped inside a window: presses in it belong to the MODEL, seen through the window -

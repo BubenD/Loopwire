@@ -14,6 +14,8 @@
 #include <QElapsedTimer>
 #include <QJsonValue>
 #include <QObject>
+
+#include <functional>
 #include <QSet>
 #include <QString>
 #include <algorithm>
@@ -89,6 +91,17 @@ public:
     static bool isTwistedTool(ToolId t) {
         return t == ToolId::TwistedPair || t == ToolId::TwistedRoute || t == ToolId::TwistedHarness;
     }
+
+    // Ask the user for a rectangle: two clicks, with everything a click normally gets - every running
+    // object snap, the snap-override menu, ortho and polar, a typed coordinate. That is the whole reason
+    // this goes through the editor rather than through a rubber band of its own: a plot window is picked
+    // off the drawing, and picking off a drawing means snapping to it.
+    //
+    // `onDone` is handed the two corners; `onCancel` runs instead if Esc is pressed. Neither is called
+    // twice, and the pick is over as soon as one of them fires.
+    void beginRectanglePick(std::function<void(Vec2, Vec2)> onDone,
+                            std::function<void()> onCancel = {});
+    bool pickingRectangle() const { return rectPick_; }
 
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
@@ -1195,6 +1208,14 @@ private:
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
+    // A rectangle being picked for something outside the editor (the plot window).
+    void endRectanglePick();
+    bool rectPick_ = false;
+    bool rectPickHaveFirst_ = false;
+    Vec2 rectPickFirst_;
+    std::function<void(Vec2, Vec2)> rectPickDone_;
+    std::function<void()> rectPickCancel_;
+
     double pixelTol_ = 10.0;
     double inputScale_ = 0.0;   // 0 = the document's own view; otherwise px per world unit in use
 

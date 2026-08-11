@@ -490,9 +490,22 @@ drawing's own colours, with or without object lineweights, sheet over the window
 **What goes on the page** is one of four. *The whole sheet*, edge to edge. *Everything drawn on it* — the
 bounds of the paper geometry and the windows, and no more of the paper than that needs. *What is on screen
 now*, taken from the canvas's own view of that sheet at the moment it prints (and, when the canvas is
-standing somewhere else, the whole sheet rather than nothing). Or *a window of it*: a rectangle in the
-sheet's own millimetres, typed rather than dragged, because this dialog stands in front of the drawing and
-a window that has to be exact — one view of three, a title block on its own — is a figure anyway. Whatever
+standing somewhere else, the whole sheet rather than nothing). Or *a window of it*, which is **picked on the
+sheet**: press *Pick window*, the page setup closes, the two corners are picked on the drawing, and the
+dialog opens again with the window in it and everything else the user had set still there. *Type it
+instead* gives the corners as figures, for a window that has to be an exact number.
+
+The picking goes through the **editor**, not through a rubber band of its own, and that is the whole point:
+every running object snap applies, the snap list on the status bar governs it, and ortho, polar and a typed
+coordinate work as they do for any other point — because a plot window is lined up with the drawing, and
+lining up means snapping to it. The windows on the sheet stand aside while a rectangle is being picked: a
+corner is often *on* a window's frame, and taking hold of the window would eat the click that was asked
+for. Esc gives up and the dialog comes back as it was.
+
+Both dialogs have to close for the pick — a modal dialog blocks the canvas however well hidden it is — so
+the request travels up: the setup dialog closes with `PickWindowResult`, the manager passes it on with
+which setup was being edited and what the user had set, and `MainWindow` picks the window and opens the
+manager again straight back into that setup. Whatever
 is chosen, the plot is clipped to the printable area, so nothing lands in the margin.
 
 Beside the choices is a **picture of the page**: the paper, the margin as a dashed rectangle, and what will

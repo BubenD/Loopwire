@@ -2175,14 +2175,54 @@ void MainWindow::printLayout(int space) {
 }
 
 void MainWindow::showPageSetup(int space) {
+    openPageSetupManager(space, /*resume=*/false, -1, PageSetup());
+}
+
+void MainWindow::openPageSetupManager(int space, bool resume, int resumeTarget,
+                                      const PageSetup& resumeWorking) {
     if (!doc_ || space <= 0) return;
     PageSetupManagerDialog dlg(*doc_, space - 1, this);
-    dlg.exec();
+    if (resume) dlg.resumeEditing(resumeTarget, resumeWorking);
+    const int result = dlg.exec();
     if (dlg.changed()) {
         doc_->setDirty(true);
         if (canvas_) canvas_->invalidateScene();
         statusBar()->showMessage(tr("Page setup changed for %1").arg(spaceName(space)), 4000);
     }
+    if (result != PageSetupManagerDialog::PickWindowResult) return;
+
+    // The plot window is picked ON the sheet, so the sheet is what is shown, and the picking goes through
+    // the editor: every running snap applies, the snap-override menu works, ortho and polar apply, and a
+    // coordinate can be typed - because a plot window is lined up with the drawing and lining up means
+    // snapping to it. Both dialogs had to close first: a modal dialog blocks the canvas however well
+    // hidden it is. They come back when the second corner is picked, or at once if Esc is pressed.
+    const int target = dlg.pickTarget();
+    const PageSetup working = dlg.pickWorking();
+    if (drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() != space)
+        drawingSpaceTabs_->setCurrentIndex(space);
+    if (!editor_) return;
+    statusBar()->showMessage(
+        tr("Pick the two corners of the plot window on the sheet — the snaps are running; Esc to give "
+           "up"));
+    if (canvas_) canvas_->setFocus();
+    editor_->beginRectanglePick(
+        [this, space, target, working](Vec2 a, Vec2 b) {
+            PageSetup picked = working;
+            picked.windowX1Mm = std::min(a.x, b.x);
+            picked.windowY1Mm = std::min(a.y, b.y);
+            picked.windowX2Mm = std::max(a.x, b.x);
+            picked.windowY2Mm = std::max(a.y, b.y);
+            picked.area = PlotArea::Window;
+            statusBar()->showMessage(tr("Plot window %1 × %2 mm")
+                                         .arg(picked.windowX2Mm - picked.windowX1Mm, 0, 'f', 1)
+                                         .arg(picked.windowY2Mm - picked.windowY1Mm, 0, 'f', 1),
+                                     4000);
+            openPageSetupManager(space, true, target, picked);
+        },
+        [this, space, target, working] {
+            statusBar()->showMessage(tr("The plot window was left as it was"), 3000);
+            openPageSetupManager(space, true, target, working);
+        });
 }
 
 void MainWindow::addLayoutWindow() {

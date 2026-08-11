@@ -96,6 +96,9 @@ public:
     void renameLayout(int space);
     void printLayout(int space);
     void showPageSetup(int space);
+    // The page setup manager, opened fresh or coming back from picking a plot window. `resumeTarget` is
+    // which setup was being edited (-1 = the layout's own) and `resumeWorking` what the user had set.
+    void openPageSetupManager(int space, bool resume, int resumeTarget, const PageSetup& resumeWorking);
     // The page setup a space plots by: the layout's own, or - for model space, which has no sheet and so
     // no setup - one that fits the drawing to the paper.
     PageSetup pageSetupFor(int space) const;

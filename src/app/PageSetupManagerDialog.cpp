@@ -13,6 +13,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QShowEvent>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -187,6 +188,69 @@ void PageSetupManagerDialog::setCurrent() {
     rebuild();
 }
 
+void PageSetupManagerDialog::resumeEditing(int target, const PageSetup& working) {
+    resume_ = true;
+    resumeTarget_ = target;
+    resumeWorking_ = working;
+}
+
+void PageSetupManagerDialog::showEvent(QShowEvent* e) {
+    QDialog::showEvent(e);
+    if (!resume_) return;
+    resume_ = false;
+    // Straight back into the setup that was being edited when the window was picked, with everything the
+    // user had set still in it. The row it belongs to is found by target: -1 is the layout's own.
+    int row = 0;
+    if (list_)
+        for (int i = 0; i < list_->count(); ++i)
+            if (list_->item(i)->data(Qt::UserRole).toInt() == resumeTarget_) row = i;
+    if (list_) list_->setCurrentRow(row);
+    editSetup(row, resumeWorking_, /*asNew=*/false, QString());
+}
+
+bool PageSetupManagerDialog::editSetup(int row, PageSetup start, bool asNew, const QString& newName) {
+    const auto& layouts = doc_.layouts();
+    const bool isOwn = list_ && row >= 0 && row < list_->count() &&
+                       list_->item(row)->data(Qt::UserRole).toInt() < 0;
+    const QString title = asNew ? newName
+                          : isOwn && layoutIndex_ < static_cast<int>(layouts.size())
+                              ? layouts[static_cast<size_t>(layoutIndex_)].name
+                              : start.name;
+    double sheetW = 0.0, sheetH = 0.0;
+    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(layouts.size())) {
+        sheetW = layouts[static_cast<size_t>(layoutIndex_)].paperWidth;
+        sheetH = layouts[static_cast<size_t>(layoutIndex_)].paperHeight;
+    }
+    PageSetupDialog dlg(start, title, sheetW, sheetH, this);
+    const int result = dlg.exec();
+    if (result == PageSetupDialog::PickWindowResult) {
+        // The window is to be picked on the drawing, and nothing modal can be in front of it. What is
+        // being edited and what the user had set are handed up with the request.
+        pickTarget_ = list_ && row >= 0 && row < list_->count()
+                          ? list_->item(row)->data(Qt::UserRole).toInt()
+                          : -1;
+        pickWorking_ = dlg.setup();
+        if (asNew) pickWorking_.name = newName;
+        done(PickWindowResult);
+        return false;
+    }
+    if (result != QDialog::Accepted) return true;
+    PageSetup made = dlg.setup();
+    if (asNew) {
+        made.name = newName;
+        doc_.pageSetups().push_back(made);
+    } else if (PageSetup* target = setupAt(row)) {
+        const QString keepName = target->name;
+        *target = made;
+        target->name = keepName;
+    }
+    doc_.setDirty(true);
+    changed_ = true;
+    rebuild();
+    if (asNew && list_) list_->setCurrentRow(list_->count() - 1);
+    return true;
+}
+
 void PageSetupManagerDialog::makeNew() {
     bool ok = false;
     const QString name = QInputDialog::getText(
@@ -203,44 +267,12 @@ void PageSetupManagerDialog::makeNew() {
     PageSetup start;
     if (const PageSetup* from = setupAt(list_ ? list_->currentRow() : -1)) start = *from;
     start.name = name.trimmed();
-    double sheetW = 0.0, sheetH = 0.0;
-    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(doc_.layouts().size())) {
-        sheetW = doc_.layouts()[static_cast<size_t>(layoutIndex_)].paperWidth;
-        sheetH = doc_.layouts()[static_cast<size_t>(layoutIndex_)].paperHeight;
-    }
-    PageSetupDialog dlg(start, start.name, sheetW, sheetH, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    PageSetup made = dlg.setup();
-    made.name = start.name;
-    doc_.pageSetups().push_back(made);
-    doc_.setDirty(true);
-    changed_ = true;
-    rebuild();
-    if (list_) list_->setCurrentRow(list_->count() - 1);
+    editSetup(list_ ? list_->currentRow() : -1, start, /*asNew=*/true, name.trimmed());
 }
 
 void PageSetupManagerDialog::modify() {
-    PageSetup* setup = setupAt(list_ ? list_->currentRow() : -1);
-    if (!setup) return;
-    const auto& layouts = doc_.layouts();
-    const bool isOwn = list_->item(list_->currentRow())->data(Qt::UserRole).toInt() < 0;
-    const QString title =
-        isOwn && layoutIndex_ < static_cast<int>(layouts.size())
-            ? layouts[static_cast<size_t>(layoutIndex_)].name
-            : setup->name;
-    double sheetW = 0.0, sheetH = 0.0;
-    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(layouts.size())) {
-        sheetW = layouts[static_cast<size_t>(layoutIndex_)].paperWidth;
-        sheetH = layouts[static_cast<size_t>(layoutIndex_)].paperHeight;
-    }
-    PageSetupDialog dlg(*setup, title, sheetW, sheetH, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    const QString keepName = setup->name;
-    *setup = dlg.setup();
-    setup->name = keepName;
-    doc_.setDirty(true);
-    changed_ = true;
-    rebuild();
+    const int row = list_ ? list_->currentRow() : -1;
+    if (const PageSetup* setup = setupAt(row)) editSetup(row, *setup, /*asNew=*/false, QString());
 }
 
 void PageSetupManagerDialog::importFrom() {

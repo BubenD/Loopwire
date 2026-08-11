@@ -1870,11 +1870,54 @@ void Editor::onDragTick() {
     emit overlayChanged(); // animate the countdown while still deciding (repaint only)
 }
 
+void Editor::beginRectanglePick(std::function<void(Vec2, Vec2)> onDone,
+                               std::function<void()> onCancel) {
+    rectPick_ = true;
+    rectPickHaveFirst_ = false;
+    rectPickDone_ = std::move(onDone);
+    rectPickCancel_ = std::move(onCancel);
+    // Nothing else is going on while a rectangle is being picked: a half-drawn line or a live selection
+    // would take the clicks that are meant for the corners.
+    selected_.clear();
+    draftPts_.clear();
+    modifyPts_.clear();
+    drafting_ = false;
+    editing_ = false;
+    regionMode_ = RegionMode::None;
+    emit message(QStringLiteral("Pick the first corner"));
+    emit selectionChanged();
+    emit overlayChanged();
+}
+
+void Editor::endRectanglePick() {
+    rectPick_ = false;
+    rectPickHaveFirst_ = false;
+    rectPickDone_ = nullptr;
+    rectPickCancel_ = nullptr;
+    emit overlayChanged();
+}
+
 void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
                             Qt::KeyboardModifiers mods) {
     if (!doc_ || button != Qt::LeftButton) return;
     onPointerMove(raw);
     const Vec2 p = cursor_;
+    // A rectangle being picked takes the clicks before any tool sees them - and it takes the SNAPPED
+    // point, because that is what `p` is: whatever the snaps caught, override menu included.
+    if (rectPick_) {
+        if (!rectPickHaveFirst_) {
+            rectPickFirst_ = p;
+            rectPickHaveFirst_ = true;
+            emit message(QStringLiteral("Pick the opposite corner"));
+            emit overlayChanged();
+        } else {
+            auto done = rectPickDone_;
+            const Vec2 first = rectPickFirst_;
+            endRectanglePick();
+            if (done) done(first, p);
+        }
+        return;
+    }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
     if (tool_ == ToolId::ModelNearPoint || tool_ == ToolId::ModelFarPoint) {
         emit modelAnchorPicked(p, tool_ == ToolId::ModelNearPoint);
@@ -12182,6 +12225,15 @@ void Editor::redo() {
 
 bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     const bool ctrl = mods & Qt::ControlModifier;
+    // Esc gives up on a rectangle being picked, and tells whoever asked for it so that it can put itself
+    // back together (the page setup reopens either way).
+    if (rectPick_ && key == Qt::Key_Escape) {
+        auto cancel = rectPickCancel_;
+        endRectanglePick();
+        emit message(QStringLiteral("Cancelled"));
+        if (cancel) cancel();
+        return true;
+    }
     // Ctrl while drawing an arc flips it to the opposite (mirrored) sweep, AutoCAD-
     // style. A bare Ctrl press arrives as Key_Control.
     if (key == Qt::Key_Control && tool_ == ToolId::Arc && drafting_) {
@@ -12381,6 +12433,20 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 // ---- Overlay painting ------------------------------------------------------
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
+    if (rectPick_ && rectPickHaveFirst_) {
+        // The window as it stands: from the corner already picked to the snapped cursor.
+        const QPointF a = vt.toScreen(rectPickFirst_);
+        const QPointF b = vt.toScreen(cursor_);
+        const QRectF box = QRectF(a, b).normalized();
+        QPen pen(paperInk(QColor(120, 200, 255, 220)));
+        pen.setCosmetic(true);
+        pen.setWidthF(1.4);
+        pen.setStyle(Qt::DashLine);
+        p.setPen(pen);
+        p.setBrush(paperInk(QColor(120, 200, 255, 40)));
+        p.drawRect(box);
+        p.setBrush(Qt::NoBrush);
+    }
     if (!doc_) return;
 
     // The break mark that a click would place, drawn where it would go: sized to the run under the

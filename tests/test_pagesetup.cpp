@@ -4,6 +4,7 @@
 // 420 x 297 sheet plotted on plain A3 must shrink to fit inside it; a full-bleed size has no margin, and
 // the sheet comes out at true size. Both are offered, and the difference has to be real in what comes out
 // of the plot - not just a word on a list - which is what the last block here measures.
+#include "app/Editor.h"
 #include "app/MainWindow.h"
 #include "app/PageSetupDialog.h"
 #include "app/PageSetupManagerDialog.h"
@@ -298,6 +299,122 @@ int run_pagesetup_tests() {
                       "manager: it puts the named setup's paper and options on the sheet");
                 check(manager.changed(), "manager: and says the drawing was changed");
             }
+        }
+    }
+
+    // ---- the plot window is picked on the drawing, with the snaps running -------------------------
+    {
+        MainWindow win;
+        win.resize(1300, 850);
+        win.show();
+        QApplication::processEvents();
+        auto* canvas = win.findChild<CanvasWidget*>();
+        auto* editor = win.findChild<Editor*>();
+        QTabBar* spaces = nullptr;
+        for (QTabBar* bar : win.findChildren<QTabBar*>())
+            if (bar->count() > 0 && bar->tabText(0) == QLatin1String("Model")) spaces = bar;
+        check(canvas && editor && spaces, "pick: the window is up");
+        if (canvas && editor && spaces) {
+            // On the sheet, with something on it to snap to: a rectangle of four lines whose corners are
+            // exactly where a plot window would be lined up.
+            spaces->setCurrentIndex(1);
+            QApplication::processEvents();
+            Document* paper = canvas->document();
+            const Vec2 corners[5] = {{40.0, 30.0}, {260.0, 30.0}, {260.0, 190.0}, {40.0, 190.0},
+                                     {40.0, 30.0}};
+            for (int i = 0; i < 4; ++i) {
+                editor->setTool(ToolId::Line);
+                editor->onPointerPress(corners[i], Qt::LeftButton, Qt::NoModifier);
+                editor->onPointerPress(corners[i + 1], Qt::LeftButton, Qt::NoModifier);
+            }
+            editor->setTool(ToolId::Select);
+            check(paper && paper->entities().size() == 4, "pick: the sheet has something on it");
+            canvas->fitView();
+            QApplication::processEvents();
+
+            // Ask for a rectangle, then click NEAR two of those corners. What comes back must be the
+            // corners themselves: the pick goes through the editor, so the snaps catch.
+            Vec2 gotA{}, gotB{};
+            bool done = false, cancelled = false;
+            editor->beginRectanglePick([&](Vec2 a, Vec2 b) { gotA = a; gotB = b; done = true; },
+                                       [&] { cancelled = true; });
+            check(editor->pickingRectangle(), "pick: the editor is waiting for a rectangle");
+            auto clickNear = [&](const Vec2& corner, double offX, double offY) {
+                const QPointF at = canvas->mapToScreen(Vec2{corner.x + offX, corner.y + offY});
+                QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton,
+                                  Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &press);
+            };
+            clickNear(corners[0], 1.2, -1.1);
+            check(editor->pickingRectangle() && !done,
+                  "pick: after the first corner it waits for the other");
+            clickNear(corners[2], -1.4, 0.9);
+            check(done && !cancelled, "pick: two clicks and the rectangle comes back");
+            check(!editor->pickingRectangle(), "pick: and the pick is over");
+            check(near(gotA.x, 40.0, 0.05) && near(gotA.y, 30.0, 0.05) &&
+                      near(gotB.x, 260.0, 0.05) && near(gotB.y, 190.0, 0.05),
+                  "pick: the corners come back SNAPPED to the drawing - clicked a millimetre off and the "
+                  "window still lines up with what is on the sheet");
+
+            // And the snap list governs it, as it governs everything else picked: with object snap turned
+            // off at the status bar, the same click lands where it was made. (Turning off Endpoint alone
+            // would prove nothing - a corner is an Intersection too, and that would still catch it, which
+            // is exactly what a snap list is for.)
+            const bool wasObjectSnap = editor->snapSettings().objectSnap;
+            const bool wasGrid = editor->snapSettings().gridSnap;
+            editor->snapSettings().objectSnap = false;
+            editor->snapSettings().gridSnap = false;
+            Vec2 rawA{}, rawB{};
+            bool rawDone = false;
+            editor->beginRectanglePick([&](Vec2 a, Vec2 b) { rawA = a; rawB = b; rawDone = true; });
+            clickNear(corners[0], 1.2, -1.1);
+            clickNear(corners[2], -1.4, 0.9);
+            check(rawDone, "snap menu: the pick still takes two clicks");
+            check(rawDone && !near(rawA.x, 40.0, 0.05),
+                  "snap menu: with object snap off the corner is taken where it was clicked - the pick "
+                  "obeys the same snap list as everything else");
+            editor->snapSettings().objectSnap = wasObjectSnap;
+            editor->snapSettings().gridSnap = wasGrid;
+
+            // Esc gives up, and says so, so whoever asked can put itself back.
+            done = cancelled = false;
+            editor->beginRectanglePick([&](Vec2, Vec2) { done = true; }, [&] { cancelled = true; });
+            clickNear(corners[0], 0.0, 0.0);
+            check(editor->onKey(Qt::Key_Escape, Qt::NoModifier), "pick: Esc is taken");
+            check(cancelled && !done, "pick: Esc gives up on the window and says so");
+            check(!editor->pickingRectangle(), "pick: and nothing is left waiting");
+            spaces->setCurrentIndex(0);
+        }
+    }
+
+    // ---- the dialog steps aside to have one picked ------------------------------------------------
+    {
+        PageSetup start;
+        start.landscape = false;                 // something else set, to be sure it survives the trip
+        start.scale = 0.5;
+        PageSetupDialog dlg(start, QStringLiteral("Layout1"), 420.0, 297.0);
+        QPushButton* pick = nullptr;
+        QPushButton* type = nullptr;
+        for (QPushButton* b : dlg.findChildren<QPushButton*>()) {
+            if (b->text().startsWith(QStringLiteral("Pick window"))) pick = b;
+            if (b->text().startsWith(QStringLiteral("Type it"))) type = b;
+        }
+        check(pick != nullptr, "aside: there is a button to pick the window on the drawing");
+        check(type != nullptr, "aside: and one to type the corners, for a window that must be exact");
+        if (pick) {
+            pick->click();
+            check(dlg.result() == PageSetupDialog::PickWindowResult,
+                  "aside: pressing it closes the dialog asking for a window to be picked");
+            check(!dlg.isVisible(), "aside: the dialog is out of the way, as the canvas needs");
+            const PageSetup kept = dlg.setup();
+            check(kept.landscape == false && near(kept.scale, 0.5),
+                  "aside: and everything else the user had set comes back with it");
+            dlg.applyPickedWindow(10.0, 20.0, 110.0, 90.0);
+            const PageSetup after = dlg.setup();
+            check(after.area == PlotArea::Window && near(after.windowX1Mm, 10.0) &&
+                      near(after.windowY1Mm, 20.0) && near(after.windowX2Mm, 110.0) &&
+                      near(after.windowY2Mm, 90.0),
+                  "aside: the picked window goes in, and the plot area is set to it");
         }
     }
 

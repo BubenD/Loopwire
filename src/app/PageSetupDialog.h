@@ -33,9 +33,19 @@ public:
 
     PageSetup setup() const;
 
+    // Closing with this instead of Accepted means: get out of the way, the plot window is to be PICKED on
+    // the drawing. Whoever opened the dialog does the picking - it is the only one that can, since a modal
+    // dialog blocks the canvas however well hidden it is - and then opens the dialog again on what
+    // setup() gives back, with the window in it. Nothing else the user had set is lost by going round.
+    static constexpr int PickWindowResult = 2;
+
+    // The window picked on the drawing, in the sheet's own millimetres.
+    void applyPickedWindow(double x1, double y1, double x2, double y2);
+
 private:
     void refresh();          // the preview and the figures under it
-    void pickWindow();       // the corners of the window to print, in sheet millimetres
+    void pickWindow();       // step aside and have the corners picked on the sheet
+    void typeWindow();       // or give them as figures
 
     PageSetup setup_;
     double sheetW_ = 0.0;
@@ -49,6 +59,7 @@ private:
     QLabel* figures_ = nullptr;
     QComboBox* area_ = nullptr;
     QPushButton* windowBtn_ = nullptr;
+    QPushButton* typeWindowBtn_ = nullptr;
     QLabel* windowLabel_ = nullptr;
     QCheckBox* fit_ = nullptr;
     QComboBox* scale_ = nullptr;
