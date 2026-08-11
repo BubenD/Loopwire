@@ -32,6 +32,10 @@ public:
     void setDocument(Document* doc);
     Document* document() const { return doc_; }
 
+    void setLayoutMode(bool on);
+    bool layoutMode() const { return layoutMode_; }
+    void setBottomOverlay(QWidget* overlay);
+
     // The editor receives input and paints interaction overlays.
     void setEditor(Editor* editor);
 
@@ -63,7 +67,7 @@ public:
     // bg), the secondary grid a touch stronger.
     void setBackgroundColor(const QColor& c) {
         bgColor_ = c;
-        EntityRenderer::setBackgroundColor(c); // keep Wipeout masks matching the bg
+        EntityRenderer::setBackgroundColor(layoutMode_ ? QColor(Qt::white) : c);
         const int lum = (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000;
         const QColor target = lum < 128 ? QColor(255, 255, 255) : QColor(0, 0, 0);
         auto mix = [&](double t) {
@@ -175,9 +179,11 @@ private:
     void showDynInput(const QString& firstChar, const QString& placeholder = QString());
     void positionDynInput(); // place the flying field just off the (snapped) cursor
     void hideDynInput();
+    void positionBottomOverlay();
 
     QLineEdit* dynInput_ = nullptr; // floating "dynamic input" box near the cursor
     QWidget* crosshairTop_ = nullptr; // transparent overlay that paints the crosshair on top
+    QWidget* bottomOverlay_ = nullptr;
     QCompleter* completer_ = nullptr; // command autocomplete for the dynamic input
     QPoint lastMousePos_;           // canvas-local cursor position
     bool cursorInside_ = false;     // mouse over the canvas (draw the crosshair)
@@ -193,6 +199,7 @@ private:
     int pickboxPx_ = 3;                 // half-size of the central pick box
     QColor bgColor_{"#1e2832"};         // canvas (model space) background (dark slate)
     QColor gridMinor_{"#2b3743"};   // 5% quieter than the #2c3845 it was
+    bool layoutMode_ = false;
     QColor gridMajor_{"#394856"};
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change

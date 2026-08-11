@@ -51,6 +51,8 @@ enum class ToolId {
     Extend,
     Fillet,
     Chamfer,
+    ModelNearPoint,
+    ModelFarPoint,
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -141,6 +143,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Extend: return QStringLiteral("Extend");
     case ToolId::Fillet: return QStringLiteral("Fillet");
     case ToolId::Chamfer: return QStringLiteral("Chamfer");
+    case ToolId::ModelNearPoint: return QStringLiteral("Model near point");
+    case ToolId::ModelFarPoint: return QStringLiteral("Model far point");
     }
     return QStringLiteral("Select");
 }

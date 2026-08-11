@@ -45,9 +45,9 @@ enum class MechModelKind {
 };
 
 std::vector<MechModelKind> allMechModelKinds();
-// "Ring terminal, insulated" - what the window shows.
+// "Ring terminal" / "Ferrule" - insulation is a model property shown in the properties panel.
 QString mechModelName(MechModelKind kind);
-// The stable key a file stores ("ring-insulated"), so renaming a label never breaks a file.
+// The stable key a file stores ("ring" / "ferrule"), so renaming a label never breaks a file.
 QString mechModelKey(MechModelKind kind);
 bool mechModelKindFromKey(const QString& key, MechModelKind& out);
 // Whether this kind is drawn to a LENGTH the harness decides - a wire, a cable, heatshrink - or is a
@@ -60,6 +60,11 @@ bool mechModelPerWire(MechModelKind kind);
 // One model: the drawing, and what must not stretch in it.
 struct MechModel {
     MechModelKind kind = MechModelKind::Wire;
+    bool insulated = true;
+    bool hasNearPoint = false;
+    bool hasFarPoint = false;
+    Vec2 nearPoint;
+    Vec2 farPoint;
     // As drawn, in millimetres, running along +x from the origin. Captured off the sheet like a part's
     // drawing, so it is drawn with the same tools as everything else.
     QJsonArray drawing;
@@ -115,5 +120,7 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
 // How long the model was drawn: what it says, or the extent of its own drawing.
 double mechModelDrawnLength(const MechModel& model);
 double mechModelDrawnAcross(const MechModel& model);
+// Distance between the two marked connection points, or 0 when the model has no complete pair.
+double mechModelAnchorLength(const MechModel& model);
 
 } // namespace Edraw_Desktop

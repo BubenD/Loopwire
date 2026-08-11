@@ -97,6 +97,12 @@ public:
     // the model-space background (kept in sync by the CanvasWidget).
     static void setBackgroundColor(const QColor& c);
     static QColor backgroundColor();
+    static void setMonochrome(bool on);
+    static bool monochrome();
+    // On a white export page, a white drawing stroke must remain visible. It is
+    // treated as black in color mode; other colors remain unchanged.
+    static void setWhitePaper(bool on);
+    static bool whitePaper();
 };
 
 } // namespace Edraw_Desktop

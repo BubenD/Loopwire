@@ -40,8 +40,8 @@ Add `-DEWIRE_BUILD_TESTS=ON` to also build the unit tests
 For a standalone run, deploy the Qt runtime next to the executable once:
 
 ```powershell
-& "C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe" --release "C:\Whatson\ETS\Software\EdrawDesktop\build\Edraw.exe"
-.\build\Edraw.exe                      # or pass a .dwx / .dxf path to open it
+& "C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe" --release "C:\Whatson\ETS\Software\EdrawDesktop\build\Release\Edraw.exe"
+.\build\Release\Edraw.exe             # or pass a .dwx / .dxf path to open it
 ```
 
 ## Layout

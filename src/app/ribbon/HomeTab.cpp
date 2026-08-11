@@ -35,6 +35,43 @@
 
 namespace Edraw_Desktop {
 
+namespace {
+QIcon modelSessionIcon(bool capture) {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#d6dae1"));
+    pen.setWidthF(2.0);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    if (capture) {
+        p.drawRect(QRectF(4, 5, 20, 17));
+        p.drawLine(QPointF(14, 2), QPointF(14, 16));
+        p.drawLine(QPointF(9, 11), QPointF(14, 16));
+        p.drawLine(QPointF(19, 11), QPointF(14, 16));
+    } else {
+        p.drawLine(QPointF(7, 7), QPointF(21, 21));
+        p.drawLine(QPointF(21, 7), QPointF(7, 21));
+    }
+    return QIcon(pm);
+}
+
+QIcon modelAnchorIcon(const QColor& color) {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(color);
+    pen.setWidthF(2.0);
+    p.setPen(pen);
+    p.drawLine(QPointF(14, 3), QPointF(14, 25));
+    p.drawEllipse(QPointF(14, 14), 5, 5);
+    return QIcon(pm);
+}
+} // namespace
+
 // ---- HOME : Draw | Modify | Properties | AI ----
 void MainWindow::buildHomeTab() {
     auto [page, lay] = makeTabPage();
@@ -173,7 +210,55 @@ void MainWindow::buildHomeTab() {
     lay->addWidget(tplHomeGroup_);
     tplHomeGroup_->hide();
     }
-
+    {
+        auto* session = new QWidget(page);
+        auto* sg = new QGridLayout(session);
+        sg->setContentsMargins(0, 0, 0, 0);
+        sg->setSpacing(2);
+        captureMechModelBtn_ = new QToolButton(session);
+        captureMechModelBtn_->setText(QStringLiteral("Capture to default model"));
+        captureMechModelBtn_->setIcon(modelSessionIcon(true));
+        captureMechModelBtn_->setIconSize(QSize(28, 28));
+        captureMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        connect(captureMechModelBtn_, &QToolButton::clicked, this,
+                [this] { saveMechModelBeingEdited(); });
+        cancelMechModelBtn_ = new QToolButton(session);
+        cancelMechModelBtn_->setText(QStringLiteral("Cancel"));
+        cancelMechModelBtn_->setIcon(modelSessionIcon(false));
+        cancelMechModelBtn_->setIconSize(QSize(28, 28));
+        cancelMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        connect(cancelMechModelBtn_, &QToolButton::clicked, this,
+                [this] { cancelMechModelEdit(); });
+        markNearMechModelBtn_ = new QToolButton(session);
+        markNearMechModelBtn_->setText(QStringLiteral("Mark near point"));
+        markNearMechModelBtn_->setIcon(modelAnchorIcon(QColor("#e6a23c")));
+        markNearMechModelBtn_->setIconSize(QSize(28, 28));
+        markNearMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        connect(markNearMechModelBtn_, &QToolButton::clicked, this,
+                [this] { armMechModelAnchor(true); });
+        markFarMechModelBtn_ = new QToolButton(session);
+        markFarMechModelBtn_->setText(QStringLiteral("Mark far point"));
+        markFarMechModelBtn_->setIcon(modelAnchorIcon(QColor("#62c370")));
+        markFarMechModelBtn_->setIconSize(QSize(28, 28));
+        markFarMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        connect(markFarMechModelBtn_, &QToolButton::clicked, this,
+                [this] { armMechModelAnchor(false); });
+        sg->addWidget(captureMechModelBtn_, 0, 0);
+        sg->addWidget(cancelMechModelBtn_, 0, 1);
+        sg->addWidget(markNearMechModelBtn_, 1, 0);
+        sg->addWidget(markFarMechModelBtn_, 1, 1);
+        mechModelSessionGroup_ = new QWidget(page);
+        auto* hg = new QHBoxLayout(mechModelSessionGroup_);
+        hg->setContentsMargins(0, 0, 0, 0);
+        hg->setSpacing(0);
+        hg->addWidget(ribbonGroup(QStringLiteral("Default model"), session));
+        auto* rule = new QFrame(mechModelSessionGroup_);
+        rule->setFrameShape(QFrame::VLine);
+        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        hg->addWidget(rule);
+        lay->addWidget(mechModelSessionGroup_);
+        mechModelSessionGroup_->hide();
+    }
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("Home"));
 }

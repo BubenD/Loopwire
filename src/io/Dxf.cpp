@@ -1,5 +1,6 @@
 #include "io/Dxf.h"
 #include <functional>
+#include <QColor>
 #include <QRegularExpression>
 
 #include "geometry/Geometry.h"
@@ -7,6 +8,7 @@
 
 #include <QFile>
 #include <QHash>
+#include <QSaveFile>
 #include <QStringList>
 #include <QTextStream>
 #include <QUuid>
@@ -31,7 +33,8 @@ QString pair(int code, double value) {
 int colorToIndex(const QString& hex, int fallback = 7) {
     static const QHash<QString, int> map = {
         {"#ff0000", 1}, {"#ffff00", 2}, {"#00ff00", 3}, {"#00ffff", 4},
-        {"#0000ff", 5}, {"#ff00ff", 6}, {"#ffffff", 7}, {"#00f0ff", 4},
+        {"#0000ff", 5}, {"#ff00ff", 6}, {"#ffffff", 7}, {"#000000", 250},
+        {"#00f0ff", 4},
         {"#f5c66d", 2}, {"#8bdc65", 3}, {"#b28cff", 6}, {"#ff6b6b", 1}};
     const QString k = hex.toLower();
     return map.value(k, (fallback % 7) + 1);
@@ -42,7 +45,7 @@ QString indexToColor(int index, int fallback) {
     static const QHash<int, QString> map = {
         {1, "#ff0000"}, {2, "#ffff00"}, {3, "#00ff00"}, {4, "#00ffff"},
         {5, "#0000ff"}, {6, "#ff00ff"}, {7, "#ffffff"}, {8, "#808080"},
-        {9, "#c0c0c0"}};
+        {9, "#c0c0c0"}, {250, "#000000"}};
     static const QString defaults[] = {"#ffffff", "#00f0ff", "#f5c66d"};
     const auto it = map.find(std::abs(index));
     if (it != map.end()) return it.value();
@@ -61,9 +64,25 @@ QString resolveEntityColor(const Entity& e, const Document& doc) {
     return QStringLiteral("#ffffff");
 }
 
+int trueColor(const QString& hex) {
+    QColor c(hex);
+    if (!c.isValid()) return -1;
+    return (c.red() << 16) | (c.green() << 8) | c.blue();
+}
+
+QString colorFromTrueColor(const QString& value) {
+    bool ok = false;
+    const int rgb = value.toInt(&ok);
+    if (!ok || rgb < 0 || rgb > 0xFFFFFF) return QString();
+    return QStringLiteral("#%1").arg(rgb, 6, 16, QLatin1Char('0'));
+}
+
 QString commonDxf(const Entity& e, const Document& doc) {
+    const QString color = resolveEntityColor(e, doc);
+    const int rgb = trueColor(color);
     return pair(8, e.layer.isEmpty() ? QStringLiteral("0") : e.layer) + "\n" +
-           pair(62, QString::number(colorToIndex(resolveEntityColor(e, doc))));
+           pair(62, QString::number(colorToIndex(color))) +
+           (rgb >= 0 ? "\n" + pair(420, QString::number(rgb)) : QString());
 }
 
 QString dxfLine(const Entity& e, const Document& doc, const Vec2& a, const Vec2& b) {
@@ -587,6 +606,13 @@ bool parse(Document& doc, const QString& text, QString*) {
                     e.id = newId();
                     e.type = EntityType::Polyline;
                     e.layer = layer;
+                    const int eci = findVal(head, "62", "256").toInt();
+                    const QString trueColorValue = colorFromTrueColor(findVal(head, "420"));
+                    e.color = !trueColorValue.isEmpty()
+                                  ? trueColorValue
+                                  : ((eci != 256 && eci != 0)
+                                         ? indexToColor(std::abs(eci), 0)
+                                         : QString());
                     int j = i + 1;
                     for (; j < to; ++j) {
                         if (pairs[j].code == "0" && pairs[j].value == "VERTEX") {
@@ -614,8 +640,12 @@ bool parse(Document& doc, const QString& text, QString*) {
                 const QString layer = findVal(g, "8", "0");
                 ensureLayer(layer, 0);
                 const int eci = findVal(g, "62", "256").toInt();
-                const QString color =
-                    (eci != 256 && eci != 0) ? indexToColor(std::abs(eci), 0) : QString();
+                const QString trueColorValue = colorFromTrueColor(findVal(g, "420"));
+                const QString color = !trueColorValue.isEmpty()
+                                          ? trueColorValue
+                                          : ((eci != 256 && eci != 0)
+                                                 ? indexToColor(std::abs(eci), 0)
+                                                 : QString());
                 Entity e;
                 e.id = newId();
                 e.layer = layer;
@@ -958,12 +988,21 @@ bool parse(Document& doc, const QString& text, QString*) {
 }
 
 bool exportFile(const Document& doc, const QString& path, QString* error) {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
         if (error) *error = file.errorString();
         return false;
     }
-    file.write(toDxf(doc).toUtf8());
+    const QByteArray payload = toDxf(doc).toUtf8();
+    if (file.write(payload) != payload.size()) {
+        if (error) *error = file.errorString();
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        if (error) *error = file.errorString();
+        return false;
+    }
     return true;
 }
 

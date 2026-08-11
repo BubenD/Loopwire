@@ -25,7 +25,9 @@
 #include "app/FontLibrary.h"
 #include "harness/Harness.h"
 #include "io/Dwx.h"
+#include "tools/EntityTransforms.h"
 #include "io/Dxf.h"
+#include "io/PdfImport.h"
 #include "render/CanvasWidget.h"
 
 #include <QAction>
@@ -1403,6 +1405,72 @@ private:
     QPoint pressGlobal_;
 };
 
+constexpr auto kMechModelGuideLayer = "«guide»";
+
+Bounds mechModelBounds(const Document& doc) {
+    Bounds out;
+    for (const Entity& e : doc.entities()) {
+        if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
+        const Bounds b = e.bounds();
+        if (b.valid) {
+            out.expand(b.min);
+            out.expand(b.max);
+        }
+    }
+    return out;
+}
+
+void addMechModelGuides(Document& doc, const MechModel& model) {
+    doc.entities().erase(
+        std::remove_if(doc.entities().begin(), doc.entities().end(), [](const Entity& e) {
+            return e.layer == QLatin1String(kMechModelGuideLayer);
+        }),
+        doc.entities().end());
+    const Bounds b = mechModelBounds(doc);
+    const double markerRadius = b.valid ? std::max(2.0, b.height() * 0.08) : 3.0;
+    auto addAnchor = [&](const Vec2& point, bool near) {
+        Entity marker;
+        marker.id = near ? QStringLiteral("model-near-point") : QStringLiteral("model-far-point");
+        marker.type = EntityType::Circle;
+        marker.layer = QLatin1String(kMechModelGuideLayer);
+        marker.center = point;
+        marker.radius = markerRadius;
+        marker.color = near ? QStringLiteral("#e6a23c") : QStringLiteral("#62c370");
+        marker.meta.insert(QStringLiteral("modelAnchor"), near ? QStringLiteral("near")
+                                                                  : QStringLiteral("far"));
+        doc.entities().push_back(marker);
+    };
+    if (model.hasNearPoint) addAnchor(model.nearPoint, true);
+    if (model.hasFarPoint) addAnchor(model.farPoint, false);
+    if (!mechModelStretches(model.kind)) return;
+    const double length = model.drawnLengthMm > 0.0 ? model.drawnLengthMm
+                                                    : mechModelDrawnLength(model);
+    if (length <= 0.0) return;
+    const double half = b.valid ? std::max(4.0, b.height()) : 8.0;
+    const double x0 = b.valid ? b.min.x : 0.0;
+    for (double at : {model.headMm, length - model.tailMm}) {
+        if (at <= 0.0 || at >= length) continue;
+        Entity guide;
+        guide.id = QStringLiteral("guide%1").arg(at, 0, 'f', 2);
+        guide.type = EntityType::Line;
+        guide.layer = QLatin1String(kMechModelGuideLayer);
+        guide.a = {x0 + at, -half};
+        guide.b = {x0 + at, half};
+        guide.color = QStringLiteral("#e6b45a");
+        guide.meta.insert(QStringLiteral("lineType"), QStringLiteral("dashed"));
+        doc.entities().push_back(guide);
+    }
+}
+
+void loadMechModelDocument(Document& doc, const MechModel& model) {
+    doc.entities().clear();
+    for (const Entity& e : partDrawingEntities(model.drawing)) doc.entities().push_back(e);
+    if (!doc.findLayer(QLatin1String(kMechModelGuideLayer)))
+        doc.layers().push_back({QLatin1String(kMechModelGuideLayer), "#e6b45a", true, true, 0.25});
+    doc.setActiveLayer(QStringLiteral("0"));
+    addMechModelGuides(doc, model);
+}
+
 } // namespace
 
 QStringList MainWindow::startupModules() {
@@ -1484,10 +1552,28 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         refreshPanels();
         updateActiveTabText(); // reflect the dirty marker
     });
+    connect(editor_, &Editor::modelAnchorPicked, this, [this](Vec2 point, bool near) {
+        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+        MechModel& model = mechModelSessionModels_[doc_];
+        if (near) {
+            model.hasNearPoint = true;
+            model.nearPoint = point;
+        } else {
+            model.hasFarPoint = true;
+            model.farPoint = point;
+        }
+        addMechModelGuides(*doc_, model);
+        doc_->setDirty(true);
+        canvas_->invalidateScene();
+        statusBar()->showMessage(near ? QStringLiteral("Near point marked in orange")
+                                      : QStringLiteral("Far point marked in green"),
+                                 3000);
+    });
     connect(editor_, &Editor::selectionChanged, this, [this] {
         refreshPanels();
         updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
         updateConnectorContext(); // selecting a connector opens the Connector build tab
+        updateModelRibbonTabs();
     });
     // Keep the "Place connector" button pressed-state in sync when placement is armed
     // by a canvas click (not just the button).
@@ -1496,12 +1582,21 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     });
     // A hatch was created (or the creation session ended): re-point the tab so the
     // controls keep editing the just-placed hatch until you click out / Close.
-    connect(editor_, &Editor::hatchTargetChanged, this, [this] { updateHatchContext(); });
+    connect(editor_, &Editor::hatchTargetChanged, this, [this] {
+        updateHatchContext();
+        updateModelRibbonTabs();
+    });
     // Clicking a table cell opens the contextual "Table Cell" tab (row/col + align ops).
-    connect(editor_, &Editor::cellSelectionChanged, this, [this] { updateTableCellContext(); });
+    connect(editor_, &Editor::cellSelectionChanged, this, [this] {
+        updateTableCellContext();
+        updateModelRibbonTabs();
+    });
     // An array session opening/closing (or its centre/path landing) drives the
     // contextual "Array Creation" tab and keeps its fields in step with the preview.
-    connect(editor_, &Editor::arrayChanged, this, [this] { updateArrayContext(); });
+    connect(editor_, &Editor::arrayChanged, this, [this] {
+        updateArrayContext();
+        updateModelRibbonTabs();
+    });
     // Match properties latches its ribbon button(s) while it waits for clicks.
     connect(editor_, &Editor::matchPropsChanged, this, [this] {
         const bool armed = editor_->awaitingMatchProps();
@@ -1533,6 +1628,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         // opens the "Hatch Creation" tab.
         updateHatchContext();
         updateConnectorContext(); // the Connector tool opens the "Connector build" tab
+        updateModelRibbonTabs();
         if (connectorPlaceBtn_) // "Place connector" is pressed only while placement is armed
             connectorPlaceBtn_->setChecked(editor_->connectorArmed());
         canvas_->setFocus(); // so typing immediately opens the dynamic-input field
@@ -1722,13 +1818,82 @@ void MainWindow::buildDocumentArea() {
     h->addWidget(plus);
     h->addStretch(1);
 
+    auto* spaceRow = new QWidget(canvas_);
+    spaceRow->setFixedHeight(32);
+    auto* spaceLayout = new QHBoxLayout(spaceRow);
+    spaceLayout->setContentsMargins(0, 0, 0, 0);
+    spaceLayout->setSpacing(0);
+    auto* spaceMenu = new QToolButton(spaceRow);
+    spaceMenu->setText(QStringLiteral("≡"));
+    spaceMenu->setToolTip(QStringLiteral("Drawing spaces"));
+    spaceMenu->setAutoRaise(true);
+    spaceMenu->setFixedWidth(38);
+    spaceMenu->setFixedHeight(32);
+    drawingSpaceTabs_ = new QTabBar(spaceRow);
+    drawingSpaceTabs_->setDocumentMode(true);
+    drawingSpaceTabs_->setExpanding(false);
+    drawingSpaceTabs_->setFixedHeight(32);
+    drawingSpaceTabs_->addTab(QStringLiteral("Model"));
+    // Two layouts to begin with, the way every drawing office starts: one sheet to issue and one to
+    // work something out on. More are added with the + beside them.
+    drawingSpaceTabs_->addTab(QStringLiteral("Layout1"));
+    drawingSpaceTabs_->addTab(QStringLiteral("Layout2"));
+    drawingSpaceTabs_->setCurrentIndex(0);
+    drawingSpaceTabs_->setStyleSheet(QStringLiteral(
+        "QTabBar{background:#252c36;}"
+        "QTabBar::tab{background:#252c36;color:#aeb9c9;padding:7px 18px;border:none;}"
+        "QTabBar::tab:selected{background:#4b596b;color:#ffffff;font-weight:600;}"
+        "QTabBar::tab:hover{background:#364252;color:#e8edf5;}"));
+    auto* addSpace = new QToolButton(spaceRow);
+    addSpace->setText(QStringLiteral("+"));
+    addSpace->setToolTip(QStringLiteral("Add layout"));
+    addSpace->setAutoRaise(true);
+    addSpace->setFixedWidth(38);
+    addSpace->setFixedHeight(32);
+    spaceMenu->setStyleSheet(QStringLiteral(
+        "QToolButton{color:#d8dee8;font-size:20px;background:#252c36;border:none;}"
+        "QToolButton:hover{background:#364252;}"));
+    addSpace->setStyleSheet(spaceMenu->styleSheet());
+    spaceLayout->addWidget(spaceMenu);
+    spaceLayout->addWidget(drawingSpaceTabs_);
+    spaceLayout->addWidget(addSpace);
+    spaceLayout->addStretch(1);
+
     v->addWidget(topRow);
     v->addWidget(canvas_, 1);
     setCentralWidget(container);
+    canvas_->setBottomOverlay(spaceRow);
 
     connect(docTabs_, &QTabBar::currentChanged, this, [this](int i) { activateIndex(i); });
     connect(docTabs_, &QTabBar::tabCloseRequested, this, [this](int i) { closeDocument(i); });
     connect(plus, &QToolButton::clicked, this, [this] { newDrawing(); });
+    connect(drawingSpaceTabs_, &QTabBar::currentChanged, this,
+            [this](int i) { activateDrawingSpace(i); });
+    connect(addSpace, &QToolButton::clicked, this, [this] {
+        // Model is not a layout, so the new one is numbered from how many LAYOUTS there are.
+        const int at = drawingSpaceTabs_->count();
+        drawingSpaceTabs_->addTab(QStringLiteral("Layout%1").arg(at));
+        drawingSpaceTabs_->setCurrentIndex(at);
+    });
+}
+
+void MainWindow::activateDrawingSpace(int index) {
+    if (!canvas_) return;
+    const bool layout = index > 0;
+    canvas_->setLayoutMode(layout);
+    if (layout) {
+        canvas_->setBackgroundColor(QColor("#747a83"));
+    } else {
+        const bool editingBlock = doc_ && blockEdits_.contains(doc_);
+        const bool editingTemplate = doc_ && templateEdits_.contains(doc_);
+        const bool editingMechModel = doc_ && mechModelEdits_.contains(doc_);
+        canvas_->setBackgroundColor(editingBlock       ? QColor("#6d7278")
+                                    : editingTemplate  ? QColor("#7c8189")
+                                    : editingMechModel  ? QColor("#3a3d42")
+                                                        : normalCanvasColor_);
+    }
+    canvas_->fitView();
+    canvas_->setFocus();
 }
 
 MainWindow::~MainWindow() = default;
@@ -2362,15 +2527,45 @@ void MainWindow::buildRibbon() {
 // While the break tool is armed the Harness-mechanical tab shows the break group alone: the other
 // groups place bundles, dimension them and call parts out, none of which is what the next click will
 // do. Leaving the tab as it was made the mark's own fields one small thing among many.
+void MainWindow::updateModelRibbonTabs() {
+    if (!ribbon_) return;
+    const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
+    int home = -1;
+    for (int i = 0; i < ribbon_->count(); ++i) {
+        if (ribbon_->tabText(i) == QStringLiteral("Home")) home = i;
+    }
+    if (modelEdit && home >= 0) {
+        const QString current = ribbon_->tabText(ribbon_->currentIndex());
+        if (current != QStringLiteral("Home") && current != QStringLiteral("Modify") &&
+            current != QStringLiteral("Annotation"))
+            ribbon_->setCurrentIndex(home);
+    }
+    for (int i = 0; i < ribbon_->count(); ++i) {
+        const QString title = ribbon_->tabText(i);
+        const bool allowed = title == QStringLiteral("Home") || title == QStringLiteral("Modify") ||
+                             title == QStringLiteral("Annotation");
+        ribbon_->tabBar()->setTabVisible(i, !modelEdit || allowed);
+    }
+    normaliseRibbonPages();
+}
+
 void MainWindow::updateMechanicalRibbonGroups() {
     if (!editor_) return;
     // The rule for this application: while a function is being used, the ribbon shows THAT FUNCTION'S
     // settings and nothing else. The tools that cannot be used during it are noise, and hunting for the
     // two fields that matter among forty buttons is what makes a drawing slow to make.
+    const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
+    if (modelEdit) {
+        for (QWidget* g : mechModelHiddenGroups_)
+            if (g) g->setVisible(false);
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(true);
+        return;
+    }
     const bool armed =
         editor_->tool() == ToolId::LengthBreak || Editor::isTwistedTool(editor_->tool());
     for (QWidget* g : mechGroups_)
         if (g && g != mechBreakGroup_) g->setVisible(!armed);
+    if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
 }
 
 void MainWindow::syncBreakOptions() {
@@ -3976,6 +4171,8 @@ void MainWindow::buildMenus() {
     auto* fileMenu = new QMenu(this);
     fileMenu->addAction(QStringLiteral("&New drawing"), QKeySequence::New, this, [this] { newDrawing(); });
     fileMenu->addAction(QStringLiteral("&Open DWX/DXF..."), QKeySequence::Open, this, [this] { openDrawing(); });
+    fileMenu->addAction(QStringLiteral("&Import PDF into drawing..."), this,
+                        [this] { importPdf(); });
     fileMenu->addAction(QStringLiteral("&Save DWX..."), QKeySequence::Save, this, [this] { saveDwxAs(); });
     fileMenu->addAction(QStringLiteral("&Export DXF..."), this, [this] { exportDxfAs(); });
     fileMenu->addAction(QStringLiteral("Export &PDF..."), this, [this] { exportPdf(false); });
@@ -6866,6 +7063,8 @@ void MainWindow::buildCommands() {
          [this] { insertPictureFromFile(); }},
         {{"pastepicture", "pasteimage"}, "Insert", "Place the picture on the clipboard",
          [this] { insertPictureFromClipboard(false); }},
+        {{"pdfimport", "pdfin", "importpdf"}, "Insert", "Import vector paths from a PDF",
+         [this] { importPdf(); }},
         {{"undo", "u"}, "Edit", "Undo", [this] { editor_->undo(); }},
         {{"redo"}, "Edit", "Redo", [this] { editor_->redo(); }},
         {{"bylayer"}, "Edit", "Set selection color to ByLayer", [this] { editor_->setColorsByLayer(); }},
@@ -9277,12 +9476,110 @@ void MainWindow::showMechanicalBuilder() {
 }
 
 void MainWindow::showMechModels() {
-    // Modeless and kept alive: a model is drawn on the sheet, captured, tried at a length, drawn again.
-    // Closing the window between those would throw away where you were.
-    if (!modelsDlg_) modelsDlg_ = new MechModelsDialog(editor_, this);
+    if (!modelsDlg_)
+        modelsDlg_ = new MechModelsDialog(editor_, this, [this](MechModelKind kind) {
+            openMechModelEditor(kind);
+        });
     modelsDlg_->show();
     modelsDlg_->raise();
     modelsDlg_->activateWindow();
+}
+
+void MainWindow::openMechModelEditor(MechModelKind kind) {
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        if (mechModelEdits_.value(docs_[i].get(), MechModelKind::Wire) == kind &&
+            mechModelEdits_.contains(docs_[i].get())) {
+            docTabs_->setCurrentIndex(i);
+            activateIndex(i);
+            return;
+        }
+    }
+
+    MechModelSet set;
+    set.load();
+    MechModel model;
+    model.kind = kind;
+    if (const MechModel* existing = set.of(kind)) model = *existing;
+
+    auto doc = std::make_unique<Document>(
+        QStringLiteral("Model - %1").arg(mechModelName(kind)));
+    loadMechModelDocument(*doc, model);
+    doc->setDirty(false);
+    Document* raw = doc.get();
+    mechModelEdits_.insert(raw, kind);
+    mechModelSessionModels_.insert(raw, model);
+    addDocument(std::move(doc), QString());
+    canvas_->fitView();
+    if (modelsDlg_) modelsDlg_->hide();
+    statusBar()->showMessage(
+        QStringLiteral("Editing %1 in the main canvas — use Place and Modify, then Capture to default model")
+            .arg(mechModelName(kind)),
+        6000);
+}
+
+void MainWindow::armMechModelAnchor(bool near) {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    editor_->setTool(near ? ToolId::ModelNearPoint : ToolId::ModelFarPoint);
+    canvas_->setFocus();
+    statusBar()->showMessage(near ? QStringLiteral("Click the near point — it will be orange")
+                                  : QStringLiteral("Click the far point — it will be green"),
+                             4000);
+}
+
+bool MainWindow::saveMechModelDocument(Document* doc) {
+    if (!doc || !mechModelEdits_.contains(doc)) return false;
+    const MechModelKind kind = mechModelEdits_.value(doc);
+    std::vector<Entity> drawing;
+    drawing.reserve(doc->entities().size());
+    for (const Entity& e : doc->entities())
+        if (e.layer != QLatin1String(kMechModelGuideLayer)) drawing.push_back(e);
+
+    const Bounds bounds = mechModelBounds(*doc);
+    if (drawing.empty() || !bounds.valid) {
+        statusBar()->showMessage(QStringLiteral("The model is empty — nothing was saved"), 4000);
+        return false;
+    }
+
+    MechModelSet set;
+    set.load();
+    MechModel model = mechModelSessionModels_.value(doc);
+    model.kind = kind;
+    const Vec2 shift{-bounds.min.x, -(bounds.min.y + bounds.max.y) / 2.0};
+    for (Entity& e : drawing) translateEntity(e, shift);
+    if (model.hasNearPoint) model.nearPoint += shift;
+    if (model.hasFarPoint) model.farPoint += shift;
+    model.drawing = partDrawingFromEntities(drawing);
+    model.drawnLengthMm = bounds.width();
+    model.drawnAcrossMm = bounds.height();
+    if (!set.save()) {
+        QMessageBox::warning(this, QStringLiteral("Save model failed"),
+                             QStringLiteral("The mechanical model could not be saved."));
+        return false;
+    }
+    doc->setDirty(false);
+    if (modelsDlg_) modelsDlg_->setModels(set);
+    statusBar()->showMessage(
+        QStringLiteral("Saved %1 (%2 mm long, %3 mm across)")
+            .arg(mechModelName(kind))
+            .arg(model.drawnLengthMm, 0, 'f', 1)
+            .arg(model.drawnAcrossMm, 0, 'f', 1),
+        5000);
+    return true;
+}
+
+void MainWindow::saveMechModelBeingEdited() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    if (saveMechModelDocument(doc_)) {
+        closeDocument(activeIndex());
+        showMechModels();
+    }
+}
+
+void MainWindow::cancelMechModelEdit() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    doc_->setDirty(false);
+    closeDocument(activeIndex());
+    showMechModels();
 }
 
 QToolButton* MainWindow::makeMechModelsButton(QWidget* parent) {
@@ -9381,22 +9678,36 @@ void MainWindow::activateIndex(int index) {
     // one is which. Switching back to a drawing puts the ordinary background back.
     const bool editingBlock = blockEdits_.contains(doc_);
     const bool editingTemplate = templateEdits_.contains(doc_);
+    const bool editingMechModel = mechModelEdits_.contains(doc_);
     // Each kind of edit gets its own colour, so which one is open is never in doubt: grey for a
     // block, a blue slate for a template, the ordinary dark for a drawing.
     // Both editors get a grey canvas - a lighter one for a template, so it reads as a sheet being
     // laid out rather than as a drawing. Either way it is never mistaken for the drawing itself.
-    canvas_->setBackgroundColor(editingBlock      ? QColor("#6d7278")
-                                : editingTemplate ? QColor("#7c8189")
-                                                  : normalCanvasColor_);
+    const bool layout = drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() > 0;
+    canvas_->setLayoutMode(layout);
+    canvas_->setBackgroundColor(layout             ? QColor("#747a83")
+                                : editingBlock       ? QColor("#6d7278")
+                                : editingTemplate    ? QColor("#7c8189")
+                                : editingMechModel   ? QColor("#3a3d42")
+                                                      : normalCanvasColor_);
     // The Template group is only on the ribbon while a template is open - buttons that mean nothing
     // to a drawing are not shown to it at all, rather than shown greyed out.
     if (tplHomeGroup_) tplHomeGroup_->setVisible(editingTemplate);
+    if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(editingMechModel);
+    const bool anchorableMechModel =
+        editingMechModel && !mechModelStretches(mechModelEdits_.value(doc_));
+    if (captureMechModelBtn_) captureMechModelBtn_->setEnabled(editingMechModel);
+    if (markNearMechModelBtn_) markNearMechModelBtn_->setEnabled(anchorableMechModel);
+    if (markFarMechModelBtn_) markFarMechModelBtn_->setEnabled(anchorableMechModel);
+    if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(editingMechModel);
     for (QToolButton* b : tplSessionBtns_)
         if (b) b->setEnabled(editingTemplate);
     // The template ribbon comes and goes with the session, the way the hatch and table-cell tabs do,
     // and the harness tabs go the other way: away while a sheet is being laid out.
     showHarnessRibbonTabs(!editingTemplate);
     showTemplateRibbon(editingTemplate);
+    updateMechanicalRibbonGroups();
+    updateModelRibbonTabs();
     if (editingTemplate) syncTemplateRibbon();
     if (saveBlockBtn_) {
         saveBlockBtn_->setEnabled(editingBlock);
@@ -9432,16 +9743,22 @@ void MainWindow::updateWindowTitleForActive() {
 
 bool MainWindow::maybeSaveDoc(int index) {
     if (index < 0 || index >= static_cast<int>(docs_.size())) return true;
-    if (!docs_[index]->dirty()) return true;
-    const QString name = docPaths_[index].isEmpty() ? docs_[index]->name()
-                                                     : QFileInfo(docPaths_[index]).fileName();
+    Document* doc = docs_[index].get();
+    if (!doc->dirty()) return true;
+    const bool modelEdit = mechModelEdits_.contains(doc);
+    const QString name = modelEdit
+                            ? mechModelName(mechModelEdits_.value(doc))
+                            : (docPaths_[index].isEmpty() ? doc->name()
+                                                          : QFileInfo(docPaths_[index]).fileName());
     const auto choice = QMessageBox::warning(
-        this, QStringLiteral("Save changes?"),
-        QStringLiteral("\"%1\" has unsaved changes. Save before closing?").arg(name),
+        this, modelEdit ? QStringLiteral("Save model changes?") : QStringLiteral("Save changes?"),
+        modelEdit
+            ? QStringLiteral("The %1 model has unsaved changes. Save before closing?").arg(name)
+            : QStringLiteral("\"%1\" has unsaved changes. Save before closing?").arg(name),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
     if (choice == QMessageBox::Cancel) return false;
     if (choice == QMessageBox::Discard) return true;
-    return saveDocument(index); // Save: only proceed if the save actually happened
+    return modelEdit ? saveMechModelDocument(doc) : saveDocument(index);
 }
 
 bool MainWindow::saveDocument(int index, bool forceDialog) {
@@ -9475,6 +9792,8 @@ void MainWindow::closeDocument(int index) {
         blockEdits_.remove(docs_[index].get());
         templateEdits_.remove(docs_[index].get());
         templateEditPaths_.remove(docs_[index].get());
+        mechModelEdits_.remove(docs_[index].get());
+        mechModelSessionModels_.remove(docs_[index].get());
         docTabs_->removeTab(index);
         docs_.erase(docs_.begin() + index);
         docPaths_.erase(docPaths_.begin() + index);
@@ -9625,6 +9944,73 @@ void MainWindow::saveDwxAs() {
     if (doc_) saveDocument(activeIndex(), /*forceDialog=*/false);
 }
 
+void MainWindow::importPdf() {
+    if (!doc_) return;
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Import PDF into drawing"), QString(), QStringLiteral("PDF (*.pdf)"));
+    if (path.isEmpty()) return;
+    Document imported;
+    QString error;
+    if (!pdf::importFile(imported, path, &error)) {
+        QMessageBox::warning(this, QStringLiteral("PDF import failed"), error);
+        return;
+    }
+    if (imported.entities().empty()) {
+        QMessageBox::information(this, QStringLiteral("Import PDF"),
+                                 QStringLiteral("Nothing was found to import: that PDF has no vector "
+                                                "geometry in it (a scan is a picture, not lines)."));
+        return;
+    }
+
+    // Laid on the origin: what comes out of a PDF carries whatever coordinates the page had - a
+    // corner at 400, 600 on one file and at 0, 842 on the next - and dropping that into a drawing
+    // puts it anywhere but where it is wanted. The bottom-left corner of what was imported goes on
+    // 0,0, so it lands somewhere known and can be moved from there.
+    Bounds ext;
+    for (const Entity& e : imported.entities()) {
+        const Bounds b = e.bounds();
+        if (b.valid) {
+            ext.expand(b.min);
+            ext.expand(b.max);
+        }
+    }
+    std::vector<Entity> placed;
+    placed.reserve(imported.entities().size());
+    for (Entity e : imported.entities()) {
+        if (ext.valid) translateEntity(e, Vec2{-ext.min.x, -ext.min.y});
+        placed.push_back(e);
+    }
+
+    // And converted to DXF beside the PDF, as the ask was: the drawing it becomes is a DXF, and having
+    // it as a file means it can be opened, sent on, or imported again without the PDF being read a
+    // second time. The import itself uses what was parsed rather than reading the DXF back, so nothing
+    // is lost in the round trip.
+    QString dxfPath = path;
+    if (dxfPath.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive))
+        dxfPath.chop(4);
+    dxfPath += QStringLiteral(".dxf");
+    Document asDxf;
+    asDxf.entities().clear();
+    for (const Entity& e : placed) asDxf.entities().push_back(e);
+    QString dxfError;
+    const bool wroteDxf = dxf::exportFile(asDxf, dxfPath, &dxfError);
+
+    editor_->appendEntities(placed);
+    canvas_->fitView();
+    statusBar()->showMessage(
+        wroteDxf
+            ? QStringLiteral("Imported %1 object(s) from %2 onto 0,0 — also written as %3")
+                  .arg(placed.size())
+                  .arg(QFileInfo(path).fileName())
+                  .arg(QFileInfo(dxfPath).fileName())
+            : QStringLiteral("Imported %1 object(s) from %2 onto 0,0 (the DXF could not be written: "
+                             "%3)")
+                  .arg(placed.size())
+                  .arg(QFileInfo(path).fileName())
+                  .arg(dxfError),
+        8000);
+}
+
 void MainWindow::exportDxfAs() {
     if (!doc_) return;
     QString path = QFileDialog::getSaveFileName(
@@ -9647,7 +10033,20 @@ void MainWindow::exportPdf(bool windowSelect) {
         canvas_->beginWindowCapture([this](Vec2 a, Vec2 b) { exportPdfRegion(a, b); });
         return;
     }
-    // Whole drawing: the bounds of every visible entity (plus a small margin).
+    // On a layout, the page IS the layout: the sheet, at its own size, exactly as the Layout tab shows
+    // it. Exporting the extents of the model instead gave a PDF of the geometry with a margin round
+    // it - which is a picture of the drawing rather than the sheet that was laid out.
+    if (drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() > 0) {
+        Bounds sheet = doc_->sheet();
+        if (!sheet.valid) {
+            sheet.expand({0.0, 0.0});
+            sheet.expand({420.0, 297.0});   // A3 landscape, the same default the canvas draws
+        }
+        exportPdfRegion(sheet.min, sheet.max);
+        return;
+    }
+
+    // In model space: the bounds of every visible entity (plus a small margin).
     Bounds ext;
     for (const auto& e : doc_->entities()) {
         if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
@@ -9663,12 +10062,36 @@ void MainWindow::exportPdf(bool windowSelect) {
     exportPdfRegion({ext.min.x - mx, ext.min.y - my}, {ext.max.x + mx, ext.max.y + my});
 }
 
+bool MainWindow::choosePdfLineMode(bool& monochrome) {
+    QMessageBox box(QMessageBox::Question, QStringLiteral("Export PDF"),
+                    QStringLiteral("Choose how drawing lines should be exported."),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(QStringLiteral("The PDF page will always have a white background."));
+    auto* black = box.addButton(QStringLiteral("Black lines"), QMessageBox::AcceptRole);
+    auto* color = box.addButton(QStringLiteral("Color lines"), QMessageBox::AcceptRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(black);
+    box.exec();
+    if (box.clickedButton() == black) {
+        monochrome = true;
+        return true;
+    }
+    if (box.clickedButton() == color) {
+        monochrome = false;
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::exportPdfRegion(const Vec2& a, const Vec2& b) {
     if (!doc_) return;
     const double wMinX = std::min(a.x, b.x), wMaxX = std::max(a.x, b.x);
     const double wMinY = std::min(a.y, b.y), wMaxY = std::max(a.y, b.y);
     const double worldW = wMaxX - wMinX, worldH = wMaxY - wMinY;
     if (worldW < 1e-9 || worldH < 1e-9) return;
+
+    bool monochrome = true;
+    if (!choosePdfLineMode(monochrome)) return;
 
     QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export PDF"), QString(),
                                                 QStringLiteral("PDF (*.pdf)"));
@@ -9677,8 +10100,29 @@ void MainWindow::exportPdfRegion(const Vec2& a, const Vec2& b) {
 
     QPdfWriter pdf(path);
     pdf.setResolution(300);
-    // Landscape or portrait page to best fit the window's aspect ratio.
-    pdf.setPageSize(QPageSize(QPageSize::A4));
+    // The nearest standard sheet to what is being exported, rather than A4 whatever it is: an A3
+    // layout printed onto A4 is the same drawing at 71%, and a dimension read off it with a rule is
+    // wrong. The long and short edges are compared against the A series, in millimetres.
+    struct Paper { QPageSize::PageSizeId id; double shortMm, longMm; };
+    const Paper papers[] = {{QPageSize::A5, 148.0, 210.0},
+                            {QPageSize::A4, 210.0, 297.0},
+                            {QPageSize::A3, 297.0, 420.0},
+                            {QPageSize::A2, 420.0, 594.0},
+                            {QPageSize::A1, 594.0, 841.0},
+                            {QPageSize::A0, 841.0, 1189.0}};
+    const double shortEdge = std::min(worldW, worldH), longEdge = std::max(worldW, worldH);
+    QPageSize::PageSizeId paper = QPageSize::A4;
+    double bestFit = 1e300;
+    for (const Paper& q : papers) {
+        // Big enough for it, and no bigger than it need be.
+        if (q.shortMm + 0.5 < shortEdge || q.longMm + 0.5 < longEdge) continue;
+        const double waste = q.shortMm * q.longMm - shortEdge * longEdge;
+        if (waste < bestFit) {
+            bestFit = waste;
+            paper = q.id;
+        }
+    }
+    pdf.setPageSize(QPageSize(paper));
     pdf.setPageOrientation(worldW >= worldH ? QPageLayout::Landscape
                                             : QPageLayout::Portrait);
     pdf.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout::Millimeter);
@@ -9699,10 +10143,13 @@ void MainWindow::exportPdfRegion(const Vec2& a, const Vec2& b) {
     vt.view.x = pw / 2.0 - (wMinX + wMaxX) / 2.0 * scale;
     vt.view.y = ph / 2.0 + (wMinY + wMaxY) / 2.0 * scale; // y is flipped (screen y-down)
 
-    // WYSIWYG: paint the drawing exactly as shown on the canvas (dark background), so
-    // white/ByLayer geometry stays visible and colours match the screen.
-    const QColor bg = EntityRenderer::backgroundColor();
-    p.fillRect(0, 0, pw, ph, bg);
+    const QColor oldBackground = EntityRenderer::backgroundColor();
+    const bool oldMonochrome = EntityRenderer::monochrome();
+    const bool oldWhitePaper = EntityRenderer::whitePaper();
+    EntityRenderer::setBackgroundColor(Qt::white);
+    EntityRenderer::setMonochrome(monochrome);
+    EntityRenderer::setWhitePaper(true);
+    p.fillRect(0, 0, pw, ph, Qt::white);
     p.setClipRect(0, 0, pw, ph);
     for (const auto& e : doc_->entities()) {
         if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
@@ -9713,6 +10160,9 @@ void MainWindow::exportPdfRegion(const Vec2& a, const Vec2& b) {
         EntityRenderer::draw(p, e, *doc_, vt);
     }
     p.end();
+    EntityRenderer::setWhitePaper(oldWhitePaper);
+    EntityRenderer::setMonochrome(oldMonochrome);
+    EntityRenderer::setBackgroundColor(oldBackground);
     statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
 }
 

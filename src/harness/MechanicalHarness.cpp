@@ -1707,6 +1707,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             double lengthMm = 0.0, odMm = 0.0;
             fittingSize(f, part, overTheWires ? endMm : bundleMm, lengthMm, odMm);
             double startMm = fittedBackMm + f.atMm;
+            double occupiedMm = lengthMm;
             if (overTheWires) {
                 // Over the bare wires: past the open length, from where the bodies end, along as much
                 // of the stripped length as is left. Nothing said about its length means all of it.
@@ -1760,11 +1761,14 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     out.push_back(arm);
                 }
             } else if (MechModelKind mk; mechModelForFitting(f.kind, mk) && mechModels().of(mk)) {
-                // Drawn the way this office draws that kind of thing, stretched to the length it is
-                // here and scaled across to what it goes over.
+                const MechModel& model = *mechModels().of(mk);
+                if (!mechModelStretches(mk)) {
+                    const double anchors = mechModelAnchorLength(model);
+                    if (anchors > 0.0) occupiedMm = anchors;
+                }
                 const Vec2 from = pn.at + u * (into * along(startMm));
                 const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
-                for (Entity& e : mechModelEntities(*mechModels().of(mk), from, dir, along(lengthMm),
+                for (Entity& e : mechModelEntities(model, from, dir, along(lengthMm),
                                                    across(odMm), 0)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
@@ -1793,7 +1797,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // A body takes up room for the next one; a layer over the wires does not.
-            if (!overTheWires) fittedBackMm = startMm + lengthMm;
+            if (!overTheWires) fittedBackMm = startMm + occupiedMm;
         }
 
         // ---- The open conductors themselves ----

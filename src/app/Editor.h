@@ -450,6 +450,7 @@ public:
     // its own extent, which is what a pasted set of objects has always done.
     void placeEntities(const std::vector<Entity>& ents,
                        const std::optional<Vec2>& heldAt = std::nullopt);
+    void appendEntities(const std::vector<Entity>& ents);
     // Everything currently selected, copied out (the parts library captures a part's drawing from
     // the sheet this way).
     std::vector<Entity> copyOfSelection() const;
@@ -907,6 +908,7 @@ signals:
     void editBlockRequested(const QString& name);
     // Double-clicked the sheet frame — the host opens the template editor for it.
     void editTemplateRequested(const QString& name);
+    void modelAnchorPicked(Vec2 point, bool near);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
     void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at,
                                 double cellW, double cellH);

@@ -1873,6 +1873,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     onPointerMove(raw);
     const Vec2 p = cursor_;
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
+    if (tool_ == ToolId::ModelNearPoint || tool_ == ToolId::ModelFarPoint) {
+        emit modelAnchorPicked(p, tool_ == ToolId::ModelNearPoint);
+        setTool(ToolId::Select);
+        return;
+    }
 
     // Clipboard base-point pick (after Ctrl+Shift+C / Ctrl+X): this click stores
     // the reference point the clipboard is relative to (then cuts if requested).
@@ -12091,6 +12096,24 @@ void Editor::placeEntities(const std::vector<Entity>& ents, const std::optional<
     clipboardBase_ = heldAt ? *heldAt : (b.valid ? b.min : Vec2{0, 0});
     awaitClipBase_ = false;
     paste(); // the contents now follow the cursor until clicked into place
+}
+
+void Editor::appendEntities(const std::vector<Entity>& ents) {
+    if (!doc_ || ents.empty()) return;
+    pushUndo();
+    QSet<QString> ids;
+    for (const Entity& e : doc_->entities()) ids.insert(e.id);
+    selected_.clear();
+    for (Entity e : ents) {
+        if (e.id.isEmpty() || ids.contains(e.id)) e.id = uid();
+        ids.insert(e.id);
+        selected_.push_back(e.id);
+        doc_->entities().push_back(std::move(e));
+    }
+    doc_->setDirty(true);
+    emit selectionChanged();
+    emit changed();
+    emit message(QStringLiteral("Imported %1 object(s)").arg(ents.size()));
 }
 
 std::vector<Entity> Editor::copyOfSelection() const {

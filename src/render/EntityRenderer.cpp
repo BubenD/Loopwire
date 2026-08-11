@@ -22,6 +22,8 @@ namespace Edraw_Desktop {
 namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
+bool g_monochrome = false;
+bool g_whitePaper = false;
 bool g_lengthInch = false;   // dimension unit: false = mm (world), true = inch
 bool g_dualUnits = false;    // append the other unit in parentheses
 
@@ -99,6 +101,10 @@ std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, d
 }
 void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
+void EntityRenderer::setMonochrome(bool on) { g_monochrome = on; }
+bool EntityRenderer::monochrome() { return g_monochrome; }
+void EntityRenderer::setWhitePaper(bool on) { g_whitePaper = on; }
+bool EntityRenderer::whitePaper() { return g_whitePaper; }
 void EntityRenderer::setLengthUnitInch(bool inch) { g_lengthInch = inch; }
 bool EntityRenderer::lengthUnitInch() { return g_lengthInch; }
 void EntityRenderer::setDualUnits(bool on) { g_dualUnits = on; }
@@ -1068,9 +1074,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     // orange at all times would put a coloured line through every connector on a finished sheet, and
     // nowhere is it more wanted than when the connector it belongs to has just been picked.
     const bool connLine = e.meta.value(QLatin1String(kConnectionLineKey)).toBool();
-    const QColor color = connLine && overrideColor.isValid()
-                             ? QColor("#ff9f40")
-                             : (overrideColor.isValid() ? overrideColor : resolveColor(e, doc));
+    QColor color = g_monochrome
+                       ? QColor(Qt::black)
+                       : (connLine && overrideColor.isValid()
+                              ? QColor("#ff9f40")
+                              : (overrideColor.isValid() ? overrideColor : resolveColor(e, doc)));
+    if (g_whitePaper && color == QColor(Qt::white)) color = QColor(Qt::black);
     QPen pen(color);
     pen.setCosmetic(true); // width is set in screen px; for a wire it is derived from the zoom
     const double px = penPixels(e.type == EntityType::Wire ? wireDrawWidth(e, doc)
@@ -1527,7 +1536,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // polyline over the mask that hides the braid - so framing it as well drew that rectangle
         // twice. Such a mask is framed only while it is selected, so it can still be found.
         if (e.meta.value("noFrame").toBool() && !overrideColor.isValid()) break;
-        QPen frame(overrideColor.isValid() ? color : QColor(120, 130, 145));
+        QPen frame(overrideColor.isValid() || g_monochrome ? color : QColor(120, 130, 145));
         frame.setCosmetic(true);
         frame.setWidthF(overrideColor.isValid() ? 2.4 : 1.0);
         p.setPen(frame);

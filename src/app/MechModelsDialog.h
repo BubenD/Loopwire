@@ -4,8 +4,12 @@
 
 #include <QDialog>
 
+#include <functional>
+
 class QCheckBox;
+class QComboBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -35,7 +39,8 @@ class Editor;
 class MechModelsDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit MechModelsDialog(Editor* editor, QWidget* parent = nullptr);
+    explicit MechModelsDialog(Editor* editor, QWidget* parent = nullptr,
+                              std::function<void(MechModelKind)> onEdit = {});
 
     // The models as they stand, and which one is showing.
     const MechModelSet& models() const { return set_; }
@@ -48,8 +53,7 @@ public:
     void captureFromSheet();
     void insertIntoDrawing();
     void clearModel();
-    // Draw it on a canvas of its own: the same canvas the application draws on, over a scratch drawing
-    // that holds nothing else, with the ends that must not stretch marked on it while you work.
+    // Open it in the main document canvas, where the full Place and Modify ribbon is available.
     void editOnCanvas();
 
 private:
@@ -61,6 +65,7 @@ private:
     MechModel* current();
 
     Editor* editor_ = nullptr;
+    std::function<void(MechModelKind)> onEdit_;
     MechModelSet set_;
     std::vector<MechModelKind> kinds_;
     bool syncing_ = false;
@@ -72,6 +77,9 @@ private:
     DrawingPreview* asDrawn_ = nullptr;
     DrawingPreview* stretched_ = nullptr;
 
+    QGroupBox* propertiesGroup_ = nullptr;
+    QComboBox* insulation_ = nullptr;
+    bool pendingInsulated_ = true;
     QDoubleSpinBox* drawnLen_ = nullptr;
     QDoubleSpinBox* head_ = nullptr;
     QDoubleSpinBox* tail_ = nullptr;

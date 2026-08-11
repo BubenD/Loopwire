@@ -1,5 +1,6 @@
 #include "geometry/Geometry.h"
 #include "geometry/Vec2.h"
+#include "model/Entity.h"
 
 #include <cmath>
 #include <cstdio>
@@ -45,6 +46,19 @@ int run_geometry_tests() {
     b.expand({1, 2});
     b.expand({-3, 5});
     check(near(b.min.x, -3.0) && near(b.max.y, 5.0), "bounds expand");
+
+    {
+        Entity ellipse;
+        ellipse.type = EntityType::Ellipse;
+        ellipse.center = {10.0, -4.0};
+        ellipse.radius = 10.0;
+        ellipse.radiusY = 30.0;
+        ellipse.rotation = M_PI / 2.0;
+        const Bounds eb = ellipse.bounds();
+        check(eb.valid && near(eb.min.x, -20.0) && near(eb.max.x, 40.0) &&
+                  near(eb.min.y, -14.0) && near(eb.max.y, 6.0),
+              "rotated ellipse bounds");
+    }
 
     // Spline: a smooth curve that passes through its control points.
     {

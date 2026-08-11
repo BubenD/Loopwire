@@ -6,6 +6,7 @@
 #include "harness/PartsLibrary.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -13,8 +14,11 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace Edraw_Desktop {
 
@@ -78,6 +82,11 @@ QString hintFor(MechModelKind kind) {
     return QString();
 }
 
+bool hasInsulationProperty(MechModelKind kind) {
+    return kind == MechModelKind::RingInsulated || kind == MechModelKind::RingUninsulated ||
+           kind == MechModelKind::FerruleInsulated || kind == MechModelKind::FerruleUninsulated;
+}
+
 QDoubleSpinBox* mmSpin(double max = 2000.0) {
     auto* s = new QDoubleSpinBox;
     s->setRange(0.0, max);
@@ -89,8 +98,9 @@ QDoubleSpinBox* mmSpin(double max = 2000.0) {
 
 } // namespace
 
-MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent)
-    : QDialog(parent), editor_(editor) {
+MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
+                                   std::function<void(MechModelKind)> onEdit)
+    : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
     setWindowTitle(QStringLiteral("Default mechanical models"));
     setModal(false);
     kinds_ = allMechModelKinds();
@@ -119,6 +129,25 @@ void MechModelsDialog::buildUi() {
     hint_ = new QLabel;
     hint_->setWordWrap(true);
     right->addWidget(hint_);
+
+    propertiesGroup_ = new QGroupBox(QStringLiteral("Properties"));
+    auto* pf = new QFormLayout(propertiesGroup_);
+    insulation_ = new QComboBox;
+    insulation_->addItems({QStringLiteral("Insulated"), QStringLiteral("Uninsulated")});
+    connect(insulation_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (syncing_) return;
+        pendingInsulated_ = index == 0;
+        const MechModelKind kind = currentKind();
+        if (const MechModel* had = set_.of(kind)) {
+            MechModel m = *had;
+            m.insulated = pendingInsulated_;
+            set_.set(m);
+            set_.save();
+            refreshPreview();
+        }
+    });
+    pf->addRow(QStringLiteral("Insulation"), insulation_);
+    right->addWidget(propertiesGroup_);
 
     // The two views: what was drawn, and the same thing at the length it is asked for.
     auto* views = new QHBoxLayout;
@@ -171,16 +200,15 @@ void MechModelsDialog::buildUi() {
     right->addWidget(summary_);
 
     auto* buttons = new QHBoxLayout;
-    captureBtn_ = new QPushButton(QStringLiteral("Capture selection"));
+    captureBtn_ = new QPushButton(QStringLiteral("Capture all drawn"));
     captureBtn_->setToolTip(QStringLiteral(
-        "Take what is selected on the sheet as this model's drawing — drawn along +x, at the size it "
-        "is in millimetres"));
+        "Take every drawn object on the current sheet as this model's drawing — drawn along +x, at the "
+        "size it is in millimetres"));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
     auto* edit = new QPushButton(QStringLiteral("Edit"));
     edit->setToolTip(QStringLiteral(
-        "Draw it on a canvas of its own — lines, polylines, rectangles, circles and arcs, with the ends "
-        "that must not stretch marked while you work"));
+        "Open it in the main canvas with all Place and Modify tools available"));
     connect(edit, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
     buttons->addWidget(edit);
     auto* ins = new QPushButton(QStringLiteral("Put on the sheet"));
@@ -244,6 +272,7 @@ MechModel* MechModelsDialog::current() {
     }
     scratch = MechModel();
     scratch.kind = kind;
+    scratch.insulated = pendingInsulated_;
     return &scratch;
 }
 
@@ -253,6 +282,12 @@ void MechModelsDialog::refreshDetails() {
     syncing_ = true;
     if (heading_) heading_->setText(mechModelName(kind));
     if (hint_) hint_->setText(hintFor(kind));
+    if (propertiesGroup_) propertiesGroup_->setVisible(hasInsulationProperty(kind));
+    if (m && hasInsulationProperty(kind)) pendingInsulated_ = m->insulated;
+    if (insulation_) {
+        QSignalBlocker block(insulation_);
+        insulation_->setCurrentIndex(pendingInsulated_ ? 0 : 1);
+    }
     if (asDrawn_) asDrawn_->setDrawing(m ? m->drawing : QJsonArray());
     if (drawnLen_) drawnLen_->setValue(m ? m->drawnLengthMm : 0.0);
     if (head_) head_->setValue(m ? m->headMm : 0.0);
@@ -278,7 +313,7 @@ void MechModelsDialog::refreshPreview() {
         if (stretched_) stretched_->setEntities({});
         if (summary_)
             summary_->setText(QStringLiteral("Nothing drawn for this yet — draw it on the sheet, "
-                                             "select it, and press Capture selection"));
+                                             "then press Capture all drawn"));
         return;
     }
     const double want = mechModelStretches(kind) && tryLen_ ? tryLen_->value()
@@ -317,26 +352,27 @@ void MechModelsDialog::applyFigures() {
 }
 
 void MechModelsDialog::captureFromSheet() {
-    if (!editor_) return;
-    const std::vector<Entity> sel = editor_->copyOfSelection();
-    if (sel.empty()) {
+    if (!editor_ || !editor_->document()) return;
+    std::vector<Entity> drawn;
+    for (const Entity& e : editor_->document()->entities())
+        if (e.layer != QLatin1String("«guide»")) drawn.push_back(e);
+    if (drawn.empty()) {
         if (summary_)
-            summary_->setText(QStringLiteral("Select the objects on the sheet first — then capture "
-                                             "them as this model"));
+            summary_->setText(QStringLiteral("There is nothing drawn to capture as this model"));
         return;
     }
     MechModel m;
     m.kind = currentKind();
-    if (const MechModel* had = set_.of(m.kind)) m = *had;   // keep the figures already given
-    m.drawing = partDrawingFromEntities(sel);
+    m.insulated = pendingInsulated_;
+    if (const MechModel* had = set_.of(m.kind)) m = *had;
+    m.drawing = partDrawingFromEntities(drawn);
     set_.set(m);
     set_.save();
     refreshList();
     refreshDetails();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured %1 object(s) as %2 — now say which ends must not "
-                                         "stretch")
-                              .arg(sel.size())
+        summary_->setText(QStringLiteral("Captured all %1 drawn object(s) as %2")
+                              .arg(drawn.size())
                               .arg(mechModelName(m.kind)));
 }
 
@@ -350,14 +386,20 @@ void MechModelsDialog::insertIntoDrawing() {
     editor_->placeEntities(partDrawingEntities(m->drawing));
     if (summary_)
         summary_->setText(QStringLiteral("Click the sheet to put it down — change it there and press "
-                                         "Capture selection to take it back"));
+                                         "Capture all drawn to take it back"));
     hide();
 }
 
 void MechModelsDialog::editOnCanvas() {
     const MechModelKind kind = currentKind();
+    if (onEdit_) {
+        onEdit_(kind);
+        hide();
+        return;
+    }
     MechModel m;
     m.kind = kind;
+    m.insulated = pendingInsulated_;
     if (const MechModel* had = set_.of(kind)) m = *had;   // what is there, to be changed
     MechModelCanvasDialog dlg(m, this);
     if (dlg.exec() != QDialog::Accepted) {

@@ -107,8 +107,40 @@ void MainWindow::buildInsertTab() {
                      0, 1);
         addGroup(lay, QStringLiteral("Picture"), w);
     }
+    {
+        auto* w = new QWidget(page);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(2);
+        auto* pdf = new QToolButton(w);
+        pdf->setText(QStringLiteral("PDF import"));
+        pdf->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        pdf->setIconSize(QSize(28, 28));
+        pdf->setAutoRaise(true);
+        pdf->setFocusPolicy(Qt::NoFocus);
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#e6e9ef"), 1.6));
+        ip.drawRect(5, 3, 18, 22);
+        ip.drawLine(15, 3, 23, 11);
+        ip.drawLine(15, 3, 15, 11);
+        ip.drawLine(15, 11, 23, 11);
+        ip.setPen(QPen(QColor("#e66b6b"), 1.8));
+        ip.drawLine(8, 17, 20, 17);
+        ip.drawLine(8, 21, 20, 21);
+        ip.end();
+        pdf->setIcon(QIcon(pm));
+        pdf->setToolTip(QStringLiteral("Import vector paths from a PDF through DXF into the current drawing"));
+        connect(pdf, &QToolButton::clicked, this, [this] { importPdf(); });
+        g->addWidget(pdf, 0, 0);
+        addGroup(lay, QStringLiteral("Import"), w);
+    }
     lay->addStretch(1);
-    ribbon_->addTab(page, QStringLiteral("Insert"));
+    // Import, not Insert: what the tab is for is bringing a drawing, a picture or a PDF IN from
+    // somewhere else, and "insert" says nothing about where a thing comes from.
+    ribbon_->addTab(page, QStringLiteral("Import"));
 }
 
 } // namespace Edraw_Desktop

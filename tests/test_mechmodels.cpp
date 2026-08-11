@@ -92,6 +92,7 @@ int run_mechmodels_tests() {
     check(near(mechModelDrawnLength(m), 60.0), "the model knows how long it was drawn");
     check(mechModelStretches(MechModelKind::Wire), "a wire is a thing drawn to a length");
     check(!mechModelStretches(MechModelKind::RingInsulated), "a ring terminal is not");
+    check(allMechModelKinds().size() == 11, "insulated variants share one model kind");
 
     for (double want : {60.0, 500.0, 12.0, 6.0}) {
         const std::vector<Entity> ents = mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, want);
@@ -129,10 +130,15 @@ int run_mechmodels_tests() {
     {
         MechModel ring = m;
         ring.kind = MechModelKind::RingInsulated;
-        const std::vector<Entity> ents = mechModelEntities(ring, Vec2{0.0, 0.0}, 0.0, 500.0);
+        ring.hasNearPoint = true;
+        ring.hasFarPoint = true;
+        ring.nearPoint = {10.0, 0.0};
+        ring.farPoint = {50.0, 0.0};
+        const std::vector<Entity> ents = mechModelEntities(ring, Vec2{100.0, 0.0}, 0.0, 500.0);
         const std::vector<double> bars = barsOf(ents);
-        check(!bars.empty() && near(bars.back(), 60.0),
-              "a ring terminal is placed at its own size, not stretched to the run");
+        check(!bars.empty() && near(bars.front(), 90.0) && near(bars.back(), 150.0),
+              "a fixed model aligns its near point to the joint");
+        check(near(mechModelAnchorLength(ring), 40.0), "a fixed model knows the near-to-far distance");
     }
 
     // Per-wire: one conductor drawn, as many as are asked for, spaced across.
@@ -163,6 +169,30 @@ int run_mechmodels_tests() {
                 check(false, "per wire: each of them the length asked for");
                 break;
             }
+    }
+
+    {
+        MechModel ring = m;
+        ring.kind = MechModelKind::RingInsulated;
+        ring.insulated = false;
+        ring.hasNearPoint = true;
+        ring.hasFarPoint = true;
+        ring.nearPoint = {10.0, 0.0};
+        ring.farPoint = {50.0, 0.0};
+        MechModelSet set;
+        set.set(ring);
+        const QJsonObject json = set.toJson();
+        const QJsonArray models = json.value(QStringLiteral("models")).toArray();
+        check(models.size() == 1 && models[0].toObject().value(QStringLiteral("kind")).toString() ==
+                                      QLatin1String("ring") &&
+                  !models[0].toObject().value(QStringLiteral("insulated")).toBool(true),
+              "insulation: stored as a property on one ring model");
+        MechModelSet back;
+        back.fromJson(json);
+        const MechModel* anchored = back.of(MechModelKind::RingInsulated);
+        check(anchored && !anchored->insulated, "insulation: property round-trips");
+        check(anchored && anchored->hasNearPoint && near(anchored->farPoint.x, 50.0),
+              "anchors: near and far points round-trip");
     }
 
     // Saved and read back.

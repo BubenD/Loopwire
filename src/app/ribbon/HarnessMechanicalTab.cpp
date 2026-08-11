@@ -45,6 +45,7 @@ void MainWindow::buildHarnessMechanicalTab() {
     // centreline, Offset and Fillet - but every one of those four is in Draw and Modify below, so it
     // was the same four buttons on the tab twice.
     mechGroups_.clear();
+    mechModelHiddenGroups_.clear();
     // The general drawing and editing tools, the same ones Home carries. A mechanical layout is drawn
     // with them as much as with the harness tools - a bracket, a panel cut-out, a centreline, a fillet
     // on a branch - and having to cross to another tab for a line and back for a break mark is the kind
@@ -362,7 +363,9 @@ void MainWindow::buildHarnessMechanicalTab() {
         // The house style sits with the library: both are what the drawings are made OF, as against
         // the windows that make a drawing.
         dg->addWidget(makeMechModelsButton(dataW), 0, 2);
-        mechGroups_ << addGroupKeep(lay, QStringLiteral("Data"), dataW);
+        QWidget* dataGroup = addGroupKeep(lay, QStringLiteral("Data"), dataW);
+        mechGroups_ << dataGroup;
+        mechModelHiddenGroups_ << dataGroup;
     }
     {
         auto* anW = new QWidget(page);
@@ -374,7 +377,9 @@ void MainWindow::buildHarnessMechanicalTab() {
         ag->addWidget(makeHarnessStepsButton(anW), 0, 0);
         ag->addWidget(makeMechanicalBuilderButton(anW), 0, 1);
         ag->addWidget(makeMechanicalValidationButton(anW), 0, 2);
-        mechGroups_ << addGroupKeep(lay, QStringLiteral("Build and check"), anW);
+        QWidget* buildGroup = addGroupKeep(lay, QStringLiteral("Build and check"), anW);
+        mechGroups_ << buildGroup;
+        mechModelHiddenGroups_ << buildGroup;
     }
     {
         auto* tw = new QWidget(page);
@@ -384,7 +389,9 @@ void MainWindow::buildHarnessMechanicalTab() {
         tg->addWidget(makeVoltageDropButton(tw), 0, 0);
         tg->addWidget(makeBundleDiameterButton(tw), 0, 1);
         tg->addWidget(makeThermalButton(tw), 0, 2);
-        mechGroups_ << addGroupKeep(lay, QStringLiteral("Tools"), tw);
+        QWidget* toolsGroup = addGroupKeep(lay, QStringLiteral("Tools"), tw);
+        mechGroups_ << toolsGroup;
+        mechModelHiddenGroups_ << toolsGroup;
     }
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("Harness mechanical"));

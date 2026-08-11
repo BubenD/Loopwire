@@ -175,6 +175,29 @@ void CanvasWidget::setDocument(Document* doc) {
     invalidateScene();
 }
 
+void CanvasWidget::setLayoutMode(bool on) {
+    if (layoutMode_ == on) return;
+    layoutMode_ = on;
+    EntityRenderer::setWhitePaper(on);
+    EntityRenderer::setBackgroundColor(on ? QColor(Qt::white) : bgColor_);
+    invalidateScene();
+}
+
+void CanvasWidget::setBottomOverlay(QWidget* overlay) {
+    bottomOverlay_ = overlay;
+    if (!bottomOverlay_) return;
+    bottomOverlay_->setParent(this);
+    bottomOverlay_->show();
+    positionBottomOverlay();
+    bottomOverlay_->raise();
+}
+
+void CanvasWidget::positionBottomOverlay() {
+    if (!bottomOverlay_) return;
+    constexpr int height = 32;
+    bottomOverlay_->setGeometry(0, std::max(0, this->height() - height), width(), height);
+}
+
 void CanvasWidget::setEditor(Editor* editor) {
     editor_ = editor;
     if (editor_) {
@@ -223,8 +246,12 @@ void CanvasWidget::fitView() {
     // drawing keeps working geometry off the sheet - a symbol parked to one side, a block placed out in
     // the field - and fitting to every last object of it opens the sheet small and off to one side.
     Bounds box = doc_->sheet();
-    if (!box.valid)
+    if (layoutMode_ && !box.valid) {
+        box.expand({0.0, 0.0});
+        box.expand({420.0, 297.0});
+    } else if (!box.valid) {
         for (const auto& e : doc_->entities()) box.expand(e.bounds());
+    }
 
     if (!box.valid) {
         view = {sz.width() / 2.0, sz.height() / 2.0, 1.0};
@@ -360,9 +387,27 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         sceneCache_.fill(bgColor_);
         QPainter sp(&sceneCache_);
         sp.setRenderHint(QPainter::Antialiasing, true);
+        bool paperClip = false;
         if (doc_) {
-            drawGrid(sp, vt);
-            drawOriginMarker(sp, vt);
+            if (layoutMode_) {
+                Bounds paper = doc_->sheet();
+                if (!paper.valid) {
+                    paper.expand({0.0, 0.0});
+                    paper.expand({420.0, 297.0});
+                }
+                const QPointF topLeft = vt.toScreen({paper.min.x, paper.max.y});
+                const QPointF bottomRight = vt.toScreen({paper.max.x, paper.min.y});
+                const QRectF paperRect = QRectF(topLeft, bottomRight).normalized();
+                sp.setPen(QPen(QColor("#555b63"), 1.0));
+                sp.setBrush(Qt::white);
+                sp.drawRect(paperRect);
+                sp.save();
+                sp.setClipRect(paperRect, Qt::IntersectClip);
+                paperClip = true;
+            } else {
+                drawGrid(sp, vt);
+                drawOriginMarker(sp, vt);
+            }
             // Viewport culling: only entities whose bounds intersect the visible
             // world rectangle (plus a margin for line widths / labels) are drawn, so
             // pan/zoom/edit on a large drawing don't re-render off-screen geometry.
@@ -397,6 +442,7 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
                     continue; // entirely off-screen
                 EntityRenderer::draw(sp, e, *doc_, vt);
             }
+            if (paperClip) sp.restore();
         }
         sceneDirty_ = false;
         sceneOffset_ = QPointF(0, 0); // cache now matches the current view
@@ -451,6 +497,8 @@ void CanvasWidget::drawCrosshair(QPainter& p) const {
 
 void CanvasWidget::resizeEvent(QResizeEvent* e) {
     if (crosshairTop_) crosshairTop_->setGeometry(rect());
+    positionBottomOverlay();
+    if (bottomOverlay_) bottomOverlay_->raise();
     QWidget::resizeEvent(e);
 }
 

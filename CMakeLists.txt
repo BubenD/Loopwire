@@ -34,9 +34,11 @@ add_library(edraw_core STATIC
     src/model/Layer.h
     src/model/Block.h
     src/model/Block.cpp
+    src/model/PartSymbols.h
     src/model/PartSymbols.cpp
     src/model/DrawingTemplate.h
     src/model/DrawingTemplate.cpp
+    src/model/Picture.h
     src/model/Picture.cpp
     src/model/Document.h
     src/model/Document.cpp
@@ -44,7 +46,10 @@ add_library(edraw_core STATIC
     src/commands/UndoStack.cpp
     src/io/AppPaths.h
     src/io/AppPaths.cpp
+    src/io/PdfText.h
     src/io/PdfText.cpp
+    src/io/PdfImport.h
+    src/io/PdfImport.cpp
     src/io/Dwx.h
     src/io/Dwx.cpp
     src/io/Dxf.h
@@ -65,10 +70,12 @@ add_library(edraw_core STATIC
     src/harness/Datasheet.cpp
     src/harness/PartsLibrary.cpp
     src/harness/MechanicalHarness.h
+    src/harness/MechModels.h
     src/harness/MechModels.cpp
     src/harness/MechanicalHarness.cpp
     src/harness/Bom.h
     src/harness/Bom.cpp
+    src/harness/CableSpec.h
     src/harness/CableSpec.cpp
     src/analysis/VoltageDrop.h
     src/analysis/Thermal.h
@@ -102,8 +109,11 @@ add_library(edraw_core STATIC
     src/app/DrawingPreview.h
     src/app/DrawingPreview.cpp
     src/app/MechanicalBuilderDialog.h
+    src/app/HarnessStepsDialog.h
     src/app/HarnessStepsDialog.cpp
+    src/app/MechModelCanvasDialog.h
     src/app/MechModelCanvasDialog.cpp
+    src/app/MechModelsDialog.h
     src/app/MechModelsDialog.cpp
     src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
@@ -119,9 +129,12 @@ add_library(edraw_core STATIC
     src/app/BomDialog.h
     src/app/BomDialog.cpp
     src/app/VoltageDropDialog.h
+    src/app/CableBuilderDialog.h
     src/app/CableBuilderDialog.cpp
+    src/app/PartViewDialog.h
     src/app/PartViewDialog.cpp
     src/app/PictureInsert.cpp
+    src/app/UiBits.h
     src/app/UiBits.cpp
     src/app/VoltageDropDialog.cpp
 )

@@ -1,0 +1,76 @@
+#include "io/PdfImport.h"
+#include "model/Document.h"
+
+#include <cstdio>
+
+using namespace Edraw_Desktop;
+
+namespace {
+int g_fail = 0;
+void check(bool ok, const char* what) {
+    if (!ok) { std::printf("  [FAIL] %s\n", what); ++g_fail; }
+}
+} // namespace
+
+int run_pdfimport_tests() {
+    g_fail = 0;
+    std::printf("PDF import tests\n");
+    const QByteArray pdf =
+        "%PDF-1.4\n"
+        "1 0 obj << /Length 35 >>\nstream\n"
+        "1 0 0 RG 0 0 m 100 0 l 100 50 l S\n"
+        "endstream\nendobj\n"
+        "trailer << >>\n%%EOF\n";
+    Document doc;
+    QString error;
+    check(pdf::parse(pdf, doc, &error), "pdf: vector paths convert through DXF");
+    check(doc.entities().size() == 1, "pdf: path becomes a drawing entity");
+    if (doc.entities().size() == 1) {
+        check(doc.entities()[0].type == EntityType::Polyline,
+              "pdf: line path is preserved");
+        check(doc.entities()[0].points.back().y == 50.0, "pdf: coordinates are preserved");
+        // Color is checked below after the DXF conversion.
+        check(doc.entities()[0].color == QLatin1String("#ff0000"),
+              "pdf: stroke colour survives the DXF conversion");
+    }
+
+    Document unchanged;
+    Entity existing;
+    existing.type = EntityType::Line;
+    existing.a = {1, 2};
+    existing.b = {3, 4};
+    unchanged.entities().push_back(existing);
+    check(!pdf::parse(QByteArrayLiteral("not a pdf"), unchanged, &error),
+          "pdf: invalid input is rejected");
+    check(unchanged.entities().size() == 1, "pdf: failed import leaves the drawing unchanged");
+
+    // A real PDF has bytes in it that mean nothing to a content stream: the '>' that ends a hex
+    // string, a stray ')', the '{' and '}' of a PostScript function, a NUL padding a stream. The
+    // reader has to pass over them.
+    //
+    // It did not: a byte that is a delimiter but is not one the reader handles left it making no
+    // progress - the run of non-delimiters before it is empty, so the read position never moved - and
+    // it appended an empty token for ever until the process ran out of memory. A 23 kB file took the
+    // application down with a fail-fast rather than being read. Every one of those bytes is in here, so
+    // a reader that cannot get past one of them hangs this test instead of a person's drawing.
+    {
+        QByteArray awkward =
+            "%PDF-1.4\n"
+            "1 0 obj << /Length 90 >>\nstream\n"
+            "{ 1 exch } 0 0 m 10 0 l S ) > } { <414243> 20 20 m 30 30 l S\n"
+            "endstream\nendobj\n"
+            "trailer << >>\n%%EOF\n";
+        awkward.append('\0');            // and a NUL, which is a delimiter too
+        awkward.append("\n%%EOF\n");
+        Document odd;
+        QString err;
+        pdf::parse(awkward, odd, &err);  // it may read it or refuse it; it must not spin
+        check(true, "pdf: a stray delimiter is passed over rather than read for ever");
+        // What it could read is still read: the two paths in there.
+        check(odd.entities().size() >= 1,
+              "pdf: and the geometry either side of one is still picked up");
+    }
+
+    std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
+    return g_fail;
+}

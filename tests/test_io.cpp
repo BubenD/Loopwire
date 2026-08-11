@@ -2,9 +2,11 @@
 #include "io/Dxf.h"
 #include "model/Document.h"
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <cmath>
 #include <cstdio>
 
@@ -60,6 +62,34 @@ int run_io_tests() {
         check(txt.type == EntityType::Text && txt.meta.value("text").toString() == "Hi" &&
                   near(txt.a.x, 5.0),
               "dwx: text position+content");
+    }
+
+    {
+        QTemporaryDir temp;
+        check(temp.isValid(), "io: temporary directory");
+        if (temp.isValid()) {
+            const Document src = makeSample();
+            QString err;
+            const QString dwxPath = temp.filePath(QStringLiteral("drawing.dwx"));
+            check(dwx::save(src, dwxPath, &err), "dwx: atomic file save");
+            QFile dwxFile(dwxPath);
+            check(dwxFile.open(QIODevice::ReadOnly) && dwxFile.size() > 0,
+                  "dwx: saved file is readable and non-empty");
+            Document dwxLoaded;
+            check(dwx::load(dwxLoaded, dwxPath, &err) &&
+                      dwxLoaded.entities().size() == src.entities().size(),
+                  "dwx: saved file reloads");
+
+            const QString dxfPath = temp.filePath(QStringLiteral("drawing.dxf"));
+            check(dxf::exportFile(src, dxfPath, &err), "dxf: atomic file export");
+            QFile dxfFile(dxfPath);
+            check(dxfFile.open(QIODevice::ReadOnly) && dxfFile.size() > 0,
+                  "dxf: exported file is readable and non-empty");
+            Document dxfLoaded;
+            check(dxf::importFile(dxfLoaded, dxfPath, &err) &&
+                      dxfLoaded.entities().size() == src.entities().size(),
+                  "dxf: exported file reloads");
+        }
     }
 
     // --- DXF export then re-import yields a readable drawing.

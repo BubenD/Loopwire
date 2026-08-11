@@ -3,6 +3,7 @@
 #include "app/BomDialog.h" // BomConfigOpener
 #include "app/Editor.h" // Editor::TextStyle used in a method signature
 #include "harness/Bom.h"
+#include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include "model/Document.h"
 #include "model/DrawingTemplate.h"   // tplBeingDrawn_ is held by value
@@ -152,6 +153,7 @@ private:
     // Exactly one ribbon page visible: the one whose tab is selected. See the definition for why this
     // has to be enforced rather than left to the tab widget.
     void normaliseRibbonPages();
+    void updateModelRibbonTabs();
     // The contextual "Capture" tab: shown while the library window has stepped aside so objects can be
     // selected for a part's drawing. Enter finishes it; Esc drops it.
     void buildCaptureRibbonTab();
@@ -167,6 +169,7 @@ private:
     void buildCommandBar();
     void buildMenus();
     void buildDocumentArea(); // tab bar + canvas
+    void activateDrawingSpace(int index);
 
     // Multi-document management.
     Document* addDocument(std::unique_ptr<Document> doc, const QString& path);
@@ -305,6 +308,13 @@ private:
     QToolButton* cancelBlockBtn_ = nullptr;
     // Whether the Blocks window was open when a block edit started, so it can be put back.
     bool blockDlgWasOpen_ = false;
+    QHash<Document*, MechModelKind> mechModelEdits_;
+    QHash<Document*, MechModel> mechModelSessionModels_;
+    QWidget* mechModelSessionGroup_ = nullptr;
+    QToolButton* captureMechModelBtn_ = nullptr;
+    QToolButton* markNearMechModelBtn_ = nullptr;
+    QToolButton* markFarMechModelBtn_ = nullptr;
+    QToolButton* cancelMechModelBtn_ = nullptr;
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
@@ -326,6 +336,12 @@ private:
     void showThermalModel();
     // The template module: what a new drawing starts as.
     void showTemplateDialog();
+    void openMechModelEditor(MechModelKind kind);
+    void armMechModelAnchor(bool near);
+    void saveMechModelBeingEdited();
+    void cancelMechModelEdit();
+    bool saveMechModelDocument(Document* doc);
+
     // Blocks.
     enum class BlockAction { Create, Insert, Manage, SaveEdit, CancelEdit };
     QToolButton* makeBlockButton(QWidget* parent, BlockAction action);
@@ -357,9 +373,13 @@ private:
     void openDrawing();
     void saveDwxAs();
     void exportDxfAs();
+    void importPdf();
     // Export the drawing to PDF. windowSelect=true first lets the user drag a
     // rectangular print window on the canvas; otherwise the full drawing extents.
     void exportPdf(bool windowSelect);
+    // The export asks whether strokes should retain their drawing colours or be
+    // converted to black; both modes always use an opaque white page.
+    bool choosePdfLineMode(bool& monochrome);
     void exportPdfRegion(const Vec2& a, const Vec2& b); // render a world rect to a PDF page
     void exportTableCsv(); // export the selected table's cells to a .csv file
 
@@ -389,6 +409,7 @@ private:
     QStringList docPaths_;                         // parallel file paths ("" if unsaved)
     Document* doc_ = nullptr;                      // active drawing (raw, owned by docs_)
     QTabBar* docTabs_ = nullptr;
+    QTabBar* drawingSpaceTabs_ = nullptr;
     Editor* editor_ = nullptr;
     CanvasWidget* canvas_ = nullptr;
     QDialog* validationDlg_ = nullptr; // modeless "Schematic validation" window (if open)
@@ -448,6 +469,7 @@ private:
     // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.
     QVector<QWidget*> mechGroups_;
+    QVector<QWidget*> mechModelHiddenGroups_;
     QWidget* mechBreakGroup_ = nullptr;
     void updateMechanicalRibbonGroups();
     QDoubleSpinBox* breakGapSpin_ = nullptr;

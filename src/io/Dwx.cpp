@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSaveFile>
 
 namespace Edraw_Desktop::dwx {
 
@@ -49,13 +50,21 @@ void fromJson(Document& doc, const QJsonObject& obj) {
 }
 
 bool save(const Document& doc, const QString& path, QString* error) {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
         if (error) *error = file.errorString();
         return false;
     }
-    const QJsonDocument json(toJson(doc));
-    file.write(json.toJson(QJsonDocument::Indented));
+    const QByteArray payload = QJsonDocument(toJson(doc)).toJson(QJsonDocument::Indented);
+    if (file.write(payload) != payload.size()) {
+        if (error) *error = file.errorString();
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        if (error) *error = file.errorString();
+        return false;
+    }
     return true;
 }
 

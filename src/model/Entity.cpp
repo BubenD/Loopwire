@@ -158,9 +158,12 @@ Bounds Entity::bounds() const {
         bnds.expand({center.x + radius, center.y + radius});
         break;
     case EntityType::Ellipse: {
-        const double rx = radius, ry = radiusY;
-        bnds.expand({center.x - rx, center.y - ry});
-        bnds.expand({center.x + rx, center.y + ry});
+        const double rx = std::abs(radius), ry = std::abs(radiusY);
+        const double c = std::cos(rotation), s = std::sin(rotation);
+        const double extentX = std::hypot(rx * c, ry * s);
+        const double extentY = std::hypot(rx * s, ry * c);
+        bnds.expand({center.x - extentX, center.y - extentY});
+        bnds.expand({center.x + extentX, center.y + extentY});
         break;
     }
     case EntityType::Text: {
