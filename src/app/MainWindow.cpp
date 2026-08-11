@@ -1,4 +1,5 @@
 #include "app/MainWindow.h"
+#include "app/OutputDialog.h"
 
 #include "app/ribbon/RibbonIcons.h"
 
@@ -98,6 +99,8 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPdfWriter>
+#include <QPrinter>
+#include <QPrintDialog>
 #include <QPageSize>
 #include <QPageLayout>
 #include <QMarginsF>
@@ -4505,6 +4508,12 @@ void MainWindow::buildMenus() {
     fileMenu->addAction(QStringLiteral("Export &PDF..."), this, [this] { exportPdf(false); });
     fileMenu->addAction(QStringLiteral("Export PDF (&window)..."), this, [this] { exportPdf(true); });
     fileMenu->addSeparator();
+    // Output: the whole drawing, or the part of it that is wanted, in the order it is wanted, to paper or
+    // to a PDF. The two Export PDF entries above stay for what they are - one quick page of what is
+    // showing; this is the one to reach for when a pack of sheets is to go out.
+    fileMenu->addAction(QStringLiteral("&Output... (print / PDF, sheets in order)"),
+                        QKeySequence::Print, this, [this] { showOutput(); });
+    fileMenu->addSeparator();
     // What a new drawing starts as: the sheet, its border, the layers and the defaults.
     fileMenu->addAction(QStringLiteral("Drawing &templates..."), this,
                         [this] { showTemplateDialog(); });
@@ -7359,6 +7368,9 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
+        {{"output", "publish", "plot"}, "Output",
+         "Put the model and the sheets out, in order, to a printer or a PDF",
+         [this] { showOutput(); }},
         {{"layoutwindow", "viewport", "addwindow"}, "Layout",
          "Put a window onto the drawing on this sheet", [this] { addLayoutWindow(); }},
         {{"mechmodels", "models", "defaults"}, "Harness",
@@ -10426,6 +10438,227 @@ void MainWindow::exportPdf(bool windowSelect) {
     }
     const double mx = std::max(1.0, ext.width() * 0.05), my = std::max(1.0, ext.height() * 0.05);
     exportPdfRegion({ext.min.x - mx, ext.min.y - my}, {ext.max.x + mx, ext.max.y + my});
+}
+
+bool MainWindow::spacePageSizeMm(int space, double& widthMm, double& heightMm) const {
+    if (!doc_) return false;
+    if (space > 0) {
+        // A sheet is its own size. That is the whole point of having laid it out.
+        const auto& layouts = doc_->layouts();
+        const int at = space - 1;
+        if (at < 0 || at >= static_cast<int>(layouts.size())) return false;
+        widthMm = std::max(10.0, layouts[static_cast<size_t>(at)].paperWidth);
+        heightMm = std::max(10.0, layouts[static_cast<size_t>(at)].paperHeight);
+        return true;
+    }
+    // Model space: what is drawn, with a margin round it, as Export PDF has always taken it.
+    Bounds ext;
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+        const Bounds b = e.bounds();
+        if (b.valid) { ext.expand(b.min); ext.expand(b.max); }
+    }
+    if (!ext.valid) return false;
+    widthMm = ext.width() * 1.1 + 2.0;
+    heightMm = ext.height() * 1.1 + 2.0;
+    return true;
+}
+
+void MainWindow::renderSpaceToPage(QPainter& painter, int space, bool monochrome) {
+    if (!doc_) return;
+    const QRectF page = painter.viewport();
+    const QColor oldBackground = EntityRenderer::backgroundColor();
+    const bool oldMonochrome = EntityRenderer::monochrome();
+    const bool oldWhitePaper = EntityRenderer::whitePaper();
+    EntityRenderer::setBackgroundColor(Qt::white);
+    EntityRenderer::setMonochrome(monochrome);
+    EntityRenderer::setWhitePaper(true);
+    painter.fillRect(page, Qt::white);
+
+    Bounds model;
+    for (const Entity& e : doc_->entities()) model.expand(e.bounds());
+
+    if (space > 0 && space - 1 < static_cast<int>(doc_->layouts().size())) {
+        // A SHEET. The page is the sheet, so the sheet's own millimetres map onto the paper: the paper
+        // space geometry at 1:1, and each window showing the model at the scale that window was given -
+        // the same arithmetic the canvas uses, so what comes out is what was laid out. The frames
+        // themselves are not printed: a window is a hole to see the drawing through, not a rectangle in
+        // the drawing.
+        const DrawingLayout& layout = doc_->layouts()[static_cast<size_t>(space - 1)];
+        const double sheetW = std::max(10.0, layout.paperWidth);
+        const double sheetH = std::max(10.0, layout.paperHeight);
+        const double scale = std::min(page.width() / sheetW, page.height() / sheetH);
+        ViewTransform paper;
+        paper.view.scale = scale;
+        paper.view.x = page.center().x() - sheetW / 2.0 * scale;
+        paper.view.y = page.center().y() + sheetH / 2.0 * scale;
+        for (const LayoutViewport& viewport : layout.viewports) {
+            const QRectF rect = CanvasWidget::layoutViewportRect(viewport, paper);
+            const ViewTransform view =
+                CanvasWidget::layoutViewportView(viewport, rect, paper, model);
+            painter.save();
+            painter.setClipRect(rect, Qt::IntersectClip);
+            for (const Entity& e : doc_->entities()) {
+                if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+                EntityRenderer::draw(painter, e, *doc_, view);
+            }
+            painter.restore();
+        }
+        // What is ON the sheet goes on last, over the windows - as on the screen, and for the same
+        // reason: a note or a border is meant to be read across the view it points at.
+        const std::vector<Entity>& onPaper =
+            paperLoaded_.first == doc_ && paperLoaded_.second == space - 1
+                ? paperDocs_[paperLoaded_]->entities()
+                : layout.paperEntities;
+        painter.save();
+        painter.setClipRect(page, Qt::IntersectClip);
+        for (const Entity& e : onPaper) EntityRenderer::draw(painter, e, *doc_, paper);
+        painter.restore();
+    } else {
+        // MODEL SPACE: the drawing, fitted to the page.
+        double wMm = 0.0, hMm = 0.0;
+        if (spacePageSizeMm(0, wMm, hMm) && model.valid) {
+            const double scale = std::min(page.width() / wMm, page.height() / hMm);
+            ViewTransform vt;
+            vt.view.scale = scale;
+            vt.view.x = page.center().x() - model.center().x * scale;
+            vt.view.y = page.center().y() + model.center().y * scale;
+            painter.setClipRect(page);
+            for (const Entity& e : doc_->entities()) {
+                if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+                EntityRenderer::draw(painter, e, *doc_, vt);
+            }
+        }
+    }
+    EntityRenderer::setWhitePaper(oldWhitePaper);
+    EntityRenderer::setMonochrome(oldMonochrome);
+    EntityRenderer::setBackgroundColor(oldBackground);
+}
+
+void MainWindow::showOutput() {
+    if (!doc_) return;
+    flushPaperSpace();   // what has just been drawn on the sheet goes out with it
+    OutputDialog dlg(*doc_, drawingSpaceTabs_ ? drawingSpaceTabs_->currentIndex() : 0, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const std::vector<int> spaces = dlg.spaces();
+    if (spaces.empty()) {
+        statusBar()->showMessage(tr("Nothing was ticked, so nothing came out."), 4000);
+        return;
+    }
+    // Anything that has nothing on it is dropped here rather than coming out as a blank page.
+    std::vector<int> pages;
+    QStringList empty;
+    for (const int space : spaces) {
+        double w = 0.0, h = 0.0;
+        if (spacePageSizeMm(space, w, h)) pages.push_back(space);
+        else empty << spaceName(space);
+    }
+    if (pages.empty()) {
+        QMessageBox::information(this, tr("Output"),
+                                 tr("There is nothing on %1 — nothing to put out.")
+                                     .arg(empty.join(QStringLiteral(", "))));
+        return;
+    }
+
+    const bool monochrome = dlg.monochrome();
+    const bool fit = dlg.fitToPage();
+
+    if (dlg.toPrinter()) {
+        QPrinter printer(QPrinter::HighResolution);
+        QPrintDialog print(&printer, this);
+        print.setWindowTitle(tr("Print %1 page(s)").arg(pages.size()));
+        if (print.exec() != QDialog::Accepted) return;
+        QPainter painter(&printer);
+        if (!painter.isActive()) {
+            QMessageBox::warning(this, tr("Print failed"), tr("Could not start the print job."));
+            return;
+        }
+        for (size_t i = 0; i < pages.size(); ++i) {
+            if (i > 0 && !printer.newPage()) break;
+            double w = 0.0, h = 0.0;
+            spacePageSizeMm(pages[i], w, h);
+            // The printer's paper is whatever the print dialog was left on: the page is laid out to fill
+            // it, and "fit" only decides whether the sheet may be blown up to do so.
+            if (!fit) {
+                const double dpm = printer.resolution() / 25.4;   // dots per millimetre
+                painter.setViewport(QRect(painter.viewport().topLeft(),
+                                          QSize(static_cast<int>(w * dpm),
+                                                static_cast<int>(h * dpm))
+                                              .boundedTo(painter.viewport().size())));
+            }
+            renderSpaceToPage(painter, pages[i], monochrome);
+        }
+        painter.end();
+        statusBar()->showMessage(tr("Printed %1 page(s)").arg(pages.size()), 5000);
+        return;
+    }
+
+    if (dlg.oneFilePerSheet()) {
+        const QString dir = QFileDialog::getExistingDirectory(
+            this, tr("A folder for the sheets"), QString());
+        if (dir.isEmpty()) return;
+        int written = 0;
+        for (const int space : pages) {
+            const QString path =
+                QDir(dir).filePath(QStringLiteral("%1.pdf").arg(spaceName(space)));
+            if (writeSpacePdf(path, {space}, monochrome, fit)) ++written;
+        }
+        statusBar()->showMessage(tr("%1 file(s) written to %2").arg(written).arg(dir), 6000);
+        return;
+    }
+
+    QString path = QFileDialog::getSaveFileName(this, tr("Output PDF"), QString(),
+                                                QStringLiteral("PDF (*.pdf)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) path += QStringLiteral(".pdf");
+    if (writeSpacePdf(path, pages, monochrome, fit))
+        statusBar()->showMessage(
+            tr("%1 page(s) written to %2").arg(pages.size()).arg(QFileInfo(path).fileName()), 6000);
+}
+
+QString MainWindow::spaceName(int space) const {
+    if (space <= 0) return tr("Model");
+    const auto& layouts = doc_ ? doc_->layouts() : std::vector<DrawingLayout>();
+    const int at = space - 1;
+    if (at >= 0 && at < static_cast<int>(layouts.size()))
+        return layouts[static_cast<size_t>(at)].name;
+    return tr("Layout%1").arg(space);
+}
+
+bool MainWindow::writeSpacePdf(const QString& path, const std::vector<int>& spaces, bool monochrome,
+                               bool fitToPage) {
+    if (!doc_ || spaces.empty()) return false;
+    QPdfWriter pdf(path);
+    pdf.setResolution(300);
+    QPainter painter;
+    for (size_t i = 0; i < spaces.size(); ++i) {
+        double w = 0.0, h = 0.0;
+        if (!spacePageSizeMm(spaces[i], w, h)) continue;
+        // Each page is the size of the thing on it: a 420 x 297 sheet is an A3 page, and a dimension
+        // read off the print with a rule is right. Fitting to a fixed page is offered, not assumed.
+        const QPageSize size = fitToPage
+                                   ? QPageSize(QPageSize::A4)
+                                   : QPageSize(QSizeF(w, h), QPageSize::Millimeter,
+                                               spaceName(spaces[i]), QPageSize::ExactMatch);
+        if (i == 0) {
+            pdf.setPageSize(size);
+            pdf.setPageOrientation(w >= h ? QPageLayout::Landscape : QPageLayout::Portrait);
+            pdf.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout::Millimeter);
+            painter.begin(&pdf);
+            if (!painter.isActive()) {
+                QMessageBox::warning(this, tr("Output failed"),
+                                     tr("Could not open %1 for writing.").arg(path));
+                return false;
+            }
+        } else {
+            pdf.setPageSize(size);
+            pdf.setPageOrientation(w >= h ? QPageLayout::Landscape : QPageLayout::Portrait);
+            if (!pdf.newPage()) break;
+        }
+        renderSpaceToPage(painter, spaces[i], monochrome);
+    }
+    if (painter.isActive()) painter.end();
+    return true;
 }
 
 bool MainWindow::choosePdfLineMode(bool& monochrome) {

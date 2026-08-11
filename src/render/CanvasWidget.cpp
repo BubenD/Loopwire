@@ -431,10 +431,15 @@ quint64 CanvasWidget::layerFingerprint() const {
     return h;
 }
 
-QRectF CanvasWidget::viewportScreenRect(const LayoutViewport& viewport,
-                                        const ViewTransform& paper) const {
+QRectF CanvasWidget::layoutViewportRect(const LayoutViewport& viewport,
+                                        const ViewTransform& paper) {
     return QRectF(paper.toScreen({viewport.x, viewport.y + viewport.height}),
                   paper.toScreen({viewport.x + viewport.width, viewport.y})).normalized();
+}
+
+QRectF CanvasWidget::viewportScreenRect(const LayoutViewport& viewport,
+                                        const ViewTransform& paper) const {
+    return layoutViewportRect(viewport, paper);
 }
 
 ViewTransform CanvasWidget::viewportTransform(const LayoutViewport& viewport, const QRectF& rect,
@@ -442,6 +447,12 @@ ViewTransform CanvasWidget::viewportTransform(const LayoutViewport& viewport, co
     Bounds model;
     const Document* drawing = drawingDocument();
     for (const Entity& entity : drawing->entities()) model.expand(entity.bounds());
+    return layoutViewportView(viewport, rect, paper, model);
+}
+
+ViewTransform CanvasWidget::layoutViewportView(const LayoutViewport& viewport, const QRectF& rect,
+                                               const ViewTransform& paper,
+                                               const Bounds& model) {
     const Vec2 center = viewport.modelScale > 0.0 || !model.valid ? viewport.modelCenter : model.center();
     double scale = viewport.modelScale > 0.0 ? viewport.modelScale * paper.scale() : 1.0;
     if (viewport.modelScale <= 0.0 && model.valid) {

@@ -80,6 +80,14 @@ public:
     // Tell the editor how big its world is on the screen, so a pick or a snap covers the same few pixels
     // wherever it is made. Called wherever the transform in use can have changed.
     void syncEditorScale();
+
+    // Where a window's rectangle falls, and the view it shows, given how the paper is being mapped onto
+    // the device. Static and public because PRINTING needs exactly the same two answers as the screen: a
+    // sheet must come off the printer laid out as it looks here, and two copies of this arithmetic would
+    // be two chances to differ.
+    static QRectF layoutViewportRect(const LayoutViewport& viewport, const ViewTransform& paper);
+    static ViewTransform layoutViewportView(const LayoutViewport& viewport, const QRectF& rect,
+                                            const ViewTransform& paper, const Bounds& modelExtents);
     void setBottomOverlay(QWidget* overlay);
 
     // The editor receives input and paints interaction overlays.

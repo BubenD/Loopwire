@@ -430,3 +430,30 @@ The layer list is the drawing's, not the sheet's: a sheet resolves colour, linew
 through the same layers, so the layer box on the ribbon means what it says while a sheet is being drawn
 on. The harness features — connectors, pin tables, the BOM, blocks, the generator and the wizard — stay
 on the model, because a harness lives in the model and not on a sheet of paper.
+
+## Output: what comes out, in what order
+
+**Output** (the E menu, Ctrl+P, or `OUTPUT` / `PUBLISH` / `PLOT`) is where a drawing goes out. A drawing
+is a model and a set of sheets, so putting it out is choosing among them: the list is Model followed by
+every layout, each with a tick, and it can be **arranged** — the order in the list is the order of the
+pages, because a pack that opens on the wrong sheet is the wrong pack. Standing on a sheet, the model
+starts unticked; standing on the model, it starts ticked. The destination is a **PDF file** or a
+**printer**, and that choice changes nothing else: the same pages, laid out the same way, painted onto
+whichever device. A PDF can also be written as **one file per sheet**, named after each.
+
+**Each page is the size of the thing on it.** A 420 × 297 sheet is a 420 × 297 page, so a scale read off
+the print with a rule is right; *Fit each page to the paper* is offered for when the printer has what it
+has. Model space has no size of its own, so its page is its extents with a margin — which is what Export
+PDF has always done with it.
+
+**A sheet page is the sheet, not a picture of the model.** The paper space geometry goes on at 1:1, each
+window shows the model at the scale that window was given, and the window frames are not printed — a
+window is a hole to see the drawing through, not a rectangle in the drawing. The arithmetic that puts a
+window on the page is the same code the canvas uses (`CanvasWidget::layoutViewportRect` and
+`layoutViewportView`, both static for this reason): two copies of it would be two chances to differ, and
+what comes off the printer must be what was laid out. What is on the sheet is painted over the windows,
+as on the screen.
+
+Sheets are flushed out of paper space before anything is written, so a line drawn a moment ago is on the
+page. The two **Export PDF** entries above it in the menu stay as they are — one quick page of whatever is
+showing, and one of a dragged window.

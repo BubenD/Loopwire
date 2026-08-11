@@ -20,7 +20,7 @@ else()
     add_compile_options(-Wall -Wextra)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core PrintSupport)
 
 # --- Core library (everything except main, so tests can link it) -------------
 add_library(edraw_core STATIC
@@ -115,6 +115,8 @@ add_library(edraw_core STATIC
     src/app/MechModelCanvasDialog.cpp
     src/app/MechModelsDialog.h
     src/app/MechModelsDialog.cpp
+    src/app/OutputDialog.h
+    src/app/OutputDialog.cpp
     src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp
@@ -140,7 +142,7 @@ add_library(edraw_core STATIC
 )
 
 target_include_directories(edraw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(edraw_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core)
+target_link_libraries(edraw_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core Qt6::PrintSupport)
 
 # --- Application executable --------------------------------------------------
 # The .rc (compiled by the MSVC resource compiler) embeds the Explorer/taskbar

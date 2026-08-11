@@ -73,6 +73,21 @@ public:
 
     // Open a .dwx or .dxf by path (used by File>Open and the command line).
     void openPath(const QString& path);
+    // Output: the model and the sheets, in a chosen order, onto a PDF or a printer. One entry point for
+    // both, because a page is a page whichever device it lands on.
+    void showOutput();
+    // One page: the space `space` (0 = model, 1..n = layout n) painted over the whole of the painter's
+    // viewport. Used for a PDF page, a printed page and, in the tests, an image.
+    void renderSpaceToPage(QPainter& painter, int space, bool monochrome);
+    // The size of paper a space wants, in millimetres: a sheet is its own size, the model is its extents
+    // with a small margin. Returns false if there is nothing there to put out.
+    bool spacePageSizeMm(int space, double& widthMm, double& heightMm) const;
+    // What a space is called - "Model", or the layout's own name.
+    QString spaceName(int space) const;
+    // The pages, in order, into one PDF.
+    bool writeSpacePdf(const QString& path, const std::vector<int>& spaces, bool monochrome,
+                       bool fitToPage);
+
     // Blocks, as operations the host can be asked to perform - each is also reachable by name from
     // the command line. Opening one for editing puts it in a tab of its own on a grey canvas.
     void openBlockEditor(const QString& name);
