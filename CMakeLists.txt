@@ -162,22 +162,12 @@ target_link_libraries(Edraw PRIVATE edraw_core)
 
 set_target_properties(Edraw PROPERTIES
     WIN32_EXECUTABLE ON
-    OUTPUT_NAME "Edraw")
-
-# The application always lands at build/Edraw.exe as well, whatever generator built it.
-#
-# A single-config generator (Ninja) puts the executable at build/Edraw.exe; a multi-config one (Visual
-# Studio) puts it at build/<Config>/Edraw.exe. Switching between them leaves the old one lying at the
-# path everybody launches, and a STALE COPY THERE IS WORSE THAN NONE: the application starts, looks
-# right, and is yesterday's - which is how an afternoon goes on a bug that was fixed hours ago. The Qt
-# DLLs are deployed beside build/Edraw.exe too, so that is also the copy that can be started by a
-# double-click rather than only from a shell with Qt on the PATH.
-if(CMAKE_CONFIGURATION_TYPES)
-    add_custom_command(TARGET Edraw POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:Edraw> ${CMAKE_BINARY_DIR}/Edraw.exe
-        COMMENT "Copying Edraw.exe to the build folder root")
-endif()
+    OUTPUT_NAME "Edraw"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}")
 
 # Recompile the .rc (and thus refresh the embedded icon) when edraw.ico changes.
 if(WIN32)

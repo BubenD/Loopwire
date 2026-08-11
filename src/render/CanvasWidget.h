@@ -32,6 +32,17 @@ public:
     void setDocument(Document* doc);
     Document* document() const { return doc_; }
 
+    // In layout mode there are TWO documents in play, and they are different things.
+    //
+    // `document()` is what is being EDITED and drawn as content: in model space the drawing itself, on a
+    // layout the paper space of that layout - so the editor, the tools, the selection and the undo stack
+    // all work on a layout exactly as they work on the model, because to them it IS just a document.
+    //
+    // `drawingDocument()` is the DRAWING: the one that owns the layouts, their windows and the model
+    // geometry those windows look at. On the model they are the same document; on a layout they are not.
+    void setDrawingDocument(Document* doc);
+    Document* drawingDocument() const { return drawingDoc_ ? drawingDoc_ : doc_; }
+
     void setLayoutMode(bool on);
     bool layoutMode() const { return layoutMode_; }
     void setLayoutIndex(int index);
@@ -179,6 +190,8 @@ private:
     ViewTransform viewportTransform(const LayoutViewport& viewport, const QRectF& rect,
                                     const ViewTransform& paper) const;
     int viewportAt(const QPointF& point) const;
+    // The window whose FRAME is under the point (edge or corner handle), and which corner if any.
+    int viewportGrabAt(const QPointF& point, const DrawingLayout& layout, int* corner) const;
     void drawLayoutScene(QPainter& painter, const ViewTransform& paper);
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
@@ -199,6 +212,7 @@ private:
     bool cursorInside_ = false;     // mouse over the canvas (draw the crosshair)
 
     Document* doc_ = nullptr;
+    Document* drawingDoc_ = nullptr;   // the drawing that owns the layouts, when a layout is being edited
     Editor* editor_ = nullptr;
     double gridSize_ = 10.0;
     bool gridVisible_ = true;

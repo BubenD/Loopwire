@@ -341,3 +341,36 @@ are, and they are spaced across rather than the picture being squashed to fit.
 
 The generator uses a model wherever there is one for the kind of thing it is drawing, and draws its own
 shape where there is not — so an office that has captured nothing sees exactly what it saw before.
+
+## Model space and the sheets
+
+The strip along the bottom of the canvas is where the drawing is: **Model**, then a tab per layout.
+Model space is the harness, at size — a 500 mm wire is 500 mm there, and that is why model space has no
+plot scale. A layout is a sheet of paper the harness is plotted on: A3 by default, with a **window** cut
+in it that looks at the model. The scale in the right-hand corner of the strip is the layout's — one of
+paper to so many of the model, or *Fit* to size the drawing to its window — and it is kept on the
+window, in the drawing, so a sheet plots the same next time it is opened.
+
+**A sheet is drawn on with the same tools as the model.** That is had without a second set of tools by
+giving each layout a document of its own — its paper space. On a layout the editor is pointed at that
+document, so the tools, the selection, the grips, the snaps, the dimensions and the undo stack all work
+exactly as they do on the harness, because as far as the editor knows it *is* a drawing. The canvas
+keeps the drawing itself in its other hand (`setDrawingDocument`) for the layouts and for what the
+windows look at. What is on the sheet is written back into the layout on the way out of it and before
+the drawing is saved, so it goes in the file with everything else.
+
+Two things follow from that, and both are deliberate:
+
+- **A window is taken hold of by its frame** — its edge, or one of its corner handles. Its inside is
+  paper like the rest of the sheet, so a line can be drawn across a window, something can be selected
+  through one and a note can be moved over one. Were the whole rectangle a handle, a window would be a
+  hole in the sheet that nothing could be put on. Double-clicking a picked-out window steps *inside* it,
+  where dragging moves what it looks at and the wheel zooms it; a press on the paper steps back out.
+- **What is drawn on the sheet is drawn last, over the windows.** A window is filled with the view
+  through it, so anything under one would be painted out — and a note, a leader or a border drawn on a
+  sheet is meant to be read across the view it points at.
+
+The layer list is the drawing's, not the sheet's: a sheet resolves colour, lineweight and linetype
+through the same layers, so the layer box on the ribbon means what it says while a sheet is being drawn
+on. The harness features — connectors, pin tables, the BOM, blocks, the generator and the wizard — stay
+on the model, because a harness lives in the model and not on a sheet of paper.

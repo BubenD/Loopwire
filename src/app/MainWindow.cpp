@@ -1834,6 +1834,11 @@ void MainWindow::buildDocumentArea() {
     drawingSpaceTabs_->setDocumentMode(true);
     drawingSpaceTabs_->setExpanding(false);
     drawingSpaceTabs_->setFixedHeight(32);
+    // No scroll arrows. The strip is as wide as the canvas and the tabs are 384 px of it, so there is
+    // nothing to scroll - but Qt draws the arrows anyway, at the right-hand end, ON TOP of the last
+    // tab's close button. Which is why the second layout could not be closed: the x was there, and the
+    // arrow was over it. With them off the strip simply shows the tabs it has.
+    drawingSpaceTabs_->setUsesScrollButtons(false);
     drawingSpaceTabs_->addTab(QStringLiteral("Model"));
     drawingSpaceTabs_->setCurrentIndex(0);
     drawingSpaceTabs_->setStyleSheet(QStringLiteral(
@@ -1866,6 +1871,7 @@ void MainWindow::buildDocumentArea() {
         "The scale this layout is plotted at: what one millimetre of paper is worth in the model. "
         "Fit sizes the drawing to the viewport instead."));
     spaceScaleBox_->setFixedHeight(24);
+    spaceScaleBox_->setMinimumWidth(96);
     struct Ratio { const char* label; double paperPerModel; };
     // Reducing scales first, as a drawing office lists them, then the enlarging ones. The figure is
     // paper per model: 1:2 is a half, 2:1 is two.
@@ -1879,8 +1885,10 @@ void MainWindow::buildDocumentArea() {
         spaceScaleBox_->addItem(QString::fromLatin1(r.label), r.paperPerModel);
     spaceScaleBox_->setCurrentIndex(1);   // 1:1
     spaceScaleBox_->setStyleSheet(QStringLiteral(
-        "QComboBox{background:#252c36;color:#d8dee8;border:none;padding:2px 10px;}"
+        "QComboBox{background:#252c36;color:#d8dee8;border:1px solid #3d4653;border-radius:3px;"
+        "padding:2px 10px;}"
         "QComboBox:hover{background:#364252;}"
+        "QComboBox:disabled{color:#6f7681;border-color:#2e353f;}"
         "QComboBox QAbstractItemView{background:#252c36;color:#d8dee8;"
         "selection-background-color:#4b596b;}"));
     connect(spaceScaleBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -1888,11 +1896,37 @@ void MainWindow::buildDocumentArea() {
         setDrawingSpaceScale(spaceScaleBox_->itemData(i).toDouble());
     });
 
+    // A window onto the model, put on the paper. A layout is a sheet with windows cut in it: this is what
+    // cuts one. Only on a layout - there is nothing to cut a window in on the model itself.
+    addViewportBtn_ = new QToolButton(spaceRow);
+    addViewportBtn_->setText(QStringLiteral("+ window"));
+    addViewportBtn_->setToolTip(QStringLiteral(
+        "Put a window onto the drawing on this sheet. Drag its corners to size it, drag inside it to "
+        "move what it looks at, and set what it is plotted at with the scale beside this."));
+    addViewportBtn_->setAutoRaise(true);
+    addViewportBtn_->setFixedHeight(24);
+    addViewportBtn_->setStyleSheet(QStringLiteral(
+        "QToolButton{color:#d8dee8;background:#252c36;border:1px solid #3d4653;border-radius:3px;"
+        "padding:2px 10px;}"
+        "QToolButton:hover{background:#364252;}"
+        "QToolButton:disabled{color:#6f7681;border-color:#2e353f;}"));
+    connect(addViewportBtn_, &QToolButton::clicked, this, [this] { addLayoutWindow(); });
+
+    // The scale wants a word beside it. On its own, 98 px of dark grey at the very edge of the canvas
+    // reads as part of the frame rather than as something to press - which is how it came to be reported
+    // as not opening at all.
+    spaceScaleLabel_ = new QLabel(QStringLiteral("Scale"), spaceRow);
+    spaceScaleLabel_->setStyleSheet(QStringLiteral("color:#8fa2b8;padding:0 6px;"));
+
     spaceLayout->addWidget(spaceMenu);
     spaceLayout->addWidget(drawingSpaceTabs_);
     spaceLayout->addWidget(addSpace);
     spaceLayout->addStretch(1);
+    spaceLayout->addWidget(addViewportBtn_);
+    spaceLayout->addSpacing(14);
+    spaceLayout->addWidget(spaceScaleLabel_);
     spaceLayout->addWidget(spaceScaleBox_);
+    spaceLayout->addSpacing(10);
 
     v->addWidget(topRow);
     v->addWidget(canvas_, 1);
@@ -1994,6 +2028,19 @@ void MainWindow::setDrawingSpaceScale(double paperPerModel) {
         3000);
 }
 
+void MainWindow::addLayoutWindow() {
+    if (!canvas_ || !canvas_->layoutMode()) {
+        statusBar()->showMessage(
+            tr("Open a layout first — a window onto the drawing is cut in a sheet."), 4000);
+        return;
+    }
+    canvas_->addLayoutViewport();
+    statusBar()->showMessage(
+        tr("A window onto the drawing added — drag its corners to size it, drag inside it to move what "
+           "it looks at, and set what it plots at with the scale in the corner."),
+        6000);
+}
+
 void MainWindow::applyLayoutTemplate() {
     if (!doc_ || !canvas_->layoutMode()) return;
     const QString path = QFileDialog::getOpenFileName(
@@ -2019,14 +2066,76 @@ void MainWindow::applyLayoutTemplate() {
     canvas_->fitView();
 }
 
+Document* MainWindow::editDoc() const {
+    return canvas_ && canvas_->document() ? canvas_->document() : doc_;
+}
+
+Document* MainWindow::paperSpaceFor(Document* drawing, int layoutIndex) {
+    if (!drawing || layoutIndex < 0 ||
+        layoutIndex >= static_cast<int>(drawing->layouts().size()))
+        return nullptr;
+    const std::pair<Document*, int> key{drawing, layoutIndex};
+    auto found = paperDocs_.find(key);
+    if (found == paperDocs_.end()) {
+        auto paper = std::make_unique<Document>();
+        const DrawingLayout& layout = drawing->layouts()[static_cast<size_t>(layoutIndex)];
+        paper->entities() = layout.paperEntities;
+        found = paperDocs_.emplace(key, std::move(paper)).first;
+    }
+    // The drawing's layers, every time the sheet is opened: a line on the sheet then resolves its colour,
+    // its width and its linetype the way a line in the model does, and a layer added or recoloured in the
+    // drawing is there on the sheet too. The layer list is the drawing's - it is not per sheet.
+    found->second->layers() = drawing->layers();
+    found->second->setActiveLayer(drawing->activeLayer());
+    return found->second.get();
+}
+
+void MainWindow::flushPaperSpace() {
+    if (!paperLoaded_.first || paperLoaded_.second < 0) return;
+    auto found = paperDocs_.find(paperLoaded_);
+    if (found == paperDocs_.end()) return;
+    Document* drawing = paperLoaded_.first;
+    const int at = paperLoaded_.second;
+    if (at >= static_cast<int>(drawing->layouts().size())) return;
+    DrawingLayout& layout = drawing->layouts()[static_cast<size_t>(at)];
+    Document* paper = found->second.get();
+    layout.paperEntities = paper->entities();
+    if (paper->dirty()) {
+        drawing->setDirty(true);   // the sheet is part of the drawing; it is saved with it
+        paper->setDirty(false);
+    }
+}
+
+void MainWindow::forgetPaperSpaces(Document* drawing) {
+    for (auto it = paperDocs_.begin(); it != paperDocs_.end();)
+        it = it->first.first == drawing ? paperDocs_.erase(it) : std::next(it);
+    if (paperLoaded_.first == drawing) paperLoaded_ = {nullptr, -1};
+}
+
 void MainWindow::activateDrawingSpace(int index) {
     if (!canvas_) return;
+    // On the way out of a sheet, what was drawn on it goes back into the layout.
+    flushPaperSpace();
     // What the space being left had is kept, so coming back to it finds it as it was.
     if (lastDrawingSpace_ >= 0) spaceGrid_[lastDrawingSpace_] = canvas_->gridVisible();
     lastDrawingSpace_ = index;
     const bool layout = index > 0;
     canvas_->setLayoutMode(layout);
     if (layout) canvas_->setLayoutIndex(index - 1);
+    // Which document the tools work in. On a layout that is the sheet's paper space; the drawing itself
+    // stays in the canvas's other hand, for the layouts and for what the windows look at.
+    Document* paper = layout ? paperSpaceFor(doc_, index - 1) : nullptr;
+    if (paper) {
+        paperLoaded_ = {doc_, index - 1};
+        canvas_->setDrawingDocument(doc_);
+        canvas_->setDocument(paper);
+        if (editor_) editor_->setDocument(paper);
+    } else {
+        paperLoaded_ = {nullptr, -1};
+        canvas_->setDrawingDocument(nullptr);
+        canvas_->setDocument(doc_);
+        if (editor_) editor_->setDocument(doc_);
+    }
     if (layout) {
         canvas_->setBackgroundColor(QColor("#747a83"));
     } else {
@@ -2064,6 +2173,18 @@ void MainWindow::activateDrawingSpace(int index) {
         const int found = spaceScaleBox_->findData(paperPerModel);
         spaceScaleBox_->setCurrentIndex(found >= 0 ? found : (paperPerModel > 0.0 ? 1 : 0));
         spaceScaleBox_->setEnabled(layout);
+        spaceScaleBox_->setToolTip(
+            layout ? tr("The scale this layout is plotted at: what one millimetre of paper is worth in "
+                        "the model. Fit sizes the drawing to its window instead.")
+                   : tr("A plot scale belongs to a layout — the model is the harness, at size. Open a "
+                        "layout to set one."));
+    }
+    if (spaceScaleLabel_) spaceScaleLabel_->setEnabled(layout);
+    if (addViewportBtn_) {
+        addViewportBtn_->setEnabled(layout);
+        addViewportBtn_->setToolTip(
+            layout ? tr("Put a window onto the drawing on this sheet")
+                   : tr("A window onto the drawing is cut in a sheet — open a layout to add one"));
     }
     canvas_->fitView();
     canvas_->setFocus();
@@ -3076,7 +3197,7 @@ void MainWindow::syncHatchRibbon() {
     bool assoc = editor_->hatchStyle().associative;
     QString color = editor_->hatchStyle().color;
     if (!hatchEditId_.isEmpty() && doc_) {
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (e.id == hatchEditId_ && e.type == EntityType::Hatch) {
                 pattern = e.meta.value(QStringLiteral("pattern")).toString(pattern);
                 angle = e.meta.value(QStringLiteral("hatchAngle")).toDouble(angle);
@@ -3189,7 +3310,7 @@ void MainWindow::showHatchPatternDialog() {
     for (int i = 0; i < pats.size(); ++i)
         if (pats[i].second == editor_->hatchStyle().pattern) { cur = i; break; }
     if (!hatchEditId_.isEmpty() && doc_)
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (e.id == hatchEditId_)
                 for (int i = 0; i < pats.size(); ++i)
                     if (pats[i].second == e.meta.value(QStringLiteral("pattern")).toString())
@@ -3229,7 +3350,7 @@ void MainWindow::updateHatchContext() {
     QString selHatch;
     if (!creating && doc_ && editor_->selection().size() == 1) {
         const QString id = editor_->selection().front();
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (e.id == id && e.type == EntityType::Hatch) { selHatch = id; break; }
     }
     if (creating) {
@@ -5001,7 +5122,7 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         editor_->selectById(balloonId); // clicking a balloon selects it/its batch
     } else if (doc_) {
         for (const auto& id : editor_->selection()) {
-            for (const auto& e : doc_->entities())
+            for (const auto& e : editDoc()->entities())
                 if (e.id == id && e.meta.value("balloon").toBool()) { balloonId = id; break; }
             if (!balloonId.isEmpty()) break;
         }
@@ -5027,11 +5148,11 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
             // Whatever is selected first - a right-click on the sheet acts on the selection - and then
             // a wire under the cursor, which is the one thing worth picking up without selecting it.
             for (const auto& id : editor_->selection())
-                for (const auto& e : doc_->entities())
+                for (const auto& e : editDoc()->entities())
                     if (e.id == id) lookAt(e);
             if (libPart.isEmpty()) {
                 const QString wire = editor_->wireAt(world);
-                for (const auto& e : doc_->entities())
+                for (const auto& e : editDoc()->entities())
                     if (e.id == wire) lookAt(e);
             }
         }
@@ -5090,7 +5211,7 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     {
         const Entity* table = nullptr;
         if (doc_) {
-            for (const auto& e : doc_->entities())
+            for (const auto& e : editDoc()->entities())
                 if (e.meta.value("table").toBool()) {
                     const Bounds tb = e.bounds();
                     if (tb.valid && world.x >= tb.min.x && world.x <= tb.max.x &&
@@ -5099,7 +5220,7 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
                 }
             if (!table)
                 for (const auto& id : editor_->selection())
-                    for (const auto& e : doc_->entities())
+                    for (const auto& e : editDoc()->entities())
                         if (e.id == id && e.meta.value("table").toBool()) table = &e;
         }
         if (table) {
@@ -5194,7 +5315,7 @@ void MainWindow::findText() {
     // Select every Text entity whose content contains the query (case-insensitive).
     editor_->clearSelection();
     int count = 0;
-    for (const auto& e : doc_->entities()) {
+    for (const auto& e : editDoc()->entities()) {
         if (e.type != EntityType::Text) continue;
         if (e.meta.value(QStringLiteral("text")).toString().contains(q, Qt::CaseInsensitive)) {
             editor_->selectById(e.id, /*additive=*/true);
@@ -6023,7 +6144,7 @@ void MainWindow::refreshProperties() {
     // mixed-type selection has no common panel, so only the General summary shows.
     std::vector<const Entity*> selEnts;
     for (const auto& id : sel)
-        for (const auto& ent : doc_->entities())
+        for (const auto& ent : editDoc()->entities())
             if (ent.id == id) { selEnts.push_back(&ent); break; }
     bool sameType = !selEnts.empty();
     for (const Entity* se : selEnts)
@@ -6514,7 +6635,7 @@ void MainWindow::refreshProperties() {
                 QStringLiteral("wire label"));
         QString onWire = QStringLiteral("not attached");
         if (!wid.isEmpty() && doc_)
-            for (const auto& w : doc_->entities())
+            for (const auto& w : editDoc()->entities())
                 if (w.id == wid && w.type == EntityType::Wire) {
                     onWire = QStringLiteral("wire #%1")
                                  .arg(w.meta.value(QStringLiteral("entNum")).toInt());
@@ -6580,7 +6701,7 @@ void MainWindow::refreshProperties() {
         const QString host = mv(QStringLiteral("host")).toString();
         QString onRun = QStringLiteral("nothing");
         if (!host.isEmpty() && doc_)
-            for (const auto& r : doc_->entities())
+            for (const auto& r : editDoc()->entities())
                 if (r.id == host)
                     onRun = QStringLiteral("%1 at %2%")
                                 .arg(entityTypeToString(r.type))
@@ -7117,7 +7238,7 @@ void MainWindow::refreshEntityList() {
     if (!entityList_) return;
     entityList_->clear();
     const auto& sel = editor_->selection();
-    for (const auto& e : doc_->entities()) {
+    for (const auto& e : editDoc()->entities()) {
         auto* item = new QListWidgetItem(
             QStringLiteral("%1  [%2]").arg(entityTypeToString(e.type), e.id));
         item->setData(Qt::UserRole, e.id);
@@ -7191,6 +7312,8 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
+        {{"layoutwindow", "viewport", "addwindow"}, "Layout",
+         "Put a window onto the drawing on this sheet", [this] { addLayoutWindow(); }},
         {{"mechmodels", "models", "defaults"}, "Harness",
          "Default mechanical models: how this office draws a wire, a cable, heatshrink, a ferrule",
          [this] { showMechModels(); }},
@@ -7434,7 +7557,7 @@ void MainWindow::showQuickSelectDialog(const QString& sampleId) {
     auto sampleForType = [this, &picked](const QString& type) -> std::optional<Entity> {
         if (type.isEmpty()) return picked;
         if (picked && entityTypeToString(picked->type) == type) return picked;
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (entityTypeToString(e.type) == type) return e;
         return std::nullopt;
     };
@@ -7453,7 +7576,7 @@ void MainWindow::showQuickSelectDialog(const QString& sampleId) {
     // Live count of what the filter would select, so the filter can be judged before
     // committing to it.
     auto updateCount = [&] {
-        const auto ids = quickSelectMatchIds(doc_->entities(), currentQuery(),
+        const auto ids = quickSelectMatchIds(editDoc()->entities(), currentQuery(),
                                              editor_->selection());
         countLbl->setText(QStringLiteral("%1 object(s) match").arg(ids.size()));
     };
@@ -9948,6 +10071,7 @@ bool MainWindow::maybeSaveDoc(int index) {
 
 bool MainWindow::saveDocument(int index, bool forceDialog) {
     if (index < 0 || index >= static_cast<int>(docs_.size())) return false;
+    flushPaperSpace();   // what is on the sheet being drawn on belongs in the file
     QString path = docPaths_[index];
     if (path.isEmpty() || forceDialog) {
         path = QFileDialog::getSaveFileName(this, QStringLiteral("Save DWX"),
@@ -9979,6 +10103,9 @@ void MainWindow::closeDocument(int index) {
         templateEditPaths_.remove(docs_[index].get());
         mechModelEdits_.remove(docs_[index].get());
         mechModelSessionModels_.remove(docs_[index].get());
+        // And its paper spaces, for the same reason: the next document allocated at that address must
+        // not inherit the sheets of this one.
+        forgetPaperSpaces(docs_[index].get());
         docTabs_->removeTab(index);
         docs_.erase(docs_.begin() + index);
         docPaths_.erase(docPaths_.begin() + index);
@@ -10356,11 +10483,11 @@ void MainWindow::exportTableCsv() {
     // Target: the table of the selected cell, else a single selected table entity.
     const Entity* table = nullptr;
     if (!editor_->selectedCellTable().isEmpty()) {
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (e.id == editor_->selectedCellTable()) { table = &e; break; }
     }
     if (!table && editor_->selection().size() == 1) {
-        for (const auto& e : doc_->entities())
+        for (const auto& e : editDoc()->entities())
             if (e.id == editor_->selection().front() && e.meta.value("table").toBool()) {
                 table = &e;
                 break;

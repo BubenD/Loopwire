@@ -15,6 +15,7 @@
 #include <QStringList>
 #include <QVector>
 #include <functional>
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -175,6 +176,23 @@ private:
     // The scale the layout showing is plotted at: what one millimetre of paper is worth in the model.
     // It is the layout's own - a viewport property, kept with the drawing - not a setting of the window.
     void setDrawingSpaceScale(double paperPerModel);
+    // Cut a window onto the drawing in the sheet showing.
+    void addLayoutWindow();
+
+    // Paper space. A layout is drawn on with the same tools as the model, and the way that is had without
+    // a second set of tools is to give the sheet a document of its own: the editor is pointed at it and
+    // draws, selects, moves, snaps, dimensions and undoes on the sheet exactly as it does on the drawing,
+    // because as far as it knows it IS a drawing. The canvas keeps the drawing itself in hand separately
+    // (setDrawingDocument) for the layouts and for what the windows look at.
+    Document* paperSpaceFor(Document* drawing, int layoutIndex);
+    // Write what is on the sheet back into the layout it belongs to. Called on the way out of a layout
+    // and before the drawing is saved, so what was drawn on the paper is in the file.
+    void flushPaperSpace();
+    // The document the tools and the selection are working in: the drawing in model space, the sheet's
+    // paper space on a layout.
+    Document* editDoc() const;
+    // Drop the paper spaces of a drawing that is being closed.
+    void forgetPaperSpaces(Document* drawing);
     void syncDrawingSpaceTabs();
     void addDrawingLayout();
     void applyLayoutTemplate();
@@ -414,11 +432,18 @@ private:
     void applyTheme(bool dark);  // re-theme chrome + canvas (Dark / Light)
 
     std::vector<std::unique_ptr<Document>> docs_; // open drawings
+    // One paper space per (drawing, layout): kept for as long as the drawing is open, so leaving a sheet
+    // and coming back finds the sheet as it was, view and all.
+    std::map<std::pair<Document*, int>, std::unique_ptr<Document>> paperDocs_;
+    std::pair<Document*, int> paperLoaded_{nullptr, -1}; // which one the editor is in, so it can be saved
+
     QStringList docPaths_;                         // parallel file paths ("" if unsaved)
     Document* doc_ = nullptr;                      // active drawing (raw, owned by docs_)
     QTabBar* docTabs_ = nullptr;
     QTabBar* drawingSpaceTabs_ = nullptr;
     QComboBox* spaceScaleBox_ = nullptr;
+    QLabel* spaceScaleLabel_ = nullptr;
+    QToolButton* addViewportBtn_ = nullptr;
     // Whether the grid is on, per drawing space, remembered as it is switched away from: a grid wanted
     // over a sheet being laid out is not the grid wanted over the harness itself, and the button that
     // turns it on belongs to the space it was pressed in. (The plot scale is not here - it belongs to

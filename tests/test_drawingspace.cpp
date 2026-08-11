@@ -5,13 +5,17 @@
 // of thing done where it was made rather than through a menu. A grid over a sheet being laid out has
 // nothing to do with the grid over the harness. And the plot scale is the LAYOUT'S - it is kept with the
 // drawing, on its viewport, not as a setting of the window that happened to be open.
+#include "app/Editor.h"
 #include "app/MainWindow.h"
 #include "model/Document.h"
 #include "render/CanvasWidget.h"
 
 #include <QComboBox>
+#include <QLabel>
+#include <QMouseEvent>
 #include <QTabBar>
 #include <QToolButton>
+#include <QApplication>
 
 #include <cmath>
 #include <cstdio>
@@ -102,7 +106,9 @@ int run_drawingspace_tests() {
               "scale: model space has no plot scale, so the box is out of reach there");
         spaces->setCurrentIndex(1);
         check(scale->isEnabled(), "scale: on a layout it can be set");
-        const Document* doc = canvas->document();
+        // The layouts belong to the drawing. On a sheet the canvas is drawing IN the sheet, so the
+        // drawing itself is asked for by name.
+        const Document* doc = canvas->drawingDocument();
         check(doc && !doc->layouts().empty(), "scale: the drawing has a layout to set it on");
         if (doc && !doc->layouts().empty()) {
             const int half = scale->findText(QStringLiteral("1:2"));
@@ -118,6 +124,119 @@ int run_drawingspace_tests() {
             check(near(doc->layouts()[0].viewports.front().modelScale, 0.0),
                   "scale: Fit leaves the drawing to be sized to its viewport");
         }
+    }
+
+    // ---- the strip itself: nothing drawn over the last tab's x -----------------------------------
+    check(!spaces->usesScrollButtons(),
+          "strip: no scroll arrows - they were drawn over the last layout's close button, which is why "
+          "the second one could not be closed");
+    {
+        // Every tab's x is where it can be pressed: inside the tab, and no other tab over it.
+        bool reachable = true;
+        for (int i = 1; i < spaces->count(); ++i) {
+            QWidget* x = spaces->tabButton(i, QTabBar::RightSide);
+            if (!x) { reachable = false; continue; }
+            const QRect inTab = spaces->tabRect(i);
+            const QRect xRect(x->pos(), x->size());   // already in the bar's own coordinates
+            if (!inTab.contains(xRect.center())) reachable = false;
+            // Against what the bar asks for rather than what it has been given: a window that has not
+            // been shown has not laid its strip out yet, and the point being made is that the x is
+            // within the tabs - with the scroll arrows off, nothing is drawn over it.
+            if (xRect.center().x() > spaces->sizeHint().width()) reachable = false;
+        }
+        check(reachable, "strip: every layout's x sits inside its own tab and within the bar");
+    }
+
+    // ---- a window onto the drawing, put on the paper ---------------------------------------------
+    QToolButton* addWindow = nullptr;
+    for (QToolButton* b : win.findChildren<QToolButton*>())
+        if (b->text() == QStringLiteral("+ window")) addWindow = b;
+    check(addWindow != nullptr, "window: the + window button is on the strip");
+    if (addWindow && canvas) {
+        spaces->setCurrentIndex(0);
+        check(!addWindow->isEnabled(),
+              "window: a window is cut in a sheet, so it is out of reach on the model");
+        spaces->setCurrentIndex(1);
+        check(addWindow->isEnabled(), "window: on a layout it can be pressed");
+        Document* drawing = canvas->drawingDocument();
+        check(drawing && !drawing->layouts().empty(), "window: the layout is there to cut it in");
+        if (drawing && !drawing->layouts().empty()) {
+            const size_t before = drawing->layouts()[0].viewports.size();
+            addWindow->click();
+            check(drawing->layouts()[0].viewports.size() == before + 1,
+                  "window: pressing it puts another window on the sheet");
+        }
+    }
+
+    // ---- the sheet is drawn on, with the same tools as the model ---------------------------------
+    auto* editor = win.findChild<Editor*>();
+    check(editor != nullptr, "paper: the editor is there");
+    if (canvas && editor) {
+        spaces->setCurrentIndex(0);
+        Document* drawing = canvas->document();
+        check(canvas->drawingDocument() == drawing,
+              "paper: in model space the drawing and what is drawn in are one and the same");
+        const size_t modelEntities = drawing ? drawing->entities().size() : 0;
+
+        spaces->setCurrentIndex(1);
+        Document* paper = canvas->document();
+        check(paper && paper != drawing,
+              "paper: a layout is drawn in a space of its own - the sheet, not the harness");
+        check(canvas->drawingDocument() == drawing,
+              "paper: while the drawing itself stays in hand, for the layouts and their windows");
+        if (paper && drawing) {
+            check(paper->layers().size() == drawing->layers().size(),
+                  "paper: the sheet carries the drawing's layers, so a line on it resolves its colour");
+
+            // A line drawn on the sheet, through the editor, exactly as one is drawn on the model.
+            editor->setTool(ToolId::Line);
+            editor->onPointerPress(Vec2{20.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->onPointerPress(Vec2{120.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+            check(paper->entities().size() == 1, "paper: the Line tool draws on the sheet");
+            check(drawing->entities().size() == modelEntities,
+                  "paper: and what is drawn on the sheet does not land in the harness");
+
+            // Select it and move it, as on the model.
+            editor->setTool(ToolId::Select);
+            editor->onPointerPress(Vec2{70.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+            check(editor->selection().size() == 1, "paper: what is on the sheet can be picked");
+
+            // Off the sheet and back: the sheet keeps what was drawn on it, and the layout holds it.
+            spaces->setCurrentIndex(0);
+            check(!drawing->layouts()[0].paperEntities.empty(),
+                  "paper: leaving the sheet writes what is on it back into the layout, to be saved with "
+                  "the drawing");
+            check(canvas->document() == drawing,
+                  "paper: and the model is drawn in again on the way back");
+            spaces->setCurrentIndex(1);
+            check(canvas->document() == paper && paper->entities().size() == 1,
+                  "paper: coming back to the sheet finds it as it was left");
+
+            // The inside of a window is paper too: a press there draws, it does not grab the window.
+            // (What grabs a window is its frame - see viewportGrabAt.)
+            const size_t sheetBefore = paper->entities().size();
+            if (!drawing->layouts()[0].viewports.empty()) {
+                const LayoutViewport& vp = drawing->layouts()[0].viewports.front();
+                const Vec2 inside{vp.x + vp.width * 0.5, vp.y + vp.height * 0.5};
+                const QPointF at = canvas->mapToScreen(inside);
+                QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at),
+                                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &press);
+                editor->setTool(ToolId::Line);
+                editor->onPointerPress(inside, Qt::LeftButton, Qt::NoModifier);
+                editor->onPointerPress(Vec2{inside.x + 30.0, inside.y}, Qt::LeftButton, Qt::NoModifier);
+                check(paper->entities().size() == sheetBefore + 1,
+                      "paper: a window is not a hole - a line can be drawn across one");
+            }
+        }
+    }
+
+    // ---- the scale, findable ----------------------------------------------------------------------
+    {
+        bool labelled = false;
+        for (QLabel* l : win.findChildren<QLabel*>())
+            if (l->text() == QStringLiteral("Scale")) labelled = true;
+        check(labelled, "scale: the box says what it is, so it reads as something to press");
     }
 
     if (spaceFailures == 0) std::printf("  -> ok\n");

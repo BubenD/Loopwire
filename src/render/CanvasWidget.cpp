@@ -180,6 +180,11 @@ void CanvasWidget::setDocument(Document* doc) {
     invalidateScene();
 }
 
+void CanvasWidget::setDrawingDocument(Document* doc) {
+    drawingDoc_ = doc;
+    invalidateScene();
+}
+
 void CanvasWidget::setLayoutMode(bool on) {
     if (layoutMode_ == on) return;
     layoutMode_ = on;
@@ -198,15 +203,19 @@ void CanvasWidget::setLayoutIndex(int index) {
 }
 
 DrawingLayout* CanvasWidget::currentLayout() {
-    if (!doc_ || layoutIndex_ < 0 || layoutIndex_ >= static_cast<int>(doc_->layouts().size()))
+    Document* drawing = drawingDocument();
+    if (!drawing || layoutIndex_ < 0 ||
+        layoutIndex_ >= static_cast<int>(drawing->layouts().size()))
         return nullptr;
-    return &doc_->layouts()[static_cast<size_t>(layoutIndex_)];
+    return &drawing->layouts()[static_cast<size_t>(layoutIndex_)];
 }
 
 const DrawingLayout* CanvasWidget::currentLayout() const {
-    if (!doc_ || layoutIndex_ < 0 || layoutIndex_ >= static_cast<int>(doc_->layouts().size()))
+    const Document* drawing = drawingDocument();
+    if (!drawing || layoutIndex_ < 0 ||
+        layoutIndex_ >= static_cast<int>(drawing->layouts().size()))
         return nullptr;
-    return &doc_->layouts()[static_cast<size_t>(layoutIndex_)];
+    return &drawing->layouts()[static_cast<size_t>(layoutIndex_)];
 }
 
 void CanvasWidget::addLayoutViewport() {
@@ -426,7 +435,8 @@ QRectF CanvasWidget::viewportScreenRect(const LayoutViewport& viewport,
 ViewTransform CanvasWidget::viewportTransform(const LayoutViewport& viewport, const QRectF& rect,
                                               const ViewTransform& paper) const {
     Bounds model;
-    for (const Entity& entity : doc_->entities()) model.expand(entity.bounds());
+    const Document* drawing = drawingDocument();
+    for (const Entity& entity : drawing->entities()) model.expand(entity.bounds());
     const Vec2 center = viewport.modelScale > 0.0 || !model.valid ? viewport.modelCenter : model.center();
     double scale = viewport.modelScale > 0.0 ? viewport.modelScale * paper.scale() : 1.0;
     if (viewport.modelScale <= 0.0 && model.valid) {
@@ -438,6 +448,40 @@ ViewTransform CanvasWidget::viewportTransform(const LayoutViewport& viewport, co
     modelView.view.x = rect.center().x() - center.x * modelView.view.scale;
     modelView.view.y = rect.center().y() + center.y * modelView.view.scale;
     return modelView;
+}
+
+int CanvasWidget::viewportGrabAt(const QPointF& point, const DrawingLayout& layout,
+                                 int* corner) const {
+    // A window is taken hold of BY ITS FRAME - its edge, or one of the four corner handles. Its inside is
+    // paper like the rest of the sheet, which is what lets a line be drawn across a window, something be
+    // selected through one, and a note be moved over one. Were the whole rectangle a handle, a window
+    // would be a hole in the sheet that nothing could be put on.
+    if (corner) *corner = -1;
+    const ViewTransform paper = transform();
+    for (int i = static_cast<int>(layout.viewports.size()) - 1; i >= 0; --i) {
+        const QRectF rect = viewportScreenRect(layout.viewports[static_cast<size_t>(i)], paper);
+        const QPointF corners[] = {rect.topLeft(), rect.topRight(), rect.bottomRight(),
+                                   rect.bottomLeft()};
+        for (int c = 0; c < 4; ++c)
+            if (QLineF(corners[c], point).length() <= 9.0) {
+                if (corner) *corner = c;
+                return i;
+            }
+        const QLineF edges[] = {QLineF(rect.topLeft(), rect.topRight()),
+                                QLineF(rect.topRight(), rect.bottomRight()),
+                                QLineF(rect.bottomRight(), rect.bottomLeft()),
+                                QLineF(rect.bottomLeft(), rect.topLeft())};
+        for (const QLineF& edge : edges) {
+            const QPointF a = edge.p1(), b = edge.p2();
+            const QPointF ab = b - a;
+            const double len2 = ab.x() * ab.x() + ab.y() * ab.y();
+            if (len2 <= 1e-9) continue;
+            const QPointF ap = point - a;
+            const double u = std::clamp((ap.x() * ab.x() + ap.y() * ab.y()) / len2, 0.0, 1.0);
+            if (QLineF(a + u * ab, point).length() <= 5.0) return i;
+        }
+    }
+    return -1;
 }
 
 int CanvasWidget::viewportAt(const QPointF& point) const {
@@ -460,8 +504,6 @@ void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper
     painter.drawRect(sheet);
     painter.save();
     painter.setClipRect(sheet, Qt::IntersectClip);
-    for (const Entity& entity : layout->paperEntities)
-        EntityRenderer::draw(painter, entity, *doc_, paper);
     for (int i = 0; i < static_cast<int>(layout->viewports.size()); ++i) {
         const LayoutViewport& viewport = layout->viewports[static_cast<size_t>(i)];
         const QRectF rect = viewportScreenRect(viewport, paper);
@@ -470,9 +512,10 @@ void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper
         painter.setClipRect(rect, Qt::IntersectClip);
         painter.fillRect(rect, Qt::white);
         drawGrid(painter, modelView);
-        for (const Entity& entity : doc_->entities()) {
-            if (const Layer* layer = doc_->findLayer(entity.layer); layer && !layer->visible) continue;
-            EntityRenderer::draw(painter, entity, *doc_, modelView);
+        const Document& drawing = *drawingDocument();
+        for (const Entity& entity : drawing.entities()) {
+            if (const Layer* layer = drawing.findLayer(entity.layer); layer && !layer->visible) continue;
+            EntityRenderer::draw(painter, entity, drawing, modelView);
         }
         painter.restore();
         painter.setBrush(Qt::NoBrush);
@@ -488,6 +531,15 @@ void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper
                 painter.drawRect(QRectF(corner.x() - 4.0, corner.y() - 4.0, 8.0, 8.0));
         }
     }
+    // What is ON the paper - drawn in the document being edited, paper space - goes on last, OVER the
+    // windows. A window is filled with the view through it, so anything drawn under one would be painted
+    // out: and a note, a leader or a border drawn on the sheet is meant to be read across the view it
+    // points at. Drawn last, it is there as soon as it is drawn, wherever on the sheet it was put.
+    if (doc_)
+        for (const Entity& entity : doc_->entities()) {
+            if (const Layer* layer = doc_->findLayer(entity.layer); layer && !layer->visible) continue;
+            EntityRenderer::draw(painter, entity, *doc_, paper);
+        }
     painter.restore();
 }
 
@@ -547,7 +599,10 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
     // leading edge by the shift shows the drawing background, not the widget's grey.
     if (!sceneOffset_.isNull()) p.fillRect(rect(), bgColor_);
     p.drawPixmap(sceneOffset_, sceneCache_);
-    if (doc_ && editor_ && !layoutMode_) {
+    // The editor's overlay - the selection, the grips, the line being drawn, the snap marker - on the
+    // sheet as well as on the model, because the sheet is drawn on the same way. Not while a window is
+    // being dragged about: that is the canvas's own doing and the editor has no part in it.
+    if (doc_ && editor_ && !(layoutMode_ && (viewportPanning_ || viewportDragCorner_ >= 0))) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
     }
@@ -637,7 +692,7 @@ void CanvasWidget::wheelEvent(QWheelEvent* e) {
                 viewport.modelScale = std::clamp(viewport.modelScale *
                                                      std::pow(1.0015, e->angleDelta().y()),
                                                  0.0001, 10000.0);
-                doc_->setDirty(true);
+                drawingDocument()->setDirty(true);
                 invalidateScene();
                 e->accept();
                 return;
@@ -694,37 +749,44 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    // A layout is a sheet that can be drawn on. A press on it is a press on the sheet - the tools, the
+    // selection and the grips all work as they do on the model - EXCEPT when it lands on the frame of a
+    // window, or inside a window that has been stepped into. Those two go to the window; everything else
+    // falls through to the editor below.
     if (layoutMode_ && e->button() == Qt::LeftButton) {
         DrawingLayout* layout = currentLayout();
-        if (!layout) return;
-        const int hit = viewportAt(e->position());
-        if (activeViewport_ >= 0) {
-            if (hit == activeViewport_) {
-                viewportPanning_ = true;
-                viewportLastPos_ = e->pos();
-                setCursor(Qt::ClosedHandCursor);
-            } else {
+        if (layout) {
+            if (activeViewport_ >= 0) {
+                // Stepped inside a window (double-clicked into it): a drag moves what it looks at, and a
+                // press outside it steps back out onto the paper and is handled as paper.
+                if (viewportAt(e->position()) == activeViewport_) {
+                    viewportPanning_ = true;
+                    viewportLastPos_ = e->pos();
+                    setCursor(Qt::ClosedHandCursor);
+                    invalidateScene();
+                    e->accept();
+                    return;
+                }
                 activeViewport_ = -1;
-                selectedViewport_ = hit;
-            }
-        } else {
-            selectedViewport_ = hit;
-            viewportDragCorner_ = -1;
-            if (hit >= 0) {
-                const QRectF rect = viewportScreenRect(layout->viewports[static_cast<size_t>(hit)],
-                                                       transform());
-                const QPointF corners[] = {rect.topLeft(), rect.topRight(), rect.bottomRight(),
-                                           rect.bottomLeft()};
-                for (int i = 0; i < 4; ++i)
-                    if (QLineF(corners[i], e->position()).length() <= 9.0) {
-                        viewportDragCorner_ = i;
-                        break;
-                    }
+                selectedViewport_ = -1;
+                invalidateScene();
+            } else {
+                int corner = -1;
+                const int grab = viewportGrabAt(e->position(), *layout, &corner);
+                if (grab >= 0) {
+                    selectedViewport_ = grab;
+                    viewportDragCorner_ = corner;
+                    invalidateScene();
+                    e->accept();
+                    return;
+                }
+                if (selectedViewport_ >= 0) {   // pressing the paper lets go of the window
+                    selectedViewport_ = -1;
+                    viewportDragCorner_ = -1;
+                    invalidateScene();
+                }
             }
         }
-        invalidateScene();
-        e->accept();
-        return;
     }
     if (e->button() == Qt::MiddleButton) { // middle-drag pans
         panning_ = true;
@@ -771,7 +833,8 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
                 const ViewTransform modelView = viewportTransform(viewport, rect, transform());
                 if (viewport.modelScale <= 0.0) {
                     Bounds model;
-                    for (const Entity& entity : doc_->entities()) model.expand(entity.bounds());
+                    for (const Entity& entity : drawingDocument()->entities())
+                        model.expand(entity.bounds());
                     if (model.valid) viewport.modelCenter = model.center();
                     viewport.modelScale = modelView.scale() / transform().scale();
                 }
@@ -794,7 +857,7 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
                     viewport.height = top - viewport.y;
                 }
             }
-            doc_->setDirty(true);
+            drawingDocument()->setDirty(true);
             invalidateScene();
         }
         e->accept();
@@ -904,14 +967,23 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
 
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
     if (layoutMode_ && e->button() == Qt::LeftButton) {
+        DrawingLayout* layout = currentLayout();
+        int corner = -1;
+        const int grab = layout ? viewportGrabAt(e->position(), *layout, &corner) : -1;
         const int hit = viewportAt(e->position());
-        activeViewport_ = hit;
-        selectedViewport_ = hit;
-        viewportPanning_ = false;
-        viewportDragCorner_ = -1;
-        invalidateScene();
-        e->accept();
-        return;
+        // Into a window: double-clicking its frame, or its inside once it has been picked out by the
+        // frame. A double click anywhere else on the paper is a double click on the paper - it opens the
+        // note under the cursor for editing, as it does on the model.
+        if (grab >= 0 || (hit >= 0 && hit == selectedViewport_)) {
+            const int into = grab >= 0 ? grab : hit;
+            activeViewport_ = into;
+            selectedViewport_ = into;
+            viewportPanning_ = false;
+            viewportDragCorner_ = -1;
+            invalidateScene();
+            e->accept();
+            return;
+        }
     }
     if (e->button() == Qt::LeftButton && editor_) {
         editor_->onDoubleClick(transform().toWorld(e->position()));
