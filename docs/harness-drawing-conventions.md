@@ -433,7 +433,7 @@ on the model, because a harness lives in the model and not on a sheet of paper.
 
 ## Output: what comes out, in what order
 
-**Output** (the E menu, Ctrl+P, or `OUTPUT` / `PUBLISH` / `PLOT`) is where a drawing goes out. A drawing
+**Publish** (the E menu, Ctrl+P, or `PUBLISH` / `OUTPUT` / `PLOT`) is where a drawing goes out. A drawing
 is a model and a set of sheets, so putting it out is choosing among them: the list is Model followed by
 every layout, each with a tick, and it can be **arranged** — the order in the list is the order of the
 pages, because a pack that opens on the wrong sheet is the wrong pack. Standing on a sheet, the model
@@ -460,7 +460,7 @@ showing, and one of a dragged window.
 
 ## Page setup: what a sheet plots on
 
-Right-click a layout's tab: **Duplicate**, **Rename**, **Print / PDF**, **Page setup**, **Delete**. That
+Right-click a layout's tab: **Duplicate**, **Rename**, **Plot**, **Page setup**, **Delete**. That
 is the menu for what is done TO a sheet, as against what is drawn on it, and the tab is the thing being
 talked about.
 
@@ -511,3 +511,18 @@ Legal), and the dialog shows the printable area in millimetres so the difference
 guess. Nothing is printed in the margin by anything: a sheet plotted at 1:1 on paper too small for it is
 clipped at the printable edge, exactly as it would come out of the machine, rather than being quietly
 shrunk. *Fit to paper* is how a sheet is made to go on paper that will not hold it.
+
+### The words on the printing dialogs
+
+The fields are named the way a plot is talked about in a drawing office and written in a spec: *plot area*
+(layout, extents, display, window), *plot scale and offset*, *fit to paper*, *plot lineweights*, *plot
+paper space last*, *monochrome*, *landscape* and *portrait*, *borderless — full bleed to the paper edge*.
+The manager is the *page setup manager*, with *set current*, *new*, *edit* and *import from drawing*, and
+what it reports about a setup is a spec sheet: device, paper size, printable area, plot area, plot scale,
+ink. The arrangement is our own — a print setup is a short list of decisions and reads better as one, with
+the page drawn beside it — but the vocabulary is the trade's, so nothing has to be translated when it is
+discussed with whoever runs the plotter.
+
+The one place plain words are kept is the line under each field, which explains what the term does: "the
+sheet as laid out, edge to edge", "the view on screen at the moment of plotting". A name should be the
+trade's; an explanation should be anybody's.

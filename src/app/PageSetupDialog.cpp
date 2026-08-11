@@ -98,7 +98,7 @@ protected:
                 p.setFont(f);
                 p.setPen(QColor("#d9534f"));
                 p.drawText(QRectF(0, page.bottom() + 3, width(), 22), Qt::AlignHCenter | Qt::AlignTop,
-                           QStringLiteral("bigger than the printable area — the edges will be cut"));
+                           QStringLiteral("exceeds the printable area — the plot will be clipped"));
             }
         }
 
@@ -126,7 +126,7 @@ private:
 PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, double sheetWidthMm,
                                  double sheetHeightMm, QWidget* parent)
     : QDialog(parent), setup_(setup), sheetW_(sheetWidthMm), sheetH_(sheetHeightMm) {
-    setWindowTitle(QStringLiteral("Print setup — %1").arg(title));
+    setWindowTitle(QStringLiteral("Page setup — %1").arg(title));
     setModal(true);
 
     auto* outer = new QVBoxLayout(this);
@@ -138,7 +138,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     top->addWidget(preview, 2);
 
     auto* paperSide = new QVBoxLayout();
-    paperSide->addWidget(new QLabel(QStringLiteral("<b>The paper</b>"), this));
+    paperSide->addWidget(new QLabel(QStringLiteral("<b>Paper</b>"), this));
     paper_ = new QComboBox(this);
     // The plain sizes only, with a tick for the full-bleed twin. Every size listed twice over is where the
     // two get confused; this way the choice reads as what it is - a size, and whether the printer may go
@@ -151,7 +151,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     paper_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     paper_->setMinimumContentsLength(24);
     if (paper_->view()) paper_->view()->setMinimumWidth(320);
-    bleed_ = new QCheckBox(QStringLiteral("Print to the paper's edges (full bleed)"), this);
+    bleed_ = new QCheckBox(QStringLiteral("Borderless — full bleed to the paper edge"), this);
     bleed_->setToolTip(QStringLiteral(
         "On: no margin, so the sheet comes out at true size — what a plotter or a PDF can do, and what a "
         "drawing that will be measured with a rule needs.\n"
@@ -168,14 +168,14 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     paperSide->addWidget(bleed_);
 
     auto* wayRound = new QHBoxLayout();
-    landscape_ = new QRadioButton(QStringLiteral("Across"), this);
-    portrait_ = new QRadioButton(QStringLiteral("Upright"), this);
+    landscape_ = new QRadioButton(QStringLiteral("Landscape"), this);
+    portrait_ = new QRadioButton(QStringLiteral("Portrait"), this);
     (setup_.landscape ? landscape_ : portrait_)->setChecked(true);
     wayRound->addWidget(landscape_);
     wayRound->addWidget(portrait_);
     wayRound->addStretch(1);
     paperSide->addLayout(wayRound);
-    upsideDown_ = new QCheckBox(QStringLiteral("Turn the page the other way up"), this);
+    upsideDown_ = new QCheckBox(QStringLiteral("Rotate 180°"), this);
     upsideDown_->setChecked(setup_.upsideDown);
     paperSide->addWidget(upsideDown_);
 
@@ -189,16 +189,20 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     outer->addLayout(top);
 
     // ---- what goes on the page --------------------------------------------------------------------
-    auto* what = new QGroupBox(QStringLiteral("What goes on the page"), this);
+    auto* what = new QGroupBox(QStringLiteral("Plot area"), this);
     auto* whatGrid = new QGridLayout(what);
     area_ = new QComboBox(what);
-    area_->addItem(QStringLiteral("The whole sheet"), static_cast<int>(PlotArea::Layout));
-    area_->addItem(QStringLiteral("Everything drawn on it"), static_cast<int>(PlotArea::Extents));
-    area_->addItem(QStringLiteral("What is on screen now"), static_cast<int>(PlotArea::Display));
-    area_->addItem(QStringLiteral("A window of it"), static_cast<int>(PlotArea::Window));
+    area_->addItem(QStringLiteral("Layout — the sheet at its own size"),
+               static_cast<int>(PlotArea::Layout));
+    area_->addItem(QStringLiteral("Extents — everything drawn on the sheet"),
+               static_cast<int>(PlotArea::Extents));
+    area_->addItem(QStringLiteral("Display — the current view"),
+               static_cast<int>(PlotArea::Display));
+    area_->addItem(QStringLiteral("Window — a defined rectangle"),
+               static_cast<int>(PlotArea::Window));
     for (int i = 0; i < area_->count(); ++i)
         if (area_->itemData(i).toInt() == static_cast<int>(setup_.area)) area_->setCurrentIndex(i);
-    windowBtn_ = new QPushButton(QStringLiteral("Set the window..."), what);
+    windowBtn_ = new QPushButton(QStringLiteral("Define window..."), what);
     windowLabel_ = new QLabel(what);
     windowLabel_->setWordWrap(true);
     whatGrid->addWidget(area_, 0, 0);
@@ -208,9 +212,9 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     outer->addWidget(what);
 
     // ---- size and position ------------------------------------------------------------------------
-    auto* size = new QGroupBox(QStringLiteral("Size and position on the page"), this);
+    auto* size = new QGroupBox(QStringLiteral("Plot scale and offset"), this);
     auto* sizeGrid = new QGridLayout(size);
-    fit_ = new QCheckBox(QStringLiteral("Make it fit the paper"), size);
+    fit_ = new QCheckBox(QStringLiteral("Fit to paper"), size);
     fit_->setChecked(setup_.fitToPaper);
     scale_ = new QComboBox(size);
     for (const auto& choice : PageSetup::scaleChoices()) scale_->addItem(choice.first, choice.second);
@@ -219,7 +223,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
         if (std::abs(scale_->itemData(i).toDouble() - setup_.scale) < 1e-9) atScale = i;
     scale_->setCurrentIndex(atScale >= 0 ? atScale : 0);
     scale_->setEnabled(!setup_.fitToPaper);
-    centre_ = new QCheckBox(QStringLiteral("Put it in the middle"), size);
+    centre_ = new QCheckBox(QStringLiteral("Centre on the printable area"), size);
     centre_->setChecked(setup_.centred);
     offsetX_ = new QDoubleSpinBox(size);
     offsetY_ = new QDoubleSpinBox(size);
@@ -235,18 +239,18 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     sizeGrid->addWidget(scale_, 0, 1);
     sizeGrid->addWidget(fit_, 0, 2);
     sizeGrid->addWidget(centre_, 1, 0, 1, 3);
-    sizeGrid->addWidget(new QLabel(QStringLiteral("In from the left:"), size), 2, 0);
+    sizeGrid->addWidget(new QLabel(QStringLiteral("Offset X:"), size), 2, 0);
     sizeGrid->addWidget(offsetX_, 2, 1);
-    sizeGrid->addWidget(new QLabel(QStringLiteral("Up from the bottom:"), size), 3, 0);
+    sizeGrid->addWidget(new QLabel(QStringLiteral("Offset Y:"), size), 3, 0);
     sizeGrid->addWidget(offsetY_, 3, 1);
     sizeGrid->setColumnStretch(2, 1);
     outer->addWidget(size);
 
     // ---- the machine and the ink ------------------------------------------------------------------
-    auto* how = new QGroupBox(QStringLiteral("Where it prints, and in what ink"), this);
+    auto* how = new QGroupBox(QStringLiteral("Output device and plot options"), this);
     auto* howGrid = new QGridLayout(how);
     device_ = new QComboBox(how);
-    device_->addItem(QStringLiteral("No printer — write a PDF"), QString());
+    device_->addItem(QStringLiteral("None — plot to a PDF file"), QString());
     for (const QPrinterInfo& info : QPrinterInfo::availablePrinters())
         device_->addItem(info.printerName(), info.printerName());
     const int atDevice = device_->findData(setup_.device);
@@ -254,18 +258,18 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     device_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     device_->setMinimumContentsLength(22);
     if (device_->view()) device_->view()->setMinimumWidth(280);
-    mono_ = new QCheckBox(QStringLiteral("Black lines"), how);
+    mono_ = new QCheckBox(QStringLiteral("Monochrome"), how);
     mono_->setChecked(setup_.monochrome);
     mono_->setToolTip(QStringLiteral("Off: the drawing's own colours, on white paper."));
-    lineweights_ = new QCheckBox(QStringLiteral("Line weights as drawn"), how);
+    lineweights_ = new QCheckBox(QStringLiteral("Plot lineweights"), how);
     lineweights_->setChecked(setup_.plotLineweights);
     lineweights_->setToolTip(QStringLiteral(
         "Off: every line the same thin one — a check print, where the geometry is what is wanted."));
-    paperLast_ = new QCheckBox(QStringLiteral("Sheet over the windows"), how);
+    paperLast_ = new QCheckBox(QStringLiteral("Plot paper space last"), how);
     paperLast_->setChecked(setup_.plotPaperSpaceLast);
     paperLast_->setToolTip(QStringLiteral(
         "What is drawn on the sheet goes on last, so a note reads across the view it points at."));
-    howGrid->addWidget(new QLabel(QStringLiteral("Printer:"), how), 0, 0);
+    howGrid->addWidget(new QLabel(QStringLiteral("Device:"), how), 0, 0);
     howGrid->addWidget(device_, 0, 1, 1, 2);
     howGrid->addWidget(mono_, 1, 0);
     howGrid->addWidget(lineweights_, 1, 1);
@@ -274,7 +278,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     outer->addWidget(how);
 
     auto* buttons = new QDialogButtonBox(this);
-    buttons->addButton(QStringLiteral("Keep"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(QStringLiteral("OK"), QDialogButtonBox::AcceptRole);
     buttons->addButton(QStringLiteral("Cancel"), QDialogButtonBox::RejectRole);
     outer->addWidget(buttons);
 
@@ -306,7 +310,7 @@ void PageSetupDialog::pickWindow() {
     // of the drawing, and a window that has to be exact - one view of three, a title block on its own - is
     // a figure anyway. The whole sheet is one button away, for when the window was a mistake.
     QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("The window to print"));
+    dlg.setWindowTitle(QStringLiteral("Plot window"));
     auto* form = new QFormLayout(&dlg);
     auto* x1 = new QDoubleSpinBox(&dlg);
     auto* y1 = new QDoubleSpinBox(&dlg);
@@ -328,7 +332,7 @@ void PageSetupDialog::pickWindow() {
     form->addRow(QStringLiteral("Bottom:"), y1);
     form->addRow(QStringLiteral("Right:"), x2);
     form->addRow(QStringLiteral("Top:"), y2);
-    auto* whole = new QPushButton(QStringLiteral("The whole sheet"), &dlg);
+    auto* whole = new QPushButton(QStringLiteral("Entire sheet"), &dlg);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     buttons->addButton(whole, QDialogButtonBox::ResetRole);
     form->addRow(buttons);
@@ -363,11 +367,11 @@ void PageSetupDialog::refresh() {
         if (!window)
             windowLabel_->setText(
                 live.area == PlotArea::Display
-                    ? QStringLiteral("Whatever the canvas is showing at the moment it is printed.")
+                    ? QStringLiteral("The view on screen at the moment of plotting.")
                     : live.area == PlotArea::Extents
-                          ? QStringLiteral("Everything on the sheet, and no more of the paper than that "
-                                           "needs.")
-                          : QStringLiteral("The sheet as it was laid out, edge to edge."));
+                          ? QStringLiteral("Everything on the sheet, and no more of the paper "
+                                           "than that needs.")
+                          : QStringLiteral("The sheet as laid out, edge to edge."));
         else if (live.windowValid())
             windowLabel_->setText(QStringLiteral("%1 × %2 mm of the sheet: (%3, %4) to (%5, %6).")
                                       .arg(live.windowX2Mm - live.windowX1Mm, 0, 'f', 1)
@@ -378,7 +382,7 @@ void PageSetupDialog::refresh() {
                                       .arg(live.windowY2Mm, 0, 'f', 1));
         else
             windowLabel_->setText(
-                QStringLiteral("No window set yet — press Set the window, or the whole sheet prints."));
+                QStringLiteral("No window defined — the whole sheet will plot. Press Define window."));
     }
     if (figures_) {
         const PaperSize& size = paperSizeByName(live.paper);
@@ -389,12 +393,12 @@ void PageSetupDialog::refresh() {
         const double takenH = live.fitToPaper ? std::min(sheetH, live.printableHeightMm())
                                               : sheetH * live.scale;
         figures_->setText(
-            QStringLiteral("Page %1 × %2 mm; %3.\nAt %4 the sheet takes %5 × %6 mm of it.")
+            QStringLiteral("Sheet size %1 × %2 mm; %3.\nAt %4 the plot measures %5 × %6 mm.")
                 .arg(live.pageWidthMm(), 0, 'f', 1)
                 .arg(live.pageHeightMm(), 0, 'f', 1)
                 .arg(size.marginMm <= 0.0
-                         ? QStringLiteral("printed right to the edges")
-                         : QStringLiteral("printable %1 × %2 mm inside a %3 mm margin")
+                         ? QStringLiteral("borderless, printable to the paper edge")
+                         : QStringLiteral("printable area %1 × %2 mm, %3 mm unprintable margin")
                                .arg(live.printableWidthMm(), 0, 'f', 1)
                                .arg(live.printableHeightMm(), 0, 'f', 1)
                                .arg(size.marginMm, 0, 'f', 1))

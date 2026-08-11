@@ -2080,15 +2080,15 @@ void MainWindow::showDrawingSpaceMenu(const QPoint& at) {
     if (space == 0) {
         // Model space: there is one of it, it has no name to change and no paper to set up. What is left
         // is putting it out, which is the same Output the sheets use, opened on the model.
-        menu->addAction(tr("Print / PDF..."), this, [this] { printLayout(0); });
-        menu->addAction(tr("Output... (every space, in order)"), this, [this] { showOutput(); });
+        menu->addAction(tr("Plot..."), this, [this] { printLayout(0); });
+        menu->addAction(tr("Publish... (every space, in plot order)"), this, [this] { showOutput(); });
         menu->popup(drawingSpaceTabs_->mapToGlobal(at));
         return;
     }
     menu->addAction(tr("Duplicate"), this, [this, space] { duplicateLayout(space); });
     menu->addAction(tr("Rename..."), this, [this, space] { renameLayout(space); });
     menu->addSeparator();
-    menu->addAction(tr("Print / PDF..."), this, [this, space] { printLayout(space); });
+    menu->addAction(tr("Plot..."), this, [this, space] { printLayout(space); });
     menu->addAction(tr("Page setup..."), this, [this, space] { showPageSetup(space); });
     menu->addSeparator();
     QAction* close = menu->addAction(tr("Delete"), this, [this, space] { closeDrawingSpace(space); });
@@ -4643,7 +4643,7 @@ void MainWindow::buildMenus() {
     // Output: the whole drawing, or the part of it that is wanted, in the order it is wanted, to paper or
     // to a PDF. The two Export PDF entries above stay for what they are - one quick page of what is
     // showing; this is the one to reach for when a pack of sheets is to go out.
-    fileMenu->addAction(QStringLiteral("&Output... (print / PDF, sheets in order)"),
+    fileMenu->addAction(QStringLiteral("&Publish... (plot the model and the layouts)"),
                         QKeySequence::Print, this, [this] { showOutput(); });
     fileMenu->addSeparator();
     // What a new drawing starts as: the sheet, its border, the layers and the defaults.
@@ -7513,8 +7513,8 @@ void MainWindow::buildCommands() {
         {{"mechanical", "mhb", "mech"}, "Harness",
          "Mechanical builder: the harness as a physical object, generated to scale",
          [this] { showMechanicalBuilder(); }},
-        {{"output", "publish", "plot"}, "Output",
-         "Put the model and the sheets out, in order, to a printer or a PDF",
+        {{"publish", "output", "plot"}, "Output",
+         "Plot the model and the layouts, in order, to a printer or a PDF",
          [this] { showOutput(); }},
         {{"layoutwindow", "viewport", "addwindow"}, "Layout",
          "Put a window onto the drawing on this sheet", [this] { addLayoutWindow(); }},

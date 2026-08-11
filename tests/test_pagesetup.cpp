@@ -226,7 +226,7 @@ int run_pagesetup_tests() {
         QCheckBox* bleed = nullptr;
         for (QCheckBox* box : dlg.findChildren<QCheckBox*>())
             if (box->text().contains(QStringLiteral("full bleed"))) bleed = box;
-        check(bleed != nullptr, "dialog: and a tick for printing to the paper's edges");
+        check(bleed != nullptr, "dialog: and a tick for borderless, full bleed to the edge");
         if (papers && bleed) {
             const int a3 = papers->findData(QStringLiteral("ISO A3 (420.00 x 297.00 MM)"));
             check(a3 >= 0, "dialog: A3 can be picked");
@@ -285,7 +285,7 @@ int run_pagesetup_tests() {
             check(list->item(1)->text() == named.name, "manager: the named one by its name");
             QPushButton* setCurrent = nullptr;
             for (QPushButton* b : manager.findChildren<QPushButton*>())
-                if (b->text() == QStringLiteral("Use for this sheet")) setCurrent = b;
+                if (b->text() == QStringLiteral("Set current")) setCurrent = b;
             check(setCurrent != nullptr, "manager: the button that puts a setup on this sheet is there");
             if (setCurrent) {
                 check(!setCurrent->isEnabled(),
@@ -338,7 +338,7 @@ int run_pagesetup_tests() {
             check(items.filter(QStringLiteral("Duplicate")).size() == 1 &&
                       items.filter(QStringLiteral("Rename")).size() == 1 &&
                       items.filter(QStringLiteral("Page setup")).size() == 1 &&
-                      items.filter(QStringLiteral("Print")).size() == 1,
+                      items.filter(QStringLiteral("Plot")).size() == 1,
                   "tabs: it is the sheet's menu - duplicate, rename, print, page setup");
             check(items.filter(QStringLiteral("Quick Select")).isEmpty() &&
                       items.filter(QStringLiteral("Copy")).isEmpty(),

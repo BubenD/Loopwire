@@ -18,7 +18,7 @@ namespace {
 // What a space is called on the list, and what it says about itself: a sheet says its size, because
 // choosing between Layout1 and Layout2 is usually choosing between an A3 and an A4.
 QString spaceLabel(const Document& doc, int space) {
-    if (space == 0) return QStringLiteral("Model — the harness, at size");
+    if (space == 0) return QStringLiteral("Model space — the harness, at full size");
     const auto& layouts = doc.layouts();
     const int at = space - 1;
     if (at < 0 || at >= static_cast<int>(layouts.size())) return QStringLiteral("Layout %1").arg(space);
@@ -36,12 +36,13 @@ QString spaceLabel(const Document& doc, int space) {
 
 OutputDialog::OutputDialog(const Document& doc, int currentSpace, QWidget* parent)
     : QDialog(parent) {
-    setWindowTitle(QStringLiteral("Output"));
+    setWindowTitle(QStringLiteral("Publish — plot the model and the layouts"));
     setModal(true);
 
     auto* outer = new QVBoxLayout(this);
     outer->addWidget(new QLabel(
-        QStringLiteral("What comes out, and in what order. Drag to arrange, or use the arrows."), this));
+        QStringLiteral("Sheet list. The order below is the plot order — drag a row, or use the arrows."),
+        this));
 
     auto* row = new QHBoxLayout();
     list_ = new QListWidget(this);
@@ -71,16 +72,16 @@ OutputDialog::OutputDialog(const Document& doc, int currentSpace, QWidget* paren
     auto* side = new QVBoxLayout();
     auto* up = new QToolButton(this);
     up->setText(QStringLiteral("▲"));
-    up->setToolTip(QStringLiteral("Earlier in the pack"));
+    up->setToolTip(QStringLiteral("Earlier in the plot order"));
     auto* down = new QToolButton(this);
     down->setText(QStringLiteral("▼"));
-    down->setToolTip(QStringLiteral("Later in the pack"));
+    down->setToolTip(QStringLiteral("Later in the plot order"));
     auto* all = new QToolButton(this);
     all->setText(QStringLiteral("All"));
-    all->setToolTip(QStringLiteral("Include everything"));
+    all->setToolTip(QStringLiteral("Select every space"));
     auto* none = new QToolButton(this);
     none->setText(QStringLiteral("None"));
-    none->setToolTip(QStringLiteral("Include nothing, and start again"));
+    none->setToolTip(QStringLiteral("Clear the selection"));
     for (QToolButton* b : {up, down, all, none}) b->setAutoRaise(true);
     side->addWidget(up);
     side->addWidget(down);
@@ -92,30 +93,30 @@ OutputDialog::OutputDialog(const Document& doc, int currentSpace, QWidget* paren
     row->addLayout(side);
     outer->addLayout(row);
 
-    auto* where = new QGroupBox(QStringLiteral("Where it goes"), this);
+    auto* where = new QGroupBox(QStringLiteral("Destination"), this);
     auto* whereBox = new QVBoxLayout(where);
-    toPdf_ = new QRadioButton(QStringLiteral("A PDF file"), where);
-    toPrint_ = new QRadioButton(QStringLiteral("A printer"), where);
+    toPdf_ = new QRadioButton(QStringLiteral("PDF file"), where);
+    toPrint_ = new QRadioButton(QStringLiteral("Printer"), where);
     toPdf_->setChecked(true);
     whereBox->addWidget(toPdf_);
     whereBox->addWidget(toPrint_);
-    perSheet_ = new QCheckBox(QStringLiteral("A separate PDF for each sheet"), where);
+    perSheet_ = new QCheckBox(QStringLiteral("One PDF per sheet"), where);
     perSheet_->setToolTip(QStringLiteral(
-        "One file per sheet, named after it, rather than one file of many pages."));
+        "A separate file per sheet, named after it, rather than one multi-page document."));
     whereBox->addWidget(perSheet_);
     outer->addWidget(where);
 
-    auto* how = new QGroupBox(QStringLiteral("How it is drawn"), this);
+    auto* how = new QGroupBox(QStringLiteral("Plot options"), this);
     auto* howBox = new QVBoxLayout(how);
-    black_ = new QRadioButton(QStringLiteral("Black lines on white"), how);
-    colour_ = new QRadioButton(QStringLiteral("The drawing's own colours, on white"), how);
+    black_ = new QRadioButton(QStringLiteral("Monochrome — black lines on white"), how);
+    colour_ = new QRadioButton(QStringLiteral("Colour — the drawing's own, on white"), how);
     black_->setChecked(true);
     howBox->addWidget(black_);
     howBox->addWidget(colour_);
-    fit_ = new QCheckBox(QStringLiteral("Fit each page to the paper"), how);
+    fit_ = new QCheckBox(QStringLiteral("Fit each sheet to the paper"), how);
     fit_->setToolTip(QStringLiteral(
-        "Off: a sheet goes out at its own size, so a scale read off it with a rule is right. On: it is "
-        "sized to whatever paper the printer has."));
+        "Off: each sheet plots at its own size, so a dimension read off it with a rule is right.\n"
+        "On: it is scaled to whatever paper the device has."));
     howBox->addWidget(fit_);
     outer->addWidget(how);
 
@@ -124,7 +125,7 @@ OutputDialog::OutputDialog(const Document& doc, int currentSpace, QWidget* paren
     outer->addWidget(summary_);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Output"));
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Publish"));
     outer->addWidget(buttons);
 
     connect(up, &QToolButton::clicked, this, [this] { moveSelected(-1); });
@@ -161,15 +162,15 @@ void OutputDialog::updateSummary() {
     if (!summary_) return;
     const std::vector<int> chosen = spaces();
     if (chosen.empty()) {
-        summary_->setText(QStringLiteral("Nothing is ticked — nothing would come out."));
+        summary_->setText(QStringLiteral("Nothing selected — nothing would be plotted."));
         return;
     }
     const bool separate = toPdf_ && toPdf_->isChecked() && perSheet_ && perSheet_->isChecked();
     summary_->setText(
-        separate ? QStringLiteral("%1 file%2, one per sheet, in the order above.")
+        separate ? QStringLiteral("%1 file%2, one per sheet, in the order listed.")
                        .arg(chosen.size())
                        .arg(chosen.size() == 1 ? QString() : QStringLiteral("s"))
-                 : QStringLiteral("%1 page%2, in the order above.")
+                 : QStringLiteral("%1 sheet%2 will plot, in the order listed.")
                        .arg(chosen.size())
                        .arg(chosen.size() == 1 ? QString() : QStringLiteral("s")));
 }
