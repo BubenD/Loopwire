@@ -25,6 +25,9 @@ QJsonObject toJson(const Document& doc) {
     root["entities"] = entities;
     if (!doc.bom().isEmpty()) root["bom"] = doc.bom();
     if (!doc.harnessPresets().isEmpty()) root["harnessPresets"] = doc.harnessPresets();
+    QJsonArray layouts;
+    for (const DrawingLayout& layout : doc.layouts()) layouts.append(layout.toJson());
+    root["layouts"] = layouts;
     return root;
 }
 
@@ -43,6 +46,10 @@ void fromJson(Document& doc, const QJsonObject& obj) {
     doc.bom() = obj.value("bom").toObject();
     doc.harnessPresets() = obj.value("harnessPresets").toObject();
     doc.entities() = std::move(entities);
+    std::vector<DrawingLayout> layouts;
+    for (const QJsonValue& value : obj.value(QStringLiteral("layouts")).toArray())
+        layouts.push_back(DrawingLayout::fromJson(value.toObject()));
+    if (!layouts.empty()) doc.layouts() = std::move(layouts);
 
     doc.setActiveLayer(doc.layers().empty() ? QStringLiteral("0")
                                             : doc.layers().front().name);

@@ -11,12 +11,14 @@
 #include <QKeyEvent>
 #include <QResizeEvent>
 #include <QLineEdit>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSet>
 #include <QAbstractItemView>
 #include <QStandardItemModel>
 #include <QStringListModel>
+#include <QUuid>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -181,8 +183,45 @@ void CanvasWidget::setDocument(Document* doc) {
 void CanvasWidget::setLayoutMode(bool on) {
     if (layoutMode_ == on) return;
     layoutMode_ = on;
+    selectedViewport_ = -1;
+    activeViewport_ = -1;
     EntityRenderer::setWhitePaper(on);
     EntityRenderer::setBackgroundColor(on ? QColor(Qt::white) : bgColor_);
+    invalidateScene();
+}
+
+void CanvasWidget::setLayoutIndex(int index) {
+    layoutIndex_ = std::max(0, index);
+    selectedViewport_ = -1;
+    activeViewport_ = -1;
+    invalidateScene();
+}
+
+DrawingLayout* CanvasWidget::currentLayout() {
+    if (!doc_ || layoutIndex_ < 0 || layoutIndex_ >= static_cast<int>(doc_->layouts().size()))
+        return nullptr;
+    return &doc_->layouts()[static_cast<size_t>(layoutIndex_)];
+}
+
+const DrawingLayout* CanvasWidget::currentLayout() const {
+    if (!doc_ || layoutIndex_ < 0 || layoutIndex_ >= static_cast<int>(doc_->layouts().size()))
+        return nullptr;
+    return &doc_->layouts()[static_cast<size_t>(layoutIndex_)];
+}
+
+void CanvasWidget::addLayoutViewport() {
+    DrawingLayout* layout = currentLayout();
+    if (!layout) return;
+    LayoutViewport viewport;
+    viewport.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    const double inset = 20.0 + 10.0 * layout->viewports.size();
+    viewport.x = inset;
+    viewport.y = inset;
+    viewport.width = std::max(40.0, layout->paperWidth - inset * 2.0);
+    viewport.height = std::max(40.0, layout->paperHeight - inset * 2.0);
+    layout->viewports.push_back(viewport);
+    selectedViewport_ = static_cast<int>(layout->viewports.size()) - 1;
+    doc_->setDirty(true);
     invalidateScene();
 }
 
@@ -255,9 +294,11 @@ void CanvasWidget::fitView() {
     // drawing keeps working geometry off the sheet - a symbol parked to one side, a block placed out in
     // the field - and fitting to every last object of it opens the sheet small and off to one side.
     Bounds box = doc_->sheet();
-    if (layoutMode_ && !box.valid) {
+    if (layoutMode_) {
+        box = {};
+        const DrawingLayout* layout = currentLayout();
         box.expand({0.0, 0.0});
-        box.expand({420.0, 297.0});
+        box.expand({layout ? layout->paperWidth : 420.0, layout ? layout->paperHeight : 297.0});
     } else if (!box.valid) {
         for (const auto& e : doc_->entities()) box.expand(e.bounds());
     }
@@ -376,6 +417,80 @@ quint64 CanvasWidget::layerFingerprint() const {
     return h;
 }
 
+QRectF CanvasWidget::viewportScreenRect(const LayoutViewport& viewport,
+                                        const ViewTransform& paper) const {
+    return QRectF(paper.toScreen({viewport.x, viewport.y + viewport.height}),
+                  paper.toScreen({viewport.x + viewport.width, viewport.y})).normalized();
+}
+
+ViewTransform CanvasWidget::viewportTransform(const LayoutViewport& viewport, const QRectF& rect,
+                                              const ViewTransform& paper) const {
+    Bounds model;
+    for (const Entity& entity : doc_->entities()) model.expand(entity.bounds());
+    const Vec2 center = viewport.modelScale > 0.0 || !model.valid ? viewport.modelCenter : model.center();
+    double scale = viewport.modelScale > 0.0 ? viewport.modelScale * paper.scale() : 1.0;
+    if (viewport.modelScale <= 0.0 && model.valid) {
+        scale = std::min(rect.width() / std::max(1.0, model.width() * 1.1),
+                         rect.height() / std::max(1.0, model.height() * 1.1));
+    }
+    ViewTransform modelView;
+    modelView.view.scale = std::max(0.0005, scale);
+    modelView.view.x = rect.center().x() - center.x * modelView.view.scale;
+    modelView.view.y = rect.center().y() + center.y * modelView.view.scale;
+    return modelView;
+}
+
+int CanvasWidget::viewportAt(const QPointF& point) const {
+    const DrawingLayout* layout = currentLayout();
+    if (!layout) return -1;
+    const ViewTransform paper = transform();
+    for (int i = static_cast<int>(layout->viewports.size()) - 1; i >= 0; --i)
+        if (viewportScreenRect(layout->viewports[static_cast<size_t>(i)], paper).contains(point))
+            return i;
+    return -1;
+}
+
+void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper) {
+    const DrawingLayout* layout = currentLayout();
+    if (!layout) return;
+    const QRectF sheet = QRectF(paper.toScreen({0.0, layout->paperHeight}),
+                                paper.toScreen({layout->paperWidth, 0.0})).normalized();
+    painter.setPen(QPen(QColor("#555b63"), 1.0));
+    painter.setBrush(Qt::white);
+    painter.drawRect(sheet);
+    painter.save();
+    painter.setClipRect(sheet, Qt::IntersectClip);
+    for (const Entity& entity : layout->paperEntities)
+        EntityRenderer::draw(painter, entity, *doc_, paper);
+    for (int i = 0; i < static_cast<int>(layout->viewports.size()); ++i) {
+        const LayoutViewport& viewport = layout->viewports[static_cast<size_t>(i)];
+        const QRectF rect = viewportScreenRect(viewport, paper);
+        const ViewTransform modelView = viewportTransform(viewport, rect, paper);
+        painter.save();
+        painter.setClipRect(rect, Qt::IntersectClip);
+        painter.fillRect(rect, Qt::white);
+        drawGrid(painter, modelView);
+        for (const Entity& entity : doc_->entities()) {
+            if (const Layer* layer = doc_->findLayer(entity.layer); layer && !layer->visible) continue;
+            EntityRenderer::draw(painter, entity, *doc_, modelView);
+        }
+        painter.restore();
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(i == activeViewport_   ? QColor("#24a8ff")
+                            : i == selectedViewport_ ? QColor("#3d8bfd")
+                                                     : QColor("#606a75"),
+                            i == activeViewport_ || i == selectedViewport_ ? 2.0 : 1.0));
+        painter.drawRect(rect);
+        if (i == selectedViewport_ && activeViewport_ < 0) {
+            painter.setBrush(QColor("#3d8bfd"));
+            for (const QPointF& corner : {rect.topLeft(), rect.topRight(), rect.bottomRight(),
+                                          rect.bottomLeft()})
+                painter.drawRect(QRectF(corner.x() - 4.0, corner.y() - 4.0, 8.0, 8.0));
+        }
+    }
+    painter.restore();
+}
+
 void CanvasWidget::paintEvent(QPaintEvent*) {
     const ViewTransform vt = transform();
     const qreal dpr = devicePixelRatioF();
@@ -396,44 +511,18 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         sceneCache_.fill(bgColor_);
         QPainter sp(&sceneCache_);
         sp.setRenderHint(QPainter::Antialiasing, true);
-        bool paperClip = false;
-        if (doc_) {
-            if (layoutMode_) {
-                Bounds paper = doc_->sheet();
-                if (!paper.valid) {
-                    paper.expand({0.0, 0.0});
-                    paper.expand({420.0, 297.0});
-                }
-                const QPointF topLeft = vt.toScreen({paper.min.x, paper.max.y});
-                const QPointF bottomRight = vt.toScreen({paper.max.x, paper.min.y});
-                const QRectF paperRect = QRectF(topLeft, bottomRight).normalized();
-                sp.setPen(QPen(QColor("#555b63"), 1.0));
-                sp.setBrush(Qt::white);
-                sp.drawRect(paperRect);
-                sp.save();
-                sp.setClipRect(paperRect, Qt::IntersectClip);
-                paperClip = true;
-            } else {
-                drawGrid(sp, vt);
-                drawOriginMarker(sp, vt);
-            }
-            // Viewport culling: only entities whose bounds intersect the visible
-            // world rectangle (plus a margin for line widths / labels) are drawn, so
-            // pan/zoom/edit on a large drawing don't re-render off-screen geometry.
+        if (doc_ && layoutMode_) {
+            drawLayoutScene(sp, vt);
+        } else if (doc_) {
+            drawGrid(sp, vt);
+            drawOriginMarker(sp, vt);
             const Vec2 c0 = vt.toWorld(QPointF(0, 0));
             const Vec2 c1 = vt.toWorld(QPointF(width(), height()));
             double vMinX = std::min(c0.x, c1.x), vMaxX = std::max(c0.x, c1.x);
             double vMinY = std::min(c0.y, c1.y), vMaxY = std::max(c0.y, c1.y);
-            // The margin is a share of what is on screen, so it shrinks as the view zooms in - which
-            // is right for a pen width and wrong for anything measured in world units. It is the
-            // object's own reach that has to cover those (see drawnBounds), with a floor here of a
-            // millimetre or two for the symbols drawn at a fixed size in pixels.
             const double mx = (vMaxX - vMinX) * 0.05 + 2.0;
             const double my = (vMaxY - vMinY) * 0.05 + 2.0;
             vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
-
-            // Selected entities are drawn live in the overlay (so they can be
-            // dragged without rebuilding the cache); skip them here.
             QSet<QString> selected;
             if (editor_)
                 for (const auto& id : editor_->selection()) selected.insert(id);
@@ -441,17 +530,12 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
                 if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible)
                     continue;
                 if (selected.contains(e.id)) continue;
-                // Where the object is DRAWN, not where its geometry is: a double run's two lines are
-                // gap/2 either side of the path this used to test, so zooming in on one of those lines
-                // culled the object whose line fills the screen. That is what made lines disappear as
-                // the view zoomed in.
                 const Bounds b = drawnBounds(e);
                 if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX ||
                                 b.max.y < vMinY || b.min.y > vMaxY))
-                    continue; // entirely off-screen
+                    continue;
                 EntityRenderer::draw(sp, e, *doc_, vt);
             }
-            if (paperClip) sp.restore();
         }
         sceneDirty_ = false;
         sceneOffset_ = QPointF(0, 0); // cache now matches the current view
@@ -463,7 +547,7 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
     // leading edge by the shift shows the drawing background, not the widget's grey.
     if (!sceneOffset_.isNull()) p.fillRect(rect(), bgColor_);
     p.drawPixmap(sceneOffset_, sceneCache_);
-    if (doc_ && editor_) {
+    if (doc_ && editor_ && !layoutMode_) {
         p.setRenderHint(QPainter::Antialiasing, true);
         editor_->drawOverlay(p, vt);
     }
@@ -541,6 +625,25 @@ void CanvasWidget::setCommandWords(const QStringList& words, const QStringList& 
 
 void CanvasWidget::wheelEvent(QWheelEvent* e) {
     if (!doc_) return;
+    if (layoutMode_ && activeViewport_ >= 0) {
+        DrawingLayout* layout = currentLayout();
+        if (layout && activeViewport_ < static_cast<int>(layout->viewports.size())) {
+            LayoutViewport& viewport = layout->viewports[static_cast<size_t>(activeViewport_)];
+            const QRectF rect = viewportScreenRect(viewport, transform());
+            if (rect.contains(e->position())) {
+                const ViewTransform current = viewportTransform(viewport, rect, transform());
+                if (viewport.modelScale <= 0.0)
+                    viewport.modelScale = current.scale() / transform().scale();
+                viewport.modelScale = std::clamp(viewport.modelScale *
+                                                     std::pow(1.0015, e->angleDelta().y()),
+                                                 0.0001, 10000.0);
+                doc_->setDirty(true);
+                invalidateScene();
+                e->accept();
+                return;
+            }
+        }
+    }
     ViewState& view = doc_->view();
 
     const double factor = std::pow(1.0015, e->angleDelta().y());
@@ -591,6 +694,38 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    if (layoutMode_ && e->button() == Qt::LeftButton) {
+        DrawingLayout* layout = currentLayout();
+        if (!layout) return;
+        const int hit = viewportAt(e->position());
+        if (activeViewport_ >= 0) {
+            if (hit == activeViewport_) {
+                viewportPanning_ = true;
+                viewportLastPos_ = e->pos();
+                setCursor(Qt::ClosedHandCursor);
+            } else {
+                activeViewport_ = -1;
+                selectedViewport_ = hit;
+            }
+        } else {
+            selectedViewport_ = hit;
+            viewportDragCorner_ = -1;
+            if (hit >= 0) {
+                const QRectF rect = viewportScreenRect(layout->viewports[static_cast<size_t>(hit)],
+                                                       transform());
+                const QPointF corners[] = {rect.topLeft(), rect.topRight(), rect.bottomRight(),
+                                           rect.bottomLeft()};
+                for (int i = 0; i < 4; ++i)
+                    if (QLineF(corners[i], e->position()).length() <= 9.0) {
+                        viewportDragCorner_ = i;
+                        break;
+                    }
+            }
+        }
+        invalidateScene();
+        e->accept();
+        return;
+    }
     if (e->button() == Qt::MiddleButton) { // middle-drag pans
         panning_ = true;
         lastPanPos_ = e->pos();
@@ -623,6 +758,47 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         if (captureActive_) { captureCur_ = e->pos(); update(); }
         e->accept();
         return; // no drawing/selection while capturing a print window
+    }
+    if (layoutMode_ && doc_ && (viewportPanning_ || viewportDragCorner_ >= 0)) {
+        DrawingLayout* layout = currentLayout();
+        if (layout && selectedViewport_ >= 0 &&
+            selectedViewport_ < static_cast<int>(layout->viewports.size())) {
+            LayoutViewport& viewport = layout->viewports[static_cast<size_t>(selectedViewport_)];
+            if (viewportPanning_ && activeViewport_ == selectedViewport_) {
+                const QPoint delta = e->pos() - viewportLastPos_;
+                viewportLastPos_ = e->pos();
+                const QRectF rect = viewportScreenRect(viewport, transform());
+                const ViewTransform modelView = viewportTransform(viewport, rect, transform());
+                if (viewport.modelScale <= 0.0) {
+                    Bounds model;
+                    for (const Entity& entity : doc_->entities()) model.expand(entity.bounds());
+                    if (model.valid) viewport.modelCenter = model.center();
+                    viewport.modelScale = modelView.scale() / transform().scale();
+                }
+                viewport.modelCenter.x -= delta.x() / modelView.scale();
+                viewport.modelCenter.y += delta.y() / modelView.scale();
+            } else if (viewportDragCorner_ >= 0) {
+                const Vec2 point = transform().toWorld(e->position());
+                const double left = viewport.x, right = viewport.x + viewport.width;
+                const double bottom = viewport.y, top = viewport.y + viewport.height;
+                if (viewportDragCorner_ == 0 || viewportDragCorner_ == 3) {
+                    viewport.x = std::min(point.x, right - 10.0);
+                    viewport.width = right - viewport.x;
+                } else {
+                    viewport.width = std::max(10.0, point.x - left);
+                }
+                if (viewportDragCorner_ == 0 || viewportDragCorner_ == 1) {
+                    viewport.height = std::max(10.0, point.y - bottom);
+                } else {
+                    viewport.y = std::min(point.y, top - 10.0);
+                    viewport.height = top - viewport.y;
+                }
+            }
+            doc_->setDirty(true);
+            invalidateScene();
+        }
+        e->accept();
+        return;
     }
     if (panning_ && doc_) {
         const QPoint delta = e->pos() - lastPanPos_;
@@ -690,6 +866,15 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    if (layoutMode_ && e->button() == Qt::LeftButton &&
+        (viewportPanning_ || viewportDragCorner_ >= 0)) {
+        viewportPanning_ = false;
+        viewportDragCorner_ = -1;
+        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        invalidateScene();
+        e->accept();
+        return;
+    }
     if (panning_ && e->button() == Qt::MiddleButton) {
         panning_ = false;
         setCursor(inlineEditing_ ? Qt::ArrowCursor
@@ -718,6 +903,16 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
+    if (layoutMode_ && e->button() == Qt::LeftButton) {
+        const int hit = viewportAt(e->position());
+        activeViewport_ = hit;
+        selectedViewport_ = hit;
+        viewportPanning_ = false;
+        viewportDragCorner_ = -1;
+        invalidateScene();
+        e->accept();
+        return;
+    }
     if (e->button() == Qt::LeftButton && editor_) {
         editor_->onDoubleClick(transform().toWorld(e->position()));
         e->accept();

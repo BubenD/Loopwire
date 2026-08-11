@@ -88,6 +88,7 @@
 #include <QTableWidget>
 #include <QToolBar>
 #include <QToolButton>
+#include <QUuid>
 #include <QWidgetAction>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -1834,10 +1835,6 @@ void MainWindow::buildDocumentArea() {
     drawingSpaceTabs_->setExpanding(false);
     drawingSpaceTabs_->setFixedHeight(32);
     drawingSpaceTabs_->addTab(QStringLiteral("Model"));
-    // Two layouts to begin with, the way every drawing office starts: one sheet to issue and one to
-    // work something out on. More are added with the + beside them.
-    drawingSpaceTabs_->addTab(QStringLiteral("Layout1"));
-    drawingSpaceTabs_->addTab(QStringLiteral("Layout2"));
     drawingSpaceTabs_->setCurrentIndex(0);
     drawingSpaceTabs_->setStyleSheet(QStringLiteral(
         "QTabBar{background:#252c36;}"
@@ -1854,10 +1851,48 @@ void MainWindow::buildDocumentArea() {
         "QToolButton{color:#d8dee8;font-size:20px;background:#252c36;border:none;}"
         "QToolButton:hover{background:#364252;}"));
     addSpace->setStyleSheet(spaceMenu->styleSheet());
+    auto* drawingSpaceMenu = new QMenu(spaceMenu);
+    drawingSpaceMenu->addAction(QStringLiteral("Add viewport"), this,
+                                [this] { canvas_->addLayoutViewport(); });
+    drawingSpaceMenu->addAction(QStringLiteral("Apply layout template..."), this,
+                                [this] { applyLayoutTemplate(); });
+    spaceMenu->setMenu(drawingSpaceMenu);
+    spaceMenu->setPopupMode(QToolButton::InstantPopup);
+    // The scale the sheet is plotted at, in the right-hand corner where a drawing office looks for it.
+    // It is the LAYOUT'S scale - the viewport's - so it is kept with the drawing and is what the sheet
+    // shows and prints at. 1:2 means one millimetre of paper is worth two of the harness.
+    spaceScaleBox_ = new QComboBox(spaceRow);
+    spaceScaleBox_->setToolTip(QStringLiteral(
+        "The scale this layout is plotted at: what one millimetre of paper is worth in the model. "
+        "Fit sizes the drawing to the viewport instead."));
+    spaceScaleBox_->setFixedHeight(24);
+    struct Ratio { const char* label; double paperPerModel; };
+    // Reducing scales first, as a drawing office lists them, then the enlarging ones. The figure is
+    // paper per model: 1:2 is a half, 2:1 is two.
+    const Ratio ratios[] = {
+        {"Fit", 0.0},      {"1:1", 1.0},        {"1:2", 1.0 / 2.0},   {"1:4", 1.0 / 4.0},
+        {"1:5", 1.0 / 5.0}, {"1:8", 1.0 / 8.0}, {"1:10", 1.0 / 10.0}, {"1:16", 1.0 / 16.0},
+        {"1:20", 1.0 / 20.0}, {"1:30", 1.0 / 30.0}, {"1:40", 1.0 / 40.0}, {"1:50", 1.0 / 50.0},
+        {"1:100", 1.0 / 100.0}, {"2:1", 2.0}, {"4:1", 4.0}, {"8:1", 8.0}, {"10:1", 10.0},
+        {"100:1", 100.0}};
+    for (const Ratio& r : ratios)
+        spaceScaleBox_->addItem(QString::fromLatin1(r.label), r.paperPerModel);
+    spaceScaleBox_->setCurrentIndex(1);   // 1:1
+    spaceScaleBox_->setStyleSheet(QStringLiteral(
+        "QComboBox{background:#252c36;color:#d8dee8;border:none;padding:2px 10px;}"
+        "QComboBox:hover{background:#364252;}"
+        "QComboBox QAbstractItemView{background:#252c36;color:#d8dee8;"
+        "selection-background-color:#4b596b;}"));
+    connect(spaceScaleBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (!spaceScaleBox_ || i < 0) return;
+        setDrawingSpaceScale(spaceScaleBox_->itemData(i).toDouble());
+    });
+
     spaceLayout->addWidget(spaceMenu);
     spaceLayout->addWidget(drawingSpaceTabs_);
     spaceLayout->addWidget(addSpace);
     spaceLayout->addStretch(1);
+    spaceLayout->addWidget(spaceScaleBox_);
 
     v->addWidget(topRow);
     v->addWidget(canvas_, 1);
@@ -1869,18 +1904,129 @@ void MainWindow::buildDocumentArea() {
     connect(plus, &QToolButton::clicked, this, [this] { newDrawing(); });
     connect(drawingSpaceTabs_, &QTabBar::currentChanged, this,
             [this](int i) { activateDrawingSpace(i); });
-    connect(addSpace, &QToolButton::clicked, this, [this] {
-        // Model is not a layout, so the new one is numbered from how many LAYOUTS there are.
-        const int at = drawingSpaceTabs_->count();
-        drawingSpaceTabs_->addTab(QStringLiteral("Layout%1").arg(at));
-        drawingSpaceTabs_->setCurrentIndex(at);
-    });
+    connect(addSpace, &QToolButton::clicked, this, [this] { addDrawingLayout(); });
+    connect(drawingSpaceTabs_, &QTabBar::tabCloseRequested, this,
+            [this](int i) { closeDrawingSpace(i); });
+}
+
+void MainWindow::syncDrawingSpaceTabs() {
+    if (!drawingSpaceTabs_) return;
+    const int current = drawingSpaceTabs_->currentIndex();
+    const QSignalBlocker blocker(drawingSpaceTabs_);
+    while (drawingSpaceTabs_->count() > 0) drawingSpaceTabs_->removeTab(0);
+    drawingSpaceTabs_->addTab(QStringLiteral("Model"));
+    if (doc_)
+        for (const DrawingLayout& layout : doc_->layouts()) drawingSpaceTabs_->addTab(layout.name);
+    // An x on the layouts, so a sheet can be thrown away where it was made. Not on Model: there is one
+    // model space and the drawing is in it, so its button is taken away rather than offered and refused.
+    // Settled here because the tabs are rebuilt from the document every time it changes.
+    drawingSpaceTabs_->setTabsClosable(true);
+    drawingSpaceTabs_->setTabButton(0, QTabBar::RightSide, nullptr);
+    drawingSpaceTabs_->setTabButton(0, QTabBar::LeftSide, nullptr);
+    drawingSpaceTabs_->setCurrentIndex(std::clamp(current, 0, drawingSpaceTabs_->count() - 1));
+}
+
+void MainWindow::addDrawingLayout() {
+    if (!doc_) return;
+    DrawingLayout layout;
+    layout.name = QStringLiteral("Layout%1").arg(doc_->layouts().size() + 1);
+    LayoutViewport viewport;
+    viewport.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    layout.viewports.push_back(viewport);
+    doc_->layouts().push_back(std::move(layout));
+    doc_->setDirty(true);
+    syncDrawingSpaceTabs();
+    drawingSpaceTabs_->setCurrentIndex(static_cast<int>(doc_->layouts().size()));
+}
+
+void MainWindow::closeDrawingSpace(int index) {
+    if (!doc_ || !drawingSpaceTabs_) return;
+    if (index <= 0) return;                       // Model: not a layout, nothing to close
+    const int at = index - 1;                     // the layouts start after it
+    auto& layouts = doc_->layouts();
+    if (at < 0 || at >= static_cast<int>(layouts.size())) return;
+    if (layouts.size() <= 1) {
+        statusBar()->showMessage(
+            tr("That is the last layout — a drawing keeps one sheet to plot."), 4000);
+        return;
+    }
+    const QString name = layouts[static_cast<size_t>(at)].name;
+    // What was on that sheet goes with it: its paper objects, its viewports, its scale. Asked first,
+    // because a sheet that has been laid out is work, and an x is easy to hit.
+    if (!layouts[static_cast<size_t>(at)].paperEntities.empty() ||
+        !layouts[static_cast<size_t>(at)].templateName.isEmpty()) {
+        const auto answer = QMessageBox::question(
+            this, tr("Close layout"),
+            tr("%1 has a sheet laid out on it. Close it and lose that?").arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) return;
+    }
+    layouts.erase(layouts.begin() + at);
+    doc_->setDirty(true);
+    // Whichever space is showing after it goes: the one before, so the eye stays where it was.
+    const int show = std::clamp(index - 1, 0, static_cast<int>(layouts.size()));
+    syncDrawingSpaceTabs();
+    drawingSpaceTabs_->setCurrentIndex(show);
+    activateDrawingSpace(show);
+    statusBar()->showMessage(tr("%1 closed").arg(name), 3000);
+}
+
+void MainWindow::setDrawingSpaceScale(double paperPerModel) {
+    if (!doc_ || !canvas_ || !canvas_->layoutMode()) return;
+    const int at = canvas_->layoutIndex();
+    auto& layouts = doc_->layouts();
+    if (at < 0 || at >= static_cast<int>(layouts.size())) return;
+    DrawingLayout& layout = layouts[static_cast<size_t>(at)];
+    if (layout.viewports.empty()) {
+        LayoutViewport viewport;
+        viewport.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+        layout.viewports.push_back(viewport);
+    }
+    // Every viewport on the sheet: what the corner says is what the sheet is plotted at.
+    for (LayoutViewport& viewport : layout.viewports) viewport.modelScale = std::max(0.0, paperPerModel);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    statusBar()->showMessage(
+        paperPerModel > 0.0
+            ? tr("%1 plots at %2").arg(layout.name,
+                                       spaceScaleBox_ ? spaceScaleBox_->currentText() : QString())
+            : tr("%1 fits the drawing to its viewport").arg(layout.name),
+        3000);
+}
+
+void MainWindow::applyLayoutTemplate() {
+    if (!doc_ || !canvas_->layoutMode()) return;
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Apply layout template"), QString(), DrawingTemplate::fileFilter());
+    if (path.isEmpty()) return;
+    DrawingTemplate drawingTemplate;
+    if (!drawingTemplate.load(path)) {
+        QMessageBox::warning(this, QStringLiteral("Layout template"),
+                             QStringLiteral("Could not open the selected template."));
+        return;
+    }
+    const int index = canvas_->layoutIndex();
+    if (index < 0 || index >= static_cast<int>(doc_->layouts().size())) return;
+    DrawingLayout& layout = doc_->layouts()[static_cast<size_t>(index)];
+    layout.paperWidth = drawingTemplate.sheet.drawnWidthMm();
+    layout.paperHeight = drawingTemplate.sheet.drawnHeightMm();
+    layout.templateName = drawingTemplate.name;
+    layout.paperEntities.clear();
+    for (const QJsonValue& value : drawingTemplate.content)
+        layout.paperEntities.push_back(Entity::fromJson(value.toObject()));
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    canvas_->fitView();
 }
 
 void MainWindow::activateDrawingSpace(int index) {
     if (!canvas_) return;
+    // What the space being left had is kept, so coming back to it finds it as it was.
+    if (lastDrawingSpace_ >= 0) spaceGrid_[lastDrawingSpace_] = canvas_->gridVisible();
+    lastDrawingSpace_ = index;
     const bool layout = index > 0;
     canvas_->setLayoutMode(layout);
+    if (layout) canvas_->setLayoutIndex(index - 1);
     if (layout) {
         canvas_->setBackgroundColor(QColor("#747a83"));
     } else {
@@ -1891,6 +2037,33 @@ void MainWindow::activateDrawingSpace(int index) {
                                     : editingTemplate  ? QColor("#7c8189")
                                     : editingMechModel  ? QColor("#3a3d42")
                                                         : normalCanvasColor_);
+    }
+    // The grid this space was left with. A layout starts without one - a sheet is laid out over a title
+    // block rather than over squares - and model space with the one it has always had.
+    canvas_->setGridVisible(spaceGrid_.value(index, !layout));
+    {
+        // The button in the status bar shows the state of the space showing, not of the one left.
+        const int gridBtn = statusToggleNames_.indexOf(QStringLiteral("grid"));
+        if (gridBtn >= 0 && gridBtn < statusToggleBtns_.size() && statusToggleBtns_[gridBtn]) {
+            const QSignalBlocker block(statusToggleBtns_[gridBtn]);
+            statusToggleBtns_[gridBtn]->setChecked(canvas_->gridVisible());
+        }
+    }
+    // And the scale of the layout showing. Model space has no plot scale - it is the harness, at size -
+    // so the box is put out of reach there rather than showing a figure that means nothing.
+    if (spaceScaleBox_) {
+        double paperPerModel = 1.0;
+        if (layout && doc_) {
+            const int at = index - 1;
+            const auto& layouts = doc_->layouts();
+            if (at >= 0 && at < static_cast<int>(layouts.size()) &&
+                !layouts[static_cast<size_t>(at)].viewports.empty())
+                paperPerModel = layouts[static_cast<size_t>(at)].viewports.front().modelScale;
+        }
+        const QSignalBlocker block(spaceScaleBox_);
+        const int found = spaceScaleBox_->findData(paperPerModel);
+        spaceScaleBox_->setCurrentIndex(found >= 0 ? found : (paperPerModel > 0.0 ? 1 : 0));
+        spaceScaleBox_->setEnabled(layout);
     }
     canvas_->fitView();
     canvas_->setFocus();
@@ -3824,7 +3997,13 @@ void MainWindow::buildStatusControls() {
 
     addField(makeToggle(QStringLiteral("grid"), QStringLiteral("Show grid"),
                         canvas_->gridVisible(),
-                        [this](bool v) { canvas_->setGridVisible(v); }),
+                        [this](bool v) {
+                            // The space showing, and only it: pressed on a layout it turns the grid on
+                            // over that sheet and leaves model space as it was.
+                            canvas_->setGridVisible(v);
+                            if (drawingSpaceTabs_)
+                                spaceGrid_[drawingSpaceTabs_->currentIndex()] = v;
+                        }),
              nullptr);
     addField(makeToggle(QStringLiteral("gridsnap"), QStringLiteral("Snap to grid"),
                         editor_->snapSettings().gridSnap,
@@ -9678,6 +9857,7 @@ void MainWindow::activateIndex(int index) {
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
+    syncDrawingSpaceTabs();
     // A block being edited is not a drawing: the canvas goes grey, so it is never in doubt which
     // one is which. Switching back to a drawing puts the ordinary background back.
     const bool editingBlock = blockEdits_.contains(doc_);
@@ -9689,6 +9869,7 @@ void MainWindow::activateIndex(int index) {
     // laid out rather than as a drawing. Either way it is never mistaken for the drawing itself.
     const bool layout = drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() > 0;
     canvas_->setLayoutMode(layout);
+    if (layout) canvas_->setLayoutIndex(drawingSpaceTabs_->currentIndex() - 1);
     canvas_->setBackgroundColor(layout             ? QColor("#747a83")
                                 : editingBlock       ? QColor("#6d7278")
                                 : editingTemplate    ? QColor("#7c8189")

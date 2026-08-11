@@ -15,10 +15,18 @@ add_executable(edraw_tests
     test_cable.cpp
     test_mechmodels.cpp
     test_mechmodelcanvas.cpp
+    test_drawingspace.cpp
     test_stepsbuilder.cpp
     test_main.cpp
 )
 # Widgets, because the step builder is a window and is tested as one.
 target_link_libraries(edraw_tests PRIVATE edraw_core Qt6::Core Qt6::Gui Qt6::Widgets)
+# The editor tests build deep call trees (recursive entity traversal, large
+# local buffers in test cases). The Windows default 1 MB stack is not enough
+# and the runner silently overflows before it can print anything. 16 MB
+# matches the desktop application's headroom.
+if(WIN32 AND MSVC)
+    target_link_options(edraw_tests PRIVATE /STACK:16777216,16777216)
+endif()
 
 add_test(NAME edraw_tests COMMAND edraw_tests)

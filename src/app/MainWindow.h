@@ -170,6 +170,14 @@ private:
     void buildMenus();
     void buildDocumentArea(); // tab bar + canvas
     void activateDrawingSpace(int index);
+    // Close a layout. Model is not one and has no x on it.
+    void closeDrawingSpace(int index);
+    // The scale the layout showing is plotted at: what one millimetre of paper is worth in the model.
+    // It is the layout's own - a viewport property, kept with the drawing - not a setting of the window.
+    void setDrawingSpaceScale(double paperPerModel);
+    void syncDrawingSpaceTabs();
+    void addDrawingLayout();
+    void applyLayoutTemplate();
 
     // Multi-document management.
     Document* addDocument(std::unique_ptr<Document> doc, const QString& path);
@@ -410,6 +418,13 @@ private:
     Document* doc_ = nullptr;                      // active drawing (raw, owned by docs_)
     QTabBar* docTabs_ = nullptr;
     QTabBar* drawingSpaceTabs_ = nullptr;
+    QComboBox* spaceScaleBox_ = nullptr;
+    // Whether the grid is on, per drawing space, remembered as it is switched away from: a grid wanted
+    // over a sheet being laid out is not the grid wanted over the harness itself, and the button that
+    // turns it on belongs to the space it was pressed in. (The plot scale is not here - it belongs to
+    // the layout and is kept with the drawing.)
+    QHash<int, bool> spaceGrid_;
+    int lastDrawingSpace_ = -1;   // which space is showing, so what it had is kept on the way out
     Editor* editor_ = nullptr;
     CanvasWidget* canvas_ = nullptr;
     QDialog* validationDlg_ = nullptr; // modeless "Schematic validation" window (if open)

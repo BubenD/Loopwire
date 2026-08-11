@@ -16,6 +16,31 @@ struct ViewState {
     double scale = 1.0;
 };
 
+struct LayoutViewport {
+    QString id;
+    double x = 40.0;
+    double y = 35.0;
+    double width = 340.0;
+    double height = 225.0;
+    Vec2 modelCenter;
+    double modelScale = 0.0;
+
+    QJsonObject toJson() const;
+    static LayoutViewport fromJson(const QJsonObject& obj);
+};
+
+struct DrawingLayout {
+    QString name = QStringLiteral("Layout1");
+    double paperWidth = 420.0;
+    double paperHeight = 297.0;
+    QString templateName;
+    std::vector<Entity> paperEntities;
+    std::vector<LayoutViewport> viewports;
+
+    QJsonObject toJson() const;
+    static DrawingLayout fromJson(const QJsonObject& obj);
+};
+
 // A single drawing document. Mirrors Edraw's per-document state created by
 // createDocument(); selection/interaction transients live on the editor, not here.
 class Document {
@@ -44,6 +69,9 @@ public:
 
     QString& unit() { return unit_; }
     const QString& unit() const { return unit_; }
+
+    std::vector<DrawingLayout>& layouts() { return layouts_; }
+    const std::vector<DrawingLayout>& layouts() const { return layouts_; }
 
     // The sheet the drawing was made on, when the file says so: a DXF states its limits, and that
     // rectangle - not the extents of every last object - is what a drawing is looked at at. A drawing
@@ -84,6 +112,7 @@ private:
     int polygonSides_ = 5;
     QJsonObject bom_;
     QJsonObject harnessPresets_;
+    std::vector<DrawingLayout> layouts_;
     Bounds sheet_;                 // invalid unless the file stated its limits
     bool dirty_ = false;
 };

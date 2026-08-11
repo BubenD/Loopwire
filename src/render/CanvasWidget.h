@@ -34,6 +34,9 @@ public:
 
     void setLayoutMode(bool on);
     bool layoutMode() const { return layoutMode_; }
+    void setLayoutIndex(int index);
+    int layoutIndex() const { return layoutIndex_; }
+    void addLayoutViewport();
     void setBottomOverlay(QWidget* overlay);
 
     // The editor receives input and paints interaction overlays.
@@ -170,6 +173,13 @@ public:
 
 private:
     ViewTransform transform() const;
+    DrawingLayout* currentLayout();
+    const DrawingLayout* currentLayout() const;
+    QRectF viewportScreenRect(const LayoutViewport& viewport, const ViewTransform& paper) const;
+    ViewTransform viewportTransform(const LayoutViewport& viewport, const QRectF& rect,
+                                    const ViewTransform& paper) const;
+    int viewportAt(const QPointF& point) const;
+    void drawLayoutScene(QPainter& painter, const ViewTransform& paper);
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
     void drawCrosshair(QPainter& p) const; // AutoCAD-style full crosshair + pickbox
@@ -200,6 +210,12 @@ private:
     QColor bgColor_{"#1e2832"};         // canvas (model space) background (dark slate)
     QColor gridMinor_{"#2b3743"};   // 5% quieter than the #2c3845 it was
     bool layoutMode_ = false;
+    int layoutIndex_ = 0;
+    int selectedViewport_ = -1;
+    int activeViewport_ = -1;
+    int viewportDragCorner_ = -1;
+    bool viewportPanning_ = false;
+    QPoint viewportLastPos_;
     QColor gridMajor_{"#394856"};
 
     QPixmap sceneCache_;       // grid + entities, rebuilt only when they change

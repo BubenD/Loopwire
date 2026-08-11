@@ -171,6 +171,71 @@ int run_io_tests() {
         check(again.harnessPresets().isEmpty(), "dwx: a deleted preset stays deleted");
     }
 
+    // --- Layout sheets and viewports belong to the drawing and must survive a save/reload.
+    {
+        Document src;
+        // The default document already carries one layout with one viewport; replace
+        // it with a known two-viewport layout so the round-trip can be checked exactly.
+        src.layouts().clear();
+        DrawingLayout layout;
+        layout.name = QStringLiteral("MyLayout");
+        layout.paperWidth = 297.0;
+        layout.paperHeight = 210.0;
+        layout.templateName = QStringLiteral("A4");
+        Entity border; border.id = "bd"; border.type = EntityType::Line; border.layer = "0";
+        border.a = {0, 0}; border.b = {297, 0};
+        layout.paperEntities.push_back(border);
+        LayoutViewport vp1;
+        vp1.id = QStringLiteral("vp1");
+        vp1.x = 20.0; vp1.y = 20.0; vp1.width = 200.0; vp1.height = 150.0;
+        vp1.modelCenter = {100.0, 50.0}; vp1.modelScale = 0.5;
+        layout.viewports.push_back(vp1);
+        LayoutViewport vp2;
+        vp2.id = QStringLiteral("vp2");
+        vp2.x = 240.0; vp2.y = 20.0; vp2.width = 50.0; vp2.height = 150.0;
+        vp2.modelCenter = {0.0, 0.0}; vp2.modelScale = 2.0;
+        layout.viewports.push_back(vp2);
+        src.layouts().push_back(std::move(layout));
+
+        Document dst;
+        dwx::fromJson(dst, dwx::toJson(src));
+        check(dst.layouts().size() == 1, "dwx: layout count preserved");
+        if (dst.layouts().size() == 1) {
+            const DrawingLayout& back = dst.layouts()[0];
+            check(back.name == QStringLiteral("MyLayout"), "dwx: layout name preserved");
+            check(near(back.paperWidth, 297.0) && near(back.paperHeight, 210.0),
+                  "dwx: layout paper size preserved");
+            check(back.templateName == QStringLiteral("A4"), "dwx: layout template name preserved");
+            check(back.paperEntities.size() == 1, "dwx: layout paper entities preserved");
+            check(back.viewports.size() == 2, "dwx: viewport count preserved");
+            if (back.viewports.size() == 2) {
+                const LayoutViewport& b1 = back.viewports[0];
+                check(b1.id == QStringLiteral("vp1"), "dwx: viewport id preserved");
+                check(near(b1.x, 20.0) && near(b1.y, 20.0), "dwx: viewport position preserved");
+                check(near(b1.width, 200.0) && near(b1.height, 150.0),
+                      "dwx: viewport size preserved");
+                check(near(b1.modelCenter.x, 100.0) && near(b1.modelCenter.y, 50.0),
+                      "dwx: viewport model center preserved");
+                check(near(b1.modelScale, 0.5), "dwx: viewport model scale preserved");
+                const LayoutViewport& b2 = back.viewports[1];
+                check(near(b2.modelScale, 2.0), "dwx: second viewport model scale preserved");
+            }
+        }
+
+        // A DWX with no layouts leaves the document's default layout in place
+        // (the constructor creates one, and the loader only replaces when the
+        // file actually carries layouts).
+        src.layouts().clear();
+        Document withDefault;
+        // Against what a NEW drawing has rather than against a number: the point being made is that a
+        // file carrying no layouts leaves the ones the constructor made alone, and how many that is is
+        // a decision about new drawings (two sheets, at the time of writing) and not about loading.
+        const size_t defaults = Document().layouts().size();
+        dwx::fromJson(withDefault, dwx::toJson(src));
+        check(withDefault.layouts().size() == defaults,
+              "dwx: a drawing with no layouts keeps the layouts a new drawing has");
+    }
+
     // --- DXF as AutoCAD writes it: formatted MTEXT, and geometry placed by blocks.
     {
         // A block holding one line and one label, placed twice - once turned and scaled - plus an

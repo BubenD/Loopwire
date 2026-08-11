@@ -21,6 +21,7 @@ int run_sizetable_tests();
 int run_cable_tests();
 int run_mechmodels_tests();
 int run_mechmodelcanvas_tests();
+int run_drawingspace_tests();
 int run_stepsbuilder_tests();
 
 int main(int argc, char** argv) {
@@ -49,6 +50,7 @@ int main(int argc, char** argv) {
     failures += run_cable_tests();
     failures += run_mechmodels_tests();
     failures += run_mechmodelcanvas_tests();
+    failures += run_drawingspace_tests();
     failures += run_stepsbuilder_tests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d TEST(S) FAILED\n", failures);
