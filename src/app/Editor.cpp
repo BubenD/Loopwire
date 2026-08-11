@@ -2716,6 +2716,9 @@ void Editor::finishRegionSelect(bool subtract) {
         region = {{b.min.x, b.min.y}, {b.max.x, b.min.y}, {b.max.x, b.max.y}, {b.min.x, b.max.y}};
     }
     if (region.size() < 3) { emit selectionChanged(); return; }
+    // Announced before the entities are gone through, so that whoever else has something in this space
+    // that is not an entity - the windows on a sheet - gets the same zone, of the same kind.
+    emit regionSelected(region, crossing, subtract);
 
     // Region edges for crossing-intersection tests.
     std::vector<std::pair<Vec2, Vec2>> regionEdges;

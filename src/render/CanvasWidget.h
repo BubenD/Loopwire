@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <vector>
 
 class QLineEdit;
 class QCompleter;
@@ -50,7 +51,19 @@ public:
     void addLayoutViewport();
     // Take a window off the sheet. -1 means the one picked out.
     void removeLayoutViewport(int index = -1);
-    int selectedLayoutViewport() const { return selectedViewport_; }
+    // The window last picked out, and whether a given one is picked. Several can be, because a selection
+    // zone drawn on the sheet takes every window it catches.
+    int selectedLayoutViewport() const {
+        return selectedViewports_.empty() ? -1 : selectedViewports_.back();
+    }
+    const std::vector<int>& selectedLayoutViewports() const { return selectedViewports_; }
+    bool layoutViewportPicked(int index) const {
+        return std::find(selectedViewports_.begin(), selectedViewports_.end(), index) !=
+               selectedViewports_.end();
+    }
+    // Take every window a selection zone caught: wholly inside it for the blue window zone, touched at
+    // all for the green crossing zone. Shift (subtract) lets them go again.
+    void selectLayoutWindowsIn(const std::vector<Vec2>& region, bool crossing, bool subtract);
     int activeLayoutViewport() const { return activeViewport_; }
     // Step into a window (so what is drawn goes into the model, seen through it) or back out onto the
     // paper. Stepping in and out is what changes which document the editor is working in, so it is
@@ -242,7 +255,7 @@ private:
     QColor gridMinor_{"#2b3743"};   // 5% quieter than the #2c3845 it was
     bool layoutMode_ = false;
     int layoutIndex_ = 0;
-    int selectedViewport_ = -1;
+    std::vector<int> selectedViewports_;   // the windows picked out on the sheet, in the order picked
     int activeViewport_ = -1;
     int viewportDragCorner_ = -1;
     bool viewportPanning_ = false;

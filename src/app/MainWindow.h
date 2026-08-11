@@ -170,7 +170,7 @@ private:
     void buildCommandBar();
     void buildMenus();
     void buildDocumentArea(); // tab bar + canvas
-    void activateDrawingSpace(int index);
+    void activateDrawingSpace(int index, bool fitToSpace = true);
     // Close a layout. Model is not one and has no x on it.
     void closeDrawingSpace(int index);
     // The scale the layout showing is plotted at: what one millimetre of paper is worth in the model.

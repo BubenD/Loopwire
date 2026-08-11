@@ -6,11 +6,13 @@
 // nothing to do with the grid over the harness. And the plot scale is the LAYOUT'S - it is kept with the
 // drawing, on its viewport, not as a setting of the window that happened to be open.
 #include "app/Editor.h"
+#include "io/Dwx.h"
 #include "app/MainWindow.h"
 #include "model/Document.h"
 #include "render/CanvasWidget.h"
 
 #include <QComboBox>
+#include <QDir>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QTabBar>
@@ -351,12 +353,142 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- a zone drawn on the paper picks the windows out too --------------------------------------
+    if (canvas && editor) {
+        spaces->setCurrentIndex(1);
+        Document* drawing = canvas->drawingDocument();
+        if (drawing && !drawing->layouts().empty()) {
+            DrawingLayout& sheet = drawing->layouts()[0];
+            sheet.viewports.clear();
+            LayoutViewport left;
+            left.id = QStringLiteral("left");
+            left.x = 20.0; left.y = 20.0; left.width = 80.0; left.height = 60.0;
+            left.modelScale = 1.0;
+            LayoutViewport right = left;
+            right.id = QStringLiteral("right");
+            right.x = 160.0;
+            sheet.viewports.push_back(left);
+            sheet.viewports.push_back(right);
+
+            // A blue window zone takes what is WHOLLY inside it: one window, not the other.
+            const std::vector<Vec2> roundLeft{{10.0, 10.0}, {120.0, 10.0}, {120.0, 100.0},
+                                              {10.0, 100.0}};
+            canvas->selectLayoutWindowsIn(roundLeft, /*crossing=*/false, /*subtract=*/false);
+            check(canvas->selectedLayoutViewports().size() == 1 && canvas->layoutViewportPicked(0),
+                  "zone: a blue window zone takes the window it encloses");
+            check(!canvas->layoutViewportPicked(1),
+                  "zone: and leaves the one it does not reach");
+
+            // A blue zone that only clips a window does not take it.
+            canvas->selectLayoutWindowsIn(roundLeft, false, true);   // let go again
+            const std::vector<Vec2> clipBoth{{60.0, 40.0}, {200.0, 40.0}, {200.0, 50.0},
+                                             {60.0, 50.0}};
+            canvas->selectLayoutWindowsIn(clipBoth, false, false);
+            check(canvas->selectedLayoutViewports().empty(),
+                  "zone: a blue zone that merely cuts across a window takes nothing - all of it or none");
+
+            // The green crossing zone takes both, because it touches both.
+            canvas->selectLayoutWindowsIn(clipBoth, true, false);
+            check(canvas->selectedLayoutViewports().size() == 2,
+                  "zone: a green crossing zone takes every window it touches");
+            canvas->selectLayoutWindowsIn(clipBoth, true, true);
+            check(canvas->selectedLayoutViewports().empty(), "zone: and Shift lets them go again");
+
+            // The real path: a rectangle dragged out with the Select tool, left to right, on the paper.
+            editor->setTool(ToolId::Select);
+            editor->onPointerPress(Vec2{10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->onPointerRelease(Vec2{10.0, 10.0}, Qt::LeftButton);
+            editor->onPointerPress(Vec2{120.0, 100.0}, Qt::LeftButton, Qt::NoModifier);
+            check(canvas->layoutViewportPicked(0),
+                  "zone: dragging a zone on the sheet with the Select tool picks the window in it");
+
+            // Several picked windows are carried about together.
+            canvas->selectLayoutWindowsIn(std::vector<Vec2>{{0.0, 0.0}, {300.0, 0.0}, {300.0, 200.0},
+                                                            {0.0, 200.0}},
+                                          true, false);
+            const size_t picked = canvas->selectedLayoutViewports().size();
+            check(picked == 2, "zone: both windows picked, ready to be moved together");
+            if (picked == 2) {
+                win.resize(1400, 900);
+                win.show();
+                QApplication::processEvents();
+                canvas->fitView();
+                const LayoutViewport wasLeft = sheet.viewports[0], wasRight = sheet.viewports[1];
+                const QPointF edge = canvas->mapToScreen(
+                    Vec2{wasRight.x + wasRight.width * 0.5, wasRight.y + wasRight.height});
+                const QPointF edgeTo = canvas->mapToScreen(
+                    Vec2{wasRight.x + wasRight.width * 0.5, wasRight.y + wasRight.height + 25.0});
+                QMouseEvent down(QEvent::MouseButtonPress, edge, canvas->mapToGlobal(edge),
+                                 Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &down);
+                QMouseEvent drag(QEvent::MouseMove, edgeTo, canvas->mapToGlobal(edgeTo), Qt::NoButton,
+                                 Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &drag);
+                QMouseEvent up(QEvent::MouseButtonRelease, edgeTo, canvas->mapToGlobal(edgeTo),
+                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &up);
+                check(sheet.viewports[0].y > wasLeft.y + 1.0 && sheet.viewports[1].y > wasRight.y + 1.0,
+                      "zone: dragging one of the picked windows carries them all");
+            }
+
+            // ---- letting go of the middle button lets go of the drawing inside a window -----------
+            canvas->enterLayoutViewport(0);
+            const Vec2 lookedAt = sheet.viewports[0].modelCenter;
+            const QPointF in = canvas->mapToScreen(Vec2{sheet.viewports[0].x + 10.0,
+                                                        sheet.viewports[0].y + 10.0});
+            QMouseEvent mid(QEvent::MouseButtonPress, in, canvas->mapToGlobal(in), Qt::MiddleButton,
+                            Qt::MiddleButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &mid);
+            QMouseEvent midMove(QEvent::MouseMove, in + QPointF(20.0, 0.0),
+                                canvas->mapToGlobal(in + QPointF(20.0, 0.0)), Qt::NoButton,
+                                Qt::MiddleButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &midMove);
+            const Vec2 dragged = sheet.viewports[0].modelCenter;
+            check(std::abs(dragged.x - lookedAt.x) > 1e-9,
+                  "middle: a middle drag inside a window moves what it looks at");
+            QMouseEvent midUp(QEvent::MouseButtonRelease, in + QPointF(20.0, 0.0),
+                              canvas->mapToGlobal(in + QPointF(20.0, 0.0)), Qt::MiddleButton,
+                              Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &midUp);
+            QMouseEvent after(QEvent::MouseMove, in + QPointF(120.0, 40.0),
+                              canvas->mapToGlobal(in + QPointF(120.0, 40.0)), Qt::NoButton,
+                              Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &after);
+            check(near(sheet.viewports[0].modelCenter.x, dragged.x, 1e-9) &&
+                      near(sheet.viewports[0].modelCenter.y, dragged.y, 1e-9),
+                  "middle: letting the button go lets the drawing go - it stops following the cursor");
+            canvas->leaveLayoutViewport();
+        }
+    }
+
     // ---- the scale, findable ----------------------------------------------------------------------
     {
         bool labelled = false;
         for (QLabel* l : win.findChildren<QLabel*>())
             if (l->text() == QStringLiteral("Scale")) labelled = true;
         check(labelled, "scale: the box says what it is, so it reads as something to press");
+    }
+
+    // ---- a drawing opened while a sheet is showing opens ITS sheet --------------------------------
+    {
+        // A drawing of its own, saved and then opened: what matters is which space it comes up in.
+        Document made;
+        const QString path = QDir::tempPath() + QStringLiteral("/edraw-open-on-a-sheet.dwx");
+        QString err;
+        check(dwx::save(made, path, &err), "open: a drawing to open is saved first");
+        check(!made.layouts().empty(), "open: and it has sheets of its own");
+        spaces->setCurrentIndex(1);
+        const int standingOn = spaces->currentIndex();
+        win.openPath(path);
+        check(spaces->currentIndex() > 0,
+              "open: opening a drawing while a sheet is showing stays on a sheet - the work in hand is "
+              "laying out sheets");
+        check(spaces->currentIndex() == standingOn,
+              "open: the same sheet by number, when the drawing goes that far");
+        check(canvas && canvas->layoutMode(), "open: the canvas is laying out, not in model space");
+        if (canvas && editor)
+            check(editor->document() != canvas->drawingDocument(),
+                  "open: and the tools are in that sheet's paper space, ready to draw on it");
     }
 
     if (spaceFailures == 0) std::printf("  -> ok\n");

@@ -21,6 +21,7 @@
 #include <QUuid>
 #include <QWheelEvent>
 #include <algorithm>
+#include <QPolygonF>
 #include <cmath>
 
 namespace Edraw_Desktop {
@@ -188,7 +189,7 @@ void CanvasWidget::setDrawingDocument(Document* doc) {
 void CanvasWidget::setLayoutMode(bool on) {
     if (layoutMode_ == on) return;
     layoutMode_ = on;
-    selectedViewport_ = -1;
+    selectedViewports_.clear();
     activeViewport_ = -1;
     EntityRenderer::setWhitePaper(on);
     EntityRenderer::setBackgroundColor(on ? QColor(Qt::white) : bgColor_);
@@ -197,7 +198,7 @@ void CanvasWidget::setLayoutMode(bool on) {
 
 void CanvasWidget::setLayoutIndex(int index) {
     layoutIndex_ = std::max(0, index);
-    selectedViewport_ = -1;
+    selectedViewports_.clear();
     activeViewport_ = -1;
     invalidateScene();
 }
@@ -229,7 +230,7 @@ void CanvasWidget::addLayoutViewport() {
     viewport.width = std::max(40.0, layout->paperWidth - inset * 2.0);
     viewport.height = std::max(40.0, layout->paperHeight - inset * 2.0);
     layout->viewports.push_back(viewport);
-    selectedViewport_ = static_cast<int>(layout->viewports.size()) - 1;
+    selectedViewports_ = {static_cast<int>(layout->viewports.size()) - 1};
     doc_->setDirty(true);
     invalidateScene();
 }
@@ -276,6 +277,12 @@ void CanvasWidget::setEditor(Editor* editor) {
             Qt::QueuedConnection);
     }
     invalidateScene();
+    if (editor)
+        connect(editor, &Editor::regionSelected, this,
+                [this](const std::vector<Vec2>& region, bool crossing, bool subtract) {
+                    selectLayoutWindowsIn(region, crossing, subtract);
+                });
+
 }
 
 void CanvasWidget::setGridSize(double g) {
@@ -467,7 +474,7 @@ void CanvasWidget::enterLayoutViewport(int index) {
     if (!layout || index < 0 || index >= static_cast<int>(layout->viewports.size())) return;
     if (activeViewport_ == index) return;
     activeViewport_ = index;
-    selectedViewport_ = index;
+    selectedViewports_ = {index};
     viewportPanning_ = false;
     viewportMoving_ = false;
     viewportDragCorner_ = -1;
@@ -486,18 +493,68 @@ void CanvasWidget::leaveLayoutViewport() {
 void CanvasWidget::removeLayoutViewport(int index) {
     DrawingLayout* layout = currentLayout();
     if (!layout) return;
-    const int at = index >= 0 ? index : selectedViewport_;
-    if (at < 0 || at >= static_cast<int>(layout->viewports.size())) return;
-    const bool wasInside = activeViewport_ == at;
-    layout->viewports.erase(layout->viewports.begin() + at);
-    selectedViewport_ = -1;
+    // The one named, or - when none is - every window picked out. Taken from the back so that the
+    // indices of the ones still to go do not shift under it.
+    std::vector<int> going;
+    if (index >= 0) going.push_back(index);
+    else going = selectedViewports_;
+    std::sort(going.begin(), going.end(), std::greater<int>());
+    going.erase(std::unique(going.begin(), going.end()), going.end());
+    bool wasInside = false;
+    bool any = false;
+    for (const int at : going) {
+        if (at < 0 || at >= static_cast<int>(layout->viewports.size())) continue;
+        if (activeViewport_ == at) wasInside = true;
+        layout->viewports.erase(layout->viewports.begin() + at);
+        any = true;
+    }
+    if (!any) return;
+    selectedViewports_.clear();
     viewportDragCorner_ = -1;
     viewportMoving_ = false;
     viewportPanning_ = false;
+    const bool wasIn = activeViewport_ >= 0;
     activeViewport_ = -1;
     drawingDocument()->setDirty(true);
     invalidateScene();
-    if (wasInside) emit viewportEntered(false);
+    if (wasInside || wasIn) emit viewportEntered(false);
+}
+
+void CanvasWidget::selectLayoutWindowsIn(const std::vector<Vec2>& region, bool crossing,
+                                         bool subtract) {
+    // Only out on the paper. Inside a window the zone belongs to the model being worked in through it,
+    // and picking the window itself with it would be picking the thing being looked through.
+    if (!layoutMode_ || activeViewport_ >= 0) return;
+    const DrawingLayout* layout = currentLayout();
+    if (!layout || region.size() < 3) return;
+    QPolygonF zone;
+    for (const Vec2& p : region) zone << QPointF(p.x, p.y);
+    if (!zone.isClosed()) zone << zone.first();
+    for (int i = 0; i < static_cast<int>(layout->viewports.size()); ++i) {
+        const LayoutViewport& viewport = layout->viewports[static_cast<size_t>(i)];
+        QPolygonF frame;
+        frame << QPointF(viewport.x, viewport.y)
+              << QPointF(viewport.x + viewport.width, viewport.y)
+              << QPointF(viewport.x + viewport.width, viewport.y + viewport.height)
+              << QPointF(viewport.x, viewport.y + viewport.height)
+              << QPointF(viewport.x, viewport.y);
+        bool caught = false;
+        if (crossing) {
+            caught = zone.intersects(frame);   // green: a touch anywhere is enough
+        } else {
+            caught = true;                     // blue: the whole window, or none of it
+            for (const QPointF& corner : frame)
+                if (!zone.containsPoint(corner, Qt::OddEvenFill)) { caught = false; break; }
+        }
+        if (!caught) continue;
+        auto at = std::find(selectedViewports_.begin(), selectedViewports_.end(), i);
+        if (subtract) {
+            if (at != selectedViewports_.end()) selectedViewports_.erase(at);
+        } else if (at == selectedViewports_.end()) {
+            selectedViewports_.push_back(i);
+        }
+    }
+    invalidateScene();
 }
 
 void CanvasWidget::freezeViewportView(LayoutViewport& viewport) {
@@ -584,12 +641,13 @@ void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper
         }
         painter.restore();
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(i == activeViewport_   ? QColor("#24a8ff")
-                            : i == selectedViewport_ ? QColor("#3d8bfd")
-                                                     : QColor("#606a75"),
-                            i == activeViewport_ || i == selectedViewport_ ? 2.0 : 1.0));
+        const bool picked = layoutViewportPicked(i);
+        painter.setPen(QPen(i == activeViewport_ ? QColor("#24a8ff")
+                            : picked             ? QColor("#3d8bfd")
+                                                 : QColor("#606a75"),
+                            i == activeViewport_ || picked ? 2.0 : 1.0));
         painter.drawRect(rect);
-        if (i == selectedViewport_ && activeViewport_ < 0) {
+        if (picked && activeViewport_ < 0) {
             painter.setBrush(QColor("#3d8bfd"));
             for (const QPointF& corner : {rect.topLeft(), rect.topRight(), rect.bottomRight(),
                                           rect.bottomLeft()})
@@ -848,13 +906,21 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
                     // fall through to the editor
                 } else {
                     leaveLayoutViewport();
-                    selectedViewport_ = -1;
+                    selectedViewports_.clear();
                 }
             } else {
                 int corner = -1;
                 const int grab = viewportGrabAt(e->position(), *layout, &corner);
                 if (grab >= 0) {
-                    selectedViewport_ = grab;
+                    // A frame that is already picked keeps the rest of the picked windows with it, so a
+                    // set caught by a zone is carried about together. Any other frame picks just itself.
+                    if (!layoutViewportPicked(grab)) selectedViewports_ = {grab};
+                    else if (selectedLayoutViewport() != grab) {
+                        selectedViewports_.erase(
+                            std::remove(selectedViewports_.begin(), selectedViewports_.end(), grab),
+                            selectedViewports_.end());
+                        selectedViewports_.push_back(grab);   // the one grabbed leads
+                    }
                     viewportDragCorner_ = corner;
                     // A corner resizes the window; an edge MOVES it, anywhere on or off the sheet.
                     viewportMoving_ = corner < 0;
@@ -866,8 +932,8 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
                     e->accept();
                     return;
                 }
-                if (selectedViewport_ >= 0) {   // pressing the paper lets go of the window
-                    selectedViewport_ = -1;
+                if (!selectedViewports_.empty()) {   // pressing the paper lets the windows go
+                    selectedViewports_.clear();
                     viewportDragCorner_ = -1;
                     viewportMoving_ = false;
                     invalidateScene();
@@ -878,7 +944,7 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
     if (e->button() == Qt::MiddleButton && layoutMode_ && activeViewport_ >= 0) {
         // Inside a window, the middle drag moves what the window looks at - the same gesture as in model
         // space, applied to the view through the glass rather than to the sheet.
-        selectedViewport_ = activeViewport_;
+        selectedViewports_ = {activeViewport_};
         viewportPanning_ = true;
         viewportLastPos_ = e->pos();
         setCursor(Qt::ClosedHandCursor);
@@ -920,10 +986,10 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     }
     if (layoutMode_ && doc_ && (viewportPanning_ || viewportMoving_ || viewportDragCorner_ >= 0)) {
         DrawingLayout* layout = currentLayout();
-        if (layout && selectedViewport_ >= 0 &&
-            selectedViewport_ < static_cast<int>(layout->viewports.size())) {
-            LayoutViewport& viewport = layout->viewports[static_cast<size_t>(selectedViewport_)];
-            if (viewportPanning_ && activeViewport_ == selectedViewport_) {
+        const int leading = selectedLayoutViewport();
+        if (layout && leading >= 0 && leading < static_cast<int>(layout->viewports.size())) {
+            LayoutViewport& viewport = layout->viewports[static_cast<size_t>(leading)];
+            if (viewportPanning_ && activeViewport_ == leading) {
                 const QPoint delta = e->pos() - viewportLastPos_;
                 viewportLastPos_ = e->pos();
                 const QRectF rect = viewportScreenRect(viewport, transform());
@@ -944,10 +1010,13 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
                 const QPoint delta = e->pos() - viewportLastPos_;
                 viewportLastPos_ = e->pos();
                 const double scale = transform().scale();
-                if (scale > 1e-9) {
-                    viewport.x += delta.x() / scale;
-                    viewport.y -= delta.y() / scale;
-                }
+                if (scale > 1e-9)
+                    for (const int at : selectedViewports_) {
+                        if (at < 0 || at >= static_cast<int>(layout->viewports.size())) continue;
+                        LayoutViewport& moved = layout->viewports[static_cast<size_t>(at)];
+                        moved.x += delta.x() / scale;
+                        moved.y -= delta.y() / scale;
+                    }
             } else if (viewportDragCorner_ >= 0) {
                 // Only the window's own edges move. What it looks at stays where it is ON THE PAPER, so
                 // dragging a corner crops the view instead of rescaling the drawing inside it: the model
@@ -1050,8 +1119,11 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
-    if (layoutMode_ && e->button() == Qt::LeftButton &&
-        (viewportPanning_ || viewportMoving_ || viewportDragCorner_ >= 0)) {
+    // Whichever button was doing it. The middle button is what moves what a window looks at, and
+    // letting it go must let the drawing go: keyed to the left button alone, the drawing went on
+    // following the cursor after the button was up, which is how it read as stuck to it.
+    if (layoutMode_ && (viewportPanning_ || viewportMoving_ || viewportDragCorner_ >= 0) &&
+        (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton)) {
         viewportPanning_ = false;
         viewportMoving_ = false;
         viewportDragCorner_ = -1;

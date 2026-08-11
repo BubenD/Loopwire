@@ -383,7 +383,24 @@ Two things follow from that, and both are deliberate:
 
   A window is added with **+ window** beside the scale, with **Add a window onto the drawing** in the
   right-click menu on a sheet, or by typing `LAYOUTWINDOW`; the same menu steps into a picked window and
-  takes one off the sheet.
+  takes the picked ones off the sheet.
+
+- **A selection zone on the paper picks windows as well as geometry.** A window is not an entity, so
+  nothing in the editor's own loop would ever find one: the editor announces every zone it closes
+  (`regionSelected`, with the polygon and which kind it was) and the canvas takes the windows the zone
+  caught. The blue window zone takes a window only if the whole of it is inside; the green crossing zone
+  takes every window it so much as touches; Shift lets them go again. Several windows can be picked at
+  once, and dragging the frame of one that is already picked carries all of them — a frame that is not
+  picked picks just itself, as it always did. Inside a window the zone belongs to the model being worked
+  in, and picks nothing on the paper.
+
+Moving what a window looks at is a **middle**-drag, and letting the middle button go lets the drawing
+go — the release is keyed to the button that was doing it, not to the left button alone.
+
+**Opening a drawing while a sheet is showing opens that drawing's sheet** — the same one by number if it
+goes that far, otherwise its first — because the work in hand is laying out sheets, and dropping to model
+space interrupts it. A drawing with no sheets shows its model. The view a drawing was saved with is kept:
+the space is applied without refitting.
 - **What is drawn on the sheet is drawn last, over the windows.** A window is filled with the view
   through it, so anything under one would be painted out — and a note, a leader or a border drawn on a
   sheet is meant to be read across the view it points at.

@@ -895,6 +895,12 @@ signals:
     void changed();              // geometry/document mutated -> repaint + panels
     void overlayChanged();       // interactive preview/cursor moved -> repaint only (no panel rebuild)
     void selectionChanged();
+    // A selection zone was closed: the polygon it enclosed, in the coordinates of whatever is being
+    // worked in, and which kind it was - the green CROSSING zone, where touching is enough, or the blue
+    // window zone, which takes only what is wholly inside it. Shift makes it take away instead.
+    // The canvas listens for this so that a zone drawn on a sheet also picks out the windows on it:
+    // a window onto the drawing is not an entity, so nothing in the loop below would ever find one.
+    void regionSelected(const std::vector<Vec2>& region, bool crossing, bool subtract);
     void toolChanged(ToolId t);
     void message(const QString& text);
     // Ctrl+V. The host decides what a paste means: the system clipboard may hold a picture that is

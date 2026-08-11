@@ -2137,7 +2137,7 @@ void MainWindow::forgetPaperSpaces(Document* drawing) {
     if (paperLoaded_.first == drawing) paperLoaded_ = {nullptr, -1};
 }
 
-void MainWindow::activateDrawingSpace(int index) {
+void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
     if (!canvas_) return;
     // On the way out of a sheet, what was drawn on it goes back into the layout.
     flushPaperSpace();
@@ -2211,7 +2211,9 @@ void MainWindow::activateDrawingSpace(int index) {
             layout ? tr("Put a window onto the drawing on this sheet")
                    : tr("A window onto the drawing is cut in a sheet — open a layout to add one"));
     }
-    canvas_->fitView();
+    // Fitted when a space is stepped into, not when a drawing is opened into the space already showing:
+    // a drawing opens at the view it was saved with, and refitting it would throw that away.
+    if (fitToSpace) canvas_->fitView();
     canvas_->setFocus();
 }
 
@@ -10022,6 +10024,7 @@ Document* MainWindow::addDocument(std::unique_ptr<Document> doc, const QString& 
 
 void MainWindow::activateIndex(int index) {
     if (index < 0 || index >= static_cast<int>(docs_.size())) return;
+    flushPaperSpace();   // the sheet being left belongs to the drawing being left
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
@@ -10035,14 +10038,20 @@ void MainWindow::activateIndex(int index) {
     // block, a blue slate for a template, the ordinary dark for a drawing.
     // Both editors get a grey canvas - a lighter one for a template, so it reads as a sheet being
     // laid out rather than as a drawing. Either way it is never mistaken for the drawing itself.
-    const bool layout = drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() > 0;
-    canvas_->setLayoutMode(layout);
-    if (layout) canvas_->setLayoutIndex(drawingSpaceTabs_->currentIndex() - 1);
-    canvas_->setBackgroundColor(layout             ? QColor("#747a83")
-                                : editingBlock       ? QColor("#6d7278")
-                                : editingTemplate    ? QColor("#7c8189")
-                                : editingMechModel   ? QColor("#3a3d42")
-                                                      : normalCanvasColor_);
+    // Which space the drawing being opened shows. Standing on a sheet and opening a drawing that has
+    // sheets of its own shows ITS sheet - the same one by number if it goes that far, otherwise its
+    // first - because the work in hand is laying out sheets, and dropping to model space interrupts it.
+    // A drawing with no sheets shows its model; there is nothing else it could show.
+    int space = drawingSpaceTabs_ ? drawingSpaceTabs_->currentIndex() : 0;
+    const int sheets = static_cast<int>(doc_->layouts().size());
+    if (space > 0) space = sheets > 0 ? std::min(space, sheets) : 0;
+    if (drawingSpaceTabs_ && drawingSpaceTabs_->currentIndex() != space) {
+        const QSignalBlocker block(drawingSpaceTabs_);
+        drawingSpaceTabs_->setCurrentIndex(space);
+    }
+    // The space itself does the rest - the layout mode, the paper space the editor works in, the grid
+    // and the plot scale - without refitting the view the drawing was saved with.
+    activateDrawingSpace(space, /*fitToSpace=*/false);
     // The Template group is only on the ribbon while a template is open - buttons that mean nothing
     // to a drawing are not shown to it at all, rather than shown greyed out.
     if (tplHomeGroup_) tplHomeGroup_->setVisible(editingTemplate);
