@@ -11,6 +11,8 @@
 #include "render/CanvasWidget.h"
 #include "tools/ToolId.h"
 
+#include <QLineEdit>
+#include <QTabBar>
 #include <QToolButton>
 
 #include <cmath>
@@ -100,6 +102,32 @@ int run_mechmodelcanvas_tests() {
     for (const Entity& e : mechModelEntities(done, Vec2{0, 0}, 0.0, 200.0))
         maxX = std::max({maxX, e.a.x, e.b.x});
     check(near(maxX, 200.0), "canvas: drawn here, it stretches to the length asked for");
+
+    // The canvas hides the OS pointer because it draws its own crosshair, and a child widget with no
+    // cursor of its own INHERITS that. So anything put on the canvas - the Model / Layout tabs along the
+    // bottom, the field a length is typed into, the inline text editor - lost the pointer the moment it
+    // was moved onto: no crosshair, because that is only painted over the drawing, and no arrow either.
+    {
+        CanvasWidget canvas;
+        check(canvas.cursor().shape() == Qt::BlankCursor,
+              "cursor: the canvas itself hides the pointer");
+        auto* row = new QWidget(&canvas);
+        auto* tabs = new QTabBar(row);
+        tabs->addTab(QStringLiteral("Model"));
+        tabs->addTab(QStringLiteral("Layout1"));
+        canvas.setBottomOverlay(row);
+        check(row->cursor().shape() == Qt::ArrowCursor,
+              "cursor: an overlay on it has a pointer of its own");
+        check(tabs->cursor().shape() != Qt::BlankCursor,
+              "cursor: and what is on the overlay inherits that, not the blank one");
+        bool sawField = false;
+        for (QLineEdit* le : canvas.findChildren<QLineEdit*>()) {
+            sawField = true;
+            check(le->cursor().shape() == Qt::IBeamCursor,
+                  "cursor: the field a value is typed into shows a text cursor");
+        }
+        check(sawField, "cursor: the canvas has that field");
+    }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", canvasFailures);

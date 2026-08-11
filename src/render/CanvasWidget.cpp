@@ -69,6 +69,9 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
         "QLineEdit{background:#0b0f16;color:#e6f0ff;border:1px solid #3d8bfd;"
         "border-radius:3px;padding:1px 5px;font-size:12px;}"));
     dynInput_->hide();
+    // A text cursor over a field being typed into, for the same reason: without one it inherits the
+    // canvas's blank cursor and there is nothing on screen while a length is being typed.
+    dynInput_->setCursor(Qt::IBeamCursor);
     dynInput_->installEventFilter(this);
 
     // The crosshair paints on a click-through overlay that we keep on top of all
@@ -187,6 +190,12 @@ void CanvasWidget::setBottomOverlay(QWidget* overlay) {
     bottomOverlay_ = overlay;
     if (!bottomOverlay_) return;
     bottomOverlay_->setParent(this);
+    // An ordinary arrow over it. The canvas hides the OS cursor because it draws its own crosshair, and
+    // a child widget with no cursor of its own INHERITS that - so the moment the pointer moved onto the
+    // Model / Layout tabs it disappeared: no crosshair, because the crosshair is only painted over the
+    // drawing, and no arrow either. Anything put on the canvas as an overlay is an ordinary control and
+    // wants an ordinary pointer, so it is set here rather than left to whoever hands it over.
+    bottomOverlay_->setCursor(Qt::ArrowCursor);
     bottomOverlay_->show();
     positionBottomOverlay();
     bottomOverlay_->raise();

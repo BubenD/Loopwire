@@ -4518,6 +4518,9 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
 
     if (!inlineEdit_) {
         inlineEdit_ = new QPlainTextEdit(canvas_);
+        // Its own cursor: a child of the canvas inherits the blank one the canvas uses for its
+        // crosshair, and a text box you cannot see the pointer in is hard to click into.
+        inlineEdit_->setCursor(Qt::IBeamCursor);
         inlineEdit_->setStyleSheet(QStringLiteral(
             "QPlainTextEdit{background:rgba(18,28,42,215);color:#eaf2ff;border:1px solid #3d8bfd;"
             // A bright, high-contrast highlight so selected text is clearly visible.
@@ -4538,6 +4541,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
         inlineRuler_ = ruler;
 
         inlineBar_ = new QFrame(canvas_);
+        inlineBar_->setCursor(Qt::ArrowCursor);
         inlineBar_->setStyleSheet(QStringLiteral(
             "QFrame{background:#3a3d43;border:1px solid #555;border-radius:3px;}"));
         auto* bl = new QHBoxLayout(inlineBar_);
