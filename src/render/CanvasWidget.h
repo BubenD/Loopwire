@@ -73,6 +73,10 @@ public:
     // Where the editor's coordinates come from: the paper, or - inside a window that has been stepped
     // into - the model as that window sees it.
     ViewTransform inputTransform() const;
+    // Where the crosshair is: the cursor, or the point a snap has caught - put on the screen the same way
+    // the editor's own world is, so that inside a window on a layout it stays where the cursor is instead
+    // of jumping off to wherever that model point would fall if it were paper.
+    QPointF crosshairScreenPos() const;
     void setBottomOverlay(QWidget* overlay);
 
     // The editor receives input and paints interaction overlays.

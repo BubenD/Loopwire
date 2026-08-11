@@ -397,6 +397,19 @@ Two things follow from that, and both are deliberate:
 Moving what a window looks at is a **middle**-drag, and letting the middle button go lets the drawing
 go — the release is keyed to the button that was doing it, not to the left button alone.
 
+Two things follow from the editor working in the model while the canvas is showing paper:
+
+- **A snapped point is put on the screen the way the editor's own world is** — through the window inside
+  one, as paper outside. Mapped as paper while working inside a window, the crosshair (and the flying
+  input field, which anchors to it) jumped off to wherever that model point would fall on the sheet the
+  moment a snap caught. Both now ask `crosshairScreenPos()`, which is that rule in one place.
+- **The overlay's ink is darkened on a white sheet** (`Editor::paperInk`). Every colour in the overlay —
+  the line being drawn, the ghosts, the guides, the grips, the selection — was chosen to read on the dark
+  canvas of model space, where pale blue on near-black is exactly right. Laid on white paper the same ink
+  all but disappears, which is why a line drawn inside a window could not be seen before it was placed.
+  Same hue, taken down to where it reads on white and made more solid; on the dark canvas the colours are
+  returned untouched, so model space looks as it always did.
+
 **Opening a drawing while a sheet is showing opens that drawing's sheet** — the same one by number if it
 goes that far, otherwise its first — because the work in hand is laying out sheets, and dropping to model
 space interrupts it. A drawing with no sheets shows its model. The view a drawing was saved with is kept:

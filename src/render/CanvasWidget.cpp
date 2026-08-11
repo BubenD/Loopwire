@@ -93,9 +93,7 @@ void CanvasWidget::positionDynInput() {
     if (!dynInput_) return;
     // Anchor just off the visible crosshair: the snapped cursor while drawing, else
     // the raw mouse — so the field stays at the point you're drawing to.
-    QPoint anchor = lastMousePos_;
-    if (editor_ && editor_->currentSnap().snapped)
-        anchor = transform().toScreen(editor_->currentSnap().point).toPoint();
+    const QPoint anchor = crosshairScreenPos().toPoint();
     QPoint pos = anchor + QPoint(16, 8);
     pos.setX(std::clamp(pos.x(), 4, std::max(4, width() - dynInput_->width() - 4)));
     pos.setY(std::clamp(pos.y(), 4, std::max(4, height() - dynInput_->height() - 4)));
@@ -761,10 +759,17 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
 
 // Full-viewport crosshair with a central pick box, AutoCAD style. Tracks the
 // snapped cursor so it locks visibly onto snap points.
-void CanvasWidget::drawCrosshair(QPainter& p) const {
-    QPointF c = lastMousePos_;
+QPointF CanvasWidget::crosshairScreenPos() const {
+    // The snapped point comes from whatever the editor is working in, so it must be put on the screen the
+    // same way: inside a window on a layout that is the MODEL through that window. Mapped as paper, the
+    // crosshair jumped away from the cursor the moment a snap caught - which is what it looked like.
     if (editor_ && editor_->currentSnap().snapped)
-        c = transform().toScreen(editor_->currentSnap().point);
+        return inputTransform().toScreen(editor_->currentSnap().point);
+    return lastMousePos_;
+}
+
+void CanvasWidget::drawCrosshair(QPainter& p) const {
+    const QPointF c = crosshairScreenPos();
     p.setRenderHint(QPainter::Antialiasing, false);
     QPen pen(crosshairColor_);
     pen.setCosmetic(true);

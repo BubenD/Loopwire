@@ -10,6 +10,7 @@
 #include "app/MainWindow.h"
 #include "model/Document.h"
 #include "render/CanvasWidget.h"
+#include "render/EntityRenderer.h"
 
 #include <QComboBox>
 #include <QDir>
@@ -459,6 +460,67 @@ int run_drawingspace_tests() {
                   "middle: letting the button go lets the drawing go - it stops following the cursor");
             canvas->leaveLayoutViewport();
         }
+    }
+
+    // ---- drawing inside a window: the crosshair stays put, and the preview can be seen ------------
+    if (canvas && editor) {
+        spaces->setCurrentIndex(1);
+        Document* drawing = canvas->drawingDocument();
+        if (drawing && !drawing->layouts().empty()) {
+            DrawingLayout& sheet = drawing->layouts()[0];
+            sheet.viewports.clear();
+            LayoutViewport only;
+            only.id = QStringLiteral("one");
+            only.x = 40.0; only.y = 60.0; only.width = 200.0; only.height = 140.0;
+            only.modelScale = 0.5;
+            only.modelCenter = Vec2{100.0, 50.0};
+            sheet.viewports.push_back(only);
+            win.resize(1400, 900);
+            win.show();
+            QApplication::processEvents();
+            canvas->fitView();
+
+            // Something in the model with an end to snap to.
+            spaces->setCurrentIndex(0);
+            editor->setTool(ToolId::Line);
+            editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            editor->onPointerPress(Vec2{200.0, 100.0}, Qt::LeftButton, Qt::NoModifier);
+            spaces->setCurrentIndex(1);
+            canvas->fitView();
+            canvas->enterLayoutViewport(0);
+
+            // Hover that end THROUGH the window: the snap catches, and the crosshair stays at the cursor.
+            const QPointF at = canvas->inputTransform().toScreen(Vec2{200.0, 100.0});
+            QMouseEvent hover(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton,
+                              Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &hover);
+            check(editor->currentSnap().snapped, "crosshair: the snap catches the model end through the "
+                                                 "window");
+            check(QLineF(canvas->crosshairScreenPos(), at).length() < 4.0,
+                  "crosshair: and the crosshair stays at the cursor - the snapped point is put on the "
+                  "screen through the window, not as if it were paper");
+            const QPointF asPaper = canvas->mapToScreen(Vec2{200.0, 100.0});
+            check(QLineF(asPaper, at).length() > 20.0,
+                  "crosshair: which is a different place entirely, or this would prove nothing");
+            canvas->leaveLayoutViewport();
+        }
+    }
+
+    // ---- the overlay's ink, on a white sheet ------------------------------------------------------
+    {
+        const QColor pale(120, 200, 255, 170);   // the ink the line being drawn is made of
+        const bool wasWhite = EntityRenderer::whitePaper();
+        EntityRenderer::setWhitePaper(false);
+        check(Editor::paperInk(pale) == pale,
+              "ink: on the dark canvas the overlay keeps the colours chosen for it");
+        EntityRenderer::setWhitePaper(true);
+        const QColor onPaper = Editor::paperInk(pale);
+        check(onPaper.value() <= 150 && onPaper.alpha() >= 205,
+              "ink: on a white sheet it comes out dark enough and solid enough to see - which is why a "
+              "line being drawn inside a window was invisible before it was placed");
+        check(std::abs(onPaper.toHsv().hue() - pale.toHsv().hue()) <= 6,
+              "ink: the same colour, though - it is still the blue of a line being drawn");
+        EntityRenderer::setWhitePaper(wasWhite);
     }
 
     // ---- the scale, findable ----------------------------------------------------------------------

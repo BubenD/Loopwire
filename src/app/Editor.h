@@ -852,6 +852,14 @@ public:
 
     // Overlay painting (after entities are drawn).
     void drawOverlay(QPainter& p, const ViewTransform& vt) const;
+
+    // The overlay's ink, as it must come out where it is being drawn. Every colour in the overlay - the
+    // line being drawn, the ghosts, the guides, the grips, the selection - was chosen to read on the dark
+    // canvas of model space, and pale blue on pale grey is exactly right there. On a LAYOUT the same ink
+    // is laid on white paper, where it all but disappears: which is why a line being drawn inside a
+    // window could not be seen before it was placed. Same hue, taken down to where it reads on white,
+    // and made more solid.
+    static QColor paperInk(const QColor& c);
     // The wires lit as the rest of the selection's bundle (read for tests / status).
     const QSet<QString>& bundleCompanions() const { return bundleCompanions_; }
 

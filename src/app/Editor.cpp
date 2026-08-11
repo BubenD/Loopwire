@@ -2897,6 +2897,15 @@ void Editor::finishRegionSelect(bool subtract) {
     emit selectionChanged();
 }
 
+QColor Editor::paperInk(const QColor& c) {
+    if (!EntityRenderer::whitePaper()) return c;   // the dark canvas: the ink was chosen for it
+    const QColor hsv = c.toHsv();
+    QColor out;
+    out.setHsv(std::max(0, hsv.hue()), std::min(255, static_cast<int>(hsv.saturation() * 1.35)),
+               std::min(hsv.value(), 150), std::max(c.alpha(), 205));
+    return out.toRgb();
+}
+
 void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const {
     // Show the MTEXT container outline (dashed) so its width/height are visible.
     if (e.type == EntityType::Text) {
@@ -2905,7 +2914,7 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
         if (bw > 0.0 || bh > 0.0) {
             const QPointF tl = vt.toScreen(e.a);
             const QPointF br = vt.toScreen({e.a.x + (bw > 0 ? bw : 0), e.a.y - (bh > 0 ? bh : 0)});
-            QPen bp(QColor(120, 200, 255, 160));
+            QPen bp(paperInk(QColor(120, 200, 255, 160)));
             bp.setCosmetic(true);
             bp.setStyle(Qt::DashLine);
             p.setPen(bp);
@@ -2925,9 +2934,9 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
         // Table grid-line handles are cyan (drag to resize a column/row).
         const bool gridEdge =
             g.role == GripRole::TableColEdge || g.role == GripRole::TableRowEdge;
-        p.setBrush(g.role == GripRole::Center ? QColor("#ffd166")
-                   : gridEdge               ? QColor("#2bd0ff")
-                                            : QColor("#ffffff"));
+        p.setBrush(g.role == GripRole::Center ? paperInk(QColor("#ffd166"))
+                   : gridEdge               ? paperInk(QColor("#2bd0ff"))
+                                            : paperInk(QColor("#ffffff")));
         p.drawRect(QRectF(s.x() - r, s.y() - r, 2 * r, 2 * r));
     }
     p.setBrush(Qt::NoBrush);
@@ -12380,7 +12389,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         // being broken, so it has to be visible as it is drawn.
         if (wireBandHasStart_) {
             p.save();
-            QPen bandPen(QColor(120, 200, 255, breakFrozen_ ? 235 : 170));
+            QPen bandPen(paperInk(QColor(120, 200, 255, breakFrozen_ ? 235 : 170)));
             bandPen.setCosmetic(true);
             bandPen.setWidthF(1.2);
             bandPen.setStyle(Qt::DashLine);
@@ -12391,7 +12400,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const Entity ghost = breakPreview();
         if (ghost.type == EntityType::LengthBreak) {
             p.save();
-            QPen pv(QColor(120, 200, 255, breakFrozen_ ? 235 : 190));
+            QPen pv(paperInk(QColor(120, 200, 255, breakFrozen_ ? 235 : 190)));
             pv.setCosmetic(true);
             pv.setWidthF(breakFrozen_ ? 1.8 : 1.4);
             if (!breakFrozen_) pv.setStyle(Qt::DashLine);
@@ -12415,7 +12424,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                              : (!twistArmType_.isEmpty() && twistFrozen_) ? twistFrozenEnd_
                                                                           : cursor_;
         p.save();
-        QPen pv(QColor(120, 200, 255, 200));
+        QPen pv(paperInk(QColor(120, 200, 255, 200)));
         pv.setCosmetic(true);
         pv.setWidthF(1.4);
         pv.setStyle(Qt::DashLine);
@@ -12452,7 +12461,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 const double spacing = 3.0 * rx; // ellipse width + one-radius gap
                 // Preview the actual outline style: dashed (with the dash scale) or solid,
                 // so a dashed shield reads as dashed before it's placed. The leg stays solid.
-                QPen outlinePen(QColor(120, 200, 255, 220));
+                QPen outlinePen(paperInk(QColor(120, 200, 255, 220)));
                 outlinePen.setCosmetic(true);
                 outlinePen.setWidthF(1.6);
                 if (screenLineType_ == QLatin1String("dashed")) {
@@ -12525,7 +12534,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                         if (twistArmType_ != QLatin1String("type3"))
                             temp.meta.insert("flatLen", twistFlatLen_);
                     }
-                    EntityRenderer::draw(p, temp, *doc_, vt, QColor(120, 200, 255, 220));
+                    EntityRenderer::draw(p, temp, *doc_, vt, paperInk(QColor(120, 200, 255, 220)));
                 }
             }
         }
@@ -12537,7 +12546,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (flashOn_) {
         const QPointF c = vt.toScreen(flashPt_);
         p.save();
-        QPen fp(QColor(255, 190, 40));
+        QPen fp(paperInk(QColor(255, 190, 40)));
         fp.setCosmetic(true);
         fp.setWidthF(2.6);
         p.setPen(fp);
@@ -12550,7 +12559,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // Right-button drag: preview the selection mirrored (X/Y) about the catch point
     // and translated to the current offset.
     if (rightDrag_) {
-        const QColor ghost(120, 200, 255, 160);
+        const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 160)));
         for (const Entity& g : rightDragGhost_) {
             Entity e = rightDragResult(g);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
@@ -12574,7 +12583,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (L > 1e-6) {
                 dir /= L;
                 constexpr double kFar = 6000.0; // beyond any canvas; Qt clips it
-                QPen gp(QColor("#19ff7e")); // bright solid green polar lock line
+                QPen gp(paperInk(QColor("#19ff7e"))); // bright solid green polar lock line
                 gp.setCosmetic(true);
                 gp.setWidthF(1.2);
                 p.setPen(gp);
@@ -12589,7 +12598,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // cursor, with a small cross at the insertion point.
     if (pastePlacing_ && !clipboard_.empty()) {
         const Vec2 off = cursor_ - clipboardBase_;
-        const QColor ghost(120, 200, 255, 170);
+        const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 170)));
         for (Entity e : clipboard_) {
             if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
             if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
@@ -12598,7 +12607,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }
         const QPointF c = vt.toScreen(cursor_);
-        QPen mp(QColor("#ffd166"));
+        QPen mp(paperInk(QColor("#ffd166")));
         mp.setCosmetic(true);
         p.setPen(mp);
         p.setBrush(Qt::NoBrush);
@@ -12610,14 +12619,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // can be positioned before it lands, with a marker on the corner it is held by.
     if (harnessPlacing_ && !harnessGhost_.empty()) {
         const Vec2 shift = cursor_ - harnessBase_;
-        const QColor ghost(120, 200, 255, 170);
+        const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 170)));
         for (Entity e : harnessGhost_) {
             if (std::abs(placeRot_) > 1e-9) rotateEntity(e, harnessBase_, placeRot_);
             translateEntity(e, shift);
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
         }
         const QPointF c = vt.toScreen(cursor_);
-        QPen mp(QColor("#ffd166"));
+        QPen mp(paperInk(QColor("#ffd166")));
         mp.setCosmetic(true);
         p.setPen(mp);
         p.setBrush(Qt::NoBrush);
@@ -12629,8 +12638,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // helpers for the active kind (the grid axes, the polar centre + orbit, or the
     // picked path), so the whole layout can be judged before it is placed.
     if (arrayActive_ && !arraySrc_.empty()) {
-        const QColor ghost(120, 200, 255, 150);
-        const QColor guide(255, 209, 102, 190);
+        const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 150)));
+        const QColor guide = paperInk(paperInk(QColor(255, 209, 102, 190)));
         const auto places = arrayPreview();
         ArraySpec s = arraySpec_;
         if (s.kind == ArrayKind::Polar) s.center = arrayCenterInUse();
@@ -12707,7 +12716,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (isLasso || isRect) {
         const bool windowMode = isLasso ? lassoWindowMode_ : (cursor_.x >= anchor_.x);
         const QColor fill = windowMode ? QColor(55, 125, 220, 90) : QColor(22, 150, 72, 90);
-        const QColor line = windowMode ? QColor("#cfe3ff") : QColor("#d9ffe6");
+        const QColor line = windowMode ? paperInk(QColor("#cfe3ff")) : paperInk(QColor("#d9ffe6"));
         QPen boxPen(line);
         boxPen.setCosmetic(true);
         boxPen.setWidthF(1.2);
@@ -12734,10 +12743,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             f.setPixelSize(12);
             p.setFont(f);
             const QRectF box(c.x() + 10, c.y() - 30, 42, 18);
-            p.setPen(QPen(QColor("#9ec8ff")));
+            p.setPen(QPen(paperInk(QColor("#9ec8ff"))));
             p.setBrush(QColor("#101720"));
             p.drawRect(box);
-            p.setPen(QPen(QColor("#dcecff")));
+            p.setPen(QPen(paperInk(QColor("#dcecff"))));
             p.drawText(box, Qt::AlignCenter, label);
             p.setBrush(Qt::NoBrush);
         }
@@ -12747,7 +12756,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // their ORIGINAL position (faint) so it's clear where they were taken from,
     // until the placement click commits the new position.
     if (editing_ && !editGhost_.empty()) {
-        const QColor ghost(150, 162, 178, 110);
+        const QColor ghost = paperInk(paperInk(QColor(150, 162, 178, 110)));
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
     }
@@ -12770,7 +12779,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             const double chh = (r < rf.size() ? rf[r].toDouble() : 0) * b.height();
             QRectF rr(vt.toScreen({x0, yTop}), vt.toScreen({x0 + cw, yTop - chh}));
             p.save();
-            QPen cp(QColor("#2bd0ff")); cp.setCosmetic(true); cp.setWidthF(1.8);
+            QPen cp(paperInk(QColor("#2bd0ff"))); cp.setCosmetic(true); cp.setWidthF(1.8);
             p.setPen(cp);
             p.setBrush(QColor(43, 208, 255, 60));
             p.drawRect(rr.normalized());
@@ -12784,7 +12793,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (!bundleCompanions_.empty()) {
         // Orange: nothing else in the drawing uses it, so "these run in the same cable" cannot be
         // mistaken for "these are selected" (cyan) or for any layer colour.
-        const QColor companion(255, 150, 40, 200);
+        const QColor companion = paperInk(paperInk(QColor(255, 150, 40, 200)));
         for (const auto& e : doc_->entities())
             if (bundleCompanions_.contains(e.id))
                 EntityRenderer::draw(p, e, *doc_, vt, companion);
@@ -12832,7 +12841,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // NOT selected, so nothing else can be edited by accident - only these can be slid along.
     if (!markSel_.empty()) {
         p.save();
-        const QColor hi("#2bd0ff");
+        const QColor hi = paperInk(QColor("#2bd0ff"));
         for (const MarkPick& m : markSel_) {
             const Entity* w = nullptr;
             for (const auto& e : doc_->entities())
@@ -12851,7 +12860,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
     // Selection marking: highlight each selected entity's geometry + draw grips.
     if (!selected_.empty()) {
-        const QColor hi("#2bd0ff");
+        const QColor hi = paperInk(QColor("#2bd0ff"));
         for (const auto& e : doc_->entities()) {
             if (std::find(selected_.begin(), selected_.end(), e.id) == selected_.end())
                 continue;
@@ -12905,12 +12914,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         ghost.a = connectorFrozen_ ? connectorFrozenPos_ : cursor_;
         ghost.layer = doc_->activeLayer();
         writeConnectorSpec(ghost.meta, connectorSpec_);
-        EntityRenderer::draw(p, ghost, *doc_, vt, QColor(120, 200, 255, 170));
+        EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor(120, 200, 255, 170)));
     }
 
     // In-progress draft preview (white, matching the line being drawn).
     if (drafting_ && !draftPts_.empty()) {
-        QPen prev(QColor("#ffffff"));
+        QPen prev(paperInk(QColor("#ffffff")));
         prev.setCosmetic(true);
         prev.setWidthF(1.4);
         prev.setStyle(Qt::DashLine);
@@ -13066,7 +13075,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 }
                 break;
             }
-            if (ok) EntityRenderer::draw(p, temp, *doc_, vt, QColor("#ffffff"));
+            if (ok) EntityRenderer::draw(p, temp, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedRoute && pts.size() >= 2) {
             Entity tp;
             tp.type = EntityType::TwistedPair;
@@ -13076,7 +13085,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
-            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
+            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedHarness && pts.size() >= 2) {
             Entity tp;
             tp.type = EntityType::TwistedPair;
@@ -13086,7 +13095,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
-            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
+            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
             // Previewed as the thing itself, drawn by the same code that will draw it once placed -
             // so what is on screen while placing it is what is placed.
@@ -13097,7 +13106,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth);
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
-            EntityRenderer::draw(p, tp, *doc_, vt, QColor("#ffffff"));
+            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::DoubleLine && pts.size() >= 2) {
             // One rail runs through the cursor and the gap goes to the other side, which is how it
             // will be placed - the preview and the result are the same line.
@@ -13168,7 +13177,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     QStringLiteral("R %1  D %2").arg(radiusWorld, 0, 'f', 2)
                                                 .arg(radiusWorld * 2.0, 0, 'f', 2);
                 const QPointF labelAt = vt.toScreen(centerWorld + Vec2{radiusWorld, 0});
-                drawDraftValueBox(p, labelAt, valueLabel, QColor("#ffd166"));
+                drawDraftValueBox(p, labelAt, valueLabel, paperInk(QColor("#ffd166")));
             }
             else {
                 QPolygonF poly;
@@ -13179,7 +13188,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Live arc preview built from the placed points + the cursor.
             auto a = buildArcEntity(arcMode_, pts, arcMirror_);
             if (a) {
-                EntityRenderer::draw(p, *a, *doc_, vt, QColor("#ffffff"));
+                EntityRenderer::draw(p, *a, *doc_, vt, paperInk(QColor("#ffffff")));
             } else {
                 QPolygonF poly;
                 for (const auto& v : pts) poly << vt.toScreen(v);
@@ -13209,7 +13218,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 const QPointF fs = vt.toScreen(from);
                 const QPointF qs = vt.toScreen(cursor_);
                 // Bright radius/direction line from the centre to the cursor.
-                QPen gp(centre ? QColor("#19ff7e") : QColor("#9aa6b6"));
+                QPen gp(centre ? paperInk(QColor("#19ff7e")) : paperInk(QColor("#9aa6b6")));
                 gp.setCosmetic(true);
                 gp.setWidthF(1.4);
                 if (!centre) gp.setStyle(Qt::DotLine);
@@ -13217,7 +13226,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.setBrush(Qt::NoBrush);
                 p.drawLine(fs, qs);
                 if (centre) { // mark the centre
-                    p.setBrush(QColor("#19ff7e"));
+                    p.setBrush(paperInk(QColor("#19ff7e")));
                     p.drawEllipse(fs, 2.6, 2.6);
                     p.setBrush(Qt::NoBrush);
                 }
@@ -13226,7 +13235,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 const QString lbl =
                     centre ? QStringLiteral("R %1   %2\xC2\xB0").arg(guideR, 0, 'f', 2).arg(deg, 0, 'f', 1)
                            : QStringLiteral("%1   %2\xC2\xB0").arg(len, 0, 'f', 2).arg(deg, 0, 'f', 1);
-                drawDraftValueBox(p, qs, lbl, QColor("#ffd166"));
+                drawDraftValueBox(p, qs, lbl, paperInk(QColor("#ffd166")));
             }
         } else if (tool_ == ToolId::Ellipse) {
             // Live (rotated) ellipse preview; before the 3rd point, a rubber line.
@@ -13241,7 +13250,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                         ellipseParamAngle(el->center, el->radius, el->radiusY, el->rotation, cursor_);
                     el->meta.insert("ellipticalArc", true);
                 }
-                EntityRenderer::draw(p, *el, *doc_, vt, QColor("#ffffff"));
+                EntityRenderer::draw(p, *el, *doc_, vt, paperInk(QColor("#ffffff")));
             } else {
                 QPolygonF poly;
                 for (const auto& v : pts) poly << vt.toScreen(v);
@@ -13283,15 +13292,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (show) {
                 const QPointF fs = vt.toScreen(from);
                 const QPointF qs = vt.toScreen(to);
-                QPen gp(QColor("#19ff7e"));
+                QPen gp(paperInk(QColor("#19ff7e")));
                 gp.setCosmetic(true);
                 gp.setWidthF(1.4);
                 p.setPen(gp);
-                p.setBrush(QColor("#19ff7e"));
+                p.setBrush(paperInk(QColor("#19ff7e")));
                 p.drawEllipse(fs, 2.6, 2.6); // mark the centre / axis start
                 p.setBrush(Qt::NoBrush);
                 p.drawLine(fs, qs);
-                drawDraftValueBox(p, qs, lbl, QColor("#ffd166"));
+                drawDraftValueBox(p, qs, lbl, paperInk(QColor("#ffd166")));
             }
         } else if (tool_ == ToolId::Spline) {
             // Control polygon (the "vertices lines"): dashed frame through the
@@ -13318,7 +13327,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 (pts.size() >= 3)
                     ? (splineMode_ == SplineMode::CV ? bsplinePoints(pts) : splinePoints(pts))
                     : pts;
-            QPen cpen(QColor("#ffffff"));
+            QPen cpen(paperInk(QColor("#ffffff")));
             cpen.setCosmetic(true);
             cpen.setWidthF(1.6);
             p.setPen(cpen);
@@ -13409,7 +13418,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.setPen(QPen(QColor("#3a3320")));
                 p.setBrush(QColor(20, 24, 32, 220));
                 p.drawRect(box);
-                p.setPen(QPen(QColor("#ffd166")));
+                p.setPen(QPen(paperInk(QColor("#ffd166"))));
                 p.drawText(box, Qt::AlignCenter, label);
                 p.setBrush(Qt::NoBrush);
             }
@@ -13425,7 +13434,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const auto& v : pts) poly << vt.toScreen(v);
             if (poly.size() >= 3) {
                 p.save();
-                QPen hp(QColor("#2bd0ff"));
+                QPen hp(paperInk(QColor("#2bd0ff")));
                 hp.setCosmetic(true);
                 hp.setWidthF(1.6);
                 p.setPen(hp);
@@ -13441,7 +13450,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         if (region.ent) {
             if (!hatchStyle_.manyJoints && region.ent->type == EntityType::Circle) {
                 p.save();
-                QPen hp(QColor("#2bd0ff"));
+                QPen hp(paperInk(QColor("#2bd0ff")));
                 hp.setCosmetic(true);
                 hp.setWidthF(1.6);
                 p.setPen(hp);
@@ -13463,7 +13472,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // not the whole shape — so it's clear which segment the corner op will use. Other
     // primitives (single lines) are re-stroked whole.
     if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && !pickIds_.empty()) {
-        const QColor mark("#ffcf3f");
+        const QColor mark = paperInk(QColor("#ffcf3f"));
         QPen wp(mark);
         wp.setCosmetic(true);
         wp.setWidthF(2.2);
@@ -13507,7 +13516,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         // Chamfer preview: after the first pick, a dashed line from the first clicked
         // point to the cursor previews the cut that will pass between the two points.
         if (tool_ == ToolId::Chamfer && !pickPts_.empty() && pickIds_.size() < 2) {
-            QPen pv(QColor("#19ff7e"));
+            QPen pv(paperInk(QColor("#19ff7e")));
             pv.setCosmetic(true);
             pv.setWidthF(1.4);
             pv.setStyle(Qt::DashLine);
@@ -13527,7 +13536,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const auto& r : doc_->entities())
                 if (std::find(trimRefIds_.begin(), trimRefIds_.end(), r.id) != trimRefIds_.end())
                     refs.push_back(r);
-            QPen gp(QColor(120, 200, 255, 200)); // ghost of the extended result
+            QPen gp(paperInk(QColor(120, 200, 255, 200))); // ghost of the extended result
             gp.setCosmetic(true);
             gp.setWidthF(1.4);
             p.setPen(gp);
@@ -13550,7 +13559,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (extendEntityTo(ghost, *x, refs)) EntityRenderer::draw(p, ghost, *doc_, vt, gp.color());
             }
         }
-        QPen fp(QColor("#19ff7e"));
+        QPen fp(paperInk(QColor("#19ff7e")));
         fp.setCosmetic(true);
         fp.setWidthF(1.6);
         fp.setStyle(Qt::DashLine);
@@ -13572,7 +13581,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
 
         // Live ghost of the result (Move/Rotate/Mirror/Scale/Offset) until the
         // command finishes, so the outcome is visible as the cursor moves.
-        const QColor ghost(120, 200, 255, 170);
+        const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 170)));
         for (const Entity& g : modifyPreview()) EntityRenderer::draw(p, g, *doc_, vt, ghost);
     }
 
@@ -13580,7 +13589,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // once an object is picked, ghost the offset copy on the cursor's side.
     if (tool_ == ToolId::Offset) {
         if (!offsetHasDist_ && offsetDistPts_.size() == 1) {
-            QPen pv(QColor("#19ff7e"));
+            QPen pv(paperInk(QColor("#19ff7e")));
             pv.setCosmetic(true);
             pv.setWidthF(1.4);
             pv.setStyle(Qt::DashLine);
@@ -13592,7 +13601,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (e.id == offsetSourceId_) { src = &e; break; }
             if (src)
                 if (auto g = offsetEntityToward(*src, cursor_, offsetDist_))
-                    EntityRenderer::draw(p, *g, *doc_, vt, QColor(120, 200, 255, 210));
+                    EntityRenderer::draw(p, *g, *doc_, vt, paperInk(QColor(120, 200, 255, 210)));
         }
     }
 
@@ -13600,7 +13609,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (snapResult_.snapped && snapResult_.kind != SnapKind::Grid &&
         snapResult_.kind != SnapKind::Ortho && snapResult_.kind != SnapKind::Polar) {
         const QPointF s = vt.toScreen(snapResult_.point);
-        QPen sp(QColor("#ffd166"));
+        QPen sp(paperInk(QColor("#ffd166")));
         sp.setCosmetic(true);
         sp.setWidthF(1.6);
         p.setPen(sp);
