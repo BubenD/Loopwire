@@ -793,6 +793,35 @@ twenty times an hour. Both lists place by **double-click**; the parts list has a
 is longer than a panel; and each is read afresh on the way in, so a part added or a block made since the last
 look is there. Both start hidden: they are asked for, rather than filling the screen unbidden.
 
+## A folded panel opens over the drawing, not beside it
+
+A panel that is only open while the cursor is on it is something held up in front of the drawing, not
+something the drawing has to make room for. So a folded side comes back as a **fly-out**: the panel laid
+over the sheet, hanging off its own strip, with a grip on the edge that faces the drawing to set how wide it
+opens. The strip stays 24 px, the canvas never changes size, and the drawing does not move.
+
+It used to come back by making the dock wide again. A dock is part of the window's layout, so opening a
+panel shoved the drawing sideways and closing it shoved it back — and the width was never the panel's to
+give: a dock's size is settled between it, the panels above and below it, and the canvas, which is why a
+side pulled wider came back narrow.
+
+**One width to a side.** The panels on a side share their width when they are pinned, so they agree when
+they fly out too — panels on one side opening at three different widths is not an arrangement. The width is
+held per side (per window), and a panel's own number is only the fallback and what gets written down for it.
+
+Two rules keep that number honest, both learned the hard way:
+
+- **Only a panel on the screen may state a width.** One not yet shown, or hidden, is resized by the layout
+  for its own reasons. That is how a panel the user had never opened came to hold a width — and, since a
+  side's panels share one, to impose it on the side.
+- **The fall-out of setting a width is not the user speaking.** Handing a saved width to one panel resizes
+  the rest of its side; without a flag saying so, the side promptly "remembered" what the layout had just
+  done to it.
+
+And when the canvas *does* change size — a pinned panel widened — the drawing is held still: the view is
+pulled back by however far the canvas moved **inside its own window**, so widening a panel no longer drags
+the whole drawing sideways. Inside its window, so that moving the window itself changes nothing.
+
 ## The width of a side is a decision
 
 A side is pulled to the width the work needs — a bill of materials with part numbers in it wants more room

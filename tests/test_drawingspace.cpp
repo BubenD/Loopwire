@@ -862,6 +862,80 @@ int run_drawingspace_tests() {
         settings.remove(QStringLiteral("panels"));
     }
 
+    // ---- a folded side opens OVER the drawing, not beside it --------------------------------------
+    {
+        // A panel that is only open while the cursor is on it is a thing held up in front of the drawing,
+        // not a thing the drawing has to make room for. It used to come back by making the dock wide again,
+        // which shoved the drawing sideways and then shoved it back - and left the panel at whatever width
+        // the layout felt like giving it.
+        QSettings settings;
+        settings.remove(QStringLiteral("panels"));
+        MainWindow w;
+        w.show();
+        QApplication::processEvents();
+        auto* sheet = w.findChild<CanvasWidget*>();
+        check(sheet != nullptr, "flyout: there is a canvas to cover");
+
+        // Fold the right side away: the bill of materials and the layers are both on it.
+        QDockWidget* bom = nullptr;
+        for (QDockWidget* d : w.findChildren<QDockWidget*>())
+            if (d->objectName() == QStringLiteral("panel_BILL OF MATERIALS")) bom = d;
+        check(bom != nullptr, "flyout: the bill of materials is on the right");
+        QToolButton* pin = nullptr;
+        if (bom)
+            for (QToolButton* b : bom->findChildren<QToolButton*>())
+                if (b->isCheckable()) pin = b;
+        if (sheet && pin) {
+            pin->click();   // unpinned: the whole right side folds to strips
+            QApplication::processEvents();
+            const int canvasWhenFolded = sheet->width();
+            const QPoint drawnAt(static_cast<int>(sheet->transform().view.x),
+                                 static_cast<int>(sheet->transform().view.y));
+
+            // Hover a strip. In a test the real cursor is wherever it is, so the strip is told directly -
+            // and given a few passes, since a side just unpinned holds hover-expand back until the cursor
+            // has left it once.
+            QElapsedTimer waited;
+            waited.start();
+            bool anyFlyout = false;
+            while (waited.elapsed() < 900 && !anyFlyout) {
+                for (QWidget* strip : w.findChildren<QWidget*>())
+                    if (strip->toolTip() == QStringLiteral("Hover to expand") && strip->isVisible()) {
+                        QEnterEvent enter(QPointF(5, 5), QPointF(5, 5),
+                                          strip->mapToGlobal(QPointF(5, 5)));
+                        QApplication::sendEvent(strip, &enter);
+                    }
+                QApplication::processEvents();
+                for (QWidget* f : w.findChildren<QWidget*>())
+                    if (f->objectName() == QStringLiteral("panelFlyout") && f->isVisible())
+                        anyFlyout = true;
+            }
+            check(anyFlyout, "flyout: hovering a folded side's strip opens the panel again");
+
+            QList<QWidget*> flyouts;
+            for (QWidget* f : w.findChildren<QWidget*>())
+                if (f->objectName() == QStringLiteral("panelFlyout") && f->isVisible()) flyouts.append(f);
+            std::printf("  flyout: %lld open, %d px wide; canvas %d px before and %d after\n",
+                        static_cast<long long>(flyouts.size()),
+                        flyouts.isEmpty() ? 0 : flyouts.first()->width(), canvasWhenFolded,
+                        sheet->width());
+            check(sheet->width() == canvasWhenFolded,
+                  "flyout: the drawing keeps the whole width it had - the panel is over it, not beside it");
+            check(static_cast<int>(sheet->transform().view.x) == drawnAt.x() &&
+                      static_cast<int>(sheet->transform().view.y) == drawnAt.y(),
+                  "flyout: and the drawing itself has not moved a pixel");
+            // Every panel on the side opens at the SAME width: they share the column when they are pinned,
+            // so they have to agree when they fly out.
+            bool sameWidth = true;
+            for (QWidget* f : flyouts)
+                if (f->width() != flyouts.first()->width()) sameWidth = false;
+            check(sameWidth, "flyout: every panel on a side opens at the one width the side has");
+            for (QWidget* f : flyouts)
+                check(f->width() > 120, "flyout: opened wide enough to read");
+        }
+        settings.remove(QStringLiteral("panels"));
+    }
+
     if (spaceFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", spaceFailures);
     return spaceFailures;

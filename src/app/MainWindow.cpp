@@ -121,6 +121,7 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 
 namespace Edraw_Desktop {
@@ -896,6 +897,45 @@ private:
     QString title_;
 };
 
+// The inner edge of a fly-out: pull it to make the panel wider. A fly-out lies OVER the drawing rather
+// than being part of the window's layout, so it has no splitter of its own - this is its splitter.
+class FlyGrip : public QWidget {
+public:
+    explicit FlyGrip(QWidget* parent, bool vertical) : QWidget(parent), vertical_(vertical) {
+        setCursor(vertical ? Qt::SplitHCursor : Qt::SplitVCursor);
+        setToolTip(QStringLiteral("Drag to set how wide the panel opens"));
+    }
+    std::function<void(QPoint)> onDrag;   // how far the grip has been pulled since the last call
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#3a3f47"));
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#8b97a8"));
+        const QPointF c(width() / 2.0, height() / 2.0);
+        for (int i = -1; i <= 1; ++i)
+            p.drawEllipse(vertical_ ? QPointF(c.x(), c.y() + i * 5) : QPointF(c.x() + i * 5, c.y()), 1.0,
+                          1.0);
+    }
+    void mousePressEvent(QMouseEvent* e) override {
+        last_ = e->globalPosition().toPoint();
+        dragging_ = true;
+    }
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!dragging_) return;
+        const QPoint now = e->globalPosition().toPoint();
+        if (onDrag) onDrag(now - last_);
+        last_ = now;
+    }
+    void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; }
+
+private:
+    bool vertical_;      // the grip runs up and down: it sets a WIDTH
+    QPoint last_;
+    bool dragging_ = false;
+};
+
 // A dock that can auto-hide. Pinning is per SIDE, not per panel: every panel docked
 // on the same side (the left column, the right column, ...) pins, folds and expands
 // as one unit, and the left and right sides are completely independent of each other.
@@ -1051,7 +1091,102 @@ public:
         refreshPinButtons();
     }
 
-    void expandIfCollapsed() { if (collapsed_) expand(); }
+    void expandIfCollapsed() { if (collapsed_) showFlyout(); }
+
+    // ---- the fly-out ----------------------------------------------------------------------------------
+    //
+    // A folded side comes back as a fly-out: the panel laid OVER the drawing, hanging off its own strip.
+    // It used to come back by making the dock wide again, and a dock is part of the window's layout - so
+    // opening a panel shoved the drawing sideways, and closing it shoved it back. Nothing was gained by
+    // that: a panel that is only open while the cursor is on it is a thing held up in front of the
+    // drawing, not a thing the drawing has to make room for. It also fixes the width: a fly-out is ours
+    // to size, where a dock's width is settled between it, the panels above and below it, and the canvas
+    // - which is why a side pulled wider used to come back narrow.
+    bool flyoutOpen() const { return flyout_ && flyout_->isVisible(); }
+
+    void showFlyout() {
+        if (pinned_ || isFloating() || !collapsed_ || !mw_ || !titleBar_ || !content_) return;
+        if (!flyout_) {
+            flyout_ = new QWidget(mw_);
+            flyout_->setObjectName(QStringLiteral("panelFlyout"));
+            flyout_->setAutoFillBackground(true);
+            flyout_->setStyleSheet(QStringLiteral(
+                "QWidget#panelFlyout{background:#2b2f36;border:1px solid #5b6572;}"));
+            body_ = new QWidget(flyout_);
+            auto* v = new QVBoxLayout(body_);
+            v->setContentsMargins(0, 0, 0, 0);
+            v->setSpacing(0);
+            flyGrip_ = new FlyGrip(flyout_, true);
+            flyGrip_->onDrag = [this](QPoint by) {
+                const Qt::DockWidgetArea area = mw_->dockWidgetArea(this);
+                int px = rememberedExtent();
+                if (area == Qt::RightDockWidgetArea) px -= by.x();
+                else if (area == Qt::LeftDockWidgetArea) px += by.x();
+                else if (area == Qt::BottomDockWidgetArea) px -= by.y();
+                else px += by.y();
+                setRememberedExtent(px, horizontalArea());
+                layoutFlyout();
+            };
+        }
+        if (auto* v = qobject_cast<QVBoxLayout*>(body_->layout())) {
+            if (titleBar_->parentWidget() != body_) v->addWidget(titleBar_);
+            if (content_->parentWidget() != body_) v->addWidget(content_, 1);
+        }
+        titleBar_->show();
+        content_->show();
+        flyout_->show();
+        flyout_->raise();
+        layoutFlyout();
+        outside_.invalidate();
+    }
+
+    void hideFlyout() {
+        if (!flyout_) return;
+        flyout_->hide();
+        // The pieces go back to the dock, out of sight, so pinning the side can put them straight back in.
+        if (titleBar_) { titleBar_->setParent(this); titleBar_->hide(); }
+        if (content_) { content_->setParent(this); content_->hide(); }
+    }
+
+    // Where the fly-out hangs: off the inner edge of its own strip, as tall as the strip, and never past
+    // the far side of the window.
+    void layoutFlyout() {
+        if (!flyoutOpen() || !mw_) return;
+        const Qt::DockWidgetArea area = mw_->dockWidgetArea(this);
+        const QPoint at = mapTo(mw_, QPoint(0, 0));
+        const int grip = 6;
+        QRect r;
+        if (area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea) {
+            const int want = std::max(180, rememberedExtent() > kSmallestExtent ? rememberedExtent() : 300);
+            const int room = area == Qt::LeftDockWidgetArea ? mw_->width() - at.x() - width() - 8
+                                                            : at.x() - 8;
+            const int w = std::max(120, std::min(want, room));
+            const int h = std::min(std::max(200, height()), mw_->height() - at.y());
+            r = QRect(area == Qt::LeftDockWidgetArea ? at.x() + width() : at.x() - w, at.y(), w, h);
+        } else {
+            const int want = std::max(140, rememberedExtent() > kSmallestExtent ? rememberedExtent() : 240);
+            const int room = area == Qt::TopDockWidgetArea ? mw_->height() - at.y() - height() - 8
+                                                           : at.y() - 8;
+            const int h = std::max(100, std::min(want, room));
+            r = QRect(at.x(), area == Qt::TopDockWidgetArea ? at.y() + height() : at.y() - h, width(), h);
+        }
+        flyout_->setGeometry(r);
+        const bool vertical = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
+        if (flyGrip_) {
+            static_cast<QWidget*>(flyGrip_)->setCursor(vertical ? Qt::SplitHCursor : Qt::SplitVCursor);
+            flyGrip_->raise();
+        }
+        // The grip sits on the edge AWAY from the strip - the edge that faces the drawing.
+        if (vertical) {
+            const bool gripLeft = area == Qt::RightDockWidgetArea;
+            flyGrip_->setGeometry(gripLeft ? 0 : r.width() - grip, 0, grip, r.height());
+            body_->setGeometry(gripLeft ? grip : 0, 0, r.width() - grip, r.height());
+        } else {
+            const bool gripTop = area == Qt::BottomDockWidgetArea;
+            flyGrip_->setGeometry(0, gripTop ? 0 : r.height() - grip, r.width(), grip);
+            body_->setGeometry(0, gripTop ? grip : 0, r.width(), r.height() - grip);
+        }
+    }
 
     // ---- how wide the panel is, and staying that wide ------------------------------------------------
     //
@@ -1059,11 +1194,18 @@ public:
     // unpinned, and after the program has been shut and started again. So the width is not read off the
     // panel when it is wanted - it is remembered the moment the panel is resized by hand, kept through
     // folding, and written to the settings on the way out.
-    int rememberedExtent() const { return expandedExtent_; }
+    // The width belongs to the SIDE, not to the panel. Every panel on the right opens at the right side's
+    // width - they share the column when they are pinned, so they have to agree when they fly out too;
+    // panels on one side opening at three different widths is not an arrangement, it is a mess. The
+    // panel's own number is only the fallback, and what gets written down for it.
+    int rememberedExtent() {
+        const int side = areaExtent_.value(mw_).value(areaKey(), 0);
+        return side > kSmallestExtent ? side : expandedExtent_;
+    }
     // What to write down on the way out: the width the user chose, or - for a panel never touched this
     // session - the width it actually has, so what comes back is what the screen looked like.
-    int extentForSaving() const {
-        if (expandedExtent_ > kSmallestExtent) return expandedExtent_;
+    int extentForSaving() {
+        if (rememberedExtent() > kSmallestExtent) return rememberedExtent();
         if (collapsed_ || isFloating() || isHidden()) return 0;
         const int px = horizontalExtent_ ? width() : height();
         return px > kSmallestExtent ? px : 0;
@@ -1074,16 +1216,41 @@ public:
         if (px <= kSmallestExtent) return;   // nonsense, or a panel that was never laid out
         expandedExtent_ = px;
         horizontalExtent_ = asWidth;
+        const int side = areaKey();
+        if (side != static_cast<int>(Qt::NoDockWidgetArea)) areaExtent_[mw_].insert(side, px);
     }
     // Give the panel the width it is remembered as, now. Wanted once the window is on screen: resizing a
     // dock before the layout exists does nothing.
     void applyRememberedExtent() {
-        if (collapsed_ || isFloating() || !mw_ || expandedExtent_ <= kSmallestExtent) return;
+        if (collapsed_ || isFloating() || !mw_ || rememberedExtent() <= kSmallestExtent) return;
+        if (isHidden()) return;   // a panel nobody can see has no width worth insisting on
+        const int want = rememberedExtent();
         suppressResize_ = true;
-        mw_->resizeDocks({this}, {expandedExtent_},
-                         horizontalExtent_ ? Qt::Horizontal : Qt::Vertical);
-        QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
+        settingExtents_ = true;
+        // A width ASKED for (resizeDocks) can be quietly dropped when the window's layout has not settled
+        // yet, which is what made a saved width look as though it had never been saved. A width the panel
+        // will not go below cannot be dropped - so the width is set as a floor, the layout is made to
+        // honour it, and the floor is taken away again once it has.
+        if (horizontalExtent_) setMinimumWidth(want);
+        else setMinimumHeight(want);
+        mw_->resizeDocks({this}, {want}, horizontalExtent_ ? Qt::Horizontal : Qt::Vertical);
+        // Made to happen NOW rather than whenever the window next lays itself out: the floor has to be
+        // honoured before it is taken away again, and leaving that to two timers is a race - which is
+        // exactly why the width came back right some of the time and not the rest.
+        if (QLayout* l = mw_->layout()) l->activate();
+        setMinimumSize(0, 0);
+        // The window may lay itself out again a pass or two later, and settle the panel somewhere of its
+        // own choosing. That is not the user speaking either, so it is ignored for a moment longer.
+        QTimer::singleShot(150, this, [this] {
+            suppressResize_ = false;
+            settingExtents_ = false;
+        });
     }
+
+    // Which side the panel is on, and whose window it belongs to: both wanted from outside, to work out
+    // one width a side and to leave another window's panels alone.
+    int sideKey() { return areaKey(); }
+    QMainWindow* owner() const { return mw_; }
 
     static const QVector<AutoHideDock*>& all() { return allDocks_; }
 
@@ -1224,12 +1391,15 @@ private:
         return a != Qt::TopDockWidgetArea && a != Qt::BottomDockWidgetArea;
     }
 
-    // Is the cursor over ANY panel (or its strip) on this side?
+    // Is the cursor over ANY panel on this side - its strip, or the fly-out hanging off it?
     bool groupInside() {
         const QPoint c = QCursor::pos();
         for (auto* d : group()) {
             if (d->isFloating()) continue;
             if (QRect(d->mapToGlobal(QPoint(0, 0)), d->size()).contains(c)) return true;
+            if (d->flyoutOpen() &&
+                QRect(d->flyout_->mapToGlobal(QPoint(0, 0)), d->flyout_->size()).contains(c))
+                return true;
         }
         return false;
     }
@@ -1254,39 +1424,48 @@ private:
         }
         if (inside) {
             outside_.invalidate();
-            if (collapsed_) expand();
+            if (collapsed_) showFlyout();
+            else layoutFlyout();   // the window may have been moved or resized under it
+        } else if (flyoutOpen()) {
+            if (!outside_.isValid())
+                outside_.start();
+            else if (outside_.elapsed() >= 500)
+                hideFlyout();
         } else if (!collapsed_) {
+            // Unpinned and somehow still full width (a panel just dragged onto a folded side): fold it.
             if (!outside_.isValid())
                 outside_.start();
             else if (outside_.elapsed() >= 500)
                 collapse();
         }
+        if (flyoutOpen()) layoutFlyout();
     }
 
     void expand() {
         if (!collapsed_ || !titleBar_) return;
+        hideFlyout();   // the panel is going back into the window; it is not held over the drawing as well
         collapsed_ = false;
         suppressResize_ = true; // ignore the programmatic resize below
         setTitleBarWidget(titleBar_);
         setWidget(content_);
+        titleBar_->show();   // it was hidden while it lived in the fly-out
         content_->show();
         setMinimumSize(0, 0);
         setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-        if (expandedExtent_ > 0)
-            mw_->resizeDocks({this}, {expandedExtent_},
-                             horizontalExtent_ ? Qt::Horizontal : Qt::Vertical);
+        applyRememberedExtent();   // the width it was left at, made to stick
         outside_.invalidate();
         QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
     }
 
     void collapse() {
         if (collapsed_ || isFloating() || !strip_) return;
+        hideFlyout();
         horizontalExtent_ = horizontalArea();
         // Only a size the panel has really been given counts. Folding a panel that has not been laid out
         // yet - which is what happens when a side starts unpinned - used to overwrite the width the user
         // had chosen with whatever the panel measured before it was ever on screen.
         const int px = horizontalExtent_ ? width() : height();
-        if (px > kSmallestExtent) expandedExtent_ = px;
+        if (px > kSmallestExtent) setRememberedExtent(px, horizontalExtent_);
         collapsed_ = true;
         suppressResize_ = true;
         resizeTimer_->stop();
@@ -1311,6 +1490,7 @@ protected:
     }
     void hideEvent(QHideEvent* e) override {
         QDockWidget::hideEvent(e);
+        hideFlyout();   // a panel closed by its x takes its fly-out with it
         // A panel closing hands the pin to whatever is now at the top of that side.
         QTimer::singleShot(0, this, [] { refreshPinButtons(); });
     }
@@ -1335,10 +1515,15 @@ protected:
         // Whatever the panel is dragged to is what it is now remembered as - pinned or not. This is the one
         // place the size is taken from the user, so folding, pinning and restarting all give back the same
         // number rather than each measuring the panel at a different moment.
-        if (e->oldSize().isValid()) {
-            horizontalExtent_ = horizontalArea();
-            const int px = horizontalExtent_ ? width() : height();
-            if (px > kSmallestExtent) expandedExtent_ = px;
+        // Only a panel that is ON THE SCREEN can say anything about its width. One not yet shown, or
+        // hidden, is resized by the layout for its own reasons - that is how a panel the user had never
+        // opened came to hold a width and, since the panels on a side share one, to impose it on the side.
+        // settingExtents_ is the other half of it: while a saved width is being handed out, the rest of the
+        // side is resized along with it, and none of that is the user speaking.
+        if (e->oldSize().isValid() && isVisible() && !settingExtents_) {
+            const bool asWidth = horizontalArea();
+            const int px = asWidth ? width() : height();
+            if (px > kSmallestExtent) setRememberedExtent(px, asWidth);
         }
         if (pinned_) return;
         if (e->oldSize().isValid() && e->size().width() != e->oldSize().width()) {
@@ -1355,6 +1540,9 @@ private:
     QWidget* content_ = nullptr;
     VerticalStrip* strip_ = nullptr;
     QWidget* emptyBar_ = nullptr;
+    QWidget* flyout_ = nullptr;        // the panel held over the drawing while an unpinned side is open
+    QWidget* body_ = nullptr;          // the title bar + the panel, inside the fly-out
+    FlyGrip* flyGrip_ = nullptr;       // the fly-out's own splitter
     QTimer* poll_ = nullptr;
     QTimer* resizeTimer_ = nullptr;    // fires 3s after the user finishes resizing
     QTimer* pinRefresh_ = nullptr;     // coalesces "which panel holds the pin" during a drag
@@ -1370,6 +1558,10 @@ private:
     static constexpr int kSmallestExtent = 60;
     QToolButton* pinBtn_ = nullptr;    // the title bar's pin toggle (synced across the side)
     QWidget* hint_ = nullptr;          // drop highlight shown while dragging
+    // Window -> side -> how wide that side opens. Per window, because a program with two windows open must
+    // not have one window's panels deciding how wide the other's are.
+    static QHash<QMainWindow*, QHash<int, int>> areaExtent_;
+    static bool settingExtents_;              // a saved width is being handed out; ignore the fall-out
     static QVector<AutoHideDock*> allDocks_;  // every auto-hide dock (to find side groups)
     static QHash<int, bool> areaPinned_;      // Qt::DockWidgetArea -> pinned, per side
 
@@ -1377,6 +1569,8 @@ public:
     ~AutoHideDock() override { allDocks_.removeAll(this); }
 };
 
+QHash<QMainWindow*, QHash<int, int>> AutoHideDock::areaExtent_;
+bool AutoHideDock::settingExtents_ = false;
 QVector<AutoHideDock*> AutoHideDock::allDocks_;
 QHash<int, bool> AutoHideDock::areaPinned_;
 
@@ -10812,7 +11006,7 @@ void MainWindow::savePanelLayout() {
     // The widths are kept separately rather than left to the saved state, because a folded panel is 24 px
     // wide and that is what the state would remember - the strip, not the panel.
     for (AutoHideDock* d : AutoHideDock::all()) {
-        if (!d) continue;
+        if (!d || d->owner() != this) continue;
         const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/");
         if (const int extent = d->extentForSaving(); extent > 0) {
             s.setValue(key + QStringLiteral("extent"), extent);
@@ -10825,21 +11019,34 @@ void MainWindow::savePanelLayout() {
 
 void MainWindow::restorePanelLayout() {
     QSettings s;
-    for (AutoHideDock* d : AutoHideDock::all()) {
-        if (!d) continue;
-        const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/");
-        const int extent = s.value(key + QStringLiteral("extent"), 0).toInt();
-        if (extent > 0)
-            d->setRememberedExtent(extent, s.value(key + QStringLiteral("extentIsWidth"), true).toBool());
-    }
-    // The arrangement first: it can move a panel to the other side, and which side a panel is on decides
-    // whether it folds with that side.
+    // The arrangement first: it decides which side each panel is on, and a width belongs to a SIDE - so
+    // there is no telling which width is a panel's until it is standing where it was left.
     const QByteArray state = s.value(QStringLiteral("panels/state")).toByteArray();
     if (!state.isEmpty()) restoreState(state);
+    // Then the widths, one to a side: the widest of what the panels standing on it remember. Panels on one
+    // side opening at three different widths is not an arrangement, and whichever was read last winning is
+    // not a rule anybody could predict.
+    QHash<int, int> bySide;
+    QHash<int, bool> asWidth;
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d || d->owner() != this) continue;
+        const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/");
+        const int extent = s.value(key + QStringLiteral("extent"), 0).toInt();
+        if (extent <= 0) continue;
+        const int side = d->sideKey();
+        bySide.insert(side, std::max(bySide.value(side, 0), extent));
+        asWidth.insert(side, s.value(key + QStringLiteral("extentIsWidth"), true).toBool());
+    }
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d || d->owner() != this) continue;
+        const int side = d->sideKey();
+        if (bySide.contains(side))
+            d->setRememberedExtent(bySide.value(side), asWidth.value(side, true));
+    }
     // restoreState() settles what is open and what is not, but only for panels it knows about - a panel
     // added since the arrangement was saved is not in it, so each is told again.
     for (AutoHideDock* d : AutoHideDock::all()) {
-        if (!d) continue;
+        if (!d || d->owner() != this) continue;
         const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/shown");
         if (s.contains(key)) d->setVisible(s.value(key).toBool());
     }
@@ -10851,8 +11058,17 @@ void MainWindow::restorePanelLayout() {
 }
 
 void MainWindow::applyPanelSizes() {
-    for (AutoHideDock* d : AutoHideDock::all())
-        if (d) d->applyRememberedExtent();
+    // ONE width a side. The panels on a side share their width, so handing each its own number in turn
+    // means the last one heard wins - and it was a panel the user had never even opened that won, which is
+    // why a side pulled wider came back narrow. The widest number remembered on a side is the one given.
+    QHash<int, AutoHideDock*> perSide;
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d || d->owner() != this || d->isHidden() || d->isFloating()) continue;
+        if (d->rememberedExtent() <= 0) continue;
+        AutoHideDock* cur = perSide.value(d->sideKey(), nullptr);
+        if (!cur || d->rememberedExtent() > cur->rememberedExtent()) perSide.insert(d->sideKey(), d);
+    }
+    for (AutoHideDock* d : perSide) d->applyRememberedExtent();
     AutoHideDock::refreshPinButtons();
 }
 

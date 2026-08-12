@@ -202,6 +202,7 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;  // keep the crosshair overlay sized
+    void moveEvent(QMoveEvent* e) override;      // a panel widened beside it must not shift the drawing
     void childEvent(QChildEvent* e) override;    // keep the crosshair overlay on top
     void paintEvent(QPaintEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
@@ -269,6 +270,10 @@ private:
     bool gridVisible_ = true;
 
     // Display options.
+    // Where the canvas sits INSIDE its own window. A panel on the left growing wider moves the canvas
+    // right; the drawing is pulled back by the same amount so it stays where it is on the screen.
+    void holdTheDrawingStill();
+    QPoint whereInTheWindow_{-1, -1};
     int crosshairPct_ = 15;             // crosshair arm length (% of viewport)
     QColor crosshairColor_{"#cdd6e4"};
     int pickboxPx_ = 3;                 // half-size of the central pick box

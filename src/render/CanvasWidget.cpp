@@ -9,6 +9,7 @@
 #include <QEnterEvent>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QMoveEvent>
 #include <QResizeEvent>
 #include <QLineEdit>
 #include <QLineF>
@@ -837,7 +838,31 @@ void CanvasWidget::resizeEvent(QResizeEvent* e) {
     if (crosshairTop_) crosshairTop_->setGeometry(rect());
     positionBottomOverlay();
     if (bottomOverlay_) bottomOverlay_->raise();
+    holdTheDrawingStill();
     QWidget::resizeEvent(e);
+}
+
+void CanvasWidget::moveEvent(QMoveEvent* e) {
+    holdTheDrawingStill();
+    QWidget::moveEvent(e);
+}
+
+// A panel on the left made wider takes its room from the canvas: the canvas's left edge moves right, and
+// with it everything drawn on it - so widening a panel appeared to drag the whole drawing sideways. The
+// view is pulled back by however far the canvas moved INSIDE ITS WINDOW, which leaves the drawing exactly
+// where it was on the screen. Inside its window, so that moving the window itself changes nothing.
+void CanvasWidget::holdTheDrawingStill() {
+    const QWidget* top = window();
+    if (!top) return;
+    const QPoint now = mapTo(const_cast<QWidget*>(top), QPoint(0, 0));
+    if (whereInTheWindow_ == QPoint(-1, -1)) { whereInTheWindow_ = now; return; }
+    const QPoint moved = now - whereInTheWindow_;
+    whereInTheWindow_ = now;
+    if (moved.isNull() || !doc_) return;
+    doc_->view().x -= moved.x();
+    doc_->view().y -= moved.y();
+    invalidateScene();
+    emit viewChanged();
 }
 
 void CanvasWidget::childEvent(QChildEvent* e) {
