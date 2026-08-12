@@ -805,9 +805,19 @@ panel shoved the drawing sideways and closing it shoved it back — and the widt
 give: a dock's size is settled between it, the panels above and below it, and the canvas, which is why a
 side pulled wider came back narrow.
 
-**One width to a side.** The panels on a side share their width when they are pinned, so they agree when
-they fly out too — panels on one side opening at three different widths is not an arrangement. The width is
-held per side (per window), and a panel's own number is only the fallback and what gets written down for it.
+**One width to a side, and one edge to set it.** The panels on a side share their width when they are
+pinned, so they agree when they fly out too — panels on one side opening at three different widths is not an
+arrangement. The width is held per side (per window), and a panel's own number is only the fallback and what
+gets written down for it. The edge that sets it is likewise the *side's*: a single grip running the whole
+length of the side's fly-outs, on the face turned to the drawing. An edge per panel would say the panels can
+be set to different widths, and they cannot.
+
+Panels do their work in `hideEvent`, and a window on its way down hides its panels — at which point asking
+the window which side a panel is on means asking a window whose layout has already gone. So `MainWindow`'s
+destructor says so first (`AutoHideDock::windowGoing`), because a derived destructor runs *before* the
+children are taken apart, and nothing is worth doing for a window that is leaving. The per-window tables are
+dropped at the same time: the allocator hands out the same address again, and the next window must not
+inherit the last one's widths or a dead edge.
 
 Two rules keep that number honest, both learned the hard way:
 

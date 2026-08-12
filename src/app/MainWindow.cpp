@@ -97,6 +97,7 @@
 #include <QFrame>
 #include <QIcon>
 #include <QPainter>
+#include <QPointer>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPdfWriter>
@@ -902,8 +903,9 @@ private:
 class FlyGrip : public QWidget {
 public:
     explicit FlyGrip(QWidget* parent, bool vertical) : QWidget(parent), vertical_(vertical) {
+        setObjectName(QStringLiteral("panelSideEdge"));
         setCursor(vertical ? Qt::SplitHCursor : Qt::SplitVCursor);
-        setToolTip(QStringLiteral("Drag to set how wide the panel opens"));
+        setToolTip(QStringLiteral("Drag to set how wide this side opens — all of its panels together"));
     }
     std::function<void(QPoint)> onDrag;   // how far the grip has been pulled since the last call
 
@@ -1116,17 +1118,6 @@ public:
             auto* v = new QVBoxLayout(body_);
             v->setContentsMargins(0, 0, 0, 0);
             v->setSpacing(0);
-            flyGrip_ = new FlyGrip(flyout_, true);
-            flyGrip_->onDrag = [this](QPoint by) {
-                const Qt::DockWidgetArea area = mw_->dockWidgetArea(this);
-                int px = rememberedExtent();
-                if (area == Qt::RightDockWidgetArea) px -= by.x();
-                else if (area == Qt::LeftDockWidgetArea) px += by.x();
-                else if (area == Qt::BottomDockWidgetArea) px -= by.y();
-                else px += by.y();
-                setRememberedExtent(px, horizontalArea());
-                layoutFlyout();
-            };
         }
         if (auto* v = qobject_cast<QVBoxLayout*>(body_->layout())) {
             if (titleBar_->parentWidget() != body_) v->addWidget(titleBar_);
@@ -1141,51 +1132,91 @@ public:
     }
 
     void hideFlyout() {
-        if (!flyout_) return;
+        if (!flyout_ || onTheWayOut(mw_)) return;
+        const int side = areaKey();
         flyout_->hide();
         // The pieces go back to the dock, out of sight, so pinning the side can put them straight back in.
         if (titleBar_) { titleBar_->setParent(this); titleBar_->hide(); }
         if (content_) { content_->setParent(this); content_->hide(); }
+        layoutSide(mw_, side);   // the side's own edge goes with the last panel on it
     }
 
-    // Where the fly-out hangs: off the inner edge of its own strip, as tall as the strip, and never past
-    // the far side of the window.
-    void layoutFlyout() {
-        if (!flyoutOpen() || !mw_) return;
-        const Qt::DockWidgetArea area = mw_->dockWidgetArea(this);
-        const QPoint at = mapTo(mw_, QPoint(0, 0));
+    // Lay out every fly-out on a side, and the ONE edge that sets how wide they all open. One edge, because
+    // the width belongs to the side: an edge per panel says the panels can be set to different widths, and
+    // they cannot - they share the column the moment the side is pinned again.
+    void layoutFlyout() { layoutSide(mw_, areaKey()); }
+
+    static void layoutSide(QMainWindow* mw, int side) {
+        if (!mw || onTheWayOut(mw) || side == static_cast<int>(Qt::NoDockWidgetArea)) return;
+        const auto area = static_cast<Qt::DockWidgetArea>(side);
+        const bool vertical = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
         const int grip = 6;
+        QRect together;
+        for (AutoHideDock* d : allDocks_) {
+            if (!d || d->mw_ != mw || d->isFloating() || d->areaKey() != side || !d->flyoutOpen()) continue;
+            const QRect r = d->placeFlyout(area, grip);
+            together = together.isNull() ? r : together.united(r);
+        }
+        QPointer<FlyGrip>& edge = sideGrip_[mw][side];
+        if (together.isNull()) {                 // nothing open on this side any more
+            if (edge) edge->hide();
+            return;
+        }
+        if (!edge) {
+            edge = new FlyGrip(mw, vertical);
+            edge->onDrag = [mw, side](QPoint by) {
+                // Whatever the edge is pulled to is the SIDE'S width, so every panel on it follows.
+                for (AutoHideDock* d : allDocks_) {
+                    if (!d || d->mw_ != mw || d->areaKey() != side) continue;
+                    int px = d->rememberedExtent();
+                    switch (static_cast<Qt::DockWidgetArea>(side)) {
+                        case Qt::RightDockWidgetArea: px -= by.x(); break;
+                        case Qt::LeftDockWidgetArea: px += by.x(); break;
+                        case Qt::BottomDockWidgetArea: px -= by.y(); break;
+                        default: px += by.y(); break;
+                    }
+                    d->setRememberedExtent(px, d->horizontalArea());
+                    break;   // one width a side: telling one panel tells the side
+                }
+                layoutSide(mw, side);
+            };
+        }
+        edge->setCursor(vertical ? Qt::SplitHCursor : Qt::SplitVCursor);
+        // The edge runs the whole length of the side's fly-outs, on the face turned to the drawing.
+        if (vertical)
+            edge->setGeometry(area == Qt::RightDockWidgetArea ? together.left() - grip : together.right() + 1,
+                              together.top(), grip, together.height());
+        else
+            edge->setGeometry(together.left(),
+                              area == Qt::BottomDockWidgetArea ? together.top() - grip
+                                                               : together.bottom() + 1,
+                              together.width(), grip);
+        edge->show();
+        edge->raise();
+    }
+
+    // Where one fly-out hangs: off the inner edge of its own strip, as tall as the strip, never past the
+    // far side of the window, and leaving room for the side's edge.
+    QRect placeFlyout(Qt::DockWidgetArea area, int grip) {
+        const QPoint at = mapTo(mw_, QPoint(0, 0));
         QRect r;
         if (area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea) {
             const int want = std::max(180, rememberedExtent() > kSmallestExtent ? rememberedExtent() : 300);
             const int room = area == Qt::LeftDockWidgetArea ? mw_->width() - at.x() - width() - 8
                                                             : at.x() - 8;
-            const int w = std::max(120, std::min(want, room));
+            const int w = std::max(120, std::min(want, room)) - grip;
             const int h = std::min(std::max(200, height()), mw_->height() - at.y());
             r = QRect(area == Qt::LeftDockWidgetArea ? at.x() + width() : at.x() - w, at.y(), w, h);
         } else {
             const int want = std::max(140, rememberedExtent() > kSmallestExtent ? rememberedExtent() : 240);
             const int room = area == Qt::TopDockWidgetArea ? mw_->height() - at.y() - height() - 8
                                                            : at.y() - 8;
-            const int h = std::max(100, std::min(want, room));
+            const int h = std::max(100, std::min(want, room)) - grip;
             r = QRect(at.x(), area == Qt::TopDockWidgetArea ? at.y() + height() : at.y() - h, width(), h);
         }
         flyout_->setGeometry(r);
-        const bool vertical = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
-        if (flyGrip_) {
-            static_cast<QWidget*>(flyGrip_)->setCursor(vertical ? Qt::SplitHCursor : Qt::SplitVCursor);
-            flyGrip_->raise();
-        }
-        // The grip sits on the edge AWAY from the strip - the edge that faces the drawing.
-        if (vertical) {
-            const bool gripLeft = area == Qt::RightDockWidgetArea;
-            flyGrip_->setGeometry(gripLeft ? 0 : r.width() - grip, 0, grip, r.height());
-            body_->setGeometry(gripLeft ? grip : 0, 0, r.width() - grip, r.height());
-        } else {
-            const bool gripTop = area == Qt::BottomDockWidgetArea;
-            flyGrip_->setGeometry(0, gripTop ? 0 : r.height() - grip, r.width(), grip);
-            body_->setGeometry(0, gripTop ? grip : 0, r.width(), r.height() - grip);
-        }
+        body_->setGeometry(0, 0, r.width(), r.height());
+        return r;
     }
 
     // ---- how wide the panel is, and staying that wide ------------------------------------------------
@@ -1253,6 +1284,17 @@ public:
     QMainWindow* owner() const { return mw_; }
 
     static const QVector<AutoHideDock*>& all() { return allDocks_; }
+
+    // The window is going. Said by MainWindow's own destructor, which runs BEFORE the panels are taken
+    // apart - and that order is the whole point. A panel hidden as its window comes down still gets a hide
+    // event, and answering one means asking the window which side the panel is on - of a window whose
+    // layout has already gone. Nothing is worth doing for a window on its way out.
+    static void windowGoing(QMainWindow* mw) {
+        going_.insert(mw);
+        sideGrip_.remove(mw);
+        areaExtent_.remove(mw);
+    }
+    static bool onTheWayOut(QMainWindow* mw) { return mw && going_.contains(mw); }
 
     // Which sides are pinned, as something that can be written down and read back: one "area:0|1" a side.
     static QStringList pinnedSnapshot() {
@@ -1486,10 +1528,12 @@ protected:
     // pin showing and never came back - which is how a side made of two panels ended up with two pins.
     void showEvent(QShowEvent* e) override {
         QDockWidget::showEvent(e);
+        if (onTheWayOut(mw_)) return;
         QTimer::singleShot(0, this, [] { refreshPinButtons(); });
     }
     void hideEvent(QHideEvent* e) override {
         QDockWidget::hideEvent(e);
+        if (onTheWayOut(mw_)) return;
         hideFlyout();   // a panel closed by its x takes its fly-out with it
         // A panel closing hands the pin to whatever is now at the top of that side.
         QTimer::singleShot(0, this, [] { refreshPinButtons(); });
@@ -1542,7 +1586,6 @@ private:
     QWidget* emptyBar_ = nullptr;
     QWidget* flyout_ = nullptr;        // the panel held over the drawing while an unpinned side is open
     QWidget* body_ = nullptr;          // the title bar + the panel, inside the fly-out
-    FlyGrip* flyGrip_ = nullptr;       // the fly-out's own splitter
     QTimer* poll_ = nullptr;
     QTimer* resizeTimer_ = nullptr;    // fires 3s after the user finishes resizing
     QTimer* pinRefresh_ = nullptr;     // coalesces "which panel holds the pin" during a drag
@@ -1561,15 +1604,34 @@ private:
     // Window -> side -> how wide that side opens. Per window, because a program with two windows open must
     // not have one window's panels deciding how wide the other's are.
     static QHash<QMainWindow*, QHash<int, int>> areaExtent_;
+    // Window -> side -> the ONE edge that sets how wide that side's fly-outs open.
+    // Guarded pointers: the edge belongs to the window, so it dies with it - and a later window can be
+    // handed the very same address by the allocator, which must not hand it a dead edge with it.
+    static QHash<QMainWindow*, QHash<int, QPointer<FlyGrip>>> sideGrip_;
+    static QSet<QMainWindow*> going_;         // windows being taken apart: leave their panels alone
     static bool settingExtents_;              // a saved width is being handed out; ignore the fall-out
     static QVector<AutoHideDock*> allDocks_;  // every auto-hide dock (to find side groups)
     static QHash<int, bool> areaPinned_;      // Qt::DockWidgetArea -> pinned, per side
 
 public:
-    ~AutoHideDock() override { allDocks_.removeAll(this); }
+    ~AutoHideDock() override {
+        allDocks_.removeAll(this);
+        // The last panel of a window gone: forget that window's side widths and its edges. Another window
+        // can be given the same address later, and would otherwise inherit them.
+        bool anyLeft = false;
+        for (AutoHideDock* d : allDocks_)
+            if (d && d->mw_ == mw_) anyLeft = true;
+        if (!anyLeft) {
+            areaExtent_.remove(mw_);
+            sideGrip_.remove(mw_);
+            going_.remove(mw_);   // the address can be handed to another window; it starts clean
+        }
+    }
 };
 
 QHash<QMainWindow*, QHash<int, int>> AutoHideDock::areaExtent_;
+QHash<QMainWindow*, QHash<int, QPointer<FlyGrip>>> AutoHideDock::sideGrip_;
+QSet<QMainWindow*> AutoHideDock::going_;
 bool AutoHideDock::settingExtents_ = false;
 QVector<AutoHideDock*> AutoHideDock::allDocks_;
 QHash<int, bool> AutoHideDock::areaPinned_;
@@ -2829,7 +2891,11 @@ void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
     canvas_->setFocus();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // Said before anything of this window is taken apart: the panels have work they do on being hidden, and
+    // none of it can be done once the window they hang in is half gone.
+    AutoHideDock::windowGoing(this);
+}
 
 QAction* MainWindow::makeToolAction(const QString& text, ToolId id) {
     QAction* a = new QAction(makeToolIcon(id), text, this);

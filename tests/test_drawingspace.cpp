@@ -930,6 +930,21 @@ int run_drawingspace_tests() {
             for (QWidget* f : flyouts)
                 if (f->width() != flyouts.first()->width()) sameWidth = false;
             check(sameWidth, "flyout: every panel on a side opens at the one width the side has");
+            // And ONE edge to set that width, running the length of the side - an edge per panel would say
+            // the panels can be set to different widths, and they cannot.
+            QList<QWidget*> edges;
+            for (QWidget* e : w.findChildren<QWidget*>())
+                if (e->objectName() == QStringLiteral("panelSideEdge") && e->isVisible()) edges.append(e);
+            check(edges.size() == 1, "flyout: one edge for the whole side, not one per panel");
+            if (edges.size() == 1 && flyouts.size() > 1) {
+                int top = flyouts.first()->y(), bottom = 0;
+                for (QWidget* f : flyouts) {
+                    top = std::min(top, f->y());
+                    bottom = std::max(bottom, f->y() + f->height());
+                }
+                check(edges.first()->height() >= bottom - top - 2,
+                      "flyout: and it runs the whole length of them");
+            }
             for (QWidget* f : flyouts)
                 check(f->width() > 120, "flyout: opened wide enough to read");
         }
