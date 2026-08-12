@@ -907,6 +907,10 @@ class AutoHideDock : public QDockWidget {
 public:
     AutoHideDock(const QString& title, QMainWindow* mw)
         : QDockWidget(title, mw), mw_(mw), title_(title) {
+        // A name of its own, because that is how a panel is found again in the saved arrangement:
+        // QMainWindow::saveState()/restoreState() key everything by objectName, and a panel without one
+        // is silently left out.
+        setObjectName(QStringLiteral("panel_") + title);
         allDocks_.push_back(this);
         poll_ = new QTimer(this);
         poll_->setInterval(200);
@@ -1048,6 +1052,62 @@ public:
     }
 
     void expandIfCollapsed() { if (collapsed_) expand(); }
+
+    // ---- how wide the panel is, and staying that wide ------------------------------------------------
+    //
+    // A side pulled wider is meant to STAY that wide: folded away and hovered open again, pinned and
+    // unpinned, and after the program has been shut and started again. So the width is not read off the
+    // panel when it is wanted - it is remembered the moment the panel is resized by hand, kept through
+    // folding, and written to the settings on the way out.
+    int rememberedExtent() const { return expandedExtent_; }
+    // What to write down on the way out: the width the user chose, or - for a panel never touched this
+    // session - the width it actually has, so what comes back is what the screen looked like.
+    int extentForSaving() const {
+        if (expandedExtent_ > kSmallestExtent) return expandedExtent_;
+        if (collapsed_ || isFloating() || isHidden()) return 0;
+        const int px = horizontalExtent_ ? width() : height();
+        return px > kSmallestExtent ? px : 0;
+    }
+    bool extentIsWidth() const { return horizontalExtent_; }
+    bool folded() const { return collapsed_; }
+    void setRememberedExtent(int px, bool asWidth) {
+        if (px <= kSmallestExtent) return;   // nonsense, or a panel that was never laid out
+        expandedExtent_ = px;
+        horizontalExtent_ = asWidth;
+    }
+    // Give the panel the width it is remembered as, now. Wanted once the window is on screen: resizing a
+    // dock before the layout exists does nothing.
+    void applyRememberedExtent() {
+        if (collapsed_ || isFloating() || !mw_ || expandedExtent_ <= kSmallestExtent) return;
+        suppressResize_ = true;
+        mw_->resizeDocks({this}, {expandedExtent_},
+                         horizontalExtent_ ? Qt::Horizontal : Qt::Vertical);
+        QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
+    }
+
+    static const QVector<AutoHideDock*>& all() { return allDocks_; }
+
+    // Which sides are pinned, as something that can be written down and read back: one "area:0|1" a side.
+    static QStringList pinnedSnapshot() {
+        QStringList out;
+        for (auto it = areaPinned_.cbegin(); it != areaPinned_.cend(); ++it)
+            out.append(QStringLiteral("%1:%2").arg(it.key()).arg(it.value() ? 1 : 0));
+        return out;
+    }
+    static void restorePinned(const QStringList& saved) {
+        for (const QString& one : saved) {
+            const QStringList bits = one.split(QLatin1Char(':'));
+            if (bits.size() != 2) continue;
+            areaPinned_.insert(bits.at(0).toInt(), bits.at(1).toInt() != 0);
+        }
+        for (AutoHideDock* d : allDocks_) {
+            if (!d || d->isFloating() || !d->isVisible()) continue;
+            const bool v = areaPinnedState(d->areaKey());
+            d->applyPinned(v);
+            d->syncPinButton(v);
+        }
+        refreshPinButtons();
+    }
 
     // One pin per side, on the panel at the top of it: a side made of several panels
     // (Properties + Layers, say) is pinned as a whole, so it needs a single control.
@@ -1222,7 +1282,11 @@ private:
     void collapse() {
         if (collapsed_ || isFloating() || !strip_) return;
         horizontalExtent_ = horizontalArea();
-        expandedExtent_ = horizontalExtent_ ? width() : height();
+        // Only a size the panel has really been given counts. Folding a panel that has not been laid out
+        // yet - which is what happens when a side starts unpinned - used to overwrite the width the user
+        // had chosen with whatever the panel measured before it was ever on screen.
+        const int px = horizontalExtent_ ? width() : height();
+        if (px > kSmallestExtent) expandedExtent_ = px;
         collapsed_ = true;
         suppressResize_ = true;
         resizeTimer_->stop();
@@ -1267,7 +1331,16 @@ protected:
     // user stops dragging, the side folds away.
     void resizeEvent(QResizeEvent* e) override {
         QDockWidget::resizeEvent(e);
-        if (pinned_ || collapsed_ || isFloating() || suppressResize_) return;
+        if (collapsed_ || isFloating() || suppressResize_) return;
+        // Whatever the panel is dragged to is what it is now remembered as - pinned or not. This is the one
+        // place the size is taken from the user, so folding, pinning and restarting all give back the same
+        // number rather than each measuring the panel at a different moment.
+        if (e->oldSize().isValid()) {
+            horizontalExtent_ = horizontalArea();
+            const int px = horizontalExtent_ ? width() : height();
+            if (px > kSmallestExtent) expandedExtent_ = px;
+        }
+        if (pinned_) return;
         if (e->oldSize().isValid() && e->size().width() != e->oldSize().width()) {
             outside_.invalidate();
             resizeTimer_->start();
@@ -1292,6 +1365,9 @@ private:
     bool suppressResize_ = false;      // ignore our own (programmatic) resizes
     bool awaitExit_ = false;           // just unpinned: hold hover-expand until the cursor leaves
     int expandedExtent_ = 0;
+    // Below this a number is not a panel width anybody chose - it is a strip (24 px), or a panel measured
+    // before it was ever laid out.
+    static constexpr int kSmallestExtent = 60;
     QToolButton* pinBtn_ = nullptr;    // the title bar's pin toggle (synced across the side)
     QWidget* hint_ = nullptr;          // drop highlight shown while dragging
     static QVector<AutoHideDock*> allDocks_;  // every auto-hide dock (to find side groups)
@@ -1793,6 +1869,10 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         }
         canvas_->setCommandWords(words, labels);
     }
+
+    // The panels as they were left last time: which side each is on, which are open, whether a side is
+    // folded away, and how wide it is. Last of the building, so everything it arranges exists.
+    restorePanelLayout();
 
     newDrawing(); // start with a single empty drawing (no demo, no last session)
 
@@ -3177,6 +3257,7 @@ void MainWindow::buildRibbon() {
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
 
     QToolBar* top = addToolBar(QStringLiteral("Ribbon"));
+    top->setObjectName(QStringLiteral("ribbonBar"));   // named, so the saved arrangement knows it
     top->setMovable(false);
     top->setFloatable(false);
     top->addWidget(ribbon_);
@@ -4829,6 +4910,7 @@ void MainWindow::buildCommandBar() {
     bar->addWidget(cmdHintLabel_);
     bar->addWidget(label);
     bar->addWidget(commandEdit_);
+    bar->setObjectName(QStringLiteral("commandBar"));
     addToolBar(Qt::BottomToolBarArea, bar);
 
     connect(commandEdit_, &QLineEdit::returnPressed, this, [this] {
@@ -10697,7 +10779,81 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         }
     }
     saveSettings(); // persist the drafting/snap toggles for next launch
+    savePanelLayout();
     e->accept();
+}
+
+void MainWindow::showEvent(QShowEvent* e) {
+    QMainWindow::showEvent(e);
+    // The saved widths can only be given to the panels once there is a layout to give them to: resizing a
+    // dock before the window is on screen does nothing at all. Once, on the way up.
+    if (!panelSizesApplied_) {
+        panelSizesApplied_ = true;
+        // Twice: a dock resized before the window's layout has been through a pass of its own can have the
+        // size taken back off it again, so it is given once as soon as possible and once when the window
+        // has certainly settled.
+        QTimer::singleShot(0, this, [this] { applyPanelSizes(); });
+        QTimer::singleShot(120, this, [this] { applyPanelSizes(); });
+    }
+}
+
+// ---- The panels between sessions -------------------------------------------
+//
+// A side is pulled to the width the work needs - a bill of materials with part numbers in it wants more
+// room than the layers list - and that width is a decision, not an accident. It survives folding an
+// unpinned side away and hovering it open again, and it survives shutting the program: what comes back is
+// the arrangement that was left. The panels ARE the tool; setting them out again every morning is not work.
+
+void MainWindow::savePanelLayout() {
+    QSettings s;
+    // Which panel is on which side, in what order, and which of them are open at all. Keyed by the
+    // objectName each panel was given.
+    s.setValue(QStringLiteral("panels/state"), saveState());
+    // The widths are kept separately rather than left to the saved state, because a folded panel is 24 px
+    // wide and that is what the state would remember - the strip, not the panel.
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d) continue;
+        const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/");
+        if (const int extent = d->extentForSaving(); extent > 0) {
+            s.setValue(key + QStringLiteral("extent"), extent);
+            s.setValue(key + QStringLiteral("extentIsWidth"), d->extentIsWidth());
+        }
+        s.setValue(key + QStringLiteral("shown"), !d->isHidden());
+    }
+    s.setValue(QStringLiteral("panels/pinned"), AutoHideDock::pinnedSnapshot());
+}
+
+void MainWindow::restorePanelLayout() {
+    QSettings s;
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d) continue;
+        const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/");
+        const int extent = s.value(key + QStringLiteral("extent"), 0).toInt();
+        if (extent > 0)
+            d->setRememberedExtent(extent, s.value(key + QStringLiteral("extentIsWidth"), true).toBool());
+    }
+    // The arrangement first: it can move a panel to the other side, and which side a panel is on decides
+    // whether it folds with that side.
+    const QByteArray state = s.value(QStringLiteral("panels/state")).toByteArray();
+    if (!state.isEmpty()) restoreState(state);
+    // restoreState() settles what is open and what is not, but only for panels it knows about - a panel
+    // added since the arrangement was saved is not in it, so each is told again.
+    for (AutoHideDock* d : AutoHideDock::all()) {
+        if (!d) continue;
+        const QString key = QStringLiteral("panels/") + d->objectName() + QStringLiteral("/shown");
+        if (s.contains(key)) d->setVisible(s.value(key).toBool());
+    }
+    // Then which sides are folded away. A side left unpinned comes back unpinned, as a strip - and opens
+    // to the width it was left at, because that is what was read back above.
+    AutoHideDock::restorePinned(s.value(QStringLiteral("panels/pinned")).toStringList());
+    AutoHideDock::refreshPinButtons();
+    syncViewPanelButtons();   // the View tab says what is actually on the screen
+}
+
+void MainWindow::applyPanelSizes() {
+    for (AutoHideDock* d : AutoHideDock::all())
+        if (d) d->applyRememberedExtent();
+    AutoHideDock::refreshPinButtons();
 }
 
 // ---- Persistent drafting preferences ---------------------------------------

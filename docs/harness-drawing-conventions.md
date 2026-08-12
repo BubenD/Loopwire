@@ -793,6 +793,34 @@ twenty times an hour. Both lists place by **double-click**; the parts list has a
 is longer than a panel; and each is read afresh on the way in, so a part added or a block made since the last
 look is there. Both start hidden: they are asked for, rather than filling the screen unbidden.
 
+## The width of a side is a decision
+
+A side is pulled to the width the work needs — a bill of materials with part numbers in it wants more room
+than a list of layers — and that is a decision, not an accident, so it lasts. It survives folding an
+unpinned side away and hovering it open again, it survives pinning and unpinning, and it survives shutting
+the program: what comes back is the arrangement that was left.
+
+The width is taken from the user at the one moment it is known — the panel being resized by hand
+(`resizeEvent`) — rather than measured off the panel whenever it is wanted. Measuring on demand is what went
+wrong before: folding a side reads its width, and a side that starts unpinned folds *before it has ever been
+laid out*, so the width the user had chosen was overwritten with whatever the panel happened to measure
+while invisible. Anything at or under 60 px is now refused outright: that is a strip (24 px) or a panel that
+was never on screen, not a width anybody chose.
+
+Between sessions (`savePanelLayout` / `restorePanelLayout`, in the same settings as the drafting toggles):
+
+- **The arrangement** is `QMainWindow::saveState()` — which side each panel is on, in what order, split how,
+  and which are open. Every panel therefore has an `objectName` (`panel_PROPERTIES`, …); a widget without one
+  is silently left out of a saved state, and so are the toolbars, which is why they are named too.
+- **The widths are kept separately**, because a folded panel is 24 px wide and that is what the state would
+  remember — the strip, not the panel.
+- **Which sides are folded** is kept per side, so a side left as a strip comes back as a strip — and opens to
+  the width it was left at.
+
+The widths are handed out one turn after the window is on screen (`showEvent` → `applyPanelSizes`). Resizing
+a dock before there is a layout to resize does nothing at all, which is why doing it in the constructor
+looked like the setting had not been saved.
+
 ## A ribbon group is two rows
 
 Every group of tools on the ribbon is a grid of **two rows** — including whatever else belongs in the group.

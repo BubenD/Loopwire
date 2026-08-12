@@ -127,9 +127,14 @@ public:
     void insertPictureFromFile();
     bool insertPictureFromClipboard(bool quiet);
     void pasteFromClipboard();   // a picture if that is what is on the clipboard, else the drawing kind
+    // The panels' arrangement and, above all, their size: kept between sessions, so a side pulled wider is
+    // that wide the next time the program is started. Saved on the way out, read back while building.
+    void savePanelLayout();
+    void restorePanelLayout();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    void showEvent(QShowEvent* e) override;   // the panels take their saved widths once there is a layout
     bool eventFilter(QObject* obj, QEvent* e) override;    // Esc in the PROPERTIES panel: back to Select, with the keyboard on the drawing again.
     void leavePropertiesPanel();
  // inline text editor keys
@@ -145,6 +150,8 @@ private:
     // The View tab: which panels are on the screen and which side each is on.
     void buildViewTab();
     void setPanelsVisible(bool on);
+    void applyPanelSizes();
+    bool panelSizesApplied_ = false;
     // The panel a View-tab button stands for, by name: the ribbon is built before the panels, so the buttons
     // are wired by name and resolved when they are pressed.
     QDockWidget* panelByKey(const QString& key) const;

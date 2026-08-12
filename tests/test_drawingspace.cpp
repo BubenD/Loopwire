@@ -20,6 +20,8 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QElapsedTimer>
+#include <QSettings>
 #include <QMouseEvent>
 #include <QTabBar>
 #include <QToolButton>
@@ -793,6 +795,71 @@ int run_drawingspace_tests() {
         std::printf("  ribbon: %d groups in two rows, %d taller\n", twoRow, tall);
         check(twoRow > 0, "rows: the ribbon's tool groups are laid out in a grid of two rows");
         check(tall == 0, "rows: and none of them runs to three");
+    }
+
+    // ---- a side pulled wider stays that wide, and comes back that wide next time -----------------
+    {
+        // The width of a side is a decision - a bill of materials with part numbers in it wants more room
+        // than a list of layers - and a decision has to outlast the panel folding away, and the program
+        // being shut. It used to outlast neither: an unpinned side that was pulled wider came back at
+        // whatever width it had been measured at before it was ever on screen.
+        QSettings settings;
+        settings.remove(QStringLiteral("panels"));   // this test's own starting point
+
+        auto propsOf = [](MainWindow& w) -> QDockWidget* {
+            for (QDockWidget* d : w.findChildren<QDockWidget*>())
+                if (d->objectName() == QStringLiteral("panel_PROPERTIES")) return d;
+            return nullptr;
+        };
+        MainWindow one;
+        one.show();
+        QApplication::processEvents();
+        QDockWidget* props = propsOf(one);
+        check(props != nullptr, "size: a panel has a name of its own, or nothing can be saved about it");
+        if (props) {
+            one.resizeDocks({props}, {320}, Qt::Horizontal);
+            QApplication::processEvents();
+            const int pulledTo = props->width();
+            check(pulledTo > 200, "size: the properties side can be pulled wider");
+
+            // The pin is the one checkable button on a panel's title bar; the other is its x.
+            QToolButton* pin = nullptr;
+            for (QToolButton* b : props->findChildren<QToolButton*>())
+                if (b->isCheckable()) pin = b;
+            check(pin != nullptr, "size: the side has a pin");
+            if (pin) {
+                // Folded away and opened again: the same width, with no file having been near it.
+                pin->click();
+                QApplication::processEvents();
+                check(props->width() < 40, "size: unpinning folds the side away to a strip");
+                pin->click();
+                QApplication::processEvents();
+                check(std::abs(props->width() - pulledTo) <= 8,
+                      "size: and opening it again gives back the width it was pulled to");
+            }
+
+            one.savePanelLayout();
+            const int writtenDown =
+                QSettings().value(QStringLiteral("panels/panel_PROPERTIES/extent"), -1).toInt();
+            check(writtenDown == pulledTo, "size: the width is written down as it stands");
+            MainWindow two;
+            two.show();
+            // The widths are given out a turn after the window is up, and the layout that carries them out
+            // is a turn after that again - so the window is given real time to settle, not just a pass of
+            // the event loop.
+            QElapsedTimer settle;
+            settle.start();
+            while (settle.elapsed() < 600) QApplication::processEvents();
+            QDockWidget* again = propsOf(two);
+            check(again != nullptr, "size: the panel is there in a new session");
+            if (again) {
+                std::printf("  panel width: pulled to %d px, written down %d px, came back %d px\n",
+                            pulledTo, writtenDown, again->width());
+                check(std::abs(again->width() - pulledTo) <= 8,
+                      "size: and it comes back the width it was left at");
+            }
+        }
+        settings.remove(QStringLiteral("panels"));
     }
 
     if (spaceFailures == 0) std::printf("  -> ok\n");
