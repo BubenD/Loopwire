@@ -783,21 +783,38 @@ int run_drawingspace_tests() {
     {
         // A group is two rows of buttons. Array beside two rows of tools, at its own full height, read as
         // something apart from them rather than as one more way of repeating a thing.
-        int tall = 0, twoRow = 0;
+        int tall = 0, twoRow = 0, ragged = 0;
         for (QGridLayout* grid : win.findChildren<QGridLayout*>()) {
             if (grid->count() < 3) continue;
-            bool everyCellAButton = true;
+            bool everyCellAnIcon = true;
+            QList<QSize> cells;
             for (int i = 0; i < grid->count(); ++i) {
                 QWidget* w = grid->itemAt(i)->widget();
-                if (!w || !qobject_cast<QToolButton*>(w)) everyCellAButton = false;
+                auto* b = qobject_cast<QToolButton*>(w);
+                // Icon buttons only: a group of labelled buttons is a different thing, and is as wide as
+                // its words.
+                if (!b || b->toolButtonStyle() != Qt::ToolButtonIconOnly) everyCellAnIcon = false;
+                if (w) cells.append(w->size());
             }
-            if (!everyCellAButton) continue;
+            if (!everyCellAnIcon || cells.isEmpty()) continue;
             if (grid->rowCount() > 2) ++tall;
             else ++twoRow;
+            // And every square the same. Array, Copy and Table are split buttons - a click and a fall menu -
+            // and a split button asks for more room than an icon, so each made its own column wider than the
+            // rest: two rows that did not line up, which is what "not ordered" looks like.
+            // A grid of BIG buttons is not a row of icons - some groups are made of labelled buttons
+            // with widths of their own, and they are not what this is about.
+            int narrowest = cells.first().width();
+            for (const QSize& s : cells) narrowest = std::min(narrowest, s.width());
+            if (narrowest > 60) continue;
+            for (const QSize& s : cells)
+                if (s != cells.first()) { ++ragged; break; }
         }
-        std::printf("  ribbon: %d groups in two rows, %d taller\n", twoRow, tall);
+        std::printf("  ribbon: %d groups in two rows, %d taller, %d ragged\n", twoRow, tall,
+                    ragged);
         check(twoRow > 0, "rows: the ribbon's tool groups are laid out in a grid of two rows");
         check(tall == 0, "rows: and none of them runs to three");
+        check(ragged == 0, "rows: every button in a row of icons is the same square, split buttons and all");
     }
 
     // ---- a side pulled wider stays that wide, and comes back that wide next time -----------------

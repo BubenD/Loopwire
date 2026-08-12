@@ -901,7 +901,7 @@ The widths are handed out one turn after the window is on screen (`showEvent` �
 a dock before there is a layout to resize does nothing at all, which is why doing it in the constructor
 looked like the setting had not been saved.
 
-## A ribbon group is two rows
+## A ribbon group is two rows of one square
 
 Every group of tools on the ribbon is a grid of **two rows** — including whatever else belongs in the group.
 *Array* used to sit beside two rows of Transform tools at its own full height, and the clipboard button beside
@@ -909,3 +909,23 @@ Edit, and *Balloon* and *Table* beside the callouts; at full height next to two 
 something apart from the tools rather than as more of them. `toolRow(tools, alsoInTheGroup)` takes the extras
 and packs them into the same two rows, so the width of a group follows how much is in it and the ribbon is one
 even band of buttons.
+
+Being in the grid is not enough on its own — the cells have to be the same size, and three things were making
+them different:
+
+- **A split button asks for more room than an icon.** *Array*, *Copy*, *Table*, *Leader* and *Dimension* each
+  have a click and a fall menu, and Qt gives the arrow its own width on top of the icon's, so each of them
+  made its column wider than the rest and the two rows stopped lining up. Every cell is now the same square
+  (`kRibbonCell`, 46×36), with the arrow a narrow strip *inside* it (`QToolButton::menu-button{width:11px}` in
+  the ribbon's sheet, with the same chevron image the combo boxes use, since styling the strip takes the
+  style's own arrow away).
+- **A button wrapped in a widget is not a button in a cell.** *Copy* was returned inside a box with a stretch
+  under it, so it sat at the top of a cell as tall as two rows: the cell was right and the button was in the
+  wrong part of it, which looks exactly like a button in the wrong place. `clipboardRow()` returns the button.
+- **Three ways of putting a button in one group.** Home's Modify group had nine tools in a grid, *Match*
+  dropped into a spare cell, and *Array* and *Copy* added beside the grid in a row of their own. All twelve go
+  through the same call now.
+
+The test measures it: every grid of icon buttons on the ribbon, two rows at most and every cell the same
+square — *16 groups in two rows, 0 taller, 0 ragged*. Groups made of labelled buttons are left alone; they are
+as wide as their words.

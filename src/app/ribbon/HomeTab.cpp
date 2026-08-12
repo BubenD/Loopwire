@@ -82,36 +82,18 @@ void MainWindow::buildHomeTab() {
                       ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                       ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
                       ToolId::Hatch, ToolId::Wipeout}));
-    {
-        // Modify group holds the modify tools AND the Copy/Cut clipboard button.
-        auto* modW = new QWidget(page);
-        auto* mh = new QHBoxLayout(modW);
-        mh->setContentsMargins(0, 0, 0, 0);
-        mh->setSpacing(2);
-        // 9 modify tools lay out 5 + 4, leaving the bottom-right grid cell empty;
-        // drop the Match icon into it so it lines up with the other icons in the row.
-        auto* modRow = toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                                ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
-                                ToolId::Chamfer});
-        if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
-            g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
-        mh->addWidget(modRow);
-        // Array sits with the modify tools: it copies something about the drawing, which is what they do.
-        mh->addWidget(makeArrayButton(modW));
-        // Icon only here, matching the tool icons it sits beside; the name is on hover.
-        mh->addWidget(clipboardRow(/*iconOnly=*/true));
-        addGroup(lay, QStringLiteral("Modify"), modW);
-    }
+    // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six. Array and Copy
+    // used to stand beside the grid, each at its own width, and Match was dropped into a spare cell - three
+    // ways of putting a button in a group, in one group.
+    addGroup(lay, QStringLiteral("Modify"),
+             toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale, ToolId::Offset,
+                      ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer},
+                     {makeMatchBtn(page, /*iconOnly=*/true), makeArrayButton(page),
+                      clipboardRow(/*iconOnly=*/true)}));
     addGroup(lay, QStringLiteral("Operations"), operationsRow());
     {
-        // Annotation group: the annotation tools + a Table button (Insert Table).
-        auto* annoW = new QWidget(page);
-        auto* ah = new QHBoxLayout(annoW);
-        ah->setContentsMargins(0, 0, 0, 0);
-        ah->setSpacing(2);
-        ah->addWidget(toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon,
-                               ToolId::Note, ToolId::Revision}));
-        auto* tb = new QToolButton(annoW);
+        // The annotation tools and the Table button, in the same two rows.
+        auto* tb = new QToolButton(page);
         tb->setIcon(makeToolIcon(ToolId::Table));
         tb->setIconSize(QSize(28, 28));
         tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -119,8 +101,10 @@ void MainWindow::buildHomeTab() {
         tb->setFocusPolicy(Qt::NoFocus);
         tb->setToolTip(QStringLiteral("Insert Table"));
         connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-        ah->addWidget(tb);
-        addGroup(lay, QStringLiteral("Annotation"), annoW);
+        addGroup(lay, QStringLiteral("Annotation"),
+                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::Note,
+                          ToolId::Revision},
+                         {tb}));
     }
 
     // Properties group: Layer + Color dropdowns.

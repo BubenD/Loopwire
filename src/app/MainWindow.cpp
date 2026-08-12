@@ -2995,6 +2995,11 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     return g;
 }
 
+// One square for every button in a tool row: 28 px of icon, room for a split button's arrow beside it, and
+// the same height whichever kind of button it is. Sizes left to Qt come out of each button's own contents,
+// and a group of mixed buttons then has no grid in it at all.
+static constexpr QSize kRibbonCell(46, 36);
+
 // A compact 2-row grid of icon tool buttons for the given tools.
 QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup) {
     auto* w = new QWidget(ribbon_);
@@ -3113,13 +3118,19 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
         // Hatch options live in the contextual "Hatch Creation" tab that opens when
         // the tool is active (AutoCAD-style), so the ribbon button just starts it.
 
+        b->setFixedSize(kRibbonCell);
         grid->addWidget(b, i / perRow, i % perRow);
         ++i;
     }
     for (QWidget* extra : alsoInTheGroup) {
         if (!extra) continue;
         extra->setParent(w);
-        grid->addWidget(extra, i / perRow, i % perRow);
+        // The same square as a plain tool. Array, Copy and Table are split buttons - a click and a fall
+        // menu - and a split button asks for more room than an icon does, so each of them made its own
+        // column wider than the rest and the two rows stopped lining up. Given the same square as
+        // everything else, with the arrow inside it (see the ribbon's menu-button rule), a group is a grid.
+        if (auto* btn = qobject_cast<QToolButton*>(extra)) btn->setFixedSize(kRibbonCell);
+        grid->addWidget(extra, i / perRow, i % perRow, Qt::AlignLeft | Qt::AlignVCenter);
         ++i;
     }
     return w;
@@ -3198,6 +3209,7 @@ QWidget* MainWindow::operationsRow() {
         b->setAutoRaise(true);
         b->setFocusPolicy(Qt::NoFocus);
         connect(b, &QToolButton::clicked, this, op.fn);
+        b->setFixedSize(kRibbonCell);   // the same square as the tools beside them, on the same tab
         grid->addWidget(b, i / perRow, i % perRow);
         opButtons_.append({key, b});
         ++i;
@@ -3251,16 +3263,11 @@ void MainWindow::insertTableCommand() {
 }
 
 QWidget* MainWindow::clipboardRow(bool iconOnly) {
-    auto* w = new QWidget(ribbon_);
-    auto* lay = new QVBoxLayout(w);
-    lay->setContentsMargins(0, 0, 0, 0);
-    lay->setSpacing(1);
-    lay->setAlignment(Qt::AlignTop);
 
     // A split button whose PRIMARY action is whichever was chosen last (Copy or Cut),
     // AutoCAD-flyout style: clicking runs it; the fall-menu switches it. Choosing Cut
     // from the menu makes the ribbon button become Cut (and vice-versa).
-    auto* btn = new QToolButton(w);
+    auto* btn = new QToolButton(ribbon_);
     btn->setIconSize(QSize(28, 28));
     // Icon-only leans on the tooltip for the name (which is what the icon buttons beside
     // it do); the fall-menu still spells both actions out.
@@ -3285,9 +3292,10 @@ QWidget* MainWindow::clipboardRow(bool iconOnly) {
     btn->setMenu(menu);
     btn->setDefaultAction(copyAct); // starts as Copy
 
-    lay->addWidget(btn);
-    lay->addStretch(1);
-    return w;
+    // The BUTTON, not a widget holding it. Wrapped in a box with a stretch under it, Copy sat at the top of
+    // a cell as tall as two rows - the cell was the right size and the button was not in the right part of
+    // it, which looks exactly like a button in the wrong place.
+    return btn;
 }
 
 // A ribbon tab page holds horizontal groups separated by vertical rules. Members rather than
@@ -3474,6 +3482,7 @@ QToolButton* MainWindow::makeMatchBtn(QWidget* parent, bool iconOnly) {
         if (iconOnly) {
             b->setToolButtonStyle(Qt::ToolButtonIconOnly);
             b->setIconSize(QSize(28, 28)); // same as toolRow() icons
+            b->setFixedSize(kRibbonCell);  // and the same square, so a row of icons stays a row of icons
             b->setAutoRaise(true);
             b->setFocusPolicy(Qt::NoFocus);
         } else {
@@ -3560,6 +3569,11 @@ QString MainWindow::ribbonStyleSheet() const {
         "QToolButton:hover{background-color:{HOVER};border-color:{HOVERBORD};}"
         "QToolButton:checked{background-color:{SEL};border-color:#3d8bfd;}"
         "QToolButton:pressed{background-color:{PRESS};}"
+        // A split button's arrow: a narrow strip inside the button's own square rather than something
+        // added to its width. Styling the strip at all takes the style's arrow away, so it is given as
+        // the same chevron image the combo boxes use.
+        "QToolButton::menu-button{width:11px;border:none;background:transparent;}"
+        "QToolButton::menu-arrow{image:url(:/caret-down.svg);width:9px;height:9px;}"
         "QFrame{color:{LINE};}"
         // A group's NAME under its buttons, and the rule between one group and the next.
         // Named where they are built rather than styled there, so they follow the scheme:
