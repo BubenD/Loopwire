@@ -30,6 +30,7 @@ class QTableWidget;
 class QListWidget;
 class QLineEdit;
 class QComboBox;
+class QDockWidget;
 class QWidget;
 class QCloseEvent;
 class QToolButton;
@@ -141,6 +142,18 @@ private:
     void buildModifyTab();
     void buildInsertTab();
     void buildAnnotationTab();
+    // The View tab: which panels are on the screen and which side each is on.
+    void buildViewTab();
+    void setPanelsVisible(bool on);
+    // The panel a View-tab button stands for, by name: the ribbon is built before the panels, so the buttons
+    // are wired by name and resolved when they are pressed.
+    QDockWidget* panelByKey(const QString& key) const;
+    void syncViewPanelButtons();   // called once the panels exist
+    // The two panels the View tab adds: the parts of the library, and the blocks, as lists to place from.
+    QDockWidget* makePartsPanel();
+    QDockWidget* makeBlocksPanel();
+    void refreshPartsPanel();
+    void refreshBlocksPanel();
     void buildSchematicBuildTab();
     void buildHarnessMechanicalTab();
     // Shared by every tab: a page with its group layout, a titled group with a rule after it, and
@@ -248,7 +261,9 @@ private:
 
     QAction* makeToolAction(const QString& text, ToolId id);
     QWidget* ribbonGroup(const QString& title, QWidget* content);
-    QWidget* toolRow(const QList<ToolId>& tools);
+    // The tools as buttons, packed into TWO ROWS - and anything else that belongs in the same group packed
+    // with them, so a group is two tidy rows rather than one tall one with odds and ends beside it.
+    QWidget* toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup = {});
     // A 2-row icon grid of the Modify "Operations" actions (Array, Explode,
     // Purge, Delete). Reused on both the Home and Modify tabs.
     QWidget* operationsRow();
@@ -592,6 +607,18 @@ private:
     QLabel* hatchPatternLabel_ = nullptr; // shows the selected pattern's name
     QString hatchEditId_; // id of the selected hatch being edited (empty = new-hatch defaults)
     QTableWidget* layersTable_ = nullptr;
+    // The panels, kept so the View tab can show, hide and move them. They were locals: a panel closed by its
+    // own x could then only be brought back by knowing that dragging a floating one to an edge re-docks it.
+    QDockWidget* propsDock_ = nullptr;
+    QDockWidget* layersDock_ = nullptr;
+    QDockWidget* bomDock_ = nullptr;
+    QDockWidget* partsDock_ = nullptr;
+    QDockWidget* blocksDock_ = nullptr;
+    QList<QPair<QString, QToolButton*>> viewPanelButtons_;
+    QListWidget* partsPanelList_ = nullptr;
+    QLineEdit* partsPanelFilter_ = nullptr;
+    QListWidget* blocksPanelList_ = nullptr;
+
     QTableWidget* propsTable_ = nullptr;
     QListWidget* entityList_ = nullptr;   // no longer built: a click on the drawing says it better
     // The bill of materials shown beside the drawing (read-only; the window edits it), and the library

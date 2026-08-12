@@ -40,25 +40,18 @@ void MainWindow::buildModifyTab() {
     auto [page, lay] = makeTabPage();
     {
         // Move / Rotate / Mirror / Scale / Offset - and Array, which is the same idea repeated.
-        auto* tw = new QWidget(page);
-        auto* th = new QHBoxLayout(tw);
-        th->setContentsMargins(0, 0, 0, 0);
-        th->setSpacing(2);
-        th->addWidget(toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                               ToolId::Offset}));
-        th->addWidget(makeArrayButton(tw));
-        addGroup(lay, QStringLiteral("Transform"), tw);
+        // All six in the same two rows: Array standing full height beside two rows of tools read as
+        // something other than one of them.
+        addGroup(lay, QStringLiteral("Transform"),
+                 toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale, ToolId::Offset},
+                         {makeArrayButton(page)}));
     }
     {
         // Edit group: the pick-modify tools plus the Copy/Cut clipboard button.
-        auto* editW = new QWidget(page);
-        auto* eh = new QHBoxLayout(editW);
-        eh->setContentsMargins(0, 0, 0, 0);
-        eh->setSpacing(2);
-        eh->addWidget(
-            toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer}));
-        eh->addWidget(clipboardRow());
-        addGroup(lay, QStringLiteral("Edit"), editW);
+        // The pick-modify tools and the clipboard button, in the same two rows.
+        addGroup(lay, QStringLiteral("Edit"),
+                 toolRow({ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer},
+                         {clipboardRow(true)}));
     }
     addGroup(lay, QStringLiteral("Operations"), operationsRow());
     lay->addStretch(1);

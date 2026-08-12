@@ -98,6 +98,7 @@ add_library(edraw_core STATIC
     src/app/ribbon/ModifyTab.cpp
     src/app/ribbon/InsertTab.cpp
     src/app/ribbon/AnnotationTab.cpp
+    src/app/ribbon/ViewTab.cpp
     src/app/ribbon/SchematicBuildTab.cpp
     src/app/ribbon/HarnessMechanicalTab.cpp
     src/app/HarnessBuilderDialog.h

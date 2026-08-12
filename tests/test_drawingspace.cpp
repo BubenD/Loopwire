@@ -14,7 +14,12 @@
 
 #include <QComboBox>
 #include <QDir>
+#include <QDockWidget>
+#include <QGridLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QTabBar>
 #include <QToolButton>
@@ -682,6 +687,112 @@ int run_drawingspace_tests() {
         if (canvas && editor)
             check(editor->document() != canvas->drawingDocument(),
                   "open: and the tools are in that sheet's paper space, ready to draw on it");
+    }
+
+    // ---- the View tab: which panels are on the screen, and which side -----------------------------
+    {
+        // Five panels, five buttons, each on its own. Before this a panel closed by its own x could only be
+        // brought back by knowing that a floating panel dragged to an edge re-docks - which nobody knows.
+        // On the screen for this one: a panel showing or not showing is the whole subject, and a window that
+        // was never shown has nothing showing in it.
+        win.show();
+        QApplication::processEvents();
+
+        QTabBar* ribbonTabs = nullptr;
+        for (QTabBar* bar : win.findChildren<QTabBar*>())
+            for (int i = 0; i < bar->count(); ++i)
+                if (bar->tabText(i) == QStringLiteral("View")) ribbonTabs = bar;
+        check(ribbonTabs != nullptr, "view: there is a View tab on the ribbon");
+
+        const QStringList wanted{QStringLiteral("Properties"), QStringLiteral("Layers"),
+                                 QStringLiteral("Bill of materials"), QStringLiteral("Parts list"),
+                                 QStringLiteral("Blocks list")};
+        QList<QToolButton*> panelBtns;
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->isCheckable() && wanted.contains(b->text())) panelBtns.append(b);
+        check(panelBtns.size() == wanted.size(),
+              "view: a button each for the properties, the layers, the bill of materials, the parts and "
+              "the blocks");
+        bool allLive = !panelBtns.isEmpty();
+        for (QToolButton* b : panelBtns) {
+            if (!b->isEnabled()) allLive = false;              // wired to a panel that exists
+            if (!b->menu() || b->menu()->actions().size() < 3) allLive = false;   // left / right / floating
+        }
+        check(allLive, "view: each one is live, and says which side its panel sits on");
+
+        // Pressed in, the panel is on the screen; pressed out, it is not. The panel's own x has to leave the
+        // button pressed out too, or the ribbon and the screen disagree about what is showing.
+        QToolButton* propsBtn = nullptr;
+        for (QToolButton* b : panelBtns)
+            if (b->text() == QStringLiteral("Properties")) propsBtn = b;
+        QDockWidget* propsPanel = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->windowTitle() == QStringLiteral("PROPERTIES")) propsPanel = d;
+        check(propsBtn && propsPanel, "view: the properties button and its panel are both there");
+        if (propsBtn && propsPanel) {
+            propsBtn->setChecked(false);
+            propsBtn->setChecked(true);
+            check(!propsPanel->isHidden(), "view: pressed in, the panel is on the screen");
+            propsBtn->setChecked(false);
+            check(propsPanel->isHidden(), "view: pressed out, it is gone");
+            propsPanel->show();
+            QApplication::processEvents();
+            check(propsBtn->isChecked(), "view: and a panel brought back by hand presses its button in");
+        }
+
+        // The two things wanted after moving panels about: all of them, or none and the whole screen.
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Hide all")) b->click();
+        QApplication::processEvents();
+        bool noneShowing = true;
+        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS"})
+            for (QDockWidget* d : win.findChildren<QDockWidget*>())
+                if (d->windowTitle() == QLatin1String(title) && !d->isHidden()) noneShowing = false;
+        check(noneShowing, "view: Hide all leaves the drawing the whole screen");
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Show all")) b->click();
+        QApplication::processEvents();
+        bool allShowing = true;
+        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS"}) {
+            bool one = false;
+            for (QDockWidget* d : win.findChildren<QDockWidget*>())
+                if (d->windowTitle() == QLatin1String(title) && !d->isHidden()) one = true;
+            if (!one) allShowing = false;
+        }
+        check(allShowing, "view: and Show all brings every one of them back");
+
+        // The parts and blocks lists are panels now, not only windows: what is on the shelf is wanted while
+        // drawing, and a part is put down by double-clicking it rather than through a dialog.
+        QListWidget* partsList = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->windowTitle() == QStringLiteral("PARTS")) partsList = d->findChild<QListWidget*>();
+        check(partsList != nullptr, "view: the parts panel is a list of the library");
+        QLineEdit* partsFilter = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->windowTitle() == QStringLiteral("PARTS")) partsFilter = d->findChild<QLineEdit*>();
+        check(partsFilter != nullptr,
+              "view: with a filter, because a real library is longer than a panel");
+    }
+
+    // ---- the Modify and Annotation groups read as two rows ----------------------------------------
+    {
+        // A group is two rows of buttons. Array beside two rows of tools, at its own full height, read as
+        // something apart from them rather than as one more way of repeating a thing.
+        int tall = 0, twoRow = 0;
+        for (QGridLayout* grid : win.findChildren<QGridLayout*>()) {
+            if (grid->count() < 3) continue;
+            bool everyCellAButton = true;
+            for (int i = 0; i < grid->count(); ++i) {
+                QWidget* w = grid->itemAt(i)->widget();
+                if (!w || !qobject_cast<QToolButton*>(w)) everyCellAButton = false;
+            }
+            if (!everyCellAButton) continue;
+            if (grid->rowCount() > 2) ++tall;
+            else ++twoRow;
+        }
+        std::printf("  ribbon: %d groups in two rows, %d taller\n", twoRow, tall);
+        check(twoRow > 0, "rows: the ribbon's tool groups are laid out in a grid of two rows");
+        check(tall == 0, "rows: and none of them runs to three");
     }
 
     if (spaceFailures == 0) std::printf("  -> ok\n");

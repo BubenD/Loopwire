@@ -769,3 +769,35 @@ stays at size, because the sheet *is* the paper (`EntityRenderer::setAnnotationS
 Two smaller things on the strip and the menu: **+ window** is not shown at all in model space rather than shown
 and greyed, since a window onto the drawing is cut in a sheet; and right-clicking a window on a layout offers
 **Delete this window** for the window *under the cursor*, picked out first or not.
+
+## The panels are the draughtsman's, not the program's
+
+There is a **View** tab, and on it one button for each panel: *Properties*, *Layers*, *Bill of materials*,
+*Parts list*, *Blocks list*. Pressed in, the panel is on the screen; pressed out, it is not. Each button also
+carries a small menu — **on the left**, **on the right**, **floating** — because which side a panel belongs on
+is a matter of how somebody works, not of how the program was built. **Show all** and **Hide all** are the two
+things wanted after moving panels about: everything back, or nothing and the whole screen for the drawing.
+
+The buttons are *independent*: five switches, not one arrangement. Before this the only way to bring back a
+panel closed by its own x was to know that a floating panel dragged to an edge re-docks — which nobody knows,
+so a closed panel was gone for the session.
+
+A button and its panel have to agree about what is showing, and the panel can be closed without the button
+being touched, so each button follows its panel's `visibilityChanged` as well as driving it. And because the
+ribbon is built **before** the panels are, the buttons are wired to the panels *by name* — `panelByKey` —
+and switched on at the end of `buildPanels()` by `syncViewPanelButtons()`.
+
+The parts and the blocks are panels now, not only windows. What is on the shelf is wanted *while drawing*, and
+crossing the screen to a dialog to put a part down — and closing it again — is a lot of work for something done
+twenty times an hour. Both lists place by **double-click**; the parts list has a filter, because a real library
+is longer than a panel; and each is read afresh on the way in, so a part added or a block made since the last
+look is there. Both start hidden: they are asked for, rather than filling the screen unbidden.
+
+## A ribbon group is two rows
+
+Every group of tools on the ribbon is a grid of **two rows** — including whatever else belongs in the group.
+*Array* used to sit beside two rows of Transform tools at its own full height, and the clipboard button beside
+Edit, and *Balloon* and *Table* beside the callouts; at full height next to two short rows they read as
+something apart from the tools rather than as more of them. `toolRow(tools, alsoInTheGroup)` takes the extras
+and packs them into the same two rows, so the width of a group follows how much is in it and the ribbon is one
+even band of buttons.

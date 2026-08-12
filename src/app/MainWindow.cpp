@@ -2584,12 +2584,16 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
 }
 
 // A compact 2-row grid of icon tool buttons for the given tools.
-QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
+QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup) {
     auto* w = new QWidget(ribbon_);
     auto* grid = new QGridLayout(w);
     grid->setContentsMargins(0, 0, 0, 0);
     grid->setSpacing(1);
-    const int perRow = (tools.size() + 1) / 2;
+    // Two rows, and everything in the group goes in them - the tools, and whatever else belongs beside them.
+    // Left out of the grid, an extra button stood full height next to two rows of tools, which is what made
+    // the Modify and Annotation groups look thrown together rather than ordered.
+    const int cells = static_cast<int>(tools.size()) + static_cast<int>(alsoInTheGroup.size());
+    const int perRow = std::max(1, (cells + 1) / 2);
     int i = 0;
     for (ToolId id : tools) {
         auto* b = new QToolButton(w);
@@ -2698,6 +2702,12 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools) {
         // the tool is active (AutoCAD-style), so the ribbon button just starts it.
 
         grid->addWidget(b, i / perRow, i % perRow);
+        ++i;
+    }
+    for (QWidget* extra : alsoInTheGroup) {
+        if (!extra) continue;
+        extra->setParent(w);
+        grid->addWidget(extra, i / perRow, i % perRow);
         ++i;
     }
     return w;
@@ -3159,6 +3169,9 @@ void MainWindow::buildRibbon() {
     buildAnnotationTab();
     buildSchematicBuildTab();
     buildHarnessMechanicalTab();
+    // The View tab is a list of the panels there are. The panels themselves do not exist yet - buildPanels()
+    // runs after this - so its buttons are wired by name and switched on later by syncViewPanelButtons().
+    buildViewTab();
 
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
@@ -4594,6 +4607,7 @@ void MainWindow::buildPanels() {
 
     // ===== PROPERTIES (left, top) =====
     auto* propsDock = new AutoHideDock(QStringLiteral("PROPERTIES"), this);
+    propsDock_ = propsDock;
     configDock(propsDock);
     auto* propsWidget = new QWidget(propsDock);
     auto* pv = new QVBoxLayout(propsWidget);
@@ -4643,6 +4657,7 @@ void MainWindow::buildPanels() {
 
     // ===== LAYERS (left, below properties) =====
     auto* layersDock = new AutoHideDock(QStringLiteral("LAYERS"), this);
+    layersDock_ = layersDock;
     configDock(layersDock);
     auto* layersWidget = new QWidget(layersDock);
     auto* lv = new QVBoxLayout(layersWidget);
@@ -4759,6 +4774,7 @@ void MainWindow::buildPanels() {
     // was drawn. Read-only here - the panel shows it, the window edits it - because a bill of materials
     // is edited a row at a time with the parts library open beside it.
     auto* bomDock = new AutoHideDock(QStringLiteral("BILL OF MATERIALS"), this);
+    bomDock_ = bomDock;
     configDock(bomDock);
     auto* bomWidget = new QWidget(bomDock);
     auto* bv = new QVBoxLayout(bomWidget);
@@ -4786,11 +4802,19 @@ void MainWindow::buildPanels() {
     // was as long as the drawing, and it was in the way of the two things that are worth having on
     // screen while drawing: what the drawing is made OF, and which layer it is on.
 
+    // The parts of the library and the blocks, as PANELS rather than only as windows: what is on the shelf
+    // is wanted while drawing, and crossing the screen to a dialog to put a part down - and closing it
+    // again - is a lot of work for a thing done twenty times an hour.
+    partsDock_ = makePartsPanel();
+    blocksDock_ = makeBlocksPanel();
+
     // Pin / auto-hide acts on a whole side, and each side is independent: the left column (Properties)
     // and the right column (the bill of materials above the layers) each carry ONE pin - on the panel at
     // the top of the side - and folding one leaves the other alone. The sides themselves are worked out
     // from the live layout, so dragging a panel across re-forms both.
     AutoHideDock::refreshPinButtons();
+    // The View tab's buttons were built before these panels existed: now they can be wired to them.
+    syncViewPanelButtons();
 }
 
 void MainWindow::buildCommandBar() {
@@ -10465,6 +10489,119 @@ void MainWindow::activateIndex(int index) {
     normaliseRibbonPages();   // never two pages at once, whatever came and went above
     refreshPanels();
     updateWindowTitleForActive();
+}
+
+QDockWidget* MainWindow::makePartsPanel() {
+    auto* dock = new AutoHideDock(QStringLiteral("PARTS"), this);
+    // Movable, floatable, closable - the same terms as the panels that were here before, so a panel behaves
+    // the same whichever of them it is.
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                      QDockWidget::DockWidgetClosable);
+    auto* body = new QWidget(dock);
+    auto* v = new QVBoxLayout(body);
+    v->setContentsMargins(4, 4, 4, 4);
+    v->setSpacing(4);
+    partsPanelFilter_ = new QLineEdit(body);
+    partsPanelFilter_->setPlaceholderText(QStringLiteral("filter by P/N, description or manufacturer"));
+    connect(partsPanelFilter_, &QLineEdit::textChanged, this, [this] { refreshPartsPanel(); });
+    v->addWidget(partsPanelFilter_);
+    partsPanelList_ = new QListWidget(body);
+    partsPanelList_->setToolTip(QStringLiteral(
+        "Double-click to put a part on the sheet: its mechanical drawing where it has one, else its "
+        "schematic symbol."));
+    // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
+    connect(partsPanelList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (!item) return;
+        placeLibraryPart(item->data(Qt::UserRole).toString(), item->data(Qt::UserRole + 1).toBool());
+    });
+    v->addWidget(partsPanelList_, 1);
+    {
+        auto* open = new QPushButton(QStringLiteral("Open the parts library"), body);
+        connect(open, &QPushButton::clicked, this, [this] { showPartsLibrary(); });
+        v->addWidget(open);
+    }
+    dock->setManaged(new DockTitleBar(dock, QStringLiteral("PARTS")), body);
+    addDockWidget(Qt::LeftDockWidgetArea, dock);
+    dock->hide();   // asked for from the View tab, rather than filling the screen unbidden
+    refreshPartsPanel();
+    return dock;
+}
+
+void MainWindow::refreshPartsPanel() {
+    if (!partsPanelList_) return;
+    partsPanelList_->clear();
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const PartsLibrary lib = catalog.merged();
+    const QString needle = partsPanelFilter_ ? partsPanelFilter_->text().trimmed() : QString();
+    for (const LibraryPart& part : lib.parts) {
+        const bool mech = part.hasMechanical();
+        const bool schem = !partSchematicDrawing(part).isEmpty();
+        if (!mech && !schem) continue;   // nothing to put down
+        if (!needle.isEmpty()) {
+            const QString hay = QStringLiteral("%1 %2 %3 %4")
+                                    .arg(part.mfrPn, part.internalPn, part.description, part.mfrName);
+            if (!hay.contains(needle, Qt::CaseInsensitive)) continue;
+        }
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()), partsPanelList_);
+        item->setData(Qt::UserRole, part.id);
+        item->setData(Qt::UserRole + 1, mech);   // the mechanical drawing where there is one
+        item->setToolTip(QStringLiteral("%1\nDouble-click to place the %2 drawing")
+                             .arg(part.title(),
+                                  mech ? QStringLiteral("mechanical") : QStringLiteral("schematic")));
+    }
+}
+
+QDockWidget* MainWindow::makeBlocksPanel() {
+    auto* dock = new AutoHideDock(QStringLiteral("BLOCKS"), this);
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                      QDockWidget::DockWidgetClosable);
+    auto* body = new QWidget(dock);
+    auto* v = new QVBoxLayout(body);
+    v->setContentsMargins(4, 4, 4, 4);
+    v->setSpacing(4);
+    blocksPanelList_ = new QListWidget(body);
+    blocksPanelList_->setToolTip(
+        QStringLiteral("Double-click to put a block on the sheet, then click where it goes."));
+    connect(blocksPanelList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (!item || !editor_) return;
+        const QString name = item->data(Qt::UserRole).toString();
+        PartsCatalog catalog;
+        catalog.openRemembered();
+        for (const BlockDef& block : allBlocks(&catalog)) {
+            if (block.name != name) continue;
+            editor_->placeEntities(blockInstanceEntities(block, Vec2{0.0, 0.0}, QString()));
+            statusBar()->showMessage(tr("Click the sheet to place %1").arg(block.name), 6000);
+            if (canvas_) canvas_->setFocus();
+            break;
+        }
+    });
+    v->addWidget(blocksPanelList_, 1);
+    {
+        auto* open = new QPushButton(QStringLiteral("Open the blocks window"), body);
+        connect(open, &QPushButton::clicked, this, [this] { showBlockDialog(); });
+        v->addWidget(open);
+    }
+    dock->setManaged(new DockTitleBar(dock, QStringLiteral("BLOCKS")), body);
+    addDockWidget(Qt::LeftDockWidgetArea, dock);
+    dock->hide();
+    refreshBlocksPanel();
+    return dock;
+}
+
+void MainWindow::refreshBlocksPanel() {
+    if (!blocksPanelList_) return;
+    blocksPanelList_->clear();
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    for (const BlockDef& block : allBlocks(&catalog)) {
+        auto* item = new QListWidgetItem(block.name, blocksPanelList_);
+        item->setData(Qt::UserRole, block.name);
+        if (!block.description.isEmpty()) item->setToolTip(block.description);
+    }
 }
 
 void MainWindow::updateActiveTabText() {

@@ -1,0 +1,204 @@
+// The View ribbon tab: which panels are on the screen, and which side each one is on.
+//
+// The panels were there before this - properties, layers, the bill of materials - but the only way to bring
+// one back once it had been closed was to know that its title bar had an x and that dragging a floating one to
+// an edge re-docks it. A drawing office does not learn a program that way. So each panel is a button here:
+// pressed in, it is on the screen; pressed out, it is not. And each says which side it is on, because which
+// side a panel belongs on is a matter of how somebody works, not of how the program was written.
+//
+// The buttons are wired to the panels BY NAME rather than by pointer, because the ribbon is built before the
+// panels are. buildPanels() calls syncViewPanelButtons() when they exist, and that is what enables them.
+#include "app/MainWindow.h"
+
+#include <QDockWidget>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QMenu>
+#include <QPainter>
+#include <QPixmap>
+#include <QSignalBlocker>
+#include <QToolButton>
+#include <QWidget>
+
+namespace Edraw_Desktop {
+
+namespace {
+
+// A small drawing of each panel: a frame with the panel's own side shaded, and its contents suggested by a
+// few lines. Drawn rather than lettered so the buttons read at a glance and at any font.
+QIcon panelIcon(const QString& key) {
+    QPixmap pm(24, 24);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    const QColor ink("#c9ccd1");
+    const QColor dim("#8b929c");
+    p.setPen(QPen(dim, 1.0));
+    p.drawRect(QRectF(2.5, 3.5, 19, 17));
+    p.setPen(QPen(ink, 1.0));
+    if (key == QLatin1String("props")) {
+        // A field and its value, twice: what a property grid is.
+        for (int i = 0; i < 3; ++i) {
+            p.drawLine(5, 8 + i * 4, 11, 8 + i * 4);
+            p.drawLine(13, 8 + i * 4, 19, 8 + i * 4);
+        }
+    } else if (key == QLatin1String("layers")) {
+        // Sheets stacked: three offset rectangles.
+        for (int i = 0; i < 3; ++i) p.drawRect(QRectF(5.5 + i * 2, 6.5 + i * 4, 11, 4));
+    } else if (key == QLatin1String("bom")) {
+        // A table with a heading row.
+        p.drawLine(4, 9, 20, 9);
+        p.drawLine(12, 6, 12, 19);
+        for (int i = 0; i < 3; ++i) p.drawLine(4, 12 + i * 3, 20, 12 + i * 3);
+    } else if (key == QLatin1String("parts")) {
+        // A list with bullets: the shelf.
+        for (int i = 0; i < 3; ++i) {
+            p.drawEllipse(QRectF(5.5, 7.5 + i * 4, 2, 2));
+            p.drawLine(10, 8 + i * 4, 19, 8 + i * 4);
+        }
+    } else if (key == QLatin1String("blocks")) {
+        // Two blocks, one of them a copy of the other.
+        p.drawRect(QRectF(5.5, 6.5, 7, 6));
+        p.drawRect(QRectF(11.5, 12.5, 7, 6));
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+} // namespace
+
+void MainWindow::buildViewTab() {
+    auto [page, lay] = makeTabPage();
+
+    struct PanelEntry { const char* key; QString title; QString what; };
+    const QList<PanelEntry> panels = {
+        {"props", QStringLiteral("Properties"), QStringLiteral("what the selected object is")},
+        {"layers", QStringLiteral("Layers"), QStringLiteral("the drawing's layers")},
+        {"bom", QStringLiteral("Bill of materials"), QStringLiteral("what the drawing is made of")},
+        {"parts", QStringLiteral("Parts list"), QStringLiteral("the library, to place from")},
+        {"blocks", QStringLiteral("Blocks list"), QStringLiteral("the blocks, to place from")},
+    };
+
+    auto* w = new QWidget(page);
+    auto* row = new QHBoxLayout(w);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(2);
+    for (const PanelEntry& entry : panels) {
+        const QString key = QString::fromLatin1(entry.key);
+        auto* b = new QToolButton(w);
+        b->setText(entry.title);
+        b->setIcon(panelIcon(key));
+        b->setIconSize(QSize(24, 24));
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setAutoRaise(true);
+        b->setCheckable(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setEnabled(false);   // until the panels exist; see syncViewPanelButtons()
+        b->setToolTip(QStringLiteral("%1 — %2. The arrow says which side it sits on.")
+                          .arg(entry.title, entry.what));
+        b->setPopupMode(QToolButton::MenuButtonPopup);
+        connect(b, &QToolButton::toggled, this, [this, key](bool on) {
+            if (QDockWidget* d = panelByKey(key)) {
+                // The two list panels are read afresh on the way in: a part added to the library, or a block
+                // made, since the last look would otherwise be missing from a list that was filled at start-up.
+                if (on && key == QLatin1String("parts")) refreshPartsPanel();
+                if (on && key == QLatin1String("blocks")) refreshBlocksPanel();
+                d->setVisible(on);
+                if (on) d->raise();
+            }
+        });
+        auto* menu = new QMenu(b);
+        // Which side. A panel goes where it is wanted, and it stays there until it is moved again.
+        menu->addAction(QStringLiteral("On the left"), this, [this, key] {
+            if (QDockWidget* d = panelByKey(key)) {
+                d->setFloating(false);
+                addDockWidget(Qt::LeftDockWidgetArea, d);
+                d->show();
+            }
+        });
+        menu->addAction(QStringLiteral("On the right"), this, [this, key] {
+            if (QDockWidget* d = panelByKey(key)) {
+                d->setFloating(false);
+                addDockWidget(Qt::RightDockWidgetArea, d);
+                d->show();
+            }
+        });
+        menu->addAction(QStringLiteral("Floating"), this, [this, key] {
+            if (QDockWidget* d = panelByKey(key)) {
+                d->setFloating(true);
+                d->show();
+            }
+        });
+        b->setMenu(menu);
+        row->addWidget(b);
+        viewPanelButtons_.append({key, b});
+    }
+    addGroup(lay, QStringLiteral("Panels"), w);
+
+    {
+        // The two things anybody wants after moving panels about: all of them, or none and the whole screen
+        // for the drawing.
+        auto* both = new QWidget(page);
+        auto* bh = new QHBoxLayout(both);
+        bh->setContentsMargins(0, 0, 0, 0);
+        bh->setSpacing(2);
+        auto* all = new QToolButton(both);
+        all->setText(QStringLiteral("Show all"));
+        all->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        all->setAutoRaise(true);
+        all->setFocusPolicy(Qt::NoFocus);
+        connect(all, &QToolButton::clicked, this, [this] { setPanelsVisible(true); });
+        auto* none = new QToolButton(both);
+        none->setText(QStringLiteral("Hide all"));
+        none->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        none->setAutoRaise(true);
+        none->setFocusPolicy(Qt::NoFocus);
+        none->setToolTip(QStringLiteral("The whole screen for the drawing"));
+        connect(none, &QToolButton::clicked, this, [this] { setPanelsVisible(false); });
+        bh->addWidget(all);
+        bh->addWidget(none);
+        addGroup(lay, QStringLiteral("All of them"), both);
+    }
+
+    lay->addStretch(1);
+    ribbon_->addTab(page, QStringLiteral("View"));
+}
+
+QDockWidget* MainWindow::panelByKey(const QString& key) const {
+    if (key == QLatin1String("props")) return propsDock_;
+    if (key == QLatin1String("layers")) return layersDock_;
+    if (key == QLatin1String("bom")) return bomDock_;
+    if (key == QLatin1String("parts")) return partsDock_;
+    if (key == QLatin1String("blocks")) return blocksDock_;
+    return nullptr;
+}
+
+void MainWindow::syncViewPanelButtons() {
+    // Called once the panels exist. Each button is enabled, set to say what its panel is doing, and made to
+    // follow it: a panel closed by its own x has to leave the button pressed out, or the two disagree about
+    // what is on the screen.
+    for (const auto& pair : viewPanelButtons_) {
+        QToolButton* b = pair.second;
+        QDockWidget* dock = panelByKey(pair.first);
+        if (!b) continue;
+        b->setEnabled(dock != nullptr);
+        if (!dock) continue;
+        const QSignalBlocker block(b);
+        b->setChecked(dock->isVisible());
+        connect(dock, &QDockWidget::visibilityChanged, b, [b](bool visible) {
+            if (b->isChecked() == visible) return;
+            const QSignalBlocker inner(b);
+            b->setChecked(visible);
+        });
+    }
+}
+
+void MainWindow::setPanelsVisible(bool on) {
+    for (QDockWidget* d : {propsDock_, layersDock_, bomDock_, partsDock_, blocksDock_})
+        if (d) {
+            d->setVisible(on);
+            if (on) d->raise();
+        }
+}
+
+} // namespace Edraw_Desktop
