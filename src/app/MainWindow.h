@@ -12,6 +12,7 @@
 
 #include <QColor>
 #include <QHash>
+#include <QIcon>
 #include <QMainWindow>
 #include <QStringList>
 #include <QVector>
@@ -155,7 +156,10 @@ private:
     // The panel a View-tab button stands for, by name: the ribbon is built before the panels, so the buttons
     // are wired by name and resolved when they are pressed.
     QDockWidget* panelByKey(const QString& key) const;
-    void syncViewPanelButtons();   // called once the panels exist
+    void syncViewPanelButtons();
+    void restyleViewPanelIcons();   // the View tab's panel glyphs, drawn again in the current scheme
+    QIcon schemeIcon() const;       // the sun/moon glyph for the scheme button, in the scheme now set
+    QToolButton* schemeButton_ = nullptr;
     // The two panels the View tab adds: the parts of the library, and the blocks, as lists to place from.
     QDockWidget* makePartsPanel();
     QDockWidget* makeBlocksPanel();
@@ -487,10 +491,17 @@ private:
     void showOptions(const QString& page = QString());
     void showAbout();            // app name / description / version (E menu)
     // Light-on-dark tooltips, so a hint is readable against this window.
-    void applyTooltipStyle();
     void loadSettings();         // restore persisted drafting/snap toggles
     void saveSettings();         // persist drafting/snap toggles on close
     void applyTheme(bool dark);  // re-theme chrome + canvas (Dark / Light)
+    // The ribbon's own sheet, in the scheme now set. One function, called when the ribbon is built and again
+    // when the scheme changes - written out twice, the two would drift apart.
+    QString ribbonStyleSheet() const;
+    void restyleRibbonCorner();        // the tab row's corner, where Undo and Redo sit
+    void restyleDrawingSpaceStrip();   // Model / the sheets / + / the scale, under the drawing
+    QWidget* ribbonCorner_ = nullptr;
+    QVector<QToolButton*> undoRedoBtns_;    // drawn icons, so they are drawn again per scheme
+    QVector<QToolButton*> spaceStripBtns_;  // the + and its fall-menu twin on the space strip
 
     std::vector<std::unique_ptr<Document>> docs_; // open drawings
     // One paper space per (drawing, layout): kept for as long as the drawing is open, so leaving a sheet

@@ -10,6 +10,8 @@
 // panels are. buildPanels() calls syncViewPanelButtons() when they exist, and that is what enables them.
 #include "app/MainWindow.h"
 
+#include "app/Chrome.h"
+
 #include <QDockWidget>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -31,8 +33,9 @@ QIcon panelIcon(const QString& key) {
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, false);
-    const QColor ink("#c9ccd1");
-    const QColor dim("#8b929c");
+    // The scheme's own ink: drawn in pale grey, these read on a dark ribbon and vanish on a light one.
+    const QColor ink = Chrome::ink();
+    const QColor dim = Chrome::subInk();
     p.setPen(QPen(dim, 1.0));
     p.drawRect(QRectF(2.5, 3.5, 19, 17));
     p.setPen(QPen(ink, 1.0));
@@ -65,7 +68,28 @@ QIcon panelIcon(const QString& key) {
     return QIcon(pm);
 }
 
+// Half a sun, half a moon: the two schemes in one glyph, so the button says what it does without a word.
+QIcon schemeGlyph() {
+    QPixmap pm(24, 24);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(Chrome::dark() ? QColor("#f0c85a") : QColor("#4a4f57"));
+    p.drawEllipse(QPointF(12, 12), 6.5, 6.5);
+    // The dark half, cut out - which half is filled says which scheme is on.
+    p.setBrush(Chrome::dark() ? QColor("#2b2f36") : QColor("#f5f5f7"));
+    p.drawChord(QRectF(5.5, 5.5, 13, 13), 90 * 16, 180 * 16);
+    p.setPen(QPen(Chrome::ink(), 1.2));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(12, 12), 6.5, 6.5);
+    p.end();
+    return QIcon(pm);
+}
+
 } // namespace
+
+QIcon MainWindow::schemeIcon() const { return schemeGlyph(); }
 
 void MainWindow::buildViewTab() {
     auto [page, lay] = makeTabPage();
@@ -160,8 +184,51 @@ void MainWindow::buildViewTab() {
         addGroup(lay, QStringLiteral("All of them"), both);
     }
 
+    {
+        // The scheme, where what the screen looks like is already being set. It is in Options too - this is
+        // the same setting, not a second one - because a drawing office works in whatever light the room has
+        // and changes its mind about this in the afternoon, not in a dialog.
+        auto* w2 = new QWidget(page);
+        auto* h = new QHBoxLayout(w2);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(2);
+        auto* light = new QToolButton(w2);
+        light->setText(QStringLiteral("Light chrome"));
+        light->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        light->setIconSize(QSize(24, 24));
+        light->setAutoRaise(true);
+        light->setCheckable(true);
+        light->setChecked(!Chrome::dark());
+        light->setFocusPolicy(Qt::NoFocus);
+        light->setToolTip(QStringLiteral(
+            "The ribbon, the menus and the panels in light grey instead of charcoal. The drawing itself "
+            "stays dark either way - a drawing is read against a dark ground."));
+        light->setIcon(schemeIcon());
+        connect(light, &QToolButton::toggled, this, [this, light](bool on) {
+            applyTheme(!on);
+            light->setIcon(schemeIcon());   // drawn, so it is drawn again in the new scheme
+        });
+        schemeButton_ = light;
+        h->addWidget(light);
+        addGroup(lay, QStringLiteral("Scheme"), w2);
+    }
+
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("View"));
+}
+
+void MainWindow::restyleViewPanelIcons() {
+    // The scheme button on this tab and the combo in Options are the same setting, so whichever was used the
+    // button has to say what is actually on the screen.
+    if (schemeButton_) {
+        const QSignalBlocker block(schemeButton_);
+        schemeButton_->setChecked(!Chrome::dark());
+        schemeButton_->setIcon(schemeGlyph());
+    }
+    // Drawn icons, so a change of scheme means drawing them again. Nothing else on the tab needs it: the
+    // ribbon's own sheet colours the words.
+    for (const auto& pair : viewPanelButtons_)
+        if (pair.second) pair.second->setIcon(panelIcon(pair.first));
 }
 
 QDockWidget* MainWindow::panelByKey(const QString& key) const {

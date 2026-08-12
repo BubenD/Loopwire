@@ -1,4 +1,6 @@
 #include "app/MainWindow.h"
+
+#include "app/Chrome.h"
 #include "app/OutputDialog.h"
 #include "app/PageSetupManagerDialog.h"
 
@@ -708,7 +710,7 @@ QPixmap makeGripPixmap() {
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor("#8b97a8"));
+    p.setBrush(Chrome::grip());
     for (int c = 0; c < cols; ++c)
         for (int r = 0; r < rows; ++r)
             p.drawEllipse(QPointF(c * pitch + pitch / 2.0, r * pitch + pitch / 2.0),
@@ -873,16 +875,16 @@ protected:
     }
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.fillRect(rect(), QColor("#34373d"));
-        p.setPen(QColor("#cfd8e6"));
+        p.fillRect(rect(), Chrome::strip());
         // A few grip dots near the top.
-        p.setBrush(QColor("#8b97a8"));
+        p.setBrush(Chrome::grip());
         p.setPen(Qt::NoPen);
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 2; ++c)
                 p.drawEllipse(QPointF(8 + c * 5, 8 + r * 4), 1.0, 1.0);
-        // Rotated title running up the strip.
-        p.setPen(QColor("#cfd8e6"));
+        // Rotated title running up the strip. Its colour is the one thing a light scheme cannot get wrong:
+        // the panel's name is all a folded side shows of itself.
+        p.setPen(Chrome::stripInk());
         p.save();
         p.translate(width() / 2.0 + 5, height() - 10);
         p.rotate(-90);
@@ -913,9 +915,9 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.fillRect(rect(), QColor("#3a3f47"));
+        p.fillRect(rect(), Chrome::edge());
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#8b97a8"));
+        p.setBrush(Chrome::grip());
         const QPointF c(width() / 2.0, height() / 2.0);
         for (int i = -1; i <= 1; ++i)
             p.drawEllipse(vertical_ ? QPointF(c.x(), c.y() + i * 5) : QPointF(c.x() + i * 5, c.y()), 1.0,
@@ -1107,14 +1109,34 @@ public:
     // - which is why a side pulled wider used to come back narrow.
     bool flyoutOpen() const { return flyout_ && flyout_->isVisible(); }
 
+    // A fly-out is held over the drawing, so it needs a ground of its own and an edge to be seen against
+    // whatever is under it - in whichever scheme.
+    void restyleFlyout() {
+        if (!flyout_) return;
+        flyout_->setStyleSheet(QStringLiteral("QWidget#panelFlyout{background:%1;border:1px solid %2;}")
+                                   .arg(Chrome::flyout().name(), Chrome::flyoutBorder().name()));
+    }
+
+    // The scheme has changed: every panel repaints its strip, re-grounds its fly-out and re-colours its
+    // edge. The strips and edges paint themselves, so they only need telling to.
+    static void restyleAll() {
+        for (AutoHideDock* d : allDocks_) {
+            if (!d) continue;
+            d->restyleFlyout();
+            if (d->strip_) d->strip_->update();
+        }
+        for (auto win = sideGrip_.cbegin(); win != sideGrip_.cend(); ++win)
+            for (auto side = win->cbegin(); side != win->cend(); ++side)
+                if (*side) (*side)->update();
+    }
+
     void showFlyout() {
         if (pinned_ || isFloating() || !collapsed_ || !mw_ || !titleBar_ || !content_) return;
         if (!flyout_) {
             flyout_ = new QWidget(mw_);
             flyout_->setObjectName(QStringLiteral("panelFlyout"));
             flyout_->setAutoFillBackground(true);
-            flyout_->setStyleSheet(QStringLiteral(
-                "QWidget#panelFlyout{background:#2b2f36;border:1px solid #5b6572;}"));
+            restyleFlyout();
             body_ = new QWidget(flyout_);
             auto* v = new QVBoxLayout(body_);
             v->setContentsMargins(0, 0, 0, 0);
@@ -1668,7 +1690,8 @@ class DockTitleBar : public QWidget {
 public:
     DockTitleBar(AutoHideDock* dock, const QString& title)
         : QWidget(dock), dock_(dock) {
-        setStyleSheet(QStringLiteral("background:#34373d;"));
+        allBars_.push_back(this);
+        restyle();
         auto* lay = new QHBoxLayout(this);
         lay->setContentsMargins(5, 2, 5, 2);
         lay->setSpacing(6);
@@ -1681,9 +1704,9 @@ public:
         grip_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         lay->addWidget(grip_);
 
-        auto* lbl = new QLabel(title, this);
-        lbl->setStyleSheet(QStringLiteral("font-weight:600;color:#cfd8e6;"));
-        lay->addWidget(lbl, 1);
+        lbl_ = new QLabel(title, this);
+        lay->addWidget(lbl_, 1);
+        restyle();   // the label exists now, so it gets its colour too
 
         auto* pin = new QToolButton(this);
         pin->setCheckable(true);
@@ -1761,12 +1784,38 @@ protected:
         e->accept();
     }
 
+public:
+    // Every title bar there is. A plain QWidget subclass in a .cpp has no Q_OBJECT and so cannot be found
+    // with findChildren, and a list of them is wanted anyway: the scheme changing means telling all of them.
+    static const QVector<DockTitleBar*>& all() { return allBars_; }
+    static void restyleAll() {
+        for (DockTitleBar* b : allBars_)
+            if (b) b->restyle();
+    }
+
+    // Its ground and its lettering, in the current scheme. Both, because a title bar that changed its
+    // background and kept its light lettering would be a white bar with white writing on it.
+    void restyle() {
+        setStyleSheet(QStringLiteral("background:%1;").arg(Chrome::bar().name()));
+        if (grip_) grip_->setPixmap(makeGripPixmap());   // drawn, so it has to be drawn again
+        if (lbl_)
+            lbl_->setStyleSheet(
+                QStringLiteral("font-weight:600;color:%1;background:transparent;").arg(Chrome::barInk().name()));
+    }
+
 private:
     AutoHideDock* dock_;
-    QLabel* grip_;
+    QLabel* lbl_ = nullptr;
+    QLabel* grip_ = nullptr;   // both start empty: restyle() runs before either is built
     bool dragging_ = false;
     QPoint pressGlobal_;
+    static QVector<DockTitleBar*> allBars_;
+
+public:
+    ~DockTitleBar() override { allBars_.removeAll(this); }
 };
+
+QVector<DockTitleBar*> DockTitleBar::allBars_;
 
 constexpr auto kMechModelGuideLayer = "«guide»";
 
@@ -2080,7 +2129,6 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     // so their initial checked state reflects the last session.
     note(QStringLiteral("Preferences"));
     loadSettings();
-    applyTooltipStyle();
 
     note(QStringLiteral("Ribbon"));
     buildRibbon();
@@ -2158,6 +2206,11 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
 
     newDrawing(); // start with a single empty drawing (no demo, no last session)
 
+    // The scheme last chosen. AFTER the first drawing exists: colouring the chrome ends by filling the
+    // panels again - a properties row colours itself as it is made - and there is nothing to fill them from
+    // until there is a drawing.
+    applyTheme(darkTheme_);
+
     QMetaObject::invokeMethod(this, [this] { canvas_->fitView(); canvas_->setFocus(); },
                               Qt::QueuedConnection);
 }
@@ -2207,21 +2260,15 @@ void MainWindow::buildDocumentArea() {
     drawingSpaceTabs_->setUsesScrollButtons(false);
     drawingSpaceTabs_->addTab(QStringLiteral("Model"));
     drawingSpaceTabs_->setCurrentIndex(0);
-    drawingSpaceTabs_->setStyleSheet(QStringLiteral(
-        "QTabBar{background:#252c36;}"
-        "QTabBar::tab{background:#252c36;color:#aeb9c9;padding:7px 18px;border:none;}"
-        "QTabBar::tab:selected{background:#4b596b;color:#ffffff;font-weight:600;}"
-        "QTabBar::tab:hover{background:#364252;color:#e8edf5;}"));
+    // Coloured by restyleDrawingSpaceStrip(), which knows which scheme is set.
     auto* addSpace = new QToolButton(spaceRow);
     addSpace->setText(QStringLiteral("+"));
     addSpace->setToolTip(QStringLiteral("Add layout"));
     addSpace->setAutoRaise(true);
     addSpace->setFixedWidth(38);
     addSpace->setFixedHeight(32);
-    spaceMenu->setStyleSheet(QStringLiteral(
-        "QToolButton{color:#d8dee8;font-size:20px;background:#252c36;border:none;}"
-        "QToolButton:hover{background:#364252;}"));
-    addSpace->setStyleSheet(spaceMenu->styleSheet());
+    spaceStripBtns_.append(addSpace);
+    spaceStripBtns_.append(spaceMenu);
     auto* drawingSpaceMenu = new QMenu(spaceMenu);
     drawingSpaceMenu->addAction(QStringLiteral("Add viewport"), this,
                                 [this] { canvas_->addLayoutViewport(); });
@@ -2250,13 +2297,7 @@ void MainWindow::buildDocumentArea() {
     for (const Ratio& r : ratios)
         spaceScaleBox_->addItem(QString::fromLatin1(r.label), r.paperPerModel);
     spaceScaleBox_->setCurrentIndex(1);   // 1:1
-    spaceScaleBox_->setStyleSheet(QStringLiteral(
-        "QComboBox{background:#252c36;color:#d8dee8;border:1px solid #3d4653;border-radius:3px;"
-        "padding:2px 10px;}"
-        "QComboBox:hover{background:#364252;}"
-        "QComboBox:disabled{color:#6f7681;border-color:#2e353f;}"
-        "QComboBox QAbstractItemView{background:#252c36;color:#d8dee8;"
-        "selection-background-color:#4b596b;}"));
+
     connect(spaceScaleBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (!spaceScaleBox_ || i < 0) return;
         setDrawingSpaceScale(spaceScaleBox_->itemData(i).toDouble());
@@ -2318,6 +2359,7 @@ void MainWindow::buildDocumentArea() {
     drawingSpaceTabs_->setContextMenuPolicy(Qt::PreventContextMenu);
     drawingSpaceTabs_->installEventFilter(this);
     drawingSpaceStrip_ = spaceRow;
+    restyleDrawingSpaceStrip();   // the strip, its tabs, its + and its scale box, in the scheme now set
     spaceRow->setContextMenuPolicy(Qt::PreventContextMenu);
     spaceRow->installEventFilter(this);
     if (canvas_)
@@ -2944,7 +2986,11 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     v->addWidget(content, 1);
     auto* lbl = new QLabel(title, g);
     lbl->setAlignment(Qt::AlignHCenter);
-    lbl->setStyleSheet(QStringLiteral("color:#b8bdc6; font-size:11px; background:transparent;"));
+    // Named rather than styled here: the ribbon's own sheet colours it, so it follows the scheme. Styled on
+    // the label itself, it would not - an inline sheet beats an ancestor's, so the group names stayed pale
+    // grey on a light ribbon and could not be read at all.
+    lbl->setObjectName(QStringLiteral("ribbonGroupTitle"));
+    lbl->setStyleSheet(QStringLiteral("font-size:11px; background:transparent;"));
     v->addWidget(lbl);
     return g;
 }
@@ -3317,44 +3363,46 @@ QToolButton* MainWindow::makePartSymbolButton(QWidget* parent, bool schematic) {
     return btn;
 }
 
+// Undo and Redo, drawn: a curved arrow going back or forward. The ink is passed in, because on a light
+// ribbon a pale grey arrow is not a faint arrow - it is no arrow at all.
+static QIcon undoArrowIcon(bool redo, bool compact, const QColor& ink) {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    // Small, the arrow is drawn BOLDER and BIGGER in its box rather than being the large one shrunk: at 18
+    // pixels a 2.2 wide stroke lands on less than two and reads as grey, and a five-pixel head disappears.
+    pen.setWidthF(compact ? 3.4 : 2.2);
+    pen.setCapStyle(Qt::RoundCap);
+    p.setPen(pen);
+    const double head = compact ? 9.0 : 5.0;
+    const double x0 = compact ? 3.0 : 6.0, x1 = compact ? 25.0 : 22.0;
+    const double yTip = compact ? 11.0 : 12.0, yTail = compact ? 21.0 : 19.0;
+    QPainterPath path;
+    if (redo) {
+        path.moveTo(x0, yTail);
+        path.cubicTo(x0 + 3, 8, x1 - 3, 6, x1, yTip);
+    } else {
+        path.moveTo(x1, yTail);
+        path.cubicTo(x1 - 3, 8, x0 + 3, 6, x0, yTip);
+    }
+    p.drawPath(path);
+    p.setBrush(ink);
+    p.setPen(Qt::NoPen);
+    QPolygonF tip;
+    if (redo) tip << QPointF(x1, yTip - 1) << QPointF(x1 - head, yTip - 1) << QPointF(x1, yTip - 1 + head);
+    else tip << QPointF(x0, yTip - 1) << QPointF(x0 + head, yTip - 1) << QPointF(x0, yTip - 1 + head);
+    p.drawPolygon(tip);
+    return QIcon(pm);
+}
+
 QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
     auto* host = new QWidget(parent);
     auto* lay = new QHBoxLayout(host);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(2);
-    auto arrow = [compact](bool redo) {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#d6dae1"));
-        // Small, the arrow is drawn BOLDER and BIGGER in its box rather than being the large one
-        // shrunk: at 18 pixels a 2.2 wide stroke lands on less than two and reads as grey, and a
-        // five-pixel head disappears altogether.
-        pen.setWidthF(compact ? 3.4 : 2.2);
-        pen.setCapStyle(Qt::RoundCap);
-        p.setPen(pen);
-        // A curved arrow, going back for undo and forward for redo.
-        const double head = compact ? 9.0 : 5.0;
-        const double x0 = compact ? 3.0 : 6.0, x1 = compact ? 25.0 : 22.0;
-        const double yTip = compact ? 11.0 : 12.0, yTail = compact ? 21.0 : 19.0;
-        QPainterPath path;
-        if (redo) {
-            path.moveTo(x0, yTail);
-            path.cubicTo(x0 + 3, 8, x1 - 3, 6, x1, yTip);
-        } else {
-            path.moveTo(x1, yTail);
-            path.cubicTo(x1 - 3, 8, x0 + 3, 6, x0, yTip);
-        }
-        p.drawPath(path);
-        p.setBrush(QColor("#d6dae1"));
-        p.setPen(Qt::NoPen);
-        QPolygonF tip;
-        if (redo) tip << QPointF(x1, yTip - 1) << QPointF(x1 - head, yTip - 1) << QPointF(x1, yTip - 1 + head);
-        else tip << QPointF(x0, yTip - 1) << QPointF(x0 + head, yTip - 1) << QPointF(x0, yTip - 1 + head);
-        p.drawPolygon(tip);
-        return QIcon(pm);
-    };
+    auto arrow = [compact](bool redo) { return undoArrowIcon(redo, compact, Chrome::ink()); };
     auto button = [&](bool redo) {
         auto* b = new QToolButton(host);
         b->setIcon(arrow(redo));
@@ -3367,6 +3415,11 @@ QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
         b->setFocusPolicy(Qt::NoFocus);
         if (compact) b->setFixedSize(24, 22);
         else b->setMinimumWidth(52);
+        // What it is, kept on the button: the icons are drawn, so a change of scheme means drawing them
+        // again, and the drawing needs to know which arrow and which size.
+        b->setProperty("redo", redo);
+        b->setProperty("compact", compact);
+        undoRedoBtns_.append(b);
         connect(b, &QToolButton::clicked, this, [this, redo] {
             if (redo) editor_->redo();
             else editor_->undo();
@@ -3385,7 +3438,8 @@ QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
         // application's light palette - a white patch in the corner of a charcoal ribbon.
         lay->setContentsMargins(4, 4, 8, 4);
         host->setMinimumHeight(30);   // fills the tab row: the corner is painted by the style otherwise
-        host->setStyleSheet(QStringLiteral("QWidget{background-color:#2f3237;}"));
+        ribbonCorner_ = host;
+        restyleRibbonCorner();
     }
     lay->addWidget(button(false));
     lay->addWidget(button(true));
@@ -3406,7 +3460,7 @@ QWidget* MainWindow::addGroupKeep(QHBoxLayout* lay, const QString& title, QWidge
     hl->addWidget(ribbonGroup(title, content));
     auto* rule = new QFrame(holder);
     rule->setFrameShape(QFrame::VLine);
-    rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+    rule->setObjectName(QStringLiteral("ribbonGroupRule"));
     hl->addWidget(rule);
     lay->addWidget(holder);
     return holder;
@@ -3471,6 +3525,82 @@ QToolButton* MainWindow::makeMatchBtn(QWidget* parent, bool iconOnly) {
         return b;
 }
 
+// The ribbon's own stylesheet, in whichever scheme is set. One function for it, called when the ribbon is
+// built and again when the scheme changes: written out twice, the two would drift, and the ribbon is where
+// the words are - the tab names, the group names, the fields. Text colour is the whole of the difference
+// between a light ribbon that can be read and one that cannot.
+QString MainWindow::ribbonStyleSheet() const {
+    const bool dark = darkTheme_;
+    const QHash<QString, QString> c =
+        dark ? QHash<QString, QString>{
+                   {"BG", "#3a3d43"},        {"LINE", "#2a2c31"},   {"RULE", "#b3afa6"},
+                   {"TX", "#c9ccd1"},        {"TXHI", "#ffffff"},   {"LBL", "#c8ccd2"},
+                   {"TABBAR", "#2f3237"},    {"HOVER", "#484c53"},  {"HOVERBORD", "#5a5f68"},
+                   {"SEL", "#294e74"},       {"PRESS", "#22384f"},  {"FIELD", "#565b64"},
+                   {"FIELDTX", "#f2f4f7"},   {"FIELDBORD", "#7b818b"}, {"FOCUS", "#5aa0ff"},
+                   {"DROP", "#6a6f78"},      {"DROPHOVER", "#7c828c"}}
+             : QHash<QString, QString>{
+                   // Light: the lettering goes to near-black, not to a paler grey. A group's name and a
+                   // tab's name are read at a glance or not at all.
+                   {"BG", "#eceef1"},        {"LINE", "#c2c2c8"},   {"RULE", "#b8b8be"},
+                   {"TX", "#1e2126"},        {"TXHI", "#000000"},   {"LBL", "#4c525b"},
+                   {"TABBAR", "#dcdce2"},    {"HOVER", "#d0e3ff"},  {"HOVERBORD", "#9cc4f0"},
+                   {"SEL", "#cfe3ff"},       {"PRESS", "#bcd9fb"},  {"FIELD", "#ffffff"},
+                   {"FIELDTX", "#1e2126"},   {"FIELDBORD", "#a8aeb8"}, {"FOCUS", "#3d8bfd"},
+                   {"DROP", "#e2e4e8"},      {"DROPHOVER", "#d0d4da"}};
+    QString ss = QStringLiteral(
+        "QTabWidget::pane{background-color:{BG};border:none;border-bottom:1px solid {LINE};}"
+        "QWidget{background-color:{BG};color:{TX};}"
+        "QTabBar{background-color:{TABBAR};}"
+        "QTabBar::tab{background-color:transparent;color:{TX};padding:5px 14px;border:none;}"
+        "QTabBar::tab:hover{color:{TXHI};}"
+        "QTabBar::tab:selected{color:{TXHI};background-color:{BG};border-bottom:2px solid #3d8bfd;}"
+        "QLabel{background-color:transparent;color:{LBL};}"
+        "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
+        "QToolButton:hover{background-color:{HOVER};border-color:{HOVERBORD};}"
+        "QToolButton:checked{background-color:{SEL};border-color:#3d8bfd;}"
+        "QToolButton:pressed{background-color:{PRESS};}"
+        "QFrame{color:{LINE};}"
+        // A group's NAME under its buttons, and the rule between one group and the next.
+        // Named where they are built rather than styled there, so they follow the scheme:
+        // an inline stylesheet beats an ancestor's, and the names stayed pale grey on a
+        // light ribbon - which is to say unreadable.
+        "QLabel#ribbonGroupTitle{background-color:transparent;color:{LBL};}"
+        "QFrame#ribbonGroupRule{color:{RULE};}"
+        // Combos + spin fields: lighter field, bright text, clear border so they
+        // read against the charcoal ribbon in dark mode.
+        "QComboBox{background-color:{FIELD};color:{FIELDTX};border:1px solid {FIELDBORD};border-radius:3px;padding:1px 6px;min-height:18px;}"
+        "QComboBox:hover{border-color:{FOCUS};}"
+        // Line edits (and the editable-combo line edit) need bright text too, else they
+        // render near-black on the ribbon.
+        "QLineEdit{background-color:{FIELD};color:{FIELDTX};border:1px solid {FIELDBORD};border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QComboBox QLineEdit{background-color:transparent;border:none;color:{FIELDTX};}"
+        // A distinct, button-like drop-down box with a clear down-triangle (a non-zero
+        // arrow box is required for the CSS border-triangle to render).
+        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
+        "background-color:{DROP};border-left:1px solid {FIELDBORD};border-top-right-radius:3px;"
+        "border-bottom-right-radius:3px;width:18px;}"
+        "QComboBox::drop-down:hover{background-color:{DROPHOVER};}"
+        "QComboBox::down-arrow{image:url(:/caret-down.svg);width:12px;height:12px;}"
+        "QComboBox QAbstractItemView{background-color:{TABBAR};color:{FIELDTX};selection-background-color:#3d8bfd;selection-color:{TXHI};}"
+        "QAbstractSpinBox{background-color:{FIELD};color:{FIELDTX};border:1px solid {FIELDBORD};border-radius:3px;padding:1px 4px;min-height:18px;}"
+        "QAbstractSpinBox:hover{border-color:{FOCUS};}"
+        "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:14px;background-color:{DROP};}"
+        // The arrows have to be IMAGES. Styling ::up-button at all stops Qt drawing the style's own
+        // arrow, and its stylesheet engine does not do the CSS border-triangle trick - so what was
+        // here before ("image:none" plus borders) left two blank blocks that turned blue on hover,
+        // which is exactly what a spin box must not look like.
+        "QAbstractSpinBox::up-arrow{image:url(:/caret-up.svg);width:9px;height:9px;}"
+        "QAbstractSpinBox::down-arrow{image:url(:/caret-down.svg);width:9px;height:9px;}"
+        "QAbstractSpinBox::up-arrow:disabled,QAbstractSpinBox::down-arrow:disabled{opacity:80;}");
+    for (auto it = c.cbegin(); it != c.cend(); ++it)
+        ss.replace(QStringLiteral("{%1}").arg(it.key()), it.value());
+    // A checked tool must read as checked in both: a pale blue wash with dark ink, not white on white.
+    ss += dark ? QStringLiteral("QToolButton:checked{color:#ffffff;}")
+               : QStringLiteral("QToolButton:checked{color:#10243d;}");
+    return ss;
+}
+
 void MainWindow::buildRibbon() {
     toolGroup_ = new QActionGroup(this);
     toolGroup_->setExclusive(true);
@@ -3478,48 +3608,9 @@ void MainWindow::buildRibbon() {
     ribbon_ = new QTabWidget(this);
     ribbon_->setDocumentMode(true);
     ribbon_->setFixedHeight(150); // taller: larger icons + room for the 4-row hatch fields
-    // AutoCAD-style charcoal-gray ribbon, scoped to the ribbon and its children.
-    // Use background-color (not the `background` shorthand) so it reliably wins
-    // over the application stylesheet's QWidget{background-color:...} rule.
-    ribbon_->setStyleSheet(QStringLiteral(
-        "QTabWidget::pane{background-color:#3a3d43;border:none;border-bottom:1px solid #2a2c31;}"
-        "QWidget{background-color:#3a3d43;color:#c9ccd1;}"
-        "QTabBar{background-color:#2f3237;}"
-        "QTabBar::tab{background-color:transparent;color:#c2c5ca;padding:5px 14px;border:none;}"
-        "QTabBar::tab:hover{color:#ffffff;}"
-        "QTabBar::tab:selected{color:#ffffff;background-color:#3a3d43;border-bottom:2px solid #3d8bfd;}"
-        "QLabel{background-color:transparent;color:#c8ccd2;}"
-        "QToolButton{background-color:transparent;border:1px solid transparent;border-radius:4px;padding:3px 6px;}"
-        "QToolButton:hover{background-color:#484c53;border-color:#5a5f68;}"
-        "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
-        "QToolButton:pressed{background-color:#22384f;}"
-        "QFrame{color:#2a2c31;}"
-        // Combos + spin fields: lighter field, bright text, clear border so they
-        // read against the charcoal ribbon in dark mode.
-        "QComboBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 6px;min-height:18px;}"
-        "QComboBox:hover{border-color:#5aa0ff;}"
-        // Line edits (and the editable-combo line edit) need bright text too, else they
-        // render near-black on the ribbon.
-        "QLineEdit{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
-        "QComboBox QLineEdit{background-color:transparent;border:none;color:#f2f4f7;}"
-        // A distinct, button-like drop-down box with a clear down-triangle (a non-zero
-        // arrow box is required for the CSS border-triangle to render).
-        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
-        "background-color:#6a6f78;border-left:1px solid #7b818b;border-top-right-radius:3px;"
-        "border-bottom-right-radius:3px;width:18px;}"
-        "QComboBox::drop-down:hover{background-color:#7c828c;}"
-        "QComboBox::down-arrow{image:url(:/caret-down.svg);width:12px;height:12px;}"
-        "QComboBox QAbstractItemView{background-color:#2f3237;color:#f2f4f7;selection-background-color:#3d8bfd;selection-color:#ffffff;}"
-        "QAbstractSpinBox{background-color:#565b64;color:#f2f4f7;border:1px solid #7b818b;border-radius:3px;padding:1px 4px;min-height:18px;}"
-        "QAbstractSpinBox:hover{border-color:#5aa0ff;}"
-        "QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{width:14px;background-color:#6a6f78;}"
-        // The arrows have to be IMAGES. Styling ::up-button at all stops Qt drawing the style's own
-        // arrow, and its stylesheet engine does not do the CSS border-triangle trick - so what was
-        // here before ("image:none" plus borders) left two blank blocks that turned blue on hover,
-        // which is exactly what a spin box must not look like.
-        "QAbstractSpinBox::up-arrow{image:url(:/caret-up.svg);width:9px;height:9px;}"
-        "QAbstractSpinBox::down-arrow{image:url(:/caret-down.svg);width:9px;height:9px;}"
-        "QAbstractSpinBox::up-arrow:disabled,QAbstractSpinBox::down-arrow:disabled{opacity:80;}"));
+    // The ribbon's colours, scoped to the ribbon and its children. background-color rather than the
+    // `background` shorthand, so it reliably wins over the application sheet's QWidget rule.
+    ribbon_->setStyleSheet(ribbonStyleSheet());
 
     // One tab per file, in src/app/ribbon/ - the ribbon was the biggest thing in this file and the
     // place every new feature landed.
@@ -3671,7 +3762,7 @@ void MainWindow::buildHatchRibbonTab() {
         lay->addWidget(ribbonGroup(title, content));
         auto* rule = new QFrame(hatchTab_);
         rule->setFrameShape(QFrame::VLine);
-        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        rule->setObjectName(QStringLiteral("ribbonGroupRule"));
         lay->addWidget(rule);
     };
     auto bigButton = [&](QWidget* parent, const QIcon& icon, const QString& text) {
@@ -4147,7 +4238,7 @@ void MainWindow::buildTableCellRibbonTab() {
         lay->addWidget(ribbonGroup(title, content));
         auto* rule = new QFrame(tableCellTab_);
         rule->setFrameShape(QFrame::VLine);
-        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        rule->setObjectName(QStringLiteral("ribbonGroupRule"));
         lay->addWidget(rule);
     };
     auto bigButton = [&](QWidget* parent, const QString& text) {
@@ -4287,7 +4378,7 @@ void MainWindow::buildArrayRibbonTab() {
         lay->addWidget(group);
         auto* rule = new QFrame(arrayTab_);
         rule->setFrameShape(QFrame::VLine);
-        rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));
+        rule->setObjectName(QStringLiteral("ribbonGroupRule"));
         lay->addWidget(rule);
         arrayGroups_.append({group, rule, rect, polar, path});
     };
@@ -5299,8 +5390,55 @@ void MainWindow::buildMenus() {
 
 // ---- Theme (Dark / Light) --------------------------------------------------
 
+// The corner of the ribbon's tab row, where Undo and Redo sit. It has to be painted: the corner of a tab
+// widget is neither the tab bar nor the pane, so left alone it comes out in the application's own colour -
+// a patch of the wrong shade in the corner of the ribbon, whichever scheme is set.
+void MainWindow::restyleRibbonCorner() {
+    if (!ribbonCorner_) return;
+    ribbonCorner_->setStyleSheet(QStringLiteral("QWidget{background-color:%1;}")
+                                     .arg(Chrome::dark() ? "#2f3237" : "#dcdce2"));
+}
+
+// The strip under the drawing: Model and the sheets, the + that adds one, and the scale in the corner. It
+// is the one piece of chrome that touches the drawing, and it was written in one colour - so in the light
+// scheme a light row carried a dark chip for the sheet in hand, and a dark scale box beside it.
+void MainWindow::restyleDrawingSpaceStrip() {
+    const bool dark = Chrome::dark();
+    const QString bg = dark ? "#252c36" : "#dcdce2";
+    const QString tx = dark ? "#aeb9c9" : "#33373f";
+    const QString onTx = dark ? "#ffffff" : "#10243d";
+    const QString on = dark ? "#4b596b" : "#ffffff";
+    const QString hover = dark ? "#364252" : "#eaecef";
+    const QString bord = dark ? "#3d4653" : "#a8aeb8";
+    const QString off = dark ? "#6f7681" : "#8b929c";
+    if (drawingSpaceStrip_)
+        drawingSpaceStrip_->setStyleSheet(QStringLiteral("QWidget{background-color:%1;}").arg(bg));
+    if (drawingSpaceTabs_)
+        drawingSpaceTabs_->setStyleSheet(
+            QStringLiteral("QTabBar{background:%1;}"
+                           "QTabBar::tab{background:%1;color:%2;padding:7px 18px;border:none;}"
+                           "QTabBar::tab:selected{background:%3;color:%4;font-weight:600;}"
+                           "QTabBar::tab:hover{background:%5;color:%4;}")
+                .arg(bg, tx, on, onTx, hover));
+    for (QToolButton* b : spaceStripBtns_)
+        if (b)
+            b->setStyleSheet(QStringLiteral("QToolButton{color:%1;font-size:20px;background:%2;border:none;}"
+                                            "QToolButton:hover{background:%3;}")
+                                 .arg(tx, bg, hover));
+    if (spaceScaleBox_)
+        spaceScaleBox_->setStyleSheet(
+            QStringLiteral("QComboBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;"
+                           "padding:2px 10px;}"
+                           "QComboBox:hover{background:%4;}"
+                           "QComboBox:disabled{color:%5;border-color:%3;}"
+                           "QComboBox QAbstractItemView{background:%1;color:%2;"
+                           "selection-background-color:%6;}")
+                .arg(dark ? bg : QString("#ffffff"), tx, bord, hover, off, dark ? on : QString("#cfe3ff")));
+}
+
 void MainWindow::applyTheme(bool dark) {
     darkTheme_ = dark;
+    Chrome::setDark(dark);   // said first: everything below asks Chrome what colour to be
 
     // Palette tokens for the application stylesheet (panels / tables / inputs).
     // The status bar + bottom command toolbar stay dark in both schemes (their
@@ -5353,10 +5491,34 @@ void MainWindow::applyTheme(bool dark) {
         "QMenu::item:selected{background-color:{SEL};color:{SELTX};}"
         "QMenu::item:disabled{color:#8b929c;}"
         "QMenu::separator{height:1px;background:{LINE};margin:3px 6px;}"
+        // Tooltips. Left to the platform they come out black on pale yellow in some themes and
+        // black on dark in others - unreadable next to this window's own colours either way.
         "QToolTip{background-color:{PANEL};color:{TEXT};border:1px solid {LINE};padding:3px;}"
         "QPushButton{background-color:{BTN};color:{TEXT};border:1px solid {INBORD};"
         "border-radius:3px;padding:3px 10px;}"
         "QPushButton:hover{background-color:{HOVER};}"
+        "QPushButton:pressed{background-color:{HEADER};}"
+        // Everything below was in the stylesheet loaded from the resources and NOT here, and this sheet
+        // replaces that one - so choosing a scheme used to take these away: tool buttons outside the ribbon
+        // lost their hover and their pressed state, the combo boxes lost their drop-down box and its
+        // chevron, and a panel's own title bar lost its ground.
+        "QToolButton{background:transparent;color:{TEXT};border:1px solid transparent;border-radius:4px;"
+        "padding:3px 6px;}"
+        "QToolButton:hover{background:{HOVER};border-color:{INBORD};}"
+        "QToolButton:checked{background:{SEL};border-color:#3d8bfd;}"
+        "QToolButton:pressed{background:{HEADER};}"
+        "QToolBar::separator{background:{LINE};width:1px;margin:4px 4px;}"
+        "QDockWidget{color:{TEXT};titlebar-close-icon:none;titlebar-normal-icon:none;}"
+        "QDockWidget::title{background:{HEADER};padding:5px 8px;border-bottom:1px solid {LINE};"
+        "font-weight:bold;color:{TEXT};}"
+        "QListWidget::item:selected{background:{SEL};color:{SELTX};}"
+        "QTabBar::tab:hover{color:{TEXT};}"
+        "QComboBox:hover,QLineEdit:focus{border-color:#3d8bfd;}"
+        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:right center;"
+        "background-color:{BTN};border-left:1px solid {INBORD};border-top-right-radius:3px;"
+        "border-bottom-right-radius:3px;width:18px;}"
+        "QComboBox::drop-down:hover{background-color:{HOVER};}"
+        "QComboBox::down-arrow{image:url(:/caret-down.svg);width:12px;height:12px;}"
         "QGroupBox{border:1px solid {LINE};border-radius:4px;margin-top:8px;}"
         "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 3px;color:{TEXT};}"
         "QCheckBox,QRadioButton,QLabel{background:transparent;color:{TEXT};}"
@@ -5384,31 +5546,8 @@ void MainWindow::applyTheme(bool dark) {
                        "QMenu::separator{height:1px;background:%4;margin:3px 6px;}")
             .arg(menuBg, menuTx, menuPop, menuBord));
 
-    // Ribbon.
-    const QString rbBg = dark ? "#3a3d43" : "#e4e4e8";
-    const QString rbTab = dark ? "#2f3237" : "#d6d6da";
-    const QString rbTx = dark ? "#c9ccd1" : "#1e1e1e";
-    const QString rbLabel = dark ? "#9da3ac" : "#55555c";
-    const QString rbLine = dark ? "#2a2c31" : "#c2c2c8";
-    const QString rbHover = dark ? "#484c53" : "#d0e3ff";
-    const QString rbCombo = dark ? "#45484f" : "#ffffff";
-    if (ribbon_)
-        ribbon_->setStyleSheet(
-            QStringLiteral(
-                "QTabWidget::pane{background-color:%1;border:none;border-bottom:1px solid %5;}"
-                "QWidget{background-color:%1;color:%3;}"
-                "QTabBar{background-color:%2;}"
-                "QTabBar::tab{background-color:transparent;color:%3;padding:5px 14px;border:none;}"
-                "QTabBar::tab:selected{color:%3;background-color:%1;border-bottom:2px solid #3d8bfd;}"
-                "QLabel{background-color:transparent;color:%4;}"
-                "QToolButton{background-color:transparent;border:1px solid transparent;"
-                "border-radius:4px;padding:3px 6px;}"
-                "QToolButton:hover{background-color:%6;border-color:#9cc4f0;}"
-                "QToolButton:checked{background-color:#294e74;border-color:#3d8bfd;}"
-                "QFrame{color:%5;}"
-                "QComboBox{background-color:%7;color:%3;border:1px solid %5;border-radius:2px;}"
-                "QComboBox QAbstractItemView{background-color:%7;color:%3;}")
-                .arg(rbBg, rbTab, rbTx, rbLabel, rbLine, rbHover, rbCombo));
+    // The ribbon, in the scheme now set - tabs, group names, fields and all.
+    if (ribbon_) ribbon_->setStyleSheet(ribbonStyleSheet());
 
     // Ribbon tool icons: light on a dark ribbon, dark on a light ribbon. Retint
     // EVERY tool button instance (a ToolId can appear on several tabs, so the
@@ -5441,6 +5580,28 @@ void MainWindow::applyTheme(bool dark) {
              : QStringLiteral("QToolButton{padding:0 2px;border:none;font-size:9px;color:#44474e;}"
                               "QToolButton:hover{background:#c8dcff;}");
     for (QToolButton* a : statusArrowBtns_) a->setStyleSheet(arrowSS);
+
+    // The panels: title bars, the strips a folded side leaves, the fly-outs and their edges. Each carries a
+    // stylesheet or a paintEvent of its own, so each has to be told - a panel whose ground turned white and
+    // whose lettering stayed pale would be a white bar with white writing on it.
+    DockTitleBar::restyleAll();
+    AutoHideDock::restyleAll();
+    restyleViewPanelIcons();   // the View tab's icons are drawn, so they are drawn again
+    restyleRibbonCorner();
+    restyleDrawingSpaceStrip();
+    // Undo and Redo are drawn too.
+    for (QToolButton* b : undoRedoBtns_)
+        if (b)
+            b->setIcon(undoArrowIcon(b->property("redo").toBool(), b->property("compact").toBool(),
+                                     Chrome::ink()));
+    // The panels are filled with rows the code colours itself - a properties section header, a layer's
+    // swatch - and those were coloured when the row was made. Filling them again makes them the scheme's.
+    if (!docs_.empty()) refreshPanels();
+
+    // The hint beside the command line, and the panel headers that are not the ribbon's.
+    if (cmdHintLabel_)
+        cmdHintLabel_->setStyleSheet(QStringLiteral("color:%1;padding:0 10px;font-weight:600;")
+                                         .arg(dark ? "#8fb0d6" : "#1f4d80"));
 
     // The drawing canvas (model space) intentionally stays dark in both schemes,
     // like AutoCAD's model space; only the surrounding chrome changes.
@@ -11166,15 +11327,6 @@ void MainWindow::applyPanelSizes() {
 
 // ---- Persistent drafting preferences ---------------------------------------
 
-// Tooltips: light text on a dark panel. Left to the platform they come out as black text on a
-// pale yellow box in some themes and black-on-dark in others - unreadable next to this window's
-// own colours either way.
-void MainWindow::applyTooltipStyle() {
-    qApp->setStyleSheet(qApp->styleSheet() +
-                        QStringLiteral("\nQToolTip { color:#e6e9ef; background-color:#2b3138; "
-                                     "border:1px solid #5b6572; padding:3px; }"));
-}
-
 void MainWindow::loadSettings() {
     QSettings s;
     auto& sn = editor_->snapSettings();
@@ -11203,6 +11355,10 @@ void MainWindow::loadSettings() {
     EntityRenderer::setDualUnits(s.value(QStringLiteral("units/dual"), false).toBool());
     crossSectionAwg_ = s.value(QStringLiteral("units/awg"), false).toBool();
     setWireGaugeNotationAwg(crossSectionAwg_); // restored before anything is drawn
+    // Which scheme the chrome is in. Read here and applied at the end of building, once there is a ribbon
+    // and there are panels to colour.
+    darkTheme_ = s.value(QStringLiteral("ui/darkChrome"), true).toBool();
+    Chrome::setDark(darkTheme_);
     customWireColors_ = s.value(QStringLiteral("wire/customColors")).toStringList();
     insulationMaterials_ = s.value(QStringLiteral("wire/insulationMaterials")).toStringList();
 }
@@ -11235,6 +11391,7 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("units/awg"), crossSectionAwg_);
     s.setValue(QStringLiteral("wire/customColors"), customWireColors_);
     s.setValue(QStringLiteral("wire/insulationMaterials"), insulationMaterials_);
+    s.setValue(QStringLiteral("ui/darkChrome"), darkTheme_);
 }
 
 // ---- File actions ----------------------------------------------------------

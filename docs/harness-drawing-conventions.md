@@ -793,6 +793,39 @@ twenty times an hour. Both lists place by **double-click**; the parts list has a
 is longer than a panel; and each is read afresh on the way in, so a part added or a block made since the last
 look is there. Both start hidden: they are asked for, rather than filling the screen unbidden.
 
+## Light chrome, dark drawing
+
+The ribbon, the menus and the panels can be light instead of charcoal — *Options → Display → Colour scheme*,
+or the **Light chrome** switch on the View tab, which is the same setting and not a second one. It is
+remembered (`ui/darkChrome`), so the program comes up in the scheme it was left in.
+
+The **drawing stays dark either way.** A harness is read against a dark ground, and the colours in a drawing
+are the draughtsman's: white lines, a red centreline, the wire colours themselves. Inverting the sheet would
+mean inverting those, and they are not the program's to invert.
+
+**The whole of the difficulty is text colour.** Pale grey lettering reads on charcoal and is a smudge on
+white, and the pale greys were everywhere — a group's name under its buttons, the name up the side of a
+folded panel, a panel's own title bar, the hint by the command line, the arrows for Undo and Redo. What was
+learned doing it:
+
+- **Anything drawn is drawn again.** Icons, glyphs, arrows and the grip dots are painted in code, so a change
+  of scheme means repainting them: `Chrome` says what colour, and every drawn thing is kept in a list so it
+  can be told (`allToolActions_`, `opButtons_`, `undoRedoBtns_`, the View tab's own icons).
+- **An inline stylesheet beats an ancestor's.** A label styled where it is built cannot be re-coloured by the
+  ribbon's sheet, which is why the group names stayed pale on a light ribbon. They are *named*
+  (`ribbonGroupTitle`, `ribbonGroupRule`) and coloured by the ribbon's sheet instead.
+- **One sheet per thing, built once.** `ribbonStyleSheet()` composes the ribbon's colours for whichever scheme
+  is set, and is called both when the ribbon is built and when the scheme changes. Written out twice, the two
+  copies drift — and the second one is always the one that forgets the spin boxes.
+- **The sheet that replaces another must carry everything it had.** Choosing a scheme replaces the sheet
+  loaded from the resources; rules only in that file (tool-button hover, the combo drop-down and its chevron,
+  a dock's own title) simply vanished when a scheme was chosen. They are all in `applyTheme` now.
+- **A panel filled with rows the code colours itself** — a properties section header, a layer's swatch — has
+  to be filled again, or those rows keep the old scheme's colours.
+
+`src/app/Chrome.h` is the one place that answers "what colour is the chrome": ink, sub-ink, bars, strips,
+fly-outs, edges. Both MainWindow.cpp and the ribbon tabs ask it, so nothing has a colour of its own.
+
 ## A folded panel opens over the drawing, not beside it
 
 A panel that is only open while the cursor is on it is something held up in front of the drawing, not

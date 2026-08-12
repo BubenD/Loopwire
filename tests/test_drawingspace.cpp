@@ -5,6 +5,7 @@
 // of thing done where it was made rather than through a menu. A grid over a sheet being laid out has
 // nothing to do with the grid over the harness. And the plot scale is the LAYOUT'S - it is kept with the
 // drawing, on its viewport, not as a setting of the window that happened to be open.
+#include "app/Chrome.h"
 #include "app/Editor.h"
 #include "io/Dwx.h"
 #include "app/MainWindow.h"
@@ -25,6 +26,7 @@
 #include <QSettings>
 #include <QMouseEvent>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QToolButton>
 #include <QApplication>
 
@@ -977,6 +979,65 @@ int run_drawingspace_tests() {
                 check(f->width() > 120, "flyout: opened wide enough to read");
         }
         settings.remove(QStringLiteral("panels"));
+    }
+
+    // ---- the light scheme: chrome only, and the text with it ---------------------------------------
+    {
+        // A drawing office is not always a dark room. The ribbon, the menus and the panels can be light -
+        // and the whole of getting that right is the TEXT: pale grey lettering that reads on charcoal is a
+        // smudge on white, which is what makes a half-themed program unusable rather than merely ugly.
+        QSettings settings;
+        settings.setValue(QStringLiteral("ui/darkChrome"), false);
+        MainWindow lit;
+        check(!Chrome::dark(), "scheme: it comes up in the scheme that was set last time");
+        check(Chrome::ink().lightnessF() < 0.4 && Chrome::bar().lightnessF() > 0.6,
+              "scheme: light ground, dark ink - not the dark scheme with its greys kept");
+
+        QTabWidget* ribbon = nullptr;
+        for (QTabWidget* tw : lit.findChildren<QTabWidget*>())
+            for (int i = 0; i < tw->count(); ++i)
+                if (tw->tabText(i) == QStringLiteral("View")) ribbon = tw;
+        check(ribbon != nullptr, "scheme: the ribbon is there to be coloured");
+        if (ribbon) {
+            const QString ss = ribbon->styleSheet();
+            check(ss.contains(QStringLiteral("#1e2126")),
+                  "scheme: the ribbon letters in near-black");
+            check(!ss.contains(QStringLiteral("#c9ccd1")) && !ss.contains(QStringLiteral("#f2f4f7")),
+                  "scheme: and nothing on it is still lettered for a dark ribbon");
+        }
+        // A group's name under its buttons: named, so the ribbon's own sheet colours it. Styled where it is
+        // built, it would keep its pale grey - an inline sheet beats an ancestor's.
+        int named = 0;
+        for (QLabel* l : lit.findChildren<QLabel*>())
+            if (l->objectName() == QStringLiteral("ribbonGroupTitle")) ++named;
+        std::printf("  scheme: %d ribbon group names take the scheme's colour\n", named);
+        check(named > 10, "scheme: every ribbon group name is coloured by the scheme");
+
+        // A panel's title bar: ground AND lettering, or it is a white bar with white writing on it.
+        bool titleReadable = false;
+        for (QDockWidget* d : lit.findChildren<QDockWidget*>()) {
+            QWidget* bar = d->titleBarWidget();
+            if (!bar) continue;
+            for (QLabel* l : bar->findChildren<QLabel*>())
+                if (l->styleSheet().contains(QStringLiteral("#1e2126"))) titleReadable = true;
+        }
+        check(titleReadable, "scheme: a panel's name is dark on its light title bar");
+
+        // The switch on the View tab and the one in Options are the same setting.
+        QToolButton* schemeBtn = nullptr;
+        for (QToolButton* b : lit.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Light chrome")) schemeBtn = b;
+        check(schemeBtn != nullptr, "scheme: the View tab carries the switch");
+        if (schemeBtn) {
+            check(schemeBtn->isChecked(), "scheme: and it says which scheme is on");
+            schemeBtn->click();
+            QApplication::processEvents();
+            check(Chrome::dark(), "scheme: pressing it goes back to the dark chrome");
+            if (ribbon)
+                check(ribbon->styleSheet().contains(QStringLiteral("#3a3d43")),
+                      "scheme: the ribbon goes with it");
+        }
+        settings.setValue(QStringLiteral("ui/darkChrome"), true);
     }
 
     if (spaceFailures == 0) std::printf("  -> ok\n");

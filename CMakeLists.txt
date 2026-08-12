@@ -88,6 +88,7 @@ add_library(edraw_core STATIC
     src/app/FontLibrary.h
     src/app/FontLibrary.cpp
     src/app/Editor.h
+    src/app/Chrome.cpp
     src/app/Editor.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
