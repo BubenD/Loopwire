@@ -145,6 +145,51 @@ int run_libraryuse_tests() {
               "contact: and it can be taken off again");
     }
 
+    // ---- the tie, from either end ------------------------------------------------------------------
+    {
+        // One tie, two ends. Tied from the connector, the contact says what it goes in; tied from the
+        // contact, the connector says what goes in it. Anything else means opening a contact on its own and
+        // being told nothing.
+        PartsLibrary two;
+        const QString cId = two.add(PartKind::Connector).id;
+        const QString pId = two.add(PartKind::ContactPin).id;
+        two.byId(cId)->mfrPn = QStringLiteral("CONN-9");
+        two.byId(pId)->mfrPn = QStringLiteral("PIN-20");
+
+        tieContactToConnector(two, cId, pId);
+        check(two.byId(cId)->contactId() == pId, "tie: the connector says which contact goes in it");
+        check(two.byId(pId)->connectorId() == cId,
+              "tie: and the CONTACT says which connector it goes in - the same tie, written at both ends");
+        check(tiedContactsOf(two, cId) == QStringList{pId} &&
+                  tiedConnectorsOf(two, pId) == QStringList{cId},
+              "tie: and it reads the same way round from either end");
+
+        // Tied from the contact's end instead: the same call, the other way about.
+        const QString c2 = two.add(PartKind::Connector).id;
+        two.byId(c2)->mfrPn = QStringLiteral("CONN-37");
+        tieContactToConnector(two, c2, pId);
+        check(two.byId(c2)->contactId() == pId,
+              "tie: a second connector can use the same contact");
+        check(two.byId(pId)->connectorIds().size() == 2,
+              "tie: and the contact knows both of them - a contact goes in as many connectors as it fits");
+
+        // Untying at one end unties at both.
+        tieContactToConnector(two, cId, QString());
+        check(two.byId(cId)->contactId().isEmpty(), "untie: the connector forgets the contact");
+        check(!two.byId(pId)->connectorIds().contains(cId),
+              "untie: and the contact forgets the connector - a tie off at one end is off at both");
+        check(two.byId(pId)->connectorIds().contains(c2),
+              "untie: the other connector's tie is untouched");
+
+        // A tie written before both ends were kept - the connector's side only - still shows on the contact.
+        PartsLibrary legacy;
+        const QString lc = legacy.add(PartKind::Connector).id;
+        const QString lp = legacy.add(PartKind::ContactPin).id;
+        legacy.byId(lc)->setContactId(lp);   // as an older version wrote it
+        check(tiedConnectorsOf(legacy, lp) == QStringList{lc},
+              "tie: worked out from both ends, so a tie written on one part only still shows on the other");
+    }
+
     // ---- the library at the top of the canvas menu -------------------------------------------------
     {
         MainWindow win;

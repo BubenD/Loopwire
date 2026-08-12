@@ -24,6 +24,7 @@ int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 bool g_monochrome = false;
 bool g_plotLineweights = true;   // a plot may be asked for without them
+double g_annotationScale = 1.0;  // how much bigger annotation is drawn than it is written
 bool g_whitePaper = false;
 bool g_lengthInch = false;   // dimension unit: false = mm (world), true = inch
 bool g_dualUnits = false;    // append the other unit in parentheses
@@ -104,6 +105,10 @@ void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
 void EntityRenderer::setMonochrome(bool on) { g_monochrome = on; }
 void EntityRenderer::setPlotLineweights(bool on) { g_plotLineweights = on; }
+void EntityRenderer::setAnnotationScale(double factor) {
+    g_annotationScale = factor > 1e-6 ? factor : 1.0;
+}
+double EntityRenderer::annotationScale() { return g_annotationScale; }
 bool EntityRenderer::plotLineweights() { return g_plotLineweights; }
 bool EntityRenderer::monochrome() { return g_monochrome; }
 void EntityRenderer::setWhitePaper(bool on) { g_whitePaper = on; }
@@ -832,10 +837,14 @@ void drawDimensionEntity(QPainter& p, const Entity& e, const ViewTransform& vt,
                          const QColor& color, int decimals) {
     const QString ty = e.meta.value("dimType").toString(QStringLiteral("linear"));
     // Per-dimension style (AutoCAD-like), with sensible defaults.
-    const double textH = e.meta.value("textHeight").toDouble(5.0);  // world units
-    const double arrowW = e.meta.value("arrowSize").toDouble(3.3);  // world units
+    // Written in world units, DRAWN at the annotation scale: a dimension on a drawing plotted at 1:10 is
+    // written 5 mm high and drawn 50, so that it comes off the paper 5 mm high. The geometry it measures is
+    // untouched - only the writing about it grows.
+    const double annot = EntityRenderer::annotationScale();
+    const double textH = e.meta.value("textHeight").toDouble(5.0) * annot;   // world units
+    const double arrowW = e.meta.value("arrowSize").toDouble(3.3) * annot;   // world units
     const double arrowPx = std::clamp(arrowW * vt.scale(), 5.0, 40.0);
-    const double extOff = e.meta.value("extOffset").toDouble(2.0); // ext-line gap (world)
+    const double extOff = e.meta.value("extOffset").toDouble(2.0) * annot; // ext-line gap (world)
     // Dimension lines are drawn thin (but clearly visible), independent of weight.
     {
         QPen dp(color);

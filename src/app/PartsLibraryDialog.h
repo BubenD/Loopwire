@@ -9,6 +9,7 @@
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QGroupBox;
 class QListWidget;
 class QPushButton;
 class QSplitter;
@@ -150,6 +151,7 @@ private:
     QLabel* summary_ = nullptr;
     // The connector's contacts: the list, and the buttons that tie one on and take one off.
     QWidget* contactGroup_ = nullptr;
+    QGroupBox* contactGroupBox_ = nullptr;   // the same group, to retitle it for whichever end is shown
     QPushButton* genSymbolBtn_ = nullptr;
     QLineEdit* linkEdit_ = nullptr;
     DrawingPreview* schemPreview_ = nullptr;

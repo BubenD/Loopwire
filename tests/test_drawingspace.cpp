@@ -107,10 +107,11 @@ int run_drawingspace_tests() {
     check(scale != nullptr, "scale: the box is in the corner of the strip");
     if (scale && canvas) {
         spaces->setCurrentIndex(0);
-        check(!scale->isEnabled(),
-              "scale: model space has no plot scale, so the box is out of reach there");
+        // The box means something in both spaces now: on a layout the plot scale, in model space the scale
+        // the drawing will be plotted at - which is what the dimensions are drawn to suit.
+        check(scale->isEnabled(), "scale: it can be set in model space too");
         spaces->setCurrentIndex(1);
-        check(scale->isEnabled(), "scale: on a layout it can be set");
+        check(scale->isEnabled(), "scale: and on a layout it can be set");
         // The layouts belong to the drawing. On a sheet the canvas is drawing IN the sheet, so the
         // drawing itself is asked for by name.
         const Document* doc = canvas->drawingDocument();
@@ -599,6 +600,58 @@ int run_drawingspace_tests() {
         check(std::abs(onPaper.toHsv().hue() - pale.toHsv().hue()) <= 6,
               "ink: the same colour, though - it is still the blue of a line being drawn");
         EntityRenderer::setWhitePaper(wasWhite);
+    }
+
+    // ---- the scale in model space is the annotation scale -----------------------------------------
+    if (canvas && scale) {
+        // The scale in the corner means two different things in the two spaces, and both of them are real. On
+        // a layout it is the plot scale, kept on the window. In MODEL space it is the scale the drawing will
+        // be plotted at, and what it sets is how big the dimensions are DRAWN: a drawing to be plotted at
+        // 1:10 needs its dimension text ten times the height in the model to come off the paper the size it
+        // says. The harness is never touched by it.
+        spaces->setCurrentIndex(0);
+        QApplication::processEvents();
+        check(scale->isEnabled(),
+              "annotation: the scale can be set in model space too - it is what the drawing will be plotted "
+              "at");
+        scale->setCurrentIndex(scale->findText(QStringLiteral("1:10")));
+        check(std::abs(EntityRenderer::annotationScale() - 10.0) < 1e-9,
+              "annotation: at 1:10 the dimensions are drawn ten times the size they are written");
+        scale->setCurrentIndex(scale->findText(QStringLiteral("1:1")));
+        check(std::abs(EntityRenderer::annotationScale() - 1.0) < 1e-9,
+              "annotation: and at 1:1 they are drawn as written");
+        scale->setCurrentIndex(scale->findText(QStringLiteral("2:1")));
+        check(std::abs(EntityRenderer::annotationScale() - 0.5) < 1e-9,
+              "annotation: a drawing blown up to 2:1 needs its dimensions half size in the model");
+        // A layout's annotation is at size on the paper - it is the window that is scaled, not the writing.
+        spaces->setCurrentIndex(1);
+        QApplication::processEvents();
+        check(std::abs(EntityRenderer::annotationScale() - 1.0) < 1e-9,
+              "annotation: on a sheet the writing is at size, because the sheet IS the paper");
+        spaces->setCurrentIndex(0);
+        QApplication::processEvents();
+        check(std::abs(EntityRenderer::annotationScale() - 0.5) < 1e-9,
+              "annotation: and coming back to the model finds the scale it was left at");
+        scale->setCurrentIndex(scale->findText(QStringLiteral("1:1")));
+    }
+
+    // ---- + window is not on the strip in model space ----------------------------------------------
+    {
+        QToolButton* addWindowBtn = nullptr;
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("+ window")) addWindowBtn = b;
+        check(addWindowBtn != nullptr, "strip: the + window button exists");
+        if (addWindowBtn) {
+            spaces->setCurrentIndex(0);
+            QApplication::processEvents();
+            check(!addWindowBtn->isVisibleTo(win.centralWidget() ? win.centralWidget() : &win) ||
+                      !addWindowBtn->isEnabled(),
+                  "strip: and it is not offered in model space at all - a window onto the drawing is cut in a "
+                  "sheet");
+            spaces->setCurrentIndex(1);
+            QApplication::processEvents();
+            check(addWindowBtn->isEnabled(), "strip: on a sheet it is there and can be pressed");
+        }
     }
 
     // ---- the scale, findable ----------------------------------------------------------------------

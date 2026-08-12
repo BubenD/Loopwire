@@ -776,7 +776,9 @@ void PartsLibraryDialog::buildUi() {
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
         auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), draw);
-        prev->setMinimumSize(320, 260);
+        // Room enough to see what the drawing IS, and no more: three of these side by side, and the window
+        // has the part's data to show as well.
+        prev->setMinimumSize(210, 170);
         if (isFanout) fanoutPreview_ = prev;
         else if (sides[i].mechanical) mechPreview_ = prev;
         else schemPreview_ = prev;
@@ -885,6 +887,7 @@ void PartsLibraryDialog::buildUi() {
     // materials, in the quantity the connector needs.
     {
         auto* group = new QGroupBox(QStringLiteral("Use with pin contact"), right);
+        contactGroupBox_ = group;
         contactGroup_ = group;
         auto* cl = new QHBoxLayout(group);
         contactBox_ = new QComboBox(group);
@@ -893,10 +896,20 @@ void PartsLibraryDialog::buildUi() {
             "the connector, one per way, wherever the connector is placed."));
         connect(contactBox_, &QComboBox::currentIndexChanged, this, [this](int) {
             if (syncing_) return;
-            if (LibraryPart* p = current()) {
-                p->setContactId(contactBox_->currentData().toString());
-                touched();
+            LibraryPart* p = current();
+            if (!p) return;
+            const QString other = contactBox_->currentData().toString();
+            const bool isContact = p->kind == PartKind::ContactPin || p->kind == PartKind::Crimp;
+            // Both ends of the tie, in the library being worked in. Tied from the contact's side or the
+            // connector's, it is the same tie and it is written on both parts.
+            if (isContact) {
+                p->setConnectorId(other);
+                tieContactToConnector(catalog_.active(), other, p->id);
+            } else {
+                tieContactToConnector(catalog_.active(), p->id, other);
             }
+            touched();
+            reloadTree();
         });
         cl->addWidget(contactBox_, 1);
         rv->addWidget(group);
@@ -1918,21 +1931,33 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
 void PartsLibraryDialog::refreshContactChoice() {
     if (!contactGroup_ || !contactBox_) return;
     const LibraryPart* p = current();
+    // The SAME tie, from whichever end is being looked at. On a connector the box chooses the contact that
+    // goes in it; on a contact it chooses the connector it goes in. Tied from either end it shows on both,
+    // which is the point: a contact opened on its own says what it is for.
     const bool isConnector = p && p->kind == PartKind::Connector;
-    contactGroup_->setVisible(isConnector);
-    if (fanoutSideRow_) fanoutSideRow_->setVisible(true);
+    const bool isContact = p && (p->kind == PartKind::ContactPin || p->kind == PartKind::Crimp);
+    if (contactGroupBox_)
+        contactGroupBox_->setTitle(isContact ? QStringLiteral("Use with connector")
+                                             : QStringLiteral("Use with pin contact"));
+    contactGroup_->setVisible(isConnector || isContact);
     const QSignalBlocker block(contactBox_);
     contactBox_->clear();
-    contactBox_->addItem(QStringLiteral("(none — the connector on its own)"), QString());
-    if (!isConnector) return;
-    for (const LibraryPart& part : catalog_.merged().parts) {
-        if (part.kind != PartKind::ContactPin && part.kind != PartKind::Crimp) continue;
-        contactBox_->addItem(part.title(), part.id);
+    if (!isConnector && !isContact) return;
+    contactBox_->addItem(isContact ? QStringLiteral("(none — not tied to a connector)")
+                                   : QStringLiteral("(none — the connector on its own)"),
+                         QString());
+    const PartsLibrary merged = catalog_.merged();
+    for (const LibraryPart& part : merged.parts) {
+        const bool offer = isContact ? part.kind == PartKind::Connector
+                                     : (part.kind == PartKind::ContactPin || part.kind == PartKind::Crimp);
+        if (offer) contactBox_->addItem(part.title(), part.id);
     }
-    const QString chosen = p->contactId();
+    // What it is tied to, worked out from BOTH ends: a tie written on the other part only still shows here.
+    const QStringList tied = isContact ? tiedConnectorsOf(merged, p->id) : tiedContactsOf(merged, p->id);
+    const QString chosen = tied.isEmpty() ? QString() : tied.front();
     const int at = contactBox_->findData(chosen);
-    // A contact that is no longer in any library that is open is still what the part says: it is shown as
-    // itself rather than quietly cleared, because clearing it would lose what somebody chose.
+    // Something no longer in any library that is open is still what the part says: shown as itself rather
+    // than quietly cleared, because clearing it would lose what somebody chose.
     if (at >= 0) {
         contactBox_->setCurrentIndex(at);
     } else if (!chosen.isEmpty()) {

@@ -175,7 +175,22 @@ struct LibraryPart {
     // kind of contact in it, and which one is a property of the connector rather than of the moment it is
     // placed - so it is set once, in the library, and every copy placed carries it.
     QString contactId() const { const QStringList ids = contactIds(); return ids.isEmpty() ? QString() : ids.front(); }
-    void setContactId(const QString& id) { setContactIds(id.isEmpty() ? QStringList() : QStringList{id}); }
+    void setContactId(const QString& contact) {
+        setContactIds(contact.isEmpty() ? QStringList() : QStringList{contact});
+    }
+
+    // The other end of the same tie: the connectors this CONTACT is used in. A tie made from either end is
+    // one tie, and it is written on both parts so that either can be looked at on its own - a contact opened
+    // in the library says what it goes in, and a connector says what goes in it.
+    QStringList connectorIds() const;
+    void setConnectorIds(const QStringList& ids);
+    QString connectorId() const {
+        const QStringList ids = connectorIds();
+        return ids.isEmpty() ? QString() : ids.front();
+    }
+    void setConnectorId(const QString& connector) {
+        setConnectorIds(connector.isEmpty() ? QStringList() : QStringList{connector});
+    }
     // How many contacts one of these connectors needs: its way count, or one if it does not say.
     int wayCount() const;
 
@@ -290,6 +305,17 @@ PartsLibrary seedLibrary();
 // that the figures are nominal and the datasheet is the authority. A harness that must hold a tolerance is
 // checked against the datasheet, not against a starter library.
 int addStandardHeatshrink(PartsLibrary& lib);
+
+// Tie a connector and a contact together, from whichever end the user was looking at. Writes BOTH sides where
+// both parts can be reached, so the tie shows on either part when it is opened on its own; passing an empty
+// contact unties whatever the connector had, and the other way about.
+void tieContactToConnector(PartsLibrary& lib, const QString& connectorId, const QString& contactId);
+
+// What a part is tied to, as it should be SHOWN: what it says itself, and what says it. A drawing office that
+// tied the contact from the connector's side before this existed still sees the tie on the contact, because
+// the answer is worked out from both ends rather than read from one.
+QStringList tiedContactsOf(const PartsLibrary& lib, const QString& connectorId);
+QStringList tiedConnectorsOf(const PartsLibrary& lib, const QString& contactId);
 
 // Put the shelf in if it has never been put in. Returns how many parts it added, and marks the library so
 // that it is not done again - which is what makes it safe to call every time a library is opened.

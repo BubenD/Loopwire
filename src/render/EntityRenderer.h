@@ -103,6 +103,12 @@ public:
     // wanted and every line comes out the same thin one.
     static void setPlotLineweights(bool on);
     static bool plotLineweights();
+    // How much bigger ANNOTATION is drawn than it is written. A drawing plotted at 1:10 needs its dimension
+    // text ten times the height in the model for it to come off the paper the size it says - which is what
+    // the scale in the corner of the strip means in model space. Geometry is never touched by it: the harness
+    // is the size it is, and only what is written about it grows.
+    static void setAnnotationScale(double factor);
+    static double annotationScale();
     // On a white export page, a white drawing stroke must remain visible. It is
     // treated as black in color mode; other colors remain unchanged.
     static void setWhitePaper(bool on);

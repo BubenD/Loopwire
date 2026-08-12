@@ -64,6 +64,9 @@ public:
     // Take every window a selection zone caught: wholly inside it for the blue window zone, touched at
     // all for the green crossing zone. Shift (subtract) lets them go again.
     void selectLayoutWindowsIn(const std::vector<Vec2>& region, bool crossing, bool subtract);
+    // The window under a point on the canvas, or -1. Public because the canvas menu asks it: right-clicking a
+    // window has to offer something about THAT window, picked out first or not.
+    int layoutViewportAt(const QPointF& point) const { return viewportAt(point); }
     int activeLayoutViewport() const { return activeViewport_; }
     // Step into a window (so what is drawn goes into the model, seen through it) or back out onto the
     // paper. Stepping in and out is what changes which document the editor is working in, so it is

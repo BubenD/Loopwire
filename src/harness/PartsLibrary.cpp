@@ -635,20 +635,85 @@ QStringList LibraryPart::contactIds() const {
     const QString raw = params.value(QStringLiteral("contacts"));
     QStringList out;
     for (const QString& piece : raw.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
-        const QString id = piece.trimmed();
-        if (!id.isEmpty() && !out.contains(id)) out << id;
+        const QString one = piece.trimmed();
+        if (!one.isEmpty() && !out.contains(one)) out << one;
     }
     return out;
 }
 
 void LibraryPart::setContactIds(const QStringList& ids) {
     QStringList clean;
-    for (const QString& id : ids) {
-        const QString trimmed = id.trimmed();
+    for (const QString& one : ids) {
+        const QString trimmed = one.trimmed();
         if (!trimmed.isEmpty() && !clean.contains(trimmed)) clean << trimmed;
     }
     if (clean.isEmpty()) params.remove(QStringLiteral("contacts"));
     else params.insert(QStringLiteral("contacts"), clean.join(QLatin1Char(';')));
+}
+
+QStringList LibraryPart::connectorIds() const {
+    const QString raw = params.value(QStringLiteral("connectors"));
+    QStringList out;
+    for (const QString& piece : raw.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const QString one = piece.trimmed();
+        if (!one.isEmpty() && !out.contains(one)) out << one;
+    }
+    return out;
+}
+
+void LibraryPart::setConnectorIds(const QStringList& ids) {
+    QStringList clean;
+    for (const QString& one : ids) {
+        const QString trimmed = one.trimmed();
+        if (!trimmed.isEmpty() && !clean.contains(trimmed)) clean << trimmed;
+    }
+    if (clean.isEmpty()) params.remove(QStringLiteral("connectors"));
+    else params.insert(QStringLiteral("connectors"), clean.join(QLatin1Char(';')));
+}
+
+void tieContactToConnector(PartsLibrary& lib, const QString& connectorId, const QString& contactId) {
+    LibraryPart* connector = lib.byId(connectorId);
+    if (!connector) return;
+    const QString wasContact = connector->contactId();
+    connector->setContactId(contactId);
+    // The contact that was tied before, if it is being replaced, forgets this connector: a tie taken off one
+    // end is off at both, or the two ends would disagree about what is tied to what.
+    if (!wasContact.isEmpty() && wasContact != contactId)
+        if (LibraryPart* was = lib.byId(wasContact)) {
+            QStringList ids = was->connectorIds();
+            ids.removeAll(connectorId);
+            was->setConnectorIds(ids);
+        }
+    if (contactId.isEmpty()) return;
+    if (LibraryPart* contact = lib.byId(contactId)) {
+        QStringList ids = contact->connectorIds();
+        if (!ids.contains(connectorId)) ids.prepend(connectorId);   // the newest tie leads
+        contact->setConnectorIds(ids);
+    }
+}
+
+QStringList tiedContactsOf(const PartsLibrary& lib, const QString& connectorId) {
+    QStringList out;
+    if (const LibraryPart* connector = lib.byId(connectorId)) out = connector->contactIds();
+    // And any contact that names this connector: a tie made from the contact's end, or one written before
+    // both ends were kept.
+    for (const LibraryPart& part : lib.parts) {
+        if (part.kind != PartKind::ContactPin && part.kind != PartKind::Crimp) continue;
+        if (!part.connectorIds().contains(connectorId)) continue;
+        if (!out.contains(part.id)) out << part.id;
+    }
+    return out;
+}
+
+QStringList tiedConnectorsOf(const PartsLibrary& lib, const QString& contactId) {
+    QStringList out;
+    if (const LibraryPart* contact = lib.byId(contactId)) out = contact->connectorIds();
+    for (const LibraryPart& part : lib.parts) {
+        if (part.kind != PartKind::Connector) continue;
+        if (!part.contactIds().contains(contactId)) continue;
+        if (!out.contains(part.id)) out << part.id;
+    }
+    return out;
 }
 
 int LibraryPart::wayCount() const {

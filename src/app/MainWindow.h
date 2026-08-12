@@ -488,6 +488,10 @@ private:
     // turns it on belongs to the space it was pressed in. (The plot scale is not here - it belongs to
     // the layout and is kept with the drawing.)
     QHash<int, bool> spaceGrid_;
+    // The scale each space was left at, by tab index. On a layout that is the plot scale (which is kept on the
+    // drawing as well, on the window); in model space it is the scale the drawing will be plotted at, which
+    // decides how big the dimensions are drawn.
+    QHash<int, double> spaceScale_;
     int lastDrawingSpace_ = -1;   // which space is showing, so what it had is kept on the way out
     Editor* editor_ = nullptr;
     CanvasWidget* canvas_ = nullptr;

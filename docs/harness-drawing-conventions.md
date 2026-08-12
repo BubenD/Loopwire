@@ -746,3 +746,26 @@ which is the dimension it always was.
 A **block instance key** is re-minted at the same time, once per copy set rather than once per entity: two
 instances sharing a key are one instance to anything that counts or rebuilds them, and the lines of one placed
 block are one instance between them.
+
+## A tie has two ends
+
+A contact and a connector are tied to each other, and the tie is written on **both** parts. Made from the
+connector — *Use with pin contact* — the contact then says what it goes in; made from the contact — the same
+box, retitled *Use with connector* — the connector says what goes in it. Untying at one end unties at both, or
+the two would disagree about what is tied to what. A contact can be tied to several connectors: it goes in as
+many as it fits.
+
+What is *shown* is worked out from both ends (`tiedContactsOf`, `tiedConnectorsOf`), not read from one, so a tie
+written by an earlier version — on the connector's side only — still appears on the contact.
+
+## The scale in the corner, in model space
+
+On a layout the scale is the **plot scale**, kept on the window. In model space it is the scale the drawing
+**will be** plotted at, and what it sets is how big the annotation is **drawn**: at 1:10 a dimension written
+5 mm high is drawn 50 mm high, so it comes off the paper 5 mm high; at 2:1 it is drawn half size. The harness
+is never touched — only what is written about it. It is remembered per space, and a layout's own annotation
+stays at size, because the sheet *is* the paper (`EntityRenderer::setAnnotationScale`).
+
+Two smaller things on the strip and the menu: **+ window** is not shown at all in model space rather than shown
+and greyed, since a window onto the drawing is cut in a sheet; and right-clicking a window on a layout offers
+**Delete this window** for the window *under the cursor*, picked out first or not.

@@ -2026,7 +2026,27 @@ void MainWindow::closeDrawingSpace(int index) {
 }
 
 void MainWindow::setDrawingSpaceScale(double paperPerModel) {
-    if (!doc_ || !canvas_ || !canvas_->layoutMode()) return;
+    if (!doc_ || !canvas_) return;
+    // MODEL SPACE: the box is the scale the drawing will be plotted at, and what it sets is how big the
+    // annotation is DRAWN. A drawing to be plotted at 1:10 needs its dimension text ten times the height in
+    // the model for it to come off the paper the size it says - so the factor is the other way up from the
+    // ratio, and Fit (which means nothing here) is one. The harness is not touched: only what is written
+    // about it changes size.
+    if (!canvas_->layoutMode()) {
+        const int space = drawingSpaceTabs_ ? drawingSpaceTabs_->currentIndex() : 0;
+        spaceScale_[space] = paperPerModel > 1e-9 ? paperPerModel : 1.0;
+        const double annot = paperPerModel > 1e-9 ? 1.0 / paperPerModel : 1.0;
+        EntityRenderer::setAnnotationScale(annot);
+        canvas_->invalidateScene();
+        statusBar()->showMessage(
+            annot > 1.0001 || annot < 0.9999
+                ? tr("Dimensions drawn %1× size, for a drawing plotted at %2")
+                      .arg(annot, 0, 'g', 3)
+                      .arg(spaceScaleBox_ ? spaceScaleBox_->currentText() : QString())
+                : tr("Dimensions drawn at size, for a drawing plotted at 1:1"),
+            4000);
+        return;
+    }
     const int at = canvas_->layoutIndex();
     auto& layouts = doc_->layouts();
     if (at < 0 || at >= static_cast<int>(layouts.size())) return;
@@ -2478,6 +2498,13 @@ void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
                                     : editingMechModel  ? QColor("#3a3d42")
                                                         : normalCanvasColor_);
     }
+    // The annotation scale of the space being entered: model space has its own (the scale the drawing will be
+    // plotted at), and a layout has none - a sheet's annotation is at size on the paper, and it is the window
+    // that is scaled.
+    EntityRenderer::setAnnotationScale(layout ? 1.0
+                                              : (spaceScale_.value(index, 1.0) > 1e-9
+                                                     ? 1.0 / spaceScale_.value(index, 1.0)
+                                                     : 1.0));
     // The grid this space was left with. A layout starts without one - a sheet is laid out over a title
     // block rather than over squares - and model space with the one it has always had.
     canvas_->setGridVisible(spaceGrid_.value(index, !layout));
@@ -2500,22 +2527,27 @@ void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
                 !layouts[static_cast<size_t>(at)].viewports.empty())
                 paperPerModel = layouts[static_cast<size_t>(at)].viewports.front().modelScale;
         }
+        // In model space the box is the ANNOTATION scale: the scale the drawing will be plotted at, so that
+        // the dimensions are drawn big enough to come off the paper the size they say. The harness itself is
+        // never touched by it. On a layout it is the plot scale, as before.
+        if (!layout) paperPerModel = spaceScale_.value(index, 1.0);
         const QSignalBlocker block(spaceScaleBox_);
         const int found = spaceScaleBox_->findData(paperPerModel);
         spaceScaleBox_->setCurrentIndex(found >= 0 ? found : (paperPerModel > 0.0 ? 1 : 0));
-        spaceScaleBox_->setEnabled(layout);
+        spaceScaleBox_->setEnabled(true);
         spaceScaleBox_->setToolTip(
             layout ? tr("The scale this layout is plotted at: what one millimetre of paper is worth in "
                         "the model. Fit sizes the drawing to its window instead.")
-                   : tr("A plot scale belongs to a layout — the model is the harness, at size. Open a "
-                        "layout to set one."));
+                   : tr("The scale this drawing will be plotted at. The dimensions are drawn to suit, so "
+                        "they come off the paper the size they say — the harness itself is unchanged."));
     }
-    if (spaceScaleLabel_) spaceScaleLabel_->setEnabled(layout);
+    if (spaceScaleLabel_) spaceScaleLabel_->setEnabled(true);
     if (addViewportBtn_) {
+        // Not there at all in model space, rather than there and greyed: a window onto the drawing is cut in
+        // a SHEET, and there is nothing in the model for the button to mean.
+        addViewportBtn_->setVisible(layout);
         addViewportBtn_->setEnabled(layout);
-        addViewportBtn_->setToolTip(
-            layout ? tr("Put a window onto the drawing on this sheet")
-                   : tr("A window onto the drawing is cut in a sheet — open a layout to add one"));
+        addViewportBtn_->setToolTip(tr("Put a window onto the drawing on this sheet"));
     }
     // Fitted when a space is stepped into, not when a drawing is opened into the space already showing:
     // a drawing opens at the view it was saved with, and refitting it would throw that away.
@@ -5494,15 +5526,25 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
                        [this] { addLayoutWindow(); });
         const int picked = canvas_->selectedLayoutViewport();
         const int inside = canvas_->activeLayoutViewport();
+        // The window UNDER THE CURSOR, whether or not it has been picked out first: right-clicking a window
+        // and being offered nothing about it is the sort of thing that makes a person hunt for a menu.
+        const int under = canvas_->layoutViewportAt(canvas_->mapFromGlobal(globalPos));
+        if (under >= 0) {
+            menu.addAction(tr("Delete this window"), this,
+                           [this, under] { canvas_->removeLayoutViewport(under); });
+            if (under != inside)
+                menu.addAction(tr("Step into this window"), this,
+                               [this, under] { canvas_->enterLayoutViewport(under); });
+        }
         if (inside >= 0) {
             menu.addAction(QStringLiteral("Step out onto the paper"), this,
                            [this] { canvas_->leaveLayoutViewport(); });
-        } else if (picked >= 0) {
+        } else if (picked >= 0 && picked != under) {
             menu.addAction(QStringLiteral("Step into this window"), this,
                            [this, picked] { canvas_->enterLayoutViewport(picked); });
         }
-        if (picked >= 0)
-            menu.addAction(QStringLiteral("Take this window off the sheet"), this,
+        if (picked >= 0 && picked != under)
+            menu.addAction(QStringLiteral("Take the picked window off the sheet"), this,
                            [this, picked] { canvas_->removeLayoutViewport(picked); });
         menu.addSeparator();
     }
