@@ -211,6 +211,89 @@ int run_partweb_tests() {
               "link: it is written to the library file and read back - a part's page is part of the part");
     }
 
+    // ---- a site that refuses to be read says so, and is not reported as "no data" ------------------
+    {
+        QString why;
+        check(pageWasRefused(QStringLiteral("<html><body><h1>Access to this page has been denied.</h1>"
+                                            "</body></html>"),
+                             403, &why),
+              "refused: an access-denied page is a refusal, not an empty part");
+        check(why.contains(QStringLiteral("403")),
+              "refused: and the status is in what the user is told, so it can be recognised for what it is");
+        why.clear();
+        check(pageWasRefused(
+                  QStringLiteral("<html><body>Powered and protected by somebody Privacy</body></html>"), 200,
+                  &why),
+              "refused: so is the holding page a bot protector serves with a 200 — which is exactly what the "
+              "distributor sent back, and it read as 'nothing found'");
+        why.clear();
+        const QString real =
+            QStringLiteral("<html><body><table><tr><td>Number of Positions</td><td>10</td></tr>"
+                           "<tr><td>Pitch</td><td>2.54 mm</td></tr></table>%1</body></html>")
+                .arg(QString(500, QLatin1Char('x')));
+        check(!pageWasRefused(real, 200, &why), "refused: a real page is not mistaken for a refusal");
+    }
+
+    // ---- the table on a distributor's page, which is where the data actually is ---------------------
+    {
+        LibraryPart conn;
+        conn.kind = PartKind::Connector;
+        const QString html = QStringLiteral(
+            "<html><head><title>43030-0010 Molex — Crimp housing</title></head><body>"
+            "<table>"
+            "<tr><td>Manufacturer</td><td>Molex</td></tr>"
+            "<tr><td>Number of Positions</td><td>10</td></tr>"
+            "<tr><td>Pitch</td><td>3.00 mm</td></tr>"
+            "<tr><td>Gender</td><td>Receptacle</td></tr>"
+            "<tr><td>Contact Plating</td><td>Tin</td></tr>"
+            "<tr><td>Operating Temperature</td><td>-40 C to +105 C</td></tr>"
+            "<tr><td>Wire Gauge</td><td>22 AWG</td></tr>"
+            "</table></body></html>");
+        const std::vector<WebFieldFind> finds = partFieldsFromPage(html, conn);
+        std::printf("  a distributor's table: %zu finds\n", finds.size());
+        check(found(finds, QStringLiteral("pins")) == QStringLiteral("10"),
+              "table: the way count off a table ROW — which is how a product page writes it, and what the "
+              "sentence patterns alone could not read");
+        check(found(finds, QStringLiteral("pitch")) == QStringLiteral("3.00"), "table: the pitch");
+        check(found(finds, QStringLiteral("gender"))
+                  .compare(QStringLiteral("Receptacle"), Qt::CaseInsensitive) == 0,
+              "table: the gender");
+        check(found(finds, QStringLiteral("plating"))
+                  .compare(QStringLiteral("Tin"), Qt::CaseInsensitive) == 0,
+              "table: the plating");
+        check(found(finds, QStringLiteral("temp")).contains(QStringLiteral("105")),
+              "table: and the temperature range");
+    }
+
+    // ---- the same reading over pasted text, and over a datasheet's text -----------------------------
+    {
+        LibraryPart shrink;
+        shrink.kind = PartKind::Heatshrink;
+        // What a person gets by selecting a page and copying it, or what a PDF gives: lines, not markup.
+        const QString pasted = QStringLiteral(
+            "DR-25 heat-shrinkable tubing\n"
+            "Shrink Ratio: 2:1\n"
+            "Expanded Diameter: 12.7 mm\n"
+            "Recovered Diameter: 6.4 mm\n"
+            "Wall Thickness: 0.64 mm\n"
+            "Operating Temperature: -75 C to +150 C\n"
+            "Material: Elastomer\n");
+        const std::vector<WebFieldFind> finds =
+            partFieldsFromText(pasted, shrink, QStringLiteral("the pasted page"));
+        std::printf("  pasted text: %zu finds\n", finds.size());
+        check(found(finds, QStringLiteral("ratio")) == QStringLiteral("2:1"),
+              "pasted: the ratio, off a plain line — which is what a page that refuses to be fetched still "
+              "gives when a person copies it");
+        check(found(finds, QStringLiteral("entryMax")) == QStringLiteral("12.7") &&
+                  found(finds, QStringLiteral("entryMin")) == QStringLiteral("6.4"),
+              "pasted: as supplied and recovered");
+        check(found(finds, QStringLiteral("wall")) == QStringLiteral("0.64"), "pasted: the wall");
+        bool sourced = !finds.empty();
+        for (const WebFieldFind& f : finds)
+            if (!f.evidence.contains(QStringLiteral("the pasted page"))) sourced = false;
+        check(sourced, "pasted: and every reading says it came from the pasted page");
+    }
+
     if (webFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", webFailures);
     return webFailures;

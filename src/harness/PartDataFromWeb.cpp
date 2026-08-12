@@ -80,7 +80,195 @@ std::vector<Pattern> patternsFor(PartKind kind) {
     }
 }
 
+// What a catalogue CALLS a thing, and which of our parameters it fills. This is where most of the reading
+// happens on a real page: a distributor's product table is a list of "Attribute | Value" rows, and a
+// datasheet is a list of "Label: value" lines. The patterns above find things written in a sentence; this
+// finds them written in a table, which is how they are usually written.
+struct LabelMap {
+    const char* label;   // as the catalogue writes it, lower case, matched as a whole word
+    const char* key;     // the parameter it fills
+    const char* what;    // what to call it on the list
+    bool numberOnly;     // take the first number out of the value (a size), rather than the words
+};
+
+const std::vector<LabelMap>& labelMap() {
+    static const std::vector<LabelMap> map = {
+        {"number of positions", "pins", "Pins", true},
+        {"number of contacts", "pins", "Pins", true},
+        {"number of ways", "pins", "Pins", true},
+        {"positions", "pins", "Pins", true},
+        {"contacts", "pins", "Pins", true},
+        {"pitch", "pitch", "Pitch", true},
+        {"contact pitch", "pitch", "Pitch", true},
+        {"gender", "gender", "Gender", false},
+        {"connector type", "type", "Type", false},
+        {"shell size", "shellSize", "Shell size", false},
+        {"contact plating", "plating", "Plating", false},
+        {"plating", "plating", "Plating", false},
+        {"contact material", "material", "Material", false},
+        {"material", "material", "Material", false},
+        {"insulation material", "insulation", "Insulation", false},
+        {"insulation", "insulation", "Insulation", false},
+        {"jacket material", "jacket", "Jacket", false},
+        {"jacket", "jacket", "Jacket", false},
+        {"wire gauge", "gauge", "Gauge", true},
+        {"conductor size", "gauge", "Gauge", true},
+        {"awg", "gauge", "Gauge", true},
+        {"stranding", "strands", "Stranding", false},
+        {"number of conductors", "cores", "Cores", true},
+        {"conductors", "cores", "Cores", true},
+        {"outside diameter", "od", "Outside diameter", true},
+        {"outer diameter", "od", "Outside diameter", true},
+        {"cable diameter", "od", "Outside diameter", true},
+        {"voltage rating", "voltage", "Voltage rating", true},
+        {"voltage", "voltage", "Voltage rating", true},
+        {"current rating", "current", "Current rating", true},
+        {"operating temperature", "temp", "Temperature range", false},
+        {"temperature range", "temp", "Temperature range", false},
+        {"shrink ratio", "ratio", "Shrink ratio", false},
+        {"expanded diameter", "entryMax", "Supplied inside diameter", true},
+        {"recovered diameter", "entryMin", "Recovered inside diameter", true},
+        {"wall thickness", "wall", "Recovered wall", true},
+        {"recovered wall", "wall", "Recovered wall", true},
+        {"colour", "colour", "Colour", false},
+        {"color", "colour", "Colour", false},
+        {"standards", "spec", "Specification", false},
+        {"specification", "spec", "Specification", false},
+        {"approvals", "spec", "Specification", false},
+    };
+    return map;
+}
+
+// The first number in a value, with its decimals: "2.54 mm" -> "2.54", "19 way" -> "19".
+QString firstNumber(const QString& value) {
+    const QRegularExpression rx(QStringLiteral("([-+]?[0-9]+(?:\\.[0-9]+)?)"));
+    const QRegularExpressionMatch m = rx.match(value);
+    return m.hasMatch() ? m.captured(1) : QString();
+}
+
+// Every "label ... value" pair the text holds, as a catalogue table or a datasheet line. The separator is a
+// colon, a tab, or two or more spaces - which is what a table flattened into text looks like.
+std::vector<WebFieldFind> harvestLabelled(const QString& text, const LibraryPart& part) {
+    std::vector<WebFieldFind> out;
+    const QStringList lines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]")),
+                                         Qt::SkipEmptyParts);
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString line = lines.at(i).simplified();
+        if (line.size() < 3 || line.size() > 200) continue;
+        for (const LabelMap& m : labelMap()) {
+            const QString label = QString::fromLatin1(m.label);
+            if (!line.startsWith(label, Qt::CaseInsensitive)) continue;
+            QString value = line.mid(label.size()).trimmed();
+            // What separates the two on a flattened table row.
+            while (!value.isEmpty() &&
+                   (value.startsWith(QLatin1Char(':')) || value.startsWith(QLatin1Char('|')) ||
+                    value.startsWith(QLatin1Char('=')) || value.startsWith(QLatin1Char('-')) ||
+                    value.startsWith(QLatin1Char('\t'))))
+                value = value.mid(1).trimmed();
+            // A TABLE row flattens to the label on one line and its value on the next - which is what a
+            // product page's technical table becomes once the tags are out. So when the label's own line has
+            // nothing after it, the value is the next line that has something on it.
+            if (value.isEmpty())
+                for (int j = i + 1; j < lines.size() && j <= i + 2; ++j) {
+                    const QString next = lines.at(j).simplified();
+                    if (next.isEmpty()) continue;
+                    if (next.size() <= 40) value = next;
+                    break;
+                }
+            if (value.isEmpty()) continue;
+            if (m.numberOnly) {
+                value = firstNumber(value);
+            } else {
+                // The value, and not the rest of the sentence it was written in: "Shrink ratio 3:1. As
+                // supplied 12.0 mm" gives 3:1, and "Shell size 15, pitch 2.54 mm" gives 15. A value is a
+                // word or two; anything past the first comma or full stop is the next fact along.
+                const int cut = [&] {
+                    int at = value.size();
+                    for (const QChar ch : {QLatin1Char(','), QLatin1Char(';'), QLatin1Char('.')}) {
+                        const int found = value.indexOf(ch);
+                        // A decimal point is part of the number, not the end of the value.
+                        if (found > 0 && ch == QLatin1Char('.') && found + 1 < value.size() &&
+                            value.at(found + 1).isDigit())
+                            continue;
+                        if (found > 0 && found < at) at = found;
+                    }
+                    return at;
+                }();
+                value = value.left(cut).trimmed();
+            }
+            if (value.isEmpty() || value.size() > 40) continue;
+            // One find per key: the first time a label is met is the one nearest the top of the page, which
+            // is the part's own table rather than a list of related products further down.
+            bool already = false;
+            for (const WebFieldFind& f : out)
+                if (f.key == QString::fromLatin1(m.key)) already = true;
+            if (already) break;
+            WebFieldFind f;
+            f.key = QString::fromLatin1(m.key);
+            f.label = QString::fromLatin1(m.what);
+            f.value = value;
+            f.evidence = line;
+            f.exists = !part.params.value(f.key).isEmpty();
+            out.push_back(f);
+            break;
+        }
+    }
+    return out;
+}
+
 } // namespace
+
+bool pageWasRefused(const QString& html, int httpStatus, QString* why) {
+    const QString text = htmlToText(html);
+    auto say = [&](const QString& what) {
+        if (why) *why = what;
+        return true;
+    };
+    if (httpStatus >= 400)
+        return say(QStringLiteral("The site answered %1 — it refused the request. Distributor sites serve "
+                                  "that to anything that is not a browser.")
+                       .arg(httpStatus));
+    for (const char* mark : {"Access to this page has been denied", "Access Denied",
+                             "unusual traffic", "are you a robot", "captcha", "cf-browser-verification",
+                             "Powered and protected by", "Checking your browser",
+                             "enable JavaScript to continue"})
+        if (text.contains(QString::fromLatin1(mark), Qt::CaseInsensitive) ||
+            html.contains(QString::fromLatin1(mark), Qt::CaseInsensitive))
+            return say(QStringLiteral("The site served a bot check rather than the page (\"%1\"). It will "
+                                      "not be read by a program.")
+                           .arg(QString::fromLatin1(mark)));
+    // A page of almost no text at all is a shim, whatever it says: a product page is thousands of characters.
+    if (text.size() < 400)
+        return say(QStringLiteral("The site sent %1 characters of text — a holding page, not the product "
+                                  "page. It will not be read by a program.")
+                       .arg(text.size()));
+    return false;
+}
+
+std::vector<WebFieldFind> partFieldsFromText(const QString& text, const LibraryPart& part,
+                                             const QString& source) {
+    std::vector<WebFieldFind> finds = harvestLabelled(text, part);
+    // And the patterns, for what is written in a sentence rather than in a table. A key already found in the
+    // table wins: a table row is about this part, a sentence may be about anything on the page.
+    LibraryPart asIf = part;
+    for (const WebFieldFind& f : finds)
+        if (f.key != QStringLiteral("__description")) asIf.params.insert(f.key, f.value);
+    for (const WebFieldFind& f : partFieldsFromPage(QStringLiteral("<body>%1</body>").arg(text), asIf)) {
+        if (f.key == QStringLiteral("__description")) continue;
+        bool already = false;
+        for (const WebFieldFind& had : finds)
+            if (had.key == f.key) already = true;
+        if (!already) {
+            WebFieldFind copy = f;
+            copy.exists = !part.params.value(f.key).isEmpty();
+            finds.push_back(copy);
+        }
+    }
+    if (!source.isEmpty())
+        for (WebFieldFind& f : finds)
+            f.evidence = QStringLiteral("%1: %2").arg(source, f.evidence);
+    return finds;
+}
 
 QString htmlToText(const QString& html) {
     QString out = html;
@@ -144,8 +332,14 @@ QStringList datasheetLinks(const QString& html, const QUrl& base) {
 
 std::vector<WebFieldFind> partFieldsFromPage(const QString& html, const LibraryPart& part) {
     const QString text = htmlToText(html);
-    std::vector<WebFieldFind> finds;
+    // The product table first - that is where a distributor's page keeps the data - then the patterns for
+    // what is written in a sentence.
+    std::vector<WebFieldFind> finds = harvestLabelled(text, part);
     for (const Pattern& p : patternsFor(part.kind)) {
+        bool already = false;
+        for (const WebFieldFind& f : finds)
+            if (f.key == QString::fromLatin1(p.key)) already = true;
+        if (already) continue;   // the table said it; a sentence does not get to overrule the table
         QString evidence;
         QString value = firstMatch(text, QString::fromLatin1(p.rx), evidence);
         if (value.isEmpty()) continue;

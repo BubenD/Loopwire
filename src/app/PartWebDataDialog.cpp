@@ -1,4 +1,10 @@
 #include "app/PartWebDataDialog.h"
+#include <QPlainTextEdit>
+#include <QGuiApplication>
+#include <QFile>
+#include <QClipboard>
+#include "io/PdfText.h"
+#include "harness/Datasheet.h"
 
 #include <QDialogButtonBox>
 #include <QHeaderView>
@@ -46,8 +52,19 @@ PartWebDataDialog::PartWebDataDialog(const LibraryPart& part, const QString& url
     auto* buttons = new QDialogButtonBox(this);
     applyBtn_ = buttons->addButton(QStringLiteral("Fill the ticked fields"), QDialogButtonBox::AcceptRole);
     applyBtn_->setEnabled(false);
+    // The two ways in when a site refuses to be read by a program - which the distributors do, all of them.
+    pasteBtn_ = buttons->addButton(QStringLiteral("Paste the page text..."), QDialogButtonBox::ActionRole);
+    pasteBtn_->setToolTip(QStringLiteral(
+        "Open the page in the browser, select it all, copy — then paste it here. A page a person can read is "
+        "a page this can read; it is only the fetching that gets refused."));
+    sheetBtn_ = buttons->addButton(QStringLiteral("Read the datasheet"), QDialogButtonBox::ActionRole);
+    sheetBtn_->setToolTip(QStringLiteral(
+        "Read the PDF datasheet instead: the document the numbers actually come from. The one attached to "
+        "this part, or one linked on the page."));
     buttons->addButton(QStringLiteral("Cancel"), QDialogButtonBox::RejectRole);
     outer->addWidget(buttons);
+    connect(pasteBtn_, &QPushButton::clicked, this, [this] { pastePageText(); });
+    connect(sheetBtn_, &QPushButton::clicked, this, [this] { readDatasheet(); });
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -79,18 +96,46 @@ void PartWebDataDialog::startFetch() {
     QNetworkReply* reply = net->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            report(QStringLiteral("The page could not be read: %1\n%2")
-                       .arg(url_, reply->errorString()));
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray body = reply->readAll();
+        const QString html = QString::fromUtf8(body);
+        // What actually happened, said plainly. "Nothing could be read" reads as "this part has no data",
+        // when what happened was that the site refused to answer a program at all - and the way round it is
+        // a different way in, not a different part.
+        QString refused;
+        if (reply->error() != QNetworkReply::NoError || pageWasRefused(html, status, &refused)) {
+            const QString what = !refused.isEmpty()
+                                     ? refused
+                                     : QStringLiteral("The site answered: %1").arg(reply->errorString());
+            report(QStringLiteral("%1 could not be read.\n\n%2\n\nThe way in: press Paste the page text, "
+                                  "open the page in your browser (the Open button beside the link), select "
+                                  "it all and copy it — or press Read the datasheet, which is the document "
+                                  "the numbers come from anyway.")
+                       .arg(url_, what));
             return;
         }
-        const QByteArray body = reply->readAll();
         if (body.isEmpty()) {
             report(QStringLiteral("The page came back empty: %1").arg(url_));
             return;
         }
-        showFinds(QString::fromUtf8(body));
+        showFinds(html);
     });
+}
+
+void PartWebDataDialog::showFindsFromText(const QString& text, const QString& source) {
+    finds_ = partFieldsFromText(text, part_, source);
+    if (finds_.empty()) {
+        report(QStringLiteral("Nothing technical could be read out of %1.\n\nWhat this reads is the words a "
+                              "catalogue uses - a gauge, a way count, a pitch, a temperature range, written "
+                              "as a table row or in a sentence. Text that has none of those in it has "
+                              "nothing to give.")
+                   .arg(source));
+        return;
+    }
+    report(QStringLiteral("%1 thing%2 read out of %3.")
+               .arg(finds_.size())
+               .arg(finds_.size() == 1 ? QString() : QStringLiteral("s"), source));
+    fillList();
 }
 
 void PartWebDataDialog::showFinds(const QString& html) {
@@ -112,6 +157,12 @@ void PartWebDataDialog::showFinds(const QString& html) {
                         ? QString()
                         : QStringLiteral("\nA datasheet is linked there too: %1").arg(datasheet_)));
 
+    fillList();
+}
+
+void PartWebDataDialog::fillList() {
+    if (!list_) return;
+    list_->clear();
     for (const WebFieldFind& f : finds_) {
         auto* item = new QTreeWidgetItem(list_);
         item->setText(0, f.label);
@@ -137,6 +188,87 @@ void PartWebDataDialog::showFinds(const QString& html) {
     }
     for (int c = 0; c < 3; ++c) list_->resizeColumnToContents(c);
     if (applyBtn_) applyBtn_->setEnabled(true);
+}
+
+void PartWebDataDialog::pastePageText() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Paste the page"));
+    dlg.resize(620, 420);
+    auto* v = new QVBoxLayout(&dlg);
+    v->addWidget(new QLabel(
+        QStringLiteral("Open the part's page in your browser, select it all (Ctrl+A), copy it (Ctrl+C), and "
+                       "paste it here (Ctrl+V). The table of technical data is what this reads."),
+        &dlg));
+    auto* box = new QPlainTextEdit(&dlg);
+    box->setPlaceholderText(QStringLiteral("paste the page here"));
+    box->setPlainText(QGuiApplication::clipboard() ? QGuiApplication::clipboard()->text() : QString());
+    v->addWidget(box, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    v->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const QString text = box->toPlainText();
+    if (text.trimmed().isEmpty()) {
+        report(QStringLiteral("Nothing was pasted."));
+        return;
+    }
+    showFindsFromText(text, QStringLiteral("the pasted page"));
+}
+
+void PartWebDataDialog::readDatasheet() {
+    // The one attached to the part first: it is already on this machine, it needs no network at all, and it
+    // is the document the numbers come from.
+    QString path;
+    if (part_.hasDatasheet()) path = DatasheetStore::pathOf(part_.datasheet());
+    if (!path.isEmpty() && QFile::exists(path)) {
+        QString how;
+        const QString text = PdfText::extractFromFile(path, &how);
+        if (text.trimmed().isEmpty()) {
+            report(QStringLiteral("The datasheet attached to this part could not be read: %1").arg(how));
+            return;
+        }
+        showFindsFromText(text, QStringLiteral("the attached datasheet"));
+        return;
+    }
+    // Else a PDF: the one found on the page, or the link itself if it points at one.
+    QString pdfUrl = datasheet_;
+    if (pdfUrl.isEmpty() && url_.contains(QStringLiteral(".pdf"), Qt::CaseInsensitive)) pdfUrl = url_;
+    if (pdfUrl.isEmpty()) {
+        report(QStringLiteral("There is no datasheet to read: none attached to this part, and none found on "
+                              "the page. Attach the PDF to the part (Attach… beside Datasheets) and press "
+                              "this again."));
+        return;
+    }
+    report(QStringLiteral("Reading the datasheet: %1 …").arg(pdfUrl));
+    auto* net = new QNetworkAccessManager(this);
+    const QUrl asked(pdfUrl);
+    QNetworkRequest request(asked);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+                      QStringLiteral("Edraw/1.0 (parts library data reader)"));
+    request.setTransferTimeout(30000);
+    QNetworkReply* reply = net->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, pdfUrl] {
+        reply->deleteLater();
+        const QByteArray body = reply->readAll();
+        if (reply->error() != QNetworkReply::NoError || body.isEmpty()) {
+            report(QStringLiteral("The datasheet could not be fetched: %1\n%2\n\nDownload it in your "
+                                  "browser and attach it to the part, then press Read the datasheet again.")
+                       .arg(pdfUrl, reply->errorString()));
+            return;
+        }
+        QString how;
+        const QString text = PdfText::extract(body, &how);
+        if (text.trimmed().isEmpty()) {
+            report(QStringLiteral("That datasheet gave no text: %1\n\nA scanned datasheet is a picture of "
+                                  "text, and reading it would need character recognition.")
+                       .arg(how));
+            return;
+        }
+        showFindsFromText(text, QStringLiteral("the datasheet"));
+    });
 }
 
 std::vector<WebFieldFind> PartWebDataDialog::chosen() const {

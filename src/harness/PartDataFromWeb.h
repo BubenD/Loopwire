@@ -37,9 +37,21 @@ QString pageTitle(const QString& html);
 // Every link on the page that looks like a datasheet (a PDF, or a link that says datasheet), made absolute.
 QStringList datasheetLinks(const QString& html, const QUrl& base);
 
+// Whether what came back is a page at all, or a site refusing to be read by a program: the shim page a bot
+// protector serves, an "access denied", a captcha, a "turn on JavaScript". Distributors serve these to
+// anything that is not a browser, and calling that "nothing found" tells the user their part has no data when
+// what actually happened is that the site said no. `why` gets the sentence to show.
+bool pageWasRefused(const QString& html, int httpStatus, QString* why);
+
 // The technical fields that can be read out of this page for a part of that kind, in the order they are
 // worth showing. `part` is used only to say which of them the part already has filled in.
 std::vector<WebFieldFind> partFieldsFromPage(const QString& html, const LibraryPart& part);
+
+// The same reading, over plain TEXT rather than a page: what a datasheet's text gives, and what the user gets
+// by opening the page in a browser and copying it. A site that will not be read by a program can always be
+// read by a person, and this is where what they paste goes.
+std::vector<WebFieldFind> partFieldsFromText(const QString& text, const LibraryPart& part,
+                                             const QString& source);
 
 // Write the finds that were ticked into the part. Returns how many fields it changed.
 int applyWebFinds(LibraryPart& part, const std::vector<WebFieldFind>& finds);

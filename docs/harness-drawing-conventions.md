@@ -627,6 +627,31 @@ plating — and looks for those things written the way a catalogue writes them. 
 first, because a page's own code is full of words that look like data, and a table-cell boundary is treated as
 a space so that `22</td><td>AWG` reads as two words.
 
+**The distributors refuse to be read by a program, and that had to be said out loud.** Asked for a Mouser
+product page, the program got HTTP 200 and a 2.6 KB holding page ("Powered and protected by…"); asked with a
+browser's user agent, it got **403 Access Denied**. So the failure was reported as "nothing could be read",
+which reads as *this part has no data* when what happened is that the site said no. `pageWasRefused()` now
+tells the two apart — an HTTP status of 400 or more, an access-denied, a captcha, a bot-check shim, or a page
+with almost no text at all — and says which it was, with the status.
+
+And there are two ways in that do work, both offered on the dialog:
+
+- **Paste the page text.** Open the page in the browser (the *Open* button beside the link), select it all,
+  copy, paste. A page a person can read is a page this can read; it is only the *fetching* that gets refused.
+  The box opens with the clipboard's contents already in it.
+- **Read the datasheet.** The PDF is the document the numbers come from, and it is rarely behind a bot check.
+  The one **attached to the part** is used first — that needs no network at all — else one linked on the page,
+  else the link itself if it points at a PDF. The text comes out through the PDF reader that is already in the
+  program (`PdfText`), which says plainly when a datasheet is a scan rather than text.
+
+**Most of the reading is now off tables, not sentences.** A product page keeps its data in "Attribute | Value"
+rows and a datasheet in "Label: value" lines, so there is a label map (`number of positions` → pins, `pitch`,
+`wire gauge`, `shrink ratio`, `expanded diameter`, `operating temperature`, `plating`, …) that harvests those
+directly — including the common case where flattening the table puts the label on one line and its value on
+the next. A value is cut at the first comma or full stop, so "Shell size 15, pitch 2.54 mm" gives 15 rather
+than the rest of the sentence. What a table says beats what a sentence says: the table row is about this part,
+a sentence may be about anything on the page.
+
 What it is **not** is a manufacturer integration or a promise. A page that keeps its table in a picture or
 behind a script yields nothing — and is reported as nothing found rather than as success. A page that says
 "for use with 22 AWG wire" about a part that is not 22 AWG yields the wrong thing. So **nothing is written

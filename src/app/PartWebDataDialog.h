@@ -34,7 +34,14 @@ public:
 private:
     void startFetch();
     void showFinds(const QString& html);
+    void showFindsFromText(const QString& text, const QString& source);
     void report(const QString& what);
+    void fillList();   // the finds, on the list, ticked as they should start
+    // The two ways in when the site will not be read by a program. Pasting is the one that always works: a
+    // page a person can see is a page a person can copy. The datasheet is the better one when there is one -
+    // it is the document the numbers come from, and it is not usually behind a bot check.
+    void pastePageText();
+    void readDatasheet();
 
     LibraryPart part_;
     QString url_;
@@ -44,6 +51,8 @@ private:
     QLabel* status_ = nullptr;
     QTreeWidget* list_ = nullptr;
     QPushButton* applyBtn_ = nullptr;
+    QPushButton* pasteBtn_ = nullptr;
+    QPushButton* sheetBtn_ = nullptr;
 };
 
 } // namespace Edraw_Desktop
