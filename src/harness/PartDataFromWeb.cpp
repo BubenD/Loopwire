@@ -63,6 +63,11 @@ std::vector<Pattern> patternsFor(PartKind kind) {
     case PartKind::Crimp:
         return {{"gaugeMin", "Smallest gauge", R"((\d{1,2})\s*(?:-|to|–)\s*\d{1,2}\s*AWG)", ""},
                 {"gaugeMax", "Largest gauge", R"(\d{1,2}\s*(?:-|to|–)\s*(\d{1,2})\s*AWG)", ""},
+                // What the contact will carry. A datasheet writes it as "current rating 7.5 A" or as amps
+                // against the contact size; the number is taken, because the field is in amps and says so.
+                {"current", "Current rating",
+                 R"((?:current rating|rated current|current)[^0-9]{0,16}([0-9]+\.?[0-9]*)\s*(?:A\b|amp))",
+                 ""},
                 {"plating", "Plating", R"(\b(gold|tin|silver|nickel)[- ]?plat)", ""},
                 {"spec", "Specification", R"(\b((?:MIL-|SAE-|AMS-)[A-Z0-9\-/]{3,20})\b)", ""}};
     case PartKind::Cable:

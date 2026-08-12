@@ -294,6 +294,24 @@ int run_partweb_tests() {
         check(sourced, "pasted: and every reading says it came from the pasted page");
     }
 
+    // ---- a contact's current rating ---------------------------------------------------------------
+    {
+        LibraryPart contact;
+        contact.kind = PartKind::ContactPin;
+        // It is a field of a contact pin now, so it has to be readable off a datasheet like the rest of them.
+        const std::vector<WebFieldFind> finds = partFieldsFromText(
+            QStringLiteral("Socket contact, machined\n"
+                           "Wire Range: 20 - 24 AWG\n"
+                           "Current Rating: 7.5 A\n"
+                           "Contact Plating: gold plated\n"
+                           "Specification: MIL-DTL-39029\n"),
+            contact, QStringLiteral("the datasheet"));
+        check(found(finds, QStringLiteral("current")) == QStringLiteral("7.5"),
+              "contact: the current rating is read off the datasheet, in amps");
+        check(has(finds, QStringLiteral("gaugeMin")) || has(finds, QStringLiteral("gauge")),
+              "contact: alongside the gauge range it goes with");
+    }
+
     if (webFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", webFailures);
     return webFailures;

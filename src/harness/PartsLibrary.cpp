@@ -299,8 +299,13 @@ std::vector<PartField> partFields(PartKind kind) {
                     text("temp", "Temperature range", "C"),
                     text("spec", "Specification")};
         case PartKind::ContactPin:
+            // The current rating belongs on a contact as much as its gauge does: a contact is what carries
+            // the current, and it is the contact - not the wire - that a circuit is derated against when the
+            // connector is loaded. Written as text rather than a number so that "7.5" and "5 (continuous)"
+            // are both sayable, which is how a datasheet says them.
             return {choice("gaugeMode", "Gauge in", {QStringLiteral("AWG"), QStringLiteral("mm2")}),
                     range("gauge", "Gauge range"),
+                    text("current", "Current rating", "A"),
                     choice("type", "Type",
                            {QStringLiteral("Pin"), QStringLiteral("Socket"),
                             QStringLiteral("Crimp"), QStringLiteral("Solder cup")}),
@@ -876,7 +881,8 @@ QString describePart(const LibraryPart& part) {
             break;
         case PartKind::ContactPin:
             lead = QStringLiteral("Contact");
-            order = {{"type", ""}, {"gauge", "AWG", true}, {"material", ""}, {"plating", ""}};
+            order = {{"type", ""}, {"gauge", "AWG", true}, {"current", "A"}, {"material", ""},
+                     {"plating", ""}};
             break;
         case PartKind::Ferrule:
             lead = QStringLiteral("Ferrule");
