@@ -1,5 +1,7 @@
 #include "app/Editor.h"
 
+#include "model/EntityRefs.h"
+
 #include "render/EntityRenderer.h"
 
 #include "model/Block.h"
@@ -8137,9 +8139,11 @@ void Editor::handleModifyPress(const Vec2& p) {
         // Built first, added after: `sel` points into the vector being appended to (see commitMirror).
         std::vector<Entity> clones;
         clones.reserve(sel.size());
+        QHash<QString, QString> offsetOldToNew;
         for (Entity* e : sel) {
             Entity clone = *e;
             clone.id = uid();
+            offsetOldToNew.insert(e->id, clone.id);
             if (e->type == EntityType::Circle) {
                 const double d = distance(e->center, side) - e->radius;
                 clone.radius = std::max(1e-6, e->radius + d);
@@ -8152,6 +8156,7 @@ void Editor::handleModifyPress(const Vec2& p) {
             }
             clones.push_back(std::move(clone));
         }
+        remapEntityReferences(clones, offsetOldToNew);   // the offset copies name each other
         for (Entity& c : clones) doc_->entities().push_back(std::move(c));
         doc_->setDirty(true);
         break;
@@ -10042,13 +10047,24 @@ void Editor::commitArray() {
             if (places[0].delta.lengthSq() > 1e-24) translateEntity(*e, places[0].delta);
         }
     std::vector<QString> ids = arraySrcIds_;
-    for (size_t i = 1; i < places.size(); ++i)
+    for (size_t i = 1; i < places.size(); ++i) {
+        // Each item of the array is its own copy set: the shields, labels and twists in item three name
+        // item three's wires, not the originals'.
+        std::vector<Entity> item;
+        item.reserve(arraySrc_.size());
+        QHash<QString, QString> oldToNew;
         for (const Entity& src : arraySrc_) {
             Entity clone = arrayItem(src, places[i], pivot);
             clone.id = uid();
+            oldToNew.insert(src.id, clone.id);
+            item.push_back(std::move(clone));
+        }
+        remapEntityReferences(item, oldToNew);
+        for (Entity& clone : item) {
             ids.push_back(clone.id);
             doc_->entities().push_back(std::move(clone));
         }
+    }
     const int items = static_cast<int>(places.size());
     const QString kindName = s.kind == ArrayKind::Rect    ? QStringLiteral("Rectangular")
                              : s.kind == ArrayKind::Polar ? QStringLiteral("Polar")
@@ -11980,10 +11996,22 @@ void Editor::commitRightDrag(bool copy) {
     if (!rightDrag_ || !doc_) { cancelRightDrag(); return; }
     pushUndo();
     if (copy) {
-        std::vector<QString> newSel;
+        // The copies are made, given their ids, and then made to point at EACH OTHER rather than at the
+        // originals: a shield is drawn across the wires it names, and a copied shield still naming the
+        // originals' wires draws a line straight across the sheet from the copy to them. See
+        // remapEntityReferences.
+        std::vector<Entity> copies;
+        copies.reserve(rightDragGhost_.size());
+        QHash<QString, QString> oldToNew;
         for (const Entity& g : rightDragGhost_) {
             Entity e = rightDragResult(g);
             e.id = uid();
+            oldToNew.insert(g.id, e.id);
+            copies.push_back(std::move(e));
+        }
+        remapEntityReferences(copies, oldToNew);
+        std::vector<QString> newSel;
+        for (Entity& e : copies) {
             newSel.push_back(e.id);
             doc_->entities().push_back(std::move(e));
         }
@@ -12029,13 +12057,16 @@ void Editor::commitMirror(bool copy) {
         std::vector<Entity> copies;
         copies.reserve(sel.size());
         std::vector<QString> newSel;
+        QHash<QString, QString> oldToNew;
         for (Entity* e : sel) {
             Entity c = *e;
             c.id = uid();
             mirrorEntity(c, mirrorA_, mirrorB_);
+            oldToNew.insert(e->id, c.id);
             newSel.push_back(c.id);
             copies.push_back(std::move(c));
         }
+        remapEntityReferences(copies, oldToNew);   // the copies name each other, not the originals
         for (Entity& c : copies) doc_->entities().push_back(std::move(c));
         selected_ = newSel;
         emit selectionChanged();
@@ -12225,9 +12256,41 @@ void Editor::appendEntities(const std::vector<Entity>& ents) {
     QSet<QString> ids;
     for (const Entity& e : doc_->entities()) ids.insert(e.id);
     selected_.clear();
+    // Whatever is being appended is a set in its own right - a paste, a block, a part's drawing - and the
+    // references inside it are between ITS members. Anything given a fresh id here (because it was empty or
+    // because that id is already on the sheet) is re-mapped so the set stays self-contained.
+    std::vector<Entity> incoming;
+    incoming.reserve(ents.size());
+    QHash<QString, QString> oldToNew;
     for (Entity e : ents) {
+        const QString was = e.id;
         if (e.id.isEmpty() || ids.contains(e.id)) e.id = uid();
+        if (!was.isEmpty() && was != e.id) oldToNew.insert(was, e.id);
         ids.insert(e.id);
+        incoming.push_back(std::move(e));
+    }
+    if (!oldToNew.isEmpty()) {
+        // Only the ones that were renamed: a reference to something in the set that KEPT its id still
+        // resolves, and one to something outside the set is left alone here - appending is not copying.
+        for (Entity& e : incoming) {
+            for (const QString& key : entityRefKeys()) {
+                const QString was = e.meta.value(key).toString();
+                const auto found = oldToNew.constFind(was);
+                if (!was.isEmpty() && found != oldToNew.constEnd()) e.meta.insert(key, *found);
+            }
+            for (const QString& key : entityRefListKeys()) {
+                if (!e.meta.contains(key)) continue;
+                QJsonArray now;
+                for (const QJsonValue& v : e.meta.value(key).toArray()) {
+                    const QString id = v.toString();
+                    const auto found = oldToNew.constFind(id);
+                    now.append(found != oldToNew.constEnd() ? *found : id);
+                }
+                e.meta.insert(key, now);
+            }
+        }
+    }
+    for (Entity& e : incoming) {
         selected_.push_back(e.id);
         doc_->entities().push_back(std::move(e));
     }

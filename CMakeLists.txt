@@ -123,6 +123,8 @@ add_library(edraw_core STATIC
     src/app/PageSetupManagerDialog.cpp
     src/model/PageSetup.h
     src/model/PageSetup.cpp
+    src/model/EntityRefs.h
+    src/model/EntityRefs.cpp
     src/harness/PartDataFromWeb.h
     src/harness/PartDataFromWeb.cpp
     src/app/PartWebDataDialog.h

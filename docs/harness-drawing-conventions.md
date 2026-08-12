@@ -687,3 +687,23 @@ than "None", and the two window buttons — **Pick window…** and **Window boun
 window is what is being plotted, because offering them otherwise is offering something that would have no
 effect. The landscape/portrait radios are styled with a filled dot: on a dark theme the stock indicator was a
 dark ring on a dark ground, and which way round the page goes is the one thing that pair exists to say.
+
+## Copies point at each other, not at the originals
+
+Entities name one another by id, in meta: a **shield** is drawn ACROSS the wires it names, a **twist band**
+clips the wires it names, a **wire label** sits on the wire it names, a **break mark** takes its place from the
+run it is attached to, a **balloon** belongs to the chain it names. Copy a harness and every copy still named
+the originals — so the copied shield's ellipse spanned wires on the other side of the drawing, and what was
+drawn was a line straight across the sheet from the copy to the original. That is what "something strange with
+the polylines after a move or a copy" was.
+
+Every copy set is now re-mapped (`remapEntityReferences`): a reference to something that was copied too becomes
+a reference to its copy, and a reference to something left behind is **dropped**. Dropped rather than kept,
+because a shield that catches nothing draws nothing — which is honest and obvious — while a shield reaching
+across the sheet to somebody else's wires is neither. The keys that hold references are listed in one place
+(`entityRefKeys`, `entityRefListKeys`) so that every copy path uses the same list: right-drag copy, mirror
+copy, array, offset and append/paste.
+
+A **block instance key** is re-minted at the same time, once per copy set rather than once per entity: two
+instances sharing a key are one instance to anything that counts or rebuilds them, and the lines of one placed
+block are one instance between them.
