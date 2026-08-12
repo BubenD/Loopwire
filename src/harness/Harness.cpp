@@ -912,6 +912,10 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
     ConnectorSpec s;
     s.designator = meta.value("designator").toString();
     s.partNumber = meta.value("partNumber").toString();
+    // Whether each of those two is DRAWN. A connector written before this existed is drawn as it always
+    // was - both shown - which is what the defaults here say.
+    s.showDesignator = meta.value("showDesignator").toBool(true);
+    s.showPartNumber = meta.value("showPartNumber").toBool(true);
     s.pinCount = std::clamp(meta.value("pinCount").toInt(4), 1, 128);
     s.pitch = meta.value("pitch").toDouble(15.0);
     s.pinLength = meta.value("pinLength").toDouble(40.0);
@@ -953,6 +957,8 @@ ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta) {
 void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     meta["designator"] = spec.designator;
     meta["partNumber"] = spec.partNumber;
+    meta["showDesignator"] = spec.showDesignator;
+    meta["showPartNumber"] = spec.showPartNumber;
     meta["pinCount"] = spec.pinCount;
     meta["pitch"] = spec.pitch;
     meta["pinLength"] = spec.pinLength;

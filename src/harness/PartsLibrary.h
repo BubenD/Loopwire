@@ -145,6 +145,15 @@ struct LibraryPart {
     QJsonArray schematic;
     QJsonArray mechanical;
 
+    // The contacts this connector takes: library part ids, in the order they were tied on. A connector is
+    // ordered with its contacts and cannot be built without them, and there is often more than one to
+    // choose from - a pin and a socket, two gauges, a sealed one and a plain one. So they are tied to the
+    // part here, and the one to fit is chosen when the connector is placed.
+    QStringList contactIds() const;
+    void setContactIds(const QStringList& ids);
+    // How many contacts one of these connectors needs: its way count, or one if it does not say.
+    int wayCount() const;
+
     QString value(const QString& key) const { return params.value(key); }
     bool hasSchematic() const { return !schematic.isEmpty(); }
     bool hasMechanical() const { return !mechanical.isEmpty(); }
@@ -267,6 +276,13 @@ int ensureStandardHeatshrink(PartsLibrary& lib);
 // anyone drawing it first. Empty for kinds with no symbol, because they are not in the circuit: a
 // boot does not appear on a schematic.
 QJsonArray builtinSchematicSymbol(PartKind kind);
+
+// A connector's schematic symbol, built from what the part already says: the way count above all, and the
+// part number to letter it with. It comes out as a real CONNECTOR object - the body, the pin stubs, the pin
+// numbers - and not as loose lines, so what is placed can be edited with the connector tools, wired up, and
+// counted on the bill of materials like any other connector. Empty for a part that is not a connector or
+// says nothing about its ways.
+QJsonArray connectorSymbolFromData(const LibraryPart& part);
 // The symbol a part actually shows: the one captured for it, or failing that the built-in one for
 // its kind. What the library previews and what Insert puts on the sheet.
 QJsonArray partSchematicDrawing(const LibraryPart& part);

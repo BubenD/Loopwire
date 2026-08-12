@@ -55,7 +55,15 @@ public:
     void finishCaptureFromSheet();
     void cancelCaptureFromSheet();
     bool capturing() const { return !capturingPart_.isEmpty(); }
-    void insertIntoDrawing(bool mechanical);    // this drawing goes onto the sheet
+    void insertIntoDrawing(bool mechanical);
+    // The contacts tied to the connector showing: which ones, and the row that edits them.
+    void refreshContactRow();
+    // Build the connector's schematic symbol from its own data (the way count above all).
+    void generateConnectorSymbol();
+    void tieContact();
+    void untieContact();
+    // Place it with a contact fitted (empty for none): what the fall menu on Insert chooses.
+    void insertWithContact(bool mechanical, const QString& contactId);    // this drawing goes onto the sheet
     // Onto the sheet AND selected, to be worked on: lines added or moved, and the one the harness
     // attaches to marked as such (Harness ▸ connection line, or the `connline` command). Pressing
     // Capture selection afterwards puts the edited drawing back on this part.
@@ -133,6 +141,10 @@ private:
     QWidget* paramHost_ = nullptr;
     QVBoxLayout* paramLay_ = nullptr;
     QLabel* summary_ = nullptr;
+    // The connector's contacts: the list, and the buttons that tie one on and take one off.
+    QWidget* contactGroup_ = nullptr;
+    QListWidget* contactList_ = nullptr;
+    QPushButton* genSymbolBtn_ = nullptr;
     DrawingPreview* schemPreview_ = nullptr;
     DrawingPreview* mechPreview_ = nullptr;
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor

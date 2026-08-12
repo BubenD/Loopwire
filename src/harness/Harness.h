@@ -219,6 +219,12 @@ struct ConnectorSpec {
     double pinTextDX = 0.0, pinTextDY = 0.0;
     double desTextDX = 0.0, desTextDY = 0.0;
     double pnTextDX = 0.0, pnTextDY = 0.0;
+    // Whether each marking is DRAWN. The designator and the part number are wanted on the schematic and
+    // usually not on the mechanical view of the same connector - and a sheet crowded at one end is tidied
+    // by turning one off rather than by dragging it somewhere it does not belong. The text itself is kept
+    // either way: this hides it, it does not delete it.
+    bool showDesignator = true;
+    bool showPartNumber = true;
 };
 
 ConnectorSpec defaultConnectorSpec(int pinCount = 4);

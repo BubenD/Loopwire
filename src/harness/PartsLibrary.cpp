@@ -1,5 +1,7 @@
 #include "harness/PartsLibrary.h"
 
+#include "harness/Harness.h"
+
 #include "model/Entity.h"
 
 #include "io/AppPaths.h"
@@ -558,6 +560,33 @@ void appendCoil(std::vector<Entity>& out, int humps, double r, double leadTo) {
 
 } // namespace
 
+QJsonArray connectorSymbolFromData(const LibraryPart& part) {
+    if (part.kind != PartKind::Connector) return {};
+    const int ways = part.wayCount();
+    if (ways <= 0) return {};
+    ConnectorSpec spec = defaultConnectorSpec(ways);
+    // The part number goes on it; the designator does not - that belongs to the place it is used, and is
+    // given when it is placed on a sheet.
+    spec.partNumber = part.mfrPn.isEmpty() ? part.internalPn : part.mfrPn;
+    spec.designator.clear();
+    // A pitch in the part's data is a real dimension: a schematic drawn at the connector's own pitch reads
+    // against the datasheet. Anything under a millimetre is not a pitch, it is an empty field.
+    const double pitch = part.value(QStringLiteral("pitch")).toDouble();
+    if (pitch >= 1.0) spec.pitch = pitch;
+    // The pins are numbered 1..n unless the data says letters. Nothing else about a connector's schematic
+    // symbol can be had from its data, and nothing else is invented here.
+    if (part.value(QStringLiteral("annotation")).startsWith(QStringLiteral("letter"),
+                                                           Qt::CaseInsensitive))
+        spec.annotation = QStringLiteral("letters");
+    Entity e;
+    e.type = EntityType::Connector;
+    e.layer = QStringLiteral("0");
+    e.a = Vec2{0.0, 0.0};
+    writeConnectorSpec(e.meta, spec);
+    e.meta.insert(QStringLiteral("libPart"), part.id);
+    return partDrawingFromEntities({e});
+}
+
 QJsonArray builtinSchematicSymbol(PartKind kind) {
     std::vector<Entity> ents;
     switch (kind) {
@@ -593,6 +622,38 @@ QJsonArray builtinSchematicSymbol(PartKind kind) {
 
 QJsonArray partSchematicDrawing(const LibraryPart& part) {
     return part.hasSchematic() ? part.schematic : builtinSchematicSymbol(part.kind);
+}
+
+QStringList LibraryPart::contactIds() const {
+    // Kept as one parameter, semicolon separated: a parameter map is what a part is written with, and a
+    // list of ids in it travels through the file, the copy and the merge without any of them knowing.
+    const QString raw = params.value(QStringLiteral("contacts"));
+    QStringList out;
+    for (const QString& piece : raw.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const QString id = piece.trimmed();
+        if (!id.isEmpty() && !out.contains(id)) out << id;
+    }
+    return out;
+}
+
+void LibraryPart::setContactIds(const QStringList& ids) {
+    QStringList clean;
+    for (const QString& id : ids) {
+        const QString trimmed = id.trimmed();
+        if (!trimmed.isEmpty() && !clean.contains(trimmed)) clean << trimmed;
+    }
+    if (clean.isEmpty()) params.remove(QStringLiteral("contacts"));
+    else params.insert(QStringLiteral("contacts"), clean.join(QLatin1Char(';')));
+}
+
+int LibraryPart::wayCount() const {
+    // "pins" on a connector, "ways" on the things that are described that way. One if neither is filled
+    // in: a connector with no way count still needs a contact, and one is the honest guess.
+    for (const QString& key : {QStringLiteral("pins"), QStringLiteral("ways")}) {
+        const int n = params.value(key).toInt();
+        if (n > 0) return n;
+    }
+    return 1;
 }
 
 QString LibraryPart::title() const {

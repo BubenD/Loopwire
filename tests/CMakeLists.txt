@@ -15,6 +15,7 @@ add_executable(edraw_tests
     test_cable.cpp
     test_mechmodels.cpp
     test_output.cpp
+    test_connectorparts.cpp
     test_heatshrink.cpp
     test_pagesetup.cpp
     test_mechmodelcanvas.cpp

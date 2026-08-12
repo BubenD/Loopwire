@@ -292,6 +292,10 @@ struct MechBomLine {
     QStringList where;               // "P1", "BR1", "the run to P2" - so a line can be found
 };
 
+// The contact chosen when a connector was placed, stamped on its block so the bill of materials can put it
+// on the line below the connector. Empty means it was placed on its own.
+inline const char* kContactPartKey = "contactPart";
+
 // The harness as a list of things to buy, ordered by what they are: connectors and contacts first,
 // then backshells and boots, then cable and wire, then heatshrink, braid and sleeving, then labels,
 // then adhesive - the order the released sample drawings use.

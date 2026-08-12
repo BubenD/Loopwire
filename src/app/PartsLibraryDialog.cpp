@@ -1,4 +1,5 @@
 #include "app/PartsLibraryDialog.h"
+#include "harness/MechanicalHarness.h"
 
 #include "app/DrawingPreview.h"
 #include "app/UiBits.h"
@@ -789,6 +790,32 @@ void PartsLibraryDialog::buildUi() {
         auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
         ins->setToolTip(QStringLiteral("Put this drawing on the sheet — then click where it goes"));
         connect(ins, &QPushButton::clicked, this, [this, mech] { insertIntoDrawing(mech); });
+        // A connector goes down WITH a contact, or on its own. The contacts tied to the part are on the
+        // fall menu, the first of them is what the button itself does, and "no contact" is there for the
+        // connector that is being drawn before anyone has decided. What is chosen is stamped on the block,
+        // and the bill of materials puts it on the line below the connector.
+        {
+            auto* menu = new QMenu(ins);
+            connect(menu, &QMenu::aboutToShow, this, [this, menu, mech] {
+                menu->clear();
+                const LibraryPart* p = current();
+                if (!p) return;
+                const QStringList tied = p->contactIds();
+                for (const QString& id : tied) {
+                    const LibraryPart* contact = catalog_.byId(id);
+                    const QString label = contact ? contact->title() : id;
+                    menu->addAction(QStringLiteral("With %1").arg(label), this,
+                                    [this, mech, id] { insertWithContact(mech, id); });
+                }
+                if (!tied.isEmpty()) menu->addSeparator();
+                menu->addAction(QStringLiteral("With no contact"), this,
+                                [this, mech] { insertWithContact(mech, QString()); });
+                if (tied.isEmpty())
+                    menu->addAction(QStringLiteral("(no contacts tied to this part yet)"))
+                        ->setEnabled(false);
+            });
+            ins->setMenu(menu);
+        }
         bl->addWidget(ins);
         auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
         edt->setToolTip(QStringLiteral(
@@ -797,11 +824,52 @@ void PartsLibraryDialog::buildUi() {
             "puts it back on the part."));
         connect(edt, &QPushButton::clicked, this, [this, mech] { editDrawing(mech); });
         bl->addWidget(edt);
+        if (!mech) {
+            // Only on the schematic side, and only for a connector: this is the one drawing that can be
+            // had from the data rather than drawn - a body, a stub per way, the numbers - and typing it out
+            // by hand for a 61-way connector is work nobody should do twice.
+            auto* gen = new QPushButton(QStringLiteral("From data"), btns);
+            gen->setToolTip(QStringLiteral(
+                "Build the schematic symbol from the part's own data: a connector of its way count, at its "
+                "pitch, numbered — as a real connector object, so it can be wired and edited after it is "
+                "placed."));
+            connect(gen, &QPushButton::clicked, this, [this] { generateConnectorSymbol(); });
+            genSymbolBtn_ = gen;
+            bl->addWidget(gen);
+        }
         auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
         connect(clr, &QPushButton::clicked, this, [this, mech] { clearDrawing(mech); });
         bl->addWidget(clr);
         dg->addWidget(btns, 1, i);
     }
+    // ---- The contacts a connector takes ----
+    //
+    // A connector is ordered with its contacts and cannot be built without them, and there is usually more
+    // than one to choose from: a pin and a socket, two gauges, sealed and plain. They are tied on here, and
+    // which one is fitted is chosen when the connector is placed.
+    {
+        auto* group = new QGroupBox(QStringLiteral("Contacts this connector takes"), right);
+        contactGroup_ = group;
+        auto* cl = new QHBoxLayout(group);
+        contactList_ = new QListWidget(group);
+        contactList_->setMaximumHeight(92);
+        contactList_->setToolTip(QStringLiteral(
+            "The contacts ordered with this connector. The first is the one offered by default when it is "
+            "placed."));
+        cl->addWidget(contactList_, 1);
+        auto* side = new QVBoxLayout();
+        auto* tie = new QPushButton(QStringLiteral("Tie a contact…"), group);
+        tie->setToolTip(QStringLiteral("Pick a contact from the library to be ordered with this connector"));
+        connect(tie, &QPushButton::clicked, this, [this] { tieContact(); });
+        auto* untie = new QPushButton(QStringLiteral("Untie"), group);
+        connect(untie, &QPushButton::clicked, this, [this] { untieContact(); });
+        side->addWidget(tie);
+        side->addWidget(untie);
+        side->addStretch(1);
+        cl->addLayout(side);
+        rv->addWidget(group);
+    }
+
     rv->addWidget(draw);
     split->addWidget(right);
     split->setStretchFactor(0, 1);
@@ -970,6 +1038,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
 }
 
 void PartsLibraryDialog::rebuildParamForm() {
+    refreshContactRow();   // a different part, different contacts - or none, if it is not a connector
     if (!paramLay_) return;
     paramWidgets_.clear();
     // Clear the form: the parameters belong to the KIND, so they are rebuilt whenever it changes.
@@ -1644,6 +1713,14 @@ void PartsLibraryDialog::captureFromSelection(bool mechanical) {
 }
 
 void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
+    // The button itself: with the first contact tied to the part, since a connector placed without its
+    // contacts is a connector nobody can build. Empty when none is tied, which is the same as before.
+    const LibraryPart* p = current();
+    const QStringList tied = p ? p->contactIds() : QStringList();
+    insertWithContact(mechanical, tied.isEmpty() ? QString() : tied.front());
+}
+
+void PartsLibraryDialog::insertWithContact(bool mechanical, const QString& contactId) {
     LibraryPart* p = current();
     if (!p || !editor_) return;
     const QJsonArray drawing = mechanical ? p->mechanical : partSchematicDrawing(*p);
@@ -1656,12 +1733,120 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     // it is wanted - and put down as one it stays one thing: picked in a click, moved in a piece, and
     // rebuilt everywhere on the sheet when the part's drawing is changed. Loose lines were none of that
     // the moment they landed.
-    editor_->placeEntities(partBlockInstance(*p, mechanical, Vec2{0.0, 0.0}));
+    std::vector<Entity> block = partBlockInstance(*p, mechanical, Vec2{0.0, 0.0});
+    // The contact fitted, stamped on every entity of the block: whichever of them the bill of materials
+    // reads, it finds the same answer, and a block copied on the sheet carries its contact with it.
+    if (!contactId.isEmpty())
+        for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    editor_->placeEntities(std::move(block));
+    const LibraryPart* contact = contactId.isEmpty() ? nullptr : catalog_.byId(contactId);
     if (summary_)
-        summary_->setText(QStringLiteral("Click the sheet to place %1").arg(p->title()));
+        summary_->setText(contact ? QStringLiteral("Click the sheet to place %1, with %2 — %3 of them on "
+                                                   "the bill of materials")
+                                        .arg(p->title(), contact->title())
+                                        .arg(p->wayCount())
+                                  : QStringLiteral("Click the sheet to place %1").arg(p->title()));
     // The click that places it happens on the canvas, so the library gets out of the way.
     hide();
     saveLibrary();
+}
+
+void PartsLibraryDialog::generateConnectorSymbol() {
+    LibraryPart* p = current();
+    if (!p) return;
+    if (p->kind != PartKind::Connector) {
+        if (summary_)
+            summary_->setText(QStringLiteral("Only a connector's symbol can be built from data"));
+        return;
+    }
+    const QJsonArray made = connectorSymbolFromData(*p);
+    if (made.isEmpty()) {
+        QMessageBox::information(
+            this, QStringLiteral("From data"),
+            QStringLiteral("Fill in the number of pins first — that is what the symbol is built from."));
+        return;
+    }
+    if (p->hasSchematic() &&
+        QMessageBox::question(this, QStringLiteral("From data"),
+                              QStringLiteral("Replace the schematic symbol this part already has?")) !=
+            QMessageBox::Yes)
+        return;
+    p->schematic = made;
+    if (schemPreview_) schemPreview_->setDrawing(p->schematic);
+    touched();
+    reloadTree();
+    if (summary_)
+        summary_->setText(QStringLiteral("Schematic symbol built: %1 way%2, numbered")
+                              .arg(p->wayCount())
+                              .arg(p->wayCount() == 1 ? QString() : QStringLiteral("s")));
+}
+
+void PartsLibraryDialog::refreshContactRow() {
+    if (genSymbolBtn_) {
+        const LibraryPart* part = current();
+        genSymbolBtn_->setEnabled(part && part->kind == PartKind::Connector);
+    }
+    if (!contactGroup_ || !contactList_) return;
+    const LibraryPart* p = current();
+    // Only a connector takes contacts. Anything else is not asked about them at all, rather than being
+    // shown an empty box it can never fill.
+    const bool isConnector = p && p->kind == PartKind::Connector;
+    contactGroup_->setVisible(isConnector);
+    contactList_->clear();
+    if (!isConnector) return;
+    for (const QString& id : p->contactIds()) {
+        const LibraryPart* contact = catalog_.byId(id);
+        auto* item = new QListWidgetItem(
+            contact ? contact->title()
+                    : QStringLiteral("%1 — not in any library that is open").arg(id),
+            contactList_);
+        item->setData(Qt::UserRole, id);
+        if (!contact) item->setForeground(QColor("#d9534f"));
+    }
+    if (contactList_->count() > 0) contactList_->setCurrentRow(0);
+}
+
+void PartsLibraryDialog::tieContact() {
+    LibraryPart* p = current();
+    if (!p) return;
+    // Every contact in every library that is open, by its title. A connector's contacts are usually a
+    // family of their own, so there is no point hiding the ones that are not obviously related.
+    QStringList labels;
+    QStringList ids;
+    for (const LibraryPart& part : catalog_.merged().parts) {
+        if (part.kind != PartKind::ContactPin && part.kind != PartKind::Crimp) continue;
+        labels << part.title();
+        ids << part.id;
+    }
+    if (labels.isEmpty()) {
+        QMessageBox::information(
+            this, QStringLiteral("Contacts"),
+            QStringLiteral("There are no contacts in the library yet. Add one as a Contact pin, then tie "
+                           "it to this connector."));
+        return;
+    }
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(this, QStringLiteral("Tie a contact"),
+                                                 QStringLiteral("Ordered with this connector:"), labels,
+                                                 0, false, &ok);
+    if (!ok || chosen.isEmpty()) return;
+    const int at = labels.indexOf(chosen);
+    if (at < 0) return;
+    QStringList tied = p->contactIds();
+    tied << ids.at(at);
+    p->setContactIds(tied);
+    touched();
+    refreshContactRow();
+}
+
+void PartsLibraryDialog::untieContact() {
+    LibraryPart* p = current();
+    if (!p || !contactList_ || !contactList_->currentItem()) return;
+    QStringList tied = p->contactIds();
+    tied.removeAll(contactList_->currentItem()->data(Qt::UserRole).toString());
+    p->setContactIds(tied);
+    touched();
+    refreshContactRow();
 }
 
 void PartsLibraryDialog::editDrawing(bool mechanical) {

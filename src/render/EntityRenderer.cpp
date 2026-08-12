@@ -1835,12 +1835,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                               color, Qt::AlignHCenter | Qt::AlignVCenter);
             }
         }
-        {
+        // Each marking is drawn only if it is meant to be seen. The same connector wants its designator on
+        // a schematic and often not on the mechanical view beside it; the text is kept either way.
+        if (spec.showDesignator) {
             QFont f = baseFont; f.setFamily(spec.desFont); p.setFont(f);
             drawWorldText(p, vt.toScreen(g.designatorPos), spec.designator, spec.desSize, vt.scale(),
                           color, Qt::AlignHCenter | Qt::AlignVCenter);
         }
-        {
+        if (spec.showPartNumber) {
             QFont f = baseFont; f.setFamily(spec.pnFont); p.setFont(f);
             drawWorldText(p, vt.toScreen(g.partPos), spec.partNumber, spec.pnSize * 0.8, vt.scale(),
                           color, Qt::AlignHCenter);

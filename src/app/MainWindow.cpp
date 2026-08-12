@@ -6583,11 +6583,19 @@ void MainWindow::refreshProperties() {
         // With no designator, show the validation fallback name (#<entNum>) as a
         // semi-transparent placeholder so it matches what Validate reports.
         const QString refdesHint = QStringLiteral("#%1").arg(mv("entNum").toInt());
-        addText(QStringLiteral("Designator"), csText("designator", cs.designator),
-                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); },
-                refdesHint);
-        addText(QStringLiteral("Part number"), csText("partNumber", cs.partNumber),
-                [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); });
+        // Each with an eye on the end of the row: whether it is DRAWN on the sheet. The same connector
+        // wants its designator on a schematic and often not on the mechanical view beside it, and a
+        // crowded corner is tidied by turning one off rather than by dragging it somewhere it does not
+        // belong. The text stays either way - the eye hides it, it does not delete it.
+        addTextEye(QStringLiteral("Designator"), csText("designator", cs.designator),
+                   [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.designator = t; }); },
+                   cs.showDesignator,
+                   [edit](bool on) { edit([on](ConnectorSpec& s) { s.showDesignator = on; }); }, -1, {},
+                   refdesHint);
+        addTextEye(QStringLiteral("Part number"), csText("partNumber", cs.partNumber),
+                   [edit](const QString& t) { edit([t](ConnectorSpec& s) { s.partNumber = t; }); },
+                   cs.showPartNumber,
+                   [edit](bool on) { edit([on](ConnectorSpec& s) { s.showPartNumber = on; }); }, -1, {});
         // Per-pin wire cross-section (AWG/mm²) + ampere editor. It edits one connector's
         // own pin list, so with several selected there is no single table to open.
         if (multi)

@@ -1,4 +1,6 @@
 #include "harness/Bom.h"
+#include <QSet>
+#include "harness/MechanicalHarness.h"
 
 #include "harness/Harness.h"
 #include "model/Document.h"
@@ -219,6 +221,33 @@ QString bomNextRowId(const std::vector<BomRow>& rows) {
 
 std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib) {
     std::vector<BomRow> out;
+    // A part placed from the library is one line however many entities its drawing is made of, so each
+    // block INSTANCE is counted once. And where a connector was placed with one of its contacts, that
+    // contact goes on the line below it, in the quantity the connector needs - which is how a connector is
+    // ordered: never by itself.
+    QSet<QString> countedInstances;
+    for (const Entity& e : doc.entities()) {
+        const QString instance = e.meta.value(QStringLiteral("blockInst")).toString();
+        const QString placedId = e.meta.value(QStringLiteral("libPart")).toString();
+        if (instance.isEmpty() || placedId.isEmpty()) continue;
+        if (countedInstances.contains(instance)) continue;
+        countedInstances.insert(instance);
+        const LibraryPart* placed = lib.byId(placedId);
+        if (!placed) continue;
+        BomRow r = bomRowFromPart(*placed, 1.0);
+        r.ref = e.meta.value(QStringLiteral("designator")).toString();
+        r.fromDrawing = true;
+        out.push_back(r);
+        // The contact it was placed with, immediately under it.
+        const QString contactId = e.meta.value(QLatin1String(kContactPartKey)).toString();
+        if (contactId.isEmpty()) continue;
+        if (const LibraryPart* contact = lib.byId(contactId)) {
+            BomRow c = bomRowFromPart(*contact, static_cast<double>(placed->wayCount()));
+            c.ref = r.ref;   // the same connector: that is what these contacts are for
+            c.fromDrawing = true;
+            out.push_back(c);
+        }
+    }
     for (const Entity& e : doc.entities()) {
         // A part stamped on the entity (by the harness builder, or by inserting a library part)
         // is what the row is about; the entity only says how much of it there is.
@@ -238,6 +267,15 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
             r.ref = spec.designator;
             r.fromDrawing = true;
             out.push_back(r);
+            // A contact chosen when it was placed goes on the line below, one per way.
+            const QString contactId = e.meta.value(QLatin1String(kContactPartKey)).toString();
+            if (const LibraryPart* contact = contactId.isEmpty() ? nullptr : lib.byId(contactId)) {
+                const int ways = part ? part->wayCount() : std::max(1, spec.pinCount);
+                BomRow c = bomRowFromPart(*contact, static_cast<double>(ways));
+                c.ref = spec.designator;
+                c.fromDrawing = true;
+                out.push_back(c);
+            }
             continue;
         }
         if (e.type != EntityType::Wire || e.points.size() < 2) continue;

@@ -149,7 +149,12 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
     b.description = part.description.isEmpty() ? partKindName(part.kind) : part.description;
     b.source = QStringLiteral("library:%1").arg(part.id);
     b.entities = drawing;
-    return blockInstanceEntities(b, at, instanceKey);
+    std::vector<Entity> out = blockInstanceEntities(b, at, instanceKey);
+    // Which PART this is, on every entity of it. Without that a part placed from the library is a set of
+    // lines that nothing can trace back to a part number - the bill of materials could not count it, and
+    // counting what is on the drawing is most of what a bill of materials is for.
+    for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
+    return out;
 }
 
 std::vector<BlockDef> libraryBlocks(const PartsCatalog& catalog) {

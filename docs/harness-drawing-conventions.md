@@ -581,3 +581,33 @@ fits is worked out from the size designation and the family's shrink ratio, whic
 wall thickness is left **blank** rather than guessed at, and every part says in its notes that the figures
 are nominal and the datasheet is the authority. A starter library is a starting point; a build held to a
 tolerance is checked against the current datasheet.
+
+## A connector and its contacts
+
+A connector is never ordered by itself: it is ordered with its contacts, and a drawing that names the
+connector without them is a drawing nobody can build from. So the **contacts are tied to the connector in
+the library** — `contactIds()`, kept as one parameter so they travel through the file, the copy and the
+merge — and there is usually more than one to choose from: a pin and a socket, two gauges, sealed and plain.
+
+**Which one is fitted is chosen when the connector is placed.** The fall menu on *Insert* lists the tied
+contacts and *With no contact*; the button itself takes the first tied one, because a connector placed
+without its contacts is a connector nobody can build. What is chosen is stamped on every entity of the
+placed block (`contactPart`), so a copy carries its contact with it and whichever entity the bill of
+materials reads, it finds the same answer.
+
+**The bill of materials puts the contact on the line below the connector**, in the quantity the connector
+needs — one per way, from the part's own way count. Placing a part from the library now reaches the BOM at
+all: `partBlockInstance` stamps `libPart` on the entities it makes, and each block *instance* is counted
+once however many lines its drawing is made of. Two of the same connector are two pairs of lines, each with
+the contact chosen for it.
+
+**A connector's schematic symbol can be built from its data** — *From data* on the schematic side. It reads
+the way count (and the pitch, if the data gives one) and produces a real **connector object**, not loose
+lines: so what is placed can be wired, edited with the connector tools and counted like any other
+connector. Nothing else about the symbol is invented from the data.
+
+**The designator and the part number each have an eye** in the properties panel: whether that marking is
+*drawn*. The same connector wants its designator on a schematic and often not on the mechanical view beside
+it, and a crowded corner is tidied by turning one off rather than by dragging it somewhere it does not
+belong. The text is kept either way — the eye hides it, it does not delete it — and what is hidden stays
+hidden when the drawing is saved and opened again.
