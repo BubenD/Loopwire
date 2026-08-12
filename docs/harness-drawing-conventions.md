@@ -812,6 +812,14 @@ gets written down for it. The edge that sets it is likewise the *side's*: a sing
 length of the side's fly-outs, on the face turned to the drawing. An edge per panel would say the panels can
 be set to different widths, and they cannot.
 
+**Opening and folding are asked as two different questions.** A folded side opens when the cursor is *on* a
+strip, and stays open while it is *within reach* — 30 px of slack around the panels and the edge, and for as
+long as the edge is actually being pulled. Reaching for the edge takes the cursor off the panel by
+definition: the edge is beyond it, over the drawing. Asked as one question, the side folded away the instant
+the cursor left the panel — so the width could never be set, because the side shut before the edge could be
+caught. Asked as two, the slack costs nothing: the panel is still there while the hand is still at it, and
+it does not fly out just because the cursor passed nearby.
+
 Panels do their work in `hideEvent`, and a window on its way down hides its panels — at which point asking
 the window which side a panel is on means asking a window whose layout has already gone. So `MainWindow`'s
 destructor says so first (`AutoHideDock::windowGoing`), because a derived destructor runs *before* the

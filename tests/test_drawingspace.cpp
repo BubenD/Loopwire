@@ -14,6 +14,7 @@
 
 #include <QComboBox>
 #include <QDir>
+#include <QCursor>
 #include <QDockWidget>
 #include <QGridLayout>
 #include <QLabel>
@@ -936,6 +937,33 @@ int run_drawingspace_tests() {
             for (QWidget* e : w.findChildren<QWidget*>())
                 if (e->objectName() == QStringLiteral("panelSideEdge") && e->isVisible()) edges.append(e);
             check(edges.size() == 1, "flyout: one edge for the whole side, not one per panel");
+            if (edges.size() == 1 && !flyouts.isEmpty()) {
+                QWidget* edge = edges.first();
+                check(edge->width() >= 8, "flyout: the edge is wide enough to catch");
+                // Right against the panels, so reaching for it does not mean crossing a gap.
+                int gap = 1 << 20;
+                for (QWidget* f : flyouts)
+                    gap = std::min(gap, std::abs(edge->x() + edge->width() - f->x()));
+                check(gap <= 1, "flyout: and it sits against them, with nothing to cross to reach it");
+
+                // The cursor ON the edge rather than on the panel: the side has to stay open, or its width
+                // could never be set - reaching for the edge used to fold it away every time.
+                const QPoint onEdge =
+                    edge->mapToGlobal(QPoint(edge->width() / 2, edge->height() / 2));
+                QCursor::setPos(onEdge);
+                if (QCursor::pos() == onEdge) {
+                    QElapsedTimer held;
+                    held.start();
+                    while (held.elapsed() < 1200) QApplication::processEvents();
+                    bool stillOpen = false;
+                    for (QWidget* f : w.findChildren<QWidget*>())
+                        if (f->objectName() == QStringLiteral("panelFlyout") && f->isVisible())
+                            stillOpen = true;
+                    check(stillOpen, "flyout: with the cursor on the edge the side stays open");
+                } else {
+                    std::printf("  flyout: no cursor to move here - the reach itself is not exercised\n");
+                }
+            }
             if (edges.size() == 1 && flyouts.size() > 1) {
                 int top = flyouts.first()->y(), bottom = 0;
                 for (QWidget* f : flyouts) {

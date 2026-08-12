@@ -908,6 +908,7 @@ public:
         setToolTip(QStringLiteral("Drag to set how wide this side opens — all of its panels together"));
     }
     std::function<void(QPoint)> onDrag;   // how far the grip has been pulled since the last call
+    bool beingDragged() const { return dragging_; }
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -1150,7 +1151,7 @@ public:
         if (!mw || onTheWayOut(mw) || side == static_cast<int>(Qt::NoDockWidgetArea)) return;
         const auto area = static_cast<Qt::DockWidgetArea>(side);
         const bool vertical = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
-        const int grip = 6;
+        const int grip = 8;
         QRect together;
         for (AutoHideDock* d : allDocks_) {
             if (!d || d->mw_ != mw || d->isFloating() || d->areaKey() != side || !d->flyoutOpen()) continue;
@@ -1433,15 +1434,31 @@ private:
         return a != Qt::TopDockWidgetArea && a != Qt::BottomDockWidgetArea;
     }
 
-    // Is the cursor over ANY panel on this side - its strip, or the fly-out hanging off it?
-    bool groupInside() {
+    // Is the cursor on this side - a strip, a fly-out, or the edge that sets the width? With `slack`, is it
+    // still WITHIN REACH of one: the cursor has to get properly clear of a side before it folds away.
+    //
+    // Reaching for the edge to pull the side wider takes the cursor off the panel, and off it by definition -
+    // the edge is beyond the panel, over the drawing. A side that folded the moment the cursor left the
+    // panel folded before the edge could be caught, every time. A little slack costs nothing: the panel is
+    // still there while the hand is still at it.
+    bool groupInside(int slack = 0) {
         const QPoint c = QCursor::pos();
+        auto within = [&c, slack](QWidget* w) {
+            if (!w || !w->isVisible()) return false;
+            QRect r(w->mapToGlobal(QPoint(0, 0)), w->size());
+            r.adjust(-slack, -slack, slack, slack);
+            return r.contains(c);
+        };
         for (auto* d : group()) {
             if (d->isFloating()) continue;
-            if (QRect(d->mapToGlobal(QPoint(0, 0)), d->size()).contains(c)) return true;
-            if (d->flyoutOpen() &&
-                QRect(d->flyout_->mapToGlobal(QPoint(0, 0)), d->flyout_->size()).contains(c))
-                return true;
+            if (within(d)) return true;
+            if (d->flyoutOpen() && within(d->flyout_)) return true;
+        }
+        // The side's own edge - and whether it is being pulled at this moment, since a drag can take the
+        // cursor well past any slack and a side that folded away mid-drag would be absurd.
+        if (mw_) {
+            const QPointer<FlyGrip> edge = sideGrip_.value(mw_).value(areaKey());
+            if (edge && (edge->beingDragged() || within(edge))) return true;
         }
         return false;
     }
@@ -1454,22 +1471,28 @@ private:
             outside_.invalidate();
             return;
         }
-        const bool inside = groupInside();
+        // Two questions, not one: ON the side (which opens it - a panel that flew out because the cursor
+        // came within a hand's breadth of the edge would be in the way all day), and WITHIN REACH of it
+        // (which keeps it open).
+        const bool onIt = groupInside();
+        const bool nearIt = onIt || groupInside(kFoldSlack);
         // Straight after an unpin the cursor is still on the panel; wait for it to
         // leave before hover-expand becomes live again.
         if (awaitExit_) {
-            if (inside) {
+            if (nearIt) {
                 outside_.invalidate();
                 return;
             }
             awaitExit_ = false;
         }
-        if (inside) {
+        if (onIt) {
             outside_.invalidate();
             if (collapsed_) showFlyout();
             else layoutFlyout();   // the window may have been moved or resized under it
         } else if (flyoutOpen()) {
-            if (!outside_.isValid())
+            if (nearIt) {
+                outside_.invalidate();   // the hand is still at it: the edge, or just off the panel
+            } else if (!outside_.isValid())
                 outside_.start();
             else if (outside_.elapsed() >= 500)
                 hideFlyout();
@@ -1599,6 +1622,9 @@ private:
     // Below this a number is not a panel width anybody chose - it is a strip (24 px), or a panel measured
     // before it was ever laid out.
     static constexpr int kSmallestExtent = 60;
+    // How far the cursor has to get from a folded side before it folds away again. Enough to reach the edge
+    // that sets the width - which is over the drawing, past the panel - and to overshoot it a little.
+    static constexpr int kFoldSlack = 30;
     QToolButton* pinBtn_ = nullptr;    // the title bar's pin toggle (synced across the side)
     QWidget* hint_ = nullptr;          // drop highlight shown while dragging
     // Window -> side -> how wide that side opens. Per window, because a program with two windows open must
