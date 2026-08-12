@@ -19,6 +19,8 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QDir>
+#include <QFile>
+#include <QRegularExpression>
 #include <QImage>
 #include <QListWidget>
 #include <QPainter>
@@ -203,6 +205,113 @@ int run_pagesetup_tests() {
               "being plotted all along");
     }
 
+    // ---- a landscape setup comes out landscape --------------------------------------------------
+    {
+        // The bug this stands on: a QPageSize is a piece of paper given UPRIGHT, and the orientation turns
+        // it. Handed an already-turned size and told Landscape, Qt turned it again and wrote a portrait
+        // page - a landscape sheet standing up in the PDF. The page box in the file is what settles it.
+        MainWindow win;
+        auto* canvas = win.findChild<CanvasWidget*>();
+        Document* drawing = canvas ? canvas->document() : nullptr;
+        check(drawing && !drawing->layouts().empty(), "landscape: a drawing with a sheet");
+        if (drawing && !drawing->layouts().empty()) {
+            DrawingLayout& sheet = drawing->layouts()[0];
+            sheet.paperWidth = 420.0;
+            sheet.paperHeight = 297.0;
+            borderTheSheet(sheet);
+            sheet.pageSetup.paper = QStringLiteral("ISO full bleed A3 (420.00 x 297.00 MM)");
+            sheet.pageSetup.fitToPaper = false;
+            sheet.pageSetup.scale = 1.0;
+
+            auto pageBox = [&](bool landscape) {
+                sheet.pageSetup.landscape = landscape;
+                const QString path = QDir::tempPath() +
+                                     QStringLiteral("/edraw-orient-%1.pdf")
+                                         .arg(landscape ? QStringLiteral("l") : QStringLiteral("p"));
+                QFile::remove(path);
+                check(win.writeSpacePdf(path, {1}, true, false), "landscape: the PDF is written");
+                QFile f(path);
+                QSizeF box;
+                if (f.open(QIODevice::ReadOnly)) {
+                    const QByteArray bytes = f.readAll();
+                    const QRegularExpression rx(
+                        QStringLiteral(R"(/MediaBox\s*\[\s*[0-9.]+\s+[0-9.]+\s+([0-9.]+)\s+([0-9.]+))"));
+                    const QRegularExpressionMatch m = rx.match(QString::fromLatin1(bytes));
+                    if (m.hasMatch())
+                        box = QSizeF(m.captured(1).toDouble(), m.captured(2).toDouble());
+                }
+                return box;
+            };
+
+            const QSizeF landscapeBox = pageBox(true);
+            std::printf("  landscape page box: %.0f x %.0f pt\n", landscapeBox.width(),
+                        landscapeBox.height());
+            check(landscapeBox.width() > 1.0 && landscapeBox.height() > 1.0,
+                  "landscape: the page box could be read out of the file");
+            check(landscapeBox.width() > landscapeBox.height(),
+                  "landscape: a sheet set up landscape comes out LANDSCAPE - wider than it is tall, which "
+                  "is the whole of what the setting means");
+            const QSizeF portraitBox = pageBox(false);
+            std::printf("  portrait page box:  %.0f x %.0f pt\n", portraitBox.width(),
+                        portraitBox.height());
+            check(portraitBox.height() > portraitBox.width(),
+                  "landscape: and one set up portrait comes out portrait, so it is the setting doing it and "
+                  "not the aspect of the sheet");
+            sheet.pageSetup.landscape = true;
+        }
+    }
+
+    // ---- the manager shows every sheet, and one can be copied from another ------------------------
+    {
+        Document doc;
+        while (doc.layouts().size() < 3) {
+            DrawingLayout extra;
+            extra.name = QStringLiteral("Layout%1").arg(doc.layouts().size() + 1);
+            doc.layouts().push_back(extra);
+        }
+        // The second sheet set up quite differently from the first, so a copy is visible.
+        doc.layouts()[1].pageSetup.paper = QStringLiteral("ISO A1 (841.00 x 594.00 MM)");
+        doc.layouts()[1].pageSetup.landscape = false;
+        doc.layouts()[1].pageSetup.scale = 0.02;
+        doc.layouts()[1].pageSetup.monochrome = false;
+
+        PageSetupManagerDialog manager(doc, 0, nullptr);
+        auto* list = manager.findChild<QListWidget*>();
+        check(list && list->count() >= static_cast<int>(doc.layouts().size()),
+              "manager: every sheet is on the list, not only the one being worked on - sheets in a set are "
+              "made to match by copying one that is right");
+        if (list) {
+            QStringList rows;
+            for (int i = 0; i < list->count(); ++i) rows << list->item(i)->text();
+            std::printf("  manager rows: %s\n", rows.join(QStringLiteral(" / ")).toUtf8().constData());
+            check(rows.filter(QStringLiteral("this sheet")).size() == 1,
+                  "manager: and the one being worked on is marked as such");
+
+            QPushButton* setCurrent = nullptr;
+            for (QPushButton* b : manager.findChildren<QPushButton*>())
+                if (b->text().startsWith(QStringLiteral("Set current")) ||
+                    b->text().startsWith(QStringLiteral("Copy to this sheet")))
+                    setCurrent = b;
+            check(setCurrent != nullptr, "manager: the button that puts a setup on this sheet is there");
+            if (setCurrent) {
+                list->setCurrentRow(0);
+                check(!setCurrent->isEnabled(),
+                      "manager: with this sheet's own setup picked there is nothing to copy");
+                list->setCurrentRow(1);
+                check(setCurrent->isEnabled() &&
+                          setCurrent->text() == QStringLiteral("Copy to this sheet"),
+                      "manager: with another sheet picked it offers to copy that sheet's setup");
+                setCurrent->click();
+                const PageSetup& got = doc.layouts()[0].pageSetup;
+                check(got.paper == doc.layouts()[1].pageSetup.paper && got.landscape == false &&
+                          near(got.scale, 0.02) && got.monochrome == false,
+                      "manager: and copying brings the paper, the scale and the plot options across");
+                check(got.name.isEmpty(),
+                      "manager: without the other sheet's name, which means nothing on this one");
+            }
+        }
+    }
+
     // ---- the dialogs -----------------------------------------------------------------------------
     {
         PageSetup setup;
@@ -279,11 +388,15 @@ int run_pagesetup_tests() {
         doc.pageSetups().push_back(named);
         PageSetupManagerDialog manager(doc, 0);
         auto* list = manager.findChild<QListWidget*>();
-        check(list && list->count() == 2, "manager: the sheet's own setup and the drawing's named one");
-        if (list && list->count() == 2) {
+        // A row per sheet - every sheet, so one can be copied from another - and one per named setup.
+        const int expected = static_cast<int>(doc.layouts().size() + doc.pageSetups().size());
+        check(list && list->count() == expected,
+              "manager: a row for every sheet, and one for the drawing's named setup");
+        if (list && list->count() == expected) {
             check(list->item(0)->text().startsWith(QStringLiteral("*")),
                   "manager: the sheet's own is written in stars, as a plot dialog writes it");
-            check(list->item(1)->text() == named.name, "manager: the named one by its name");
+            check(list->item(list->count() - 1)->text() == named.name,
+                  "manager: the named one by its name, after the sheets");
             QPushButton* setCurrent = nullptr;
             for (QPushButton* b : manager.findChildren<QPushButton*>())
                 if (b->text() == QStringLiteral("Set current")) setCurrent = b;
@@ -291,7 +404,7 @@ int run_pagesetup_tests() {
             if (setCurrent) {
                 check(!setCurrent->isEnabled(),
                       "manager: with the sheet's own setup picked there is nothing to set");
-                list->setCurrentRow(1);
+                list->setCurrentRow(list->count() - 1);   // the named setup
                 check(setCurrent->isEnabled(), "manager: with a named one picked, there is");
                 setCurrent->click();
                 check(doc.layouts()[0].pageSetup.paper == named.paper &&
@@ -452,10 +565,11 @@ int run_pagesetup_tests() {
         QPushButton* type = nullptr;
         for (QPushButton* b : dlg.findChildren<QPushButton*>()) {
             if (b->text().startsWith(QStringLiteral("Pick window"))) pick = b;
-            if (b->text().startsWith(QStringLiteral("Type it"))) type = b;
+            if (b->text().startsWith(QStringLiteral("Window boundaries"))) type = b;
         }
         check(pick != nullptr, "aside: there is a button to pick the window on the drawing");
-        check(type != nullptr, "aside: and one to type the corners, for a window that must be exact");
+        check(type != nullptr,
+              "aside: and one to give the window boundaries as figures, for a window that must be exact");
         if (pick) {
             pick->click();
             check(dlg.result() == PageSetupDialog::PickWindowResult,

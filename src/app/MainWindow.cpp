@@ -11018,6 +11018,17 @@ bool MainWindow::printSpaces(const std::vector<int>& spaces) {
     // setup that says which plotter it is for should not have to be repeated in the print dialog.
     const PageSetup first = pageSetupFor(spaces.front());
     if (!first.device.isEmpty()) printer.setPrinterName(first.device);
+    // The paper the setup asks for, and which way round - upright paper plus an orientation, for the same
+    // reason as the PDF above. The print dialog opens on it rather than on whatever it was left on.
+    {
+        double w = 0.0, h = 0.0;
+        if (spacePageSizeMm(spaces.front(), w, h)) {
+            const QSizeF upright(std::min(w, h), std::max(w, h));
+            printer.setPageSize(QPageSize(upright, QPageSize::Millimeter, spaceName(spaces.front()),
+                                          QPageSize::FuzzyMatch));
+            printer.setPageOrientation(w >= h ? QPageLayout::Landscape : QPageLayout::Portrait);
+        }
+    }
     QPrintDialog print(&printer, this);
     print.setWindowTitle(tr("Print %1 page(s)").arg(spaces.size()));
     if (print.exec() != QDialog::Accepted) return false;
@@ -11050,13 +11061,21 @@ bool MainWindow::writeSpacePdf(const QString& path, const std::vector<int>& spac
         if (!spacePageSizeMm(spaces[i], w, h)) continue;
         // Each page is the size of the thing on it: a 420 x 297 sheet is an A3 page, and a dimension
         // read off the print with a rule is right. Fitting to a fixed page is offered, not assumed.
+        // The page, and which way round it goes - and these two must not both do the swapping.
+        //
+        // A QPageSize is a piece of paper, and it is given UPRIGHT: short edge across, long edge up. The
+        // orientation then turns it. Handed a size that was already turned (420 x 297 for a landscape A3)
+        // AND told Landscape, Qt turned it again and wrote a portrait page: a landscape sheet came out of
+        // the PDF standing up. So the paper goes in upright and the orientation does the turning, once.
+        const bool landscape = w >= h;
+        const QSizeF upright(std::min(w, h), std::max(w, h));
         const QPageSize size = fitToPage
                                    ? QPageSize(QPageSize::A4)
-                                   : QPageSize(QSizeF(w, h), QPageSize::Millimeter,
-                                               spaceName(spaces[i]), QPageSize::ExactMatch);
+                                   : QPageSize(upright, QPageSize::Millimeter, spaceName(spaces[i]),
+                                               QPageSize::ExactMatch);
         if (i == 0) {
             pdf.setPageSize(size);
-            pdf.setPageOrientation(w >= h ? QPageLayout::Landscape : QPageLayout::Portrait);
+            pdf.setPageOrientation(landscape ? QPageLayout::Landscape : QPageLayout::Portrait);
             pdf.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout::Millimeter);
             painter.begin(&pdf);
             if (!painter.isActive()) {
@@ -11066,7 +11085,7 @@ bool MainWindow::writeSpacePdf(const QString& path, const std::vector<int>& spac
             }
         } else {
             pdf.setPageSize(size);
-            pdf.setPageOrientation(w >= h ? QPageLayout::Landscape : QPageLayout::Portrait);
+            pdf.setPageOrientation(landscape ? QPageLayout::Landscape : QPageLayout::Portrait);
             if (!pdf.newPage()) break;
         }
         renderSpaceToPage(painter, spaces[i], monochrome);

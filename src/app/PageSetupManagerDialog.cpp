@@ -98,10 +98,22 @@ void PageSetupManagerDialog::rebuild() {
     const bool haveLayout = layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(layouts.size());
     const QString layoutName =
         haveLayout ? layouts[static_cast<size_t>(layoutIndex_)].name : QStringLiteral("Layout");
-    if (haveLayout) {
-        auto* own = new QListWidgetItem(
-            rowLabel(layouts[static_cast<size_t>(layoutIndex_)].pageSetup, true, layoutName), list_);
-        own->setData(Qt::UserRole, -1);   // -1: the layout's own
+    // EVERY layout, not only the one being worked on. Sheets in a set are set up the same way, and the way
+    // that is had is by looking at one that is right and copying it - so the others have to be on the list
+    // to be looked at and copied. The one being worked on is marked, and the rest are named.
+    //
+    // The row's data says which setup it stands for: -1 - n for a layout's own (see rowForLayout), and
+    // 0 and up for a named setup.
+    for (int i = 0; i < static_cast<int>(layouts.size()); ++i) {
+        const DrawingLayout& l = layouts[static_cast<size_t>(i)];
+        auto* item = new QListWidgetItem(rowLabel(l.pageSetup, true, l.name), list_);
+        item->setData(Qt::UserRole, -1 - i);
+        if (i == layoutIndex_) {
+            QFont f = item->font();
+            f.setBold(true);   // the sheet being worked on: found at a glance
+            item->setFont(f);
+            item->setText(QStringLiteral("%1  — this sheet").arg(item->text()));
+        }
     }
     for (int i = 0; i < static_cast<int>(doc_.pageSetups().size()); ++i) {
         auto* item = new QListWidgetItem(doc_.pageSetups()[static_cast<size_t>(i)].name, list_);
@@ -122,12 +134,20 @@ PageSetup* PageSetupManagerDialog::setupAt(int row) {
     if (!list_ || row < 0 || row >= list_->count()) return nullptr;
     const int which = list_->item(row)->data(Qt::UserRole).toInt();
     if (which < 0) {
+        // A layout's own setup: -1 is the first layout, -2 the second, and so on.
         auto& layouts = doc_.layouts();
-        if (layoutIndex_ < 0 || layoutIndex_ >= static_cast<int>(layouts.size())) return nullptr;
-        return &layouts[static_cast<size_t>(layoutIndex_)].pageSetup;
+        const int at = -1 - which;
+        if (at < 0 || at >= static_cast<int>(layouts.size())) return nullptr;
+        return &layouts[static_cast<size_t>(at)].pageSetup;
     }
     if (which >= static_cast<int>(doc_.pageSetups().size())) return nullptr;
     return &doc_.pageSetups()[static_cast<size_t>(which)];
+}
+
+int PageSetupManagerDialog::layoutOfRow(int row) const {
+    if (!list_ || row < 0 || row >= list_->count()) return -1;
+    const int which = list_->item(row)->data(Qt::UserRole).toInt();
+    return which < 0 ? -1 - which : -1;
 }
 
 void PageSetupManagerDialog::updateDetails() {
@@ -168,10 +188,18 @@ void PageSetupManagerDialog::updateDetails() {
                                    : QStringLiteral("the drawing's colours"))
             .arg(setup->plotLineweights ? QStringLiteral("lineweights plotted")
                                         : QStringLiteral("lineweights off")));
-    // The layout's own setup is already current: there is nothing to set.
-    const bool isOwn = list_ && list_->currentRow() >= 0 &&
-                       list_->item(list_->currentRow())->data(Qt::UserRole).toInt() < 0;
-    if (setCurrentBtn_) setCurrentBtn_->setEnabled(!isOwn);
+    // Anything but this sheet's own setup can be put on this sheet - another sheet's included, which is how
+    // a set of sheets is made to match: find one that plots right and copy it.
+    const bool isThisSheet = layoutOfRow(list_ ? list_->currentRow() : -1) == layoutIndex_;
+    if (setCurrentBtn_) {
+        setCurrentBtn_->setEnabled(!isThisSheet);
+        const int from = layoutOfRow(list_ ? list_->currentRow() : -1);
+        setCurrentBtn_->setText(from >= 0 && from != layoutIndex_ ? QStringLiteral("Copy to this sheet")
+                                                                 : QStringLiteral("Set current"));
+        setCurrentBtn_->setToolTip(
+            from >= 0 ? QStringLiteral("Copy that sheet's paper, scale and plot options onto this one")
+                      : QStringLiteral("Put this named setup on the sheet being worked on"));
+    }
 }
 
 void PageSetupManagerDialog::setCurrent() {
@@ -182,6 +210,9 @@ void PageSetupManagerDialog::setCurrent() {
     // can say which one the sheet is following. A layout plots by its own setup, always: a named setup
     // that was renamed or deleted must not be able to change how a sheet plots.
     PageSetup applied = *named;
+    // Copied from another SHEET rather than from a named setup: the name it carries is that sheet's own,
+    // which means nothing here, so it is dropped. What is copied is the paper, the scale and the options.
+    if (layoutOfRow(list_ ? list_->currentRow() : -1) >= 0) applied.name.clear();
     layouts[static_cast<size_t>(layoutIndex_)].pageSetup = applied;
     doc_.setDirty(true);
     changed_ = true;
@@ -210,16 +241,18 @@ void PageSetupManagerDialog::showEvent(QShowEvent* e) {
 
 bool PageSetupManagerDialog::editSetup(int row, PageSetup start, bool asNew, const QString& newName) {
     const auto& layouts = doc_.layouts();
-    const bool isOwn = list_ && row >= 0 && row < list_->count() &&
-                       list_->item(row)->data(Qt::UserRole).toInt() < 0;
+    // Which layout the row is, if it is one: the title of the dialog is that sheet's name, because a sheet's
+    // own setup is edited under the name of the sheet and not under a name of its own.
+    const int ofLayout = layoutOfRow(row);
     const QString title = asNew ? newName
-                          : isOwn && layoutIndex_ < static_cast<int>(layouts.size())
-                              ? layouts[static_cast<size_t>(layoutIndex_)].name
+                          : ofLayout >= 0 && ofLayout < static_cast<int>(layouts.size())
+                              ? layouts[static_cast<size_t>(ofLayout)].name
                               : start.name;
+    const int showSheet = ofLayout >= 0 ? ofLayout : layoutIndex_;
     double sheetW = 0.0, sheetH = 0.0;
-    if (layoutIndex_ >= 0 && layoutIndex_ < static_cast<int>(layouts.size())) {
-        sheetW = layouts[static_cast<size_t>(layoutIndex_)].paperWidth;
-        sheetH = layouts[static_cast<size_t>(layoutIndex_)].paperHeight;
+    if (showSheet >= 0 && showSheet < static_cast<int>(layouts.size())) {
+        sheetW = layouts[static_cast<size_t>(showSheet)].paperWidth;
+        sheetH = layouts[static_cast<size_t>(showSheet)].paperHeight;
     }
     PageSetupDialog dlg(start, title, sheetW, sheetH, this);
     const int result = dlg.exec();

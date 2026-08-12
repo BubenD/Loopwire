@@ -666,3 +666,24 @@ it carries the part id, so the bill of materials still counts it.
 
 Each drawing pane is 320 × 260 at its smallest and fits its drawing: a drawing squeezed into a thumbnail is a
 drawing nobody can check.
+
+### Landscape means landscape
+
+A `QPageSize` is a piece of paper and it is given **upright** — short edge across, long edge up — and the
+page orientation then turns it. Handed a size that had already been turned (420 × 297 for a landscape A3) *and*
+told Landscape, Qt turned it again and wrote a portrait page: a landscape sheet came out of the PDF standing
+up. The paper now goes in upright and the orientation does the turning, once, in the PDF and on the printer
+alike. Measured in the file's own page box: a landscape A3 comes out 1191 × 842 pt, a portrait one 842 × 1191.
+
+### The page setup manager shows every sheet
+
+Sheets in a set are set up the same way, and the way that is had is by finding one that plots right and
+copying it — so **every** layout is on the list, not only the one being worked on (which is marked *this
+sheet*), and *Set current* becomes **Copy to this sheet** when another sheet is picked. What is copied is the
+paper, the scale and the plot options; the other sheet's name is not, since it means nothing on this one.
+
+Two smaller things in the page setup itself: the device that is not a device is called **PDF file** rather
+than "None", and the two window buttons — **Pick window…** and **Window boundaries…** — are shown only when a
+window is what is being plotted, because offering them otherwise is offering something that would have no
+effect. The landscape/portrait radios are styled with a filled dot: on a dark theme the stock indicator was a
+dark ring on a dark ground, and which way round the page goes is the one thing that pair exists to say.

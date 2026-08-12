@@ -170,6 +170,19 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     auto* wayRound = new QHBoxLayout();
     landscape_ = new QRadioButton(QStringLiteral("Landscape"), this);
     portrait_ = new QRadioButton(QStringLiteral("Portrait"), this);
+    // The dot has to be visible. On a dark theme the stock indicator is a dark ring on a dark ground and
+    // the filled middle is barely there, so which way round the page goes cannot be read at a glance -
+    // which is the one thing this pair exists to say. Drawn as a ring with a solid dot in it.
+    const QString radioStyle = QStringLiteral(
+        "QRadioButton{spacing:6px;}"
+        "QRadioButton::indicator{width:14px;height:14px;border-radius:7px;"
+        "border:1px solid #8a929c;background:#20262e;}"
+        "QRadioButton::indicator:hover{border-color:#c8d0da;}"
+        "QRadioButton::indicator:checked{border:1px solid #4a9eff;"
+        "background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
+        "stop:0 #4a9eff,stop:0.55 #4a9eff,stop:0.6 #20262e,stop:1 #20262e);}");
+    landscape_->setStyleSheet(radioStyle);
+    portrait_->setStyleSheet(radioStyle);
     (setup_.landscape ? landscape_ : portrait_)->setChecked(true);
     wayRound->addWidget(landscape_);
     wayRound->addWidget(portrait_);
@@ -206,9 +219,9 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     windowBtn_->setToolTip(QStringLiteral(
         "This closes, you pick the two corners on the sheet with the snaps running, and it opens again "
         "with the window in it."));
-    typeWindowBtn_ = new QPushButton(QStringLiteral("Type it instead..."), what);
+    typeWindowBtn_ = new QPushButton(QStringLiteral("Window boundaries..."), what);
     typeWindowBtn_->setToolTip(
-        QStringLiteral("Give the corners as figures, for a window that has to be exact."));
+        QStringLiteral("Give the boundaries as figures, for a window that has to be exact."));
     windowLabel_ = new QLabel(what);
     windowLabel_->setWordWrap(true);
     whatGrid->addWidget(area_, 0, 0);
@@ -257,7 +270,7 @@ PageSetupDialog::PageSetupDialog(const PageSetup& setup, const QString& title, d
     auto* how = new QGroupBox(QStringLiteral("Output device and plot options"), this);
     auto* howGrid = new QGridLayout(how);
     device_ = new QComboBox(how);
-    device_->addItem(QStringLiteral("None — plot to a PDF file"), QString());
+    device_->addItem(QStringLiteral("PDF file"), QString());
     for (const QPrinterInfo& info : QPrinterInfo::availablePrinters())
         device_->addItem(info.printerName(), info.printerName());
     const int atDevice = device_->findData(setup_.device);
@@ -392,8 +405,13 @@ void PageSetupDialog::refresh() {
     if (preview_)
         preview_->showSetup(live, sheetW_ > 0.0 ? sheetW_ : live.pageWidthMm(),
                            sheetH_ > 0.0 ? sheetH_ : live.pageHeightMm());
+    const bool windowArea = live.area == PlotArea::Window;
+    // Only when a window is what is being plotted. Offering "pick a window" while the whole sheet is being
+    // plotted is offering something that would have no effect, which is worse than not offering it.
+    if (windowBtn_) windowBtn_->setVisible(windowArea);
+    if (typeWindowBtn_) typeWindowBtn_->setVisible(windowArea);
     if (windowLabel_) {
-        const bool window = live.area == PlotArea::Window;
+        const bool window = windowArea;
         if (!window)
             windowLabel_->setText(
                 live.area == PlotArea::Display

@@ -49,6 +49,8 @@ private:
     void updateDetails();
     // The setup the row stands for: the layout's own, or a named one. Null if the row is odd.
     PageSetup* setupAt(int row);
+    // Which layout the row stands for, or -1 for a named setup.
+    int layoutOfRow(int row) const;
 
     void setCurrent();
     // The edit dialog, on the row given. Returns false if the window is to be picked, having recorded
