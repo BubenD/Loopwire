@@ -704,6 +704,20 @@ across the sheet to somebody else's wires is neither. The keys that hold referen
 (`entityRefKeys`, `entityRefListKeys`) so that every copy path uses the same list: right-drag copy, mirror
 copy, array, offset and append/paste.
 
+### The other ghost: a cap left behind
+
+There were two causes, and the second was not a reference at all. Each end of a double run can be cut
+**twice** — once per line of it — so the trim caps live in four slots: `cutStart`, `cutStart2`, `cutEnd`,
+`cutEnd2`. A transform carried only the first of each pair. The second stayed at the coordinates it was cut
+at, and the cap was then drawn from where the run is now to where it used to be: a line straight across the
+sheet, from the copy back to the original. All four slots are carried now — corners, circle centres and the
+extend-cap edge sets alike — and the slots are named from the same list the renderer and the grip edit use.
+
+Measured on the drawing this was reported from: a right-drag copy of all 66 objects, 500 below, then a move
+of the copies — before the fix one object reached 885 × 505 (from the copy back across the sheet); after it,
+nothing on the sheet reaches more than 600, and the furthest-reaching object is a dimension at 560 × 173,
+which is the dimension it always was.
+
 A **block instance key** is re-minted at the same time, once per copy set rather than once per entity: two
 instances sharing a key are one instance to anything that counts or rebuilds them, and the lines of one placed
 block are one instance between them.

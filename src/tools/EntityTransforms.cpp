@@ -63,12 +63,24 @@ void mapPoints(Entity& e, F fn) {
         }
         e.meta.insert(QLatin1String("leaders"), arr);
     }
-    xf("cutStartAx", "cutStartAy");
-    xf("cutStartBx", "cutStartBy");
-    xf("cutEndAx", "cutEndAy");
-    xf("cutEndBx", "cutEndBy");
-    xf("cutStartCx", "cutStartCy"); // circle-cut centre
-    xf("cutEndCx", "cutEndCy");
+    // Every trim cap slot, and there are FOUR of them: each end of a run can be cut twice - once per line
+    // of a double run - so the keys are cutStart, cutStart2, cutEnd and cutEnd2. Only the first of each pair
+    // was being carried, and the second stayed behind at the coordinates it was cut at: a copied or moved run
+    // then drew its cap from where it is now to where it used to be, which is a line straight across the
+    // sheet. That is the ghost line. The slots are named the same way everywhere else that touches them
+    // (applyDoubleRunCuts, and the grip edit that drops them), so they are named the same way here.
+    for (const char* slot : {"cutStart", "cutStart2", "cutEnd", "cutEnd2"}) {
+        const QString base = QString::fromLatin1(slot);
+        const QByteArray ax = (base + QStringLiteral("Ax")).toLatin1();
+        const QByteArray ay = (base + QStringLiteral("Ay")).toLatin1();
+        const QByteArray bx = (base + QStringLiteral("Bx")).toLatin1();
+        const QByteArray by = (base + QStringLiteral("By")).toLatin1();
+        const QByteArray cx = (base + QStringLiteral("Cx")).toLatin1();
+        const QByteArray cy = (base + QStringLiteral("Cy")).toLatin1();
+        xf(ax.constData(), ay.constData());
+        xf(bx.constData(), by.constData());
+        xf(cx.constData(), cy.constData());   // circle-cut centre
+    }
     // A hole trimmed out of one line of a double run is kept as the two points where the line stops
     // and starts again ([side, ax, ay, bx, by]); they follow the object like the caps do.
     if (e.meta.contains(QLatin1String("holes"))) {
@@ -83,8 +95,8 @@ void mapPoints(Entity& e, F fn) {
         }
         e.meta.insert(QLatin1String("holes"), arr);
     }
-    // Extend cut-cap edge sets (flat [ax,ay,bx,by,...]) follow the entity too.
-    for (const char* k : {"cutStartPoly", "cutEndPoly"}) {
+    // Extend cut-cap edge sets (flat [ax,ay,bx,by,...]) follow the entity too - all four slots again.
+    for (const char* k : {"cutStartPoly", "cutStart2Poly", "cutEndPoly", "cutEnd2Poly"}) {
         if (!e.meta.contains(QLatin1String(k))) continue;
         QJsonArray arr = e.meta.value(QLatin1String(k)).toArray();
         for (int i = 0; i + 1 < arr.size(); i += 2) {

@@ -9,6 +9,7 @@
 #include "model/Document.h"
 #include "model/EntityRefs.h"
 #include "render/EntityRenderer.h"
+#include "tools/EntityTransforms.h"
 
 #include <QJsonArray>
 
@@ -201,6 +202,63 @@ int run_entityrefs_tests() {
             std::printf("  everything drawn spans %.1f in y (the two harnesses are 500 apart)\n",
                         all.valid ? all.height() : 0.0);
         }
+    }
+
+    // ---- every trim cap slot follows the object ----------------------------------------------------
+    {
+        // Each end of a double run can be cut TWICE - once per line of it - so there are four slots:
+        // cutStart, cutStart2, cutEnd, cutEnd2. Only the first of each pair was being carried when the object
+        // moved, and the second stayed at the coordinates it was cut at: the cap was then drawn from where the
+        // run is now to where it used to be, straight across the sheet. That is the second ghost line, and it
+        // was not a reference at all - it was geometry left behind.
+        Entity run;
+        run.type = EntityType::Polyline;
+        run.id = QStringLiteral("run");
+        run.layer = QStringLiteral("0");
+        run.points = {Vec2{0.0, 0.0}, Vec2{100.0, 0.0}};
+        run.meta.insert(QStringLiteral("double"), true);
+        run.meta.insert(QStringLiteral("gap"), 4.0);
+        struct Slot { const char* base; double ax, ay, bx, by; };
+        const Slot capSlots[] = {   // not `slots`: Qt makes that word a macro
+                              {"cutStart", 0.0, -10.0, 0.0, 10.0},
+                              {"cutStart2", 1.0, -10.0, 1.0, 10.0},
+                              {"cutEnd", 100.0, -10.0, 100.0, 10.0},
+                              {"cutEnd2", 99.0, -10.0, 99.0, 10.0}};
+        for (const Slot& s : capSlots) {
+            const QString base = QString::fromLatin1(s.base);
+            run.meta.insert(base, true);
+            run.meta.insert(base + QStringLiteral("Ax"), s.ax);
+            run.meta.insert(base + QStringLiteral("Ay"), s.ay);
+            run.meta.insert(base + QStringLiteral("Bx"), s.bx);
+            run.meta.insert(base + QStringLiteral("By"), s.by);
+        }
+
+        Entity moved = run;
+        translateEntity(moved, Vec2{0.0, -500.0});
+        bool allMoved = true;
+        for (const Slot& s : capSlots) {
+            const QString base = QString::fromLatin1(s.base);
+            const double ay = moved.meta.value(base + QStringLiteral("Ay")).toDouble();
+            const double by = moved.meta.value(base + QStringLiteral("By")).toDouble();
+            if (std::abs(ay - (s.ay - 500.0)) > 1e-9 || std::abs(by - (s.by - 500.0)) > 1e-9)
+                allMoved = false;
+        }
+        check(allMoved,
+              "caps: all four trim cap slots travel with the object - the second slot of each end was the one "
+              "left behind, and a cap left behind is a line from the object to where it used to be");
+
+        // And what is DRAWN stays where the object is, which is the point of all of it.
+        const Bounds capDrawn = drawnBounds(moved);
+        check(capDrawn.valid && capDrawn.height() < 60.0,
+              "caps: so what is drawn is the run and its caps, not a line reaching back 500 to where it was");
+        std::printf("  a run with four cut slots, moved 500: drawn %.0f x %.0f\n",
+                    capDrawn.valid ? capDrawn.width() : 0.0, capDrawn.valid ? capDrawn.height() : 0.0);
+
+        // A scale carries them too, by the factor it scaled by.
+        Entity scaled = run;
+        scaleEntity(scaled, Vec2{0.0, 0.0}, 2.0);
+        check(std::abs(scaled.meta.value(QStringLiteral("cutEnd2Ax")).toDouble() - 198.0) < 1e-9,
+              "caps: and a scale takes them with it, by the factor it scaled by");
     }
 
     if (refFailures == 0) std::printf("  -> ok\n");
