@@ -703,6 +703,7 @@ QJsonObject PartsLibrary::toJson() const {
         o[QStringLiteral("mfrName")] = p.mfrName;
         o[QStringLiteral("mfrPn")] = p.mfrPn;
         o[QStringLiteral("internalPn")] = p.internalPn;
+        o[QStringLiteral("link")] = p.link;
         o[QStringLiteral("unit")] = p.unit;
         QJsonObject params;
         for (auto it = p.params.constBegin(); it != p.params.constEnd(); ++it)
@@ -736,6 +737,7 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
         p.mfrName = o.value(QStringLiteral("mfrName")).toString();
         p.mfrPn = o.value(QStringLiteral("mfrPn")).toString();
         p.internalPn = o.value(QStringLiteral("internalPn")).toString();
+        p.link = o.value(QStringLiteral("link")).toString();
         p.unit = o.value(QStringLiteral("unit")).toString(defaultUnitForKind(p.kind));
         const QJsonObject params = o.value(QStringLiteral("params")).toObject();
         for (auto it = params.constBegin(); it != params.constEnd(); ++it)

@@ -60,6 +60,9 @@ public:
     void refreshContactRow();
     // Build the connector's schematic symbol from its own data (the way count above all).
     void generateConnectorSymbol();
+    // The part's page: open it in a browser, or read what can be read off it into the fields.
+    void openPartLink();
+    void fetchDataFromLink();
     void tieContact();
     void untieContact();
     // Place it with a contact fitted (empty for none): what the fall menu on Insert chooses.
@@ -145,6 +148,7 @@ private:
     QWidget* contactGroup_ = nullptr;
     QListWidget* contactList_ = nullptr;
     QPushButton* genSymbolBtn_ = nullptr;
+    QLineEdit* linkEdit_ = nullptr;
     DrawingPreview* schemPreview_ = nullptr;
     DrawingPreview* mechPreview_ = nullptr;
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor

@@ -1,4 +1,6 @@
 #include "app/PartsLibraryDialog.h"
+#include "harness/PartDataFromWeb.h"
+#include "app/PartWebDataDialog.h"
 #include "harness/MechanicalHarness.h"
 
 #include "app/DrawingPreview.h"
@@ -667,6 +669,35 @@ void PartsLibraryDialog::buildUi() {
         if (LibraryPart* p = current()) { p->internalPn = t; touched(); }
     });
     headRow(QStringLiteral("Internal P/N"), internalEdit_);
+    // The part's own page - the manufacturer's, or the distributor's listing. Every part has one, and it is
+    // asked for in the same breath as the part number, so it is a field of the part and not a parameter of
+    // some kinds of part. Beside it: open it, and read what can be read off it.
+    {
+        auto* host = new QWidget(head);
+        auto* hl = new QHBoxLayout(host);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        linkEdit_ = new QLineEdit(host);
+        linkEdit_->setPlaceholderText(QStringLiteral("https://…  the manufacturer's page for this part"));
+        connect(linkEdit_, &QLineEdit::textChanged, this, [this](const QString& t) {
+            if (syncing_) return;
+            if (LibraryPart* p = current()) { p->link = t.trimmed(); touched(); }
+        });
+        hl->addWidget(linkEdit_, 1);
+        auto* open = new QPushButton(QStringLiteral("Open"), host);
+        open->setToolTip(QStringLiteral("Open this part's page in the browser"));
+        connect(open, &QPushButton::clicked, this, [this] { openPartLink(); });
+        hl->addWidget(open);
+        auto* fetch = new QPushButton(QStringLiteral("Read data…"), host);
+        fetch->setToolTip(QStringLiteral(
+            "Read the page and offer what can be found on it — the gauge, the ratio, the way count, the "
+            "temperature range, whatever that kind of part is described by.\n"
+            "Nothing is written until it is ticked: a reading off a page is a suggestion, and it is shown "
+            "with the words it came from."));
+        connect(fetch, &QPushButton::clicked, this, [this] { fetchDataFromLink(); });
+        hl->addWidget(fetch);
+        headRow(QStringLiteral("Web link"), host);
+    }
     // What the part is issued in. A bill of materials totals quantities by it, so it decides what
     // can be added to what: wire by the metre, a connector each, heatshrink by the millimetre.
     unitBox_ = new QComboBox(head);
@@ -1015,6 +1046,10 @@ void PartsLibraryDialog::showPart(const QString& id) {
     if (pnEdit_) {
         pnEdit_->setEnabled(have);
         pnEdit_->setText(have ? p->mfrPn : QString());
+    }
+    if (linkEdit_) {
+        linkEdit_->setEnabled(have);
+        linkEdit_->setText(have ? p->link : QString());
     }
     if (internalEdit_) {
         internalEdit_->setEnabled(have);
@@ -1749,6 +1784,56 @@ void PartsLibraryDialog::insertWithContact(bool mechanical, const QString& conta
     // The click that places it happens on the canvas, so the library gets out of the way.
     hide();
     saveLibrary();
+}
+
+void PartsLibraryDialog::openPartLink() {
+    const LibraryPart* p = current();
+    if (!p) return;
+    QString link = p->link.trimmed();
+    if (link.isEmpty()) {
+        if (summary_) summary_->setText(QStringLiteral("No web link on this part yet"));
+        return;
+    }
+    // A link written without its scheme - copied out of a spreadsheet, usually - is still a link.
+    if (!link.contains(QStringLiteral("://"))) link.prepend(QStringLiteral("https://"));
+    if (!QDesktopServices::openUrl(QUrl(link)) && summary_)
+        summary_->setText(QStringLiteral("That link could not be opened: %1").arg(link));
+}
+
+void PartsLibraryDialog::fetchDataFromLink() {
+    LibraryPart* p = current();
+    if (!p) return;
+    QString link = p->link.trimmed();
+    if (link.isEmpty()) {
+        QMessageBox::information(
+            this, QStringLiteral("Read data"),
+            QStringLiteral("Put the part's page in the Web link field first — the manufacturer's page for "
+                           "this part, or the distributor's listing of it."));
+        return;
+    }
+    if (!link.contains(QStringLiteral("://"))) link.prepend(QStringLiteral("https://"));
+    PartWebDataDialog dlg(*p, link, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    // Only what was ticked, and it is written into the part that is showing - which may have been changed
+    // while the page was being read, so it is fetched again rather than remembered.
+    LibraryPart* still = current();
+    if (!still) return;
+    const int changed = applyWebFinds(*still, dlg.chosen());
+    const QString sheet = dlg.datasheetLink();
+    if (!sheet.isEmpty()) still->params.insert(QStringLiteral("datasheetLink"), sheet);
+    if (changed > 0 || !sheet.isEmpty()) {
+        touched();
+        rebuildParamForm();   // the fields it filled in are on the form
+        reloadTree();
+        if (summary_)
+            summary_->setText(QStringLiteral("%1 field%2 filled in from the page%3")
+                                  .arg(changed)
+                                  .arg(changed == 1 ? QString() : QStringLiteral("s"))
+                                  .arg(sheet.isEmpty() ? QString()
+                                                       : QStringLiteral(", and the datasheet link kept")));
+    } else if (summary_) {
+        summary_->setText(QStringLiteral("Nothing was taken from the page"));
+    }
 }
 
 void PartsLibraryDialog::generateConnectorSymbol() {

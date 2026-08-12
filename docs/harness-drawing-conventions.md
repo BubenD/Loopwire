@@ -611,3 +611,26 @@ connector. Nothing else about the symbol is invented from the data.
 it, and a crowded corner is tidied by turning one off rather than by dragging it somewhere it does not
 belong. The text is kept either way — the eye hides it, it does not delete it — and what is hidden stays
 hidden when the drawing is saved and opened again.
+
+## A part's page, and reading data off it
+
+Every part carries a **web link** — the manufacturer's page, or the distributor's listing. It is a field of
+the part rather than a parameter of some kinds of part, because every part has a page and it is asked for in
+the same breath as the part number. **Open** puts it in the browser; a link written without its scheme (copied
+out of a spreadsheet) is opened as `https://` rather than refused.
+
+**Read data…** fetches that one page and offers what can be read off it. What the reader is: a careful reader
+of the page's TEXT, which knows what each kind of part is described by — a wire by its gauge, stranding,
+insulation, diameter, voltage and temperature range; heatshrink by its ratio, its supplied and recovered
+diameters, its wall and its shrink temperature; a connector by its way count, pitch, shell size, gender and
+plating — and looks for those things written the way a catalogue writes them. Scripts and styles are stripped
+first, because a page's own code is full of words that look like data, and a table-cell boundary is treated as
+a space so that `22</td><td>AWG` reads as two words.
+
+What it is **not** is a manufacturer integration or a promise. A page that keeps its table in a picture or
+behind a script yields nothing — and is reported as nothing found rather than as success. A page that says
+"for use with 22 AWG wire" about a part that is not 22 AWG yields the wrong thing. So **nothing is written
+behind the user's back**: every find is listed with the words it was read from and the value the part already
+has, and only the ticked lines are written. A field the part already fills in starts **unticked** — what
+somebody typed is worth more than what a page was read to say, until they decide otherwise. A datasheet PDF
+linked on the page is offered too, as a link, made absolute.

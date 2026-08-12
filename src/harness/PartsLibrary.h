@@ -126,6 +126,10 @@ struct LibraryPart {
     QString mfrPn;
     // The house part number, when there is one: a bill of materials is ordered against it.
     QString internalPn;
+    // Where the part lives on the web: the manufacturer's page or the distributor's listing. One field on
+    // every kind of part rather than a parameter of some of them, because every part has a page and it is
+    // asked for in the same breath as the part number.
+    QString link;
     // What it is issued in (see PartUnit). Set from the kind when the part is created.
     QString unit;
     // The technical parameters, by field key (a Range's two halves are "<key>Min"/"<key>Max",
