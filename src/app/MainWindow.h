@@ -96,6 +96,11 @@ public:
     void renameLayout(int space);
     void printLayout(int space);
     void showPageSetup(int space);
+    // The library, at the top of the canvas menu: pick a part and put its drawing down. `mechanical` says
+    // which of the two drawings; the search dialog is for a library too long to walk through by hand.
+    void addLibraryToCanvasMenu(QMenu& menu);
+    void placeLibraryPart(const QString& partId, bool mechanical);
+    void findAndPlaceLibraryPart();
     // The page setup manager, opened fresh or coming back from picking a plot window. `resumeTarget` is
     // which setup was being edited (-1 = the layout's own) and `resumeWorking` what the user had set.
     void openPageSetupManager(int space, bool resume, int resumeTarget, const PageSetup& resumeWorking);

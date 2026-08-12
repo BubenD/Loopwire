@@ -564,37 +564,6 @@ void PartsLibraryDialog::buildUi() {
                                    QStringLiteral("Take this part out of the library"), true);
     connect(delBtn, &QPushButton::clicked, this, [this] { deleteCurrentPart(); });
     ar->addWidget(delBtn);
-    // The heat-shrink families a harness shop keeps on the shelf, in every size they are made in. Offered
-    // to a library that already exists as well as seeded into a new one, and it adds only what is missing,
-    // so pressing it twice does not put a second DR-25 3/8 on every bill of materials.
-    auto* shrinkBtn = new QPushButton(QStringLiteral("Add heatshrink range"), addRow);
-    shrinkBtn->setToolTip(QStringLiteral(
-        "DR-25, RNF-100, RT-375 clear and ATUM adhesive-lined tubing, and TMS-SCE identification sleeve "
-        "in white and yellow — every size, added if it is not there already.\n"
-        "Diameters are nominal, from the size designation; check the datasheet before a build is held to "
-        "a tolerance."));
-    connect(shrinkBtn, &QPushButton::clicked, this, [this] {
-        // reloadTree() is the PARTS list. refreshLibraryList() is the list of library files - refreshing
-        // that one left the parts in the file and off the screen, which is exactly how this looked like
-        // nothing having happened.
-        const int added = addStandardHeatshrink(catalog_.active());
-        if (added > 0) {
-            catalog_.active().standardHeatshrink = true;
-            saveLibrary();
-            reloadTree();
-            refreshLibraryList();   // the count beside the library changes too
-        }
-        QMessageBox::information(
-            this, QStringLiteral("Heatshrink"),
-            added > 0 ? QStringLiteral("%1 part%2 added — DR-25, RNF-100, RT-375, ATUM and TMS-SCE, in "
-                                       "every size they are made in.\n\nDiameters are nominal, from the "
-                                       "size designation and the shrink ratio; wall thickness is left "
-                                       "blank. Check the datasheet before holding a build to a tolerance.")
-                            .arg(added)
-                            .arg(added == 1 ? QString() : QStringLiteral("s"))
-                      : QStringLiteral("They are all in the library already."));
-    });
-    ar->addWidget(shrinkBtn);
     lv->addWidget(addRow);
     split->addWidget(left);
 
@@ -799,16 +768,77 @@ void PartsLibraryDialog::buildUi() {
         const char* caption;
         bool mechanical;
     };
-    const Side sides[] = {{"Schematic symbol", false}, {"Mechanical drawing", true}};
-    for (int i = 0; i < 2; ++i) {
+    // Three drawings of a part, side by side: what it is on a circuit, what it is in the metal, and what
+    // the harness does at it. Each pane is given room enough to read - a drawing squeezed into a thumbnail
+    // is a drawing nobody can check.
+    const Side sides[] = {{"Schematic symbol", false}, {"Mechanical drawing", true},
+                          {"Fanout", false}};
+    for (int i = 0; i < 3; ++i) {
+        const bool isFanout = i == 2;
         auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), draw);
-        if (sides[i].mechanical) mechPreview_ = prev;
+        prev->setMinimumSize(320, 260);
+        if (isFanout) fanoutPreview_ = prev;
+        else if (sides[i].mechanical) mechPreview_ = prev;
         else schemPreview_ = prev;
         dg->addWidget(prev, 0, i);
+        if (isFanout) {
+            // Which side of the connector it was drawn from. A fanout is only meaningful with that said:
+            // the same drawing is the front view or the back view depending on it, and the other side is
+            // the same drawing mirrored.
+            auto* sideRow = new QWidget(draw);
+            fanoutSideRow_ = sideRow;
+            auto* sl = new QHBoxLayout(sideRow);
+            sl->setContentsMargins(0, 0, 0, 0);
+            sl->addWidget(new QLabel(QStringLiteral("Drawn from the"), sideRow));
+            fanoutSideBox_ = new QComboBox(sideRow);
+            fanoutSideBox_->addItem(QStringLiteral("front — looking at the face"),
+                                    QStringLiteral("front"));
+            fanoutSideBox_->addItem(QStringLiteral("back — looking at the wires"),
+                                    QStringLiteral("back"));
+            connect(fanoutSideBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+                if (syncing_) return;
+                if (LibraryPart* p = current()) {
+                    p->setFanoutSide(fanoutSideBox_->currentData().toString());
+                    touched();
+                }
+            });
+            sl->addWidget(fanoutSideBox_, 1);
+            dg->addWidget(sideRow, 2, i);
+        }
         auto* btns = new QWidget(draw);
         auto* bl = new QHBoxLayout(btns);
         bl->setContentsMargins(0, 0, 0, 0);
         const bool mech = sides[i].mechanical;
+        if (isFanout) {
+            // Its own four: take it off the sheet, put it down as drawn, put it down mirrored for the other
+            // side of the connector, and throw it away.
+            auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
+            cap->setToolTip(QStringLiteral("Take what is selected on the sheet as this part's fanout"));
+            connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(); });
+            bl->addWidget(cap);
+            auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
+            ins->setToolTip(QStringLiteral("Put the fanout on the sheet, as it was drawn"));
+            connect(ins, &QPushButton::clicked, this, [this] { insertFanout(false); });
+            bl->addWidget(ins);
+            auto* mir = new QPushButton(QStringLiteral("Insert mirrored"), btns);
+            mir->setToolTip(QStringLiteral(
+                "Put it on the sheet mirrored about the X axis — the same fanout seen from the other side of "
+                "the connector, front for back and back for front."));
+            connect(mir, &QPushButton::clicked, this, [this] { insertFanout(true); });
+            bl->addWidget(mir);
+            auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
+            connect(clr, &QPushButton::clicked, this, [this] {
+                if (LibraryPart* p = current()) {
+                    p->fanout = QJsonArray();
+                    if (fanoutPreview_) fanoutPreview_->setDrawing(p->fanout);
+                    touched();
+                    reloadTree();
+                }
+            });
+            bl->addWidget(clr);
+            dg->addWidget(btns, 1, i);
+            continue;
+        }
         auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
         cap->setToolTip(QStringLiteral(
             "Take what is selected on the sheet as this part's %1 drawing")
@@ -821,32 +851,6 @@ void PartsLibraryDialog::buildUi() {
         auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
         ins->setToolTip(QStringLiteral("Put this drawing on the sheet — then click where it goes"));
         connect(ins, &QPushButton::clicked, this, [this, mech] { insertIntoDrawing(mech); });
-        // A connector goes down WITH a contact, or on its own. The contacts tied to the part are on the
-        // fall menu, the first of them is what the button itself does, and "no contact" is there for the
-        // connector that is being drawn before anyone has decided. What is chosen is stamped on the block,
-        // and the bill of materials puts it on the line below the connector.
-        {
-            auto* menu = new QMenu(ins);
-            connect(menu, &QMenu::aboutToShow, this, [this, menu, mech] {
-                menu->clear();
-                const LibraryPart* p = current();
-                if (!p) return;
-                const QStringList tied = p->contactIds();
-                for (const QString& id : tied) {
-                    const LibraryPart* contact = catalog_.byId(id);
-                    const QString label = contact ? contact->title() : id;
-                    menu->addAction(QStringLiteral("With %1").arg(label), this,
-                                    [this, mech, id] { insertWithContact(mech, id); });
-                }
-                if (!tied.isEmpty()) menu->addSeparator();
-                menu->addAction(QStringLiteral("With no contact"), this,
-                                [this, mech] { insertWithContact(mech, QString()); });
-                if (tied.isEmpty())
-                    menu->addAction(QStringLiteral("(no contacts tied to this part yet)"))
-                        ->setEnabled(false);
-            });
-            ins->setMenu(menu);
-        }
         bl->addWidget(ins);
         auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
         edt->setToolTip(QStringLiteral(
@@ -873,31 +877,28 @@ void PartsLibraryDialog::buildUi() {
         bl->addWidget(clr);
         dg->addWidget(btns, 1, i);
     }
-    // ---- The contacts a connector takes ----
+    // ---- The pin contact this connector is used with ----
     //
-    // A connector is ordered with its contacts and cannot be built without them, and there is usually more
-    // than one to choose from: a pin and a socket, two gauges, sealed and plain. They are tied on here, and
-    // which one is fitted is chosen when the connector is placed.
+    // ONE, and for both drawings: a connector is built with one kind of contact in it, and which one is a
+    // property of the connector rather than of the moment it is placed. So it is set here, once, and every
+    // copy put on a sheet carries it - which is what puts it on the line below the connector on the bill of
+    // materials, in the quantity the connector needs.
     {
-        auto* group = new QGroupBox(QStringLiteral("Contacts this connector takes"), right);
+        auto* group = new QGroupBox(QStringLiteral("Use with pin contact"), right);
         contactGroup_ = group;
         auto* cl = new QHBoxLayout(group);
-        contactList_ = new QListWidget(group);
-        contactList_->setMaximumHeight(92);
-        contactList_->setToolTip(QStringLiteral(
-            "The contacts ordered with this connector. The first is the one offered by default when it is "
-            "placed."));
-        cl->addWidget(contactList_, 1);
-        auto* side = new QVBoxLayout();
-        auto* tie = new QPushButton(QStringLiteral("Tie a contact…"), group);
-        tie->setToolTip(QStringLiteral("Pick a contact from the library to be ordered with this connector"));
-        connect(tie, &QPushButton::clicked, this, [this] { tieContact(); });
-        auto* untie = new QPushButton(QStringLiteral("Untie"), group);
-        connect(untie, &QPushButton::clicked, this, [this] { untieContact(); });
-        side->addWidget(tie);
-        side->addWidget(untie);
-        side->addStretch(1);
-        cl->addLayout(side);
+        contactBox_ = new QComboBox(group);
+        contactBox_->setToolTip(QStringLiteral(
+            "The contact ordered and crimped into this connector. It goes on the bill of materials under "
+            "the connector, one per way, wherever the connector is placed."));
+        connect(contactBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+            if (syncing_) return;
+            if (LibraryPart* p = current()) {
+                p->setContactId(contactBox_->currentData().toString());
+                touched();
+            }
+        });
+        cl->addWidget(contactBox_, 1);
         rv->addWidget(group);
     }
 
@@ -1066,6 +1067,12 @@ void PartsLibraryDialog::showPart(const QString& id) {
     // A component of a standard kind shows its symbol straight away; capturing one for the part
     // replaces it.
     if (schemPreview_) schemPreview_->setDrawing(have ? partSchematicDrawing(*p) : QJsonArray());
+    if (fanoutPreview_) fanoutPreview_->setDrawing(p ? p->fanout : QJsonArray());
+    if (fanoutSideBox_ && p) {
+        const QSignalBlocker block(fanoutSideBox_);
+        const int at = fanoutSideBox_->findData(p->fanoutSide());
+        fanoutSideBox_->setCurrentIndex(at >= 0 ? at : 0);
+    }
     refreshDatasheetRow();
     if (mechPreview_) mechPreview_->setDrawing(have ? p->mechanical : QJsonArray());
     syncing_ = false;
@@ -1748,15 +1755,10 @@ void PartsLibraryDialog::captureFromSelection(bool mechanical) {
 }
 
 void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
-    // The button itself: with the first contact tied to the part, since a connector placed without its
-    // contacts is a connector nobody can build. Empty when none is tied, which is the same as before.
-    const LibraryPart* p = current();
-    const QStringList tied = p ? p->contactIds() : QStringList();
-    insertWithContact(mechanical, tied.isEmpty() ? QString() : tied.front());
-}
-
-void PartsLibraryDialog::insertWithContact(bool mechanical, const QString& contactId) {
     LibraryPart* p = current();
+    // The contact the part is used with, whichever drawing is being placed: it is a property of the
+    // connector, so there is nothing to ask at the moment of placing.
+    const QString contactId = p ? p->contactId() : QString();
     if (!p || !editor_) return;
     const QJsonArray drawing = mechanical ? p->mechanical : partSchematicDrawing(*p);
     if (drawing.isEmpty()) {
@@ -1866,72 +1868,87 @@ void PartsLibraryDialog::generateConnectorSymbol() {
                               .arg(p->wayCount() == 1 ? QString() : QStringLiteral("s")));
 }
 
+void PartsLibraryDialog::beginCaptureFanout() {
+    LibraryPart* p = current();
+    if (!p || !editor_) return;
+    const std::vector<Entity> sel = editor_->copyOfSelection();
+    if (sel.empty()) {
+        if (summary_)
+            summary_->setText(QStringLiteral(
+                "Select the fanout on the sheet first — the wires as they leave the connector"));
+        return;
+    }
+    p->fanout = partDrawingFromEntities(sel);
+    if (fanoutPreview_) fanoutPreview_->setDrawing(p->fanout);
+    touched();
+    reloadTree();
+    if (summary_)
+        summary_->setText(QStringLiteral("Captured %1 object(s) as the fanout, drawn from the %2")
+                              .arg(sel.size())
+                              .arg(p->fanoutSide()));
+}
+
+void PartsLibraryDialog::insertFanout(bool mirrored) {
+    LibraryPart* p = current();
+    if (!p || !editor_) return;
+    if (!p->hasFanout()) {
+        if (summary_)
+            summary_->setText(QStringLiteral("No fanout captured for this part yet — draw it on the sheet "
+                                             "and press Capture selection under Fanout"));
+        return;
+    }
+    std::vector<Entity> block = partDrawingBlockInstance(*p, p->fanout, QStringLiteral("fanout"),
+                                                         Vec2{0.0, 0.0}, mirrored);
+    const QString contactId = p->contactId();
+    if (!contactId.isEmpty())
+        for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    editor_->placeEntities(std::move(block));
+    // Mirroring turns the side it shows into the other one, and saying so is the whole point of the button.
+    const QString shows = p->fanoutSide() == QStringLiteral("front")
+                              ? (mirrored ? QStringLiteral("back") : QStringLiteral("front"))
+                              : (mirrored ? QStringLiteral("front") : QStringLiteral("back"));
+    if (summary_)
+        summary_->setText(QStringLiteral("Click the sheet to place the fanout of %1 — the %2 of the "
+                                         "connector")
+                              .arg(p->title(), shows));
+    hide();
+    saveLibrary();
+}
+
+void PartsLibraryDialog::refreshContactChoice() {
+    if (!contactGroup_ || !contactBox_) return;
+    const LibraryPart* p = current();
+    const bool isConnector = p && p->kind == PartKind::Connector;
+    contactGroup_->setVisible(isConnector);
+    if (fanoutSideRow_) fanoutSideRow_->setVisible(true);
+    const QSignalBlocker block(contactBox_);
+    contactBox_->clear();
+    contactBox_->addItem(QStringLiteral("(none — the connector on its own)"), QString());
+    if (!isConnector) return;
+    for (const LibraryPart& part : catalog_.merged().parts) {
+        if (part.kind != PartKind::ContactPin && part.kind != PartKind::Crimp) continue;
+        contactBox_->addItem(part.title(), part.id);
+    }
+    const QString chosen = p->contactId();
+    const int at = contactBox_->findData(chosen);
+    // A contact that is no longer in any library that is open is still what the part says: it is shown as
+    // itself rather than quietly cleared, because clearing it would lose what somebody chose.
+    if (at >= 0) {
+        contactBox_->setCurrentIndex(at);
+    } else if (!chosen.isEmpty()) {
+        contactBox_->addItem(QStringLiteral("%1 — not in any library that is open").arg(chosen), chosen);
+        contactBox_->setCurrentIndex(contactBox_->count() - 1);
+    } else {
+        contactBox_->setCurrentIndex(0);
+    }
+}
+
 void PartsLibraryDialog::refreshContactRow() {
     if (genSymbolBtn_) {
         const LibraryPart* part = current();
         genSymbolBtn_->setEnabled(part && part->kind == PartKind::Connector);
     }
-    if (!contactGroup_ || !contactList_) return;
-    const LibraryPart* p = current();
-    // Only a connector takes contacts. Anything else is not asked about them at all, rather than being
-    // shown an empty box it can never fill.
-    const bool isConnector = p && p->kind == PartKind::Connector;
-    contactGroup_->setVisible(isConnector);
-    contactList_->clear();
-    if (!isConnector) return;
-    for (const QString& id : p->contactIds()) {
-        const LibraryPart* contact = catalog_.byId(id);
-        auto* item = new QListWidgetItem(
-            contact ? contact->title()
-                    : QStringLiteral("%1 — not in any library that is open").arg(id),
-            contactList_);
-        item->setData(Qt::UserRole, id);
-        if (!contact) item->setForeground(QColor("#d9534f"));
-    }
-    if (contactList_->count() > 0) contactList_->setCurrentRow(0);
-}
-
-void PartsLibraryDialog::tieContact() {
-    LibraryPart* p = current();
-    if (!p) return;
-    // Every contact in every library that is open, by its title. A connector's contacts are usually a
-    // family of their own, so there is no point hiding the ones that are not obviously related.
-    QStringList labels;
-    QStringList ids;
-    for (const LibraryPart& part : catalog_.merged().parts) {
-        if (part.kind != PartKind::ContactPin && part.kind != PartKind::Crimp) continue;
-        labels << part.title();
-        ids << part.id;
-    }
-    if (labels.isEmpty()) {
-        QMessageBox::information(
-            this, QStringLiteral("Contacts"),
-            QStringLiteral("There are no contacts in the library yet. Add one as a Contact pin, then tie "
-                           "it to this connector."));
-        return;
-    }
-    bool ok = false;
-    const QString chosen = QInputDialog::getItem(this, QStringLiteral("Tie a contact"),
-                                                 QStringLiteral("Ordered with this connector:"), labels,
-                                                 0, false, &ok);
-    if (!ok || chosen.isEmpty()) return;
-    const int at = labels.indexOf(chosen);
-    if (at < 0) return;
-    QStringList tied = p->contactIds();
-    tied << ids.at(at);
-    p->setContactIds(tied);
-    touched();
-    refreshContactRow();
-}
-
-void PartsLibraryDialog::untieContact() {
-    LibraryPart* p = current();
-    if (!p || !contactList_ || !contactList_->currentItem()) return;
-    QStringList tied = p->contactIds();
-    tied.removeAll(contactList_->currentItem()->data(Qt::UserRole).toString());
-    p->setContactIds(tied);
-    touched();
-    refreshContactRow();
+    refreshContactChoice();
 }
 
 void PartsLibraryDialog::editDrawing(bool mechanical) {

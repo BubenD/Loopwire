@@ -157,6 +157,28 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
     return out;
 }
 
+std::vector<Entity> partDrawingBlockInstance(const LibraryPart& part, const QJsonArray& drawing,
+                                             const QString& what, const Vec2& at, bool mirrorY,
+                                             const QString& instanceKey) {
+    if (drawing.isEmpty()) return {};
+    BlockDef b;
+    b.name = QStringLiteral("%1 (%2)").arg(part.title(), what);
+    b.description = part.description.isEmpty() ? partKindName(part.kind) : part.description;
+    b.source = QStringLiteral("library:%1").arg(part.id);
+    b.entities = drawing;
+    std::vector<Entity> out = blockInstanceEntities(b, at, instanceKey);
+    if (mirrorY) {
+        // About the X axis through where it was placed: the fanout drawn for one side of the connector, put
+        // down for the other. Mirroring is what turns a front view into a back view - the wires leave the
+        // other way, and everything else about the drawing is the same drawing.
+        for (Entity& e : out) mirrorEntity(e, at, Vec2{at.x + 1.0, at.y});
+        b.name = QStringLiteral("%1 (%2, mirrored)").arg(part.title(), what);
+        for (Entity& e : out) e.meta.insert(QLatin1String(kBlockKey), b.name);
+    }
+    for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
+    return out;
+}
+
 std::vector<BlockDef> libraryBlocks(const PartsCatalog& catalog) {
     std::vector<BlockDef> out;
     const PartsLibrary merged = catalog.merged();

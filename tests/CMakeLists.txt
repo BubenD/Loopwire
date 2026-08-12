@@ -17,6 +17,7 @@ add_executable(edraw_tests
     test_output.cpp
     test_connectorparts.cpp
     test_partweb.cpp
+    test_libraryuse.cpp
     test_heatshrink.cpp
     test_pagesetup.cpp
     test_mechmodelcanvas.cpp

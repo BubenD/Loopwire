@@ -72,6 +72,14 @@ std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
 std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, const Vec2& at,
                                       const QString& instanceKey = QString());
 
+// The same, for a drawing of the part that is neither of those two - the fanout. `what` names it, so the
+// block is "X (fanout)" and every copy of it can be rebuilt when the part's drawing changes, exactly as the
+// other two are. `mirrorY` mirrors the geometry about the X axis: a fanout drawn from the front, placed for
+// the back, and the other way about.
+std::vector<Entity> partDrawingBlockInstance(const LibraryPart& part, const QJsonArray& drawing,
+                                             const QString& what, const Vec2& at, bool mirrorY = false,
+                                             const QString& instanceKey = QString());
+
 // Every block there is, in one list: the ones saved as files, and every drawing in the connected
 // part libraries. A library part IS a block - a symbol drawn once and dropped in wherever it is
 // wanted is exactly what a block is for - so the two are offered together rather than a part having

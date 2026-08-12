@@ -634,3 +634,35 @@ behind the user's back**: every find is listed with the words it was read from a
 has, and only the ticked lines are written. A field the part already fills in starts **unticked** — what
 somebody typed is worth more than what a page was read to say, until they decide otherwise. A datasheet PDF
 linked on the page is offered too, as a link, made absolute.
+
+## The library, from the sheet
+
+The canvas right-click menu opens with the **Library**: the parts of the library being worked in, grouped by
+kind, each offering the drawings it actually has — *Mechanical drawing*, *Schematic symbol* — plus **Find a
+part…** for a library too long to walk through (search across part number, description and manufacturer,
+filtered by kind) and the way through to the library window itself. Putting a part on the sheet is the
+commonest thing done from that menu by a long way, and it used to mean crossing the screen and coming back.
+Everything else on the menu, the bill of materials included, sits below the rule under it.
+
+A part with no drawing is not offered: it is a line on a bill of materials and nothing to put down.
+
+## The pin contact, and the fanout
+
+**Use with pin contact** is one choice, for both drawings. A connector is built with one kind of contact in
+it, and which one is a property of the connector rather than of the moment it is placed — so it is set once in
+the library and every copy carries it, whether it was placed from the library window or from the canvas menu.
+That is what puts it on the bill of materials under the connector, one per way. Nothing is asked at insert
+time any more.
+
+The **fanout** is a third drawing of a part, beside the mechanical and the schematic, because it is a third
+thing: the mechanical view is the connector's body, the schematic is its circuit, and the fanout is what the
+harness *does* at it. It is drawn from one side — **front**, looking at the face, or **back**, looking at the
+wires — and that has to be said, because the same drawing is the front view or the back view depending on it.
+
+**Insert mirrored** puts it down mirrored about the X axis through the placement point: the same fanout seen
+from the other side of the connector, front for back and back for front. The mirrored copy is its own block —
+a mirrored fanout is not the same block as the one it came from, or rebuilding one would flip the other — and
+it carries the part id, so the bill of materials still counts it.
+
+Each drawing pane is 320 × 260 at its smallest and fits its drawing: a drawing squeezed into a thumbnail is a
+drawing nobody can check.

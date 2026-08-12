@@ -2174,6 +2174,137 @@ void MainWindow::printLayout(int space) {
                                                             QFileInfo(path).fileName()), 6000);
 }
 
+void MainWindow::addLibraryToCanvasMenu(QMenu& menu) {
+    if (!editor_) return;
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const PartsLibrary& lib = catalog.active();
+    auto* root = menu.addMenu(tr("Library"));
+    root->setToolTip(tr("Put a part from the library on the sheet"));
+    // Only the parts that have a drawing to place. A part with neither is a line on a bill of materials and
+    // nothing to put down, and offering it here would be offering nothing.
+    int offered = 0;
+    for (PartKind kind : allPartKinds()) {
+        std::vector<const LibraryPart*> ofKind;
+        for (const LibraryPart& part : lib.parts) {
+            if (part.kind != kind) continue;
+            if (!part.hasMechanical() && partSchematicDrawing(part).isEmpty()) continue;
+            ofKind.push_back(&part);
+        }
+        if (ofKind.empty()) continue;
+        auto* kindMenu = root->addMenu(partKindName(kind));
+        for (const LibraryPart* part : ofKind) {
+            auto* partMenu = kindMenu->addMenu(part->title());
+            const QString id = part->id;
+            if (part->hasMechanical())
+                partMenu->addAction(tr("Mechanical drawing"), this,
+                                    [this, id] { placeLibraryPart(id, true); });
+            if (!partSchematicDrawing(*part).isEmpty())
+                partMenu->addAction(tr("Schematic symbol"), this,
+                                    [this, id] { placeLibraryPart(id, false); });
+            ++offered;
+        }
+    }
+    if (offered == 0) {
+        root->addAction(tr("(nothing in the library has a drawing yet)"))->setEnabled(false);
+    } else {
+        root->addSeparator();
+        root->addAction(tr("Find a part... (search the library)"), this,
+                        [this] { findAndPlaceLibraryPart(); });
+    }
+    root->addSeparator();
+    root->addAction(tr("Open the parts library..."), this, [this] { showPartsLibrary(); });
+    menu.addSeparator();
+}
+
+void MainWindow::placeLibraryPart(const QString& partId, bool mechanical) {
+    if (!editor_) return;
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(partId);
+    if (!part) return;
+    std::vector<Entity> block = partBlockInstance(*part, mechanical, Vec2{0.0, 0.0});
+    if (block.empty()) {
+        statusBar()->showMessage(tr("%1 has no %2 drawing to place")
+                                     .arg(part->title(), mechanical ? tr("mechanical")
+                                                                    : tr("schematic")),
+                                 4000);
+        return;
+    }
+    // The contact the connector is used with goes down with it, as it does from the library window: it is a
+    // property of the part, so it does not matter which way the part was reached.
+    const QString contactId = part->contactId();
+    if (!contactId.isEmpty())
+        for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    editor_->placeEntities(std::move(block));
+    statusBar()->showMessage(tr("Click the sheet to place %1").arg(part->title()), 6000);
+    if (canvas_) canvas_->setFocus();
+}
+
+void MainWindow::findAndPlaceLibraryPart() {
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const PartsLibrary lib = catalog.merged();
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Find a part to place"));
+    dlg.resize(560, 460);
+    auto* v = new QVBoxLayout(&dlg);
+    auto* search = new QLineEdit(&dlg);
+    search->setPlaceholderText(tr("part number, description, manufacturer…"));
+    v->addWidget(search);
+    auto* kindBox = new QComboBox(&dlg);
+    kindBox->addItem(tr("Every kind"), -1);
+    for (PartKind k : allPartKinds()) kindBox->addItem(partKindName(k), static_cast<int>(k));
+    v->addWidget(kindBox);
+    auto* list = new QListWidget(&dlg);
+    v->addWidget(list, 1);
+    auto* buttons = new QDialogButtonBox(&dlg);
+    auto* mechBtn = buttons->addButton(tr("Place mechanical"), QDialogButtonBox::AcceptRole);
+    auto* schemBtn = buttons->addButton(tr("Place schematic"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(tr("Cancel"), QDialogButtonBox::RejectRole);
+    v->addWidget(buttons);
+
+    // The list, filtered by what has been typed and by the kind chosen: a library of a thousand parts is
+    // searched, not scrolled.
+    auto refill = [&] {
+        list->clear();
+        const QString needle = search->text().trimmed();
+        const int wantKind = kindBox->currentData().toInt();
+        for (const LibraryPart& part : lib.parts) {
+            if (wantKind >= 0 && static_cast<int>(part.kind) != wantKind) continue;
+            const bool drawn = part.hasMechanical() || !partSchematicDrawing(part).isEmpty();
+            if (!drawn) continue;
+            if (!needle.isEmpty()) {
+                const QString hay = QStringLiteral("%1 %2 %3 %4")
+                                        .arg(part.mfrPn, part.internalPn, part.description, part.mfrName);
+                if (!hay.contains(needle, Qt::CaseInsensitive)) continue;
+            }
+            auto* item = new QListWidgetItem(
+                QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()), list);
+            item->setData(Qt::UserRole, part.id);
+            item->setData(Qt::UserRole + 1, part.hasMechanical());
+        }
+        if (list->count() > 0) list->setCurrentRow(0);
+    };
+    QObject::connect(search, &QLineEdit::textChanged, &dlg, refill);
+    QObject::connect(kindBox, &QComboBox::currentIndexChanged, &dlg, refill);
+    QObject::connect(list, &QListWidget::currentItemChanged, &dlg, [&](QListWidgetItem* item) {
+        // A part with no mechanical drawing cannot be placed as one: the button says so rather than
+        // failing when it is pressed.
+        mechBtn->setEnabled(item && item->data(Qt::UserRole + 1).toBool());
+    });
+    bool mechanical = true;
+    QObject::connect(mechBtn, &QPushButton::clicked, &dlg, [&] { mechanical = true; });
+    QObject::connect(schemBtn, &QPushButton::clicked, &dlg, [&] { mechanical = false; });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    QObject::connect(list, &QListWidget::itemDoubleClicked, &dlg, &QDialog::accept);
+    refill();
+    if (dlg.exec() != QDialog::Accepted || !list->currentItem()) return;
+    placeLibraryPart(list->currentItem()->data(Qt::UserRole).toString(), mechanical);
+}
+
 void MainWindow::showPageSetup(int space) {
     openPageSetupManager(space, /*resume=*/false, -1, PageSetup());
 }
@@ -5350,6 +5481,10 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     }
 
     QMenu menu(this);
+    // The library first. Putting a part on the sheet is the commonest thing done from this menu by a long
+    // way, and it used to mean crossing the screen to the library window and coming back. The parts of the
+    // library being worked in are here, by kind, with a search for a library too long to walk through.
+    addLibraryToCanvasMenu(menu);
     const bool hasSel = !editor_->selection().empty();
 
     // On a sheet, the windows come first. A window is added here, or with "+ window" in the corner of the

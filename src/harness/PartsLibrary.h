@@ -145,9 +145,25 @@ struct LibraryPart {
     QStringList datasheets;
     QString datasheet() const { return datasheets.isEmpty() ? QString() : datasheets.front(); }
     bool hasDatasheet() const { return !datasheets.isEmpty(); }
-    // The two drawings, as entities. Empty until one is captured from a sheet.
+    // The drawings, as entities. Empty until one is captured from a sheet.
     QJsonArray schematic;
     QJsonArray mechanical;
+    // The FANOUT: how the wires leave the connector - which way they break out, and in what order. It is a
+    // third drawing because it is a third thing: the mechanical view is the connector's body, the schematic
+    // is its circuit, and the fanout is what the harness does at it. Drawn for one side, front or back, and
+    // placed mirrored for the other.
+    QJsonArray fanout;
+
+    // Which side the fanout was drawn from: "front" (looking at the face) or "back" (looking at the wires).
+    QString fanoutSide() const {
+        const QString s = params.value(QStringLiteral("fanoutSide"));
+        return s == QStringLiteral("back") ? s : QStringLiteral("front");
+    }
+    void setFanoutSide(const QString& side) {
+        params.insert(QStringLiteral("fanoutSide"),
+                      side == QStringLiteral("back") ? side : QStringLiteral("front"));
+    }
+    bool hasFanout() const { return !fanout.isEmpty(); }
 
     // The contacts this connector takes: library part ids, in the order they were tied on. A connector is
     // ordered with its contacts and cannot be built without them, and there is often more than one to
@@ -155,6 +171,11 @@ struct LibraryPart {
     // part here, and the one to fit is chosen when the connector is placed.
     QStringList contactIds() const;
     void setContactIds(const QStringList& ids);
+    // The pin contact this connector is used with: ONE, for both drawings. A connector is built with one
+    // kind of contact in it, and which one is a property of the connector rather than of the moment it is
+    // placed - so it is set once, in the library, and every copy placed carries it.
+    QString contactId() const { const QStringList ids = contactIds(); return ids.isEmpty() ? QString() : ids.front(); }
+    void setContactId(const QString& id) { setContactIds(id.isEmpty() ? QStringList() : QStringList{id}); }
     // How many contacts one of these connectors needs: its way count, or one if it does not say.
     int wayCount() const;
 

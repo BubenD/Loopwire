@@ -63,10 +63,14 @@ public:
     // The part's page: open it in a browser, or read what can be read off it into the fields.
     void openPartLink();
     void fetchDataFromLink();
-    void tieContact();
-    void untieContact();
+
     // Place it with a contact fitted (empty for none): what the fall menu on Insert chooses.
-    void insertWithContact(bool mechanical, const QString& contactId);    // this drawing goes onto the sheet
+    // Place the fanout - as drawn, or mirrored about the X axis for the other side of the connector.
+    void insertFanout(bool mirrored);
+    // Take what is selected on the sheet as this part's fanout.
+    void beginCaptureFanout();
+    // Which pin contact this connector is used with: one, for both drawings.
+    void refreshContactChoice();    // this drawing goes onto the sheet
     // Onto the sheet AND selected, to be worked on: lines added or moved, and the one the harness
     // attaches to marked as such (Harness ▸ connection line, or the `connline` command). Pressing
     // Capture selection afterwards puts the edited drawing back on this part.
@@ -146,11 +150,15 @@ private:
     QLabel* summary_ = nullptr;
     // The connector's contacts: the list, and the buttons that tie one on and take one off.
     QWidget* contactGroup_ = nullptr;
-    QListWidget* contactList_ = nullptr;
     QPushButton* genSymbolBtn_ = nullptr;
     QLineEdit* linkEdit_ = nullptr;
     DrawingPreview* schemPreview_ = nullptr;
     DrawingPreview* mechPreview_ = nullptr;
+    // The fanout: a third drawing of the part, and which side of the connector it was drawn from.
+    DrawingPreview* fanoutPreview_ = nullptr;
+    QComboBox* fanoutSideBox_ = nullptr;
+    QWidget* fanoutSideRow_ = nullptr;
+    QComboBox* contactBox_ = nullptr;
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor
 };
 
