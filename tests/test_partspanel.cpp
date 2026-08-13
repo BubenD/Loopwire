@@ -10,6 +10,7 @@
 #include "app/MainWindow.h"
 #include "app/Editor.h"
 #include "model/Block.h"
+#include "render/CanvasWidget.h"
 #include "harness/PartsLibrary.h"
 
 #include <QAction>
@@ -18,6 +19,7 @@
 #include <QDockWidget>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 #include <QTableWidget>
 #include <QCheckBox>
 #include <QTreeWidget>
@@ -428,6 +430,114 @@ int run_partspanel_tests() {
         onPlace->setChecked(true);
         unify->setChecked(true);
         QApplication::processEvents();
+    }
+
+    // ---- a COPY of a placed part is another one of it ----------------------------------------------
+    {
+        // Copy a connector on the sheet and there are two connectors to buy. The copy kept the instance key
+        // of the one it came from - every paste went through a path that never re-minted the copies'
+        // references - so anything counting instances counted the two as one, and the bill of materials
+        // showed one connector where the drawing had two.
+        QTableWidget* bom = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->objectName() == QStringLiteral("panel_BILL OF MATERIALS"))
+                bom = d->findChild<QTableWidget*>();
+        Editor* editor = win.findChild<Editor*>();
+        CanvasWidget* canvas = win.findChild<CanvasWidget*>();
+        check(bom && editor && canvas, "copy: the sheet, the editor and the bill of materials are all here");
+        if (!bom || !editor || !canvas) return panelFailures;
+
+        PartsCatalog cat;
+        cat.openRemembered();
+        const LibraryPart* part = cat.byId(drawnId);
+        check(part != nullptr, "copy: and the part to place");
+        if (!part) return panelFailures;
+
+        auto qtyOfTheConnector = [bom]() -> QString {
+            for (int i = 0; i < bom->rowCount(); ++i)
+                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
+                    return bom->item(i, 3) ? bom->item(i, 3)->text() : QString();
+            return QString();
+        };
+        auto linesOfTheConnector = [bom] {
+            int n = 0;
+            for (int i = 0; i < bom->rowCount(); ++i)
+                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++n;
+            return n;
+        };
+
+        // An empty sheet to count on: the checks above left parts on it, and a count is only a count when
+        // it is known what is being counted.
+        editor->selectAll();
+        editor->deleteSelected();
+        QApplication::processEvents();
+        check(linesOfTheConnector() == 0, "copy: the sheet starts empty");
+
+        // One on the sheet.
+        editor->appendEntities(partBlockInstance(*part, true, Vec2{0.0, 0.0}));
+        QApplication::processEvents();
+        check(linesOfTheConnector() == 1 && qtyOfTheConnector() == QStringLiteral("1"),
+              "copy: one placed connector is one line of one");
+
+        // Copied and pasted, the way the keys do it: copy the selection, paste, then click to put it down.
+        editor->selectAll();
+        editor->copySelection();
+        editor->paste();
+        editor->onPointerPress(Vec2{200.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        QApplication::processEvents();
+        std::printf("  copy: after pasting - %d line(s), quantity %s\n", linesOfTheConnector(),
+                    qPrintable(qtyOfTheConnector()));
+        check(linesOfTheConnector() == 1 && qtyOfTheConnector() == QStringLiteral("2"),
+              "copy: the copy is another one of the part - one line, counted twice");
+
+        // Every entity of the copy is its own instance, and its own entity: a copy that shares an id or an
+        // instance key with the original is the whole cause of the miscount.
+        {
+            QSet<QString> ids, instances;
+            int stamped = 0;
+            for (const Entity& e : editor->document()->entities()) {
+                if (e.meta.value(QStringLiteral("libPart")).toString() != part->id) continue;
+                ++stamped;
+                ids.insert(e.id);
+                instances.insert(e.meta.value(QStringLiteral("blockInst")).toString());
+            }
+            check(ids.size() == stamped, "copy: no two lines of the two copies share an id");
+            check(instances.size() == 2, "copy: and the two copies are two instances, not one");
+        }
+
+        // Delete one of them: back to one. The line is the drawing's own, so taking the thing off the
+        // drawing is what takes it off the bill - there is nothing else to do and nothing else to undo.
+        editor->clearSelection();
+        {
+            const QString oneInstance =
+                [&]() -> QString {
+                    for (const Entity& e : editor->document()->entities())
+                        if (e.meta.value(QStringLiteral("libPart")).toString() == part->id)
+                            return e.meta.value(QStringLiteral("blockInst")).toString();
+                    return QString();
+                }();
+            bool first = true;
+            QStringList toGo;
+            for (const Entity& e : editor->document()->entities())
+                if (e.meta.value(QStringLiteral("blockInst")).toString() == oneInstance) toGo << e.id;
+            for (const QString& id : toGo) {
+                editor->selectById(id, !first);
+                first = false;
+            }
+            editor->deleteSelected();
+            QApplication::processEvents();
+        }
+        std::printf("  copy: one deleted - %d line(s), quantity %s\n", linesOfTheConnector(),
+                    qPrintable(qtyOfTheConnector()));
+        check(linesOfTheConnector() == 1 && qtyOfTheConnector() == QStringLiteral("1"),
+              "copy: deleting one of the two takes one off the bill of materials");
+
+        // And the last of them takes the line with it.
+        editor->selectAll();
+        editor->deleteSelected();
+        QApplication::processEvents();
+        check(linesOfTheConnector() == 0,
+              "copy: deleting the last one takes the line off altogether");
     }
 
     // The count under the list says what is in view out of what is connected, so a short list is never a

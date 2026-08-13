@@ -787,6 +787,22 @@ being touched, so each button follows its panel's `visibilityChanged` as well as
 ribbon is built **before** the panels are, the buttons are wired to the panels *by name* — `panelByKey` —
 and switched on at the end of `buildPanels()` by `syncViewPanelButtons()`.
 
+### A copy of a placed part is another one of it
+
+Copy a connector on the sheet and there are two connectors to buy. There were not: the copy kept the
+**instance key** of the part it came from, and everything that counts placed parts counts *instances* — one
+line per block instance, however many entities the drawing of it is made of — so the two read as one and the
+bill of materials showed a single connector for a drawing that plainly had two.
+
+The cause was one path. `remapEntityReferences` exists exactly for this — the copies name each other rather
+than the originals, and a copied block instance gets a new key — and the offset, mirror and array paths all
+called it. **Paste did not**, and paste is what every Ctrl+V and every Insert goes through, so the copies were
+appended with fresh entity ids and the *old* instance key.
+
+Deleting needs nothing of its own: the line is the drawing's, so taking the thing off the drawing takes it off
+the bill. Measured: one placed connector is one line of one; pasted, one line of two; delete one, back to one;
+delete the last, the line goes.
+
 ### The shelf shows the whole shelf
 
 The parts panel lists **every part of every library in view** — and it did not: it skipped any part without a

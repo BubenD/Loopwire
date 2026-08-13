@@ -2020,13 +2020,27 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             cutPending_.clear();
         }
         selected_.clear();
+        // A pasted set is a SET: the copies name each other, not the originals, and a copy of a placed
+        // library part is another one of that part. Both of those are what remapEntityReferences says, and
+        // this path - the one every paste and every Insert goes through - was not calling it. So a pasted
+        // connector kept the instance key of the one it was copied from, and anything that counts instances
+        // counted the two as one: the bill of materials showed one connector where the sheet had two.
+        std::vector<Entity> copies;
+        copies.reserve(clipboard_.size());
+        QHash<QString, QString> oldToNew;
         for (Entity e : clipboard_) {
+            const QString was = e.id;
             e.id = uid();
+            oldToNew.insert(was, e.id);
             if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
             if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
             // Turned the way it was turned under the cursor, about the point it was held by.
             if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
             translateEntity(e, off);
+            copies.push_back(std::move(e));
+        }
+        remapEntityReferences(copies, oldToNew);
+        for (Entity& e : copies) {
             selected_.push_back(e.id);
             doc_->entities().push_back(std::move(e));
         }
