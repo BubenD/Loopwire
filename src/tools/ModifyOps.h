@@ -106,6 +106,16 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
                    std::optional<Entity>& extra);
 
+// The piece of a path BETWEEN two points that lie on it, taken out. `path` is a line, a polyline or a wire;
+// `p1` and `p2` are two points on it (each within `tol` of it), in either order. What comes back is what is
+// LEFT: nothing (the two points are its two ends), one piece (a point at one end), or two pieces. False when
+// either point is not on the path at all, and then `pieces` is untouched.
+//
+// It is how a component dropped on a net gets into the net rather than sitting across it: the wire is cut at
+// the symbol's two leads and the piece under the symbol goes, so the current has to go through the part.
+bool cutPathBetweenPoints(const Entity& path, const Vec2& p1, const Vec2& p2, double tol,
+                          std::vector<std::vector<Vec2>>& pieces);
+
 // Extend a line's nearest end to the first boundary it would meet. Returns true
 // if modified.
 bool extendLineTo(Entity& line, const Vec2& pick,

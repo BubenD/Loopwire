@@ -1,6 +1,7 @@
 #include "app/Editor.h"
 
 #include "model/EntityRefs.h"
+#include "model/PartSymbols.h"
 
 #include "render/EntityRenderer.h"
 
@@ -2044,6 +2045,13 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             selected_.push_back(e.id);
             doc_->entities().push_back(std::move(e));
         }
+        // A component dropped on a net goes INTO it: the wire is cut between the symbol's two leads, so the
+        // current has to go through the part. A line drawn straight through a resistor is a resistor with a
+        // wire shorting it out, which is not what anybody means by putting one there.
+        if (const int cut = cutNetsUnderSymbols(selected_))
+            emit message(QStringLiteral("Placed - the net was cut between its leads (%1 wire%2)")
+                             .arg(cut)
+                             .arg(cut == 1 ? QString() : QStringLiteral("s")));
         pastePlacing_ = false;
         pasteMirrorX_ = pasteMirrorY_ = false;
         placeRot_ = 0.0;
@@ -12334,6 +12342,79 @@ void Editor::paste() {
     pasteMirrorX_ = pasteMirrorY_ = false;
     emit message(QStringLiteral("Specify insertion point — X / Y mirror before placing"));
     emit overlayChanged();
+}
+
+int Editor::cutNetsUnderSymbols(const std::vector<QString>& placedIds) {
+    if (!doc_ || placedIds.empty()) return 0;
+    // The two leads of each symbol that was just put down. A symbol's entities share one key, so several
+    // symbols pasted at once are still told apart - and the tip of a lead is its `a`, which has been turned
+    // and mirrored with the rest of the drawing.
+    struct Pins { std::optional<Vec2> one, two; };
+    QHash<QString, Pins> bySymbol;
+    QSet<QString> placed;
+    for (const QString& id : placedIds) placed.insert(id);
+    for (const Entity& e : doc_->entities()) {
+        if (!placed.contains(e.id)) continue;
+        const QString inst = e.meta.value(QLatin1String(kPartSymbolInstKey)).toString();
+        const QString pin = e.meta.value(QLatin1String(kPartSymbolPinKey)).toString();
+        if (inst.isEmpty() || pin.isEmpty()) continue;
+        Pins& p = bySymbol[inst];
+        if (pin == QLatin1String("1")) p.one = e.a;
+        else if (pin == QLatin1String("2")) p.two = e.a;
+    }
+    if (bySymbol.isEmpty()) return 0;
+
+    const double tol = std::max(1e-6, worldTolerance());
+    int cuts = 0;
+    for (auto it = bySymbol.cbegin(); it != bySymbol.cend(); ++it) {
+        const Pins& pins = it.value();
+        if (!pins.one || !pins.two) continue;
+        // Every wire or line the symbol landed on with BOTH leads. Both, because that is what "the same net
+        // between the connection points" means: a symbol touching a net with one lead is drawn beside it, not
+        // in it, and cutting anything there would be inventing an intention.
+        std::vector<Entity> added;
+        std::vector<QString> gone;
+        for (Entity& e : doc_->entities()) {
+            if (placed.contains(e.id)) continue;   // itself, and anything else just put down
+            if (e.type != EntityType::Line && e.type != EntityType::Polyline && e.type != EntityType::Wire)
+                continue;
+            std::vector<std::vector<Vec2>> pieces;
+            if (!cutPathBetweenPoints(e, *pins.one, *pins.two, tol, pieces)) continue;
+            ++cuts;
+            // The first piece stays in place, keeping the wire's own id, layer and everything written on it;
+            // any second piece is the same wire again, cut. Nothing left means the symbol spans the whole of
+            // it, and then the wire goes: the symbol is the connection now.
+            if (pieces.empty()) {
+                gone.push_back(e.id);
+                continue;
+            }
+            auto shape = [](Entity& target, const std::vector<Vec2>& pts) {
+                if (target.type == EntityType::Line) {
+                    target.a = pts.front();
+                    target.b = pts.back();
+                } else {
+                    target.points = pts;
+                }
+            };
+            if (pieces.size() > 1) {
+                Entity second = e;
+                second.id = uid();
+                shape(second, pieces[1]);
+                added.push_back(std::move(second));
+            }
+            shape(e, pieces[0]);
+        }
+        if (!gone.empty()) {
+            auto& ents = doc_->entities();
+            ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                      [&gone](const Entity& e) {
+                                          return std::find(gone.begin(), gone.end(), e.id) != gone.end();
+                                      }),
+                       ents.end());
+        }
+        for (Entity& e : added) doc_->entities().push_back(std::move(e));
+    }
+    return cuts;
 }
 
 void Editor::togglePasteMirror(bool xAxis) {

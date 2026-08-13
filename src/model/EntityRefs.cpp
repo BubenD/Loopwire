@@ -1,5 +1,7 @@
 #include "model/EntityRefs.h"
 
+#include "model/PartSymbols.h"
+
 #include <QJsonArray>
 #include <QUuid>
 
@@ -52,6 +54,11 @@ void remapEntityReferences(Entity& copy, const QHash<QString, QString>& oldToNew
     if (copy.meta.contains(QStringLiteral("blockInst")))
         copy.meta.insert(QStringLiteral("blockInst"),
                          QUuid::createUuid().toString(QUuid::WithoutBraces));
+    // The same for a stock symbol: a copied resistor is another resistor, and the two have to be told apart
+    // by whatever cuts a net under one of them.
+    if (copy.meta.contains(QLatin1String(kPartSymbolInstKey)))
+        copy.meta.insert(QLatin1String(kPartSymbolInstKey),
+                         QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
 void remapEntityReferences(std::vector<Entity>& copies, const QHash<QString, QString>& oldToNew) {
@@ -59,15 +66,25 @@ void remapEntityReferences(std::vector<Entity>& copies, const QHash<QString, QSt
     // a copy of that block is one new instance rather than one per line. So it is decided here and handed to
     // each entity that carried the same one.
     QHash<QString, QString> instances;
+    QHash<QString, QString> symbols;
     for (Entity& copy : copies) {
         const QString wasInstance = copy.meta.value(QStringLiteral("blockInst")).toString();
+        const QString wasSymbol = copy.meta.value(QLatin1String(kPartSymbolInstKey)).toString();
         remapEntityReferences(copy, oldToNew);
-        if (wasInstance.isEmpty()) continue;
-        auto found = instances.constFind(wasInstance);
-        if (found == instances.constEnd())
-            found = instances.insert(wasInstance,
-                                     copy.meta.value(QStringLiteral("blockInst")).toString());
-        copy.meta.insert(QStringLiteral("blockInst"), *found);
+        if (!wasInstance.isEmpty()) {
+            auto found = instances.constFind(wasInstance);
+            if (found == instances.constEnd())
+                found = instances.insert(wasInstance,
+                                         copy.meta.value(QStringLiteral("blockInst")).toString());
+            copy.meta.insert(QStringLiteral("blockInst"), *found);
+        }
+        if (!wasSymbol.isEmpty()) {
+            auto found = symbols.constFind(wasSymbol);
+            if (found == symbols.constEnd())
+                found = symbols.insert(wasSymbol,
+                                       copy.meta.value(QLatin1String(kPartSymbolInstKey)).toString());
+            copy.meta.insert(QLatin1String(kPartSymbolInstKey), *found);
+        }
     }
 }
 

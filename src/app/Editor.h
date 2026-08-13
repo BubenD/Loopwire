@@ -481,6 +481,9 @@ public:
     // Flip the paste preview before placing: xAxis mirrors across a vertical line
     // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
     void togglePasteMirror(bool xAxis);
+    // A stock symbol just put down: where its two leads land on a net, the net is cut between them, so the
+    // part is IN the circuit rather than lying across it. Returns how many nets were cut.
+    int cutNetsUnderSymbols(const std::vector<QString>& placedIds);
 
     // While something is being MOVED - dragged by the pointer, or by one of its own joints - Space
     // turns it a quarter turn clockwise about the cursor and Shift+Space the other way. Turning a part

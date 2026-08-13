@@ -52,5 +52,13 @@ std::vector<PartSymbol> schematicPartSymbols();
 
 // The meta key every entity of a placed part carries: the part's own name.
 inline constexpr char kPartSymbolKey[] = "partSymbol";
+// Which copy of a symbol this is - one key shared by every entity of one drawing of it, re-minted when the
+// symbol is copied, exactly as a block instance is. Two symbols sharing a key would be one symbol to anything
+// that has to tell them apart.
+inline constexpr char kPartSymbolInstKey[] = "symbolInst";
+// A LEAD, and which of the two it is ("1" / "2"). The entity's `a` is the TIP: the point the symbol connects
+// to the net at. Stamped because a symbol dropped on a net has to cut the net between its two tips, and after
+// the symbol has been turned or mirrored under the cursor nothing else can say where those tips are.
+inline constexpr char kPartSymbolPinKey[] = "symbolPin";
 
 } // namespace Edraw_Desktop

@@ -1210,6 +1210,77 @@ bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& ot
     return false;
 }
 
+namespace {
+
+// Where a point sits along a path: which segment, and how far along it. The distance is what says whether the
+// point is on the path at all.
+struct AlongPath {
+    int segment = -1;
+    double t = 0.0;
+    double distance = 1e18;
+};
+
+AlongPath alongPath(const std::vector<Vec2>& pts, const Vec2& q) {
+    AlongPath best;
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        const Vec2 a = pts[i], b = pts[i + 1];
+        const double dx = b.x - a.x, dy = b.y - a.y;
+        const double len2 = dx * dx + dy * dy;
+        double t = 0.0;
+        if (len2 > 1e-18) t = std::clamp(((q.x - a.x) * dx + (q.y - a.y) * dy) / len2, 0.0, 1.0);
+        const Vec2 on{a.x + dx * t, a.y + dy * t};
+        const double d = std::hypot(q.x - on.x, q.y - on.y);
+        if (d < best.distance) {
+            best.distance = d;
+            best.segment = static_cast<int>(i);
+            best.t = t;
+        }
+    }
+    return best;
+}
+
+double pathLength(const std::vector<Vec2>& pts) {
+    double sum = 0.0;
+    for (size_t i = 0; i + 1 < pts.size(); ++i) sum += std::hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    return sum;
+}
+
+} // namespace
+
+bool cutPathBetweenPoints(const Entity& path, const Vec2& p1, const Vec2& p2, double tol,
+                          std::vector<std::vector<Vec2>>& pieces) {
+    std::vector<Vec2> pts;
+    if (path.type == EntityType::Line) pts = {path.a, path.b};
+    else if (path.type == EntityType::Polyline || path.type == EntityType::Wire) pts = path.points;
+    if (pts.size() < 2) return false;
+
+    AlongPath a = alongPath(pts, p1);
+    AlongPath b = alongPath(pts, p2);
+    if (a.distance > tol || b.distance > tol) return false;
+    // In the order they come along the path, not the order they were given: a symbol can be dropped either
+    // way round, and the piece between them is the same piece.
+    if (b.segment < a.segment || (b.segment == a.segment && b.t < a.t)) std::swap(a, b);
+
+    auto at = [&pts](const AlongPath& w) {
+        const Vec2 s = pts[static_cast<size_t>(w.segment)], e = pts[static_cast<size_t>(w.segment) + 1];
+        return Vec2{s.x + (e.x - s.x) * w.t, s.y + (e.y - s.y) * w.t};
+    };
+    const Vec2 cutA = at(a), cutB = at(b);
+
+    std::vector<Vec2> first, second;
+    for (int i = 0; i <= a.segment; ++i) first.push_back(pts[static_cast<size_t>(i)]);
+    first.push_back(cutA);
+    second.push_back(cutB);
+    for (size_t i = static_cast<size_t>(b.segment) + 1; i < pts.size(); ++i) second.push_back(pts[i]);
+
+    pieces.clear();
+    // A piece of no length is not a piece: a cut exactly at an end leaves nothing that side, and leaving a
+    // zero-length line behind is worse than leaving a gap - it cannot be seen and it can be picked.
+    if (pathLength(first) > tol) pieces.push_back(std::move(first));
+    if (pathLength(second) > tol) pieces.push_back(std::move(second));
+    return true;
+}
+
 bool extendLineTo(Entity& line, const Vec2& pick, const std::vector<Entity>& others) {
     if (line.type != EntityType::Line) return false;
     // The end to extend is the one nearer the pick.

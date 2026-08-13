@@ -992,6 +992,30 @@ Two things came out of drawing them small:
   reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
   icon is 11 px tall in a 28 px box, where it was 0.
 
+## A component dropped on a net goes into the net
+
+Put a resistor on a wire and the wire is **cut between its two leads**. A line drawn straight through a
+resistor is a resistor with a wire shorting it out, which is not what anybody means by putting one there — and
+that is exactly what the drawing showed before: the symbol lay across the net and the net ran on underneath it.
+
+How the two points are known: each schematic symbol's leads are drawn as **leads**, not as plain lines — the
+entity's `a` is the *tip*, the point the net joins, and it is stamped with which of the two it is
+(`symbolPin`). A remembered pair of numbers would be wrong the moment the symbol was turned or mirrored under
+the cursor; `a` and `b` are transformed with the drawing, so the tips follow it. Every entity of one symbol
+also shares a `symbolInst` key — re-minted on copy, exactly as a block instance is — so several symbols pasted
+at once are still told apart.
+
+The cut itself is `cutPathBetweenPoints` (in ModifyOps, where the other trimming lives): given a line, a
+polyline or a wire and two points **on** it, it returns what is left — two pieces, or one when a lead lands on
+an end, or none when the symbol spans the whole of it, in which case the wire goes and the symbol *is* the
+connection. The first piece keeps the wire's own id, layer and everything written on it; a second piece is the
+same wire again, cut.
+
+**Both** leads have to land on the same wire. A symbol touching a net with one lead is drawn *beside* it, not
+in it, and cutting there would be inventing an intention. Measured: a resistor dropped at 50 on a net from 0
+to 100 leaves 0–41 and 59–100 — its leads are 9 either side of where it was held — a symbol dropped clear of
+the net leaves it whole, and one lying across the *end* of a net with a lead off it does not cut it.
+
 ## A ribbon group is two rows of one square
 
 Every group of tools on the ribbon is a grid of **two rows** — including whatever else belongs in the group.

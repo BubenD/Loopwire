@@ -1,5 +1,7 @@
 #include "model/PartSymbols.h"
 
+#include <QUuid>
+
 #include <QtMath>
 #include <cmath>
 
@@ -47,6 +49,16 @@ public:
         e.endAngle = to * M_PI / 180.0;
         out_.push_back(std::move(e));
     }
+    // A lead: the wire out of the symbol to the point the net joins it. `a` is the TIP - the outer end -
+    // because that is the point a net is cut at, and it has to survive the symbol being turned or mirrored
+    // under the cursor, which transforming `a` and `b` does and a remembered number would not.
+    void lead(double xTip, double yTip, double xInner, double yInner, int pin) {
+        Entity e = start(EntityType::Line);
+        e.a = {at_.x + xTip, at_.y + yTip};
+        e.b = {at_.x + xInner, at_.y + yInner};
+        e.meta.insert(QLatin1String(kPartSymbolPinKey), QString::number(pin));
+        out_.push_back(std::move(e));
+    }
     std::vector<Entity> take() { return std::move(out_); }
 
 private:
@@ -54,10 +66,13 @@ private:
         Entity e;
         e.type = t;
         e.meta.insert(QLatin1String(kPartSymbolKey), part_);
+        e.meta.insert(QLatin1String(kPartSymbolInstKey), inst_);
         return e;
     }
     Vec2 at_;
     QString part_;
+    // One key per DRAWING of the symbol, so the entities of one resistor are one resistor.
+    QString inst_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     std::vector<Entity> out_;
 };
 
@@ -245,8 +260,8 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         // The symbol: a plain box with a lead each side.
         const double hx = 4.0, hy = 1.5, lead = 5.0;
         d.rect(-hx, -hy, hx, hy);
-        d.line(-hx, 0.0, -hx - lead, 0.0);
-        d.line(hx, 0.0, hx + lead, 0.0);
+        d.lead(-hx - lead, 0.0, -hx, 0.0, 1);
+        d.lead(hx + lead, 0.0, hx, 0.0, 2);
         break;
     }
     case PartSymbol::SchResistorZigzag: {
@@ -268,8 +283,8 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         }
         zig.push_back({hx, 0.0});
         d.poly(zig);
-        d.line(-hx, 0.0, -hx - lead, 0.0);
-        d.line(hx, 0.0, hx + lead, 0.0);
+        d.lead(-hx - lead, 0.0, -hx, 0.0, 1);
+        d.lead(hx + lead, 0.0, hx, 0.0, 2);
         break;
     }
     case PartSymbol::SchCapacitor: {
@@ -277,16 +292,16 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         const double gap = 0.9, plate = 2.5, lead = 5.0;
         d.line(-gap, -plate, -gap, plate);
         d.line(gap, -plate, gap, plate);
-        d.line(-gap, 0.0, -gap - lead, 0.0);
-        d.line(gap, 0.0, gap + lead, 0.0);
+        d.lead(-gap - lead, 0.0, -gap, 0.0, 1);
+        d.lead(gap + lead, 0.0, gap, 0.0, 2);
         break;
     }
     case PartSymbol::SchCoil: {
         // Four turns, and a lead each side.
         const double r = 1.25, lead = 4.0;
         for (int i = 0; i < 4; ++i) d.arc(-3.0 * r + i * 2.0 * r, 0.0, r, 0.0, 180.0);
-        d.line(-4.0 * r, 0.0, -4.0 * r - lead, 0.0);
-        d.line(4.0 * r, 0.0, 4.0 * r + lead, 0.0);
+        d.lead(-4.0 * r - lead, 0.0, -4.0 * r, 0.0, 1);
+        d.lead(4.0 * r + lead, 0.0, 4.0 * r, 0.0, 2);
         break;
     }
     case PartSymbol::SchFerrite: {
@@ -294,8 +309,8 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         // choke is drawn as.
         const double r = 1.25, lead = 4.0;
         for (int i = 0; i < 4; ++i) d.arc(-3.0 * r + i * 2.0 * r, 0.0, r, 0.0, 180.0);
-        d.line(-4.0 * r, 0.0, -4.0 * r - lead, 0.0);
-        d.line(4.0 * r, 0.0, 4.0 * r + lead, 0.0);
+        d.lead(-4.0 * r - lead, 0.0, -4.0 * r, 0.0, 1);
+        d.lead(4.0 * r + lead, 0.0, 4.0 * r, 0.0, 2);
         d.line(-4.0 * r, r + 0.6, 4.0 * r, r + 0.6);
         d.line(-4.0 * r, r + 1.2, 4.0 * r, r + 1.2);
         break;

@@ -5697,6 +5697,82 @@ int run_editor_tests() {
                   "resistors: its icon is a zigzag and not a dash - the ink stands up off the centre line");
         }
 
+        // A component dropped on a net goes INTO the net: the wire is cut between its two leads, so the
+        // current has to go through the part. A line drawn straight through a resistor is a resistor with a
+        // wire shorting it out, which is not what putting one there means.
+        {
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            noSnap(ed);   // the points in this check are the points, not what a snap would prefer
+            // A net across the sheet, and a resistor dropped on the middle of it.
+            Entity wire;
+            wire.type = EntityType::Line;
+            wire.id = QStringLiteral("net");
+            wire.a = {0.0, 0.0};
+            wire.b = {100.0, 0.0};
+            doc.entities().push_back(wire);
+
+            ed.placeEntities(partSymbolEntities(PartSymbol::SchResistorZigzag, Vec2{0.0, 0.0}),
+                             Vec2{0.0, 0.0});
+            ed.onPointerPress(Vec2{50.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+
+            // The net is two pieces now, and the gap between them is the symbol.
+            std::vector<const Entity*> netPieces;
+            for (const Entity& e : doc.entities())
+                if (e.type == EntityType::Line &&
+                    e.meta.value(kPartSymbolKey).toString().isEmpty())
+                    netPieces.push_back(&e);
+            std::printf("  net cut: %lld piece(s) of net left\n",
+                        static_cast<long long>(netPieces.size()));
+            check(netPieces.size() == 2, "net: the wire under a dropped component is cut in two");
+            if (netPieces.size() == 2) {
+                // Each piece runs from an end of the net to a lead of the symbol, and nothing crosses the
+                // symbol itself: the leads are 9 units apart either side of the middle (18 long overall).
+                double leftEnd = 0.0, rightStart = 0.0;
+                for (const Entity* e : netPieces) {
+                    const double lo = std::min(e->a.x, e->b.x), hi = std::max(e->a.x, e->b.x);
+                    if (near(lo, 0.0)) leftEnd = hi;
+                    if (near(hi, 100.0)) rightStart = lo;
+                }
+                std::printf("  net cut: kept 0..%.1f and %.1f..100\n", leftEnd, rightStart);
+                check(near(leftEnd, 41.0) && near(rightStart, 59.0),
+                      "net: cut exactly at the symbol's leads, and the piece between them is gone");
+            }
+
+            // A symbol dropped where it touches nothing cuts nothing.
+            const size_t before = doc.entities().size();
+            ed.placeEntities(partSymbolEntities(PartSymbol::SchResistorZigzag, Vec2{0.0, 0.0}),
+                             Vec2{0.0, 0.0});
+            ed.onPointerPress(Vec2{50.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
+            int stillTwo = 0;
+            for (const Entity& e : doc.entities())
+                if (e.type == EntityType::Line && e.meta.value(kPartSymbolKey).toString().isEmpty())
+                    ++stillTwo;
+            check(stillTwo == 2, "net: a component dropped clear of the net leaves it alone");
+            check(doc.entities().size() > before, "net: and is still placed");
+
+            // One lead on the net and one off it: drawn beside the net, not in it. Cutting there would be
+            // inventing an intention.
+            Entity other;
+            other.type = EntityType::Line;
+            other.id = QStringLiteral("net2");
+            other.a = {0.0, 200.0};
+            other.b = {100.0, 200.0};
+            doc.entities().push_back(other);
+            ed.placeEntities(partSymbolEntities(PartSymbol::SchResistor, Vec2{0.0, 0.0}), Vec2{0.0, 0.0});
+            // Held by its middle: put down so its LEFT lead lands on the net's end and the rest runs off it.
+            ed.onPointerPress(Vec2{100.0, 200.0}, Qt::LeftButton, Qt::NoModifier);
+            int piecesOfTheSecond = 0;
+            for (const Entity& e : doc.entities())
+                if (e.type == EntityType::Line && e.meta.value(kPartSymbolKey).toString().isEmpty() &&
+                    near(e.a.y, 200.0) && near(e.b.y, 200.0))
+                    ++piecesOfTheSecond;
+            std::printf("  net cut: the second net is in %d piece(s)\n", piecesOfTheSecond);
+            check(piecesOfTheSecond == 1,
+                  "net: a symbol lying across the END of a net, one lead off it, does not cut it");
+        }
+
         // The ring from the side cannot show its hole, so those two edges are drawn hidden.
         int hidden = 0;
         for (const Entity& e : partSymbolEntities(PartSymbol::FerriteRingSide, Vec2{0.0, 0.0}))
