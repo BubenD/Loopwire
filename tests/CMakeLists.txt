@@ -18,6 +18,7 @@ add_executable(edraw_tests
     test_connectorparts.cpp
     test_partweb.cpp
     test_libraryuse.cpp
+    test_partspanel.cpp
     test_entityrefs.cpp
     test_heatshrink.cpp
     test_pagesetup.cpp

@@ -11045,20 +11045,53 @@ QDockWidget* MainWindow::makePartsPanel() {
     auto* v = new QVBoxLayout(body);
     v->setContentsMargins(4, 4, 4, 4);
     v->setSpacing(4);
-    partsPanelFilter_ = new QLineEdit(body);
+
+    // The filter, and beside it which libraries the list is drawn from. A shop connects more than one
+    // library - the house library, a customer's, a project's - and the panel is a shelf: which shelves are
+    // in view is the first thing to be able to say about it.
+    auto* head = new QWidget(body);
+    auto* hh = new QHBoxLayout(head);
+    hh->setContentsMargins(0, 0, 0, 0);
+    hh->setSpacing(4);
+    partsPanelFilter_ = new QLineEdit(head);
     partsPanelFilter_->setPlaceholderText(QStringLiteral("filter by P/N, description or manufacturer"));
     connect(partsPanelFilter_, &QLineEdit::textChanged, this, [this] { refreshPartsPanel(); });
-    v->addWidget(partsPanelFilter_);
+    hh->addWidget(partsPanelFilter_, 1);
+    auto* libsBtn = new QToolButton(head);
+    libsBtn->setText(QStringLiteral("Libraries"));
+    libsBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    libsBtn->setPopupMode(QToolButton::InstantPopup);
+    libsBtn->setToolTip(QStringLiteral("Which of the connected libraries this list is drawn from"));
+    auto* libsMenu = new QMenu(libsBtn);
+    // Filled when it is opened, not when it is built: a library connected since is on the list.
+    connect(libsMenu, &QMenu::aboutToShow, this, [this, libsMenu] { fillPartsLibraryMenu(libsMenu); });
+    libsBtn->setMenu(libsMenu);
+    hh->addWidget(libsBtn);
+    v->addWidget(head);
+
     partsPanelList_ = new QListWidget(body);
     partsPanelList_->setToolTip(QStringLiteral(
-        "Double-click to put a part on the sheet: its mechanical drawing where it has one, else its "
-        "schematic symbol."));
+        "Every part of every library in view. Double-click to put one on the sheet: its mechanical drawing "
+        "where it has one, else its schematic symbol. A part with neither opens in the library, where a "
+        "drawing can be made for it."));
     // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
     connect(partsPanelList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
         if (!item) return;
-        placeLibraryPart(item->data(Qt::UserRole).toString(), item->data(Qt::UserRole + 1).toBool());
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty()) return;                       // a library's name, not a part
+        if (!item->data(Qt::UserRole + 2).toBool()) {
+            // Nothing to put down yet. Rather than a shrug, the part opens where a drawing is made for it.
+            statusBar()->showMessage(
+                tr("%1 has no drawing yet — opening it in the library").arg(item->text()), 6000);
+            showPartsLibraryAt(id);
+            return;
+        }
+        placeLibraryPart(id, item->data(Qt::UserRole + 1).toBool());
     });
     v->addWidget(partsPanelList_, 1);
+    partsPanelCount_ = new QLabel(body);
+    partsPanelCount_->setToolTip(QStringLiteral("What is in view, out of what is connected"));
+    v->addWidget(partsPanelCount_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the parts library"), body);
         connect(open, &QPushButton::clicked, this, [this] { showPartsLibrary(); });
@@ -11071,30 +11104,121 @@ QDockWidget* MainWindow::makePartsPanel() {
     return dock;
 }
 
+// The libraries that are connected, each with a tick: on the list or not. A library is remembered as hidden
+// by its own path, so connecting another does not disturb what is in view.
+void MainWindow::fillPartsLibraryMenu(QMenu* menu) {
+    if (!menu) return;
+    menu->clear();
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const QStringList paths = catalog.paths();
+    if (paths.isEmpty()) {
+        QAction* none = menu->addAction(QStringLiteral("No library is connected"));
+        none->setEnabled(false);
+        return;
+    }
+    for (const QString& path : paths) {
+        const PartsLibrary* lib = catalog.byPath(path);
+        const int count = lib ? static_cast<int>(lib->parts.size()) : 0;
+        QAction* a = menu->addAction(
+            QStringLiteral("%1  (%2)").arg(QFileInfo(path).completeBaseName()).arg(count));
+        a->setCheckable(true);
+        a->setChecked(!partsPanelHidden_.contains(path));
+        a->setToolTip(path);
+        connect(a, &QAction::toggled, this, [this, path](bool on) {
+            if (on) partsPanelHidden_.removeAll(path);
+            else if (!partsPanelHidden_.contains(path)) partsPanelHidden_.append(path);
+            refreshPartsPanel();
+        });
+    }
+    if (paths.size() > 1) {
+        menu->addSeparator();
+        menu->addAction(QStringLiteral("All of them"), this, [this] {
+            partsPanelHidden_.clear();
+            refreshPartsPanel();
+        });
+    }
+}
+
 void MainWindow::refreshPartsPanel() {
     if (!partsPanelList_) return;
     partsPanelList_->clear();
     PartsCatalog catalog;
     catalog.openRemembered();
-    const PartsLibrary lib = catalog.merged();
     const QString needle = partsPanelFilter_ ? partsPanelFilter_->text().trimmed() : QString();
-    for (const LibraryPart& part : lib.parts) {
+
+    // EVERY part, not only the ones with a drawing. The panel used to skip a part that had neither a
+    // mechanical drawing nor a symbol, which is most of a real library - a heat-shrink size, a contact, a
+    // length of wire - so a shelf of a hundred parts showed three, and looked broken rather than filtered.
+    // A part with no drawing is shown greyed and opens in the library, where one can be made for it.
+    auto matches = [&needle](const LibraryPart& part) {
+        if (needle.isEmpty()) return true;
+        const QString hay = QStringLiteral("%1 %2 %3 %4 %5")
+                                .arg(part.mfrPn, part.internalPn, part.description, part.mfrName,
+                                     partKindName(part.kind));
+        return hay.contains(needle, Qt::CaseInsensitive);
+    };
+
+    QStringList shownFrom = catalog.paths();
+    for (const QString& hidden : partsPanelHidden_) shownFrom.removeAll(hidden);
+    int shown = 0, connected = 0;
+    const bool severalInView = shownFrom.size() > 1;
+
+    auto addPart = [this, &shown](const LibraryPart& part) {
         const bool mech = part.hasMechanical();
         const bool schem = !partSchematicDrawing(part).isEmpty();
-        if (!mech && !schem) continue;   // nothing to put down
-        if (!needle.isEmpty()) {
-            const QString hay = QStringLiteral("%1 %2 %3 %4")
-                                    .arg(part.mfrPn, part.internalPn, part.description, part.mfrName);
-            if (!hay.contains(needle, Qt::CaseInsensitive)) continue;
-        }
         auto* item = new QListWidgetItem(
             QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()), partsPanelList_);
         item->setData(Qt::UserRole, part.id);
-        item->setData(Qt::UserRole + 1, mech);   // the mechanical drawing where there is one
-        item->setToolTip(QStringLiteral("%1\nDouble-click to place the %2 drawing")
-                             .arg(part.title(),
-                                  mech ? QStringLiteral("mechanical") : QStringLiteral("schematic")));
+        item->setData(Qt::UserRole + 1, mech);              // the mechanical drawing where there is one
+        item->setData(Qt::UserRole + 2, mech || schem);      // is there anything to put down at all
+        if (mech || schem)
+            item->setToolTip(QStringLiteral("%1\nDouble-click to place the %2 drawing")
+                                 .arg(part.title(),
+                                      mech ? QStringLiteral("mechanical") : QStringLiteral("schematic")));
+        else {
+            item->setToolTip(QStringLiteral("%1\nNo drawing yet — double-click to open it in the library")
+                                 .arg(part.title()));
+            item->setForeground(Chrome::subInk());
+        }
+        ++shown;
+    };
+
+    if (catalog.paths().isEmpty()) {
+        // Nothing connected by name: whatever the catalogue has, as one shelf.
+        const PartsLibrary lib = catalog.merged();
+        connected = static_cast<int>(lib.parts.size());
+        for (const LibraryPart& part : lib.parts)
+            if (matches(part)) addPart(part);
+    } else {
+        for (const QString& path : catalog.paths()) {
+            const PartsLibrary* lib = catalog.byPath(path);
+            if (!lib) continue;
+            connected += static_cast<int>(lib->parts.size());
+            if (!shownFrom.contains(path)) continue;
+            if (severalInView) {
+                // Which shelf this is. Not selectable: it is a heading, not a part.
+                auto* head = new QListWidgetItem(QFileInfo(path).completeBaseName().toUpper(),
+                                                 partsPanelList_);
+                head->setFlags(Qt::ItemIsEnabled);
+                QFont f = head->font();
+                f.setBold(true);
+                head->setFont(f);
+                head->setForeground(Chrome::subInk());
+            }
+            for (const LibraryPart& part : lib->parts)
+                if (matches(part)) addPart(part);
+        }
     }
+    if (partsPanelCount_)
+        partsPanelCount_->setText(
+            shownFrom.size() == catalog.paths().size()
+                ? tr("%1 of %2 parts").arg(shown).arg(connected)
+                : tr("%1 of %2 parts — %3 of %4 libraries")
+                      .arg(shown)
+                      .arg(connected)
+                      .arg(shownFrom.size())
+                      .arg(catalog.paths().size()));
 }
 
 QDockWidget* MainWindow::makeBlocksPanel() {
@@ -11373,6 +11497,7 @@ void MainWindow::loadSettings() {
     // and there are panels to colour.
     darkTheme_ = s.value(QStringLiteral("ui/darkChrome"), true).toBool();
     Chrome::setDark(darkTheme_);
+    partsPanelHidden_ = s.value(QStringLiteral("panels/partsHidden")).toStringList();
     customWireColors_ = s.value(QStringLiteral("wire/customColors")).toStringList();
     insulationMaterials_ = s.value(QStringLiteral("wire/insulationMaterials")).toStringList();
 }
@@ -11406,6 +11531,7 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("wire/customColors"), customWireColors_);
     s.setValue(QStringLiteral("wire/insulationMaterials"), insulationMaterials_);
     s.setValue(QStringLiteral("ui/darkChrome"), darkTheme_);
+    s.setValue(QStringLiteral("panels/partsHidden"), partsPanelHidden_);
 }
 
 // ---- File actions ----------------------------------------------------------

@@ -31,6 +31,7 @@ class QTableWidget;
 class QListWidget;
 class QLineEdit;
 class QComboBox;
+class QMenu;
 class QDockWidget;
 class QWidget;
 class QCloseEvent;
@@ -164,6 +165,11 @@ private:
     QDockWidget* makePartsPanel();
     QDockWidget* makeBlocksPanel();
     void refreshPartsPanel();
+    // Which of the connected libraries the parts panel draws from. Remembered by path, so connecting
+    // another library does not disturb what is in view.
+    void fillPartsLibraryMenu(QMenu* menu);
+    QStringList partsPanelHidden_;
+    QLabel* partsPanelCount_ = nullptr;
     void refreshBlocksPanel();
     void buildSchematicBuildTab();
     void buildHarnessMechanicalTab();

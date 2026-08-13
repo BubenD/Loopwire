@@ -28,6 +28,7 @@ int run_heatshrink_tests();
 int run_connectorparts_tests();
 int run_partweb_tests();
 int run_libraryuse_tests();
+int run_partspanel_tests();
 int run_entityrefs_tests();
 int run_stepsbuilder_tests();
 
@@ -64,6 +65,7 @@ int main(int argc, char** argv) {
     failures += run_connectorparts_tests();
     failures += run_partweb_tests();
     failures += run_libraryuse_tests();
+    failures += run_partspanel_tests();
     failures += run_entityrefs_tests();
     failures += run_stepsbuilder_tests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");

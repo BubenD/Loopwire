@@ -787,6 +787,23 @@ being touched, so each button follows its panel's `visibilityChanged` as well as
 ribbon is built **before** the panels are, the buttons are wired to the panels *by name* — `panelByKey` —
 and switched on at the end of `buildPanels()` by `syncViewPanelButtons()`.
 
+### The shelf shows the whole shelf
+
+The parts panel lists **every part of every library in view** — and it did not: it skipped any part without a
+drawing, which in a real library is nearly all of them. A heat-shrink size has no drawing, nor has a contact,
+nor a length of wire. A library of a hundred and twenty parts showed three, which does not look filtered, it
+looks broken.
+
+A part with no drawing is listed greyed, and double-clicking it opens it **in the library**, where a drawing
+can be made for it — that being the only thing that can honestly happen next.
+
+A shop connects more than one library: the house library, a customer's, a project's. **Libraries** beside the
+filter ticks each connected one, with its part count, and taking a tick off takes that library's parts off the
+shelf; with more than one in view each is listed under its own heading. What is not in view is remembered by
+path, so connecting another library does not disturb it. And the line under the list says *"122 of 122 parts"*
+— or how many libraries of how many, when some are out of view — so a short list is never a mystery: it is
+the filter or it is a library out of view, and both are said.
+
 The parts and the blocks are panels now, not only windows. What is on the shelf is wanted *while drawing*, and
 crossing the screen to a dialog to put a part down — and closing it again — is a lot of work for something done
 twenty times an hour. Both lists place by **double-click**; the parts list has a filter, because a real library
