@@ -992,6 +992,34 @@ Two things came out of drawing them small:
   reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
   icon is 11 px tall in a 28 px box, where it was 0.
 
+## A PDF comes in as a block
+
+A PDF import used to land as loose entities — hundreds or thousands of little lines, because that is what a
+PDF is. A title block alone is a few hundred. Loose, they cannot be moved as a unit, cannot be picked without
+catching the drawing underneath, and cannot be changed all at once.
+
+It comes in as a **block** now, named after the file, with one copy dropped on 0,0. So it is one object on the
+sheet, it can be inserted again wherever it is wanted, and it opens **on its own tab** — Blocks, or
+right-click it — where the lines can be worked on and saved back to every copy at once. A second import of the
+same file becomes *name (2)* rather than overwriting the first: replacing a block replaces every copy of it
+already on a sheet, and doing that because two PDFs share a file name is not an import, it is a loss.
+
+The DXF written beside the PDF is unchanged, and the work is now reachable with a path
+(`importPdfFile`) rather than only through the file dialog — which is what makes it testable, and what lets
+anything else that already knows the file ask for it.
+
+## Colour belongs to every object, whatever kind it is
+
+Colour, layer, linetype and lineweight are on the base entity: every object has them. The properties panel
+offered them only when the selection was all of **one** kind — pick a line and a circle together and it said
+*"2 objects (mixed)"* and nothing else, so the commonest thing anybody wants to do to a mixed selection, make
+it all red, could not be done from the panel at all.
+
+The General section is built for **any** selection now; only the per-kind sections below it still wait for a
+selection of one kind. The multi-value readers compare across the whole selection rather than only across a
+same-kind one, so a property the selection disagrees about still shows `#Value` — and the Type row still says
+the selection is of several kinds, because it is.
+
 ## A component dropped on a net goes into the net
 
 Put a resistor on a wire and the wire is **cut between its two leads**. A line drawn straight through a

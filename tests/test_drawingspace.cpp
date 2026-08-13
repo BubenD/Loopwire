@@ -25,6 +25,7 @@
 #include <QElapsedTimer>
 #include <QSettings>
 #include <QMouseEvent>
+#include <QTableWidget>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
@@ -818,6 +819,86 @@ int run_drawingspace_tests() {
         check(twoRow > 0, "rows: the ribbon's tool groups are laid out in a grid of two rows");
         check(tall == 0, "rows: and none of them runs to three");
         check(ragged == 0, "rows: every button in a row of icons is the same square, split buttons and all");
+    }
+
+    // ---- one colour over a selection of several KINDS of object ------------------------------------
+    {
+        // Colour, layer, linetype and lineweight belong to every object whatever kind it is. The panel only
+        // offered them when the selection was all of one kind: pick a line and a circle together and it said
+        // "2 objects (mixed)" and nothing else, so the commonest thing anybody wants to do to a mixed
+        // selection - make it all red - could not be done from the panel at all.
+        Editor* editor = win.findChild<Editor*>();
+        check(editor != nullptr, "mixed: there is an editor");
+        if (editor) {
+            editor->selectAll();
+            editor->deleteSelected();
+            Entity line;
+            line.type = EntityType::Line;
+            line.id = QStringLiteral("mixed-line");
+            line.a = {0.0, 0.0};
+            line.b = {50.0, 0.0};
+            Entity circle;
+            circle.type = EntityType::Circle;
+            circle.id = QStringLiteral("mixed-circle");
+            circle.center = {20.0, 20.0};
+            circle.radius = 8.0;
+            Entity text;
+            text.type = EntityType::Text;
+            text.id = QStringLiteral("mixed-text");
+            text.a = {0.0, 40.0};
+            text.meta.insert(QStringLiteral("text"), QStringLiteral("N O T E"));
+            editor->appendEntities({line, circle, text});
+            editor->selectById(QStringLiteral("mixed-line"));
+            editor->selectById(QStringLiteral("mixed-circle"), true);
+            editor->selectById(QStringLiteral("mixed-text"), true);
+            QApplication::processEvents();
+
+            // The properties panel, and the Color row in it.
+            QTableWidget* props = nullptr;
+            for (QDockWidget* d : win.findChildren<QDockWidget*>())
+                if (d->windowTitle() == QStringLiteral("PROPERTIES"))
+                    props = d->findChild<QTableWidget*>();
+            check(props != nullptr, "mixed: the properties panel is there");
+            QComboBox* colorCombo = nullptr;
+            QStringList rows;
+            if (props)
+                for (int r = 0; r < props->rowCount(); ++r) {
+                    const QString key = props->item(r, 0) ? props->item(r, 0)->text() : QString();
+                    rows << key;
+                    if (key == QStringLiteral("Color"))
+                        colorCombo = qobject_cast<QComboBox*>(props->cellWidget(r, 1));
+                }
+            std::printf("  mixed: three kinds selected, the panel offers %s\n",
+                        qPrintable(rows.join(QStringLiteral(", "))));
+            check(colorCombo != nullptr,
+                  "mixed: a colour can be set with a line, a circle and a text selected together");
+            check(rows.contains(QStringLiteral("Layer")) && rows.contains(QStringLiteral("Lineweight")),
+                  "mixed: and so can the layer and the lineweight - every object has those too");
+
+            if (colorCombo) {
+                colorCombo->setCurrentText(QStringLiteral("Red"));
+                QApplication::processEvents();
+                QApplication::processEvents();   // the apply is deferred, so the combo survives it
+                int red = 0;
+                for (const Entity& e : editor->document()->entities())
+                    if (e.color.toLower() == QLatin1String("#ff0000")) ++red;
+                std::printf("  mixed: %d of the 3 went red\n", red);
+                check(red == 3, "mixed: all three of them take the colour");
+            }
+
+            // And it says the truth about what they are: a mixed selection is not one type.
+            bool saysMixed = false;
+            if (props)
+                for (int r = 0; r < props->rowCount(); ++r)
+                    if (props->item(r, 0) && props->item(r, 0)->text() == QStringLiteral("Type") &&
+                        props->item(r, 1) && props->item(r, 1)->text().contains(QStringLiteral("mixed")))
+                        saysMixed = true;
+            check(saysMixed, "mixed: the Type row still says the selection is of several kinds");
+
+            editor->selectAll();
+            editor->deleteSelected();
+            QApplication::processEvents();
+        }
     }
 
     // ---- the stock symbols are on the ribbon, not behind a menu of names --------------------------

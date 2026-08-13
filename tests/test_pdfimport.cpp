@@ -1,4 +1,13 @@
 #include "io/PdfImport.h"
+#include <QTabBar>
+#include <QSet>
+#include <QFile>
+#include <QDir>
+#include <QApplication>
+#include "harness/PartsLibrary.h"
+#include "model/Block.h"
+#include "app/Editor.h"
+#include "app/MainWindow.h"
 #include "model/Document.h"
 
 #include <cstdio>
@@ -32,6 +41,85 @@ int run_pdfimport_tests() {
         // Color is checked below after the DXF conversion.
         check(doc.entities()[0].color == QLatin1String("#ff0000"),
               "pdf: stroke colour survives the DXF conversion");
+    }
+
+    // ---- a PDF comes in as a BLOCK, and one that can be opened and edited ------------------------
+    {
+        // Loose, a PDF is hundreds of little lines: impossible to move as a unit, impossible to pick
+        // without catching the drawing under it, impossible to change all at once. As a block it is one
+        // object, insertable again, and openable on its own tab where the lines can be worked on.
+        const QString stem = QStringLiteral("edraw-pdfblock-test");
+        const QString file = QDir::tempPath() + QStringLiteral("/") + stem + QStringLiteral(".pdf");
+        QFile::remove(file);
+        {
+            QFile f(file);
+            check(f.open(QIODevice::WriteOnly), "block: a PDF to import is written");
+            f.write(pdf);
+        }
+        // Any block of that name left by an earlier run would make this one a name test instead.
+        QFile::remove(BlockDef::pathFor(stem));
+
+        MainWindow win;
+        QString said;
+        const bool ok = win.importPdfFile(file, &said);
+        std::printf("  pdf block: %s\n", qPrintable(said));
+        check(ok, "block: the PDF imports");
+
+        PartsCatalog catalog;
+        catalog.openRemembered();
+        BlockDef made;
+        for (const BlockDef& b : allBlocks(&catalog))
+            if (b.name == stem) made = b;
+        check(!made.name.isEmpty(), "block: the import is a block, named after the file");
+        check(made.entities.size() >= 1, "block: with the PDF's geometry in it");
+        check(made.description.contains(stem), "block: and it says where it came from");
+
+        // One copy of it on the sheet - one object, not a heap of lines: every entity of it carries the
+        // block's name and the one instance key that makes it a copy.
+        Document* doc = win.findChild<Editor*>() ? win.findChild<Editor*>()->document() : nullptr;
+        check(doc != nullptr, "block: there is a drawing to have imported into");
+        if (doc) {
+            QSet<QString> instances;
+            int stamped = 0;
+            for (const Entity& e : doc->entities())
+                if (e.meta.value(QStringLiteral("block")).toString() == stem) {
+                    ++stamped;
+                    instances.insert(e.meta.value(QStringLiteral("blockInst")).toString());
+                }
+            std::printf("  pdf block: %d entities on the sheet, %lld instance(s)\n", stamped,
+                        static_cast<long long>(instances.size()));
+            check(stamped >= 1, "block: a copy of it is on the sheet");
+            check(instances.size() == 1, "block: and it is ONE copy, however many lines it is drawn with");
+        }
+
+        // Openable for editing: the block editor puts it on a tab of its own with its lines in it.
+        win.openBlockEditor(stem);
+        QApplication::processEvents();
+        bool openForEditing = false;
+        for (QTabBar* bar : win.findChildren<QTabBar*>())
+            for (int i = 0; i < bar->count(); ++i)
+                if (bar->tabText(i).contains(stem)) openForEditing = true;
+        check(openForEditing, "block: and it opens on a tab of its own to be edited");
+        win.cancelBlockEdit();
+        QApplication::processEvents();
+
+        // A second import of the same file does not overwrite the first block - and every copy of it
+        // already on a sheet.
+        QString again;
+        win.importPdfFile(file, &again);
+        bool secondOne = false;
+        PartsCatalog catalog2;
+        catalog2.openRemembered();
+        for (const BlockDef& b : allBlocks(&catalog2))
+            if (b.name == stem + QStringLiteral(" (2)")) secondOne = true;
+        check(secondOne, "block: importing it again makes a second block rather than replacing the first");
+
+        QFile::remove(file);
+        QFile::remove(BlockDef::pathFor(stem));
+        QFile::remove(BlockDef::pathFor(stem + QStringLiteral(" (2)")));
+        QString dxf = file;
+        dxf.chop(4);
+        QFile::remove(dxf + QStringLiteral(".dxf"));
     }
 
     Document unchanged;

@@ -142,6 +142,9 @@ public:
     void cancelTemplateEdit();
     // Pictures: a PNG/JPEG/BMP from a file, or whatever is on the clipboard - a screenshot, a copied
     // image file - dropped onto the sheet and then resized by its corners or in Properties.
+    // A PDF into this drawing, as an editable block. Split from the menu command so the work can be asked
+    // for with a path - by a test, or by anything else that already knows which file.
+    bool importPdfFile(const QString& path, QString* said = nullptr);
     void insertPictureFromFile();
     bool insertPictureFromClipboard(bool quiet);
     void pasteFromClipboard();   // a picture if that is what is on the clipboard, else the drawing kind
@@ -503,6 +506,9 @@ private:
     void saveDwxAs();
     void exportDxfAs();
     void importPdf();
+    // The block name a PDF import takes: the file's own name, or the next number after it when that name
+    // is already a block.
+    QString blockNameForImport(const QString& base) const;
     // Export the drawing to PDF. windowSelect=true first lets the user drag a
     // rectangular print window on the canvas; otherwise the full drawing extents.
     void exportPdf(bool windowSelect);

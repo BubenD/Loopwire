@@ -7223,6 +7223,13 @@ void MainWindow::refreshProperties() {
         if (se->type != selEnts.front()->type) { sameType = false; break; }
     const Entity* e = sameType ? selEnts.front() : nullptr;
     const bool multi = sameType && selEnts.size() > 1;
+    // COLOUR, layer, linetype, lineweight: every object has them, whatever kind of object it is. So the
+    // General section is built for any selection - `gen` stands for it - while the sections below stay behind
+    // `e`, which is only set when the selection is all of one kind. Picking a line and a circle together and
+    // being told "2 objects (mixed)" and nothing else meant the commonest thing anybody wants to do to a
+    // mixed selection - make it all red - could not be done from the panel at all.
+    const Entity* gen = selEnts.empty() ? nullptr : selEnts.front();
+    const bool several = selEnts.size() > 1;
 
     // Reading one property ACROSS the selection. With a single object it is simply that
     // object's value; with several it is the shared value, or "varies" when they differ.
@@ -7243,29 +7250,29 @@ void MainWindow::refreshProperties() {
         bool contains() const { return !v.isUndefined(); }
         bool isVaries() const { return varies; }
     };
-    auto mv = [&selEnts, multi](const QString& key) {
+    auto mv = [&selEnts, several](const QString& key) {
         SelValue out;
         if (selEnts.empty()) return out;
         out.v = selEnts.front()->meta.value(key);
-        if (multi)
+        if (several)
             for (const Entity* se : selEnts)
                 if (se->meta.value(key) != out.v) { out.varies = true; break; }
         return out;
     };
     // The same for values that live on the entity itself (or are derived from its
     // geometry) rather than in its meta bag: `sv` for text, `nv` for numbers.
-    auto sv = [&selEnts, multi](const std::function<QString(const Entity&)>& read) -> QString {
+    auto sv = [&selEnts, several](const std::function<QString(const Entity&)>& read) -> QString {
         if (selEnts.empty()) return QString();
         const QString out = read(*selEnts.front());
-        if (multi)
+        if (several)
             for (const Entity* se : selEnts)
                 if (read(*se) != out) return QStringLiteral("#Value");
         return out;
     };
-    auto nv = [&selEnts, multi](const std::function<double(const Entity&)>& read) -> double {
+    auto nv = [&selEnts, several](const std::function<double(const Entity&)>& read) -> double {
         if (selEnts.empty()) return 0.0;
         const double out = read(*selEnts.front());
-        if (multi)
+        if (several)
             for (const Entity* se : selEnts)
                 if (std::abs(read(*se) - out) > 1e-9)
                     return std::numeric_limits<double>::quiet_NaN();
@@ -7285,7 +7292,7 @@ void MainWindow::refreshProperties() {
                                       .arg(entityTypeToString(e->type))
                                 : (e ? entityTypeToString(e->type)
                                      : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
-    if (e) {
+    if (gen) {
         QStringList layerNames;
         for (const auto& l : doc_->layers()) layerNames << l.name;
         static const QHash<QString, QString> hexToColor = {
@@ -7314,8 +7321,8 @@ void MainWindow::refreshProperties() {
         colorItems.push_back({QStringLiteral("Select Color..."), selectColorIcon(),
                               QStringLiteral("__pick__")});
         // A custom (non-named) explicit colour: show it as the current entry.
-        if (e->hasExplicitColor() && !hexToColor.contains(e->color.toLower()))
-            colorItems.push_front({e->color, colorSwatchIcon(QColor(e->color)), e->color});
+        if (gen->hasExplicitColor() && !hexToColor.contains(gen->color.toLower()))
+            colorItems.push_front({gen->color, colorSwatchIcon(QColor(gen->color)), gen->color});
         addIconCombo(QStringLiteral("Color"), colorItems, curColor, [this](const QString& d) {
             if (d == QLatin1String("__pick__")) {
                 const QColor c = QColorDialog::getColor(Qt::white, this,
@@ -11914,17 +11921,24 @@ void MainWindow::importPdf() {
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Import PDF into drawing"), QString(), QStringLiteral("PDF (*.pdf)"));
     if (path.isEmpty()) return;
+    importPdfFile(path);
+}
+
+bool MainWindow::importPdfFile(const QString& path, QString* said) {
+    if (!doc_) return false;
     Document imported;
     QString error;
     if (!pdf::importFile(imported, path, &error)) {
-        QMessageBox::warning(this, QStringLiteral("PDF import failed"), error);
-        return;
+        if (said) *said = error;
+        else QMessageBox::warning(this, QStringLiteral("PDF import failed"), error);
+        return false;
     }
     if (imported.entities().empty()) {
-        QMessageBox::information(this, QStringLiteral("Import PDF"),
-                                 QStringLiteral("Nothing was found to import: that PDF has no vector "
-                                                "geometry in it (a scan is a picture, not lines)."));
-        return;
+        const QString nothing = QStringLiteral("Nothing was found to import: that PDF has no vector "
+                                               "geometry in it (a scan is a picture, not lines).");
+        if (said) *said = nothing;
+        else QMessageBox::information(this, QStringLiteral("Import PDF"), nothing);
+        return false;
     }
 
     // Laid on the origin: what comes out of a PDF carries whatever coordinates the page had - a
@@ -11960,20 +11974,61 @@ void MainWindow::importPdf() {
     QString dxfError;
     const bool wroteDxf = dxf::exportFile(asDxf, dxfPath, &dxfError);
 
-    editor_->appendEntities(placed);
+    // As a BLOCK, and one that can be edited. A PDF comes in as hundreds or thousands of little lines -
+    // a title block alone is a few hundred - and as loose entities they are impossible to move as a unit,
+    // impossible to pick without catching the drawing under them, and impossible to change all at once.
+    // As one block it is one object on the sheet, insertable again as often as it is wanted, and openable
+    // on its own tab (Blocks, or right-click it) where the lines can be worked on and saved back to every
+    // copy at once.
+    const QString wanted = blockNameForImport(QFileInfo(path).completeBaseName());
+    BlockDef def = blockFromEntities(wanted, placed, Vec2{0.0, 0.0});
+    def.description = QStringLiteral("Imported from %1").arg(QFileInfo(path).fileName());
+    const bool savedBlock = def.save(BlockDef::pathFor(wanted));
+    if (savedBlock) {
+        // One copy of it, on the origin - where the entities themselves would have gone.
+        editor_->appendEntities(blockInstanceEntities(def, Vec2{0.0, 0.0}, QString()));
+        if (blockDlg_) blockDlg_->refresh();
+        refreshBlocksPanel();
+    } else {
+        // The block folder could not be written. Rather than lose the import, the lines go down as they
+        // are and the message says which of the two happened.
+        editor_->appendEntities(placed);
+    }
     canvas_->fitView();
-    statusBar()->showMessage(
-        wroteDxf
-            ? QStringLiteral("Imported %1 object(s) from %2 onto 0,0 — also written as %3")
-                  .arg(placed.size())
-                  .arg(QFileInfo(path).fileName())
-                  .arg(QFileInfo(dxfPath).fileName())
-            : QStringLiteral("Imported %1 object(s) from %2 onto 0,0 (the DXF could not be written: "
-                             "%3)")
-                  .arg(placed.size())
-                  .arg(QFileInfo(path).fileName())
-                  .arg(dxfError),
-        8000);
+    QStringList told;
+    told << (savedBlock ? tr("Imported %1 object(s) from %2 as the block \"%3\", one copy on 0,0 — open "
+                             "it from Blocks to edit it")
+                              .arg(placed.size())
+                              .arg(QFileInfo(path).fileName())
+                              .arg(wanted)
+                        : tr("Imported %1 object(s) from %2 onto 0,0 (a block could not be saved, so the "
+                             "lines went down as they are)")
+                              .arg(placed.size())
+                              .arg(QFileInfo(path).fileName()));
+    told << (wroteDxf ? tr("also written as %1").arg(QFileInfo(dxfPath).fileName())
+                      : tr("the DXF could not be written: %1").arg(dxfError));
+    const QString message = told.join(QStringLiteral(" — "));
+    statusBar()->showMessage(message, 10000);
+    if (said) *said = message;
+    return true;
+}
+
+// A name for the block a PDF becomes: the file's own, and if that name is taken, the next number after it.
+// Overwriting a block somebody already has - and every copy of it already on a sheet - because a second PDF
+// happened to have the same file name is not an import, it is a loss.
+QString MainWindow::blockNameForImport(const QString& base) const {
+    QString stem = base.trimmed();
+    if (stem.isEmpty()) stem = QStringLiteral("PDF");
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    QSet<QString> taken;
+    for (const BlockDef& b : allBlocks(&catalog)) taken.insert(b.name);
+    if (!taken.contains(stem)) return stem;
+    for (int n = 2; n < 1000; ++n) {
+        const QString tryThis = QStringLiteral("%1 (%2)").arg(stem).arg(n);
+        if (!taken.contains(tryThis)) return tryThis;
+    }
+    return stem;
 }
 
 void MainWindow::exportDxfAs() {
