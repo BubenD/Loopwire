@@ -73,7 +73,8 @@ QString partSymbolName(PartSymbol s) {
     case PartSymbol::SmtCoil: return QStringLiteral("Coil, SMT (top view)");
     case PartSymbol::FerriteRingSide: return QStringLiteral("Ferrite ring (side view)");
     case PartSymbol::FerriteRingTop: return QStringLiteral("Ferrite ring (top view)");
-    case PartSymbol::SchResistor: return QStringLiteral("Resistor");
+    case PartSymbol::SchResistor: return QStringLiteral("Resistor (box)");
+    case PartSymbol::SchResistorZigzag: return QStringLiteral("Resistor (zigzag)");
     case PartSymbol::SchCapacitor: return QStringLiteral("Capacitor");
     case PartSymbol::SchCoil: return QStringLiteral("Coil");
     case PartSymbol::SchFerrite: return QStringLiteral("Ferrite");
@@ -103,7 +104,13 @@ QString partSymbolTip(PartSymbol s) {
     case PartSymbol::FerriteRingTop:
         return QStringLiteral("A ferrite ring from above: 12 mm across the outside, 6 mm across the "
                               "hole - what has to fit over the bundle.");
-    case PartSymbol::SchResistor: return QStringLiteral("The resistor symbol, with its two leads.");
+    case PartSymbol::SchResistor:
+        return QStringLiteral("The resistor as a box - IEC 60617, which is what a European schematic "
+                              "uses - with its two leads.");
+    case PartSymbol::SchResistorZigzag:
+        return QStringLiteral("The resistor as a zigzag - ANSI/IEEE, which is what an American schematic "
+                              "uses. The same part as the box: which one to draw is the drawing office's "
+                              "own convention, so both are here.");
     case PartSymbol::SchCapacitor: return QStringLiteral("The capacitor symbol, with its two leads.");
     case PartSymbol::SchCoil: return QStringLiteral("The coil symbol, with its two leads.");
     case PartSymbol::SchFerrite:
@@ -115,6 +122,7 @@ QString partSymbolTip(PartSymbol s) {
 bool partSymbolIsSchematic(PartSymbol s) {
     switch (s) {
     case PartSymbol::SchResistor:
+    case PartSymbol::SchResistorZigzag:
     case PartSymbol::SchCapacitor:
     case PartSymbol::SchCoil:
     case PartSymbol::SchFerrite:
@@ -131,8 +139,8 @@ std::vector<PartSymbol> mechanicalPartSymbols() {
 }
 
 std::vector<PartSymbol> schematicPartSymbols() {
-    return {PartSymbol::SchResistor, PartSymbol::SchCapacitor, PartSymbol::SchCoil,
-            PartSymbol::SchFerrite};
+    return {PartSymbol::SchResistor, PartSymbol::SchResistorZigzag, PartSymbol::SchCapacitor,
+            PartSymbol::SchCoil, PartSymbol::SchFerrite};
 }
 
 std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
@@ -237,6 +245,29 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         // The symbol: a plain box with a lead each side.
         const double hx = 4.0, hy = 1.5, lead = 5.0;
         d.rect(-hx, -hy, hx, hy);
+        d.line(-hx, 0.0, -hx - lead, 0.0);
+        d.line(hx, 0.0, hx + lead, 0.0);
+        break;
+    }
+    case PartSymbol::SchResistorZigzag: {
+        // The same part as the box, drawn the American way: a zigzag of six equal legs between two leads.
+        // Six because that is what makes three full peaks - the count a draughtsman reads as a resistor
+        // rather than as a kink in a wire - and the peaks are as tall as the box is half deep, so the two
+        // symbols sit at the same weight on a sheet beside each other.
+        const double hx = 4.0;       // the zigzag runs from -hx to +hx, as the box does
+        const double peak = 1.5;     // as tall as the box's half depth
+        const double lead = 5.0;
+        constexpr int kLegs = 6;
+        std::vector<Vec2> zig;
+        zig.push_back({-hx, 0.0});
+        for (int i = 0; i < kLegs; ++i) {
+            // Half a step in from each end, so the first and last legs are half legs and the zigzag
+            // leaves the leads level rather than starting on a peak.
+            const double x = -hx + (2.0 * hx) * (i + 0.5) / kLegs;
+            zig.push_back({x, (i % 2 == 0) ? peak : -peak});
+        }
+        zig.push_back({hx, 0.0});
+        d.poly(zig);
         d.line(-hx, 0.0, -hx - lead, 0.0);
         d.line(hx, 0.0, hx + lead, 0.0);
         break;

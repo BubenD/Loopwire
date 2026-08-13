@@ -48,6 +48,7 @@ void MainWindow::buildSchematicBuildTab() {
     screenBtn->setIconSize(QSize(28, 28));
     screenBtn->setAutoRaise(true);
     screenBtn->setFocusPolicy(Qt::NoFocus);
+    screenBtn->setFixedSize(kRibbonCell);   // the Place group is one grid: this is part of it
     screenBtn->setToolTip(QStringLiteral(
         "Shield: click, then drag a crossing line across the wires to shield them"));
     {
@@ -88,6 +89,7 @@ void MainWindow::buildSchematicBuildTab() {
     // Twist: split-button + per-type menu. Lives in the Place group (it places a twist
     // symbol); the same handlers as before.
     auto* modTwistBtn = new QToolButton(page);
+    modTwistBtn->setFixedSize(kRibbonCell);
     // Icon-only: the name shows on hover (tooltip). The MenuButtonPopup arrow stays as
     // the fall-menu (type) affordance.
     modTwistBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -157,10 +159,10 @@ void MainWindow::buildSchematicBuildTab() {
     stG->addWidget(screenBtn, 0, 0);
     stG->addWidget(modTwistBtn, 1, 0);
     placeLay->addWidget(stW);
-    // The stock symbols - resistor, capacitor, coil, ferrite - as one button with a menu of them. A
-    // harness schematic is not only wires: there is a resistor across a pair, a capacitor to the shell,
-    // a bead on a line, and each of them has to be drawn.
-    placeLay->addWidget(makePartSymbolButton(placeW, /*schematic=*/true));
+    // The stock symbols - both resistors, capacitor, coil, ferrite - as a small icon each in two rows,
+    // like the tools beside them. A harness schematic is not only wires: there is a resistor across a
+    // pair, a capacitor to the shell, a bead on a line, and each of them has to be drawn.
+    placeLay->addWidget(makePartSymbolRow(placeW, /*schematic=*/true));
     schemPlaceGroup_ = ribbonGroup(QStringLiteral("Place"), placeW);
     lay->addWidget(schemPlaceGroup_);
     {

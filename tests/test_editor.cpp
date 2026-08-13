@@ -3,6 +3,7 @@
 #include "io/Dwx.h"
 #include "geometry/Snap.h"
 #include "model/Document.h"
+#include "app/ribbon/RibbonIcons.h"
 #include "model/PartSymbols.h"
 #include "render/EntityRenderer.h"
 #include "tools/EntityTransforms.h"
@@ -5631,6 +5632,70 @@ int run_editor_tests() {
         for (const Entity& e : partSymbolEntities(PartSymbol::FerriteRingTop, Vec2{0.0, 0.0}))
             if (e.type == EntityType::Circle && near(e.radius, 3.0)) ++holes;
         check(holes == 1, "parts: with a 6 mm hole through it - the ring is a ring");
+
+        // Both resistors: the box (IEC) and the zigzag (ANSI). The same part drawn two ways, so which one
+        // a sheet uses is the office's convention - and they have to sit at the same weight beside each
+        // other, or a schematic that uses both looks like two schematics.
+        {
+            const QPointF box = span(PartSymbol::SchResistor);
+            const QPointF zig = span(PartSymbol::SchResistorZigzag);
+            std::printf("  resistor symbols: box %.1f x %.1f, zigzag %.1f x %.1f\n", box.x(), box.y(),
+                        zig.x(), zig.y());
+            check(near(box.x(), zig.x()),
+                  "resistors: the zigzag is exactly as long as the box, leads and all");
+            check(near(box.y(), zig.y()),
+                  "resistors: and as tall, so the two read at the same weight on a sheet");
+
+            // A zigzag, and one that reads as a resistor: six legs, which is three full peaks. Fewer and
+            // it reads as a kink in a wire.
+            int zigLines = 0, peaks = 0, troughs = 0;
+            const std::vector<Entity> zents = partSymbolEntities(PartSymbol::SchResistorZigzag,
+                                                                 Vec2{0.0, 0.0});
+            for (const Entity& e : zents) {
+                if (e.type != EntityType::Polyline) continue;
+                ++zigLines;
+                for (const Vec2& v : e.points) {
+                    if (near(v.y, 1.5)) ++peaks;
+                    if (near(v.y, -1.5)) ++troughs;
+                }
+                // It leaves the leads level: the two ends of the zigzag are on the centre line, or the
+                // symbol joins its wire with a step in it.
+                check(near(e.points.front().y, 0.0) && near(e.points.back().y, 0.0),
+                      "resistors: the zigzag starts and ends on the centre line, level with its leads");
+            }
+            check(zigLines == 1, "resistors: the zigzag is one polyline");
+            check(peaks == 3 && troughs == 3,
+                  "resistors: three peaks and three troughs - six legs, which is what reads as a resistor");
+            // And it is a resistor, not a box: no rectangle in it.
+            bool anyBox = false;
+            for (const Entity& e : zents)
+                if (e.type == EntityType::Rect) anyBox = true;
+            check(!anyBox, "resistors: and there is no box in it");
+
+            // The ICON has to show the zigzag, and it did not: an icon is drawn from the part's own drawing,
+            // and the painter knew lines, circles and arcs but not POLYLINES - so the zigzag came out as a
+            // pair of leads with a gap between them, and the axial resistor's waisted body had been missing
+            // from its icon since the day it was drawn. Measured as ink away from the centre line, which is
+            // the whole difference between a zigzag and a dash.
+            const QImage img = makePartSymbolIcon(PartSymbol::SchResistorZigzag, QColor("#ffffff"))
+                                   .pixmap(28, 28)
+                                   .toImage();
+            // How TALL the ink is, which is the whole difference: a dash spans two or three pixels, a
+            // zigzag spans most of the icon. Asking for ink in two fixed bands instead put the answer at the
+            // mercy of where a peak happens to round to.
+            int top = img.height(), bottom = -1, inked = 0;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = 0; x < img.width(); ++x) {
+                    if (qAlpha(img.pixel(x, y)) < 40) continue;
+                    top = std::min(top, y);
+                    bottom = std::max(bottom, y);
+                    ++inked;
+                }
+            const int tall = bottom - top;
+            std::printf("  zigzag icon: %d px of ink, %d px tall\n", inked, tall);
+            check(tall >= 10,
+                  "resistors: its icon is a zigzag and not a dash - the ink stands up off the centre line");
+        }
 
         // The ring from the side cannot show its hole, so those two edges are drawn hidden.
         int hidden = 0;

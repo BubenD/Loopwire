@@ -55,32 +55,20 @@ void MainWindow::buildHarnessMechanicalTab() {
                                         ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                                         ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
                                         ToolId::Hatch, ToolId::Wipeout}));
-    {
-        auto* modW = new QWidget(page);
-        auto* mh = new QHBoxLayout(modW);
-        mh->setContentsMargins(0, 0, 0, 0);
-        mh->setSpacing(2);
-        // Nine tools lay out 5 + 4; the Match icon fills the empty cell, as on Home.
-        auto* modRow = toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale,
-                                ToolId::Offset, ToolId::Trim, ToolId::Extend, ToolId::Fillet,
-                                ToolId::Chamfer});
-        if (auto* g = qobject_cast<QGridLayout*>(modRow->layout()))
-            g->addWidget(makeMatchBtn(modRow, /*iconOnly=*/true), 1, 4);
-        mh->addWidget(modRow);
-        mh->addWidget(makeArrayButton(modW));
-        mh->addWidget(clipboardRow(/*iconOnly=*/true));
-        mechGroups_ << addGroupKeep(lay, QStringLiteral("Modify"), modW);
-    }
+    // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six, as on Home.
+    // Array and Copy standing beside the grid at their own widths is what made this group read as three
+    // groups.
+    mechGroups_ << addGroupKeep(
+        lay, QStringLiteral("Modify"),
+        toolRow({ToolId::Move, ToolId::Rotate, ToolId::Mirror, ToolId::Scale, ToolId::Offset,
+                 ToolId::Trim, ToolId::Extend, ToolId::Fillet, ToolId::Chamfer},
+                {makeMatchBtn(page, /*iconOnly=*/true), makeArrayButton(page),
+                 clipboardRow(/*iconOnly=*/true)}));
     {
         // Annotation: Home's group, with the leader the harness tools use folded in - one group with
-        // every way of writing on the drawing, rather than the same balloon on the tab twice.
-        auto* annoW = new QWidget(page);
-        auto* ah = new QHBoxLayout(annoW);
-        ah->setContentsMargins(0, 0, 0, 0);
-        ah->setSpacing(2);
-        ah->addWidget(toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader,
-                               ToolId::Note, ToolId::Revision}));
-        auto* tb = new QToolButton(annoW);
+        // every way of writing on the drawing, rather than the same balloon on the tab twice. The Table
+        // button goes in the grid with them: seven buttons, two rows.
+        auto* tb = new QToolButton(page);
         tb->setIcon(makeToolIcon(ToolId::Table));
         tb->setIconSize(QSize(28, 28));
         tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -88,8 +76,11 @@ void MainWindow::buildHarnessMechanicalTab() {
         tb->setFocusPolicy(Qt::NoFocus);
         tb->setToolTip(QStringLiteral("Insert Table"));
         connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-        ah->addWidget(tb);
-        mechGroups_ << addGroupKeep(lay, QStringLiteral("Annotation"), annoW);
+        mechGroups_ << addGroupKeep(
+            lay, QStringLiteral("Annotation"),
+            toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
+                     ToolId::Revision},
+                    {tb}));
     }
     // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break
     // that says a run is longer than the paper, and the twisted pair. They are not drawing tools and

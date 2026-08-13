@@ -14,6 +14,7 @@
 #include <QHash>
 #include <QIcon>
 #include <QPoint>
+#include <QSize>
 #include <QMainWindow>
 #include <QStringList>
 #include <QVector>
@@ -212,6 +213,10 @@ private:
     // mechanical tab, the symbols on the schematic tab. Choosing one hands it to the cursor, so it is
     // dropped by a click - and turned with R first, like anything else being placed.
     QToolButton* makePartSymbolButton(QWidget* parent, bool schematic);
+    // The stock symbols as a small icon each, in two rows: a symbol is picked by its shape, so the shapes
+    // are on the ribbon rather than behind a menu of names.
+    QWidget* makePartSymbolRow(QWidget* parent, bool schematic);
+    QVector<QPair<int, QToolButton*>> partSymbolButtons_;   // drawn icons: re-drawn per scheme
     // Show/hide the Schematic-build ribbon groups by context: while a twist is armed only
     // the Twist group shows; while a Splice/X marker tool is armed the Modify/DRC groups hide.
     void updateSchematicRibbonGroups();
@@ -304,6 +309,10 @@ private:
     // The tools as buttons, packed into TWO ROWS - and anything else that belongs in the same group packed
     // with them, so a group is two tidy rows rather than one tall one with odds and ends beside it.
     QWidget* toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup = {});
+    // One square for every icon button on the ribbon: 28 px of icon, room for a split button's arrow beside
+    // it, and the same height whichever kind of button it is. Sizes left to Qt come out of each button's own
+    // contents, and a group of mixed buttons then has no grid in it at all.
+    static constexpr QSize kRibbonCell{46, 36};
     // A 2-row icon grid of the Modify "Operations" actions (Array, Explode,
     // Purge, Delete). Reused on both the Home and Modify tabs.
     QWidget* operationsRow();

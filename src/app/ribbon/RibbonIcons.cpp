@@ -240,10 +240,16 @@ QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink) {
     p.setBrush(Qt::NoBrush);
     const double w = std::max(1e-6, b.max.x - b.min.x), h = std::max(1e-6, b.max.y - b.min.y);
     const double k = std::min(24.0 / w, 24.0 / h);
-    // World to icon: y turns over, because a drawing measures upwards and a pixmap downwards.
+    // A symbol with its leads is long and shallow - a resistor is 18 by 3 - and scaled to fit, evenly, it
+    // comes out as a 2-pixel-tall squiggle on a line: the box reads as two dashes and the zigzag reads as
+    // the same two dashes. So the HEIGHT is exaggerated, up to two and a half times, for a drawing flatter
+    // than three to one. An icon is a pictogram of the thing, not a scale drawing of it; the drawing on the
+    // sheet is untouched, and anything squarer than 2:1 is left exactly as it is.
+    const double flat = w / h;
+    const double ky = k * std::min(3.5, std::max(1.0, flat / 2.0));
     auto to = [&](const Vec2& v) {
         return QPointF(14.0 + (v.x - (b.min.x + b.max.x) / 2.0) * k,
-                       14.0 - (v.y - (b.min.y + b.max.y) / 2.0) * k);
+                       14.0 - (v.y - (b.min.y + b.max.y) / 2.0) * ky);
     };
     for (const Entity& e : ents) {
         if (e.meta.value(QStringLiteral("lineType")).toString() == QLatin1String("dashed")) {
@@ -258,6 +264,8 @@ QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink) {
             p.drawLine(to(e.a), to(e.b));
             break;
         case EntityType::Circle:
+            // Round things stay round: the stretch is for the flat symbols, and a stretched circle in an
+            // icon reads as a mistake rather than as emphasis.
             p.drawEllipse(to(e.center), e.radius * k, e.radius * k);
             break;
         case EntityType::Arc: {
@@ -268,6 +276,26 @@ QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink) {
             double span = (e.endAngle - e.startAngle) * 180.0 / M_PI;
             while (span <= 0.0) span += 360.0;
             p.drawArc(box, static_cast<int>(from * 16), static_cast<int>(span * 16));
+            break;
+        }
+        case EntityType::Polyline: {
+            // A POLYLINE. Left out, and so drawn as nothing: the zigzag resistor came out as a bare pair of
+            // leads with a gap between them, and the axial resistor's waisted body had been missing from its
+            // icon since it was drawn. An icon made from the part's own drawing has to be able to draw all
+            // of it, or it quietly shows something else.
+            if (e.points.size() < 2) break;
+            QPolygonF poly;
+            for (const Vec2& v : e.points) poly << to(v);
+            p.drawPolyline(poly);
+            break;
+        }
+        case EntityType::Rect:
+        case EntityType::Polygon: {
+            // Both are their corners, and both close.
+            if (e.points.size() < 3) break;
+            QPolygonF poly;
+            for (const Vec2& v : e.points) poly << to(v);
+            p.drawPolygon(poly);
             break;
         }
         default:

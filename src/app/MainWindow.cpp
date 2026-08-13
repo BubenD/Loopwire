@@ -3043,11 +3043,6 @@ QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     return g;
 }
 
-// One square for every button in a tool row: 28 px of icon, room for a split button's arrow beside it, and
-// the same height whichever kind of button it is. Sizes left to Qt come out of each button's own contents,
-// and a group of mixed buttons then has no grid in it at all.
-static constexpr QSize kRibbonCell(46, 36);
-
 // A compact 2-row grid of icon tool buttons for the given tools.
 QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup) {
     auto* w = new QWidget(ribbon_);
@@ -3379,6 +3374,42 @@ void MainWindow::normaliseRibbonPages() {
 
 // Undo and Redo, drawn as the arrows they are. The keys have always done this; the buttons are for
 // the hand that is already on the mouse - and for anyone who does not know the keys exist.
+// The stock symbols as what they ARE: a small icon each, in two rows, like the tools beside them. They used
+// to be one button with a fall menu, which hides the very thing being chosen - a symbol is picked by its
+// shape, and a menu of names makes the eye read words to find a picture it already knows.
+QWidget* MainWindow::makePartSymbolRow(QWidget* parent, bool schematic) {
+    auto* w = new QWidget(parent);
+    auto* grid = new QGridLayout(w);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(1);
+    const auto list = schematic ? schematicPartSymbols() : mechanicalPartSymbols();
+    const int perRow = std::max(1, (static_cast<int>(list.size()) + 1) / 2);
+    int i = 0;
+    for (const PartSymbol s : list) {
+        auto* b = new QToolButton(w);
+        b->setIcon(makePartSymbolIcon(s));
+        b->setIconSize(QSize(28, 28));
+        b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setFixedSize(kRibbonCell);   // the same square as every other icon on the ribbon
+        b->setToolTip(QStringLiteral("%1 — %2").arg(partSymbolName(s), partSymbolTip(s)));
+        connect(b, &QToolButton::clicked, this, [this, s] {
+            // Handed to the cursor exactly like a pasted block: it ghosts under the crosshair, R turns it a
+            // quarter turn at a time, and a click puts it down. Held by its middle: a resistor is put where
+            // its body goes, not where its corner does.
+            editor_->placeEntities(partSymbolEntities(s, Vec2{0.0, 0.0}), Vec2{0.0, 0.0});
+            statusBar()->showMessage(
+                QStringLiteral("%1 - click to place it, R turns it, Esc cancels").arg(partSymbolName(s)),
+                4000);
+        });
+        partSymbolButtons_.append({static_cast<int>(s), b});   // so the scheme can re-draw the icon
+        grid->addWidget(b, i / perRow, i % perRow);
+        ++i;
+    }
+    return w;
+}
+
 QToolButton* MainWindow::makePartSymbolButton(QWidget* parent, bool schematic) {
     auto* btn = new QToolButton(parent);
     btn->setText(schematic ? QStringLiteral("Symbols") : QStringLiteral("Parts"));
@@ -5655,6 +5686,10 @@ void MainWindow::applyTheme(bool dark) {
     restyleViewPanelIcons();   // the View tab's icons are drawn, so they are drawn again
     restyleRibbonCorner();
     restyleDrawingSpaceStrip();
+    // The stock symbols are drawn as well - a pale grey resistor on a light ribbon is not a faint symbol,
+    // it is no symbol at all.
+    for (const auto& sb : partSymbolButtons_)
+        if (sb.second) sb.second->setIcon(makePartSymbolIcon(static_cast<PartSymbol>(sb.first), ink));
     // Undo and Redo are drawn too.
     for (QToolButton* b : undoRedoBtns_)
         if (b)

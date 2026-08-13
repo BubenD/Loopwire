@@ -951,6 +951,31 @@ The widths are handed out one turn after the window is on screen (`showEvent` �
 a dock before there is a layout to resize does nothing at all, which is why doing it in the constructor
 looked like the setting had not been saved.
 
+## Both resistors, and symbols picked by their shape
+
+A resistor is drawn as a **box** (IEC 60617) or as a **zigzag** (ANSI/IEEE). It is the same part either way;
+which one a sheet uses is the drawing office's own convention, so both are on the shelf — *Resistor (box)* and
+*Resistor (zigzag)*. The zigzag is six legs, which is three full peaks: fewer reads as a kink in a wire. It is
+exactly as long as the box and exactly as tall (18 × 3 with its leads, measured), because a schematic that
+mixes the two at different weights looks like two schematics.
+
+The stock symbols now sit on the ribbon as **a small icon each, in two rows**, in the same squares as the
+tools beside them. They were one button with a fall menu, which hides the very thing being chosen: a symbol is
+picked by its *shape*, and a menu of names makes the eye read words to find a picture it already knows.
+
+Two things came out of drawing them small:
+
+- **An icon made from the part's own drawing has to be able to draw all of it.** The icon painter knew lines,
+  circles and arcs — not polylines. So the zigzag came out as a pair of leads with a gap between them, and the
+  axial resistor's waisted body had been missing from its icon since the day it was drawn. Polylines,
+  rectangles and polygons are drawn now.
+- **A symbol with its leads is long and shallow**, and scaled evenly into a 28 px square it becomes a
+  two-pixel squiggle on a line — the box and the zigzag reduce to the same two dashes. So the height is
+  exaggerated for anything flatter than 2:1, up to three and a half times: an icon is a pictogram of the
+  thing, not a scale drawing of it. Circles keep their own radius, because a stretched circle in an icon
+  reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
+  icon is 11 px tall in a 28 px box, where it was 0.
+
 ## A ribbon group is two rows of one square
 
 Every group of tools on the ribbon is a grid of **two rows** — including whatever else belongs in the group.
@@ -976,6 +1001,8 @@ them different:
   dropped into a spare cell, and *Array* and *Copy* added beside the grid in a row of their own. All twelve go
   through the same call now.
 
-The test measures it: every grid of icon buttons on the ribbon, two rows at most and every cell the same
-square — *16 groups in two rows, 0 taller, 0 ragged*. Groups made of labelled buttons are left alone; they are
+The same holds on **Harness mechanical**: its Modify group is twelve buttons in two rows of six (the tools,
+Match, Array and Copy), and its Annotation group is seven in two rows of four with the Table button among
+them. The test measures every grid of icon buttons on the ribbon — two rows at most, every cell the same
+square: *17 groups in two rows, 0 taller, 0 ragged*. Groups made of labelled buttons are left alone; they are
 as wide as their words.

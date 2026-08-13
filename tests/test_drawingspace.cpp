@@ -820,6 +820,50 @@ int run_drawingspace_tests() {
         check(ragged == 0, "rows: every button in a row of icons is the same square, split buttons and all");
     }
 
+    // ---- the stock symbols are on the ribbon, not behind a menu of names --------------------------
+    {
+        // A symbol is picked by its SHAPE. Behind a fall menu the shapes were hidden and the eye had to
+        // read words to find a picture it already knew - so they are small icons on the ribbon now, in the
+        // same two rows and the same squares as the tools beside them.
+        QTabBar* tabs = nullptr;
+        for (QTabBar* bar : win.findChildren<QTabBar*>())
+            for (int i = 0; i < bar->count(); ++i)
+                if (bar->tabText(i) == QStringLiteral("Schematic build")) tabs = bar;
+        check(tabs != nullptr, "symbols: there is a Schematic build tab to place from");
+
+        // Every stock schematic symbol has a button of its own, named for the symbol.
+        const QStringList wanted{QStringLiteral("Resistor (box)"), QStringLiteral("Resistor (zigzag)"),
+                                 QStringLiteral("Capacitor"), QStringLiteral("Coil"),
+                                 QStringLiteral("Ferrite")};
+        QList<QToolButton*> found;
+        for (QToolButton* b : win.findChildren<QToolButton*>()) {
+            for (const QString& w : wanted)
+                if (b->toolTip().startsWith(w) && b->toolButtonStyle() == Qt::ToolButtonIconOnly)
+                    found.append(b);
+        }
+        std::printf("  symbols: %lld symbol buttons on the ribbon\n",
+                    static_cast<long long>(found.size()));
+        check(found.size() >= wanted.size(),
+              "symbols: a small icon each - both resistors, the capacitor, the coil and the ferrite");
+        bool sameSquare = !found.isEmpty();
+        for (QToolButton* b : found) {
+            if (b->icon().isNull()) sameSquare = false;
+            if (b->size() != found.first()->size()) sameSquare = false;
+        }
+        check(sameSquare, "symbols: each drawn, and all the same square as the tools beside them");
+        // In a grid of two rows, like everything else on the ribbon.
+        bool twoRows = false;
+        for (QGridLayout* g : win.findChildren<QGridLayout*>()) {
+            if (g->count() < static_cast<int>(wanted.size())) continue;
+            bool holdsSymbols = false;
+            for (int i = 0; i < g->count(); ++i)
+                if (found.contains(qobject_cast<QToolButton*>(g->itemAt(i)->widget())))
+                    holdsSymbols = true;
+            if (holdsSymbols && g->rowCount() == 2) twoRows = true;
+        }
+        check(twoRows, "symbols: laid out in two rows");
+    }
+
     // ---- a side pulled wider stays that wide, and comes back that wide next time -----------------
     {
         // The width of a side is a decision - a bill of materials with part numbers in it wants more room

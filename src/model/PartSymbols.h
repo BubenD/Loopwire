@@ -29,7 +29,8 @@ enum class PartSymbol {
     FerriteRingSide,  // a ferrite ring from the side, its hole shown hidden
     FerriteRingTop,   // ... and from above
     // What the part is called - for the schematic.
-    SchResistor,
+    SchResistor,      // the box: IEC 60617, what a European schematic uses
+    SchResistorZigzag,// the zigzag: ANSI/IEEE, what an American one uses - the same part, drawn the other way
     SchCapacitor,
     SchCoil,
     SchFerrite,       // a coil with its core: the ferrite bead / choke symbol
