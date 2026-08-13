@@ -65,6 +65,8 @@ int run_pdfimport_tests() {
         const bool ok = win.importPdfFile(file, &said);
         std::printf("  pdf block: %s\n", qPrintable(said));
         check(ok, "block: the PDF imports");
+        check(said.contains(QStringLiteral("2 line(s)")),
+              "block: a three-point path comes in as its two lines, not as one object");
 
         PartsCatalog catalog;
         catalog.openRemembered();
@@ -72,7 +74,8 @@ int run_pdfimport_tests() {
         for (const BlockDef& b : allBlocks(&catalog))
             if (b.name == stem) made = b;
         check(!made.name.isEmpty(), "block: the import is a block, named after the file");
-        check(made.entities.size() >= 1, "block: with the PDF's geometry in it");
+        check(made.entities.size() == 2,
+              "block: the block holds the lines separately - a path is not one object inside it");
         check(made.description.contains(stem), "block: and it says where it came from");
 
         // One copy of it on the sheet - one object, not a heap of lines: every entity of it carries the
@@ -138,7 +141,8 @@ int run_pdfimport_tests() {
                 // Inside: the lines are their own objects, and they can be taken to the clipboard.
                 const int inside = static_cast<int>(ed->document()->entities().size());
                 std::printf("  pdf block: %d separate object(s) inside the block\n", inside);
-                check(inside >= 1, "block: and inside it the lines are separate objects");
+                check(inside == 2,
+                      "block: and inside it every line of the PDF is its own object to work on");
                 ed->selectAll();
                 ed->copySelection();
                 check(ed->clipboardCount() == inside,

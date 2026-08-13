@@ -2672,11 +2672,23 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
     catalog.openRemembered();
     const LibraryPart* part = catalog.byId(partId);
     if (!part) return;
-    if (!part->hasFanout()) {
-        statusBar()->showMessage(tr("%1 has no fanout drawing yet").arg(part->title()), 4000);
+    // Drawn for the part, or worked out from what the part says: one wire per way, out of the back of the
+    // housing and into the bundle. Being sent to the library to draw one is not placing a fanout, and a
+    // connector's fanout is exactly the thing its own data can say.
+    QJsonArray drawing = part->fanout;
+    bool generated = false;
+    if (drawing.isEmpty()) {
+        drawing = fanoutFromData(*part);
+        generated = true;
+    }
+    if (drawing.isEmpty()) {
+        statusBar()->showMessage(
+            tr("%1 has no fanout, and none can be worked out from it - a fanout needs a way count")
+                .arg(part->title()),
+            5000);
         return;
     }
-    std::vector<Entity> block = partDrawingBlockInstance(*part, part->fanout, QStringLiteral("fanout"),
+    std::vector<Entity> block = partDrawingBlockInstance(*part, drawing, QStringLiteral("fanout"),
                                                          Vec2{0.0, 0.0}, mirrored);
     const QString contactId = part->contactId();
     if (!contactId.isEmpty())
@@ -2687,7 +2699,13 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
                               ? (mirrored ? tr("back") : tr("front"))
                               : (mirrored ? tr("front") : tr("back"));
     statusBar()->showMessage(
-        tr("Click the sheet to place the fanout of %1 — the %2 of the connector").arg(part->title(), shows),
+        generated
+            ? tr("Click the sheet to place a fanout worked out from %1 - %2 way(s) out of the back of the "
+                 "housing. Capture your own in the library to replace it")
+                  .arg(part->title())
+                  .arg(part->wayCount())
+            : tr("Click the sheet to place the fanout of %1 — the %2 of the connector")
+                  .arg(part->title(), shows),
         6000);
     if (canvas_) canvas_->setFocus();
 }
@@ -11209,21 +11227,24 @@ QDockWidget* MainWindow::makePartsPanel() {
                 // what comes down. The columns are how the row says what it has, so they are also how it is
                 // asked for - a part with three drawings and one gesture had no way of saying which.
                 if (column == 1 || column == 2 || column == 3) {
-                    const bool there = column == 1 ? hasMech : (column == 2 ? (hasAny || !hasMech) : hasFan);
+                    if (column == 3) {
+                        // The fanout, drawn for the part or worked out from its ways - placeLibraryFanout
+                        // knows which, and says so either way. The tick still means one was DRAWN.
+                        Q_UNUSED(hasFan);
+                        placeLibraryFanout(id, false);
+                        return;
+                    }
                     if (column == 2 && !hasSchematicDrawing(id)) {
                         statusBar()->showMessage(tr("%1 has no schematic symbol").arg(item->text(0)), 4000);
                         return;
                     }
-                    if (!there) {
-                        statusBar()->showMessage(
-                            tr("%1 has no %2 drawing")
-                                .arg(item->text(0),
-                                     column == 1 ? tr("mechanical") : tr("fanout")),
-                            4000);
+                    if (column == 1 && !hasMech) {
+                        statusBar()->showMessage(tr("%1 has no mechanical drawing").arg(item->text(0)),
+                                                 4000);
                         return;
                     }
-                    if (column == 3) placeLibraryFanout(id, false);
-                    else placeLibraryPart(id, column == 1);
+                    Q_UNUSED(hasAny);
+                    placeLibraryPart(id, column == 1);
                     return;
                 }
                 if (!hasAny) {
@@ -11365,12 +11386,14 @@ QMenu* MainWindow::buildPartsPanelMenu(const QString& id) {
         menu.addAction(
             tr("Place the fanout mirrored (%1 of the connector)").arg(drawnFront ? tr("back") : tr("front")),
             this, [this, id] { placeLibraryFanout(id, true); });
-    } else {
-        // Said even when there is none, and said where it would be: a command that is simply absent looks
-        // like a program that cannot do it. Greyed, with the way to get one right underneath.
-        QAction* none = menu.addAction(tr("Place the fanout — none drawn yet"));
-        none->setEnabled(false);
-        menu.addAction(tr("Draw the fanout in the library"), this, [this, id] { showPartsLibraryAt(id); });
+    } else if (canHaveFanout(*part)) {
+        // None drawn - so one is worked out from the part's own data and placed. Being sent to the library
+        // to draw one is not placing a fanout; the generated one can be drawn over, or replaced by capturing
+        // a real one in the library.
+        menu.addAction(tr("Place the fanout — %1 way(s), from its own data").arg(part->wayCount()), this,
+                       [this, id] { placeLibraryFanout(id, false); });
+        menu.addAction(tr("Place the fanout mirrored — %1 way(s), from its own data").arg(part->wayCount()),
+                       this, [this, id] { placeLibraryFanout(id, true); });
     }
     if (!mech && !schem && !fan) {
         QAction* none = menu.addAction(tr("No drawing to place yet"));
@@ -11526,8 +11549,13 @@ void MainWindow::refreshPartsPanel() {
             item->setText(c + 1, has[c] ? QString(QChar(0x2713)) : QString());
             item->setTextAlignment(c + 1, Qt::AlignCenter);
             item->setForeground(c + 1, has[c] ? Chrome::ink() : Chrome::subInk());
-            item->setToolTip(c + 1, has[c] ? tr("Has a %1 drawing").arg(kPartDrawingNames[c])
-                                           : tr("No %1 drawing").arg(kPartDrawingNames[c]));
+            QString cellTip = has[c] ? tr("Has a %1 drawing - double-click to place it")
+                                           .arg(kPartDrawingNames[c])
+                                     : tr("No %1 drawing").arg(kPartDrawingNames[c]);
+            if (c == 2 && !fan && canHaveFanout(part))
+                cellTip = tr("No fanout drawn - double-click to place one worked out from its %1 way(s)")
+                              .arg(part.wayCount());
+            item->setToolTip(c + 1, cellTip);
         }
         QStringList drawings;
         if (mech) drawings << tr("mechanical");
@@ -11993,10 +12021,29 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
             ext.expand(b.max);
         }
     }
+    // Every path a LINE at a time. A PDF draws a whole outline - a title block's frame, a border, a table -
+    // as one path, and one path is one object: inside the block it could not be worked on, only replaced. A
+    // segment each is what makes an imported PDF editable, which is the whole reason for importing it as a
+    // block rather than as a picture. Nothing about how it LOOKS changes: a polyline and its segments draw
+    // the same lines.
     std::vector<Entity> placed;
-    placed.reserve(imported.entities().size());
+    placed.reserve(imported.entities().size() * 2);
+    int fromPaths = 0;
     for (Entity e : imported.entities()) {
         if (ext.valid) translateEntity(e, Vec2{-ext.min.x, -ext.min.y});
+        if (e.type == EntityType::Polyline && e.points.size() >= 2) {
+            ++fromPaths;
+            for (size_t i = 0; i + 1 < e.points.size(); ++i) {
+                Entity seg = e;
+                seg.id.clear();
+                seg.type = EntityType::Line;
+                seg.a = e.points[i];
+                seg.b = e.points[i + 1];
+                seg.points.clear();
+                placed.push_back(std::move(seg));
+            }
+            continue;
+        }
         placed.push_back(e);
     }
 
@@ -12036,8 +12083,8 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
     }
     canvas_->fitView();
     QStringList told;
-    told << (savedBlock ? tr("Imported %1 object(s) from %2 as the block \"%3\", one copy on 0,0 — open "
-                             "it from Blocks to edit it")
+    told << (savedBlock ? tr("Imported %1 line(s) from %2 as the block \"%3\", one copy on 0,0 — "
+                             "double-click it to edit them")
                               .arg(placed.size())
                               .arg(QFileInfo(path).fileName())
                               .arg(wanted)

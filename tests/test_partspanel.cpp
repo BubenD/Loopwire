@@ -67,6 +67,16 @@ QString writeDrawnLibrary(QString& partId) {
         part.setFanoutSide(QStringLiteral("front"));
         partId = part.id;
     }
+    {
+        // A connector with a way count and NO fanout drawn: what a real library is mostly made of, and the
+        // case the menu has to answer with a fanout rather than with a trip to the library.
+        LibraryPart& plain = lib.add(PartKind::Connector);
+        plain.mfrPn = QStringLiteral("PANELTEST-CONN-NOFAN");
+        plain.description = QStringLiteral("housing, 6 way");
+        plain.mfrName = QStringLiteral("Molex");
+        plain.mechanical = oneLine();
+        plain.params.insert(QStringLiteral("pins"), QStringLiteral("6"));
+    }
     const QString path = QDir::tempPath() + QStringLiteral("/edraw-panel-drawn.plb");
     QFile::remove(path);
     lib.save(path);
@@ -484,22 +494,68 @@ int run_partspanel_tests() {
         }
     }
 
-    // ---- the fanout is on the menu whether the part has one or not ---------------------------------
+    // ---- a fanout can be PLACED whether one was drawn for the part or not --------------------------
     {
-        // A command that is simply absent looks like a program that cannot do it. For a part with no fanout
-        // the entry is there, greyed, with the way to get one underneath it.
-        QString bareId;
-        if (QTreeWidgetItem* bareRow = rowNamed(list, QStringLiteral("PANELTEST-HOUSE-2")))
-            bareId = bareRow->data(0, Qt::UserRole).toString();
-        if (QMenu* menu = win.buildPartsPanelMenu(bareId)) {
-            bool saysNone = false, canDraw = false;
+        // A connector's fanout is exactly the thing its own data can say - one wire a way, out of the back of
+        // the housing and into the bundle - so a part with none drawn gets one worked out and placed. Being
+        // sent to the library to draw one is not placing a fanout.
+        QString noFanId;
+        if (QTreeWidgetItem* row = rowNamed(list, QStringLiteral("PANELTEST-CONN-NOFAN")))
+            noFanId = row->data(0, Qt::UserRole).toString();
+        check(!noFanId.isEmpty(), "fanout: the connector with no fanout drawn is on the shelf");
+        if (QMenu* menu = win.buildPartsPanelMenu(noFanId)) {
+            QStringList items;
+            bool canPlace = false, mirrored = false, sentToLibrary = false;
             for (QAction* a : menu->actions()) {
-                if (a->text().contains(QStringLiteral("fanout")) && !a->isEnabled()) saysNone = true;
-                if (a->text().contains(QStringLiteral("Draw the fanout"))) canDraw = true;
+                if (a->isSeparator()) continue;
+                items << a->text();
+                if (a->text().contains(QStringLiteral("fanout")) && a->isEnabled() &&
+                    !a->text().contains(QStringLiteral("mirrored")))
+                    canPlace = true;
+                if (a->text().contains(QStringLiteral("mirrored")) && a->isEnabled()) mirrored = true;
+                if (a->text().contains(QStringLiteral("Draw the fanout"))) sentToLibrary = true;
             }
-            check(saysNone, "fanout: the menu says so even when there is no fanout, greyed");
-            check(canDraw, "fanout: and offers to draw one in the library");
+            std::printf("  fanout: %s\n", qPrintable(items.join(QStringLiteral(" | "))));
+            check(canPlace && mirrored,
+                  "fanout: the menu places one for a connector that has none drawn, either way round");
+            check(!sentToLibrary, "fanout: and does not send anybody to the library to draw it first");
             delete menu;
+        }
+
+        // A heat-shrink sleeve has no fanout and never will: it is offered none. wayCount() answers 1 for
+        // everything, so the question has to be asked of the part rather than of the number.
+        QString sleeveId;
+        if (QTreeWidgetItem* row = rowNamed(list, QStringLiteral("PANELTEST-HOUSE-2")))
+            sleeveId = row->data(0, Qt::UserRole).toString();
+        if (QMenu* menu = win.buildPartsPanelMenu(sleeveId)) {
+            bool anyFanout = false;
+            for (QAction* a : menu->actions())
+                if (a->text().contains(QStringLiteral("fanout"))) anyFanout = true;
+            check(!anyFanout, "fanout: a sleeve is not offered one - a sleeve has no fanout");
+            delete menu;
+        }
+
+        // And placing it puts down a wire a way: what the generated fanout IS.
+        Editor* editor = win.findChild<Editor*>();
+        if (editor && !noFanId.isEmpty()) {
+            editor->selectAll();
+            editor->deleteSelected();
+            win.placeLibraryFanout(noFanId, false);
+            editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            QApplication::processEvents();
+            int wires = 0, bodies = 0;
+            for (const Entity& e : editor->document()->entities()) {
+                if (e.meta.value(QStringLiteral("libPartView")).toString() != QStringLiteral("fanout"))
+                    continue;
+                if (e.type == EntityType::Polyline) ++wires;
+                if (e.type == EntityType::Rect) ++bodies;
+            }
+            std::printf("  fanout: placed - %d wire(s) and %d housing(s)\n", wires, bodies);
+            check(wires == 6 && bodies == 1,
+                  "fanout: six ways, six wires out of the back of one housing");
+            editor->selectAll();
+            editor->deleteSelected();
+            QApplication::processEvents();
         }
     }
 

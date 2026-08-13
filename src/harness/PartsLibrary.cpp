@@ -592,6 +592,62 @@ QJsonArray connectorSymbolFromData(const LibraryPart& part) {
     return partDrawingFromEntities({e});
 }
 
+bool canHaveFanout(const LibraryPart& part) {
+    if (part.kind == PartKind::Connector) return true;
+    for (const QString& key : {QStringLiteral("pins"), QStringLiteral("ways")})
+        if (part.value(key).toInt() > 0) return true;
+    return false;
+}
+
+QJsonArray fanoutFromData(const LibraryPart& part) {
+    if (!canHaveFanout(part)) return {};
+    const int ways = part.wayCount();
+    if (ways <= 0) return {};
+    // The pitch is a real dimension when the data has one; under a millimetre it is an empty field, and
+    // 2.54 is the pitch of most of what a harness shop has on the shelf.
+    double pitch = part.value(QStringLiteral("pitch")).toDouble();
+    if (pitch < 1.0) pitch = 2.54;
+    const double bodyW = 6.0;                       // the housing, seen from the side
+    const double bodyH = ways * pitch + pitch;      // a way's worth of shoulder at each end
+    const double open = 8.0;                        // the conductors run open before they gather
+    const double gather = 14.0;                     // and then into the bundle
+    std::vector<Entity> ents;
+    // The housing.
+    {
+        Entity e;
+        e.type = EntityType::Rect;
+        e.layer = QStringLiteral("0");
+        e.points = {{-bodyW / 2.0, -bodyH / 2.0},
+                    {bodyW / 2.0, -bodyH / 2.0},
+                    {bodyW / 2.0, bodyH / 2.0},
+                    {-bodyW / 2.0, bodyH / 2.0}};
+        ents.push_back(std::move(e));
+    }
+    // One wire per way: out of the back of the housing, straight for the open length, then to the point
+    // where the bundle starts. Drawn as one polyline each, which is what a wire IS on a fanout - a run with
+    // a knee in it - so it can be picked up and re-routed a wire at a time.
+    const double first = -(ways - 1) * pitch / 2.0;
+    for (int i = 0; i < ways; ++i) {
+        const double y = first + i * pitch;
+        Entity w;
+        w.type = EntityType::Polyline;
+        w.layer = QStringLiteral("0");
+        w.points = {{-bodyW / 2.0, y}, {-bodyW / 2.0 - open, y}, {-bodyW / 2.0 - open - gather, 0.0}};
+        ents.push_back(std::move(w));
+    }
+    // The bundle it gathers into, so the drawing says where the harness goes.
+    {
+        Entity b;
+        b.type = EntityType::Line;
+        b.layer = QStringLiteral("0");
+        b.a = {-bodyW / 2.0 - open - gather, 0.0};
+        b.b = {-bodyW / 2.0 - open - gather - 12.0, 0.0};
+        ents.push_back(std::move(b));
+    }
+    for (Entity& e : ents) e.meta.insert(QStringLiteral("libPart"), part.id);
+    return partDrawingFromEntities(ents);
+}
+
 QJsonArray builtinSchematicSymbol(PartKind kind) {
     std::vector<Entity> ents;
     switch (kind) {

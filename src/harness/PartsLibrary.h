@@ -328,6 +328,18 @@ int ensureStandardHeatshrink(PartsLibrary& lib);
 // boot does not appear on a schematic.
 QJsonArray builtinSchematicSymbol(PartKind kind);
 
+// A connector's FANOUT, built from what the part already says: one wire per way, leaving the back of the
+// housing and gathering into the bundle. It is what the harness DOES at the connector, and it can be had from
+// the way count and the pitch alone - so a part with no fanout drawn for it still has one to place, and a
+// draughtsman who wants it different draws over it or captures his own in the library.
+QJsonArray fanoutFromData(const LibraryPart& part);
+
+// Is a fanout a thing this part HAS? A connector has one - it is where the harness leaves it - and so does
+// anything whose data gives a way or pin count. A heat-shrink sleeve does not, and wayCount() answers 1 for
+// everything (a connector with no count still needs one contact), so the question has to be asked separately
+// or every sleeve on the shelf would be offered a one-way fanout.
+bool canHaveFanout(const LibraryPart& part);
+
 // A connector's schematic symbol, built from what the part already says: the way count above all, and the
 // part number to letter it with. It comes out as a real CONNECTOR object - the body, the pin stubs, the pin
 // numbers - and not as loose lines, so what is placed can be edited with the connector tools, wired up, and

@@ -854,10 +854,18 @@ at all opens in the library.
 
 **Right-click a part** for the rest of it: place the mechanical drawing, place the schematic symbol, place the
 fanout — *for the front or, mirrored, for the back of the connector, each named for the side it shows* — add it
-to the bill of materials, or edit it in the library. What cannot be done is *said* rather than left out — a
-command that is simply absent looks like a program that cannot do it — so a part with no fanout gets a greyed
-*"Place the fanout — none drawn yet"* with **Draw the fanout in the library** under it, and a part with no
-drawing at all says so while still being addable to the bill of materials.
+to the bill of materials, or edit it in the library. A part with **no fanout drawn** is still offered one to
+place: *"Place the fanout — 6 way(s), from its own data"*. A connector's fanout is exactly the thing its own
+data can say — one wire per way, out of the back of the housing, running open and then gathering into the
+bundle (`fanoutFromData`) — and being sent to the library to draw one is not placing a fanout. The generated
+one can be drawn over, or replaced by capturing a real one in the library; the **F** tick still means one was
+*drawn*, and the empty cell's tooltip says a double-click will make one.
+
+What genuinely cannot be done is left out rather than greyed: a heat-shrink sleeve is offered no fanout at all,
+because a sleeve has not got one. That has to be asked of the *part* (`canHaveFanout`: a connector, or anything
+whose data gives a way or pin count) and not of the number — `wayCount()` answers 1 for everything, since a
+connector with no count still needs one contact, so every sleeve on the shelf would otherwise be offered a
+one-way fanout. A part with no drawing at all says so while still being addable to the bill of materials.
 
 **Right-click a line of the bill of materials** to take it off — in the panel and in the window both. A line
 put there by hand goes; a line the drawing itself calls for cannot, and the menu says *why* rather than
@@ -1023,6 +1031,13 @@ sheet, it can be inserted again wherever it is wanted, and it opens **on its own
 right-click it — where the lines can be worked on and saved back to every copy at once. A second import of the
 same file becomes *name (2)* rather than overwriting the first: replacing a block replaces every copy of it
 already on a sheet, and doing that because two PDFs share a file name is not an import, it is a loss.
+
+**Every path comes in a line at a time.** A PDF draws a whole outline — a frame, a border, a table — as one
+path, and one path is one object: inside the block it could not be worked on, only replaced. Each path is
+therefore exploded into its segments at import, so the block's own definition holds separate lines. Nothing
+about how it *looks* changes — a polyline and its segments draw the same lines — and everything about editing
+it does: a line can be picked, trimmed, moved, copied or deleted on its own. Measured: a three-point path
+imports as its two lines, and the block editor shows two objects, not one.
 
 **Double-click a copy of it on the sheet** and the block opens — that is how a block is opened in every
 drawing package, and an imported PDF is a block like any other. Inside, its lines are separate objects: every
