@@ -2665,6 +2665,53 @@ void MainWindow::placeLibraryPart(const QString& partId, bool mechanical) {
     if (canvas_) canvas_->setFocus();
 }
 
+void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
+    if (!editor_) return;
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(partId);
+    if (!part) return;
+    if (!part->hasFanout()) {
+        statusBar()->showMessage(tr("%1 has no fanout drawing yet").arg(part->title()), 4000);
+        return;
+    }
+    std::vector<Entity> block = partDrawingBlockInstance(*part, part->fanout, QStringLiteral("fanout"),
+                                                         Vec2{0.0, 0.0}, mirrored);
+    const QString contactId = part->contactId();
+    if (!contactId.isEmpty())
+        for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    editor_->placeEntities(std::move(block));
+    // Which side the copy shows is the whole point of mirroring it, so it is said.
+    const QString shows = part->fanoutSide() == QStringLiteral("front")
+                              ? (mirrored ? tr("back") : tr("front"))
+                              : (mirrored ? tr("front") : tr("back"));
+    statusBar()->showMessage(
+        tr("Click the sheet to place the fanout of %1 — the %2 of the connector").arg(part->title(), shows),
+        6000);
+    if (canvas_) canvas_->setFocus();
+}
+
+void MainWindow::addPartToBom(const QString& partId) {
+    Document* doc = editDoc();
+    if (!doc) return;
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(partId);
+    if (!part) return;
+    BomTable table;
+    table.fromJson(doc->bom());
+    BomRow row = bomRowFromPart(*part, 1.0);
+    row.rowId = bomNextRowId(table.rows);
+    row.fromDrawing = false;   // put there by hand, and so removable by hand
+    table.rows.push_back(row);
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    refreshBomPanel();
+    statusBar()->showMessage(tr("%1 added to the bill of materials — set the quantity in its window")
+                                 .arg(part->title()),
+                             6000);
+}
+
 void MainWindow::findAndPlaceLibraryPart() {
     PartsCatalog catalog;
     catalog.openRemembered();
@@ -5258,6 +5305,10 @@ void MainWindow::buildPanels() {
     bomPanel_->verticalHeader()->setVisible(false);
     bomPanel_->setShowGrid(false);
     bomPanel_->setAlternatingRowColors(true);
+    // Right-click a line: take it off, if it is a line somebody put there.
+    bomPanel_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(bomPanel_, &QTableWidget::customContextMenuRequested, this,
+            [this](const QPoint& at) { showBomPanelMenu(at); });
     bv->addWidget(bomPanel_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the bill of materials"), bomWidget);
@@ -8215,6 +8266,13 @@ void MainWindow::refreshBomPanel() {
             bomPanel_->setItem(i, col, it);
         };
         cell(0, r.description.isEmpty() ? r.ref : r.description);
+        // Where the line came from, and what it names: what the right-click menu needs to know whether the
+        // line can be taken off, and which of the drawing's own rows to take off with it.
+        if (QTableWidgetItem* it = bomPanel_->item(i, 0)) {
+            it->setData(Qt::UserRole + 1, !r.fromDrawing);
+            it->setData(Qt::UserRole + 2, r.partId);
+            it->setData(Qt::UserRole + 3, r.mfrPn);
+        }
         cell(1, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn);
         cell(2, r.mfrName);
         cell(3, r.qtyText(table.config.qtyDecimals));
@@ -11034,6 +11092,40 @@ void MainWindow::activateIndex(int index) {
     updateWindowTitleForActive();
 }
 
+// Which of the three drawings a part has: mechanical, schematic, fanout. Three cells, filled for the ones it
+// has and outlined for the ones it has not, so a shelf can be read down the left-hand edge - a connector with
+// a body and a symbol but no fanout is the commonest thing in a library and the one worth seeing at a glance.
+static QIcon partDrawingsIcon(bool mech, bool schem, bool fan) {
+    QPixmap pm(38, 16);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    const QColor has = Chrome::ink();
+    const QColor hasnt = Chrome::dark() ? QColor("#5c626b") : QColor("#adb2ba");
+    const char* letters[3] = {"M", "S", "F"};
+    const bool state[3] = {mech, schem, fan};
+    QFont f = p.font();
+    f.setPixelSize(9);
+    f.setBold(true);
+    p.setFont(f);
+    for (int i = 0; i < 3; ++i) {
+        const QRectF cell(i * 13.0 + 0.5, 1.5, 11.0, 12.0);
+        p.setPen(QPen(state[i] ? has : hasnt, 1.0));
+        if (state[i]) {
+            p.setBrush(QColor(has.red(), has.green(), has.blue(), Chrome::dark() ? 60 : 40));
+            p.drawRect(cell);
+            p.setPen(has);
+        } else {
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(cell);
+            p.setPen(hasnt);
+        }
+        p.drawText(cell, Qt::AlignCenter, QLatin1String(letters[i]));
+    }
+    p.end();
+    return QIcon(pm);
+}
+
 QDockWidget* MainWindow::makePartsPanel() {
     auto* dock = new AutoHideDock(QStringLiteral("PARTS"), this);
     // Movable, floatable, closable - the same terms as the panels that were here before, so a panel behaves
@@ -11088,6 +11180,13 @@ QDockWidget* MainWindow::makePartsPanel() {
         }
         placeLibraryPart(id, item->data(Qt::UserRole + 1).toBool());
     });
+    // Right-click: what can be done with the part under the cursor. The commands are the same ones the
+    // library window has - place it, add it to the bill of materials, edit it - and a menu on the part is
+    // where they are looked for when the part is what is being pointed at.
+    partsPanelList_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(partsPanelList_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        showPartsPanelMenu(at);
+    });
     v->addWidget(partsPanelList_, 1);
     partsPanelCount_ = new QLabel(body);
     partsPanelCount_->setToolTip(QStringLiteral("What is in view, out of what is connected"));
@@ -11102,6 +11201,121 @@ QDockWidget* MainWindow::makePartsPanel() {
     dock->hide();   // asked for from the View tab, rather than filling the screen unbidden
     refreshPartsPanel();
     return dock;
+}
+
+// The menu on a part in the panel. Only what CAN be done is offered: a part with no fanout is not given a
+// "Place the fanout" that would answer with a message in the status bar.
+void MainWindow::showPartsPanelMenu(const QPoint& at) {
+    if (!partsPanelList_) return;
+    QListWidgetItem* item = partsPanelList_->itemAt(at);
+    if (!item) return;
+    const QString id = item->data(Qt::UserRole).toString();
+    if (id.isEmpty()) return;   // a library's heading, not a part
+    if (QMenu* menu = buildPartsPanelMenu(id)) {
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(partsPanelList_->viewport()->mapToGlobal(at));
+    }
+}
+
+// Built rather than shown, so what is on it can be asked for: by the panel, which pops it up, and by a test,
+// which reads it.
+QMenu* MainWindow::buildPartsPanelMenu(const QString& id) {
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(id);
+    if (!part) return nullptr;
+
+    auto* menuPtr = new QMenu(this);
+    QMenu& menu = *menuPtr;
+    const bool mech = part->hasMechanical();
+    const bool schem = !partSchematicDrawing(*part).isEmpty();
+    const bool fan = part->hasFanout();
+    if (mech)
+        menu.addAction(tr("Place the mechanical drawing"), this, [this, id] { placeLibraryPart(id, true); });
+    if (schem)
+        menu.addAction(tr("Place the schematic symbol"), this, [this, id] { placeLibraryPart(id, false); });
+    if (fan) {
+        // Both sides, named for what each one shows rather than for what was done to it.
+        const bool drawnFront = part->fanoutSide() == QStringLiteral("front");
+        menu.addAction(tr("Place the fanout (%1 of the connector)").arg(drawnFront ? tr("front") : tr("back")),
+                       this, [this, id] { placeLibraryFanout(id, false); });
+        menu.addAction(
+            tr("Place the fanout mirrored (%1 of the connector)").arg(drawnFront ? tr("back") : tr("front")),
+            this, [this, id] { placeLibraryFanout(id, true); });
+    }
+    if (!mech && !schem && !fan) {
+        QAction* none = menu.addAction(tr("No drawing to place yet"));
+        none->setEnabled(false);
+    }
+    menu.addSeparator();
+    menu.addAction(tr("Add to the bill of materials"), this, [this, id] { addPartToBom(id); });
+    menu.addAction(tr("Edit in the library"), this, [this, id] { showPartsLibraryAt(id); });
+    return menuPtr;
+}
+
+// The menu on a line of the bill of materials. A line put there BY HAND can be taken off; a line the drawing
+// itself calls for cannot, and saying why is more use than a greyed-out command: the way to remove it is to
+// take the thing off the drawing, or to stop counting the drawing at all.
+void MainWindow::showBomPanelMenu(const QPoint& at) {
+    if (!bomPanel_ || !editDoc()) return;
+    QTableWidgetItem* cell = bomPanel_->itemAt(at);
+    const int row = cell ? cell->row() : -1;
+    QMenu menu(this);
+    if (row >= 0) {
+        QTableWidgetItem* first = bomPanel_->item(row, 0);
+        const bool byHand = first && first->data(Qt::UserRole + 1).toBool();
+        const QString what = first ? first->text() : QString();
+        if (byHand) {
+            menu.addAction(tr("Remove \"%1\" from the bill of materials").arg(what), this,
+                           [this, row] { removeBomPanelRow(row); });
+        } else {
+            QAction* why = menu.addAction(tr("\"%1\" is what the drawing calls for").arg(what));
+            why->setEnabled(false);
+            menu.addAction(tr("Stop counting the drawing (the window's own switch)"), this,
+                           [this] { showBomDialog(); });
+        }
+        menu.addSeparator();
+    }
+    menu.addAction(tr("Open the bill of materials"), this, [this] { showBomDialog(); });
+    menu.exec(bomPanel_->viewport()->mapToGlobal(at));   // a menu on a table row: modal is what is wanted
+}
+
+// Take a hand-added line off. The panel shows the lines TOTALLED, so one line on screen can be several rows
+// in the drawing's own table: every hand-added row that names the same thing goes, and the count is said, or
+// a part added twice would take two goes to remove and look as though the first had not worked.
+void MainWindow::removeBomPanelRow(int row) {
+    Document* doc = editDoc();
+    if (!doc || !bomPanel_) return;
+    QTableWidgetItem* first = bomPanel_->item(row, 0);
+    if (!first) return;
+    const QString partId = first->data(Qt::UserRole + 2).toString();
+    const QString mfrPn = first->data(Qt::UserRole + 3).toString();
+    const QString description = first->text();
+    BomTable table;
+    table.fromJson(doc->bom());
+    // The same test the totalling uses: the library id if there is one, else the manufacturer's P/N, else
+    // what it is called.
+    auto sameThing = [&](const BomRow& r) {
+        if (!partId.isEmpty()) return r.partId == partId;
+        if (!mfrPn.isEmpty()) return r.mfrPn == mfrPn;
+        return r.description == description;
+    };
+    std::vector<BomRow> kept;
+    int gone = 0;
+    for (const BomRow& r : table.rows) {
+        if (!r.fromDrawing && sameThing(r)) { ++gone; continue; }
+        kept.push_back(r);
+    }
+    if (gone == 0) return;
+    table.rows = kept;
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    refreshBomPanel();
+    statusBar()->showMessage(gone == 1 ? tr("%1 removed from the bill of materials").arg(description)
+                                       : tr("%1 — %2 lines removed from the bill of materials")
+                                             .arg(description)
+                                             .arg(gone),
+                             6000);
 }
 
 // The libraries that are connected, each with a tick: on the list or not. A library is remembered as hidden
@@ -11167,17 +11381,26 @@ void MainWindow::refreshPartsPanel() {
     auto addPart = [this, &shown](const LibraryPart& part) {
         const bool mech = part.hasMechanical();
         const bool schem = !partSchematicDrawing(part).isEmpty();
+        const bool fan = part.hasFanout();
         auto* item = new QListWidgetItem(
             QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()), partsPanelList_);
         item->setData(Qt::UserRole, part.id);
         item->setData(Qt::UserRole + 1, mech);              // the mechanical drawing where there is one
         item->setData(Qt::UserRole + 2, mech || schem);      // is there anything to put down at all
-        if (mech || schem)
-            item->setToolTip(QStringLiteral("%1\nDouble-click to place the %2 drawing")
-                                 .arg(part.title(),
-                                      mech ? QStringLiteral("mechanical") : QStringLiteral("schematic")));
+        item->setData(Qt::UserRole + 3, fan);
+        // What the part HAS, shown rather than described: M S F, filled for the ones it has. A part is
+        // chosen off the shelf by what can be done with it, and until now that took opening it.
+        item->setIcon(partDrawingsIcon(mech, schem, fan));
+        QStringList drawings;
+        if (mech) drawings << tr("mechanical");
+        if (schem) drawings << tr("schematic");
+        if (fan) drawings << tr("fanout (%1)").arg(part.fanoutSide());
+        if (!drawings.isEmpty())
+            item->setToolTip(tr("%1\nDrawings: %2\nDouble-click to place the %3 — right-click for the rest")
+                                 .arg(part.title(), drawings.join(QStringLiteral(", ")),
+                                      mech ? tr("mechanical drawing") : tr("schematic symbol")));
         else {
-            item->setToolTip(QStringLiteral("%1\nNo drawing yet — double-click to open it in the library")
+            item->setToolTip(tr("%1\nNo drawing of any kind yet — double-click to open it in the library")
                                  .arg(part.title()));
             item->setForeground(Chrome::subInk());
         }

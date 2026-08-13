@@ -16,6 +16,7 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
@@ -72,6 +73,32 @@ void BomDialog::buildUi() {
     view_->setSelectionMode(QAbstractItemView::SingleSelection);
     view_->setDragDropMode(QAbstractItemView::InternalMove);
     view_->setDragDropOverwriteMode(false);
+    // Right-click a line: take it off. The button is still there, but a list is worked on where the cursor
+    // already is, and "remove" is looked for on the thing being removed.
+    view_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(view_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        if (!view_) return;
+        QTableWidgetItem* cell = view_->itemAt(at);
+        if (cell) view_->setCurrentCell(cell->row(), cell->column());
+        const std::vector<BomRow> shown = shownRows();
+        const int r = view_->currentRow();
+        QMenu menu(this);
+        if (r >= 0 && r < static_cast<int>(shown.size())) {
+            const BomRow& row = shown[static_cast<size_t>(r)];
+            const QString what = row.description.isEmpty() ? row.ref : row.description;
+            if (row.fromDrawing) {
+                // Saying why is more use than a greyed command: the line is the drawing's, and the way to
+                // take it off is to take the thing off the drawing - or to stop counting the drawing.
+                QAction* why = menu.addAction(tr("\"%1\" is what the drawing calls for").arg(what));
+                why->setEnabled(false);
+            } else {
+                menu.addAction(tr("Remove \"%1\"").arg(what), this, [this] { removeCurrentRow(); });
+            }
+            menu.addSeparator();
+        }
+        menu.addAction(tr("Add a row to fill in by hand"), this, [this] { addManualRow(); });
+        menu.exec(view_->viewport()->mapToGlobal(at));
+    });
     view_->verticalHeader()->setSectionsMovable(true);
     view_->verticalHeader()->setVisible(true);
     view_->verticalHeader()->setFixedWidth(18);

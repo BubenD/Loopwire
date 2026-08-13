@@ -13,6 +13,7 @@
 #include <QColor>
 #include <QHash>
 #include <QIcon>
+#include <QPoint>
 #include <QMainWindow>
 #include <QStringList>
 #include <QVector>
@@ -103,6 +104,17 @@ public:
     // which of the two drawings; the search dialog is for a library too long to walk through by hand.
     void addLibraryToCanvasMenu(QMenu& menu);
     void placeLibraryPart(const QString& partId, bool mechanical);
+    // The fanout - the third drawing of a part - put down for the side it was drawn from, or mirrored for
+    // the other one. `mirrored` turns a fanout drawn from the front into the back of the connector.
+    void placeLibraryFanout(const QString& partId, bool mirrored);
+    // A library part as a line of this drawing's bill of materials, one of it. Added BY HAND, which is what
+    // makes it removable again: the lines the drawing itself calls for are the drawing's to say.
+    void addPartToBom(const QString& partId);
+    // The menu for a part in the panel: place its drawings, list it, edit it. Built rather than shown, so
+    // what is on it can be asked for.
+    QMenu* buildPartsPanelMenu(const QString& partId);
+    // Take a line put there by hand off the bill of materials - `row` as the panel shows it.
+    void removeBomPanelRow(int row);
     void findAndPlaceLibraryPart();
     // The page setup manager, opened fresh or coming back from picking a plot window. `resumeTarget` is
     // which setup was being edited (-1 = the layout's own) and `resumeWorking` what the user had set.
@@ -168,6 +180,8 @@ private:
     // Which of the connected libraries the parts panel draws from. Remembered by path, so connecting
     // another library does not disturb what is in view.
     void fillPartsLibraryMenu(QMenu* menu);
+    void showPartsPanelMenu(const QPoint& at);   // right-click on a part: place it, list it, edit it
+    void showBomPanelMenu(const QPoint& at);     // right-click on a line: take it off, if it is yours
     QStringList partsPanelHidden_;
     QLabel* partsPanelCount_ = nullptr;
     void refreshBlocksPanel();

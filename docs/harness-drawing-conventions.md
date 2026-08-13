@@ -797,6 +797,24 @@ looks broken.
 A part with no drawing is listed greyed, and double-clicking it opens it **in the library**, where a drawing
 can be made for it — that being the only thing that can honestly happen next.
 
+**Each row says what the part has**: a mark of three cells — **M S F** — filled for the mechanical drawing,
+the schematic symbol and the fanout, outlined for the ones it has not. A part is chosen off the shelf by what
+can be done with it, and until now finding that out meant opening it. A connector with a body and a symbol but
+no fanout is the commonest thing in a library and the one worth seeing at a glance.
+
+**Right-click a part** for the rest of it: place the mechanical drawing, place the schematic symbol, place the
+fanout — *for the front or, mirrored, for the back of the connector, each named for the side it shows* — add it
+to the bill of materials, or edit it in the library. Only what can be done is offered: a part with no fanout
+is not given a command that would answer with a message in the status bar, and a part with no drawing at all
+says so, greyed, while still being addable to the bill of materials.
+
+**Right-click a line of the bill of materials** to take it off — in the panel and in the window both. A line
+put there by hand goes; a line the drawing itself calls for cannot, and the menu says *why* rather than
+greying a command out, because the way to remove it is to take the thing off the drawing or to stop counting
+the drawing at all. And the panel shows the lines *totalled*, so one line on screen can be several rows behind
+it: a part added twice is one line, and taking that line off takes both rows, or the first removal would look
+as though it had done nothing.
+
 A shop connects more than one library: the house library, a customer's, a project's. **Libraries** beside the
 filter ticks each connected one, with its part count, and taking a tick off takes that library's parts off the
 shelf; with more than one in view each is listed under its own heading. What is not in view is remembered by
