@@ -30,6 +30,9 @@ class QTabWidget;
 class QTabBar;
 class QTableWidget;
 class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
+class QCheckBox;
 class QLineEdit;
 class QComboBox;
 class QMenu;
@@ -184,6 +187,12 @@ private:
     void showBomPanelMenu(const QPoint& at);     // right-click on a line: take it off, if it is yours
     QStringList partsPanelHidden_;
     QLabel* partsPanelCount_ = nullptr;
+    // The two rules the panel puts within reach, both of them the drawing's own (they are kept in its bill
+    // of materials, and the bill-of-materials window shows the same two switches).
+    QCheckBox* bomOnPlaceBox_ = nullptr;
+    QCheckBox* bomUnifyBox_ = nullptr;
+    void syncBomRuleBoxes();                       // the boxes say what the drawing is set to
+    void setBomRule(bool onPlace, bool value);     // and setting one is setting the drawing's own rule
     void refreshBlocksPanel();
     void buildSchematicBuildTab();
     void buildHarnessMechanicalTab();
@@ -653,7 +662,10 @@ private:
     QDockWidget* partsDock_ = nullptr;
     QDockWidget* blocksDock_ = nullptr;
     QList<QPair<QString, QToolButton*>> viewPanelButtons_;
-    QListWidget* partsPanelList_ = nullptr;
+    // The shelf, as a table: the part, and a column each for the mechanical drawing, the schematic symbol
+    // and the fanout. A tree rather than a list because several libraries in view are shown under their own
+    // names, and because the three drawings want columns of their own to be read down.
+    QTreeWidget* partsPanelTree_ = nullptr;
     QLineEdit* partsPanelFilter_ = nullptr;
     QListWidget* blocksPanelList_ = nullptr;
 

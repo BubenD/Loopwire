@@ -797,10 +797,25 @@ looks broken.
 A part with no drawing is listed greyed, and double-clicking it opens it **in the library**, where a drawing
 can be made for it — that being the only thing that can honestly happen next.
 
-**Each row says what the part has**: a mark of three cells — **M S F** — filled for the mechanical drawing,
-the schematic symbol and the fanout, outlined for the ones it has not. A part is chosen off the shelf by what
-can be done with it, and until now finding that out meant opening it. A connector with a body and a symbol but
-no fanout is the commonest thing in a library and the one worth seeing at a glance.
+**A column each for the three drawings.** The shelf is a table: the part, then **M**, **S** and **F** —
+mechanical, schematic, fanout — ticked for the ones the part has and empty for the ones it has not, so it is
+read *down the columns* rather than part by part. A tick and nothing, never a tick and a cross: the eye counts
+ticks in a column and stops at the gaps. The part's name takes what is left over, and the three stay narrow at
+the right (a header stretches its *last* section left to itself, which gave the fanout column half the panel
+and the name none of it). A connector with a body and a symbol but no fanout is the commonest thing in a
+library and the one worth seeing at a glance.
+
+**Two rules, where parts are put down.** Both are the *drawing's* — they are kept in its bill of materials, and
+the bill-of-materials window shows the same two switches; these are not a second set that could disagree:
+
+- **A placed part goes on the bill of materials.** Every part put on the sheet is counted, with its part
+  number and its unit. Off, the bill lists only what was added by hand. (`BomConfig::includeDrawing`)
+- **The same part twice is one line, counted twice.** Two of the same part number make one line of quantity
+  two, not two lines of one — and quantities in units that cannot be added, metres against pieces, are still
+  never merged. (`BomConfig::unify`)
+
+Measured end to end: place a part → one line; place the same part again → still one line, quantity 1 → 2;
+switch the second rule off → two lines; switch the first off → the drawing is not counted at all.
 
 **Right-click a part** for the rest of it: place the mechanical drawing, place the schematic symbol, place the
 fanout — *for the front or, mirrored, for the back of the connector, each named for the side it shows* — add it

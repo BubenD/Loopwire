@@ -28,6 +28,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QApplication>
 
 #include <QLineF>
@@ -768,10 +769,12 @@ int run_drawingspace_tests() {
 
         // The parts and blocks lists are panels now, not only windows: what is on the shelf is wanted while
         // drawing, and a part is put down by double-clicking it rather than through a dialog.
-        QListWidget* partsList = nullptr;
+        QTreeWidget* partsList = nullptr;
         for (QDockWidget* d : win.findChildren<QDockWidget*>())
-            if (d->windowTitle() == QStringLiteral("PARTS")) partsList = d->findChild<QListWidget*>();
-        check(partsList != nullptr, "view: the parts panel is a list of the library");
+            if (d->windowTitle() == QStringLiteral("PARTS")) partsList = d->findChild<QTreeWidget*>();
+        check(partsList != nullptr, "view: the parts panel is a table of the library");
+        check(partsList && partsList->columnCount() == 4,
+              "view: the part, and a column each for the mechanical, schematic and fanout drawings");
         QLineEdit* partsFilter = nullptr;
         for (QDockWidget* d : win.findChildren<QDockWidget*>())
             if (d->windowTitle() == QStringLiteral("PARTS")) partsFilter = d->findChild<QLineEdit*>();

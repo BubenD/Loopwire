@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include "app/Editor.h"
+#include "model/Block.h"
 #include "harness/PartsLibrary.h"
 
 #include <QAction>
@@ -17,6 +19,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTableWidget>
+#include <QCheckBox>
+#include <QTreeWidget>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -82,18 +86,41 @@ QString writeLibrary(const QString& name, const QStringList& partNames) {
     return path;
 }
 
-QListWidget* partsList(MainWindow& win) {
+QTreeWidget* partsList(MainWindow& win) {
     for (QDockWidget* d : win.findChildren<QDockWidget*>())
-        if (d->objectName() == QStringLiteral("panel_PARTS")) return d->findChild<QListWidget*>();
+        if (d->objectName() == QStringLiteral("panel_PARTS")) return d->findChild<QTreeWidget*>();
     return nullptr;
 }
 
-// The items that stand for a part (the library headings are not parts).
-QStringList partRows(QListWidget* list) {
-    QStringList out;
-    for (int i = 0; i < list->count(); ++i)
-        if (!list->item(i)->data(Qt::UserRole).toString().isEmpty()) out << list->item(i)->text();
+// Every row of the shelf, headings and parts alike - the tree is one level deep, a heading per library.
+QList<QTreeWidgetItem*> everyRow(QTreeWidget* tree) {
+    QList<QTreeWidgetItem*> out;
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* top = tree->topLevelItem(i);
+        out << top;
+        for (int k = 0; k < top->childCount(); ++k) out << top->child(k);
+    }
     return out;
+}
+
+// The rows that stand for a part (the library headings carry no part id).
+QStringList partRows(QTreeWidget* tree) {
+    QStringList out;
+    for (QTreeWidgetItem* it : everyRow(tree))
+        if (!it->data(0, Qt::UserRole).toString().isEmpty()) out << it->text(0);
+    return out;
+}
+
+QTreeWidgetItem* rowFor(QTreeWidget* tree, const QString& partId) {
+    for (QTreeWidgetItem* it : everyRow(tree))
+        if (it->data(0, Qt::UserRole).toString() == partId) return it;
+    return nullptr;
+}
+
+QTreeWidgetItem* rowNamed(QTreeWidget* tree, const QString& text) {
+    for (QTreeWidgetItem* it : everyRow(tree))
+        if (it->text(0).contains(text)) return it;
+    return nullptr;
 }
 
 } // namespace
@@ -121,8 +148,8 @@ int run_partspanel_tests() {
     }
 
     MainWindow win;
-    QListWidget* list = partsList(win);
-    check(list != nullptr, "panel: the parts panel is a list");
+    QTreeWidget* list = partsList(win);
+    check(list != nullptr, "panel: the parts panel is a table of parts");
     if (!list) {
         std::printf("  -> %d failed\n", ++panelFailures);
         return panelFailures;
@@ -139,10 +166,9 @@ int run_partspanel_tests() {
 
     // A part with nothing to place says so, rather than being left out: the flag the double-click reads.
     bool anyWithoutADrawing = false;
-    for (int i = 0; i < list->count(); ++i) {
-        QListWidgetItem* it = list->item(i);
-        if (it->data(Qt::UserRole).toString().isEmpty()) continue;
-        if (!it->data(Qt::UserRole + 2).toBool()) anyWithoutADrawing = true;
+    for (QTreeWidgetItem* it : everyRow(list)) {
+        if (it->data(0, Qt::UserRole).toString().isEmpty()) continue;
+        if (!it->data(0, Qt::UserRole + 2).toBool()) anyWithoutADrawing = true;
     }
     check(anyWithoutADrawing,
           "panel: and it is marked as having no drawing, so a double-click opens it in the library");
@@ -185,34 +211,39 @@ int run_partspanel_tests() {
         }
     }
 
-    // ---- what a part HAS, on the row itself -------------------------------------------------------
+    // ---- what a part HAS, in columns of its own ---------------------------------------------------
     {
-        // A part is chosen off the shelf by what can be done with it, and that took opening it. The row
-        // carries M S F now - mechanical, schematic, fanout - filled for the ones the part has.
-        QListWidgetItem* drawn = nullptr;
-        QListWidgetItem* bare = nullptr;
-        for (int i = 0; i < list->count(); ++i) {
-            QListWidgetItem* it = list->item(i);
-            if (it->data(Qt::UserRole).toString() == drawnId) drawn = it;
-            if (it->text().contains(QStringLiteral("PANELTEST-HOUSE-1"))) bare = it;
-        }
-        check(drawn != nullptr, "drawings: the connector with all three drawings is on the shelf");
+        // A part is chosen off the shelf by what can be done with it, and that took opening it. There is a
+        // column each now - M, S, F - ticked for the drawings the part has, so a shelf is read down its
+        // columns rather than part by part.
+        check(list->columnCount() == 4, "columns: the part, and one column each for M, S and F");
+        check(list->headerItem()->text(1) == QStringLiteral("M") &&
+                  list->headerItem()->text(2) == QStringLiteral("S") &&
+                  list->headerItem()->text(3) == QStringLiteral("F"),
+              "columns: headed M, S and F");
+        check(list->headerItem()->toolTip(1).contains(QStringLiteral("Mechanical")) &&
+                  list->headerItem()->toolTip(3).contains(QStringLiteral("Fanout")),
+              "columns: and each says in words what its letter means");
+
+        QTreeWidgetItem* drawn = rowFor(list, drawnId);
+        QTreeWidgetItem* bare = rowNamed(list, QStringLiteral("PANELTEST-HOUSE-1"));
+        check(drawn != nullptr, "columns: the connector with all three drawings is on the shelf");
         if (drawn) {
-            check(!drawn->icon().isNull(), "drawings: its row carries the M S F mark");
-            const QString tip = QString(drawn->toolTip()).replace(QLatin1Char('\n'), QLatin1Char(' '));
-            std::printf("  drawings: \"%s\"\n", qPrintable(tip));
-            check(tip.contains(QStringLiteral("mechanical")) && tip.contains(QStringLiteral("schematic")) &&
-                      tip.contains(QStringLiteral("fanout")),
-                  "drawings: and says which it has - mechanical, schematic, fanout");
-            check(tip.contains(QStringLiteral("front")),
-                  "drawings: the fanout says which side of the connector it was drawn from");
-            check(drawn->data(Qt::UserRole + 3).toBool(), "drawings: the fanout is flagged on the row");
+            const QString tick(QChar(0x2713));
+            std::printf("  columns: %s -> [%s][%s][%s]\n", qPrintable(drawn->text(0)),
+                        qPrintable(drawn->text(1)), qPrintable(drawn->text(2)),
+                        qPrintable(drawn->text(3)));
+            check(drawn->text(1) == tick && drawn->text(2) == tick && drawn->text(3) == tick,
+                  "columns: all three ticked for a part that has all three");
+            check(drawn->toolTip(3).contains(QStringLiteral("fanout")),
+                  "columns: and the cell says what it is about");
+            check(drawn->data(0, Qt::UserRole + 3).toBool(), "columns: the fanout is flagged on the row");
         }
         if (bare) {
-            check(!bare->icon().isNull(),
-                  "drawings: a part with none carries the mark too - all three cells empty");
-            check(!bare->data(Qt::UserRole + 2).toBool() && !bare->data(Qt::UserRole + 3).toBool(),
-                  "drawings: and is flagged as having nothing to place");
+            check(bare->text(1).isEmpty() && bare->text(2).isEmpty() && bare->text(3).isEmpty(),
+                  "columns: a part with no drawing has three empty cells - a gap the eye stops at");
+            check(!bare->data(0, Qt::UserRole + 2).toBool(),
+                  "columns: and is flagged as having nothing to place");
         }
     }
 
@@ -244,9 +275,8 @@ int run_partspanel_tests() {
         }
         // A part with nothing to place says so, rather than offering a command that cannot work.
         QString bareId;
-        for (int i = 0; i < list->count(); ++i)
-            if (list->item(i)->text().contains(QStringLiteral("PANELTEST-HOUSE-1")))
-                bareId = list->item(i)->data(Qt::UserRole).toString();
+        if (QTreeWidgetItem* bareRow = rowNamed(list, QStringLiteral("PANELTEST-HOUSE-1")))
+            bareId = bareRow->data(0, Qt::UserRole).toString();
         if (QMenu* bareMenu = win.buildPartsPanelMenu(bareId)) {
             bool saysSo = false, canStillList = false;
             for (QAction* a : bareMenu->actions()) {
@@ -308,6 +338,96 @@ int run_partspanel_tests() {
                 check(!leftOver, "bom: and taking that line off takes both of the rows behind it");
             }
         }
+    }
+
+    // ---- placing a part, and counting it ----------------------------------------------------------
+    {
+        // Two rules a shop sets once and then forgets: a part put on the sheet is counted, and two of the
+        // same part number are one line of two rather than two lines of one. Both are the DRAWING'S rules -
+        // they are kept in its bill of materials - and both are within reach of the parts panel now, which
+        // is where parts are put down.
+        QCheckBox* onPlace = nullptr;
+        QCheckBox* unify = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->objectName() == QStringLiteral("panel_PARTS"))
+                for (QCheckBox* b : d->findChildren<QCheckBox*>()) {
+                    if (b->text().contains(QStringLiteral("bill of materials"))) onPlace = b;
+                    if (b->text().contains(QStringLiteral("one line"))) unify = b;
+                }
+        check(onPlace != nullptr, "rules: the panel carries the place-and-count switch");
+        check(unify != nullptr, "rules: and the one that adds up two of the same part");
+        if (!onPlace || !unify) return panelFailures;
+
+        QTableWidget* bom = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->objectName() == QStringLiteral("panel_BILL OF MATERIALS"))
+                bom = d->findChild<QTableWidget*>();
+        check(bom != nullptr, "rules: the bill of materials is on screen to be counted on");
+        if (!bom) return panelFailures;
+
+        Editor* editor = win.findChild<Editor*>();
+        check(editor != nullptr, "rules: there is an editor to place with");
+        PartsCatalog cat;
+        cat.openRemembered();
+        const LibraryPart* part = cat.byId(drawnId);
+        check(part != nullptr, "rules: and the part to place");
+        if (!editor || !part) return panelFailures;
+
+        // Put the part on the sheet the way placing it does - the same block, with the part stamped on
+        // every entity of it - but committed rather than left following the cursor.
+        auto putOneDown = [&] {
+            editor->appendEntities(partBlockInstance(*part, true, Vec2{0.0, 0.0}));
+            QApplication::processEvents();   // the panels follow the drawing on their own
+        };
+
+        onPlace->setChecked(true);
+        unify->setChecked(true);
+        QApplication::processEvents();
+        const int before = bom->rowCount();
+        putOneDown();
+        int line = -1;
+        for (int i = 0; i < bom->rowCount(); ++i)
+            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) line = i;
+        std::printf("  rules: placed one - %d lines, the part on line %d\n", bom->rowCount(), line);
+        check(bom->rowCount() == before + 1 && line >= 0,
+              "rules: a part put on the sheet is on the bill of materials, without being asked twice");
+        const QString qtyOne = line >= 0 && bom->item(line, 3) ? bom->item(line, 3)->text() : QString();
+
+        // The same part again: one line, counted twice - not a second line.
+        putOneDown();
+        int lines = 0, only = -1;
+        for (int i = 0; i < bom->rowCount(); ++i)
+            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) {
+                ++lines;
+                only = i;
+            }
+        const QString qtyTwo = only >= 0 && bom->item(only, 3) ? bom->item(only, 3)->text() : QString();
+        std::printf("  rules: placed a second - %d line(s), quantity %s -> %s\n", lines,
+                    qPrintable(qtyOne), qPrintable(qtyTwo));
+        check(lines == 1, "rules: the same part number twice is ONE line");
+        check(qtyTwo != qtyOne, "rules: and its quantity went up by one");
+
+        // Switched off, each is a line of its own again.
+        unify->setChecked(false);
+        QApplication::processEvents();
+        int apart = 0;
+        for (int i = 0; i < bom->rowCount(); ++i)
+            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++apart;
+        std::printf("  rules: not adding up - %d lines\n", apart);
+        check(apart == 2, "rules: switched off, two of the same part are two lines");
+
+        // And with placing switched off, the sheet is not counted at all.
+        onPlace->setChecked(false);
+        QApplication::processEvents();
+        int counted = 0;
+        for (int i = 0; i < bom->rowCount(); ++i)
+            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++counted;
+        check(counted == 0,
+              "rules: with the switch off the bill lists only what was added to it by hand");
+        // Left as they were found, so the rest of the run sees the ordinary rules.
+        onPlace->setChecked(true);
+        unify->setChecked(true);
+        QApplication::processEvents();
     }
 
     // The count under the list says what is in view out of what is connected, so a short list is never a

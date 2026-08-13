@@ -74,6 +74,7 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QTreeWidget>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -11092,39 +11093,9 @@ void MainWindow::activateIndex(int index) {
     updateWindowTitleForActive();
 }
 
-// Which of the three drawings a part has: mechanical, schematic, fanout. Three cells, filled for the ones it
-// has and outlined for the ones it has not, so a shelf can be read down the left-hand edge - a connector with
-// a body and a symbol but no fanout is the commonest thing in a library and the one worth seeing at a glance.
-static QIcon partDrawingsIcon(bool mech, bool schem, bool fan) {
-    QPixmap pm(38, 16);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, false);
-    const QColor has = Chrome::ink();
-    const QColor hasnt = Chrome::dark() ? QColor("#5c626b") : QColor("#adb2ba");
-    const char* letters[3] = {"M", "S", "F"};
-    const bool state[3] = {mech, schem, fan};
-    QFont f = p.font();
-    f.setPixelSize(9);
-    f.setBold(true);
-    p.setFont(f);
-    for (int i = 0; i < 3; ++i) {
-        const QRectF cell(i * 13.0 + 0.5, 1.5, 11.0, 12.0);
-        p.setPen(QPen(state[i] ? has : hasnt, 1.0));
-        if (state[i]) {
-            p.setBrush(QColor(has.red(), has.green(), has.blue(), Chrome::dark() ? 60 : 40));
-            p.drawRect(cell);
-            p.setPen(has);
-        } else {
-            p.setBrush(Qt::NoBrush);
-            p.drawRect(cell);
-            p.setPen(hasnt);
-        }
-        p.drawText(cell, Qt::AlignCenter, QLatin1String(letters[i]));
-    }
-    p.end();
-    return QIcon(pm);
-}
+// The three drawings a part can have, named once so the columns, their tooltips and the menu all say the
+// same words.
+static const char* const kPartDrawingNames[3] = {"mechanical", "schematic", "fanout"};
 
 QDockWidget* MainWindow::makePartsPanel() {
     auto* dock = new AutoHideDock(QStringLiteral("PARTS"), this);
@@ -11161,36 +11132,71 @@ QDockWidget* MainWindow::makePartsPanel() {
     hh->addWidget(libsBtn);
     v->addWidget(head);
 
-    partsPanelList_ = new QListWidget(body);
-    partsPanelList_->setToolTip(QStringLiteral(
-        "Every part of every library in view. Double-click to put one on the sheet: its mechanical drawing "
-        "where it has one, else its schematic symbol. A part with neither opens in the library, where a "
-        "drawing can be made for it."));
+    partsPanelTree_ = new QTreeWidget(body);
+    partsPanelTree_->setColumnCount(4);
+    partsPanelTree_->setHeaderLabels({tr("Part"), tr("M"), tr("S"), tr("F")});
+    // The three columns are what a part IS TO THE DRAWING, so they are named where they are read.
+    partsPanelTree_->headerItem()->setToolTip(1, tr("Mechanical drawing"));
+    partsPanelTree_->headerItem()->setToolTip(2, tr("Schematic symbol"));
+    partsPanelTree_->headerItem()->setToolTip(3, tr("Fanout drawing"));
+    partsPanelTree_->setRootIsDecorated(false);
+    partsPanelTree_->setUniformRowHeights(true);
+    partsPanelTree_->setAllColumnsShowFocus(true);
+    // The part takes what is left, and the three tick columns stay narrow. Left to itself a header stretches
+    // its LAST section, which gave the fanout column half the panel and the part's name none of it.
+    partsPanelTree_->header()->setStretchLastSection(false);
+    partsPanelTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int c = 1; c <= 3; ++c) {
+        partsPanelTree_->header()->setSectionResizeMode(c, QHeaderView::Fixed);
+        partsPanelTree_->header()->resizeSection(c, 22);
+    }
+    partsPanelTree_->setToolTip(QStringLiteral(
+        "Every part of every library in view, and which drawings it has: M mechanical, S schematic, "
+        "F fanout. Double-click to put one on the sheet; a part with no drawing at all opens in the "
+        "library, where one can be made for it."));
     // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
-    connect(partsPanelList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
-        if (!item) return;
-        const QString id = item->data(Qt::UserRole).toString();
-        if (id.isEmpty()) return;                       // a library's name, not a part
-        if (!item->data(Qt::UserRole + 2).toBool()) {
-            // Nothing to put down yet. Rather than a shrug, the part opens where a drawing is made for it.
-            statusBar()->showMessage(
-                tr("%1 has no drawing yet — opening it in the library").arg(item->text()), 6000);
-            showPartsLibraryAt(id);
-            return;
-        }
-        placeLibraryPart(id, item->data(Qt::UserRole + 1).toBool());
-    });
+    connect(partsPanelTree_, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem* item, int) {
+                if (!item) return;
+                const QString id = item->data(0, Qt::UserRole).toString();
+                if (id.isEmpty()) return;   // a library's name, not a part
+                if (!item->data(0, Qt::UserRole + 2).toBool()) {
+                    // Nothing to put down yet. Rather than a shrug, the part opens where one is made.
+                    statusBar()->showMessage(
+                        tr("%1 has no drawing yet — opening it in the library").arg(item->text(0)), 6000);
+                    showPartsLibraryAt(id);
+                    return;
+                }
+                placeLibraryPart(id, item->data(0, Qt::UserRole + 1).toBool());
+            });
     // Right-click: what can be done with the part under the cursor. The commands are the same ones the
     // library window has - place it, add it to the bill of materials, edit it - and a menu on the part is
     // where they are looked for when the part is what is being pointed at.
-    partsPanelList_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(partsPanelList_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& at) {
-        showPartsPanelMenu(at);
-    });
-    v->addWidget(partsPanelList_, 1);
+    partsPanelTree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(partsPanelTree_, &QTreeWidget::customContextMenuRequested, this,
+            [this](const QPoint& at) { showPartsPanelMenu(at); });
+    v->addWidget(partsPanelTree_, 1);
     partsPanelCount_ = new QLabel(body);
     partsPanelCount_->setToolTip(QStringLiteral("What is in view, out of what is connected"));
     v->addWidget(partsPanelCount_);
+
+    // The two rules about placing a part and counting it. They belong here rather than only in the
+    // bill-of-materials window, because this is where parts are put down - and they ARE that window's own
+    // two switches, kept with the drawing, not a second set of settings that could disagree with them.
+    bomOnPlaceBox_ = new QCheckBox(tr("A placed part goes on the bill of materials"), body);
+    bomOnPlaceBox_->setToolTip(tr(
+        "Every part put on the sheet is counted on the bill of materials, with its part number and its "
+        "unit. Off, the bill lists only what was added to it by hand.\nKept with the drawing - the "
+        "bill-of-materials window shows the same switch."));
+    connect(bomOnPlaceBox_, &QCheckBox::toggled, this, [this](bool on) { setBomRule(true, on); });
+    v->addWidget(bomOnPlaceBox_);
+    bomUnifyBox_ = new QCheckBox(tr("The same part twice is one line, counted twice"), body);
+    bomUnifyBox_->setToolTip(tr(
+        "Two of the same part number are one line with a quantity of two, rather than two lines of one. "
+        "Quantities in units that cannot be added - metres and pieces - are never merged.\nKept with the "
+        "drawing - the bill-of-materials window shows the same switch."));
+    connect(bomUnifyBox_, &QCheckBox::toggled, this, [this](bool on) { setBomRule(false, on); });
+    v->addWidget(bomUnifyBox_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the parts library"), body);
         connect(open, &QPushButton::clicked, this, [this] { showPartsLibrary(); });
@@ -11203,17 +11209,58 @@ QDockWidget* MainWindow::makePartsPanel() {
     return dock;
 }
 
+// The two boxes say what the DRAWING is set to, because that is where the rules are kept: a sheet keeps the
+// way its bill of materials is counted, so opening another drawing shows that drawing's rules.
+void MainWindow::syncBomRuleBoxes() {
+    const Document* doc = editDoc();
+    if (!doc) return;
+    BomTable table;
+    table.fromJson(doc->bom());
+    if (bomOnPlaceBox_) {
+        const QSignalBlocker block(bomOnPlaceBox_);
+        bomOnPlaceBox_->setChecked(table.config.includeDrawing);
+    }
+    if (bomUnifyBox_) {
+        const QSignalBlocker block(bomUnifyBox_);
+        bomUnifyBox_->setChecked(table.config.unify);
+    }
+}
+
+void MainWindow::setBomRule(bool onPlace, bool value) {
+    Document* doc = editDoc();
+    if (!doc) return;
+    BomTable table;
+    table.fromJson(doc->bom());
+    if (onPlace) {
+        if (table.config.includeDrawing == value) return;
+        table.config.includeDrawing = value;
+    } else {
+        if (table.config.unify == value) return;
+        table.config.unify = value;
+    }
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    refreshBomPanel();
+    statusBar()->showMessage(onPlace ? (value ? tr("Parts placed on the sheet are counted on the bill of "
+                                                  "materials")
+                                              : tr("The bill of materials now lists only what was added to "
+                                                   "it by hand"))
+                                     : (value ? tr("The same part twice is one line, counted twice")
+                                              : tr("Each of the same part is a line of its own")),
+                             6000);
+}
+
 // The menu on a part in the panel. Only what CAN be done is offered: a part with no fanout is not given a
 // "Place the fanout" that would answer with a message in the status bar.
 void MainWindow::showPartsPanelMenu(const QPoint& at) {
-    if (!partsPanelList_) return;
-    QListWidgetItem* item = partsPanelList_->itemAt(at);
+    if (!partsPanelTree_) return;
+    QTreeWidgetItem* item = partsPanelTree_->itemAt(at);
     if (!item) return;
-    const QString id = item->data(Qt::UserRole).toString();
+    const QString id = item->data(0, Qt::UserRole).toString();
     if (id.isEmpty()) return;   // a library's heading, not a part
     if (QMenu* menu = buildPartsPanelMenu(id)) {
         menu->setAttribute(Qt::WA_DeleteOnClose);
-        menu->popup(partsPanelList_->viewport()->mapToGlobal(at));
+        menu->popup(partsPanelTree_->viewport()->mapToGlobal(at));
     }
 }
 
@@ -11355,8 +11402,9 @@ void MainWindow::fillPartsLibraryMenu(QMenu* menu) {
 }
 
 void MainWindow::refreshPartsPanel() {
-    if (!partsPanelList_) return;
-    partsPanelList_->clear();
+    if (!partsPanelTree_) return;
+    partsPanelTree_->clear();
+    syncBomRuleBoxes();
     PartsCatalog catalog;
     catalog.openRemembered();
     const QString needle = partsPanelFilter_ ? partsPanelFilter_->text().trimmed() : QString();
@@ -11378,31 +11426,40 @@ void MainWindow::refreshPartsPanel() {
     int shown = 0, connected = 0;
     const bool severalInView = shownFrom.size() > 1;
 
-    auto addPart = [this, &shown](const LibraryPart& part) {
+    auto addPart = [this, &shown](const LibraryPart& part, QTreeWidgetItem* under) {
         const bool mech = part.hasMechanical();
         const bool schem = !partSchematicDrawing(part).isEmpty();
         const bool fan = part.hasFanout();
-        auto* item = new QListWidgetItem(
-            QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()), partsPanelList_);
-        item->setData(Qt::UserRole, part.id);
-        item->setData(Qt::UserRole + 1, mech);              // the mechanical drawing where there is one
-        item->setData(Qt::UserRole + 2, mech || schem);      // is there anything to put down at all
-        item->setData(Qt::UserRole + 3, fan);
-        // What the part HAS, shown rather than described: M S F, filled for the ones it has. A part is
-        // chosen off the shelf by what can be done with it, and until now that took opening it.
-        item->setIcon(partDrawingsIcon(mech, schem, fan));
+        auto* item = under ? new QTreeWidgetItem(under) : new QTreeWidgetItem(partsPanelTree_);
+        item->setText(0, QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()));
+        item->setData(0, Qt::UserRole, part.id);
+        item->setData(0, Qt::UserRole + 1, mech);           // the mechanical drawing where there is one
+        item->setData(0, Qt::UserRole + 2, mech || schem);   // is there anything to put down at all
+        item->setData(0, Qt::UserRole + 3, fan);
+        // A column each, ticked: what the part IS, read down the columns rather than opened part by part.
+        // A tick and nothing - not a tick and a cross - because the eye counts ticks in a column and stops
+        // at the gaps.
+        const bool has[3] = {mech, schem, fan};
+        for (int c = 0; c < 3; ++c) {
+            item->setText(c + 1, has[c] ? QString(QChar(0x2713)) : QString());
+            item->setTextAlignment(c + 1, Qt::AlignCenter);
+            item->setForeground(c + 1, has[c] ? Chrome::ink() : Chrome::subInk());
+            item->setToolTip(c + 1, has[c] ? tr("Has a %1 drawing").arg(kPartDrawingNames[c])
+                                           : tr("No %1 drawing").arg(kPartDrawingNames[c]));
+        }
         QStringList drawings;
         if (mech) drawings << tr("mechanical");
         if (schem) drawings << tr("schematic");
         if (fan) drawings << tr("fanout (%1)").arg(part.fanoutSide());
         if (!drawings.isEmpty())
-            item->setToolTip(tr("%1\nDrawings: %2\nDouble-click to place the %3 — right-click for the rest")
+            item->setToolTip(0,
+                             tr("%1\nDrawings: %2\nDouble-click to place the %3 — right-click for the rest")
                                  .arg(part.title(), drawings.join(QStringLiteral(", ")),
                                       mech ? tr("mechanical drawing") : tr("schematic symbol")));
         else {
-            item->setToolTip(tr("%1\nNo drawing of any kind yet — double-click to open it in the library")
-                                 .arg(part.title()));
-            item->setForeground(Chrome::subInk());
+            item->setToolTip(0, tr("%1\nNo drawing of any kind yet — double-click to open it in the library")
+                                    .arg(part.title()));
+            item->setForeground(0, Chrome::subInk());
         }
         ++shown;
     };
@@ -11412,26 +11469,30 @@ void MainWindow::refreshPartsPanel() {
         const PartsLibrary lib = catalog.merged();
         connected = static_cast<int>(lib.parts.size());
         for (const LibraryPart& part : lib.parts)
-            if (matches(part)) addPart(part);
+            if (matches(part)) addPart(part, nullptr);
     } else {
         for (const QString& path : catalog.paths()) {
             const PartsLibrary* lib = catalog.byPath(path);
             if (!lib) continue;
             connected += static_cast<int>(lib->parts.size());
             if (!shownFrom.contains(path)) continue;
+            QTreeWidgetItem* head = nullptr;
             if (severalInView) {
-                // Which shelf this is. Not selectable: it is a heading, not a part.
-                auto* head = new QListWidgetItem(QFileInfo(path).completeBaseName().toUpper(),
-                                                 partsPanelList_);
-                head->setFlags(Qt::ItemIsEnabled);
-                QFont f = head->font();
+                // Which shelf this is, with its parts under it. It is a heading, not a part: it carries no
+                // part id, and everything that acts on a part asks for one.
+                head = new QTreeWidgetItem(partsPanelTree_);
+                head->setText(0, QFileInfo(path).completeBaseName().toUpper());
+                QFont f = head->font(0);
                 f.setBold(true);
-                head->setFont(f);
-                head->setForeground(Chrome::subInk());
+                head->setFont(0, f);
+                head->setForeground(0, Chrome::subInk());
+                head->setFirstColumnSpanned(false);
+                head->setExpanded(true);
             }
             for (const LibraryPart& part : lib->parts)
-                if (matches(part)) addPart(part);
+                if (matches(part)) addPart(part, head);
         }
+        partsPanelTree_->setRootIsDecorated(severalInView);
     }
     if (partsPanelCount_)
         partsPanelCount_->setText(
