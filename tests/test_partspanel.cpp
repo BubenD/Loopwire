@@ -432,6 +432,129 @@ int run_partspanel_tests() {
         QApplication::processEvents();
     }
 
+    // ---- double-click a COLUMN and that is the drawing you get --------------------------------------
+    {
+        // The columns are how the row says what the part has, so they are also how it is asked for: a part
+        // with three drawings and one gesture had no way of saying which one was wanted.
+        Editor* editor = win.findChild<Editor*>();
+        check(editor != nullptr, "columns: there is an editor to place into");
+        if (editor) {
+            editor->selectAll();
+            editor->deleteSelected();
+            QTreeWidgetItem* row = rowFor(list, drawnId);
+            check(row != nullptr, "columns: the connector is on the shelf");
+            if (row) {
+                // The S column: the schematic symbol, not the mechanical drawing.
+                emit list->itemDoubleClicked(row, 2);
+                editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+                QApplication::processEvents();
+                QString view;
+                for (const Entity& e : editor->document()->entities())
+                    if (e.meta.value(QStringLiteral("libPart")).toString() == drawnId)
+                        view = e.meta.value(QStringLiteral("libPartView")).toString();
+                std::printf("  columns: double-clicked S, placed the %s drawing\n", qPrintable(view));
+                check(view == QStringLiteral("schematic"),
+                      "columns: double-clicking under S places the schematic symbol");
+
+                editor->selectAll();
+                editor->deleteSelected();
+                emit list->itemDoubleClicked(row, 1);
+                editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+                QApplication::processEvents();
+                view.clear();
+                for (const Entity& e : editor->document()->entities())
+                    if (e.meta.value(QStringLiteral("libPart")).toString() == drawnId)
+                        view = e.meta.value(QStringLiteral("libPartView")).toString();
+                check(view == QStringLiteral("mechanical"), "columns: and under M, the mechanical drawing");
+
+                editor->selectAll();
+                editor->deleteSelected();
+                emit list->itemDoubleClicked(row, 3);
+                editor->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+                QApplication::processEvents();
+                view.clear();
+                for (const Entity& e : editor->document()->entities())
+                    if (e.meta.value(QStringLiteral("libPart")).toString() == drawnId)
+                        view = e.meta.value(QStringLiteral("libPartView")).toString();
+                check(view == QStringLiteral("fanout"), "columns: and under F, the fanout");
+                editor->selectAll();
+                editor->deleteSelected();
+                QApplication::processEvents();
+            }
+        }
+    }
+
+    // ---- the fanout is on the menu whether the part has one or not ---------------------------------
+    {
+        // A command that is simply absent looks like a program that cannot do it. For a part with no fanout
+        // the entry is there, greyed, with the way to get one underneath it.
+        QString bareId;
+        if (QTreeWidgetItem* bareRow = rowNamed(list, QStringLiteral("PANELTEST-HOUSE-2")))
+            bareId = bareRow->data(0, Qt::UserRole).toString();
+        if (QMenu* menu = win.buildPartsPanelMenu(bareId)) {
+            bool saysNone = false, canDraw = false;
+            for (QAction* a : menu->actions()) {
+                if (a->text().contains(QStringLiteral("fanout")) && !a->isEnabled()) saysNone = true;
+                if (a->text().contains(QStringLiteral("Draw the fanout"))) canDraw = true;
+            }
+            check(saysNone, "fanout: the menu says so even when there is no fanout, greyed");
+            check(canDraw, "fanout: and offers to draw one in the library");
+            delete menu;
+        }
+    }
+
+    // ---- the same part drawn two ways is one part to buy --------------------------------------------
+    {
+        // A connector is drawn twice: its body on the assembly and its symbol on the schematic. It is one
+        // connector to buy. Counting the views separately and adding them up said two, which is a bill
+        // nobody could order from - so the part is counted as the BIGGEST of its views, and a schematic that
+        // shows more than the assembly is the count, because then the assembly sheet is short.
+        Editor* editor = win.findChild<Editor*>();
+        QTableWidget* bom = nullptr;
+        for (QDockWidget* d : win.findChildren<QDockWidget*>())
+            if (d->objectName() == QStringLiteral("panel_BILL OF MATERIALS"))
+                bom = d->findChild<QTableWidget*>();
+        PartsCatalog cat;
+        cat.openRemembered();
+        const LibraryPart* part = cat.byId(drawnId);
+        check(editor && bom && part, "views: the sheet, the bill and the part are all here");
+        if (editor && bom && part) {
+            auto qty = [bom]() -> QString {
+                for (int i = 0; i < bom->rowCount(); ++i)
+                    if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
+                        return bom->item(i, 3) ? bom->item(i, 3)->text() : QString();
+                return QStringLiteral("0");
+            };
+            editor->selectAll();
+            editor->deleteSelected();
+            QApplication::processEvents();
+
+            editor->appendEntities(partBlockInstance(*part, true, Vec2{0.0, 0.0}));
+            QApplication::processEvents();
+            const QString one = qty();
+            editor->appendEntities(partBlockInstance(*part, false, Vec2{100.0, 0.0}));
+            QApplication::processEvents();
+            const QString both = qty();
+            std::printf("  views: mechanical %s, plus its schematic %s\n", qPrintable(one),
+                        qPrintable(both));
+            check(one == QStringLiteral("1") && both == QStringLiteral("1"),
+                  "views: the body and the symbol of one connector are ONE connector to buy");
+
+            // Two more symbols: the schematic now shows three where the assembly shows one, and three is
+            // the truth - the assembly sheet is two short.
+            editor->appendEntities(partBlockInstance(*part, false, Vec2{200.0, 0.0}));
+            editor->appendEntities(partBlockInstance(*part, false, Vec2{300.0, 0.0}));
+            QApplication::processEvents();
+            std::printf("  views: three on the schematic, one on the assembly -> %s\n",
+                        qPrintable(qty()));
+            check(qty() == QStringLiteral("3"),
+                  "views: and when one view shows more than the other, the bigger one is the count");
+            editor->selectAll();
+            editor->deleteSelected();
+            QApplication::processEvents();
+        }
+    }
+
     // ---- a COPY of a placed part is another one of it ----------------------------------------------
     {
         // Copy a connector on the sheet and there are two connectors to buy. The copy kept the instance key

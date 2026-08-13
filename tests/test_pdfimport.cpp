@@ -7,6 +7,7 @@
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
 #include "app/Editor.h"
+#include "tools/ToolId.h"
 #include "app/MainWindow.h"
 #include "model/Document.h"
 
@@ -102,6 +103,62 @@ int run_pdfimport_tests() {
         check(openForEditing, "block: and it opens on a tab of its own to be edited");
         win.cancelBlockEdit();
         QApplication::processEvents();
+
+        // DOUBLE-CLICK it on the sheet and the block opens: the lines are separate objects there, every
+        // drawing tool works on them, and what is copied inside can be pasted outside. Which is the whole
+        // point of importing a PDF as a block rather than as a picture.
+        if (doc) {
+            // A point ON the geometry, not the middle of its bounding box: the middle of the box around an
+            // L-shaped path is not on the path, and a double-click there hits nothing at all.
+            Vec2 onIt{0.0, 0.0};
+            for (const Entity& e : doc->entities())
+                if (e.meta.value(QStringLiteral("block")).toString() == stem) {
+                    if (!e.points.empty()) onIt = e.points.front();
+                    else onIt = e.a;
+                }
+            Editor* ed = win.findChild<Editor*>();
+            check(ed != nullptr, "block: the editor is there to double-click with");
+            if (ed) {
+                ed->setTool(ToolId::Select);
+                ed->onDoubleClick(onIt);
+                QApplication::processEvents();
+                bool editing = false;
+                for (QTabBar* bar : win.findChildren<QTabBar*>())
+                    for (int i = 0; i < bar->count(); ++i)
+                        if (bar->tabText(i).contains(stem)) editing = true;
+                check(editing, "block: double-clicking a copy of it opens the block to be edited");
+
+                // Inside the block, and known to be: the tab is the block's own, so what is measured next
+                // is the block's contents and not the drawing's.
+                Editor* inBlock = win.findChild<Editor*>();
+                check(inBlock && inBlock->document() &&
+                          inBlock->document()->name().contains(stem),
+                      "block: and the drawing being edited IS the block");
+                ed = inBlock;
+                // Inside: the lines are their own objects, and they can be taken to the clipboard.
+                const int inside = static_cast<int>(ed->document()->entities().size());
+                std::printf("  pdf block: %d separate object(s) inside the block\n", inside);
+                check(inside >= 1, "block: and inside it the lines are separate objects");
+                ed->selectAll();
+                ed->copySelection();
+                check(ed->clipboardCount() == inside,
+                      "block: all of them go to the clipboard together");
+
+                // Out again, and paste: what was inside the block is now loose in the drawing, which is
+                // what "copy out of the block" has to mean.
+                win.cancelBlockEdit();
+                QApplication::processEvents();
+                Editor* back = win.findChild<Editor*>();
+                const int beforePaste = static_cast<int>(back->document()->entities().size());
+                back->paste();
+                back->onPointerPress(Vec2{500.0, 500.0}, Qt::LeftButton, Qt::NoModifier);
+                QApplication::processEvents();
+                const int afterPaste = static_cast<int>(back->document()->entities().size());
+                std::printf("  pdf block: pasted outside, %d -> %d object(s)\n", beforePaste, afterPaste);
+                check(afterPaste == beforePaste + inside,
+                      "block: and pasting outside the block puts them in the drawing");
+            }
+        }
 
         // A second import of the same file does not overwrite the first block - and every copy of it
         // already on a sheet.

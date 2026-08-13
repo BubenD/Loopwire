@@ -66,6 +66,12 @@ BlockDef blockFromEntities(const QString& name, const std::vector<Entity>& ents,
 std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
                                           const QString& instanceKey);
 
+// WHICH DRAWING of the part a placed copy is: "mechanical", "schematic" or "fanout". One part is drawn
+// several ways - the body on the assembly, the symbol on the schematic, the fanout at the connector - and they
+// are all the same thing to buy, so the bill of materials has to be able to tell one view from another rather
+// than counting three drawings as three parts.
+inline constexpr char kLibPartViewKey[] = "libPartView";
+
 // One copy of a library part's drawing, stamped as a block copy: what goes on the sheet when a part is
 // inserted, or when the harness builder puts one down. The block is the part - the same name
 // libraryBlocks() gives it - so editing the part's drawing rebuilds every copy already placed.

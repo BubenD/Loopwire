@@ -187,6 +187,7 @@ private:
     // Which of the connected libraries the parts panel draws from. Remembered by path, so connecting
     // another library does not disturb what is in view.
     void fillPartsLibraryMenu(QMenu* menu);
+    bool hasSchematicDrawing(const QString& partId) const;   // its own symbol, or the standard one
     void showPartsPanelMenu(const QPoint& at);   // right-click on a part: place it, list it, edit it
     void showBomPanelMenu(const QPoint& at);     // right-click on a line: take it off, if it is yours
     QStringList partsPanelHidden_;

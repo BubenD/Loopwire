@@ -481,6 +481,9 @@ public:
     // Flip the paste preview before placing: xAxis mirrors across a vertical line
     // through the base (flip X), else a horizontal line (flip Y). Connectors flip too.
     void togglePasteMirror(bool xAxis);
+    // How many objects are on the clipboard. The clipboard is the EDITOR'S, not the drawing's, so it
+    // survives switching tabs - which is what lets a selection copied inside a block be pasted outside it.
+    int clipboardCount() const { return static_cast<int>(clipboard_.size()); }
     // A stock symbol just put down: where its two leads land on a net, the net is cut between them, so the
     // part is IN the circuit rather than lying across it. Returns how many nets were cut.
     int cutNetsUnderSymbols(const std::vector<QString>& placedIds);

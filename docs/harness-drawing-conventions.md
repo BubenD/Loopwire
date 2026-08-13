@@ -787,6 +787,19 @@ being touched, so each button follows its panel's `visibilityChanged` as well as
 ribbon is built **before** the panels are, the buttons are wired to the panels *by name* — `panelByKey` —
 and switched on at the end of `buildPanels()` by `syncViewPanelButtons()`.
 
+### One part drawn several ways is one part to buy
+
+A connector is drawn twice: its body on the assembly and its symbol on the schematic. A fanout is a third
+drawing of the same connector. All of them are **one connector to buy**, and counting the drawings gave two or
+three — a bill nobody could order from.
+
+Every placed copy now says WHICH drawing it is (`libPartView`: mechanical, schematic, fanout), the views are
+counted separately, and the part is counted as **the biggest of them**. So body + symbol is one; and when the
+schematic shows six where the assembly shows four, six is the count — because then the assembly sheet is two
+short, and a bill of materials that hid that would be worse than one that showed it. Ties go to the view that
+was put down first. A copy placed before views were written down counts as the mechanical one, so an old
+drawing reads exactly as it always did.
+
 ### A copy of a placed part is another one of it
 
 Copy a connector on the sheet and there are two connectors to buy. There were not: the copy kept the
@@ -833,11 +846,18 @@ the bill-of-materials window shows the same two switches; these are not a second
 Measured end to end: place a part → one line; place the same part again → still one line, quantity 1 → 2;
 switch the second rule off → two lines; switch the first off → the drawing is not counted at all.
 
+**The column you double-click is the drawing you get**: under **M** the mechanical drawing, under **S** the
+schematic symbol, under **F** the fanout. The columns are how the row says what the part has, so they are also
+how it is asked for — with three drawings and one gesture there was no way of saying which. Double-clicking the
+*name* still places the part the way it is most likely wanted, its body if it has one; a part with no drawing
+at all opens in the library.
+
 **Right-click a part** for the rest of it: place the mechanical drawing, place the schematic symbol, place the
 fanout — *for the front or, mirrored, for the back of the connector, each named for the side it shows* — add it
-to the bill of materials, or edit it in the library. Only what can be done is offered: a part with no fanout
-is not given a command that would answer with a message in the status bar, and a part with no drawing at all
-says so, greyed, while still being addable to the bill of materials.
+to the bill of materials, or edit it in the library. What cannot be done is *said* rather than left out — a
+command that is simply absent looks like a program that cannot do it — so a part with no fanout gets a greyed
+*"Place the fanout — none drawn yet"* with **Draw the fanout in the library** under it, and a part with no
+drawing at all says so while still being addable to the bill of materials.
 
 **Right-click a line of the bill of materials** to take it off — in the panel and in the window both. A line
 put there by hand goes; a line the drawing itself calls for cannot, and the menu says *why* rather than
@@ -1003,6 +1023,13 @@ sheet, it can be inserted again wherever it is wanted, and it opens **on its own
 right-click it — where the lines can be worked on and saved back to every copy at once. A second import of the
 same file becomes *name (2)* rather than overwriting the first: replacing a block replaces every copy of it
 already on a sheet, and doing that because two PDFs share a file name is not an import, it is a loss.
+
+**Double-click a copy of it on the sheet** and the block opens — that is how a block is opened in every
+drawing package, and an imported PDF is a block like any other. Inside, its lines are separate objects: every
+drawing tool works on them, and what is selected and copied there can be pasted *outside* the block, because
+the clipboard belongs to the editor rather than to the drawing and survives the tab. Measured end to end:
+double-click in, the tab is the block's own document, the lines are there separately, copy takes all of them,
+and pasting after Cancel puts them loose in the drawing.
 
 The DXF written beside the PDF is unchanged, and the work is now reachable with a path
 (`importPdfFile`) rather than only through the file dialog — which is what makes it testable, and what lets

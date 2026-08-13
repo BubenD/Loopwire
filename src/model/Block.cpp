@@ -154,6 +154,10 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
     // lines that nothing can trace back to a part number - the bill of materials could not count it, and
     // counting what is on the drawing is most of what a bill of materials is for.
     for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
+    // And WHICH drawing of it: the same part put down as its body and as its symbol is one part to buy.
+    for (Entity& e : out)
+        e.meta.insert(QLatin1String(kLibPartViewKey),
+                      mechanical ? QStringLiteral("mechanical") : QStringLiteral("schematic"));
     return out;
 }
 
@@ -176,6 +180,7 @@ std::vector<Entity> partDrawingBlockInstance(const LibraryPart& part, const QJso
         for (Entity& e : out) e.meta.insert(QLatin1String(kBlockKey), b.name);
     }
     for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
+    for (Entity& e : out) e.meta.insert(QLatin1String(kLibPartViewKey), what);
     return out;
 }
 

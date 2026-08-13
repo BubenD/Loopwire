@@ -1,4 +1,6 @@
 #include "harness/Bom.h"
+
+#include "model/Block.h"
 #include <QSet>
 #include "harness/MechanicalHarness.h"
 
@@ -225,6 +227,19 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
     // block INSTANCE is counted once. And where a connector was placed with one of its contacts, that
     // contact goes on the line below it, in the quantity the connector needs - which is how a connector is
     // ordered: never by itself.
+    // One part is drawn several WAYS - its body on the assembly, its symbol on the schematic, its fanout at
+    // the connector - and all of them are the same thing to buy. So the views are counted separately and the
+    // part is counted as the BIGGEST of them: four connectors drawn mechanically and four drawn on the
+    // schematic are four connectors, and if the schematic shows six then six is the truth and the assembly
+    // sheet is two short. Adding the views up instead said eight, which is a bill nobody could order from.
+    struct Placed {
+        QString instance;
+        QString partId;
+        QString view;
+        QString designator;
+        QString contactId;
+    };
+    std::vector<Placed> placedInOrder;
     QSet<QString> countedInstances;
     for (const Entity& e : doc.entities()) {
         const QString instance = e.meta.value(QStringLiteral("blockInst")).toString();
@@ -232,16 +247,49 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
         if (instance.isEmpty() || placedId.isEmpty()) continue;
         if (countedInstances.contains(instance)) continue;
         countedInstances.insert(instance);
-        const LibraryPart* placed = lib.byId(placedId);
+        if (!lib.byId(placedId)) continue;
+        Placed p;
+        p.instance = instance;
+        p.partId = placedId;
+        // A copy placed before views were written down counts as the mechanical one: whatever it is, every
+        // such copy is the same view as every other, so the count comes out as it always did.
+        p.view = e.meta.value(QLatin1String(kLibPartViewKey)).toString();
+        if (p.view.isEmpty()) p.view = QStringLiteral("mechanical");
+        p.designator = e.meta.value(QStringLiteral("designator")).toString();
+        p.contactId = e.meta.value(QLatin1String(kContactPartKey)).toString();
+        placedInOrder.push_back(std::move(p));
+    }
+    // How many of each view there are of each part, and which view is the biggest. Ties go to the view seen
+    // first, so a part drawn once each way reads as the one it was put down as first.
+    QHash<QString, QHash<QString, int>> views;
+    QHash<QString, QString> firstView;
+    for (const Placed& p : placedInOrder) {
+        ++views[p.partId][p.view];
+        if (!firstView.contains(p.partId)) firstView.insert(p.partId, p.view);
+    }
+    QHash<QString, QString> countThisView;
+    for (auto part = views.cbegin(); part != views.cend(); ++part) {
+        QString best = firstView.value(part.key());
+        int most = part.value().value(best, 0);
+        for (auto v = part.value().cbegin(); v != part.value().cend(); ++v)
+            if (v.value() > most) {
+                most = v.value();
+                best = v.key();
+            }
+        countThisView.insert(part.key(), best);
+    }
+    for (const Placed& p : placedInOrder) {
+        // Only the view that carries the count: the others are the same parts, drawn again.
+        if (countThisView.value(p.partId) != p.view) continue;
+        const LibraryPart* placed = lib.byId(p.partId);
         if (!placed) continue;
         BomRow r = bomRowFromPart(*placed, 1.0);
-        r.ref = e.meta.value(QStringLiteral("designator")).toString();
+        r.ref = p.designator;
         r.fromDrawing = true;
         out.push_back(r);
         // The contact it was placed with, immediately under it.
-        const QString contactId = e.meta.value(QLatin1String(kContactPartKey)).toString();
-        if (contactId.isEmpty()) continue;
-        if (const LibraryPart* contact = lib.byId(contactId)) {
+        if (p.contactId.isEmpty()) continue;
+        if (const LibraryPart* contact = lib.byId(p.contactId)) {
             BomRow c = bomRowFromPart(*contact, static_cast<double>(placed->wayCount()));
             c.ref = r.ref;   // the same connector: that is what these contacts are for
             c.fromDrawing = true;

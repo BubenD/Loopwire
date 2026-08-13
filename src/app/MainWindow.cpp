@@ -11198,18 +11198,43 @@ QDockWidget* MainWindow::makePartsPanel() {
         "library, where one can be made for it."));
     // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
     connect(partsPanelTree_, &QTreeWidget::itemDoubleClicked, this,
-            [this](QTreeWidgetItem* item, int) {
+            [this](QTreeWidgetItem* item, int column) {
                 if (!item) return;
                 const QString id = item->data(0, Qt::UserRole).toString();
                 if (id.isEmpty()) return;   // a library's name, not a part
-                if (!item->data(0, Qt::UserRole + 2).toBool()) {
+                const bool hasMech = item->data(0, Qt::UserRole + 1).toBool();
+                const bool hasAny = item->data(0, Qt::UserRole + 2).toBool();
+                const bool hasFan = item->data(0, Qt::UserRole + 3).toBool();
+                // The COLUMN says which drawing: double-click the tick under S and the schematic symbol is
+                // what comes down. The columns are how the row says what it has, so they are also how it is
+                // asked for - a part with three drawings and one gesture had no way of saying which.
+                if (column == 1 || column == 2 || column == 3) {
+                    const bool there = column == 1 ? hasMech : (column == 2 ? (hasAny || !hasMech) : hasFan);
+                    if (column == 2 && !hasSchematicDrawing(id)) {
+                        statusBar()->showMessage(tr("%1 has no schematic symbol").arg(item->text(0)), 4000);
+                        return;
+                    }
+                    if (!there) {
+                        statusBar()->showMessage(
+                            tr("%1 has no %2 drawing")
+                                .arg(item->text(0),
+                                     column == 1 ? tr("mechanical") : tr("fanout")),
+                            4000);
+                        return;
+                    }
+                    if (column == 3) placeLibraryFanout(id, false);
+                    else placeLibraryPart(id, column == 1);
+                    return;
+                }
+                if (!hasAny) {
                     // Nothing to put down yet. Rather than a shrug, the part opens where one is made.
                     statusBar()->showMessage(
                         tr("%1 has no drawing yet — opening it in the library").arg(item->text(0)), 6000);
                     showPartsLibraryAt(id);
                     return;
                 }
-                placeLibraryPart(id, item->data(0, Qt::UserRole + 1).toBool());
+                // On the name: whichever drawing the part is most likely wanted by - its body if it has one.
+                placeLibraryPart(id, hasMech);
             });
     // Right-click: what can be done with the part under the cursor. The commands are the same ones the
     // library window has - place it, add it to the bill of materials, edit it - and a menu on the part is
@@ -11294,6 +11319,15 @@ void MainWindow::setBomRule(bool onPlace, bool value) {
 
 // The menu on a part in the panel. Only what CAN be done is offered: a part with no fanout is not given a
 // "Place the fanout" that would answer with a message in the status bar.
+// Has this part a schematic symbol to place - its own, or the standard one for its kind? Asked by name so
+// the panel's double-click can answer for the column it was made on.
+bool MainWindow::hasSchematicDrawing(const QString& partId) const {
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(partId);
+    return part && !partSchematicDrawing(*part).isEmpty();
+}
+
 void MainWindow::showPartsPanelMenu(const QPoint& at) {
     if (!partsPanelTree_) return;
     QTreeWidgetItem* item = partsPanelTree_->itemAt(at);
@@ -11331,6 +11365,12 @@ QMenu* MainWindow::buildPartsPanelMenu(const QString& id) {
         menu.addAction(
             tr("Place the fanout mirrored (%1 of the connector)").arg(drawnFront ? tr("back") : tr("front")),
             this, [this, id] { placeLibraryFanout(id, true); });
+    } else {
+        // Said even when there is none, and said where it would be: a command that is simply absent looks
+        // like a program that cannot do it. Greyed, with the way to get one right underneath.
+        QAction* none = menu.addAction(tr("Place the fanout — none drawn yet"));
+        none->setEnabled(false);
+        menu.addAction(tr("Draw the fanout in the library"), this, [this, id] { showPartsLibraryAt(id); });
     }
     if (!mech && !schem && !fan) {
         QAction* none = menu.addAction(tr("No drawing to place yet"));
