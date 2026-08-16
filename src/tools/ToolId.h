@@ -53,6 +53,7 @@ enum class ToolId {
     Chamfer,
     ModelNearPoint,
     ModelFarPoint,
+    ModelConnectPoint,   // where the part connects, and which way it runs from there (two clicks)
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -145,6 +146,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Chamfer: return QStringLiteral("Chamfer");
     case ToolId::ModelNearPoint: return QStringLiteral("Model near point");
     case ToolId::ModelFarPoint: return QStringLiteral("Model far point");
+    case ToolId::ModelConnectPoint: return QStringLiteral("Model connection point");
     }
     return QStringLiteral("Select");
 }

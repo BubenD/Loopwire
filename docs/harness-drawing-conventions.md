@@ -1020,6 +1020,39 @@ Two things came out of drawing them small:
   reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
   icon is 11 px tall in a 28 px box, where it was 0.
 
+## The default models are a list, not a fixed set of slots
+
+An office draws a straight backshell and a right-angled one. Both are backshells. One model per kind meant the
+second could not be kept at all — capturing it *replaced* the first, and every drawing that used the first
+changed with it. A kind holds **as many models as are drawn**, each with a name, and one of them is the
+**default**: what a drawing uses when nothing else is said. Add, remove, rename and make-default are in the
+models window; the first model added to a kind is its default, and removing the default hands it to whatever
+is left, so a kind is never left with models and nothing to use. Everything that only wants "the heatshrink
+model" (`of(kind)`) keeps working whether an office keeps one or six.
+
+## Where a part connects, and which way it runs
+
+A model used to have to be drawn **along +x from its own origin**, because that was the assumption the
+placement made. A right-angled backshell, a boot that leaves at 45°, a fanout drawn as it looks on the sheet —
+none of them could be placed by that.
+
+So a model marks two things on its own drawing: the **connection point** (where the part meets what it is
+placed on) and the **direction it runs** from there. Both are picked on the drawing itself — *Connection
+point* in the model session, then two clicks: the point, and anywhere along the direction. Both clicks are
+snapped points, so **polar tracking gives the angle** (0, 30, 45, 90 exactly) and an object snap takes the
+direction off the drawing. They are drawn as a blue dot and an arrow while the model is being edited, because
+the whole reason for marking them is to see what the wizard will do with it.
+
+Placing turns the drawing by *(the run's direction − the model's own)* and sets it down so the connection
+point lands exactly on the point asked for. Measured: a boot drawn running **up** the page from (10,5), placed
+at (100,50) on a run going along +x, comes out from **(100,50) to (120,50)** — its connection point on the
+point, its body along the run.
+
+**The side** is the same part the other way up: mirrored about the run's own axis, in the model's coordinates,
+so what is mirrored is the part and not its place on the sheet. Measured: one side reaches +10 across the run,
+the other −10, mirrored exactly rather than moved. A model that marks neither point nor direction is placed
+exactly as it always was, so every model already captured is untouched.
+
 ## Capture takes what was picked
 
 The default mechanical models — the house style for a wire, a cable, a heat-shrink, a boot — are captured off

@@ -961,6 +961,10 @@ signals:
     // Double-clicked the sheet frame — the host opens the template editor for it.
     void editTemplateRequested(const QString& name);
     void modelAnchorPicked(Vec2 point, bool near);
+    // Where the part connects, and which way it runs from there. Two clicks: the point, then anywhere along
+    // the direction - so the polar tracking and the object snaps give the angle, rather than a number typed
+    // into a box that nobody can check against the drawing.
+    void modelConnectPicked(Vec2 point, double angleRad);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
     void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at,
                                 double cellW, double cellH);
@@ -1238,6 +1242,9 @@ private:
     std::function<void()> rectPickCancel_;
 
     double pixelTol_ = 10.0;
+    // The first click of the connection-point pick, waiting for the second that gives the direction.
+    bool haveConnectFirst_ = false;
+    Vec2 connectFirst_;
     double inputScale_ = 0.0;   // 0 = the document's own view; otherwise px per world unit in use
 
     // In-progress draw state.

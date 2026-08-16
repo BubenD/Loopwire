@@ -46,7 +46,15 @@ public:
     const MechModelSet& models() const { return set_; }
     void setModels(const MechModelSet& set);
     MechModelKind currentKind() const;
+    // Which MODEL of that kind is showing: a kind can have several - a straight backshell and a right-angled
+    // one - and the list has a row per model rather than a row per kind.
+    QString currentName() const;
     bool selectKind(MechModelKind kind);
+    // Managing them: another model of this kind, this one gone, renamed, or made the one the kind uses.
+    void addModel(const QString& name);
+    void removeCurrentModel();
+    void renameCurrentModel(const QString& to);
+    void makeCurrentDefault();
 
     // Driving it: take what is selected on the sheet as this model's drawing, put the model on the
     // sheet to be worked on, and clear it.
@@ -81,6 +89,9 @@ private:
     std::function<void(MechModelKind)> onEdit_;
     MechModelSet set_;
     std::vector<MechModelKind> kinds_;
+    // One entry per ROW of the list: which kind, and which model of it ("" = the kind's first).
+    struct Row { MechModelKind kind; QString name; };
+    std::vector<Row> rows_;
     bool syncing_ = false;
 
     QListWidget* list_ = nullptr;

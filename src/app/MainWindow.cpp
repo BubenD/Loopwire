@@ -1855,6 +1855,43 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
     };
     if (model.hasNearPoint) addAnchor(model.nearPoint, true);
     if (model.hasFarPoint) addAnchor(model.farPoint, false);
+    // The connection point, and an arrow along the direction the part runs from it - drawn, because the
+    // whole reason for marking them on the model is to be able to SEE what the wizard will do with it.
+    if (model.hasConnect) {
+        Entity dot;
+        dot.id = QStringLiteral("model-connect-point");
+        dot.type = EntityType::Circle;
+        dot.layer = QLatin1String(kMechModelGuideLayer);
+        dot.center = model.connectPoint;
+        dot.radius = markerRadius;
+        dot.color = QStringLiteral("#5aa0ff");
+        dot.meta.insert(QStringLiteral("modelAnchor"), QStringLiteral("connect"));
+        doc.entities().push_back(dot);
+        const double arm = std::max(6.0 * markerRadius, b.valid ? b.width() * 0.35 : 10.0);
+        const double c = std::cos(model.connectAngleRad), s = std::sin(model.connectAngleRad);
+        const Vec2 tip{model.connectPoint.x + arm * c, model.connectPoint.y + arm * s};
+        Entity shaft;
+        shaft.id = QStringLiteral("model-connect-dir");
+        shaft.type = EntityType::Line;
+        shaft.layer = QLatin1String(kMechModelGuideLayer);
+        shaft.a = model.connectPoint;
+        shaft.b = tip;
+        shaft.color = QStringLiteral("#5aa0ff");
+        doc.entities().push_back(shaft);
+        // A head on it, so the arrow says which way rather than only which line.
+        const double headLen = arm * 0.22, spread = 0.35;
+        for (const double side : {1.0, -1.0}) {
+            Entity barb;
+            barb.id = QStringLiteral("model-connect-barb%1").arg(side > 0 ? 1 : 2);
+            barb.type = EntityType::Line;
+            barb.layer = QLatin1String(kMechModelGuideLayer);
+            barb.a = tip;
+            const double a2 = model.connectAngleRad + M_PI + side * spread;
+            barb.b = {tip.x + headLen * std::cos(a2), tip.y + headLen * std::sin(a2)};
+            barb.color = QStringLiteral("#5aa0ff");
+            doc.entities().push_back(barb);
+        }
+    }
     if (!mechModelStretches(model.kind)) return;
     const double length = model.drawnLengthMm > 0.0 ? model.drawnLengthMm
                                                     : mechModelDrawnLength(model);
@@ -1981,6 +2018,20 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         statusBar()->showMessage(near ? QStringLiteral("Near point marked in orange")
                                       : QStringLiteral("Far point marked in green"),
                                  3000);
+    });
+    connect(editor_, &Editor::modelConnectPicked, this, [this](Vec2 point, double angleRad) {
+        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+        MechModel& model = mechModelSessionModels_[doc_];
+        model.hasConnect = true;
+        model.connectPoint = point;
+        model.connectAngleRad = angleRad;
+        addMechModelGuides(*doc_, model);
+        doc_->setDirty(true);
+        canvas_->invalidateScene();
+        statusBar()->showMessage(
+            tr("Connection point marked, running %1° from it — the wizard places the part by these")
+                .arg(angleRad * 180.0 / M_PI, 0, 'f', 1),
+            5000);
     });
     connect(editor_, &Editor::selectionChanged, this, [this] {
         refreshPanels();
@@ -10959,6 +11010,17 @@ void MainWindow::openMechModelEditor(MechModelKind kind) {
         QStringLiteral("Editing %1 in the main canvas — use Place and Modify, then Capture to default model")
             .arg(mechModelName(kind)),
         6000);
+}
+
+// The connection point and the direction the part runs from it: two clicks on the model itself, which is
+// where they can be seen. The wizard places a part by them - the drawing is turned so that direction runs
+// along the run, and set down so that point lands on it.
+void MainWindow::armMechModelConnect() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    editor_->setTool(ToolId::ModelConnectPoint);
+    canvas_->setFocus();
+    statusBar()->showMessage(
+        tr("Click where the part connects — then click along the direction it runs from there"), 6000);
 }
 
 void MainWindow::armMechModelAnchor(bool near) {

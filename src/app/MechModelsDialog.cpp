@@ -11,6 +11,8 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
@@ -224,6 +226,36 @@ void MechModelsDialog::buildUi() {
     ins->setToolTip(QStringLiteral("Draw it on the sheet to change it, then capture it again"));
     connect(ins, &QPushButton::clicked, this, &MechModelsDialog::insertIntoDrawing);
     buttons->addWidget(ins);
+    // Managing the models themselves: another of this kind, this one gone, renamed, or made the one a
+    // drawing uses. A window that could only fill in a fixed list of kinds could not hold a second backshell.
+    auto* add = new QPushButton(QStringLiteral("Add model"));
+    add->setToolTip(QStringLiteral(
+        "Another model of this kind - a straight backshell and a right-angled one are both backshells"));
+    connect(add, &QPushButton::clicked, this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Add model"),
+                                                   QStringLiteral("What is it called?"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        if (ok) addModel(name);
+    });
+    buttons->addWidget(add);
+    auto* rm = new QPushButton(QStringLiteral("Remove model"));
+    rm->setToolTip(QStringLiteral("Take this model off the list"));
+    connect(rm, &QPushButton::clicked, this, [this] { removeCurrentModel(); });
+    buttons->addWidget(rm);
+    auto* ren = new QPushButton(QStringLiteral("Rename"));
+    connect(ren, &QPushButton::clicked, this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Rename model"),
+                                                   QStringLiteral("What is it called?"),
+                                                   QLineEdit::Normal, currentName(), &ok);
+        if (ok) renameCurrentModel(name);
+    });
+    buttons->addWidget(ren);
+    auto* def = new QPushButton(QStringLiteral("Make default"));
+    def->setToolTip(QStringLiteral("What a drawing uses for this kind when nothing else is said"));
+    connect(def, &QPushButton::clicked, this, [this] { makeCurrentDefault(); });
+    buttons->addWidget(def);
     auto* clr = new QPushButton(QStringLiteral("Clear"));
     connect(clr, &QPushButton::clicked, this, &MechModelsDialog::clearModel);
     buttons->addWidget(clr);
@@ -237,21 +269,36 @@ void MechModelsDialog::buildUi() {
     resize(1020, 760);
 }
 
+// A row per MODEL, not per kind: an office that draws a straight backshell and a right-angled one keeps two,
+// and both have to be visible to be worked on. A kind with nothing drawn still gets its row - the point of the
+// window is to fill those in.
 void MechModelsDialog::refreshList() {
     if (!list_) return;
     const bool was = syncing_;
     syncing_ = true;
     const int row = list_->currentRow();
     list_->clear();
+    rows_.clear();
     for (MechModelKind k : kinds_) {
-        const MechModel* m = set_.of(k);
-        QString label = mechModelName(k);
-        // Which of them are drawn and which are still to do, at a glance: the point of the window is
-        // to fill the list in.
-        label += m ? QStringLiteral("   ✓") : QStringLiteral("   —");
-        auto* item = new QListWidgetItem(label);
-        item->setToolTip(hintFor(k));
-        list_->addItem(item);
+        const std::vector<const MechModel*> models = set_.all(k);
+        if (models.empty()) {
+            auto* item = new QListWidgetItem(mechModelName(k) + QStringLiteral("   —"));
+            item->setToolTip(hintFor(k));
+            list_->addItem(item);
+            rows_.push_back({k, QString()});
+            continue;
+        }
+        for (const MechModel* m : models) {
+            QString label = mechModelName(k);
+            if (!m->name.isEmpty()) label += QStringLiteral(" · ") + m->name;
+            label += m->isEmpty() ? QStringLiteral("   —") : QStringLiteral("   ✓");
+            // The one the kind uses when nothing else is said, said plainly rather than by a shade of grey.
+            if (m->isDefault && models.size() > 1) label += QStringLiteral("   (default)");
+            auto* item = new QListWidgetItem(label);
+            item->setToolTip(hintFor(k));
+            list_->addItem(item);
+            rows_.push_back({k, m->name});
+        }
     }
     if (row >= 0 && row < list_->count()) list_->setCurrentRow(row);
     syncing_ = was;
@@ -259,23 +306,98 @@ void MechModelsDialog::refreshList() {
 
 MechModelKind MechModelsDialog::currentKind() const {
     const int row = list_ ? list_->currentRow() : -1;
-    if (row < 0 || row >= static_cast<int>(kinds_.size())) return MechModelKind::Wire;
-    return kinds_[static_cast<size_t>(row)];
+    if (row < 0 || row >= static_cast<int>(rows_.size())) return MechModelKind::Wire;
+    return rows_[static_cast<size_t>(row)].kind;
+}
+
+QString MechModelsDialog::currentName() const {
+    const int row = list_ ? list_->currentRow() : -1;
+    if (row < 0 || row >= static_cast<int>(rows_.size())) return QString();
+    return rows_[static_cast<size_t>(row)].name;
 }
 
 bool MechModelsDialog::selectKind(MechModelKind kind) {
-    for (size_t i = 0; i < kinds_.size(); ++i)
-        if (kinds_[i] == kind) {
+    for (size_t i = 0; i < rows_.size(); ++i)
+        if (rows_[i].kind == kind) {
             if (list_) list_->setCurrentRow(static_cast<int>(i));
             return true;
         }
     return false;
 }
 
+// Another model of this kind. It starts empty and is drawn or captured like any other - what it inherits is
+// the kind, and nothing else, because a second model exists precisely to be different.
+void MechModelsDialog::addModel(const QString& name) {
+    const MechModelKind kind = currentKind();
+    if (name.trimmed().isEmpty()) return;
+    if (set_.of(kind, name.trimmed())) {
+        if (summary_)
+            summary_->setText(QStringLiteral("There is already a %1 called \"%2\"")
+                                  .arg(mechModelName(kind), name.trimmed()));
+        return;
+    }
+    MechModel m;
+    m.kind = kind;
+    m.name = name.trimmed();
+    m.insulated = pendingInsulated_;
+    // An empty drawing would not be kept by the file, so it is held in the set until something is captured
+    // into it: the row is there to capture INTO, which is the whole point of adding one.
+    set_.set(m);
+    set_.save();
+    refreshList();
+    for (size_t i = 0; i < rows_.size(); ++i)
+        if (rows_[i].kind == kind && rows_[i].name == m.name && list_)
+            list_->setCurrentRow(static_cast<int>(i));
+    refreshDetails();
+    if (summary_)
+        summary_->setText(QStringLiteral("Added %1 \"%2\" — draw it, then Capture")
+                              .arg(mechModelName(kind), m.name));
+}
+
+void MechModelsDialog::removeCurrentModel() {
+    const MechModelKind kind = currentKind();
+    const QString name = currentName();
+    set_.remove(kind, name);
+    set_.save();
+    refreshList();
+    refreshDetails();
+    if (summary_)
+        summary_->setText(name.isEmpty()
+                              ? QStringLiteral("Removed the %1 model").arg(mechModelName(kind))
+                              : QStringLiteral("Removed %1 \"%2\"").arg(mechModelName(kind), name));
+}
+
+void MechModelsDialog::renameCurrentModel(const QString& to) {
+    const MechModelKind kind = currentKind();
+    const QString from = currentName();
+    if (to.trimmed().isEmpty() || to.trimmed() == from) return;
+    if (!set_.rename(kind, from, to.trimmed())) {
+        if (summary_)
+            summary_->setText(QStringLiteral("There is already a %1 called \"%2\"")
+                                  .arg(mechModelName(kind), to.trimmed()));
+        return;
+    }
+    set_.save();
+    refreshList();
+    refreshDetails();
+}
+
+void MechModelsDialog::makeCurrentDefault() {
+    const MechModelKind kind = currentKind();
+    if (!set_.setDefault(kind, currentName())) return;
+    set_.save();
+    refreshList();
+    refreshDetails();
+    if (summary_)
+        summary_->setText(QStringLiteral("%1 is what a drawing uses for %2 now")
+                              .arg(currentName().isEmpty() ? QStringLiteral("This one") : currentName(),
+                                   mechModelName(kind)));
+}
+
 MechModel* MechModelsDialog::current() {
     static MechModel scratch;
     const MechModelKind kind = currentKind();
-    if (const MechModel* m = set_.of(kind)) {
+    if (const MechModel* m = set_.of(kind, currentName())) {
         scratch = *m;
         return &scratch;
     }
@@ -320,7 +442,7 @@ void MechModelsDialog::refreshDetails() {
 
 void MechModelsDialog::refreshPreview() {
     const MechModelKind kind = currentKind();
-    const MechModel* m = set_.of(kind);
+    const MechModel* m = set_.of(kind, currentName());
     if (!m) {
         if (stretched_) stretched_->setEntities({});
         if (summary_)
@@ -350,7 +472,7 @@ void MechModelsDialog::refreshPreview() {
 void MechModelsDialog::applyFigures() {
     if (syncing_) return;
     const MechModelKind kind = currentKind();
-    const MechModel* had = set_.of(kind);
+    const MechModel* had = set_.of(kind, currentName());
     if (!had) return;   // nothing drawn: the figures have nothing to be about yet
     MechModel m = *had;
     m.drawnLengthMm = drawnLen_ ? drawnLen_->value() : 0.0;
@@ -410,7 +532,8 @@ void MechModelsDialog::captureSelection() {
     MechModel m;
     m.kind = currentKind();
     m.insulated = pendingInsulated_;
-    if (const MechModel* had = set_.of(m.kind)) m = *had;
+    if (const MechModel* had = set_.of(m.kind, currentName())) m = *had;
+    m.name = currentName();   // into the model showing, not over the kind's first one
     m.drawing = partDrawingFromEntities(drawn);
     set_.set(m);
     set_.save();

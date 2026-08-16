@@ -227,10 +227,22 @@ void MainWindow::buildHomeTab() {
         markFarMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         connect(markFarMechModelBtn_, &QToolButton::clicked, this,
                 [this] { armMechModelAnchor(false); });
+        markConnectMechModelBtn_ = new QToolButton(session);
+        markConnectMechModelBtn_->setText(QStringLiteral("Connection point"));
+        markConnectMechModelBtn_->setIcon(modelAnchorIcon(QColor("#5aa0ff")));
+        markConnectMechModelBtn_->setIconSize(QSize(28, 28));
+        markConnectMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        markConnectMechModelBtn_->setToolTip(QStringLiteral(
+            "Click where the part connects to what it is placed on, then click along the direction it runs "
+            "from there. The wizard places the part by those two: the drawing is turned so that direction "
+            "runs along the run, and set down so that point lands on it."));
+        connect(markConnectMechModelBtn_, &QToolButton::clicked, this,
+                [this] { armMechModelConnect(); });
         sg->addWidget(captureMechModelBtn_, 0, 0);
         sg->addWidget(cancelMechModelBtn_, 0, 1);
         sg->addWidget(markNearMechModelBtn_, 1, 0);
         sg->addWidget(markFarMechModelBtn_, 1, 1);
+        sg->addWidget(markConnectMechModelBtn_, 0, 2);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);

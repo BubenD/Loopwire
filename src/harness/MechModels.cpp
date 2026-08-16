@@ -123,6 +123,13 @@ bool mechModelPerWire(MechModelKind kind) {
 
 QJsonObject MechModel::toJson() const {
     QJsonObject o;
+    if (!name.isEmpty()) o.insert(QStringLiteral("name"), name);
+    if (isDefault) o.insert(QStringLiteral("default"), true);
+    if (hasConnect) {
+        o.insert(QStringLiteral("connect"),
+                 QJsonObject{{"x", connectPoint.x}, {"y", connectPoint.y}});
+        o.insert(QStringLiteral("connectAngle"), connectAngleRad);
+    }
     if (gapMm > 0.0) o.insert(QStringLiteral("gap"), gapMm);
     o.insert(QStringLiteral("kind"), mechModelKey(kind));
     if (isInsulationKind(kind)) o.insert(QStringLiteral("insulated"), insulated);
@@ -140,6 +147,14 @@ QJsonObject MechModel::toJson() const {
 }
 
 void MechModel::fromJson(const QJsonObject& o) {
+    name = o.value(QStringLiteral("name")).toString();
+    isDefault = o.value(QStringLiteral("default")).toBool();
+    const QJsonObject connect = o.value(QStringLiteral("connect")).toObject();
+    hasConnect = !connect.isEmpty();
+    if (hasConnect)
+        connectPoint = {connect.value(QStringLiteral("x")).toDouble(),
+                        connect.value(QStringLiteral("y")).toDouble()};
+    connectAngleRad = o.value(QStringLiteral("connectAngle")).toDouble();
     gapMm = o.value(QStringLiteral("gap")).toDouble();
     const QString key = o.value(QStringLiteral("kind")).toString();
     MechModelKind k = MechModelKind::Wire;
@@ -168,9 +183,28 @@ void MechModel::fromJson(const QJsonObject& o) {
 
 const MechModel* MechModelSet::of(MechModelKind kind) const {
     kind = canonicalKind(kind);
+    const MechModel* first = nullptr;
+    for (const MechModel& m : models_) {
+        if (m.kind != kind || m.isEmpty()) continue;
+        if (m.isDefault) return &m;
+        if (!first) first = &m;
+    }
+    return first;
+}
+
+const MechModel* MechModelSet::of(MechModelKind kind, const QString& name) const {
+    kind = canonicalKind(kind);
     for (const MechModel& m : models_)
-        if (m.kind == kind && !m.isEmpty()) return &m;
+        if (m.kind == kind && m.name == name) return &m;
     return nullptr;
+}
+
+std::vector<const MechModel*> MechModelSet::all(MechModelKind kind) const {
+    kind = canonicalKind(kind);
+    std::vector<const MechModel*> out;
+    for (const MechModel& m : models_)
+        if (m.kind == kind) out.push_back(&m);
+    return out;
 }
 
 void MechModelSet::set(const MechModel& model) {
@@ -179,12 +213,61 @@ void MechModelSet::set(const MechModel& model) {
         normalized.kind == MechModelKind::FerruleUninsulated)
         normalized.insulated = false;
     normalized.kind = canonicalKind(normalized.kind);
+    // By NAME: the same name replaces, a new name is another model of that kind. Replacing whatever was
+    // there of the kind - which is what this did - made a second model impossible to keep.
     for (MechModel& m : models_)
-        if (m.kind == normalized.kind) {
+        if (m.kind == normalized.kind && m.name == normalized.name) {
             m = normalized;
+            if (normalized.isDefault) setDefault(normalized.kind, normalized.name);
             return;
         }
     models_.push_back(normalized);
+    // The first of a kind is its default, or a kind could have models and no default at all.
+    bool anyDefault = false;
+    for (const MechModel& m : models_)
+        if (m.kind == normalized.kind && m.isDefault) anyDefault = true;
+    if (!anyDefault) setDefault(normalized.kind, normalized.name);
+    else if (normalized.isDefault) setDefault(normalized.kind, normalized.name);
+}
+
+void MechModelSet::remove(MechModelKind kind, const QString& name) {
+    kind = canonicalKind(kind);
+    const bool wasDefault = [&] {
+        const MechModel* m = of(kind, name);
+        return m && m->isDefault;
+    }();
+    models_.erase(std::remove_if(models_.begin(), models_.end(),
+                                 [kind, &name](const MechModel& m) {
+                                     return m.kind == kind && m.name == name;
+                                 }),
+                  models_.end());
+    // The default went with it: the next one of that kind takes over, so a kind is never left with models
+    // and nothing to use.
+    if (!wasDefault) return;
+    for (MechModel& m : models_)
+        if (m.kind == kind) {
+            m.isDefault = true;
+            return;
+        }
+}
+
+bool MechModelSet::rename(MechModelKind kind, const QString& from, const QString& to) {
+    kind = canonicalKind(kind);
+    if (of(kind, to)) return false;   // that name is taken on this kind
+    for (MechModel& m : models_)
+        if (m.kind == kind && m.name == from) {
+            m.name = to;
+            return true;
+        }
+    return false;
+}
+
+bool MechModelSet::setDefault(MechModelKind kind, const QString& name) {
+    kind = canonicalKind(kind);
+    if (!of(kind, name)) return false;
+    for (MechModel& m : models_)
+        if (m.kind == kind) m.isDefault = (m.name == name);
+    return true;
 }
 
 void MechModelSet::remove(MechModelKind kind) {
@@ -288,7 +371,7 @@ double mechModelAnchorLength(const MechModel& model) {
 }
 
 std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, double dirRad,
-                                      double lengthMm, double acrossMm, int wireCount) {
+                                      double lengthMm, double acrossMm, int wireCount, bool flip) {
     std::vector<Entity> out = partDrawingEntities(model.drawing);
     if (out.empty()) return out;
     const Bounds b = drawingBounds(model.drawing);
@@ -372,16 +455,28 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
         }
     }
 
-    // Placed: turned to the run's direction and set down at the point.
+    // THE SIDE. The same part on the other side of the run is the same drawing seen the other way up, so it
+    // is mirrored about the run's own axis - which, before it is turned, is the x axis. Done here, in the
+    // model's own coordinates, so what is mirrored is the part and not its place on the sheet.
+    if (flip)
+        for (Entity& e : built) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
+
+    // WHERE IT CONNECTS AND WHICH WAY IT RUNS. A model that says both is turned by the difference between
+    // the run's direction and its own, and set down so its connection point lands exactly on the point asked
+    // for. A model that says neither is what it always was: drawn along +x, from its own origin.
+    const double turn = model.hasConnect ? dirRad - model.connectAngleRad : dirRad;
+    Vec2 anchor{0.0, 0.0};
+    if (model.hasConnect) anchor = mapPoint(model.connectPoint);
+    else if (!stretch && model.hasNearPoint) anchor = mapPoint(model.nearPoint);
+    if (flip) anchor.y = -anchor.y;   // mirrored with the rest of it
     Vec2 translation = at;
-    if (!stretch && model.hasNearPoint) {
-        const Vec2 local = mapPoint(model.nearPoint);
-        const Vec2 turned{local.x * std::cos(dirRad) - local.y * std::sin(dirRad),
-                          local.x * std::sin(dirRad) + local.y * std::cos(dirRad)};
+    if (model.hasConnect || (!stretch && model.hasNearPoint)) {
+        const Vec2 turned{anchor.x * std::cos(turn) - anchor.y * std::sin(turn),
+                          anchor.x * std::sin(turn) + anchor.y * std::cos(turn)};
         translation -= turned;
     }
     for (Entity& e : built) {
-        if (std::abs(dirRad) > 1e-9) rotateEntity(e, Vec2{0.0, 0.0}, dirRad);
+        if (std::abs(turn) > 1e-9) rotateEntity(e, Vec2{0.0, 0.0}, turn);
         translateEntity(e, translation);
     }
     return built;

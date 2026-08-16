@@ -60,6 +60,12 @@ bool mechModelPerWire(MechModelKind kind);
 // One model: the drawing, and what must not stretch in it.
 struct MechModel {
     MechModelKind kind = MechModelKind::Wire;
+    // Its NAME, so a kind can have more than one of them: a straight backshell and a right-angled one are
+    // both backshells, and an office that draws two keeps two. Empty is the kind's own first model, which is
+    // what every file written before this had, so those read back as the one model they were.
+    QString name;
+    // The one a kind uses when nothing else is said. Exactly one per kind: setDefault() sees to that.
+    bool isDefault = false;
     bool insulated = true;
     bool hasNearPoint = false;
     bool hasFarPoint = false;
@@ -80,6 +86,17 @@ struct MechModel {
     // For the per-wire kinds: how many conductors the drawing shows, so it can be redrawn for another
     // number by spacing them out rather than by squashing the picture.
     int drawnWireCount = 0;
+    // WHERE IT CONNECTS, and WHICH WAY IT RUNS from there. Marked on the drawing rather than assumed: a
+    // model drawn along +x from its own origin was the assumption, and a part drawn any other way - a
+    // right-angled backshell, a boot that leaves at 45 degrees - could not be placed by it at all.
+    //
+    // The point is where the part meets what it is placed on, and the angle is the direction the part runs
+    // FROM that point, as drawn. Placing it turns the drawing by (the run's direction - this angle), so it
+    // comes out running along the run whichever way it happens to have been drawn.
+    bool hasConnect = false;
+    Vec2 connectPoint;
+    double connectAngleRad = 0.0;
+
     // The GAP a cable or a wire leaves at each end: the piece of the run it does not cover, where the
     // conductors come out and are worked on. It is a property of how the office draws them - the LENGTH is
     // not, because that comes from the harness when the drawing is generated - so it is kept with the model
@@ -101,9 +118,20 @@ struct MechModel {
 // style, in one place, moved from machine to machine as one file.
 class MechModelSet {
 public:
+    // The one a kind uses: the one marked default, or the first there is. Every caller that only wants "the
+    // heatshrink model" keeps working whether an office keeps one or six.
     const MechModel* of(MechModelKind kind) const;
+    // A particular one, by name - and every one there is of a kind, in the order they were added.
+    const MechModel* of(MechModelKind kind, const QString& name) const;
+    std::vector<const MechModel*> all(MechModelKind kind) const;
+    // Add or replace BY NAME. A model with a name a kind already has replaces that one; a new name is
+    // another model of that kind.
     void set(const MechModel& model);
-    void remove(MechModelKind kind);
+    void remove(MechModelKind kind);                          // every model of that kind
+    void remove(MechModelKind kind, const QString& name);     // just that one
+    bool rename(MechModelKind kind, const QString& from, const QString& to);
+    // Which one the kind uses. Marking one unmarks the rest, because "the default" is one thing.
+    bool setDefault(MechModelKind kind, const QString& name);
     bool has(MechModelKind kind) const { return of(kind) != nullptr; }
     int count() const { return static_cast<int>(models_.size()); }
 
@@ -126,7 +154,8 @@ private:
 // distance from the end, and everything between is scaled. So a wire drawn 60 long with 4 mm flush
 // ends, asked for at 500, comes out with the same two ends and 492 of wire between them.
 std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, double dirRad,
-                                      double lengthMm, double acrossMm = 0.0, int wireCount = 0);
+                                      double lengthMm, double acrossMm = 0.0, int wireCount = 0,
+                                      bool flip = false);
 
 // How long the model was drawn: what it says, or the extent of its own drawing.
 double mechModelDrawnLength(const MechModel& model);

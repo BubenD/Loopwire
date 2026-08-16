@@ -479,6 +479,8 @@ private:
     void showTemplateDialog();
     void openMechModelEditor(MechModelKind kind);
     void armMechModelAnchor(bool near);
+    void armMechModelConnect();          // the connection point, and the direction the part runs from it
+    QToolButton* markConnectMechModelBtn_ = nullptr;
     void saveMechModelBeingEdited();
     void cancelMechModelEdit();
     bool saveMechModelDocument(Document* doc);

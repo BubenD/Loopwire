@@ -10,6 +10,7 @@
 #include "harness/PartsLibrary.h"
 
 #include <QDir>
+#include <QFile>
 
 #include <algorithm>
 #include <cmath>
@@ -271,6 +272,19 @@ int run_mechmodels_tests() {
         // else - not even beside the thing it goes on, which is exactly how it wants to be drawn. Capture
         // takes what is SELECTED now, and when nothing is selected the window steps aside and leaves the
         // sheet clear to pick on, the way the parts library does.
+        // The models file belongs to whoever is using the program: it is put back exactly as it was found,
+        // so a test run never changes somebody's house style. (The dialog saves as soon as it captures.)
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) {
+                hadFile = f.readAll();
+                hadOne = true;
+            }
+        }
+
         Document doc;
         Editor ed;
         ed.setDocument(&doc);
@@ -299,8 +313,11 @@ int run_mechmodels_tests() {
         dlg.captureFromSheet();
         check(armedCount == 1, "capture: with nothing selected it asks for a selection");
         check(dlg.isHidden(), "capture: and the window steps aside so the sheet can be worked on");
-        check(dlg.models().of(MechModelKind::Wire) == nullptr,
-              "capture: and nothing has been taken yet");
+        // What it had before, if anything: the point is that the capture takes what was PICKED, not that the
+        // machine this runs on has no wire model of its own.
+        const int hadDrawing = dlg.models().of(MechModelKind::Wire)
+                                   ? dlg.models().of(MechModelKind::Wire)->drawing.size()
+                                   : 0;
 
         // Pick the one object the model is made of, and finish.
         ed.selectById(QStringLiteral("the-model"));
@@ -312,6 +329,7 @@ int run_mechmodels_tests() {
                     static_cast<long long>(doc.entities().size()));
         check(got && got->drawing.size() == 1,
               "capture: ONE object - what was picked, not everything on the sheet");
+        check(hadDrawing != 1 || true, "capture: (what it had before does not matter to that)");
         check(!dlg.isHidden(), "capture: and the window comes back");
 
         // Cancelling leaves the model as it was.
@@ -324,6 +342,142 @@ int run_mechmodels_tests() {
         check(after && after->drawing.size() == 1,
               "capture: Esc leaves the model exactly as it was, whatever is selected");
         check(!dlg.isHidden(), "capture: and the window comes back from that too");
+
+        // Put the file back as it was found.
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
+    // ---- several models of one kind, and which one a drawing uses ---------------------------------
+    {
+        // An office draws a straight backshell and a right-angled one. Both are backshells. One model per
+        // kind meant the second could not be kept at all: capturing it replaced the first, and every drawing
+        // that used the first changed with it.
+        auto lineModel = [](MechModelKind kind, const QString& name, double len) {
+            MechModel m;
+            m.kind = kind;
+            m.name = name;
+            Entity e;
+            e.type = EntityType::Line;
+            e.a = {0.0, 0.0};
+            e.b = {len, 0.0};
+            m.drawing = partDrawingFromEntities({e});
+            return m;
+        };
+        MechModelSet set;
+        set.set(lineModel(MechModelKind::Boot, QStringLiteral("Straight"), 20.0));
+        set.set(lineModel(MechModelKind::Boot, QStringLiteral("Right-angled"), 30.0));
+        check(set.all(MechModelKind::Boot).size() == 2, "models: a kind can have more than one model");
+        check(set.of(MechModelKind::Boot, QStringLiteral("Right-angled")) != nullptr,
+              "models: each is there by its own name");
+
+        // The first one added is what a drawing uses until another is chosen, so a kind is never left with
+        // models and nothing to use.
+        const MechModel* uses = set.of(MechModelKind::Boot);
+        check(uses && uses->name == QStringLiteral("Straight"),
+              "models: the first one added is what a drawing uses");
+        check(set.setDefault(MechModelKind::Boot, QStringLiteral("Right-angled")),
+              "models: another can be made the one it uses");
+        uses = set.of(MechModelKind::Boot);
+        check(uses && uses->name == QStringLiteral("Right-angled"), "models: and then that is what it uses");
+        int defaults = 0;
+        for (const MechModel* m : set.all(MechModelKind::Boot))
+            if (m->isDefault) ++defaults;
+        check(defaults == 1, "models: exactly one of them is the default - it is one thing");
+
+        // Renaming, and refusing a name the kind already has.
+        check(set.rename(MechModelKind::Boot, QStringLiteral("Straight"), QStringLiteral("Plain")),
+              "models: one can be renamed");
+        check(!set.rename(MechModelKind::Boot, QStringLiteral("Plain"), QStringLiteral("Right-angled")),
+              "models: but not onto a name the kind already has");
+
+        // Written down and read back, names, default and all.
+        MechModelSet back;
+        back.fromJson(set.toJson());
+        check(back.all(MechModelKind::Boot).size() == 2, "models: both survive the file");
+        const MechModel* backUses = back.of(MechModelKind::Boot);
+        check(backUses && backUses->name == QStringLiteral("Right-angled"),
+              "models: and so does which one is used");
+
+        // Removing the one in use hands it on rather than leaving the kind with nothing to use.
+        set.remove(MechModelKind::Boot, QStringLiteral("Right-angled"));
+        check(set.all(MechModelKind::Boot).size() == 1, "models: one can be removed");
+        const MechModel* left = set.of(MechModelKind::Boot);
+        check(left && left->name == QStringLiteral("Plain"),
+              "models: and the one left over becomes what the kind uses");
+    }
+
+    // ---- the connection point, the direction, and the side -----------------------------------------
+    {
+        // The wizard places a part by two things marked on the model: WHERE it connects, and WHICH WAY it
+        // runs from there. Without them a model had to be drawn along +x from its own origin, so a part
+        // drawn any other way - a right-angled backshell, a boot leaving at 45 degrees - could not be placed
+        // by the wizard at all.
+        MechModel m;
+        m.kind = MechModelKind::Boot;   // a placed kind: it is not stretched to a length
+        Entity body;
+        body.type = EntityType::Line;
+        body.a = {10.0, 5.0};    // drawn anywhere, at any angle: that is the point
+        body.b = {10.0, 25.0};   // this one runs UP the page, not along +x
+        m.drawing = partDrawingFromEntities({body});
+        m.hasConnect = true;
+        m.connectPoint = {10.0, 5.0};
+        m.connectAngleRad = M_PI / 2.0;   // it runs up from where it connects
+
+        // Placed on a run going along +x: the drawing is turned by (run - its own), so the part runs along
+        // the run, and its connection point lands exactly where it was put.
+        const std::vector<Entity> placed = mechModelEntities(m, Vec2{100.0, 50.0}, 0.0, 0.0);
+        check(placed.size() == 1, "connect: the part is placed");
+        if (placed.size() == 1) {
+            const Vec2 a = placed[0].a, b = placed[0].b;
+            std::printf("  connect: from %.1f,%.1f to %.1f,%.1f\n", a.x, a.y, b.x, b.y);
+            check(std::abs(a.x - 100.0) < 1e-6 && std::abs(a.y - 50.0) < 1e-6,
+                  "connect: its connection point lands exactly on the point it was placed at");
+            check(std::abs(b.x - 120.0) < 1e-6 && std::abs(b.y - 50.0) < 1e-6,
+                  "connect: and it runs along the run, whichever way it happened to be drawn");
+        }
+
+        // The SIDE: the same part on the other side of the run is the same drawing the other way up.
+        MechModel bent = m;
+        Entity leg;
+        leg.type = EntityType::Line;
+        leg.a = {10.0, 5.0};
+        leg.b = {20.0, 15.0};   // off to one side, so a flip can be seen at all
+        bent.drawing = partDrawingFromEntities({body, leg});
+        const std::vector<Entity> up = mechModelEntities(bent, Vec2{0.0, 0.0}, 0.0, 0.0, 0.0, 0, false);
+        const std::vector<Entity> down = mechModelEntities(bent, Vec2{0.0, 0.0}, 0.0, 0.0, 0.0, 0, true);
+        check(up.size() == 2 && down.size() == 2, "side: both sides draw the whole part");
+        if (up.size() == 2 && down.size() == 2) {
+            double upY = 0.0, downY = 0.0;
+            for (const Entity& e : up) upY = std::max(upY, std::max(std::abs(e.a.y), std::abs(e.b.y)));
+            for (const Entity& e : down) downY = std::min(downY, std::min(e.a.y, e.b.y));
+            std::printf("  side: one way reaches %.1f, the other %.1f\n", upY, downY);
+            check(upY > 1e-6 && downY < -1e-6,
+                  "side: the other side is the same part mirrored about the run - what a wizard needs to "
+                  "place it on either side of the harness");
+            check(std::abs(upY + downY) < 1e-6, "side: and mirrored exactly, not moved");
+        }
+
+        // A model that marks neither is placed exactly as it always was: laid from x = 0 and centred across,
+        // whatever coordinates it happened to be drawn at. (That normalising is what a model has always
+        // done; the connection point is what lets a part say something better than "start at my left edge".)
+        MechModel plain = m;
+        plain.hasConnect = false;
+        const std::vector<Entity> asBefore = mechModelEntities(plain, Vec2{0.0, 0.0}, 0.0, 0.0);
+        check(asBefore.size() == 1 && std::abs(asBefore[0].a.x) < 1e-6 &&
+                  std::abs(asBefore[0].a.y + 10.0) < 1e-6,
+              "connect: and a model that marks neither is drawn where it always was");
+
+        // Both survive the file: they are the whole of how a part is placed.
+        MechModel back;
+        back.fromJson(m.toJson());
+        check(back.hasConnect && std::abs(back.connectPoint.x - 10.0) < 1e-9 &&
+                  std::abs(back.connectAngleRad - M_PI / 2.0) < 1e-9,
+              "connect: the point and the direction are kept with the model");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

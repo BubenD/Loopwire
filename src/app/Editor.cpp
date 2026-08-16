@@ -961,6 +961,7 @@ void Editor::setDocument(Document* doc) {
 }
 
 void Editor::setTool(ToolId t) {
+    if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
     clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
@@ -1987,6 +1988,26 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
     if (tool_ == ToolId::ModelNearPoint || tool_ == ToolId::ModelFarPoint) {
         emit modelAnchorPicked(p, tool_ == ToolId::ModelNearPoint);
+        setTool(ToolId::Select);
+        return;
+    }
+    if (tool_ == ToolId::ModelConnectPoint) {
+        // The point first, then a second click anywhere along the direction the part runs from it. Both
+        // clicks are SNAPPED points, so the polar tracking gives 0, 30, 45, 90 exactly and an object snap
+        // takes the direction off the drawing itself.
+        if (!haveConnectFirst_) {
+            connectFirst_ = p;
+            haveConnectFirst_ = true;
+            emit message(QStringLiteral(
+                "Now click along the direction the part runs from there — polar tracking gives the angle"));
+            return;
+        }
+        haveConnectFirst_ = false;
+        const double dx = p.x - connectFirst_.x, dy = p.y - connectFirst_.y;
+        // Two clicks in the same place say nothing about a direction: along +x, which is how a model that
+        // says nothing is drawn anyway.
+        const double angle = (std::abs(dx) < 1e-9 && std::abs(dy) < 1e-9) ? 0.0 : std::atan2(dy, dx);
+        emit modelConnectPicked(connectFirst_, angle);
         setTool(ToolId::Select);
         return;
     }
