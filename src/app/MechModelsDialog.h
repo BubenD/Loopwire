@@ -8,6 +8,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
@@ -56,8 +57,7 @@ public:
     void renameCurrentModel(const QString& to);
     void makeCurrentDefault();
 
-    // Driving it: take what is selected on the sheet as this model's drawing, put the model on the
-    // sheet to be worked on, and clear it.
+    // Driving it: take what is selected on the sheet as this model's drawing.
     void captureFromSheet();
     // Armed capture: the window steps aside, the objects are picked on the sheet, and Enter takes them.
     // Taking the whole sheet was the only way before, so a model could not be drawn beside anything else -
@@ -65,8 +65,6 @@ public:
     void finishCaptureFromSheet();
     void cancelCaptureFromSheet();
     void captureSelection();   // what is selected, as this model's drawing
-    void insertIntoDrawing();
-    void clearModel();
     // Open it in the main document canvas, where the full Place and Modify ribbon is available.
     void editOnCanvas();
 
@@ -101,18 +99,29 @@ private:
     DrawingPreview* asDrawn_ = nullptr;
     DrawingPreview* stretched_ = nullptr;
 
-    QGroupBox* propertiesGroup_ = nullptr;
     QComboBox* insulation_ = nullptr;
     bool pendingInsulated_ = true;
-    QDoubleSpinBox* drawnLen_ = nullptr;
+    // What the CAPTURE measured off the drawing - its length and its diameter - said rather than typed.
+    // They were two fields with a magic zero in each ("0 = measure it", "0 = do not scale across"), which is
+    // two ways of saying a thing the drawing already knows.
+    QLabel* measured_ = nullptr;
+    QCheckBox* scaleAcross_ = nullptr;
+    // Where it connects and which way it runs: marked on the drawing, said here.
+    QLabel* placement_ = nullptr;
+    QGroupBox* figures_ = nullptr;
+    QGroupBox* tryBox_ = nullptr;
+    QFormLayout* figuresForm_ = nullptr;
+    QFormLayout* tryForm_ = nullptr;
     QDoubleSpinBox* gap_ = nullptr;       // cable and wire: the piece of the run they do not cover
     QDoubleSpinBox* head_ = nullptr;
     QDoubleSpinBox* tail_ = nullptr;
-    QDoubleSpinBox* across_ = nullptr;
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* tryLen_ = nullptr;
     QSpinBox* tryWires_ = nullptr;
     QPushButton* captureBtn_ = nullptr;
+    QPushButton* removeBtn_ = nullptr;
+    QPushButton* renameBtn_ = nullptr;
+    QPushButton* defaultBtn_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

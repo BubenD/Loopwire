@@ -1020,6 +1020,29 @@ Two things came out of drawing them small:
   reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
   icon is 11 px tall in a 28 px box, where it was 0.
 
+## The default models window is a manager
+
+The window is the **list**. A kind holds as many models as an office draws, so *Add*, *Remove*, *Rename* and
+*Make default* sit under the list — that is what the window is for — and the right-hand side says what the
+selected model **is**.
+
+What it says, and what it no longer asks:
+
+- **Taken from the drawing.** How many objects it is, how long it was drawn and how thick — *measured* at
+  capture and stated. There used to be two fields for those, each with a magic zero in it (*"0 = measure
+  it"*, *"0 = do not scale across"*), which is asking for the drawing to be described to the program a second
+  time and giving two chances to describe it wrong. Scaling across is a plain yes-or-no now; the size it was
+  drawn at is measured.
+- **Where it connects and which way it runs**, in words — or, when nothing is marked, that it will be placed
+  from its left-hand end along the run, and where to go and mark it. A model that is placed differently from
+  what somebody assumed is a drawing that comes out wrong, so the window says which it is.
+- **Only the rows this kind has.** A ring terminal is placed, not run: no ends that must not stretch, no gap,
+  no *At this length*. A cable is not drawn per conductor: no conductor count. Only a ring or a ferrule is
+  insulated or not. A row that cannot apply is *taken away*, not greyed — greyed rows are furniture.
+- **Two commands, not four.** A model is drawn (*Edit on the canvas*, with every tool and with Connection
+  point) or taken (*Capture*). *Put on the sheet* was a third way of saying Edit, and *Clear* emptied a model
+  that can simply be removed.
+
 ## The default models are a list, not a fixed set of slots
 
 An office draws a straight backshell and a right-angled one. Both are backshells. One model per kind meant the

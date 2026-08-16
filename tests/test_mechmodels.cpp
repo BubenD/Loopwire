@@ -9,6 +9,10 @@
 #include "app/Editor.h"
 #include "harness/PartsLibrary.h"
 
+#include <QApplication>
+#include <QDoubleSpinBox>
+#include <QLabel>
+#include <QPushButton>
 #include <QDir>
 #include <QFile>
 
@@ -478,6 +482,134 @@ int run_mechmodels_tests() {
         check(back.hasConnect && std::abs(back.connectPoint.x - 10.0) < 1e-9 &&
                   std::abs(back.connectAngleRad - M_PI / 2.0) < 1e-9,
               "connect: the point and the direction are kept with the model");
+    }
+
+    // ---- the manager shows what the model HAS, and nothing else -----------------------------------
+    {
+        // A window that shows every field for every kind teaches nobody anything: a ring terminal has no
+        // ends that must not stretch, a cable is not drawn per conductor, and only a ring or a ferrule is
+        // insulated. The rows that do not apply are taken away rather than greyed.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+        {
+            // Something drawn for each of the three kinds this looks at, so the rows have a model to be
+            // about.
+            MechModelSet s;
+            for (MechModelKind k : {MechModelKind::Cable, MechModelKind::RingInsulated,
+                                    MechModelKind::OpenWires}) {
+                MechModel m;
+                m.kind = k;
+                Entity e;
+                e.type = EntityType::Line;
+                e.a = {0.0, 0.0};
+                e.b = {40.0, 0.0};
+                m.drawing = partDrawingFromEntities({e});
+                s.set(m);
+            }
+            s.save();
+        }
+
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        MechModelsDialog dlg(&ed);
+        dlg.show();
+        QApplication::processEvents();
+
+        auto spins = [&dlg] {
+            QStringList out;
+            for (QDoubleSpinBox* s : dlg.findChildren<QDoubleSpinBox*>())
+                if (s->isVisible()) out << s->toolTip().left(20);
+            return out;
+        };
+        auto visibleLabels = [&dlg] {
+            QStringList out;
+            for (QLabel* l : dlg.findChildren<QLabel*>())
+                if (l->isVisible() && !l->text().isEmpty()) out << l->text();
+            return out;
+        };
+        auto rowShowing = [&dlg](const QString& label) {
+            for (QLabel* l : dlg.findChildren<QLabel*>())
+                if (l->text() == label) return l->isVisible();
+            return false;
+        };
+
+        // A CABLE: it is run to a length, so it has two ends that must not stretch and a gap. It is not
+        // drawn per conductor and it is not insulated-or-not.
+        dlg.selectKind(MechModelKind::Cable);
+        QApplication::processEvents();
+        check(rowShowing(QStringLiteral("The end at the left")) &&
+                  rowShowing(QStringLiteral("Gap left at each end")),
+              "manager: a cable shows its ends and its gap");
+        check(!rowShowing(QStringLiteral("Conductors the drawing shows")) &&
+                  !rowShowing(QStringLiteral("Insulation")),
+              "manager: and not the rows it has nothing to do with");
+        check(rowShowing(QStringLiteral("At this length")),
+              "manager: it can be tried at a length, because that is what a run gives it");
+        check(!rowShowing(QStringLiteral("With this many conductors")),
+              "manager: but not with a number of conductors");
+
+        // A RING TERMINAL: it is placed, not run. No ends, no gap, no conductors - but insulated or not.
+        dlg.selectKind(MechModelKind::RingInsulated);
+        QApplication::processEvents();
+        check(!rowShowing(QStringLiteral("The end at the left")) &&
+                  !rowShowing(QStringLiteral("Gap left at each end")),
+              "manager: a ring terminal is placed, so it has no ends that stretch and no gap");
+        check(rowShowing(QStringLiteral("Insulation")), "manager: it is insulated or not, and says so");
+        check(!rowShowing(QStringLiteral("At this length")),
+              "manager: and there is no length to try it at");
+
+        // THE OPEN WIRES: drawn for so many conductors, and the number comes from the harness.
+        dlg.selectKind(MechModelKind::OpenWires);
+        QApplication::processEvents();
+        check(rowShowing(QStringLiteral("Conductors the drawing shows")) &&
+                  rowShowing(QStringLiteral("With this many conductors")),
+              "manager: the open wires are drawn per conductor, and can be tried at another number");
+
+        // The two figures the drawing itself knows are MEASURED and said, not asked for: what is left to
+        // type is what cannot be measured.
+        const QStringList said = visibleLabels();
+        bool saysMeasured = false;
+        for (const QString& s : said)
+            if (s.contains(QStringLiteral("drawn")) && s.contains(QStringLiteral("mm long")))
+                saysMeasured = true;
+        check(saysMeasured, "manager: it says how long the drawing is, rather than asking");
+        check(!rowShowing(QStringLiteral("Drawn at this length (0 = measure it)")),
+              "manager: the length field with the magic zero in it is gone");
+        check(!rowShowing(QStringLiteral("Drawn at this diameter (0 = do not scale across)")),
+              "manager: and so is the diameter one - scaling across is a yes or no now");
+
+        // What was marked on the drawing for the wizard: said in the window, because a model with no
+        // connection point is placed differently and that has to be visible.
+        bool saysPlacement = false;
+        for (const QString& s : said)
+            if (s.contains(QStringLiteral("connection point")) || s.contains(QStringLiteral("Connects at")))
+                saysPlacement = true;
+        check(saysPlacement, "manager: and it says where the part connects and which way it runs");
+
+        // The commands that were two ways of saying the same thing are gone.
+        QStringList buttons;
+        for (QPushButton* b : dlg.findChildren<QPushButton*>()) buttons << b->text();
+        std::printf("  manager: buttons - %s\n", qPrintable(buttons.join(QStringLiteral(", "))));
+        check(!buttons.contains(QStringLiteral("Put on the sheet")) &&
+                  !buttons.contains(QStringLiteral("Clear")),
+              "manager: no Put on the sheet (Edit does that) and no Clear (Remove does that)");
+        check(buttons.contains(QStringLiteral("Add")) && buttons.contains(QStringLiteral("Remove")) &&
+                  buttons.contains(QStringLiteral("Rename")) &&
+                  buttons.contains(QStringLiteral("Make default")),
+              "manager: and the four that manage the list are all there");
+
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
     }
 
     if (failures == 0) std::printf("  -> ok\n");

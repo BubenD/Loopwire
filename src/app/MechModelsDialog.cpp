@@ -7,6 +7,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -115,12 +116,54 @@ MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
 void MechModelsDialog::buildUi() {
     auto* outer = new QHBoxLayout(this);
 
+    // ---- The manager: every model there is, and what can be done to the list ----------------------
+    //
+    // The list IS the window. A kind holds as many models as an office draws - a straight backshell and a
+    // right-angled one are both backshells - so adding, removing, renaming and choosing which one a drawing
+    // uses are the commands that belong beside it and nowhere else.
+    auto* left = new QVBoxLayout;
     list_ = new QListWidget;
-    list_->setMinimumWidth(250);
-    list_->setMaximumWidth(300);
+    list_->setMinimumWidth(260);
+    list_->setMaximumWidth(320);
     connect(list_, &QListWidget::currentRowChanged, this, [this](int) { refreshDetails(); });
-    outer->addWidget(list_);
+    left->addWidget(list_, 1);
 
+    auto* manage = new QGridLayout;
+    manage->setContentsMargins(0, 0, 0, 0);
+    auto* add = new QPushButton(QStringLiteral("Add"));
+    add->setToolTip(QStringLiteral(
+        "Another model of the kind showing - a straight backshell and a right-angled one are both "
+        "backshells"));
+    connect(add, &QPushButton::clicked, this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Add model"),
+                                                   QStringLiteral("What is it called?"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        if (ok) addModel(name);
+    });
+    removeBtn_ = new QPushButton(QStringLiteral("Remove"));
+    removeBtn_->setToolTip(QStringLiteral("Take this model off the list"));
+    connect(removeBtn_, &QPushButton::clicked, this, [this] { removeCurrentModel(); });
+    renameBtn_ = new QPushButton(QStringLiteral("Rename"));
+    connect(renameBtn_, &QPushButton::clicked, this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Rename model"),
+                                                   QStringLiteral("What is it called?"),
+                                                   QLineEdit::Normal, currentName(), &ok);
+        if (ok) renameCurrentModel(name);
+    });
+    defaultBtn_ = new QPushButton(QStringLiteral("Make default"));
+    defaultBtn_->setToolTip(
+        QStringLiteral("What a drawing uses for this kind when the wizard is not told otherwise"));
+    connect(defaultBtn_, &QPushButton::clicked, this, [this] { makeCurrentDefault(); });
+    manage->addWidget(add, 0, 0);
+    manage->addWidget(removeBtn_, 0, 1);
+    manage->addWidget(renameBtn_, 1, 0);
+    manage->addWidget(defaultBtn_, 1, 1);
+    left->addLayout(manage);
+    outer->addLayout(left);
+
+    // ---- What the model showing IS ---------------------------------------------------------------
     auto* right = new QVBoxLayout;
     heading_ = new QLabel;
     QFont hf = heading_->font();
@@ -132,15 +175,64 @@ void MechModelsDialog::buildUi() {
     hint_->setWordWrap(true);
     right->addWidget(hint_);
 
-    propertiesGroup_ = new QGroupBox(QStringLiteral("Properties"));
-    auto* pf = new QFormLayout(propertiesGroup_);
+    // The two views: what was drawn, and the same thing at the length it is asked for.
+    auto* views = new QHBoxLayout;
+    asDrawn_ = new DrawingPreview(QStringLiteral("As drawn"));
+    asDrawn_->setEmptyText(QStringLiteral("nothing drawn for this yet"));
+    views->addWidget(asDrawn_, 1);
+    stretched_ = new DrawingPreview(QStringLiteral("At the length asked for"));
+    stretched_->setEmptyText(QStringLiteral("-"));
+    views->addWidget(stretched_, 1);
+    right->addLayout(views, 1);
+
+    // What the capture MEASURED, and what was marked on the drawing. The drawing knows how long and how
+    // thick it is: asking for those in two fields with a magic zero in each ("0 = measure it", "0 = do not
+    // scale across") was asking for the drawing to be described to the program a second time.
+    auto* takenBox = new QGroupBox(QStringLiteral("Taken from the drawing"));
+    auto* takenLay = new QVBoxLayout(takenBox);
+    measured_ = new QLabel;
+    measured_->setWordWrap(true);
+    takenLay->addWidget(measured_);
+    scaleAcross_ = new QCheckBox(QStringLiteral("Scale it across to the bundle it goes over"));
+    scaleAcross_->setToolTip(QStringLiteral(
+        "Drawn at one diameter and used at another: with this on the model is scaled across as well as "
+        "along. Off, it is drawn at the size it was captured at."));
+    connect(scaleAcross_, &QCheckBox::toggled, this, [this] { applyFigures(); });
+    takenLay->addWidget(scaleAcross_);
+    placement_ = new QLabel;
+    placement_->setWordWrap(true);
+    takenLay->addWidget(placement_);
+    right->addWidget(takenBox);
+
+    // The figures that cannot be measured - and only the ones this kind has. A row that does not apply is
+    // taken away rather than greyed, so what is on the screen is what this model is made of.
+    figures_ = new QGroupBox(QStringLiteral("What must not stretch"));
+    figuresForm_ = new QFormLayout(figures_);
+    head_ = mmSpin();
+    connect(head_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
+    figuresForm_->addRow(QStringLiteral("The end at the left"), head_);
+    tail_ = mmSpin();
+    connect(tail_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
+    figuresForm_->addRow(QStringLiteral("The end at the right"), tail_);
+    // A cable and a wire are taken AS DRAWN and given a length when the drawing is generated, so the only
+    // figure of their own that a run needs is the gap: the piece at each end they do not cover.
+    gap_ = mmSpin();
+    gap_->setToolTip(QStringLiteral(
+        "The piece at each end of the run this does not cover - where the conductors come out. The LENGTH "
+        "is not asked for: it comes from the harness when the drawing is generated."));
+    connect(gap_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
+    figuresForm_->addRow(QStringLiteral("Gap left at each end"), gap_);
+    wires_ = new QSpinBox;
+    wires_->setRange(0, 200);
+    wires_->setKeyboardTracking(false);
+    connect(wires_, &QSpinBox::valueChanged, this, [this] { applyFigures(); });
+    figuresForm_->addRow(QStringLiteral("Conductors the drawing shows"), wires_);
     insulation_ = new QComboBox;
     insulation_->addItems({QStringLiteral("Insulated"), QStringLiteral("Uninsulated")});
     connect(insulation_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (syncing_) return;
         pendingInsulated_ = index == 0;
-        const MechModelKind kind = currentKind();
-        if (const MechModel* had = set_.of(kind)) {
+        if (const MechModel* had = set_.of(currentKind(), currentName())) {
             MechModel m = *had;
             m.insulated = pendingInsulated_;
             set_.set(m);
@@ -148,117 +240,44 @@ void MechModelsDialog::buildUi() {
             refreshPreview();
         }
     });
-    pf->addRow(QStringLiteral("Insulation"), insulation_);
-    right->addWidget(propertiesGroup_);
+    figuresForm_->addRow(QStringLiteral("Insulation"), insulation_);
+    right->addWidget(figures_);
 
-    // The two views: what was drawn, and the same thing at the length it is asked for.
-    auto* views = new QHBoxLayout;
-    asDrawn_ = new DrawingPreview(QStringLiteral("As drawn"));
-    asDrawn_->setEmptyText(QStringLiteral("nothing drawn for this yet"));
-    views->addWidget(asDrawn_, 1);
-    stretched_ = new DrawingPreview(QStringLiteral("At the length asked for"));
-    stretched_->setEmptyText(QStringLiteral("—"));
-    views->addWidget(stretched_, 1);
-    right->addLayout(views, 1);
-
-    auto* figures = new QGroupBox(QStringLiteral("What must not stretch"));
-    auto* ff = new QFormLayout(figures);
-    drawnLen_ = mmSpin();
-    connect(drawnLen_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("Drawn at this length (0 = measure it)"), drawnLen_);
-    head_ = mmSpin();
-    connect(head_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("The end at the left"), head_);
-    tail_ = mmSpin();
-    connect(tail_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("The end at the right"), tail_);
-    across_ = mmSpin(500.0);
-    connect(across_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("Drawn at this diameter (0 = do not scale across)"), across_);
-    wires_ = new QSpinBox;
-    wires_->setRange(0, 200);
-    wires_->setKeyboardTracking(false);
-    connect(wires_, &QSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("Conductors the drawing shows"), wires_);
-    // A cable and a wire are taken AS DRAWN and given a length when the harness drawing is generated, so the
-    // only figure of their own that a run needs is the gap: the piece at each end they do not cover, where
-    // the conductors come out and are worked on.
-    gap_ = mmSpin();
-    gap_->setToolTip(QStringLiteral(
-        "The piece at each end of the run this does not cover — where the conductors come out. The LENGTH is "
-        "not asked for here: it comes from the harness when the drawing is generated."));
-    connect(gap_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    ff->addRow(QStringLiteral("Gap left at each end"), gap_);
-    right->addWidget(figures);
-
-    auto* tryBox = new QGroupBox(QStringLiteral("Try it"));
-    auto* tf = new QFormLayout(tryBox);
+    tryBox_ = new QGroupBox(QStringLiteral("Try it"));
+    tryForm_ = new QFormLayout(tryBox_);
     tryLen_ = mmSpin(20000.0);
     tryLen_->setValue(250.0);
     connect(tryLen_, &QDoubleSpinBox::valueChanged, this, [this] { refreshPreview(); });
-    tf->addRow(QStringLiteral("At this length"), tryLen_);
+    tryForm_->addRow(QStringLiteral("At this length"), tryLen_);
     tryWires_ = new QSpinBox;
     tryWires_->setRange(0, 200);
     tryWires_->setValue(6);
     tryWires_->setKeyboardTracking(false);
     connect(tryWires_, &QSpinBox::valueChanged, this, [this] { refreshPreview(); });
-    tf->addRow(QStringLiteral("With this many conductors"), tryWires_);
-    right->addWidget(tryBox);
+    tryForm_->addRow(QStringLiteral("With this many conductors"), tryWires_);
+    right->addWidget(tryBox_);
 
     summary_ = new QLabel;
     summary_->setWordWrap(true);
     summary_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
     right->addWidget(summary_);
 
+    // Two things are done TO a model: it is drawn (on the canvas, with the ordinary tools) and it is taken
+    // (captured off the sheet). "Put on the sheet" was a third way of saying Edit, and "Clear" emptied a
+    // model that can now simply be removed: both were ways of not choosing.
     auto* buttons = new QHBoxLayout;
     captureBtn_ = new QPushButton(QStringLiteral("Capture"));
     captureBtn_->setToolTip(QStringLiteral(
-        "Take the objects on the sheet as this model's drawing — drawn along +x, at the size it is in "
+        "Take the objects on the sheet as this model's drawing - drawn along +x, at the size it is in "
         "millimetres. This window steps aside so they can be picked; Enter takes them, Esc drops it."));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
-    auto* edit = new QPushButton(QStringLiteral("Edit"));
+    auto* edit = new QPushButton(QStringLiteral("Edit on the canvas"));
     edit->setToolTip(QStringLiteral(
-        "Open it in the main canvas with all Place and Modify tools available"));
+        "Open it in the main canvas with every Place and Modify tool - and with Connection point, which is "
+        "where the point it connects at and the direction it runs from there are marked"));
     connect(edit, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
     buttons->addWidget(edit);
-    auto* ins = new QPushButton(QStringLiteral("Put on the sheet"));
-    ins->setToolTip(QStringLiteral("Draw it on the sheet to change it, then capture it again"));
-    connect(ins, &QPushButton::clicked, this, &MechModelsDialog::insertIntoDrawing);
-    buttons->addWidget(ins);
-    // Managing the models themselves: another of this kind, this one gone, renamed, or made the one a
-    // drawing uses. A window that could only fill in a fixed list of kinds could not hold a second backshell.
-    auto* add = new QPushButton(QStringLiteral("Add model"));
-    add->setToolTip(QStringLiteral(
-        "Another model of this kind - a straight backshell and a right-angled one are both backshells"));
-    connect(add, &QPushButton::clicked, this, [this] {
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, QStringLiteral("Add model"),
-                                                   QStringLiteral("What is it called?"),
-                                                   QLineEdit::Normal, QString(), &ok);
-        if (ok) addModel(name);
-    });
-    buttons->addWidget(add);
-    auto* rm = new QPushButton(QStringLiteral("Remove model"));
-    rm->setToolTip(QStringLiteral("Take this model off the list"));
-    connect(rm, &QPushButton::clicked, this, [this] { removeCurrentModel(); });
-    buttons->addWidget(rm);
-    auto* ren = new QPushButton(QStringLiteral("Rename"));
-    connect(ren, &QPushButton::clicked, this, [this] {
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, QStringLiteral("Rename model"),
-                                                   QStringLiteral("What is it called?"),
-                                                   QLineEdit::Normal, currentName(), &ok);
-        if (ok) renameCurrentModel(name);
-    });
-    buttons->addWidget(ren);
-    auto* def = new QPushButton(QStringLiteral("Make default"));
-    def->setToolTip(QStringLiteral("What a drawing uses for this kind when nothing else is said"));
-    connect(def, &QPushButton::clicked, this, [this] { makeCurrentDefault(); });
-    buttons->addWidget(def);
-    auto* clr = new QPushButton(QStringLiteral("Clear"));
-    connect(clr, &QPushButton::clicked, this, &MechModelsDialog::clearModel);
-    buttons->addWidget(clr);
     buttons->addStretch(1);
     auto* close = new QPushButton(QStringLiteral("Close"));
     connect(close, &QPushButton::clicked, this, &QDialog::close);
@@ -266,12 +285,9 @@ void MechModelsDialog::buildUi() {
     right->addLayout(buttons);
 
     outer->addLayout(right, 1);
-    resize(1020, 760);
+    resize(1020, 780);
 }
 
-// A row per MODEL, not per kind: an office that draws a straight backshell and a right-angled one keeps two,
-// and both have to be visible to be worked on. A kind with nothing drawn still gets its row - the point of the
-// window is to fill those in.
 void MechModelsDialog::refreshList() {
     if (!list_) return;
     const bool was = syncing_;
@@ -409,33 +425,76 @@ MechModel* MechModelsDialog::current() {
 
 void MechModelsDialog::refreshDetails() {
     const MechModelKind kind = currentKind();
-    const MechModel* m = set_.of(kind);
+    const MechModel* m = set_.of(kind, currentName());
     syncing_ = true;
-    if (heading_) heading_->setText(mechModelName(kind));
+    if (heading_)
+        heading_->setText(currentName().isEmpty()
+                              ? mechModelName(kind)
+                              : QStringLiteral("%1 - %2").arg(mechModelName(kind), currentName()));
     if (hint_) hint_->setText(hintFor(kind));
-    if (propertiesGroup_) propertiesGroup_->setVisible(hasInsulationProperty(kind));
-    if (m && hasInsulationProperty(kind)) pendingInsulated_ = m->insulated;
-    if (insulation_) {
-        QSignalBlocker block(insulation_);
-        insulation_->setCurrentIndex(pendingInsulated_ ? 0 : 1);
+
+    // Which rows this kind even has. A model of a thing that is only placed has no ends that must not
+    // stretch; one that is not drawn per conductor has no conductor count; only a ring or a ferrule is
+    // insulated or not. Taken away rather than greyed: a row that can never be filled in is furniture.
+    const bool stretches = mechModelStretches(kind);
+    const bool perWire = mechModelPerWire(kind);
+    const bool hasGap = MechModel::kindHasGap(kind);
+    if (figuresForm_) {
+        figuresForm_->setRowVisible(head_, stretches);
+        figuresForm_->setRowVisible(tail_, stretches);
+        figuresForm_->setRowVisible(gap_, hasGap);
+        figuresForm_->setRowVisible(wires_, perWire);
+        figuresForm_->setRowVisible(insulation_, hasInsulationProperty(kind));
     }
+    if (figures_) figures_->setVisible(stretches || hasGap || perWire || hasInsulationProperty(kind));
+    if (tryForm_) {
+        tryForm_->setRowVisible(tryLen_, stretches);
+        tryForm_->setRowVisible(tryWires_, perWire);
+    }
+    if (tryBox_) tryBox_->setVisible(stretches || perWire);
+
+    if (m && hasInsulationProperty(kind)) pendingInsulated_ = m->insulated;
+    if (insulation_) insulation_->setCurrentIndex(pendingInsulated_ ? 0 : 1);
     if (asDrawn_) asDrawn_->setDrawing(m ? m->drawing : QJsonArray());
-    if (drawnLen_) drawnLen_->setValue(m ? m->drawnLengthMm : 0.0);
-    if (gap_) gap_->setValue(m ? m->gapMm : 0.0);
     if (head_) head_->setValue(m ? m->headMm : 0.0);
     if (tail_) tail_->setValue(m ? m->tailMm : 0.0);
-    if (across_) across_->setValue(m ? m->drawnAcrossMm : 0.0);
+    if (gap_) gap_->setValue(m ? m->gapMm : 0.0);
     if (wires_) wires_->setValue(m ? m->drawnWireCount : 0);
-    // A thing that is not stretched has no ends to keep and no length to try.
-    const bool stretches = mechModelStretches(kind);
-    for (QWidget* w : {static_cast<QWidget*>(head_), static_cast<QWidget*>(tail_),
-                       static_cast<QWidget*>(tryLen_)})
-        if (w) w->setEnabled(stretches);
-    const bool perWire = mechModelPerWire(kind);
-    if (wires_) wires_->setEnabled(perWire);
-    if (tryWires_) tryWires_->setEnabled(perWire);
-    // The gap belongs to the two kinds that are drawn to a length the harness decides and leave one.
-    if (gap_) gap_->setEnabled(MechModel::kindHasGap(kind));
+    if (scaleAcross_) scaleAcross_->setChecked(m && m->drawnAcrossMm > 0.0);
+
+    // What the drawing itself says. Measured on capture, said here - not asked for.
+    if (measured_) {
+        if (!m || m->isEmpty()) {
+            measured_->setText(QStringLiteral("Nothing drawn for this yet."));
+        } else {
+            const double len = mechModelDrawnLength(*m);
+            QString said = QStringLiteral("%1 object(s), drawn %2 mm long")
+                               .arg(m->drawing.size())
+                               .arg(len, 0, 'f', 1);
+            if (m->drawnAcrossMm > 0.0)
+                said += QStringLiteral(" and %1 mm across").arg(m->drawnAcrossMm, 0, 'f', 1);
+            measured_->setText(said);
+        }
+    }
+    // And what was marked on it: where it connects, and which way it runs from there. Both are what the
+    // wizard places the part by, so a model that has neither says so plainly rather than leaving it to be
+    // found out when a drawing comes out wrong.
+    if (placement_) {
+        if (m && m->hasConnect)
+            placement_->setText(
+                QStringLiteral("Connects at %1, %2 and runs %3° from there")
+                    .arg(m->connectPoint.x, 0, 'f', 1)
+                    .arg(m->connectPoint.y, 0, 'f', 1)
+                    .arg(m->connectAngleRad * 180.0 / 3.14159265358979323846, 0, 'f', 1));
+        else
+            placement_->setText(QStringLiteral(
+                "No connection point marked — it is placed from its left-hand end, along the run. Edit it on "
+                "the canvas and press Connection point to mark one."));
+    }
+    if (removeBtn_) removeBtn_->setEnabled(m != nullptr);
+    if (renameBtn_) renameBtn_->setEnabled(m != nullptr);
+    if (defaultBtn_)
+        defaultBtn_->setEnabled(m != nullptr && set_.all(kind).size() > 1 && !m->isDefault);
     syncing_ = false;
     refreshPreview();
 }
@@ -475,20 +534,18 @@ void MechModelsDialog::applyFigures() {
     const MechModel* had = set_.of(kind, currentName());
     if (!had) return;   // nothing drawn: the figures have nothing to be about yet
     MechModel m = *had;
-    m.drawnLengthMm = drawnLen_ ? drawnLen_->value() : 0.0;
-    m.gapMm = gap_ && MechModel::kindHasGap(m.kind) ? gap_->value() : 0.0;
-    m.headMm = head_ ? head_->value() : 0.0;
-    m.tailMm = tail_ ? tail_->value() : 0.0;
-    m.drawnAcrossMm = across_ ? across_->value() : 0.0;
-    m.drawnWireCount = wires_ ? wires_->value() : 0;
+    m.headMm = head_ && mechModelStretches(kind) ? head_->value() : 0.0;
+    m.tailMm = tail_ && mechModelStretches(kind) ? tail_->value() : 0.0;
+    m.gapMm = gap_ && MechModel::kindHasGap(kind) ? gap_->value() : 0.0;
+    m.drawnWireCount = wires_ && mechModelPerWire(kind) ? wires_->value() : 0;
+    // Scaling across is a yes or no, and the size it was drawn at is measured: the two used to be one field
+    // where zero meant no, which is a number standing in for a decision.
+    m.drawnAcrossMm = scaleAcross_ && scaleAcross_->isChecked() ? mechModelDrawnAcross(m) : 0.0;
     set_.set(m);
     set_.save();
-    refreshPreview();
+    refreshDetails();
 }
 
-// Capture what is SELECTED. Nothing selected yet, so the window steps aside and the sheet is left clear to
-// pick on - the same way the parts library captures a part's drawing. Taking the whole sheet was the only way
-// before, which meant a model could not be drawn beside anything else, not even beside the thing it goes on.
 void MechModelsDialog::captureFromSheet() {
     if (!editor_ || !editor_->document()) return;
     if (editor_->copyOfSelection().empty()) {
@@ -535,6 +592,12 @@ void MechModelsDialog::captureSelection() {
     if (const MechModel* had = set_.of(m.kind, currentName())) m = *had;
     m.name = currentName();   // into the model showing, not over the kind's first one
     m.drawing = partDrawingFromEntities(drawn);
+    // TAKEN FROM THE CAPTURE: how long it is, and how thick. The drawing knows both, so neither is asked
+    // for - and the length in particular was a field with a magic zero in it that nobody could check
+    // against the drawing.
+    m.drawnLengthMm = 0.0;                       // 0 = measured off the drawing, which is what it is
+    if (m.drawnAcrossMm > 0.0 || (scaleAcross_ && scaleAcross_->isChecked()))
+        m.drawnAcrossMm = mechModelDrawnAcross(m);
     set_.set(m);
     set_.save();
     refreshList();
@@ -543,20 +606,6 @@ void MechModelsDialog::captureSelection() {
         summary_->setText(QStringLiteral("Captured %1 selected object(s) as %2")
                               .arg(drawn.size())
                               .arg(mechModelName(m.kind)));
-}
-
-void MechModelsDialog::insertIntoDrawing() {
-    if (!editor_) return;
-    const MechModel* m = set_.of(currentKind());
-    if (!m) {
-        if (summary_) summary_->setText(QStringLiteral("Nothing drawn for this yet"));
-        return;
-    }
-    editor_->placeEntities(partDrawingEntities(m->drawing));
-    if (summary_)
-        summary_->setText(QStringLiteral("Click the sheet to put it down — change it there and press "
-                                         "select it and press Capture to take it back"));
-    hide();
 }
 
 void MechModelsDialog::editOnCanvas() {
@@ -595,18 +644,6 @@ void MechModelsDialog::editOnCanvas() {
                                          "not stretch")
                               .arg(m.drawnLengthMm, 0, 'f', 1)
                               .arg(m.drawnAcrossMm, 0, 'f', 1));
-}
-
-void MechModelsDialog::clearModel() {
-    const MechModelKind kind = currentKind();
-    set_.remove(kind);
-    set_.save();
-    refreshList();
-    refreshDetails();
-    if (summary_)
-        summary_->setText(QStringLiteral("%1 cleared — the generator draws its own until one is "
-                                         "captured again")
-                              .arg(mechModelName(kind)));
 }
 
 void MechModelsDialog::setModels(const MechModelSet& set) {
