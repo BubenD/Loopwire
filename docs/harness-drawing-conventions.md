@@ -1134,6 +1134,21 @@ in the middle of its run. Zero is the default and zero draws exactly as it alway
 
 Measured: a 500 mm run with a 20 mm gap holds 460 mm of cable, from 20 to 480.
 
+## A fillet takes both of them back
+
+Rounding a corner between a **line and a run** (a polyline, a rect, a polygon) left a stub: the run's end
+vertex was taken back to the fillet and the line kept its full length, so the piece between the line's end and
+where the arc left it stayed on the drawing.
+
+The cause is in how the two are handed to the fillet. A run cannot be filleted as it stands — its picked end
+*segment* stands in as a line, the fillet is worked out from that, and the trimmed stand-in is written back
+into the run's vertex. A plain line was made to stand in as well, by **copying** it. The fillet trimmed the
+copy, the copy was thrown away, and the line on the drawing never heard about it.
+
+A stand-in now remembers the line it came from, and the write-back puts both ends back on it — both ends,
+because which of them the fillet takes back depends on the side that was picked. Measured: a line running 58
+units past the corner ends at 91.72, exactly where the arc starts, whichever of the two is picked first.
+
 ## A DXF that would not open
 
 A released sample sheet — `SMP-00003_A01.dxf` — would not open. Three separate faults, each enough on its own:

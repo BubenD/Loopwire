@@ -9658,6 +9658,7 @@ void Editor::handlePickModifyPress(const Vec2& p) {
         struct Stand {
             Entity line;          // the stand-in
             Entity* src = nullptr;// the run it came from (null: it IS a line or a curve)
+            Entity* plain = nullptr;   // ... and then THIS is the line itself, which has to be written back
             int endIdx = -1;      // which vertex of the run moves
         };
         auto standFor = [&](Entity* e, const Vec2& pick, const Vec2& otherPick, Stand& s,
@@ -9665,6 +9666,11 @@ void Editor::handlePickModifyPress(const Vec2& p) {
             if (!isRun(*e)) {     // a plain line stands for itself
                 s.line = *e;
                 s.src = nullptr;
+                // A COPY stands in, and the fillet trims the copy. Kept only as a copy - which is what
+                // happened here - the real line was left at its full length while the arc left it early:
+                // the stub the fillet is supposed to have taken off, still on the drawing. So the line it
+                // came from is remembered, and written back with the rest.
+                s.plain = (e->type == EntityType::Line) ? e : nullptr;
                 return true;
             }
             const int n = static_cast<int>(e->points.size());
@@ -9731,6 +9737,13 @@ void Editor::handlePickModifyPress(const Vec2& p) {
                 r = filletLines(s1.line, s2.line, filletRadius_, pickPts_[0], pickPts_[1]);
             // Each stand-in must have kept the end that belongs to the rest of its run.
             auto writeBack = [&](Stand& s) {
+                if (s.plain) {
+                    // Whichever end the fillet took back: a plain line is trimmed at either end, and which
+                    // one is decided by the side that was picked.
+                    s.plain->a = s.line.a;
+                    s.plain->b = s.line.b;
+                    return true;
+                }
                 if (!s.src) return true;
                 const int n = static_cast<int>(s.src->points.size());
                 const int innerIdx = (s.endIdx == 0) ? 1 : n - 2;

@@ -288,6 +288,75 @@ int run_editor_tests() {
               "fillet-knee: the shared vertex gets the fillet radius");
     }
 
+    // --- Fillet a LINE against a POLYLINE: BOTH of them are taken back to the fillet.
+    {
+        // The polyline's end vertex was taken back and the line was not - it kept its full length while the
+        // arc left it early, so the piece between them stayed on the drawing: the stub the fillet is
+        // supposed to have taken off. The line stood in as a COPY, the fillet trimmed the copy, and the copy
+        // was thrown away.
+        Document d;
+        d.entities().clear();
+        Entity h;
+        h.id = "h";
+        h.type = EntityType::Line;
+        h.a = {0, 0};
+        h.b = {150, 0};   // running well past the polyline's end, so a stub would be plain to see
+        Entity pl;
+        pl.id = "p";
+        pl.type = EntityType::Polyline;
+        pl.points = {{100, 0}, {170, 70}, {240, 70}};
+        d.entities().push_back(h);
+        d.entities().push_back(pl);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setPixelTolerance(3);
+        ed.setFilletRadius(20.0);
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);    // the line
+        ed.onPointerPress({130, 30}, Qt::LeftButton, Qt::NoModifier);  // the polyline, near its end
+
+        const Entity* line = nullptr;
+        const Entity* poly = nullptr;
+        const Entity* arc = nullptr;
+        for (const auto& e : d.entities()) {
+            if (e.id == "h") line = &e;
+            else if (e.id == "p") poly = &e;
+            else if (e.type == EntityType::Arc) arc = &e;
+        }
+        check(arc != nullptr, "fillet line+run: the corner is rounded");
+        check(line && poly, "fillet line+run: both objects are still there");
+        if (arc && line && poly) {
+            std::printf("  fillet line+run: the line ends at %.2f, the arc starts at %.2f\n", line->b.x,
+                        arc->center.x);
+            check(near(line->b.x, arc->center.x),
+                  "fillet line+run: the LINE is taken back to where the fillet touches it - no stub");
+            check(near(poly->points.front().x, 105.86, 0.01),
+                  "fillet line+run: and so is the run's end vertex");
+            // The two of them and the arc meet: nothing sticks out past the tangent points.
+            const double toArc = std::hypot(line->b.x - arc->center.x, line->b.y - (arc->center.y - arc->radius));
+            check(toArc < 1e-6, "fillet line+run: the line ends exactly on the arc");
+        }
+
+        // The same the other way round: whichever is picked first, both are trimmed.
+        Document d2;
+        d2.entities().clear();
+        d2.entities().push_back(h);
+        d2.entities().push_back(pl);
+        Editor ed2;
+        ed2.setDocument(&d2);
+        noSnap(ed2);
+        ed2.setPixelTolerance(3);
+        ed2.setFilletRadius(20.0);
+        ed2.setTool(ToolId::Fillet);
+        ed2.onPointerPress({130, 30}, Qt::LeftButton, Qt::NoModifier);
+        ed2.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+        for (const auto& e : d2.entities())
+            if (e.id == "h")
+                check(e.b.x < 100.0,
+                      "fillet line+run: picking the run first trims the line just the same");
+    }
+
     // --- Fillet a POLYGON corner (closed shape, wrap-around): pick the two edges
     //     that share the corner.
     {
