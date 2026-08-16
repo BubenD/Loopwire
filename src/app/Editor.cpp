@@ -1392,8 +1392,16 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
     // a curve at a joint could not be filleted: the two picks were the same object.
     const auto& ents = doc_->entities();
     for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
-        if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
-            continue;
+        // A default model's connection/near/far markers live on a LOCKED layer - locked so nothing else
+        // on it (the drawing's own guide lines) can be nudged by accident - but the markers themselves are
+        // exactly the thing a drawing office needs to pick up and move, or decide was put in the wrong
+        // place. So they are exempted from the lock, and only while the Select tool is the one asking:
+        // every other tool keeps the lock exactly as it was, so a Trim or a Fillet never catches one by
+        // mistake.
+        const bool anchorMarker = tool_ == ToolId::Select && it->meta.contains(QStringLiteral("modelAnchor"));
+        if (!anchorMarker)
+            if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
+                continue;
         if (!skip.empty() && std::find(skip.begin(), skip.end(), it->id) != skip.end()) continue;
         // A stretch of run that a break mark hides is not there to be clicked either: the drawing does
         // not show it, so a click in it belongs to the mark, or to nothing.

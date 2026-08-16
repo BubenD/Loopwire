@@ -7,6 +7,7 @@
 #include "model/Document.h"
 #include "app/DrawingPreview.h"
 #include "app/MechModelsDialog.h"
+#include "app/MainWindow.h"
 #include "app/Editor.h"
 #include "harness/PartsLibrary.h"
 
@@ -349,6 +350,130 @@ int run_mechmodels_tests() {
         check(!dlg.isHidden(), "capture: and the window comes back from that too");
 
         // Put the file back as it was found.
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
+    // ---- the connection/near/far markers can be picked, dragged and deleted -----------------------
+    {
+        // They used to be paint only: the guide layer they live on is LOCKED (so nothing else on it - the
+        // stretch-preview dashed lines - can be nudged by accident), and the lock shut the markers out of
+        // Select too. A mark put in the wrong place could only be redone by re-picking it from scratch.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        win.openMechModelEditor(MechModelKind::Boot);
+        for (int i = 0; i < 10; ++i) QApplication::processEvents();
+        Editor* ed = win.findChild<Editor*>();
+        Document* doc = ed->document();
+        auto& snap = ed->snapSettings();
+        snap.objectSnap = false;
+        snap.gridSnap = false;
+        snap.ortho = false;
+        snap.polar = false;
+
+        auto findByTag = [&](const char* tag) -> Entity* {
+            for (Entity& e : doc->entities())
+                if (e.meta.value(QStringLiteral("modelAnchor")).toString() == QLatin1String(tag))
+                    return &e;
+            return nullptr;
+        };
+
+        Entity body;
+        body.id = QStringLiteral("body-line");
+        body.type = EntityType::Line;
+        body.a = {0.0, 0.0};
+        body.b = {20.0, 0.0};
+        doc->entities().push_back(body);
+
+        // Far, on its own: click it, and Delete removes it.
+        ed->setTool(ToolId::ModelFarPoint);
+        ed->onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
+        QApplication::processEvents();
+        Entity* farE = findByTag("far");
+        check(farE != nullptr, "markers: Far is drawn where it was marked");
+
+        ed->setTool(ToolId::Select);
+        ed->onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerRelease({60.0, 60.0}, Qt::LeftButton);
+        bool farPicked = false;
+        for (const QString& id : ed->selection())
+            if (farE && id == farE->id) farPicked = true;
+        check(farPicked, "markers: clicking Far with Select picks it up, lock and all");
+
+        ed->deleteSelected();
+        QApplication::processEvents();
+        check(findByTag("far") == nullptr, "markers: Delete removes it");
+
+        // Near and Connection, put deliberately on the SAME point: one circle used to paint straight over
+        // the other, and there was no way to tell the first one had ever been marked.
+        ed->setTool(ToolId::ModelNearPoint);
+        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        QApplication::processEvents();
+        ed->setTool(ToolId::ModelConnectPoint);
+        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);   // the point
+        ed->onPointerPress({40.0, 5.0}, Qt::LeftButton, Qt::NoModifier);  // the direction
+        QApplication::processEvents();
+        Entity* nearE = findByTag("near");
+        Entity* connE = findByTag("connect");
+        check(nearE && connE && near(nearE->center.x, 10.0) && near(connE->center.x, 10.0),
+              "markers: both land on the same point, as marked");
+        std::printf("  markers: coincident radii - near %.2f, connect %.2f\n", nearE ? nearE->radius : -1.0,
+                    connE ? connE->radius : -1.0);
+        check(nearE && connE && !near(nearE->radius, connE->radius, 0.05),
+              "markers: sitting on top of each other, they draw at two different radii - two rings, not one");
+
+        // Both rings stay reachable of their own accord: a click nearer the OUTER radius than the
+        // inner one lands on Near, not Connect. (Biased 75% of the way out rather than sat exactly
+        // between the two radii, where the distance to each outline ties and the pick is a coin flip.)
+        ed->setTool(ToolId::Select);
+        const Vec2 between{10.0 + connE->radius + (nearE->radius - connE->radius) * 0.75, 5.0};
+        ed->onPointerPress(between, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerRelease(between, Qt::LeftButton);
+        bool gotNear = false, gotConnect = false;
+        for (const QString& id : ed->selection()) {
+            if (id == nearE->id) gotNear = true;
+            if (id == connE->id) gotConnect = true;
+        }
+        check(gotNear && !gotConnect, "markers: a click between the two rings reaches the outer one only");
+
+        // Plain clicks in this app ACCUMULATE selection (Shift is what deselects) - Near is still
+        // picked from the click just above, so it is cleared before picking Connect on its own.
+        ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+
+        // Dragging Connect (picked at the shared point, which favours the smaller/inner ring) moves it -
+        // and the new position survives a later regeneration, which is the proof it reached the MODEL and
+        // not just the entity on screen.
+        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerRelease({10.0, 5.0}, Qt::LeftButton);
+        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);   // grab its centre grip
+        ed->onPointerMove({90.0, 33.0});
+        ed->onPointerPress({90.0, 33.0}, Qt::LeftButton, Qt::NoModifier); // place it
+        QApplication::processEvents();
+        Entity* movedConn = findByTag("connect");
+        check(movedConn && near(movedConn->center.x, 90.0) && near(movedConn->center.y, 33.0),
+              "markers: dragging Connect by its grip moves it");
+
+        ed->setTool(ToolId::ModelFarPoint);
+        ed->onPointerPress({5.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        QApplication::processEvents();
+        Entity* connAfterRegen = findByTag("connect");
+        check(connAfterRegen && near(connAfterRegen->center.x, 90.0),
+              "markers: the moved position survives a fresh regeneration - it reached the model itself");
+
         if (hadOne) {
             QFile f(modelsFile);
             if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);

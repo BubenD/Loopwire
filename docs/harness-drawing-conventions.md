@@ -1087,6 +1087,34 @@ so what is mirrored is the part and not its place on the sheet. Measured: one si
 the other −10, mirrored exactly rather than moved. A model that marks neither point nor direction is placed
 exactly as it always was, so every model already captured is untouched.
 
+## The near and far points mark what the run cannot stretch through
+
+A model's connection point says where it attaches and its direction says which way it runs — but a cable, a
+heat-shrink, a boot all have a **body**, and the body occupies part of the run rather than sitting at a single
+point on it. The **near point** and **far point** are the two ends of that occupied span, measured along the
+model's own drawing: near is the end closest to the connection point, far is the end away from it. The
+generator uses them to know how much of the run a fitting actually uses up before the next thing on it can
+start — a boot that reaches 40 mm past its connection point must push the next fitting back 40 mm, not draw
+straight through it.
+
+**Marking them is optional.** A model with neither point set is treated as a point fitting (a ring terminal,
+a ferrule) that takes up no length of run at all; only kinds that run need them, and only if the office wants
+the generator to account for the body's length. Left unmarked, the run is measured exactly as it always was.
+
+**Both markers, and the connection point, can be picked up like anything else on the sheet.** They are drawn
+on a locked guide layer — locked so the model's own stretch-preview lines can't be nudged by accident — but
+the Select tool is let through that lock for these three markers specifically: click one to select it, click
+again to grab it and place it elsewhere (the same grab-move-click-to-place a joint uses anywhere else in the
+app), or Delete to remove it outright. Moving or deleting a marker writes straight back into the model being
+edited — the marker on the sheet is what was just acted on, so it decides, not the other way round.
+
+**A connection point often sits exactly on the near point**, since both mark where the part meets the run.
+One circle drawn on top of the other used to look like a single mark, with no way to tell whether the near
+point had ever been set at all. Each mark now grows a little for every earlier mark (in a fixed connect →
+near → far order) it lands on top of, so two coincident points draw as two concentric rings rather than one
+solid disc — and both rings stay independently clickable: a click at the shared centre reaches the inner
+(smaller) one, a click out towards the second ring's own edge reaches that one instead.
+
 ## The wizard says which side, and which of the drawn models
 
 Two settings belong to the FITTING rather than to the kind of thing in general — they are about this one part

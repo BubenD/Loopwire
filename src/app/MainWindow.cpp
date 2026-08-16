@@ -1841,32 +1841,41 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
         doc.entities().end());
     const Bounds b = mechModelBounds(doc);
     const double markerRadius = b.valid ? std::max(2.0, b.height() * 0.08) : 3.0;
-    auto addAnchor = [&](const Vec2& point, bool near) {
+
+    // The three marks, in a fixed order, each with a name and a colour. A connection point sitting
+    // exactly on the near point - which it usually does, since both mark where the part meets the
+    // run - used to draw as ONE circle: whichever was added second painted straight over the first,
+    // and there was no way to tell the near point had ever been set at all.
+    struct Mark { QString id, tag, color; Vec2 point; };
+    std::vector<Mark> marks;
+    if (model.hasConnect)
+        marks.push_back({QStringLiteral("model-connect-point"), QStringLiteral("connect"),
+                         QStringLiteral("#5aa0ff"), model.connectPoint});
+    if (model.hasNearPoint)
+        marks.push_back({QStringLiteral("model-near-point"), QStringLiteral("near"),
+                         QStringLiteral("#e6a23c"), model.nearPoint});
+    if (model.hasFarPoint)
+        marks.push_back({QStringLiteral("model-far-point"), QStringLiteral("far"),
+                         QStringLiteral("#62c370"), model.farPoint});
+    for (size_t i = 0; i < marks.size(); ++i) {
+        // Every EARLIER mark this one lands on top of grows it a little: one circle becomes two (or
+        // three) concentric rings, each colour still its own ring rather than one solid disc.
+        int stacked = 0;
+        for (size_t j = 0; j < i; ++j)
+            if (distance(marks[i].point, marks[j].point) < markerRadius * 0.5) ++stacked;
         Entity marker;
-        marker.id = near ? QStringLiteral("model-near-point") : QStringLiteral("model-far-point");
+        marker.id = marks[i].id;
         marker.type = EntityType::Circle;
         marker.layer = QLatin1String(kMechModelGuideLayer);
-        marker.center = point;
-        marker.radius = markerRadius;
-        marker.color = near ? QStringLiteral("#e6a23c") : QStringLiteral("#62c370");
-        marker.meta.insert(QStringLiteral("modelAnchor"), near ? QStringLiteral("near")
-                                                                  : QStringLiteral("far"));
+        marker.center = marks[i].point;
+        marker.radius = markerRadius * (1.0 + 0.45 * stacked);
+        marker.color = marks[i].color;
+        marker.meta.insert(QStringLiteral("modelAnchor"), marks[i].tag);
         doc.entities().push_back(marker);
-    };
-    if (model.hasNearPoint) addAnchor(model.nearPoint, true);
-    if (model.hasFarPoint) addAnchor(model.farPoint, false);
-    // The connection point, and an arrow along the direction the part runs from it - drawn, because the
-    // whole reason for marking them on the model is to be able to SEE what the wizard will do with it.
+    }
+    // An arrow along the direction the part runs from the connection point - drawn, because the whole
+    // reason for marking any of these on the model is to be able to SEE what the wizard will do with it.
     if (model.hasConnect) {
-        Entity dot;
-        dot.id = QStringLiteral("model-connect-point");
-        dot.type = EntityType::Circle;
-        dot.layer = QLatin1String(kMechModelGuideLayer);
-        dot.center = model.connectPoint;
-        dot.radius = markerRadius;
-        dot.color = QStringLiteral("#5aa0ff");
-        dot.meta.insert(QStringLiteral("modelAnchor"), QStringLiteral("connect"));
-        doc.entities().push_back(dot);
         const double arm = std::max(6.0 * markerRadius, b.valid ? b.width() * 0.35 : 10.0);
         const double c = std::cos(model.connectAngleRad), s = std::sin(model.connectAngleRad);
         const Vec2 tip{model.connectPoint.x + arm * c, model.connectPoint.y + arm * s};
@@ -2001,6 +2010,38 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         canvas_->update();
         refreshPanels();
         updateActiveTabText(); // reflect the dirty marker
+        // A connection/near/far marker just moved or was deleted: the Select tool's own Move and Delete
+        // now reach these (Editor::hitTest exempts them, on purpose, from the guide layer's lock), so
+        // this is where a drag or a Delete on one of them is heard. The marker ON THE SHEET is read back
+        // into the model it belongs to - not the other way round - because the entity is what the user
+        // just acted on; a marker that is gone is a point that is no longer marked, and one that moved
+        // is marked wherever it was dropped.
+        if (doc_ && mechModelEdits_.contains(doc_)) {
+            MechModel& model = mechModelSessionModels_[doc_];
+            bool sawNear = false, sawFar = false, sawConnect = false;
+            for (const Entity& e : doc_->entities()) {
+                const QString tag = e.meta.value(QStringLiteral("modelAnchor")).toString();
+                if (tag == QLatin1String("near")) {
+                    sawNear = true;
+                    model.hasNearPoint = true;
+                    model.nearPoint = e.center;
+                } else if (tag == QLatin1String("far")) {
+                    sawFar = true;
+                    model.hasFarPoint = true;
+                    model.farPoint = e.center;
+                } else if (tag == QLatin1String("connect")) {
+                    sawConnect = true;
+                    model.hasConnect = true;
+                    model.connectPoint = e.center;   // the angle is set only by re-picking Connection point
+                }
+            }
+            if (!sawNear) model.hasNearPoint = false;
+            if (!sawFar) model.hasFarPoint = false;
+            if (!sawConnect) model.hasConnect = false;
+            // Redrawn rather than left as they are: a marker dropped onto another one has to restagger
+            // to the two-ring size right away, and a deleted marker's ring has to actually disappear.
+            addMechModelGuides(*doc_, model);
+        }
     });
     connect(editor_, &Editor::modelAnchorPicked, this, [this](Vec2 point, bool near) {
         if (!doc_ || !mechModelEdits_.contains(doc_)) return;
