@@ -96,8 +96,10 @@ private:
     QLabel* heading_ = nullptr;
     QLabel* hint_ = nullptr;
     QLabel* summary_ = nullptr;
-    DrawingPreview* asDrawn_ = nullptr;
-    DrawingPreview* stretched_ = nullptr;
+    // ONE drawing window, and it shows the model: as drawn, or at the length it is being tried at. Two of
+    // them side by side halved the size of both and showed the same drawing twice for every model that is
+    // not stretched at all - which is most of them.
+    DrawingPreview* view_ = nullptr;
 
     QComboBox* insulation_ = nullptr;
     bool pendingInsulated_ = true;

@@ -72,6 +72,10 @@ QIcon modelAnchorIcon(const QColor& color) {
 }
 } // namespace
 
+// The square a model-session button takes: an icon and up to two short lines under it. Big enough that the
+// words are read rather than guessed at, and the same for all five, so the row reads as one group.
+constexpr QSize kModelSessionCell(84, 66);
+
 // ---- HOME : Draw | Modify | Properties | AI ----
 void MainWindow::buildHomeTab() {
     auto [page, lay] = makeTabPage();
@@ -195,54 +199,54 @@ void MainWindow::buildHomeTab() {
     tplHomeGroup_->hide();
     }
     {
+        // The five things done while a default model is being drawn. Long labels under small icons in a
+        // two-row grid ran into one another and were cut off by the row below - the words were there and
+        // could not be read, which is worse than no words. One row, one square each, and a label of at most
+        // two short lines: the group is called "Default model", so no button has to say so as well.
         auto* session = new QWidget(page);
         auto* sg = new QGridLayout(session);
         sg->setContentsMargins(0, 0, 0, 0);
-        sg->setSpacing(2);
-        captureMechModelBtn_ = new QToolButton(session);
-        captureMechModelBtn_->setText(QStringLiteral("Capture to default model"));
-        captureMechModelBtn_->setIcon(modelSessionIcon(true));
-        captureMechModelBtn_->setIconSize(QSize(28, 28));
-        captureMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        sg->setSpacing(4);
+        auto sessionButton = [this, session](QToolButton*& into, const QString& text, const QIcon& icon,
+                                             const QString& tip) {
+            into = new QToolButton(session);
+            into->setText(text);
+            into->setIcon(icon);
+            into->setIconSize(QSize(26, 26));
+            into->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            into->setToolTip(tip);
+            into->setAutoRaise(true);
+            into->setFocusPolicy(Qt::NoFocus);
+            // Room for two short lines under the icon, and the same room for each: a row of buttons of
+            // different widths reads as a row of different things.
+            into->setFixedSize(kModelSessionCell);
+            return into;
+        };
+        sessionButton(captureMechModelBtn_, tr("Capture"), modelSessionIcon(true),
+                      tr("Take what is drawn here as this default model and close the session"));
         connect(captureMechModelBtn_, &QToolButton::clicked, this,
                 [this] { saveMechModelBeingEdited(); });
-        cancelMechModelBtn_ = new QToolButton(session);
-        cancelMechModelBtn_->setText(QStringLiteral("Cancel"));
-        cancelMechModelBtn_->setIcon(modelSessionIcon(false));
-        cancelMechModelBtn_->setIconSize(QSize(28, 28));
-        cancelMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        connect(cancelMechModelBtn_, &QToolButton::clicked, this,
-                [this] { cancelMechModelEdit(); });
-        markNearMechModelBtn_ = new QToolButton(session);
-        markNearMechModelBtn_->setText(QStringLiteral("Mark near point"));
-        markNearMechModelBtn_->setIcon(modelAnchorIcon(QColor("#e6a23c")));
-        markNearMechModelBtn_->setIconSize(QSize(28, 28));
-        markNearMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        connect(markNearMechModelBtn_, &QToolButton::clicked, this,
-                [this] { armMechModelAnchor(true); });
-        markFarMechModelBtn_ = new QToolButton(session);
-        markFarMechModelBtn_->setText(QStringLiteral("Mark far point"));
-        markFarMechModelBtn_->setIcon(modelAnchorIcon(QColor("#62c370")));
-        markFarMechModelBtn_->setIconSize(QSize(28, 28));
-        markFarMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        connect(markFarMechModelBtn_, &QToolButton::clicked, this,
-                [this] { armMechModelAnchor(false); });
-        markConnectMechModelBtn_ = new QToolButton(session);
-        markConnectMechModelBtn_->setText(QStringLiteral("Connection point"));
-        markConnectMechModelBtn_->setIcon(modelAnchorIcon(QColor("#5aa0ff")));
-        markConnectMechModelBtn_->setIconSize(QSize(28, 28));
-        markConnectMechModelBtn_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        markConnectMechModelBtn_->setToolTip(QStringLiteral(
-            "Click where the part connects to what it is placed on, then click along the direction it runs "
-            "from there. The wizard places the part by those two: the drawing is turned so that direction "
-            "runs along the run, and set down so that point lands on it."));
+        sessionButton(cancelMechModelBtn_, tr("Cancel"), modelSessionIcon(false),
+                      tr("Leave the model as it was"));
+        connect(cancelMechModelBtn_, &QToolButton::clicked, this, [this] { cancelMechModelEdit(); });
+        sessionButton(markConnectMechModelBtn_, tr("Connection\npoint"), modelAnchorIcon(QColor("#5aa0ff")),
+                      tr("Click where the part connects to what it is placed on, then click along the "
+                         "direction it runs from there. The wizard places the part by those two: the "
+                         "drawing is turned so that direction runs along the run, and set down so that "
+                         "point lands on it."));
         connect(markConnectMechModelBtn_, &QToolButton::clicked, this,
                 [this] { armMechModelConnect(); });
+        sessionButton(markNearMechModelBtn_, tr("Near\npoint"), modelAnchorIcon(QColor("#e6a23c")),
+                      tr("The near end of the model - marked in orange"));
+        connect(markNearMechModelBtn_, &QToolButton::clicked, this, [this] { armMechModelAnchor(true); });
+        sessionButton(markFarMechModelBtn_, tr("Far\npoint"), modelAnchorIcon(QColor("#62c370")),
+                      tr("The far end of the model - marked in green"));
+        connect(markFarMechModelBtn_, &QToolButton::clicked, this, [this] { armMechModelAnchor(false); });
         sg->addWidget(captureMechModelBtn_, 0, 0);
         sg->addWidget(cancelMechModelBtn_, 0, 1);
-        sg->addWidget(markNearMechModelBtn_, 1, 0);
-        sg->addWidget(markFarMechModelBtn_, 1, 1);
         sg->addWidget(markConnectMechModelBtn_, 0, 2);
+        sg->addWidget(markNearMechModelBtn_, 0, 3);
+        sg->addWidget(markFarMechModelBtn_, 0, 4);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);

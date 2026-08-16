@@ -1026,6 +1026,11 @@ The window is the **list**. A kind holds as many models as an office draws, so *
 *Make default* sit under the list — that is what the window is for — and the right-hand side says what the
 selected model **is**.
 
+**One drawing window**, the width of the panel, and it shows this model and nothing else: as drawn, or at the
+length it is being tried at, with the caption saying which. Two panes side by side halved the size of both,
+and for every kind that is only placed — a ring, a ferrule, a Y-split — the second one showed the same drawing
+as the first.
+
 What it says, and what it no longer asks:
 
 - **Taken from the drawing.** How many objects it is, how long it was drawn and how thick — *measured* at
@@ -1039,7 +1044,13 @@ What it says, and what it no longer asks:
 - **Only the rows this kind has.** A ring terminal is placed, not run: no ends that must not stretch, no gap,
   no *At this length*. A cable is not drawn per conductor: no conductor count. Only a ring or a ferrule is
   insulated or not. A row that cannot apply is *taken away*, not greyed — greyed rows are furniture.
-- **Two commands, not four.** A model is drawn (*Edit on the canvas*, with every tool and with Connection
+- **The buttons of a model session are read, not guessed at.** Five things are done while a default model is
+being drawn — Capture, Cancel, Connection point, Near point, Far point — and they were long labels under small
+icons in a two-row grid, running into one another and cut off by the row below. Words that are there and
+cannot be read are worse than no words. One row, one square each (84 × 66), and at most two short lines under
+the icon; the group is called *Default model*, so no button has to say so as well.
+
+**Two commands, not four.** A model is drawn (*Edit on the canvas*, with every tool and with Connection
   point) or taken (*Capture*). *Put on the sheet* was a third way of saying Edit, and *Clear* emptied a model
   that can simply be removed.
 

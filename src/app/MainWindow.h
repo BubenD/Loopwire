@@ -150,6 +150,9 @@ public:
     void pasteFromClipboard();   // a picture if that is what is on the clipboard, else the drawing kind
     // The panels' arrangement and, above all, their size: kept between sessions, so a side pulled wider is
     // that wide the next time the program is started. Saved on the way out, read back while building.
+    // Open a default model for drawing, by kind. Public because the models window is not the only thing
+    // that has a reason to ask - a picture of the session, or a test of it, has one too.
+    void openMechModelEditor(MechModelKind kind);
     void savePanelLayout();
     void restorePanelLayout();
 
@@ -477,7 +480,6 @@ private:
     void showThermalModel();
     // The template module: what a new drawing starts as.
     void showTemplateDialog();
-    void openMechModelEditor(MechModelKind kind);
     void armMechModelAnchor(bool near);
     void armMechModelConnect();          // the connection point, and the direction the part runs from it
     QToolButton* markConnectMechModelBtn_ = nullptr;

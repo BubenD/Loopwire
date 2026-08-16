@@ -5,6 +5,7 @@
 // difficulty with scaling a drawing, so it is measured here rather than eyeballed.
 #include "harness/MechModels.h"
 #include "model/Document.h"
+#include "app/DrawingPreview.h"
 #include "app/MechModelsDialog.h"
 #include "app/Editor.h"
 #include "harness/PartsLibrary.h"
@@ -591,6 +592,12 @@ int run_mechmodels_tests() {
             if (s.contains(QStringLiteral("connection point")) || s.contains(QStringLiteral("Connects at")))
                 saysPlacement = true;
         check(saysPlacement, "manager: and it says where the part connects and which way it runs");
+
+        // ONE drawing window, and it is the model's. Two side by side halved the size of both, and for
+        // every kind that is only placed the second showed the same drawing as the first.
+        const QList<DrawingPreview*> views = dlg.findChildren<DrawingPreview*>();
+        std::printf("  manager: %lld drawing window(s)\n", static_cast<long long>(views.size()));
+        check(views.size() == 1, "manager: one drawing window, not two");
 
         // The commands that were two ways of saying the same thing are gone.
         QStringList buttons;

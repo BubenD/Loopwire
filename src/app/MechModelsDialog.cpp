@@ -175,15 +175,13 @@ void MechModelsDialog::buildUi() {
     hint_->setWordWrap(true);
     right->addWidget(hint_);
 
-    // The two views: what was drawn, and the same thing at the length it is asked for.
-    auto* views = new QHBoxLayout;
-    asDrawn_ = new DrawingPreview(QStringLiteral("As drawn"));
-    asDrawn_->setEmptyText(QStringLiteral("nothing drawn for this yet"));
-    views->addWidget(asDrawn_, 1);
-    stretched_ = new DrawingPreview(QStringLiteral("At the length asked for"));
-    stretched_->setEmptyText(QStringLiteral("-"));
-    views->addWidget(stretched_, 1);
-    right->addLayout(views, 1);
+    // ONE drawing window, the width of the panel, and it shows this model and nothing else. Two of them
+    // side by side halved the size of both, and for every kind that is not stretched - a ring, a ferrule, a
+    // Y-split - the second one showed the same drawing as the first.
+    view_ = new DrawingPreview(QStringLiteral("As drawn"));
+    view_->setEmptyText(QStringLiteral("nothing drawn for this yet"));
+    view_->setMinimumHeight(260);
+    right->addWidget(view_, 1);
 
     // What the capture MEASURED, and what was marked on the drawing. The drawing knows how long and how
     // thick it is: asking for those in two fields with a magic zero in each ("0 = measure it", "0 = do not
@@ -455,7 +453,6 @@ void MechModelsDialog::refreshDetails() {
 
     if (m && hasInsulationProperty(kind)) pendingInsulated_ = m->insulated;
     if (insulation_) insulation_->setCurrentIndex(pendingInsulated_ ? 0 : 1);
-    if (asDrawn_) asDrawn_->setDrawing(m ? m->drawing : QJsonArray());
     if (head_) head_->setValue(m ? m->headMm : 0.0);
     if (tail_) tail_->setValue(m ? m->tailMm : 0.0);
     if (gap_) gap_->setValue(m ? m->gapMm : 0.0);
@@ -503,17 +500,25 @@ void MechModelsDialog::refreshPreview() {
     const MechModelKind kind = currentKind();
     const MechModel* m = set_.of(kind, currentName());
     if (!m) {
-        if (stretched_) stretched_->setEntities({});
+        if (view_) {
+            view_->setEntities({});
+            view_->setCaption(QStringLiteral("As drawn"));
+        }
         if (summary_)
             summary_->setText(QStringLiteral("Nothing drawn for this yet — draw it on the sheet, "
                                              "then select them and press Capture"));
         return;
     }
-    const double want = mechModelStretches(kind) && tryLen_ ? tryLen_->value()
-                                                            : mechModelDrawnLength(*m);
+    // The one window shows the model AS IT WILL BE DRAWN: at the length being tried when the kind is run to
+    // a length, and as it was captured when it is only placed. The caption says which, so what is on the
+    // screen is never in doubt.
+    const bool stretches = mechModelStretches(kind);
+    const double want = stretches && tryLen_ ? tryLen_->value() : mechModelDrawnLength(*m);
     const int wires = mechModelPerWire(kind) && tryWires_ ? tryWires_->value() : 0;
-    if (stretched_)
-        stretched_->setEntities(mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires));
+    if (view_) {
+        view_->setEntities(mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires));
+        view_->setCaption(stretches ? tr("At %1 mm").arg(want, 0, 'f', 0) : tr("As drawn"));
+    }
     if (summary_) {
         const double drawn = mechModelDrawnLength(*m);
         QString s = QStringLiteral("Drawn %1 mm long").arg(drawn, 0, 'f', 1);
