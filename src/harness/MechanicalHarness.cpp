@@ -16,6 +16,7 @@
 #include <functional>
 
 namespace Edraw_Desktop {
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -1074,33 +1075,6 @@ std::vector<MechIssue> validateMechanicalHarness(const MechHarnessDef& def,
 
 namespace {
 
-// The library part's own mechanical drawing, moved and turned onto the run. Empty when it has none.
-// The office's own drawing of a standard piece, where there is one. A part number's shape comes out of
-// the library; a KIND of thing - heatshrink, a boot, a ferrule, a length of wire - comes out of the
-// default models, drawn once by whoever decides how this office's drawings look. Nothing captured for a
-// kind means the generator draws its own, which is what it did before there were any.
-const MechModelSet& mechModels() {
-    static MechModelSet set = [] {
-        MechModelSet s;
-        s.load();
-        return s;
-    }();
-    return set;
-}
-
-// Which model draws a fitting of this kind. Nothing for the ones the generator has no standard drawing
-// of - a sleeve, a conduit, a tie - which are drawn as a plain body of the size they say.
-bool mechModelForFitting(PartKind kind, MechModelKind& out) {
-    switch (kind) {
-    case PartKind::Heatshrink: out = MechModelKind::Heatshrink; return true;
-    case PartKind::HeatshrinkBoot: out = MechModelKind::Boot; return true;
-    case PartKind::YSplit: out = MechModelKind::YSplit; return true;
-    case PartKind::Ferrule: out = MechModelKind::FerruleInsulated; return true;
-    case PartKind::Crimp: out = MechModelKind::RingInsulated; return true;
-    default: return false;
-    }
-}
-
 // Which parts are drawn from their OWN drawing, and which are drawn from their numbers.
 //
 // A connector, a backshell, a Y- or T-split: what those look like is the point of them. Their shape is
@@ -1212,6 +1186,41 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
 }
 
 } // namespace
+
+// The office's own drawing of a standard piece, where there is one. A part number's shape comes out of
+// the library; a KIND of thing - heatshrink, a boot, a ferrule, a length of wire - comes out of the
+// default models, drawn once by whoever decides how this office's drawings look. Nothing captured for a
+// kind means the generator draws its own, which is what it did before there were any.
+const MechModelSet& mechModels() {
+    static MechModelSet set = [] {
+        MechModelSet s;
+        s.load();
+        return s;
+    }();
+    return set;
+}
+
+// Which model draws this fitting: the one it names, or the one the kind is set to use. Asked in one place so
+// a name that has since been removed falls back to the default rather than drawing nothing at all - a drawing
+// that silently loses a boot because a model was renamed is worse than one that draws the ordinary boot.
+static const MechModel* mechModelFor(MechModelKind kind, const QString& name) {
+    if (!name.isEmpty())
+        if (const MechModel* named = mechModels().of(kind, name)) return named;
+    return mechModels().of(kind);
+}
+
+// Which model draws a fitting of this kind. Nothing for the ones the generator has no standard drawing
+// of - a sleeve, a conduit, a tie - which are drawn as a plain body of the size they say.
+bool mechModelForFitting(PartKind kind, MechModelKind& out) {
+    switch (kind) {
+    case PartKind::Heatshrink: out = MechModelKind::Heatshrink; return true;
+    case PartKind::HeatshrinkBoot: out = MechModelKind::Boot; return true;
+    case PartKind::YSplit: out = MechModelKind::YSplit; return true;
+    case PartKind::Ferrule: out = MechModelKind::FerruleInsulated; return true;
+    case PartKind::Crimp: out = MechModelKind::RingInsulated; return true;
+    default: return false;
+    }
+}
 
 std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const PartsCatalog* catalog) {
     std::vector<Entity> out;
@@ -1576,10 +1585,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
-            } else if (MechModelKind mk; mechModelForFitting(f.kind, mk) && mechModels().of(mk)) {
+            } else if (MechModelKind mk;
+                       mechModelForFitting(f.kind, mk) && mechModelFor(mk, f.modelName)) {
                 const Vec2 from = ps.a + u * along(startMm);
-                for (Entity& e : mechModelEntities(*mechModels().of(mk), from, rad(ps.dirDeg),
-                                                   along(runMm), across(odMm), 0)) {
+                for (Entity& e : mechModelEntities(*mechModelFor(mk, f.modelName), from, rad(ps.dirDeg),
+                                                   along(runMm), across(odMm), 0, f.flipped)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
                     e.meta.insert(QStringLiteral("mechSeg"), ps.id);
@@ -1760,8 +1770,9 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     arm.meta.insert(QStringLiteral("ysplitLeg"), leg->id);
                     out.push_back(arm);
                 }
-            } else if (MechModelKind mk; mechModelForFitting(f.kind, mk) && mechModels().of(mk)) {
-                const MechModel& model = *mechModels().of(mk);
+            } else if (MechModelKind mk;
+                       mechModelForFitting(f.kind, mk) && mechModelFor(mk, f.modelName)) {
+                const MechModel& model = *mechModelFor(mk, f.modelName);
                 if (!mechModelStretches(mk)) {
                     const double anchors = mechModelAnchorLength(model);
                     if (anchors > 0.0) occupiedMm = anchors;
@@ -1769,7 +1780,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 const Vec2 from = pn.at + u * (into * along(startMm));
                 const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
                 for (Entity& e : mechModelEntities(model, from, dir, along(lengthMm),
-                                                   across(odMm), 0)) {
+                                                   across(odMm), 0, f.flipped)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
                     e.meta.insert(QStringLiteral("mechNode"), pn.id);

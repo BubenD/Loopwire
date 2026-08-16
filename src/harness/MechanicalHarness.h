@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include "model/Entity.h"
 
@@ -47,6 +48,12 @@ enum class MechNodeKind { Root, Breakout, Connector, FreeEnd };
 QString mechNodeKindName(MechNodeKind kind);
 
 // A part fitted at a node (a backshell, a boot) or along a segment (a sleeve, a conduit, a tie).
+// The office's own drawings of the standard pieces, loaded once. A part number's shape comes out of the
+// library; a KIND of thing - heatshrink, a boot, a ferrule - comes out of these.
+const MechModelSet& mechModels();
+// Which model kind draws a fitting of this part kind. False for the ones there is no standard drawing of.
+bool mechModelForFitting(PartKind kind, MechModelKind& out);
+
 struct MechFitting {
     QString id;
     QString libPart;                        // the library part, when it comes from the library
@@ -60,6 +67,12 @@ struct MechFitting {
     double odMm = 0.0;
     // Along a segment: how far from its start. At a node: how far back from the node.
     double atMm = 0.0;
+    // WHICH default model draws it, when there is more than one of that kind - a straight backshell and a
+    // right-angled one are both backshells. Empty takes the one the kind is set to use.
+    QString modelName;
+    // WHICH SIDE of the run it goes on. A part is drawn one way round and used both ways: the same boot on
+    // the other side of the harness is the same drawing the other way up. False is the way it was drawn.
+    bool flipped = false;
 };
 
 struct MechNode {

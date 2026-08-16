@@ -1053,6 +1053,25 @@ so what is mirrored is the part and not its place on the sheet. Measured: one si
 the other −10, mirrored exactly rather than moved. A model that marks neither point nor direction is placed
 exactly as it always was, so every model already captured is untouched.
 
+## The wizard says which side, and which of the drawn models
+
+Two settings belong to the FITTING rather than to the kind of thing in general — they are about this one part
+on this one node — so they are on the part in the builder's list, by right-click:
+
+- **Which side of the run** it goes on. A part is drawn one way round and used both ways: the same boot on the
+  other side of the harness is the same drawing the other way up. The generator hands the side straight to the
+  model, which mirrors about the run's own axis.
+- **Which model draws it**, when the office has drawn more than one of that kind — and the submenu only
+  appears then, because that is the only time it is a question. *Whatever this kind is set to use* is the
+  default, and a name that has since been removed falls back to it: a drawing that silently loses a boot
+  because a model was renamed is worse than one that draws the ordinary boot.
+
+Both are shown on the fitting's own row (*"Boot — at the end · other side, Right-angled"*), because a setting
+that can only be seen by opening a menu is a setting nobody checks.
+
+Measured: a boot drawn reaching +6 across the run reaches −6 on the other side — mirrored exactly, the same
+part and not a different one — and a fitting starts on the side it was drawn, with the kind's own model.
+
 ## Capture takes what was picked
 
 The default mechanical models — the house style for a wire, a cable, a heat-shrink, a boot — are captured off

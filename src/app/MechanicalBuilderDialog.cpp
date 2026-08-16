@@ -1,4 +1,5 @@
 #include "app/MechanicalBuilderDialog.h"
+#include "harness/MechModels.h"
 
 #include "app/UiBits.h"
 #include "harness/CableSpec.h"
@@ -14,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QListWidget>
 #include <QPushButton>
 #include <QHeaderView>
@@ -394,6 +396,12 @@ void MechanicalBuilderDialog::buildUi() {
     grid->addWidget(wireList_, r++, 1, 1, 3);
 
     fittingList_ = new QListWidget(selBox);
+    fittingList_->setContextMenuPolicy(Qt::CustomContextMenu);
+    fittingList_->setToolTip(QStringLiteral(
+        "The parts on this node or run. Right-click one for which side of the run it goes on, and which of "
+        "the drawn models draws it."));
+    connect(fittingList_, &QListWidget::customContextMenuRequested, this,
+            [this](const QPoint& at) { showFittingMenu(at); });
     fittingList_->setMaximumHeight(90);
     grid->addWidget(caption(selBox, QStringLiteral("Fitted")), r, 0, Qt::AlignTop);
     grid->addWidget(fittingList_, r++, 1, 1, 3);
@@ -800,6 +808,15 @@ void MechanicalBuilderDialog::removeFitting() {
     refreshAll();
 }
 
+// What a fitting is set to, said on its own row: which side it is on, and which model draws it. A setting
+// that can only be seen by opening a menu is a setting nobody checks.
+static QString fittingExtra(const MechFitting& f) {
+    QStringList said;
+    if (f.flipped) said << QStringLiteral("other side");
+    if (!f.modelName.isEmpty()) said << f.modelName;
+    return said.isEmpty() ? QString() : QStringLiteral("  ·  %1").arg(said.join(QStringLiteral(", ")));
+}
+
 void MechanicalBuilderDialog::refreshFittingList() {
     if (!fittingList_) return;
     syncing_ = true;
@@ -813,8 +830,8 @@ void MechanicalBuilderDialog::refreshFittingList() {
             const QString where = mechOverTheWires(f.kind)
                                       ? QStringLiteral("over the wires")
                                       : QStringLiteral("at the end");
-            auto* item = new QListWidgetItem(QStringLiteral("%1  —  %2").arg(f.name, where),
-                                             fittingList_);
+            auto* item = new QListWidgetItem(
+                QStringLiteral("%1  —  %2%3").arg(f.name, where, fittingExtra(f)), fittingList_);
             item->setData(Qt::UserRole, f.id);
             item->setData(Qt::UserRole + 1, true);
         }
@@ -822,12 +839,95 @@ void MechanicalBuilderDialog::refreshFittingList() {
     if (seg) {
         for (const MechFitting& f : seg->coverings) {
             auto* item = new QListWidgetItem(
-                QStringLiteral("%1  —  along the run").arg(f.name), fittingList_);
+                QStringLiteral("%1  —  along the run%2").arg(f.name, fittingExtra(f)), fittingList_);
             item->setData(Qt::UserRole, f.id);
             item->setData(Qt::UserRole + 1, false);
         }
     }
     syncing_ = false;
+}
+
+MechFitting* MechanicalBuilderDialog::fittingById(const QString& id, bool atEnd) {
+    if (atEnd) {
+        if (MechNode* n = currentNode())
+            for (MechFitting& f : n->fittings)
+                if (f.id == id) return &f;
+        return nullptr;
+    }
+    if (MechSegment* s = currentRun())
+        for (MechFitting& f : s->coverings)
+            if (f.id == id) return &f;
+    return nullptr;
+}
+
+// Which side of the run the part goes on, and which of the drawn models draws it. Both are about placing a
+// part properly rather than about what it is, so they belong on the part in the list rather than in a
+// settings page: the wizard asks about this one fitting.
+QMenu* MechanicalBuilderDialog::buildFittingMenu(const QString& id, bool atEnd) {
+    MechFitting* f = fittingById(id, atEnd);
+    if (!f) return nullptr;
+    auto* menu = new QMenu(this);
+    menu->addAction(f->name)->setEnabled(false);
+    menu->addSeparator();
+    // THE SIDE. A part is drawn one way round and used both ways: the same boot on the other side of the
+    // harness is the same drawing the other way up.
+    QAction* asDrawn = menu->addAction(tr("On the side it was drawn"));
+    asDrawn->setCheckable(true);
+    asDrawn->setChecked(!f->flipped);
+    connect(asDrawn, &QAction::triggered, this, [this, id, atEnd] {
+        if (MechFitting* g = fittingById(id, atEnd)) g->flipped = false;
+        refreshAll();
+    });
+    QAction* other = menu->addAction(tr("On the other side of the run"));
+    other->setCheckable(true);
+    other->setChecked(f->flipped);
+    connect(other, &QAction::triggered, this, [this, id, atEnd] {
+        if (MechFitting* g = fittingById(id, atEnd)) g->flipped = true;
+        refreshAll();
+    });
+
+    // WHICH MODEL. Only worth a submenu when the office has drawn more than one of that kind - which is
+    // exactly when it matters.
+    MechModelKind mk;
+    if (mechModelForFitting(f->kind, mk)) {
+        const std::vector<const MechModel*> models = mechModels().all(mk);
+        if (models.size() > 1) {
+            menu->addSeparator();
+            QMenu* which = menu->addMenu(tr("Draw it with"));
+            QAction* useDefault = which->addAction(tr("Whatever this kind is set to use"));
+            useDefault->setCheckable(true);
+            useDefault->setChecked(f->modelName.isEmpty());
+            connect(useDefault, &QAction::triggered, this, [this, id, atEnd] {
+                if (MechFitting* g = fittingById(id, atEnd)) g->modelName.clear();
+                refreshAll();
+            });
+            which->addSeparator();
+            for (const MechModel* m : models) {
+                const QString name = m->name;
+                QAction* a = which->addAction(
+                    name.isEmpty() ? tr("(the first one)") : name +
+                        (m->isDefault ? tr("   (the default)") : QString()));
+                a->setCheckable(true);
+                a->setChecked(f->modelName == name && !f->modelName.isEmpty());
+                connect(a, &QAction::triggered, this, [this, id, atEnd, name] {
+                    if (MechFitting* g = fittingById(id, atEnd)) g->modelName = name;
+                    refreshAll();
+                });
+            }
+        }
+    }
+    return menu;
+}
+
+void MechanicalBuilderDialog::showFittingMenu(const QPoint& at) {
+    if (!fittingList_) return;
+    QListWidgetItem* item = fittingList_->itemAt(at);
+    if (!item) return;
+    if (QMenu* menu = buildFittingMenu(item->data(Qt::UserRole).toString(),
+                                       item->data(Qt::UserRole + 1).toBool())) {
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(fittingList_->viewport()->mapToGlobal(at));
+    }
 }
 
 // ---- Refresh -------------------------------------------------------------------------------------

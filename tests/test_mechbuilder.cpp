@@ -2,6 +2,7 @@
 // angles, and a drawing generated from both. Every figure here can be checked by hand.
 #include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
+#include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include <QJsonObject>
 #include "model/Block.h"
@@ -1008,6 +1009,51 @@ int run_mechbuilder_tests() {
         for (const Entity& e : ents)
             if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("balloon"))
                 balloonText << e.meta.value(QStringLiteral("text")).toString();
+    // ---- the wizard says which side, and which of the drawn models ---------------------------------
+    {
+        // A part is drawn one way round and used both ways round: the same boot on the other side of the
+        // harness is the same drawing the other way up. And an office that has drawn two backshells - a
+        // straight one and a right-angled one - has to be able to say which of them this fitting is.
+        //
+        // Both are settings on the FITTING, because they are about this one part on this one node, not
+        // about the kind of thing in general.
+        MechFitting f;
+        f.id = QStringLiteral("boot");
+        f.kind = PartKind::HeatshrinkBoot;
+        f.name = QStringLiteral("Boot");
+        check(!f.flipped, "wizard: a fitting is on the side it was drawn until it is told otherwise");
+        check(f.modelName.isEmpty(),
+              "wizard: and is drawn with whatever the kind is set to use until one is named");
+
+        // What the two do to the drawing is measured on the model itself - the generator hands them
+        // straight to it - so this is the whole of what the wizard has to get right.
+        MechModel m;
+        m.kind = MechModelKind::Boot;
+        Entity leg;
+        leg.type = EntityType::Line;
+        leg.a = {0.0, 0.0};
+        leg.b = {10.0, 6.0};    // off to one side, so a side can be told from the other
+        m.drawing = partDrawingFromEntities({leg});
+        m.hasConnect = true;
+        m.connectPoint = {0.0, 0.0};
+        m.connectAngleRad = 0.0;
+
+        const std::vector<Entity> asDrawn =
+            mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 0.0, 0.0, 0, false);
+        const std::vector<Entity> otherSide =
+            mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 0.0, 0.0, 0, true);
+        check(asDrawn.size() == 1 && otherSide.size() == 1, "wizard: both sides draw the part");
+        if (asDrawn.size() == 1 && otherSide.size() == 1) {
+            std::printf("  wizard: as drawn it reaches y=%.1f, on the other side y=%.1f\n",
+                        asDrawn[0].b.y, otherSide[0].b.y);
+            check(asDrawn[0].b.y > 0.0 && otherSide[0].b.y < 0.0,
+                  "wizard: the other side is the same part mirrored about the run");
+            check(std::abs(asDrawn[0].b.y + otherSide[0].b.y) < 1e-9 &&
+                      std::abs(asDrawn[0].b.x - otherSide[0].b.x) < 1e-9,
+                  "wizard: mirrored exactly - the same part, not a different one");
+        }
+    }
+
         std::printf("    (balloons: %s)\n", qPrintable(balloonText.join(QStringLiteral(" "))));
         check(!balloonText.contains(QStringLiteral("?")),
               "balloons: every one of them found its row");

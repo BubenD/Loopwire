@@ -11,6 +11,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QMenu;
 class QPushButton;
 class QTableWidget;
 class QTreeWidget;
@@ -72,6 +73,11 @@ private:
     void readOptionsFromControls();
     void writeOptionsToControls();
     void refreshFittingList();
+    // Right-click a fitting: which side of the run it goes on, and which of the drawn models draws it.
+    // Built rather than shown, so a test can ask what is on it.
+    QMenu* buildFittingMenu(const QString& id, bool atEnd);
+    void showFittingMenu(const QPoint& at);
+    MechFitting* fittingById(const QString& id, bool atEnd);
     void addFitting();
     void removeFitting();
     // Where a fitting of this kind goes at the selected point: at the END - a backshell, a boot, and a
