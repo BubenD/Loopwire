@@ -313,6 +313,22 @@ void CanvasWidget::fitView() {
     // drawing keeps working geometry off the sheet - a symbol parked to one side, a block placed out in
     // the field - and fitting to every last object of it opens the sheet small and off to one side.
     Bounds box = doc_->sheet();
+    // A sheet with nothing drawn on it is not the sheet. A file can state a drawing area it has long since
+    // outgrown - limits of 12 by 9 with the drawing out at 20 to 47 - and fitting to that opens the window
+    // on empty paper with the drawing off the screen, which is indistinguishable from a file that did not
+    // open at all.
+    if (box.valid && !layoutMode_) {
+        bool anythingOnIt = false;
+        for (const auto& e : doc_->entities()) {
+            const Bounds b = e.bounds();
+            if (!b.valid) continue;
+            if (b.max.x < box.min.x || b.min.x > box.max.x) continue;
+            if (b.max.y < box.min.y || b.min.y > box.max.y) continue;
+            anythingOnIt = true;
+            break;
+        }
+        if (!anythingOnIt) box = {};
+    }
     if (layoutMode_) {
         box = {};
         const DrawingLayout* layout = currentLayout();

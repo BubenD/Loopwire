@@ -499,6 +499,148 @@ int run_io_tests() {
               "dxf-in: a SOLID is filled - it is a patch of colour, not an outline of one");
     }
 
+    // ---- a DXF written as BYTES ---------------------------------------------------------------
+    {
+        // AutoCAD writes a binary DXF whenever it is asked for one: the same drawing and the same group
+        // codes, written as bytes rather than as lines. Read as text it is gibberish, and a released
+        // drawing that plainly exists would not open at all.
+        //
+        // The one thing to get right is how wide a group code is. R13 and later write it as TWO bytes;
+        // R12 and earlier as one. Guess wrong and every record after the first is read at the wrong
+        // offset - a drawing of a hundred thousand records comes out as a handful of nonsense.
+        auto binaryDxf = [](bool wideCodes) {
+            QByteArray b("AutoCAD Binary DXF\r\n\x1a\0", 22);
+            auto code = [&](int c) {
+                if (wideCodes) {
+                    const quint16 v = static_cast<quint16>(c);
+                    b.append(reinterpret_cast<const char*>(&v), 2);
+                } else {
+                    b.append(static_cast<char>(c));
+                }
+            };
+            auto str = [&](const char* s) { b.append(s); b.append('\0'); };
+            auto dbl = [&](double d) { b.append(reinterpret_cast<const char*>(&d), 8); };
+            auto i16 = [&](qint16 v) { b.append(reinterpret_cast<const char*>(&v), 2); };
+            code(0); str("SECTION");
+            code(2); str("ENTITIES");
+            code(0); str("LINE");
+            code(8); str("WALLS");
+            code(62); i16(1);
+            code(10); dbl(10.0);
+            code(20); dbl(20.0);
+            code(11); dbl(110.0);
+            code(21); dbl(70.0);
+            code(0); str("ENDSEC");
+            code(0); str("EOF");
+            return b;
+        };
+
+        for (const bool wide : {true, false}) {
+            const QByteArray bytes = binaryDxf(wide);
+            check(dxf::looksBinary(bytes), "dxf-binary: it is known for what it is");
+            Document d;
+            QString err;
+            check(dxf::parseBytes(d, bytes, &err),
+                  wide ? "dxf-binary: a file with two-byte group codes reads"
+                       : "dxf-binary: and so does one with one-byte codes");
+            check(d.entities().size() == 1, "dxf-binary: the line in it comes through");
+            if (d.entities().size() == 1) {
+                const Entity& e = d.entities().front();
+                check(e.type == EntityType::Line && std::abs(e.a.x - 10.0) < 1e-9 &&
+                          std::abs(e.b.y - 70.0) < 1e-9,
+                      "dxf-binary: with the coordinates it was written with");
+                check(e.layer == QLatin1String("WALLS"), "dxf-binary: and on its own layer");
+            }
+        }
+
+        // Text is still text: the same reader takes either, because which one a file is is the file's
+        // business and not the user's.
+        Document plain;
+        const QByteArray asText = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n1.0\n20\n2.0\n11\n3.0\n21\n4.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        check(dxf::parseBytes(plain, asText, nullptr) && plain.entities().size() == 1,
+              "dxf-binary: and a text DXF still reads through the same door");
+    }
+
+    // ---- an arc is as big as the piece that is drawn --------------------------------------------
+    {
+        // A drawing package writes an almost-straight segment as an arc of enormous radius sweeping a
+        // thousandth of a degree - four of them in one released sheet. Taking the whole circle for those
+        // made the drawing's extents 86 metres across, and everything that asks how big a drawing is got
+        // the wrong answer: the fit-to-view showed a sheet the size of a full stop.
+        Entity nearlyStraight;
+        nearlyStraight.type = EntityType::Arc;
+        nearlyStraight.center = {86868.0, 2386.0};
+        nearlyStraight.radius = 86884.0;
+        nearlyStraight.startAngle = 181.5461 * M_PI / 180.0;
+        nearlyStraight.endAngle = 181.5465 * M_PI / 180.0;
+        const Bounds b = nearlyStraight.bounds();
+        check(b.valid && b.width() < 1.0 && b.height() < 1.0,
+              "arc bounds: a hair of an arc is a hair wide, not the circle it belongs to");
+
+        Entity quarter;
+        quarter.type = EntityType::Arc;
+        quarter.center = {0.0, 0.0};
+        quarter.radius = 10.0;
+        quarter.startAngle = 0.0;
+        quarter.endAngle = M_PI / 2.0;
+        const Bounds q = quarter.bounds();
+        check(std::abs(q.min.x) < 1e-9 && std::abs(q.max.x - 10.0) < 1e-9 &&
+                  std::abs(q.min.y) < 1e-9 && std::abs(q.max.y - 10.0) < 1e-9,
+              "arc bounds: a quarter is the quarter, corner to corner");
+
+        Entity whole;
+        whole.type = EntityType::Arc;
+        whole.center = {0.0, 0.0};
+        whole.radius = 5.0;
+        whole.startAngle = 0.0;
+        whole.endAngle = 2.0 * M_PI;
+        const Bounds w = whole.bounds();
+        check(std::abs(w.min.x + 5.0) < 1e-9 && std::abs(w.max.y - 5.0) < 1e-9,
+              "arc bounds: and the whole way round is still the whole circle");
+    }
+
+    // ---- the sheet a file states, and where the drawing actually is -----------------------------
+    {
+        // A released sheet had limits of 12 by 9 - the sheet the file was set up with, years ago - and the
+        // drawing itself out at 13 to 42. Taking the limits as the sheet opened the window on an empty
+        // patch of paper with the drawing off the screen, which reads exactly like a file that will not
+        // open. The limits are the sheet when the drawing is ON them, and what was last saved otherwise.
+        const QByteArray away = QByteArrayLiteral(
+            "0\nSECTION\n2\nHEADER\n"
+            "9\n$LIMMIN\n10\n0.0\n20\n0.0\n"
+            "9\n$LIMMAX\n10\n12.0\n20\n9.0\n"
+            "9\n$EXTMIN\n10\n13.0\n20\n20.0\n"
+            "9\n$EXTMAX\n10\n42.0\n20\n47.0\n"
+            "0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+            "0\nLINE\n8\n0\n10\n13.0\n20\n20.0\n11\n42.0\n21\n47.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, away, nullptr), "sheet: the file reads");
+        const Bounds sheet = d.sheet();
+        std::printf("  sheet: %.0f,%.0f .. %.0f,%.0f\n", sheet.min.x, sheet.min.y, sheet.max.x,
+                    sheet.max.y);
+        check(sheet.valid && sheet.min.x > 12.0,
+              "sheet: limits the drawing is nowhere near are not the sheet - what was saved is");
+
+        // And when the drawing IS on the limits, they are the sheet: a drawing keeps working geometry off
+        // the sheet, and fitting to every last object of it opens the sheet small and off to one side.
+        const QByteArray onIt = QByteArrayLiteral(
+            "0\nSECTION\n2\nHEADER\n"
+            "9\n$LIMMIN\n10\n0.0\n20\n0.0\n"
+            "9\n$LIMMAX\n10\n420.0\n20\n297.0\n"
+            "9\n$EXTMIN\n10\n10.0\n20\n10.0\n"
+            "9\n$EXTMAX\n10\n400.0\n20\n280.0\n"
+            "0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+            "0\nLINE\n8\n0\n10\n10.0\n20\n10.0\n11\n400.0\n21\n280.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d2;
+        dxf::parseBytes(d2, onIt, nullptr);
+        check(d2.sheet().valid && std::abs(d2.sheet().max.x - 420.0) < 1e-9,
+              "sheet: and a drawing on its own sheet keeps that sheet");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

@@ -153,10 +153,35 @@ Bounds Entity::bounds() const {
         for (const auto& p : points) bnds.expand(p);
         break;
     case EntityType::Circle:
-    case EntityType::Arc:
-        bnds.expand({center.x - radius, center.y - radius});
-        bnds.expand({center.x + radius, center.y + radius});
+    case EntityType::Arc: {
+        // The piece that is DRAWN, not the whole circle it is part of. A drawing package writes an
+        // almost-straight segment as an arc of enormous radius sweeping a thousandth of a degree - four of
+        // them in one released sample sheet - and taking the circle's box for those made the drawing's
+        // extents 86 metres across. Everything that asks how big a drawing is then gets the wrong answer:
+        // a fit-to-view shows a sheet the size of a full stop.
+        //
+        // So: the two ends, and then each quarter point the sweep actually passes through.
+        auto at = [this](double a) {
+            return Vec2{center.x + radius * std::cos(a), center.y + radius * std::sin(a)};
+        };
+        double sweep = endAngle - startAngle;
+        while (sweep < 0.0) sweep += 2.0 * M_PI;
+        // No sweep at all, or the whole way round, is a full circle - which is how one is written here.
+        if (sweep <= 1e-9 || sweep >= 2.0 * M_PI - 1e-9) {
+            bnds.expand({center.x - radius, center.y - radius});
+            bnds.expand({center.x + radius, center.y + radius});
+            break;
+        }
+        bnds.expand(at(startAngle));
+        bnds.expand(at(endAngle));
+        for (int q = 0; q < 4; ++q) {
+            const double quarter = q * M_PI / 2.0;
+            double from = quarter - startAngle;
+            while (from < 0.0) from += 2.0 * M_PI;
+            if (from <= sweep) bnds.expand(at(quarter));
+        }
         break;
+    }
     case EntityType::Ellipse: {
         const double rx = std::abs(radius), ry = std::abs(radiusY);
         const double c = std::cos(rotation), s = std::sin(rotation);

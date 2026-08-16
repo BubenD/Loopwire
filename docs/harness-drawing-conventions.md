@@ -1134,6 +1134,29 @@ in the middle of its run. Zero is the default and zero draws exactly as it alway
 
 Measured: a 500 mm run with a 20 mm gap holds 460 mm of cable, from 20 to 480.
 
+## A DXF that would not open
+
+A released sample sheet — `SMP-00003_A01.dxf` — would not open. Three separate faults, each enough on its own:
+
+- **It was a binary DXF.** AutoCAD writes one whenever it is asked for a DXF: the same drawing and the same
+  group codes, written as bytes rather than as lines. Read as text it is gibberish. The reader takes either
+  now (`parseBytes`), and the one thing to get right is how wide a group code is — R13 and later write it as
+  **two** bytes, R12 and earlier as one. Guess wrong and every record after the first is read at the wrong
+  offset: 106,613 records came out as a handful of nonsense. Which it is can be read off the first record,
+  because a DXF always begins with code 0, `SECTION`.
+- **An arc was as big as its circle.** A drawing package writes an almost-straight segment as an arc of
+  enormous radius sweeping a thousandth of a degree — four of them in that sheet, one of radius 86 metres.
+  Taking the whole circle for those made the drawing's extents 86 m across, so the fit-to-view showed the
+  sheet the size of a full stop. An arc's bounds are now the piece that is *drawn*: its two ends, plus each
+  quarter point the sweep actually passes through. A full sweep is still the whole circle.
+- **The sheet was where the drawing is not.** The file's `$LIMMIN/$LIMMAX` say 12 × 9 — the sheet it was set
+  up with, long ago — while the drawing itself sits at 13–42 × 20–47. Fitting the view to the limits opened
+  the window on an empty patch of paper with the drawing off the screen, which reads exactly like a file that
+  did not open. The limits are the sheet **when the drawing is on them**, and what was last saved
+  (`$EXTMIN/$EXTMAX`) otherwise; and `fitView` ignores a stated sheet that has nothing drawn on it.
+
+It opens now: 2,457 objects on 14 layers, both sheets of the drawing where they belong.
+
 ## A PDF comes in as a block
 
 A PDF import used to land as loose entities — hundreds or thousands of little lines, because that is what a

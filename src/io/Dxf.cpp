@@ -11,6 +11,8 @@
 #include <QSaveFile>
 #include <QStringList>
 #include <QTextStream>
+#include <cstring>
+#include <QStringDecoder>
 #include <QUuid>
 #include <QtMath>
 #include <algorithm>
@@ -408,6 +410,175 @@ struct Xf {
 
 } // namespace
 
+// ---- The binary form of a DXF ------------------------------------------------------------------
+//
+// The same drawing and the same group codes, written as bytes: a sentinel, then record after record of
+// [code][value], where the code is one byte (or 255 followed by two bytes) and what follows depends on
+// which code it is - a NUL-terminated string, an eight-byte double, a two- or four-byte integer.
+//
+// Rather than a second parser for it, the bytes are turned back into the CODE / VALUE lines the text
+// parser already reads. One parser understands DXF; this only understands how it was written down.
+
+namespace {
+
+const char kBinarySentinel[] = "AutoCAD Binary DXF\r\n\x1a\0";
+constexpr int kBinarySentinelLen = 22;
+
+// What sort of value follows a group code, from the DXF reference's own table.
+enum class BinType { Str, Dbl, I16, I32, I64, I8, Chunk };
+
+BinType binTypeOf(int code) {
+    if (code >= 0 && code <= 9) return BinType::Str;
+    if (code >= 10 && code <= 59) return BinType::Dbl;
+    if (code >= 60 && code <= 79) return BinType::I16;
+    if (code >= 90 && code <= 99) return BinType::I32;
+    if (code == 100 || code == 101 || code == 102 || code == 105) return BinType::Str;
+    if (code >= 110 && code <= 149) return BinType::Dbl;
+    if (code >= 160 && code <= 169) return BinType::I64;
+    if (code >= 170 && code <= 179) return BinType::I16;
+    if (code >= 210 && code <= 239) return BinType::Dbl;
+    if (code >= 270 && code <= 289) return BinType::I16;
+    if (code >= 290 && code <= 299) return BinType::I8;
+    if (code >= 300 && code <= 309) return BinType::Str;
+    if (code >= 310 && code <= 319) return BinType::Chunk;
+    if (code >= 320 && code <= 369) return BinType::Str;
+    if (code >= 370 && code <= 389) return BinType::I16;
+    if (code >= 390 && code <= 399) return BinType::Str;
+    if (code >= 400 && code <= 409) return BinType::I16;
+    if (code >= 410 && code <= 419) return BinType::Str;
+    if (code >= 420 && code <= 429) return BinType::I32;
+    if (code >= 430 && code <= 439) return BinType::Str;
+    if (code >= 440 && code <= 449) return BinType::I32;
+    if (code >= 450 && code <= 459) return BinType::I32;
+    if (code >= 460 && code <= 469) return BinType::Dbl;
+    if (code >= 470 && code <= 481) return BinType::Str;
+    if (code == 999) return BinType::Str;
+    if (code >= 1000 && code <= 1009) return BinType::Str;
+    if (code >= 1010 && code <= 1059) return BinType::Dbl;
+    if (code >= 1060 && code <= 1070) return BinType::I16;
+    if (code == 1071) return BinType::I32;
+    return BinType::Str;
+}
+
+// A DXF's own text is written in whatever code page the file says ($DWGCODEPAGE, usually ANSI_1252). Read
+// as UTF-8 where that is what it is, and as Latin-1 otherwise - which is what ANSI_1252 mostly is, and
+// never throws away a byte.
+QString textFromBytes(const QByteArray& bytes) {
+    auto toUtf8 = QStringDecoder(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
+    QString out = toUtf8(bytes);
+    if (!toUtf8.hasError()) return out;
+    return QString::fromLatin1(bytes);
+}
+
+} // namespace
+
+bool looksBinary(const QByteArray& bytes) {
+    return bytes.size() >= kBinarySentinelLen &&
+           std::memcmp(bytes.constData(), kBinarySentinel, kBinarySentinelLen) == 0;
+}
+
+// The binary form turned back into CODE / VALUE lines. Empty (with `error` said) when the bytes run out in
+// the middle of a record: a truncated file is a truncated file, and saying so beats drawing half of it.
+static QString binaryDxfAsText(const QByteArray& bytes, QString* error) {
+    QString out;
+    out.reserve(bytes.size() * 2);
+    qsizetype i = kBinarySentinelLen;
+    const qsizetype n = bytes.size();
+    auto need = [&](qsizetype count) { return i + count <= n; };
+    // How wide a group code is. R13 and later write it as TWO bytes, R12 and earlier as one - and which it
+    // is can be read off the first record, because a DXF always begins with code 0, "SECTION". Guessing
+    // wrong is not a small error: every record after the first is then read at the wrong offset, and a
+    // drawing of half a million records comes out as a handful of nonsense.
+    const bool wideCodes = n >= kBinarySentinelLen + 9 &&
+                           bytes.at(kBinarySentinelLen) == '\0' &&
+                           bytes.at(kBinarySentinelLen + 1) == '\0' &&
+                           bytes.mid(kBinarySentinelLen + 2, 7) == QByteArrayLiteral("SECTION");
+    while (i < n) {
+        int code = 0;
+        if (wideCodes) {
+            if (!need(2)) break;
+            quint16 raw = 0;
+            std::memcpy(&raw, bytes.constData() + i, 2);
+            code = static_cast<int>(raw);
+            i += 2;
+        } else {
+            code = static_cast<unsigned char>(bytes.at(i++));
+        }
+        QString value;
+        switch (binTypeOf(code)) {
+        case BinType::Str: {
+            const qsizetype start = i;
+            while (i < n && bytes.at(i) != '\0') ++i;
+            value = textFromBytes(bytes.mid(start, i - start));
+            if (i < n) ++i;   // the NUL
+            break;
+        }
+        case BinType::Dbl: {
+            if (!need(8)) { i = n; break; }
+            double d = 0.0;
+            std::memcpy(&d, bytes.constData() + i, 8);
+            i += 8;
+            // As many figures as a double has, so a coordinate comes back as the coordinate it was.
+            value = QString::number(d, 'g', 17);
+            break;
+        }
+        case BinType::I16: {
+            if (!need(2)) { i = n; break; }
+            qint16 v = 0;
+            std::memcpy(&v, bytes.constData() + i, 2);
+            i += 2;
+            value = QString::number(v);
+            break;
+        }
+        case BinType::I32: {
+            if (!need(4)) { i = n; break; }
+            qint32 v = 0;
+            std::memcpy(&v, bytes.constData() + i, 4);
+            i += 4;
+            value = QString::number(v);
+            break;
+        }
+        case BinType::I64: {
+            if (!need(8)) { i = n; break; }
+            qint64 v = 0;
+            std::memcpy(&v, bytes.constData() + i, 8);
+            i += 8;
+            value = QString::number(v);
+            break;
+        }
+        case BinType::I8: {
+            if (!need(1)) { i = n; break; }
+            value = QString::number(static_cast<int>(static_cast<unsigned char>(bytes.at(i))));
+            i += 1;
+            break;
+        }
+        case BinType::Chunk: {
+            if (!need(1)) { i = n; break; }
+            const int len = static_cast<unsigned char>(bytes.at(i++));
+            if (!need(len)) { i = n; break; }
+            value = QString::fromLatin1(bytes.mid(i, len).toHex().toUpper());
+            i += len;
+            break;
+        }
+        }
+        out += QString::number(code);
+        out += QLatin1Char('\n');
+        out += value;
+        out += QLatin1Char('\n');
+        if (code == 0 && value == QLatin1String("EOF")) break;
+    }
+    if (out.isEmpty() && error)
+        *error = QStringLiteral("This binary DXF has no readable records in it.");
+    return out;
+}
+
+bool parseBytes(Document& doc, const QByteArray& bytes, QString* error) {
+    if (!looksBinary(bytes)) return parse(doc, textFromBytes(bytes), error);
+    const QString asText = binaryDxfAsText(bytes, error);
+    if (asText.isEmpty()) return false;
+    return parse(doc, asText, error);
+}
+
 bool parse(Document& doc, const QString& text, QString*) {
     QString clean = text;
     clean.replace("\r", "");
@@ -493,16 +664,31 @@ bool parse(Document& doc, const QString& text, QString*) {
             return false;
         };
         Vec2 lo, hi;
-        const bool haveLimits = headerPoint(QStringLiteral("$LIMMIN"), lo) &&
-                                headerPoint(QStringLiteral("$LIMMAX"), hi);
-        const bool haveExtents = !haveLimits && headerPoint(QStringLiteral("$EXTMIN"), lo) &&
-                                 headerPoint(QStringLiteral("$EXTMAX"), hi);
-        if ((haveLimits || haveExtents) && hi.x - lo.x > 1e-6 && hi.y - lo.y > 1e-6) {
-            Bounds sheet;
+        Bounds sheet;
+        if (headerPoint(QStringLiteral("$LIMMIN"), lo) && headerPoint(QStringLiteral("$LIMMAX"), hi) &&
+            hi.x - lo.x > 1e-6 && hi.y - lo.y > 1e-6) {
             sheet.expand(lo);
             sheet.expand(hi);
-            doc.sheet() = sheet;
         }
+        // THE LIMITS ONLY IF THE DRAWING IS ON THEM. A released sheet had limits of 12 by 9 - the sheet the
+        // file was set up with years ago - and the drawing itself out at 13 to 42 by 20 to 47, nowhere near
+        // them. Fitting the view to the limits then opened the file on an empty patch of paper: the drawing
+        // was there, and the window was looking somewhere else, which reads exactly like a file that will
+        // not open. So the limits are used when the drawing is inside them, and what was last saved
+        // ($EXTMIN/$EXTMAX) otherwise.
+        Bounds extents;
+        Vec2 elo, ehi;
+        if (headerPoint(QStringLiteral("$EXTMIN"), elo) && headerPoint(QStringLiteral("$EXTMAX"), ehi) &&
+            ehi.x - elo.x > 1e-6 && ehi.y - elo.y > 1e-6) {
+            extents.expand(elo);
+            extents.expand(ehi);
+        }
+        const bool limitsHoldTheDrawing =
+            sheet.valid && extents.valid && extents.min.x >= sheet.min.x - 1e-6 &&
+            extents.min.y >= sheet.min.y - 1e-6 && extents.max.x <= sheet.max.x + 1e-6 &&
+            extents.max.y <= sheet.max.y + 1e-6;
+        if (sheet.valid && (!extents.valid || limitsHoldTheDrawing)) doc.sheet() = sheet;
+        else if (extents.valid) doc.sheet() = extents;
     }
 
     // The order the drawing is drawn in. A file's objects are not necessarily drawn in the order they
@@ -1012,7 +1198,8 @@ bool importFile(Document& doc, const QString& path, QString* error) {
         if (error) *error = file.errorString();
         return false;
     }
-    return parse(doc, QString::fromUtf8(file.readAll()), error);
+    // Text or binary: both are DXF, and which one it is is the file's business rather than the user's.
+    return parseBytes(doc, file.readAll(), error);
 }
 
 } // namespace Edraw_Desktop::dxf
