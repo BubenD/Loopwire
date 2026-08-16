@@ -4,6 +4,9 @@
 // ends that must NOT stretch, and everything between them makes up the difference. That is the whole
 // difficulty with scaling a drawing, so it is measured here rather than eyeballed.
 #include "harness/MechModels.h"
+#include "model/Document.h"
+#include "app/MechModelsDialog.h"
+#include "app/Editor.h"
 #include "harness/PartsLibrary.h"
 
 #include <QDir>
@@ -207,6 +210,120 @@ int run_mechmodels_tests() {
         check(back && near(back->headMm, 4.0) && near(back->drawnLengthMm, 60.0),
               "read back: the ends that must not stretch came with it");
         check(back && back->drawing.size() == m.drawing.size(), "read back: and the drawing itself");
+    }
+
+    // ---- the gap a cable leaves at each end of its run ---------------------------------------------
+    {
+        // A cable is taken AS DRAWN and given its length when the harness drawing is generated - the model
+        // never carries a length. What it does carry is the gap: the piece at each end of the run it does
+        // not cover, where the conductors come out and are worked on. A cable that covered its run to the
+        // last millimetre would leave nowhere for them to come out.
+        MechModel m;
+        m.kind = MechModelKind::Cable;
+        Entity body;
+        body.type = EntityType::Line;
+        body.a = {0.0, 0.0};
+        body.b = {100.0, 0.0};
+        m.drawing = partDrawingFromEntities({body});
+        m.drawnLengthMm = 100.0;
+
+        auto spanOf = [](const std::vector<Entity>& ents) {
+            Bounds b;
+            for (const Entity& e : ents) b.expand(e.bounds());
+            return b;
+        };
+
+        // No gap: the drawing covers the whole run, exactly as it always did.
+        const Bounds flush = spanOf(mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 500.0));
+        check(std::abs(flush.min.x - 0.0) < 1e-6 && std::abs(flush.max.x - 500.0) < 1e-6,
+              "gap: with no gap a cable covers the whole of the run it is asked for");
+
+        // 20 mm of gap: 20 at each end, so 460 of cable in the middle of a 500 run.
+        m.gapMm = 20.0;
+        const Bounds gapped = spanOf(mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 500.0));
+        std::printf("  cable gap: 500 mm of run holds %.1f mm of cable, from %.1f to %.1f\n",
+                    gapped.max.x - gapped.min.x, gapped.min.x, gapped.max.x);
+        check(std::abs(gapped.min.x - 20.0) < 1e-6 && std::abs(gapped.max.x - 480.0) < 1e-6,
+              "gap: 20 mm of gap leaves 20 at each end, and the cable in the middle");
+
+        // It is written down and read back, or it would not last the session.
+        MechModel back;
+        back.fromJson(m.toJson());
+        check(std::abs(back.gapMm - 20.0) < 1e-9, "gap: it is kept in the file with the model");
+
+        // And it belongs to a cable and a wire, not to a ring terminal.
+        check(MechModel::kindHasGap(MechModelKind::Cable) && MechModel::kindHasGap(MechModelKind::Wire),
+              "gap: a cable and a wire have one");
+        check(!MechModel::kindHasGap(MechModelKind::RingInsulated),
+              "gap: a ring terminal does not - it is placed, not run");
+        MechModel ring;
+        ring.kind = MechModelKind::RingInsulated;
+        ring.gapMm = 20.0;   // nonsense on that kind, and ignored rather than obeyed
+        ring.drawing = m.drawing;
+        const Bounds asPlaced = spanOf(mechModelEntities(ring, Vec2{0.0, 0.0}, 0.0, 0.0));
+        check(std::abs(asPlaced.max.x - asPlaced.min.x - 100.0) < 1e-6,
+              "gap: and a kind that has no gap is drawn as it always was");
+    }
+
+    // ---- capturing a model: the objects that were PICKED, not the whole sheet ----------------------
+    {
+        // "Capture all drawn" took everything on the sheet, so a model could not be drawn beside anything
+        // else - not even beside the thing it goes on, which is exactly how it wants to be drawn. Capture
+        // takes what is SELECTED now, and when nothing is selected the window steps aside and leaves the
+        // sheet clear to pick on, the way the parts library does.
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        Entity theModel;
+        theModel.type = EntityType::Line;
+        theModel.id = QStringLiteral("the-model");
+        theModel.a = {0.0, 0.0};
+        theModel.b = {60.0, 0.0};
+        Entity somethingElse;
+        somethingElse.type = EntityType::Circle;
+        somethingElse.id = QStringLiteral("not-the-model");
+        somethingElse.center = {0.0, 40.0};
+        somethingElse.radius = 5.0;
+        doc.entities().push_back(theModel);
+        doc.entities().push_back(somethingElse);
+
+        MechModelsDialog dlg(&ed);
+        dlg.selectKind(MechModelKind::Wire);
+
+        // Nothing selected: the window steps aside and says so, rather than taking the sheet.
+        int armedCount = 0;
+        QObject::connect(&dlg, &MechModelsDialog::captureArmed, &dlg,
+                         [&armedCount](const QString&) { ++armedCount; });
+        dlg.show();
+        ed.clearSelection();
+        dlg.captureFromSheet();
+        check(armedCount == 1, "capture: with nothing selected it asks for a selection");
+        check(dlg.isHidden(), "capture: and the window steps aside so the sheet can be worked on");
+        check(dlg.models().of(MechModelKind::Wire) == nullptr,
+              "capture: and nothing has been taken yet");
+
+        // Pick the one object the model is made of, and finish.
+        ed.selectById(QStringLiteral("the-model"));
+        dlg.finishCaptureFromSheet();
+        const MechModel* got = dlg.models().of(MechModelKind::Wire);
+        check(got != nullptr, "capture: Enter takes what was picked");
+        std::printf("  capture: took %lld object(s) of the %lld on the sheet\n",
+                    static_cast<long long>(got ? got->drawing.size() : 0),
+                    static_cast<long long>(doc.entities().size()));
+        check(got && got->drawing.size() == 1,
+              "capture: ONE object - what was picked, not everything on the sheet");
+        check(!dlg.isHidden(), "capture: and the window comes back");
+
+        // Cancelling leaves the model as it was.
+        ed.clearSelection();
+        dlg.captureFromSheet();
+        check(dlg.isHidden(), "capture: it steps aside again");
+        ed.selectById(QStringLiteral("not-the-model"));
+        dlg.cancelCaptureFromSheet();
+        const MechModel* after = dlg.models().of(MechModelKind::Wire);
+        check(after && after->drawing.size() == 1,
+              "capture: Esc leaves the model exactly as it was, whatever is selected");
+        check(!dlg.isHidden(), "capture: and the window comes back from that too");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

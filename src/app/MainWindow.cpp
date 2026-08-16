@@ -9823,23 +9823,37 @@ void MainWindow::showPartsLibrary() {
         // on and how to finish.
         connect(libraryDlg_, &PartsLibraryDialog::captureArmed, this,
                 [this](bool mechanical, const QString& what) {
-                    showCaptureRibbon(true, what, mechanical);
-                    statusBar()->showMessage(
-                        QStringLiteral("Select what the %1 drawing of %2 is, then press Enter "
-                                       "(Esc to drop it)")
-                            .arg(mechanical ? QStringLiteral("mechanical")
-                                            : QStringLiteral("schematic"),
-                                 what),
-                        0);
+                    armCapture(QStringLiteral("%1 — the %2 drawing")
+                                   .arg(what, mechanical ? QStringLiteral("mechanical")
+                                                         : QStringLiteral("schematic")),
+                               mechanical ? QStringLiteral("mechanical") : QStringLiteral("schematic"),
+                               [this] { if (libraryDlg_) libraryDlg_->finishCaptureFromSheet(); },
+                               [this] { if (libraryDlg_) libraryDlg_->cancelCaptureFromSheet(); });
                 });
-        connect(libraryDlg_, &PartsLibraryDialog::captureFinished, this, [this] {
-            showCaptureRibbon(false);
-            statusBar()->clearMessage();
-        });
+        connect(libraryDlg_, &PartsLibraryDialog::captureFinished, this, [this] { disarmCapture(); });
     }
     libraryDlg_->show();
     libraryDlg_->raise();
     libraryDlg_->activateWindow();
+}
+
+// Arming a capture: the window that asked steps aside, the ribbon says what to do and how to finish, and
+// Enter / Esc are given to whoever armed it. One routine for it, because there are two windows that capture
+// and the second one could not have been added without either copying this or generalising it.
+void MainWindow::armCapture(const QString& what, const QString& which, std::function<void()> take,
+                            std::function<void()> drop) {
+    captureTake_ = std::move(take);
+    captureDrop_ = std::move(drop);
+    showCaptureRibbon(true, what);
+    statusBar()->showMessage(
+        tr("Select what the %1 is, then press Enter (Esc to drop it)").arg(which), 0);
+}
+
+void MainWindow::disarmCapture() {
+    captureTake_ = nullptr;
+    captureDrop_ = nullptr;
+    showCaptureRibbon(false);
+    statusBar()->clearMessage();
 }
 
 void MainWindow::showPartsLibraryAt(const QString& libPartId) {
@@ -10897,10 +10911,19 @@ void MainWindow::showMechanicalBuilder() {
 }
 
 void MainWindow::showMechModels() {
-    if (!modelsDlg_)
+    if (!modelsDlg_) {
         modelsDlg_ = new MechModelsDialog(editor_, this, [this](MechModelKind kind) {
             openMechModelEditor(kind);
         });
+        // The same stepping-aside as the parts library: the window goes, the ribbon says what to do, and
+        // Enter takes the selection.
+        connect(modelsDlg_, &MechModelsDialog::captureArmed, this, [this](const QString& name) {
+            armCapture(tr("%1 — the model's drawing").arg(name), tr("model's drawing"),
+                       [this] { if (modelsDlg_) modelsDlg_->finishCaptureFromSheet(); },
+                       [this] { if (modelsDlg_) modelsDlg_->cancelCaptureFromSheet(); });
+        });
+        connect(modelsDlg_, &MechModelsDialog::captureFinished, this, [this] { disarmCapture(); });
+    }
     modelsDlg_->show();
     modelsDlg_->raise();
     modelsDlg_->activateWindow();

@@ -258,6 +258,14 @@ private:
     // selected for a part's drawing. Enter finishes it; Esc drops it.
     void buildCaptureRibbonTab();
     void showCaptureRibbon(bool on, const QString& what = QString(), bool mechanical = false);
+    // Who the capture is FOR. The ribbon's Take / Cancel - and Enter / Esc - belong to whichever window
+    // armed it: the parts library capturing a part's drawing, or the mechanical models capturing a model.
+    // Wired to the library alone, the same ribbon could not serve the second one at all.
+    std::function<void()> captureTake_;
+    std::function<void()> captureDrop_;
+    void armCapture(const QString& what, const QString& which, std::function<void()> take,
+                    std::function<void()> drop);
+    void disarmCapture();
     // Stamp the frame with ids and remember it as generated, so every line of it is an ordinary
     // object that can be picked, moved and reshaped - and an edited one is kept, not regenerated.
     void adoptGeneratedFrame(std::vector<Entity>& ents, bool markAll);

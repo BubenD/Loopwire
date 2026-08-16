@@ -80,6 +80,17 @@ struct MechModel {
     // For the per-wire kinds: how many conductors the drawing shows, so it can be redrawn for another
     // number by spacing them out rather than by squashing the picture.
     int drawnWireCount = 0;
+    // The GAP a cable or a wire leaves at each end: the piece of the run it does not cover, where the
+    // conductors come out and are worked on. It is a property of how the office draws them - the LENGTH is
+    // not, because that comes from the harness when the drawing is generated - so it is kept with the model
+    // and taken off the length asked for, at each end, whenever the model is drawn. Zero for everything
+    // else, and zero draws exactly as it always did.
+    double gapMm = 0.0;
+    // Which kinds a gap means anything for: a cable and a wire are drawn to a length the harness decides and
+    // are the two that leave one.
+    static bool kindHasGap(MechModelKind kind) {
+        return kind == MechModelKind::Cable || kind == MechModelKind::Wire;
+    }
 
     bool isEmpty() const { return drawing.isEmpty(); }
     QJsonObject toJson() const;

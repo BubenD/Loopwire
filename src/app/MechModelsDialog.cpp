@@ -178,6 +178,15 @@ void MechModelsDialog::buildUi() {
     wires_->setKeyboardTracking(false);
     connect(wires_, &QSpinBox::valueChanged, this, [this] { applyFigures(); });
     ff->addRow(QStringLiteral("Conductors the drawing shows"), wires_);
+    // A cable and a wire are taken AS DRAWN and given a length when the harness drawing is generated, so the
+    // only figure of their own that a run needs is the gap: the piece at each end they do not cover, where
+    // the conductors come out and are worked on.
+    gap_ = mmSpin();
+    gap_->setToolTip(QStringLiteral(
+        "The piece at each end of the run this does not cover — where the conductors come out. The LENGTH is "
+        "not asked for here: it comes from the harness when the drawing is generated."));
+    connect(gap_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
+    ff->addRow(QStringLiteral("Gap left at each end"), gap_);
     right->addWidget(figures);
 
     auto* tryBox = new QGroupBox(QStringLiteral("Try it"));
@@ -200,10 +209,10 @@ void MechModelsDialog::buildUi() {
     right->addWidget(summary_);
 
     auto* buttons = new QHBoxLayout;
-    captureBtn_ = new QPushButton(QStringLiteral("Capture all drawn"));
+    captureBtn_ = new QPushButton(QStringLiteral("Capture"));
     captureBtn_->setToolTip(QStringLiteral(
-        "Take every drawn object on the current sheet as this model's drawing — drawn along +x, at the "
-        "size it is in millimetres"));
+        "Take the objects on the sheet as this model's drawing — drawn along +x, at the size it is in "
+        "millimetres. This window steps aside so they can be picked; Enter takes them, Esc drops it."));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
     auto* edit = new QPushButton(QStringLiteral("Edit"));
@@ -290,6 +299,7 @@ void MechModelsDialog::refreshDetails() {
     }
     if (asDrawn_) asDrawn_->setDrawing(m ? m->drawing : QJsonArray());
     if (drawnLen_) drawnLen_->setValue(m ? m->drawnLengthMm : 0.0);
+    if (gap_) gap_->setValue(m ? m->gapMm : 0.0);
     if (head_) head_->setValue(m ? m->headMm : 0.0);
     if (tail_) tail_->setValue(m ? m->tailMm : 0.0);
     if (across_) across_->setValue(m ? m->drawnAcrossMm : 0.0);
@@ -302,6 +312,8 @@ void MechModelsDialog::refreshDetails() {
     const bool perWire = mechModelPerWire(kind);
     if (wires_) wires_->setEnabled(perWire);
     if (tryWires_) tryWires_->setEnabled(perWire);
+    // The gap belongs to the two kinds that are drawn to a length the harness decides and leave one.
+    if (gap_) gap_->setEnabled(MechModel::kindHasGap(kind));
     syncing_ = false;
     refreshPreview();
 }
@@ -313,7 +325,7 @@ void MechModelsDialog::refreshPreview() {
         if (stretched_) stretched_->setEntities({});
         if (summary_)
             summary_->setText(QStringLiteral("Nothing drawn for this yet — draw it on the sheet, "
-                                             "then press Capture all drawn"));
+                                             "then select them and press Capture"));
         return;
     }
     const double want = mechModelStretches(kind) && tryLen_ ? tryLen_->value()
@@ -342,6 +354,7 @@ void MechModelsDialog::applyFigures() {
     if (!had) return;   // nothing drawn: the figures have nothing to be about yet
     MechModel m = *had;
     m.drawnLengthMm = drawnLen_ ? drawnLen_->value() : 0.0;
+    m.gapMm = gap_ && MechModel::kindHasGap(m.kind) ? gap_->value() : 0.0;
     m.headMm = head_ ? head_->value() : 0.0;
     m.tailMm = tail_ ? tail_->value() : 0.0;
     m.drawnAcrossMm = across_ ? across_->value() : 0.0;
@@ -351,14 +364,47 @@ void MechModelsDialog::applyFigures() {
     refreshPreview();
 }
 
+// Capture what is SELECTED. Nothing selected yet, so the window steps aside and the sheet is left clear to
+// pick on - the same way the parts library captures a part's drawing. Taking the whole sheet was the only way
+// before, which meant a model could not be drawn beside anything else, not even beside the thing it goes on.
 void MechModelsDialog::captureFromSheet() {
     if (!editor_ || !editor_->document()) return;
+    if (editor_->copyOfSelection().empty()) {
+        capturing_ = true;
+        hide();
+        emit captureArmed(mechModelName(currentKind()));
+        return;
+    }
+    captureSelection();
+}
+
+void MechModelsDialog::finishCaptureFromSheet() {
+    if (!capturing_) return;
+    capturing_ = false;
+    show();
+    raise();
+    captureSelection();
+    emit captureFinished();
+}
+
+void MechModelsDialog::cancelCaptureFromSheet() {
+    if (!capturing_) return;
+    capturing_ = false;
+    show();
+    raise();
+    if (summary_) summary_->setText(QStringLiteral("Capture cancelled — the model is unchanged."));
+    emit captureFinished();
+}
+
+void MechModelsDialog::captureSelection() {
+    if (!editor_ || !editor_->document()) return;
     std::vector<Entity> drawn;
-    for (const Entity& e : editor_->document()->entities())
+    for (const Entity& e : editor_->copyOfSelection())
         if (e.layer != QLatin1String("«guide»")) drawn.push_back(e);
     if (drawn.empty()) {
         if (summary_)
-            summary_->setText(QStringLiteral("There is nothing drawn to capture as this model"));
+            summary_->setText(QStringLiteral(
+                "Nothing was selected — pick the objects that make up the model, then capture them"));
         return;
     }
     MechModel m;
@@ -371,7 +417,7 @@ void MechModelsDialog::captureFromSheet() {
     refreshList();
     refreshDetails();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured all %1 drawn object(s) as %2")
+        summary_->setText(QStringLiteral("Captured %1 selected object(s) as %2")
                               .arg(drawn.size())
                               .arg(mechModelName(m.kind)));
 }
@@ -386,7 +432,7 @@ void MechModelsDialog::insertIntoDrawing() {
     editor_->placeEntities(partDrawingEntities(m->drawing));
     if (summary_)
         summary_->setText(QStringLiteral("Click the sheet to put it down — change it there and press "
-                                         "Capture all drawn to take it back"));
+                                         "select it and press Capture to take it back"));
     hide();
 }
 

@@ -51,12 +51,25 @@ public:
     // Driving it: take what is selected on the sheet as this model's drawing, put the model on the
     // sheet to be worked on, and clear it.
     void captureFromSheet();
+    // Armed capture: the window steps aside, the objects are picked on the sheet, and Enter takes them.
+    // Taking the whole sheet was the only way before, so a model could not be drawn beside anything else -
+    // not even beside the thing it goes on, which is exactly how it wants to be drawn.
+    void finishCaptureFromSheet();
+    void cancelCaptureFromSheet();
+    void captureSelection();   // what is selected, as this model's drawing
     void insertIntoDrawing();
     void clearModel();
     // Open it in the main document canvas, where the full Place and Modify ribbon is available.
     void editOnCanvas();
 
+signals:
+    // The sheet is wanted for picking: the window has hidden itself, and the ribbon says what to do and
+    // how to finish - the same as the parts library does when it captures a part's drawing.
+    void captureArmed(const QString& modelName);
+    void captureFinished();
+
 private:
+    bool capturing_ = false;   // waiting for a selection on the sheet
     void buildUi();
     void refreshList();
     void refreshDetails();
@@ -81,6 +94,7 @@ private:
     QComboBox* insulation_ = nullptr;
     bool pendingInsulated_ = true;
     QDoubleSpinBox* drawnLen_ = nullptr;
+    QDoubleSpinBox* gap_ = nullptr;       // cable and wire: the piece of the run they do not cover
     QDoubleSpinBox* head_ = nullptr;
     QDoubleSpinBox* tail_ = nullptr;
     QDoubleSpinBox* across_ = nullptr;

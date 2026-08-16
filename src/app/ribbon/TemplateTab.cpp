@@ -224,9 +224,8 @@ void MainWindow::buildCaptureRibbonTab() {
             b->setAutoRaise(true);
             b->setFocusPolicy(Qt::NoFocus);
             connect(b, &QToolButton::clicked, this, [this, take] {
-                if (!libraryDlg_) return;
-                if (take) libraryDlg_->finishCaptureFromSheet();
-                else libraryDlg_->cancelCaptureFromSheet();
+                if (take) { if (captureTake_) captureTake_(); }
+                else if (captureDrop_) captureDrop_();
             });
             return b;
         };
@@ -248,12 +247,12 @@ void MainWindow::buildCaptureRibbonTab() {
     captureTakeSc_ = new QShortcut(QKeySequence(Qt::Key_Return), this);
     captureTakeSc_->setContext(Qt::WindowShortcut);
     connect(captureTakeSc_, &QShortcut::activated, this, [this] {
-        if (libraryDlg_) libraryDlg_->finishCaptureFromSheet();
+        if (captureTake_) captureTake_();
     });
     captureDropSc_ = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     captureDropSc_->setContext(Qt::WindowShortcut);
     connect(captureDropSc_, &QShortcut::activated, this, [this] {
-        if (libraryDlg_) libraryDlg_->cancelCaptureFromSheet();
+        if (captureDrop_) captureDrop_();
     });
     captureTakeSc_->setEnabled(false);
     captureDropSc_->setEnabled(false);
@@ -264,10 +263,7 @@ void MainWindow::showCaptureRibbon(bool on, const QString& what, bool mechanical
     if (!captureTab_) buildCaptureRibbonTab();
     const int idx = ribbon_->indexOf(captureTab_);
     if (on) {
-        if (captureWhat_)
-            captureWhat_->setText(QStringLiteral("%1 — the %2 drawing")
-                                      .arg(what, mechanical ? QStringLiteral("mechanical")
-                                                            : QStringLiteral("schematic")));
+        if (captureWhat_) captureWhat_->setText(what);
         const int at = idx < 0 ? ribbon_->addTab(captureTab_, QStringLiteral("Capture")) : idx;
         ribbon_->setCurrentIndex(at);
     } else if (idx >= 0) {

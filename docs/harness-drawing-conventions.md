@@ -1020,6 +1020,34 @@ Two things came out of drawing them small:
   reads as a mistake rather than as emphasis. The drawing on the sheet is untouched. Measured: the zigzag's
   icon is 11 px tall in a 28 px box, where it was 0.
 
+## Capture takes what was picked
+
+The default mechanical models — the house style for a wire, a cable, a heat-shrink, a boot — are captured off
+the sheet. **Capture all drawn** took *everything* on it, which meant a model could not be drawn beside
+anything else: not even beside the thing it goes on, which is exactly how it wants to be drawn.
+
+**Capture** now takes what is **selected**. With nothing selected the window steps aside, the ribbon says what
+to do and how to finish, and Enter takes the picked objects (Esc drops it) — the same stepping-aside the parts
+library has always used for a part's drawing. The two windows share one ribbon: it is armed with a pair of
+callbacks (`armCapture`), because wired to the parts library alone it could not serve the second window at
+all.
+
+Measured: two objects on the sheet, one picked — the model is one object, not two — and cancelling leaves the
+model exactly as it was, whatever is selected at the time.
+
+## A cable and a wire are taken as drawn, and leave a gap
+
+A model never carries a length: a cable is drawn at whatever length suits and the harness says how long the
+cable actually is when the drawing is generated. What a cable and a wire *do* carry, besides the general
+parameters, is the **gap** — the piece at each end of the run they do not cover, where the conductors come out
+and are worked on. A cable that covered its run to the last millimetre would leave nowhere for them.
+
+So the gap is kept with the model (`MechModel::gapMm`, only for the kinds that run — a ring terminal is placed,
+not run), taken off the length asked for at *each* end, and the drawing is moved along by one gap so it sits
+in the middle of its run. Zero is the default and zero draws exactly as it always did.
+
+Measured: a 500 mm run with a 20 mm gap holds 460 mm of cable, from 20 to 480.
+
 ## A PDF comes in as a block
 
 A PDF import used to land as loose entities — hundreds or thousands of little lines, because that is what a

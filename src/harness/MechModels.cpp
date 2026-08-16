@@ -123,6 +123,7 @@ bool mechModelPerWire(MechModelKind kind) {
 
 QJsonObject MechModel::toJson() const {
     QJsonObject o;
+    if (gapMm > 0.0) o.insert(QStringLiteral("gap"), gapMm);
     o.insert(QStringLiteral("kind"), mechModelKey(kind));
     if (isInsulationKind(kind)) o.insert(QStringLiteral("insulated"), insulated);
     if (hasNearPoint)
@@ -139,6 +140,7 @@ QJsonObject MechModel::toJson() const {
 }
 
 void MechModel::fromJson(const QJsonObject& o) {
+    gapMm = o.value(QStringLiteral("gap")).toDouble();
     const QString key = o.value(QStringLiteral("kind")).toString();
     MechModelKind k = MechModelKind::Wire;
     if (mechModelKindFromKey(key, k)) kind = canonicalKind(k);
@@ -299,7 +301,14 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
     // How the length is made up: the two ends keep their size, the middle is stretched to fit. A
     // length shorter than the two ends together cannot keep them both, so they are shrunk in
     // proportion rather than crossing over one another.
-    const bool stretch = mechModelStretches(model.kind) && lengthMm > 0.0 && drawn > 1e-9;
+    // The GAP a cable or a wire leaves at each end of its run: the piece it does not cover, where the
+    // conductors come out and are worked on. The run itself is what the harness says when the drawing is
+    // generated - the model never carries a length - so the gap is taken off it here, at each end, and the
+    // drawing is moved along by one gap so it sits in the middle of the run it was asked for. Zero for
+    // everything else, and zero draws exactly as it always did.
+    const double gap = MechModel::kindHasGap(model.kind) ? std::max(0.0, model.gapMm) : 0.0;
+    const double askedFor = lengthMm > 0.0 && gap > 0.0 ? std::max(1e-6, lengthMm - 2.0 * gap) : lengthMm;
+    const bool stretch = mechModelStretches(model.kind) && askedFor > 0.0 && drawn > 1e-9;
     double head = std::max(0.0, model.headMm);
     double tail = std::max(0.0, model.tailMm);
     if (head + tail > drawn) {
@@ -307,7 +316,7 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
         head *= k;
         tail *= k;
     }
-    double want = stretch ? lengthMm : drawn;
+    double want = stretch ? askedFor : drawn;
     if (stretch && want < head + tail) {
         const double k = want / std::max(1e-9, head + tail);
         head *= k;
@@ -319,12 +328,17 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
     const double yScale = acrossMm > 0.0 && drawnAcross > 1e-9 ? acrossMm / drawnAcross : 1.0;
 
     auto mapPoint = [&](const Vec2& p) {
+        // Moved along by one gap, so what is drawn sits in the MIDDLE of the run it was asked for and the
+        // gap is left at both ends rather than all of it at one.
         const double x = p.x - x0;                     // from the start of the model
         double nx = x;
         if (!stretch) nx = x;
         else if (x <= head) nx = x;                    // the head keeps its own size
         else if (x >= drawn - tail) nx = want - (drawn - x);   // and so does the tail
         else nx = head + (x - head) * xScale;          // the middle makes up the difference
+        // Moved along by one gap, so what is drawn sits in the MIDDLE of the run it was asked for and the
+        // gap is left at both ends rather than all of it at one end.
+        nx += gap;
         const double ny = (p.y - yMid) * yScale;
         return Vec2{nx, ny};
     };
