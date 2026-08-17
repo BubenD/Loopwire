@@ -637,6 +637,79 @@ std::vector<Vec2> expandBulgePolyline(const std::vector<Vec2>& points,
     return out;
 }
 
+namespace {
+
+// One basis function of the B-spline, by the Cox-de Boor recursion. The degree is 3 in practice, so
+// the recursion is a handful of terms and there is nothing to be gained by unrolling it.
+double bsplineBasis(int i, int k, double t, const std::vector<double>& U) {
+    if (i + k + 1 >= static_cast<int>(U.size())) return 0.0;
+    if (k == 0) return (t >= U[i] && t < U[i + 1]) ? 1.0 : 0.0;
+    const double d1 = U[i + k] - U[i];
+    const double d2 = U[i + k + 1] - U[i + 1];
+    double out = 0.0;
+    if (d1 > 1e-12) out += (t - U[i]) / d1 * bsplineBasis(i, k - 1, t, U);
+    if (d2 > 1e-12) out += (U[i + k + 1] - t) / d2 * bsplineBasis(i + 1, k - 1, t, U);
+    return out;
+}
+
+} // namespace
+
+std::vector<Vec2> nurbsCurvePoints(const std::vector<Vec2>& ctrl, const std::vector<double>& knots,
+                                   int degree, const std::vector<double>& weights,
+                                   int samplesPerSegment) {
+    const int n = static_cast<int>(ctrl.size());
+    if (n == 0) return {};
+    if (n == 1) return ctrl;
+    const int p = std::clamp(degree, 1, std::max(1, n - 1));
+    if (n <= p) return ctrl;   // not enough points to be a curve of that degree
+
+    // The knot vector the file stated, when it stated a usable one. Otherwise a CLAMPED uniform vector:
+    // p+1 zeroes, the interior spaced evenly, p+1 ones - which starts and ends the curve on the first
+    // and last control point, the reading anybody would expect of a file that left them out.
+    std::vector<double> U;
+    if (static_cast<int>(knots.size()) == n + p + 1) {
+        U = knots;
+    } else {
+        U.assign(n + p + 1, 0.0);
+        const int interior = n - p;   // number of spans
+        for (int i = 0; i < n + p + 1; ++i) {
+            if (i <= p) U[i] = 0.0;
+            else if (i >= n) U[i] = 1.0;
+            else U[i] = double(i - p) / double(interior);
+        }
+    }
+    // Non-decreasing, or the basis is meaningless.
+    for (size_t i = 1; i < U.size(); ++i)
+        if (U[i] < U[i - 1]) U[i] = U[i - 1];
+
+    const double t0 = U[p], t1 = U[n];
+    if (!(t1 > t0)) return ctrl;
+
+    const bool rational = static_cast<int>(weights.size()) == n;
+    const int steps = std::max(8, samplesPerSegment * std::max(1, n - p));
+    std::vector<Vec2> out;
+    out.reserve(steps + 1);
+    for (int s = 0; s <= steps; ++s) {
+        // The very end of the span is nudged inside it: a basis function is defined on a half-open
+        // interval, so every one of them is zero exactly at t1 and the point would come out at the
+        // origin. The last sample is placed by hand below instead.
+        double t = t0 + (t1 - t0) * (double(s) / steps);
+        if (s == steps) t = t1 - (t1 - t0) * 1e-9;
+        double wx = 0.0, wy = 0.0, wsum = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double b = bsplineBasis(i, p, t, U);
+            if (b == 0.0) continue;
+            const double w = rational ? weights[i] : 1.0;
+            wx += ctrl[i].x * b * w;
+            wy += ctrl[i].y * b * w;
+            wsum += b * w;
+        }
+        if (std::abs(wsum) > 1e-12) out.push_back({wx / wsum, wy / wsum});
+    }
+    if (out.empty()) return ctrl;
+    return out;
+}
+
 Vec2 ellipsePointAt(double t, const Vec2& c, double rx, double ry, double rot) {
     const double cc = std::cos(rot), ss = std::sin(rot);
     const double lx = rx * std::cos(t), ly = ry * std::sin(t);

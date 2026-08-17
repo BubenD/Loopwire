@@ -758,6 +758,101 @@ int run_io_tests() {
               "bulge: a straight run is left straight, with nothing to expand");
     }
 
+    // ---- a spline is a shape, and it was skipped -------------------------------------------------
+    {
+        // SPLINE was not in the list of things worth reading, so it was dropped outright. On a real sheet
+        // that is not a missing line but a missing SHAPE - the ovals round the wire groups simply were not
+        // there - and nothing about the drawing said anything had been left out.
+        //
+        // Evaluated on the way in rather than kept as control points: a DXF spline states its own knot
+        // vector and may be rational, and this drawing's own spline is a uniform one, so assuming uniform
+        // spacing would draw a different curve, wrong by a different amount for every spline in a file.
+        //
+        // Degree 3, knots 0,0,0,0,1,1,1,1 - clamped, one span - so the curve must start on the first
+        // control point and end on the last, and bow toward the two in between.
+        const QByteArray sp = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nSPLINE\n8\n0\n70\n8\n71\n3\n72\n8\n73\n4\n74\n0\n"
+            "40\n0.0\n40\n0.0\n40\n0.0\n40\n0.0\n40\n1.0\n40\n1.0\n40\n1.0\n40\n1.0\n"
+            "10\n0.0\n20\n0.0\n30\n0.0\n"
+            "10\n0.0\n20\n10.0\n30\n0.0\n"
+            "10\n10.0\n20\n10.0\n30\n0.0\n"
+            "10\n10.0\n20\n0.0\n30\n0.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, sp, nullptr) && d.entities().size() == 1,
+              "spline: it is read at all, rather than skipped");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.points.size() > 8, "spline: it arrives as a curve, finely sampled");
+            check(std::abs(e.points.front().x) < 1e-6 && std::abs(e.points.front().y) < 1e-6,
+                  "spline: a clamped curve starts exactly on its first control point");
+            check(std::abs(e.points.back().x - 10.0) < 1e-6 &&
+                      std::abs(e.points.back().y) < 1e-6,
+                  "spline: and ends exactly on its last");
+            // It is pulled TOWARD the middle two control points without reaching them: the highest the
+            // curve gets is well above the ends and well below y = 10.
+            double topY = -1e9;
+            for (const Vec2& q : e.points) topY = std::max(topY, q.y);
+            std::printf("  spline: %d points, rises to y = %.3f (control points reach 10)\n",
+                        int(e.points.size()), topY);
+            check(topY > 3.0 && topY < 9.9,
+                  "spline: bowed toward the middle control points, not through them");
+        }
+
+        // A spline that says nothing usable about its knots is still drawn - read as the clamped uniform
+        // curve anybody would take it for, rather than thrown away for being incomplete.
+        const QByteArray noKnots = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nSPLINE\n8\n0\n71\n3\n73\n4\n"
+            "10\n0.0\n20\n0.0\n10\n0.0\n20\n5.0\n10\n5.0\n20\n5.0\n10\n5.0\n20\n0.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document k;
+        dxf::parseBytes(k, noKnots, nullptr);
+        check(k.entities().size() == 1 && k.entities().front().points.size() > 8,
+              "spline: one with no knot vector is still read, as the clamped curve it looks like");
+    }
+
+    // ---- a turn stated as a direction, and a point pretending to be one --------------------------
+    {
+        // MTEXT can stand at an angle given as a direction vector (11/21) instead of an angle (50). But
+        // plenty of writers put the INSERTION POINT in 11/21 - the very same coordinates as 10/20 - and a
+        // point read as a direction is the bearing of the text's own position from the origin of the
+        // drawing. On the sheet this came from, that turned 92 labels by 40 to 72 degrees, each by a
+        // different amount because each sat somewhere different: "P2" at (16.85, 29.87) came out at 60.58
+        // degrees, which is exactly atan2(29.87, 16.85).
+        const QByteArray pretend = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nMTEXT\n8\n0\n10\n16.847\n20\n29.870\n11\n16.847\n21\n29.870\n"
+            "40\n0.2\n1\nP2\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        dxf::parseBytes(d, pretend, nullptr);
+        check(d.entities().size() == 1, "text turn: the label reads");
+        if (d.entities().size() == 1) {
+            std::printf("  text turn: 11/21 = the insertion point -> %.2f deg\n",
+                        d.entities().front().rotation * 180.0 / M_PI);
+            check(std::abs(d.entities().front().rotation) < 1e-9,
+                  "text turn: a vector that IS the insertion point states no direction at all");
+        }
+
+        // And one that really does carry a direction is still turned by it.
+        const QByteArray sideways = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nMTEXT\n8\n0\n10\n21.977\n20\n27.199\n11\n0.0\n21\n-1.0\n"
+            "40\n0.086\n1\n28V DC IN\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document s;
+        dxf::parseBytes(s, sideways, nullptr);
+        check(s.entities().size() == 1, "text turn: the turned label reads");
+        if (s.entities().size() == 1) {
+            const double deg = s.entities().front().rotation * 180.0 / M_PI;
+            std::printf("  text turn: a real direction vector (0,-1) -> %.2f deg\n", deg);
+            check(std::abs(deg + 90.0) < 1e-6,
+                  "text turn: a genuine direction still stands the text on its side");
+        }
+    }
+
     // ---- the text size a drawing states ----------------------------------------------------------
     {
         // A floor of 0.1 used to be imposed on every imported text height, so that text could never be

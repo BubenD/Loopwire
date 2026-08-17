@@ -838,7 +838,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                 static const QStringList kKnown = {
                     "LINE",   "LWPOLYLINE", "CIRCLE",  "ARC",    "TEXT",      "MTEXT",
                     "INSERT", "ELLIPSE",    "SOLID",   "LEADER", "DIMENSION", "ACAD_TABLE",
-                    "MULTILEADER", "WIPEOUT"};
+                    "MULTILEADER", "WIPEOUT", "SPLINE"};
                 if (!kKnown.contains(type)) continue;
 
                 const auto g = collectGroup(pairs, i + 1);
@@ -1103,6 +1103,65 @@ bool parse(Document& doc, const QString& text, QString*) {
                         if (head.points.size() == 3) entities.push_back(std::move(head));
                     }
                     if (e.points.size() > 1) entities.push_back(std::move(e));
+                } else if (type == "SPLINE") {
+                    // A spline was skipped outright, which on a real sheet is not a missing line but a
+                    // missing SHAPE: the ovals round the wire groups simply were not there, and nothing
+                    // about the drawing said anything had been left out.
+                    //
+                    // It is evaluated here rather than handed on as control points, because a DXF spline
+                    // states its own knot vector and may be rational, and this drawing's own spline is a
+                    // uniform one - assuming uniform spacing would draw a different curve, wrong by a
+                    // different amount for every spline in the file. So it comes in as the curve it
+                    // describes: sampled finely, and as a polyline, which is what it now is.
+                    std::vector<Vec2> ctrl;
+                    std::vector<Vec2> fit;
+                    std::vector<double> knots, weights;
+                    {
+                        Vec2 c{0, 0}, ft{0, 0};
+                        bool haveC = false, haveF = false;
+                        for (const auto& pr : g) {
+                            if (pr.code == "10") {
+                                if (haveC) ctrl.push_back(c);
+                                c = {pr.value.toDouble(), 0.0};
+                                haveC = true;
+                            } else if (pr.code == "20" && haveC) {
+                                c.y = pr.value.toDouble();
+                            } else if (pr.code == "11") {
+                                if (haveF) fit.push_back(ft);
+                                ft = {pr.value.toDouble(), 0.0};
+                                haveF = true;
+                            } else if (pr.code == "21" && haveF) {
+                                ft.y = pr.value.toDouble();
+                            } else if (pr.code == "40") {
+                                knots.push_back(pr.value.toDouble());
+                            } else if (pr.code == "41") {
+                                weights.push_back(pr.value.toDouble());
+                            }
+                        }
+                        if (haveC) ctrl.push_back(c);
+                        if (haveF) fit.push_back(ft);
+                    }
+                    const int degree = std::max(1, findVal(g, "71", "3").toInt());
+                    const bool closed = (findVal(g, "70", "0").toInt() & 1) != 0;
+                    std::vector<Vec2> curve;
+                    if (ctrl.size() >= 2) {
+                        std::vector<Vec2> use = ctrl;
+                        // A closed spline runs back into itself: the first `degree` points repeat at the
+                        // end, which is what makes the join continuous rather than a corner.
+                        if (closed)
+                            for (int k = 0; k < degree && k < static_cast<int>(ctrl.size()); ++k)
+                                use.push_back(ctrl[k]);
+                        curve = nurbsCurvePoints(use, closed ? std::vector<double>{} : knots, degree,
+                                                 weights.size() == use.size() ? weights
+                                                                             : std::vector<double>{});
+                    } else if (fit.size() >= 2) {
+                        curve = splinePoints(fit);   // only fit points given: pass through them
+                    }
+                    if (curve.size() < 2) continue;
+                    e.type = EntityType::Polyline;
+                    for (const Vec2& q : curve) e.points.push_back(xf.apply(q));
+                    if (closed && e.points.size() > 2) e.points.push_back(e.points.front());
+                    entities.push_back(std::move(e));
                 } else if (type == "CIRCLE") {
                     e.type = EntityType::Circle;
                     e.center = xf.apply({findNum(g, "10"), findNum(g, "20")});
@@ -1167,10 +1226,23 @@ bool parse(Document& doc, const QString& text, QString*) {
                         if (w > 1e-6) e.meta.insert("boxWidth", w);
                         const double h = xf.len(findNum(g, "46", 0.0));
                         if (h > 1e-6) e.meta.insert("boxHeight", h);
-                        // A turn can be stated as a direction vector rather than an angle.
+                        // A turn can be stated as a direction vector (11/21) rather than an angle.
+                        //
+                        // But plenty of writers put the INSERTION POINT there instead - the very same
+                        // coordinates as 10/20 - and a point read as though it were a direction is the
+                        // bearing of the text's own position from the origin of the drawing. On the sheet
+                        // that showed this up, that turned 92 labels by between 40 and 72 degrees each,
+                        // every one of them by a different amount, because each sat somewhere different:
+                        // "P2" at (16.85, 29.87) came out at 60.58 degrees, which is exactly
+                        // atan2(29.87, 16.85). A vector that IS the insertion point states nothing, so it
+                        // is not read as a direction. The labels that really are turned - a genuine
+                        // (0, -1) for the column written on its side - are unaffected.
                         if (findVal(g, "50").isEmpty()) {
                             const Vec2 dir{findNum(g, "11", 0.0), findNum(g, "21", 0.0)};
-                            if (std::hypot(dir.x, dir.y) > 1e-12)
+                            const Vec2 ins{findNum(g, "10", 0.0), findNum(g, "20", 0.0)};
+                            const bool isTheInsertionPoint =
+                                std::hypot(dir.x - ins.x, dir.y - ins.y) < 1e-9;
+                            if (!isTheInsertionPoint && std::hypot(dir.x, dir.y) > 1e-12)
                                 e.rotation = xf.angle(std::atan2(dir.y, dir.x));
                         }
                         static const char* const kJust[9] = {"TL", "TC", "TR", "ML", "MC",

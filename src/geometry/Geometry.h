@@ -166,4 +166,17 @@ std::vector<Vec2> splinePoints(const std::vector<Vec2>& pts, int samplesPerSegme
 // unchanged.
 std::vector<Vec2> bsplinePoints(const std::vector<Vec2>& ctrl, int samplesPerSegment = 16);
 
+// A B-spline of any degree, with the KNOTS it was written with, and weights if it has them (a
+// rational one - a NURBS). bsplinePoints above is the uniform case, which is what this drawing's own
+// spline tool makes; a spline read out of a DXF states its own knot vector and may be rational, and
+// neither of those can be recovered by assuming uniform spacing. So an imported one is evaluated as
+// what it actually is, here, and brought in as the curve it describes.
+//
+// `weights` may be empty (all 1). `knots` may be empty or the wrong length, in which case a clamped
+// uniform vector is generated - the reasonable reading of a file that did not say. Returns a sampled
+// polyline over the curve's valid span, starting and ending exactly on the curve's own ends.
+std::vector<Vec2> nurbsCurvePoints(const std::vector<Vec2>& ctrl, const std::vector<double>& knots,
+                                   int degree, const std::vector<double>& weights = {},
+                                   int samplesPerSegment = 16);
+
 } // namespace Edraw_Desktop
