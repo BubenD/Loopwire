@@ -4,6 +4,7 @@
 #include <QRegularExpression>
 
 #include "geometry/Geometry.h"
+#include "model/Block.h"   // stampEntityGroup: a callout is one thing, not three
 #include "model/Document.h"
 
 #include <QFile>
@@ -729,19 +730,172 @@ bool parse(Document& doc, const QString& text, QString*) {
     // silent), scaled by the style's overall scale. A callout drawn as a multileader takes its size from
     // its own style instead, which is named by handle. Read as nothing, every balloon's leader was a
     // bare line resting against the wire it picks out.
-    QHash<QString, double> dimArrow, mleaderArrow;
+    // How an office writes its dimensions: the sizes are held by the STYLE, not by each dimension, and
+    // they matter more than they look. The drawing's own defaults are millimetres on a sheet - text 5
+    // units high - and a schematic drawn in millimetres-as-units is 29 units across altogether, so a
+    // dimension taking the default would write a number a sixth of the width of the whole drawing.
+    struct DimStyle {
+        double arrow = 2.5;      // 41, DIMASZ
+        double textH = 2.5;      // 140, DIMTXT
+        double extOff = 0.625;   // 42, DIMEXO
+    };
+    QHash<QString, DimStyle> dimStyles;
+    QHash<QString, double> mleaderArrow;
+    // Where a drawing actually states them. A DIMSTYLE record only writes the variables that differ from
+    // the drawing's own, so on a real file the style table can be three bare names and every size lives
+    // in the HEADER - which is exactly what the sheet this was written for does: $DIMTXT and $DIMASZ of
+    // 0.18, and a style table stating nothing at all.
+    DimStyle headerDim;
+    {
+        auto headerNum = [&](const QString& name, double& out) {
+            for (int i = 0; i + 2 < n; ++i) {
+                if (pairs[i].code != "9" || pairs[i].value != name) continue;
+                for (int j = i + 1; j < n && j < i + 6; ++j) {
+                    if (pairs[j].code == "9") break;
+                    if (pairs[j].code == "40" || pairs[j].code == "140" ||
+                        pairs[j].code == "70" || pairs[j].code == "1") {
+                        out = pairs[j].value.toDouble();
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return false;
+        };
+        double scale = 1.0;
+        headerNum(QStringLiteral("$DIMSCALE"), scale);
+        if (!(scale > 1e-9)) scale = 1.0;
+        headerNum(QStringLiteral("$DIMASZ"), headerDim.arrow);
+        headerNum(QStringLiteral("$DIMTXT"), headerDim.textH);
+        headerNum(QStringLiteral("$DIMEXO"), headerDim.extOff);
+        headerDim.arrow *= scale;
+        headerDim.textH *= scale;
+        headerDim.extOff *= scale;
+    }
     for (int i = 0; i < n; ++i) {
         if (pairs[i].code != "0") continue;
         if (pairs[i].value == QLatin1String("DIMSTYLE")) {
             const auto g = collectGroup(pairs, i + 1);
-            const double scale = findNum(g, "40", 1.0);
-            dimArrow.insert(findVal(g, "2"),
-                            findNum(g, "41", 2.5) * (scale > 1e-9 ? scale : 1.0));
+            // Everything a style states is at the style's own overall scale (40, DIMSCALE). A style only
+            // writes what it CHANGES, so what it says nothing about keeps the drawing's own figure -
+            // reading an absent code as a default of 2.5 put millimetre-on-paper sizes onto a drawing
+            // whose units are millimetres, and wrote a number a sixth of the width of the sheet.
+            const double raw = findNum(g, "40", 0.0);
+            const double scale = raw > 1e-9 ? raw : 1.0;
+            DimStyle st = headerDim;
+            if (!findVal(g, "41").isEmpty()) st.arrow = findNum(g, "41") * scale;
+            if (!findVal(g, "140").isEmpty()) st.textH = findNum(g, "140") * scale;
+            if (!findVal(g, "42").isEmpty()) st.extOff = findNum(g, "42") * scale;
+            dimStyles.insert(findVal(g, "2"), st);
         } else if (pairs[i].value == QLatin1String("MLEADERSTYLE")) {
             const auto g = collectGroup(pairs, i + 1);
             mleaderArrow.insert(findVal(g, "5").trimmed().toUpper(), findNum(g, "42", 2.5));
         }
     }
+    // A DIMENSION as the measurement it is, rather than the pile of lines AutoCAD baked for it.
+    //
+    // Every dimension in a DXF carries BOTH: an anonymous block holding the geometry already drawn for
+    // it, and the points that say what is being measured. Expanding the block was faithful to the marks
+    // on the paper and lost the dimension itself - what arrived was a handful of lines, two filled
+    // triangles and a piece of text, none of which knows it is a measurement, none of which re-measures
+    // when the geometry moves, and every piece of which has to be selected and deleted separately.
+    //
+    // Read from the defining points instead and it comes in as a dimension: it can be picked up by its
+    // joints, moved, restyled, and it says what it measures. Anything whose kind cannot be represented
+    // falls back to expanding the block, so a file never loses marks it had.
+    auto readDimension = [&dimStyles, &headerDim](Entity& e, const std::vector<Pair>& g,
+                                                  const Xf& xf) -> bool {
+        const int flags = findVal(g, "70", "0").toInt();
+        const int kind = flags & 7;
+        const Vec2 defPt = xf.apply({findNum(g, "10"), findNum(g, "20")});
+        const Vec2 p1 = xf.apply({findNum(g, "13"), findNum(g, "23")});
+        const Vec2 p2 = xf.apply({findNum(g, "14"), findNum(g, "24")});
+        const Vec2 ctr = xf.apply({findNum(g, "15"), findNum(g, "25")});
+        const Vec2 txtAt = xf.apply({findNum(g, "11"), findNum(g, "21")});
+
+        switch (kind) {
+        case 0: {
+            // Rotated linear: measured along a stated direction. Ours measures along one axis or the
+            // other, so a dimension taken on a slant is not one of ours and keeps its baked geometry.
+            const double rot = findNum(g, "50", 0.0) * M_PI / 180.0;
+            const double c = std::abs(std::cos(rot)), s = std::abs(std::sin(rot));
+            if (std::min(c, s) > 1e-6) return false;
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+            // Which way it was PLACED measuring, stated rather than guessed at later: the geometry it
+            // measures can be dragged, and a dimension that works its own direction out afterwards
+            // turns round and measures something else the moment that happens.
+            e.meta.insert(QStringLiteral("dimAcross"), c >= s);
+            e.a = p1;
+            e.b = p2;
+            e.points = {p1, p2, defPt};
+            break;
+        }
+        case 1:   // aligned: measured between the two points themselves
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("aligned"));
+            e.a = p1;
+            e.b = p2;
+            e.points = {p1, p2, defPt};
+            break;
+        case 4:   // radius: the centre, and a point out on the ring
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("radius"));
+            e.center = ctr;
+            e.radius = distance(ctr, defPt);
+            e.b = txtAt;
+            break;
+        case 3:   // diameter: two points across the circle, so the centre lies between them
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("diameter"));
+            e.center = lerp(ctr, defPt, 0.5);
+            e.radius = distance(ctr, defPt) * 0.5;
+            e.b = txtAt;
+            break;
+        case 5:   // angular by three points: the corner it is taken about, and the two rays
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("angular"));
+            e.points = {ctr, p1, p2};
+            break;
+        case 6:   // ordinate: where the feature is, and where its leader ends
+            e.meta.insert(QStringLiteral("dimType"), QStringLiteral("ordinate"));
+            e.a = p1;
+            e.b = defPt;
+            break;
+        default:
+            // 2 is angular taken between two LINES, which needs the lines; anything else is unknown.
+            return false;
+        }
+        e.type = EntityType::Dimension;
+
+        // WHAT IT SAYS, when the drawing says it rather than leaving it to the measurement. This is not a
+        // nicety: on the sheet it was written for, six of the nine dimensions read "TBD" and two more read
+        // a round number quite unlike the distance actually on the paper. A dimension that measured for
+        // itself and ignored this would quietly state something the drawing never said.
+        const QString says = findVal(g, "1");
+        if (!says.isEmpty() && says != QLatin1String("<>"))
+            e.meta.insert(QStringLiteral("textOverride"), says);
+
+        // Written at the size the DRAWING says, not at this program's own default, which is millimetres
+        // on a sheet and swamps a drawing whose units are millimetres.
+        //
+        // Three places say it, each overriding the one before: the header, the named style, and the
+        // dimension's own overrides. The last of those is how AutoCAD records "this one dimension is
+        // different", and it is kept in extended data rather than in a group code of its own - 1070
+        // names the setting by its variable number and the 1040 after it carries the value. On the sheet
+        // this was written for, that is the ONLY place the real sizes appear: 41 (the arrow) at 0.15 and
+        // 140 (the text) at 0.12, against a header saying 0.18 for both.
+        DimStyle st = dimStyles.contains(findVal(g, "3")) ? dimStyles.value(findVal(g, "3"))
+                                                        : headerDim;
+        for (size_t k = 0; k + 1 < g.size(); ++k) {
+            if (g[k].code != QLatin1String("1070") || g[k + 1].code != QLatin1String("1040")) continue;
+            const QString which = g[k].value.trimmed();
+            const double v = g[k + 1].value.toDouble();
+            if (which == QLatin1String("41")) st.arrow = v;
+            else if (which == QLatin1String("140")) st.textH = v;
+            else if (which == QLatin1String("42")) st.extOff = v;
+        }
+        e.meta.insert(QStringLiteral("textHeight"), xf.len(st.textH));
+        e.meta.insert(QStringLiteral("arrowSize"), xf.len(st.arrow));
+        e.meta.insert(QStringLiteral("extOffset"), xf.len(st.extOff));
+        return true;
+    };
+
     // The filled triangle a leader points with: its tip AT the point picked out, lying back along the
     // leader. AutoCAD's proportions - as long as the arrow size, a third of that across.
     auto arrowHead = [](const Vec2& tip, const Vec2& from, double size) {
@@ -858,6 +1012,17 @@ bool parse(Document& doc, const QString& text, QString*) {
                 e.color = color;
 
                 if (type == "INSERT" || type == "DIMENSION" || type == "ACAD_TABLE") {
+                    // A dimension is READ as a dimension when it can be, from the points that define
+                    // what it measures, rather than expanded from the geometry baked for it. Tried
+                    // first, and it falls through to the block below when the kind is not one of ours,
+                    // so a file never loses marks it had.
+                    if (type == "DIMENSION") {
+                        Entity dim = e;
+                        if (readDimension(dim, g, xf)) {
+                            entities.push_back(std::move(dim));
+                            continue;
+                        }
+                    }
                     // All three are drawn by a BLOCK. An insert places one, with its own scale and
                     // turn; a dimension and a table each name the block that holds the geometry
                     // AutoCAD generated for them, which is already in the drawing's coordinates.
@@ -949,11 +1114,17 @@ bool parse(Document& doc, const QString& text, QString*) {
                     // content's own base point, so a leader given as a single point is a line from
                     // there to the text and not nothing at all.
                     if (verts.size() == 1 && haveText) verts.push_back(textAt);
+                    // A callout is ONE thing: the line, the head on it and the words it carries. There
+                    // is no leader object in this drawing to read it into, so the three pieces are
+                    // stamped as one group instead - picked up, moved and deleted together, rather than
+                    // three separate items to be found and dragged one at a time.
+                    const QString callout = QStringLiteral("mleader-%1").arg(e.id);
                     if (verts.size() > 1) {
                         Entity lead = e;
                         lead.id = newId();
                         lead.type = EntityType::Polyline;
                         lead.points = verts;
+                        stampEntityGroup(lead, callout);
                         entities.push_back(std::move(lead));
                         // And the head it points with. A multileader names its style by handle - the
                         // LAST 340 in the record; the 340 before it is the style its words are set in.
@@ -966,6 +1137,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                         head.points = arrowHead(verts[0], verts[1],
                                                 xf.len(mleaderArrow.value(styleHandle, 2.5)));
                         head.meta.insert("filled", true);
+                        stampEntityGroup(head, callout);
                         if (head.points.size() == 3) entities.push_back(std::move(head));
                     }
                     if (!label.isEmpty() && haveText) {
@@ -978,6 +1150,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                                         std::max(1e-9, xf.len(height > 0.0 ? height : 2.5)));
                         // A leader's words sit beside where it lands, reading away from it.
                         txt.meta.insert("justify", QStringLiteral("ML"));
+                        stampEntityGroup(txt, callout);
                         entities.push_back(std::move(txt));
                     }
                     continue;
@@ -1089,7 +1262,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                     // its own extended data: 1070 names the setting (41 is the arrow size) and the 1040
                     // after it carries the value.
                     if (type == "LEADER" && e.points.size() > 1) {
-                        double size = dimArrow.value(findVal(g, "3"), 2.5);
+                        double size = dimStyles.value(findVal(g, "3")).arrow;
                         for (size_t k = 0; k + 1 < g.size(); ++k)
                             if (g[k].code == QLatin1String("1070") &&
                                 g[k].value.trimmed() == QLatin1String("41") &&
@@ -1100,6 +1273,12 @@ bool parse(Document& doc, const QString& text, QString*) {
                         head.type = EntityType::Polygon;
                         head.points = arrowHead(e.points[0], e.points[1], xf.len(size));
                         head.meta.insert("filled", true);
+                        // An arrow and the line it sits on the end of are ONE thing to a person reading
+                        // the sheet, and were two things to move and two to delete. Stamped as a group,
+                        // so picking either takes both.
+                        const QString callout = QStringLiteral("leader-%1").arg(e.id);
+                        stampEntityGroup(head, callout);
+                        stampEntityGroup(e, callout);
                         if (head.points.size() == 3) entities.push_back(std::move(head));
                     }
                     if (e.points.size() > 1) entities.push_back(std::move(e));

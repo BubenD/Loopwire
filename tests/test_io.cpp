@@ -853,6 +853,106 @@ int run_io_tests() {
         }
     }
 
+    // ---- a measurement read as a measurement -----------------------------------------------------
+    {
+        // Every dimension in a DXF carries BOTH: an anonymous block holding the geometry AutoCAD already
+        // drew for it, and the points saying what is being measured. Expanding the block was faithful to
+        // the marks on the paper and lost the dimension - a handful of lines, two filled triangles and a
+        // piece of text, none of which knows it is a measurement, none of which re-measures when the
+        // geometry moves, and every piece of which has to be deleted separately.
+        //
+        // The sizes matter as much as the geometry. A DIMSTYLE record only writes what it CHANGES, so on a
+        // real file the style table is three bare names and the figures live in the header - or, as here,
+        // in the dimension's own extended-data overrides, where 1070 names the setting by its variable
+        // number and the 1040 after it carries the value.
+        const QByteArray dim = QByteArrayLiteral(
+            "0\nSECTION\n2\nHEADER\n"
+            "9\n$DIMSCALE\n40\n1.0\n"
+            "9\n$DIMASZ\n40\n0.18\n"
+            "9\n$DIMTXT\n40\n0.18\n"
+            "0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+            "0\nDIMENSION\n8\n0\n70\n32\n3\nEdi\n"
+            "13\n10.0\n23\n5.0\n"      // first extension line origin
+            "14\n20.0\n24\n5.0\n"      // second
+            "10\n20.0\n20\n8.0\n"      // where the dimension line stands off
+            "11\n15.0\n21\n8.0\n"      // the text midpoint
+            "1\nTBD\n"                 // what it SAYS, in place of the measurement
+            "1001\nACAD\n1000\nDSTYLE\n1002\n{\n1070\n140\n1040\n0.12\n1002\n}\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, dim, nullptr), "dimension: the file reads");
+        check(d.entities().size() == 1, "dimension: it is ONE object, not a pile of lines");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.type == EntityType::Dimension, "dimension: read as a dimension");
+            check(e.meta.value("dimType").toString() == QLatin1String("linear"),
+                  "dimension: a rotated one measures along an axis");
+            // Which way it was PLACED measuring, stated rather than worked out later: the geometry it
+            // measures can be dragged, and a dimension that decides afterwards turns round and measures
+            // something else the moment that happens.
+            check(e.meta.value("dimAcross").toBool(), "dimension: it remembers measuring across x");
+            check(std::abs(e.a.x - 10.0) < 1e-9 && std::abs(e.b.x - 20.0) < 1e-9,
+                  "dimension: between the two points it was taken between");
+            check(e.points.size() == 3 && std::abs(e.points[2].y - 8.0) < 1e-9,
+                  "dimension: standing off where the drawing put its line");
+            // Six of the nine on the sheet this came from read "TBD", and two more read a round number
+            // quite unlike the distance on the paper. A dimension that measured for itself and ignored
+            // that would quietly state something the drawing never said.
+            check(e.meta.value("textOverride").toString() == QLatin1String("TBD"),
+                  "dimension: it says what the drawing says, not what it measures");
+            std::printf("  dimension: says %s, text %.3f, arrow %.3f\n",
+                        qPrintable(e.meta.value("textOverride").toString()),
+                        e.meta.value("textHeight").toDouble(),
+                        e.meta.value("arrowSize").toDouble());
+            check(std::abs(e.meta.value("textHeight").toDouble() - 0.12) < 1e-9,
+                  "dimension: written at the size its own override states");
+            check(std::abs(e.meta.value("arrowSize").toDouble() - 0.18) < 1e-9,
+                  "dimension: and the arrow at the size the header states, having no override");
+        }
+
+        // A dimension taken on a SLANT is not one this drawing can represent - ours measures along one
+        // axis or the other - so it must not be read as though it were. Better the baked geometry (or,
+        // with no block in the file to bake from, nothing) than a measurement that states a length the
+        // drawing never took.
+        const QByteArray slant = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nDIMENSION\n8\n0\n70\n32\n50\n30.0\n"
+            "13\n0.0\n23\n0.0\n14\n10.0\n24\n0.0\n10\n10.0\n20\n4.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document s;
+        dxf::parseBytes(s, slant, nullptr);
+        bool anyDim = false;
+        for (const Entity& e : s.entities())
+            if (e.type == EntityType::Dimension) anyDim = true;
+        check(!anyDim, "dimension: one taken on a slant is not passed off as an axis measurement");
+    }
+
+    // ---- an arrow and its line are one thing -----------------------------------------------------
+    {
+        // There is no leader object in this drawing to read a callout into, so a LEADER arrives as the
+        // line plus the filled triangle on the end of it. That was two things to select, two to move and
+        // two to delete - the arrow left behind after dragging the line is exactly the sort of thing that
+        // gets released. Stamped as one group instead, so picking either takes both.
+        const QByteArray lead = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLEADER\n8\n0\n3\nEdi\n"
+            "10\n1.0\n20\n1.0\n10\n5.0\n20\n5.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        dxf::parseBytes(d, lead, nullptr);
+        std::printf("  leader: %d piece(s)\n", int(d.entities().size()));
+        check(d.entities().size() == 2, "leader: the line, and the head it points with");
+        QString key;
+        bool allOne = !d.entities().empty();
+        for (const Entity& e : d.entities()) {
+            const QString k = e.meta.value(QStringLiteral("blockInst")).toString();
+            if (k.isEmpty()) allOne = false;
+            else if (key.isEmpty()) key = k;
+            else if (k != key) allOne = false;
+        }
+        check(allOne, "leader: both pieces carry the same stamp, so they move as one");
+    }
+
     // ---- the text size a drawing states ----------------------------------------------------------
     {
         // A floor of 0.1 used to be imposed on every imported text height, so that text could never be
