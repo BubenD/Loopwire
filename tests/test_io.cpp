@@ -956,6 +956,74 @@ int run_io_tests() {
         }
     }
 
+    // ---- a table read as a table ------------------------------------------------------------------
+    {
+        // Everything needed is in the record: how many rows and columns, the height of each row, the width
+        // of each column, and one cell record per cell carrying that cell's words. It was thrown away in
+        // favour of expanding the grid AutoCAD baked - which drew the right marks and left no table. On the
+        // sheet this was written for that was 197 lines and 243 separate pieces of text in place of four
+        // objects: nothing whose cells could be typed into, no rows to add, no columns to widen.
+        //
+        // Read sequentially, because the header codes and the cell records both use 90..94 for their own
+        // purposes and only their position tells them apart.
+        const QByteArray tbl = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nACAD_TABLE\n8\n0\n2\n*T1\n"
+            "10\n5.0\n20\n20.0\n11\n1.0\n21\n0.0\n"
+            "91\n2\n92\n3\n"                       // 2 rows, 3 columns
+            "141\n1.0\n141\n2.0\n"                 // row heights
+            "142\n3.0\n142\n4.0\n142\n5.0\n"       // column widths
+            "171\n1\n1\nA1\n"
+            "171\n1\n1\nB1\n"
+            "171\n1\n1\nC1\n"
+            "171\n1\n1\nA2\n"
+            "171\n1\n"                             // an empty cell
+            "171\n1\n1\nC2\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, tbl, nullptr) && d.entities().size() == 1,
+              "table: it is ONE object, not a grid of lines and loose texts");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.meta.value("table").toBool(), "table: read as a table");
+            check(e.meta.value("rows").toInt() == 2 && e.meta.value("cols").toInt() == 3,
+                  "table: with the rows and columns the file states");
+            const QJsonArray cells = e.meta.value("cells").toArray();
+            check(cells.size() == 6, "table: a cell for every row and column");
+            check(cells[0].toString() == QLatin1String("A1") &&
+                      cells[2].toString() == QLatin1String("C1") &&
+                      cells[5].toString() == QLatin1String("C2"),
+                  "table: the words are in the cells they belong to");
+            check(cells[4].toString().isEmpty(), "table: and an empty cell stays empty");
+            // The insertion point is the TOP-LEFT: columns run right from it, rows down.
+            const Bounds b = e.bounds();
+            std::printf("  table: %.1f x %.1f at (%.1f,%.1f)\n", b.width(), b.height(), b.min.x,
+                        b.min.y);
+            check(std::abs(b.width() - 12.0) < 1e-6 && std::abs(b.height() - 3.0) < 1e-6,
+                  "table: as wide as its columns and as tall as its rows");
+            check(std::abs(b.max.y - 20.0) < 1e-6 && std::abs(b.min.x - 5.0) < 1e-6,
+                  "table: hanging down and to the right of where it is placed");
+            const QJsonArray colFrac = e.meta.value("colFrac").toArray();
+            check(colFrac.size() == 3 && std::abs(colFrac[0].toDouble() - 0.25) < 1e-9,
+                  "table: the columns keep their own widths, not an even share");
+        }
+
+        // A TURNED table is not something this drawing's table can be, so it is not laid out square and
+        // wrong - it keeps the baked grid (and with no block in the file to bake from, nothing).
+        const QByteArray turned = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nACAD_TABLE\n8\n0\n2\n*T9\n"
+            "10\n5.0\n20\n20.0\n11\n0.0\n21\n1.0\n"
+            "91\n1\n92\n1\n141\n1.0\n142\n1.0\n171\n1\n1\nX\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document t;
+        dxf::parseBytes(t, turned, nullptr);
+        bool anyTable = false;
+        for (const Entity& e : t.entities())
+            if (e.meta.value("table").toBool()) anyTable = true;
+        check(!anyTable, "table: a turned one is not passed off as a square one");
+    }
+
     // ---- a fill that was thrown away --------------------------------------------------------------
     {
         // HATCH was not in the list of things worth reading, so every fill on a sheet was dropped: a

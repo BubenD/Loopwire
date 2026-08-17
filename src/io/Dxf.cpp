@@ -896,6 +896,81 @@ bool parse(Document& doc, const QString& text, QString*) {
         return true;
     };
 
+    // A TABLE as a table, rather than as the grid of lines and separate texts AutoCAD baked for it.
+    //
+    // Everything needed is in the record: how many rows and columns, the height of each row and the width
+    // of each column, and then one cell record per cell carrying that cell's words. It was being thrown
+    // away in favour of expanding the generated block, which drew the right marks and left no table -
+    // nothing whose cells could be typed into, no rows to add, no columns to widen, just a hundred and
+    // ninety-seven lines and two hundred and forty-three separate pieces of text.
+    //
+    // Read sequentially: the header codes come first and the cell records follow, and both use 90..94 for
+    // their own purposes, so position is what tells them apart.
+    auto readTable = [](Entity& e, const std::vector<Pair>& g, const Xf& xf) -> bool {
+        const int rows = findVal(g, "91", "0").toInt();
+        const int cols = findVal(g, "92", "0").toInt();
+        if (rows < 1 || cols < 1 || rows * cols > 20000) return false;
+        // Turned tables are not something this drawing's table can be, so one of those keeps the baked
+        // grid rather than being laid out square and wrong.
+        const Vec2 dir{findNum(g, "11", 1.0), findNum(g, "21", 0.0)};
+        if (std::hypot(dir.x, dir.y) > 1e-12 && std::abs(dir.y) > 1e-6 * std::abs(dir.x)) return false;
+
+        std::vector<double> rowH, colW;
+        std::vector<QString> cells;
+        double textH = 0.0;
+        {
+            size_t i = 0;
+            // The header: row heights (141) and column widths (142), up to the first cell record.
+            for (; i < g.size() && g[i].code != QLatin1String("171"); ++i) {
+                if (g[i].code == QLatin1String("141")) rowH.push_back(g[i].value.toDouble());
+                else if (g[i].code == QLatin1String("142")) colW.push_back(g[i].value.toDouble());
+                else if (g[i].code == QLatin1String("140") && textH <= 0.0)
+                    textH = g[i].value.toDouble();
+            }
+            // Then one record per cell, each led by 171. A cell's words are its code 1; a cell with none
+            // is an empty cell, which is most of a title block.
+            while (i < g.size()) {
+                if (g[i].code != QLatin1String("171")) { ++i; continue; }
+                ++i;
+                QString said;
+                for (; i < g.size() && g[i].code != QLatin1String("171"); ++i)
+                    if (g[i].code == QLatin1String("1") && said.isEmpty()) said = g[i].value;
+                cells.push_back(decodeDxfText(said, true));
+            }
+        }
+        if (static_cast<int>(rowH.size()) < rows || static_cast<int>(colW.size()) < cols) return false;
+        rowH.resize(rows);
+        colW.resize(cols);
+        double W = 0.0, H = 0.0;
+        for (double w : colW) W += w;
+        for (double h : rowH) H += h;
+        if (!(W > 1e-9) || !(H > 1e-9)) return false;
+
+        // Where it sits: the insertion point is the TOP-LEFT, columns run right from it and rows down.
+        const Vec2 at = xf.apply({findNum(g, "10"), findNum(g, "20")});
+        const double w = xf.len(W), h = xf.len(H);
+        const double minX = at.x, maxX = at.x + w, maxY = at.y, minY = at.y - h;
+        e.type = EntityType::Rect;
+        e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+        e.a = {minX, maxY};
+
+        QJsonArray colFrac, rowFrac, cellArr;
+        for (double cw : colW) colFrac.append(cw / W);
+        for (double rh : rowH) rowFrac.append(rh / H);
+        cells.resize(static_cast<size_t>(rows) * cols);   // pad short, drop long
+        for (const QString& s : cells) cellArr.append(s);
+        e.meta.insert(QStringLiteral("table"), true);
+        e.meta.insert(QStringLiteral("rows"), rows);
+        e.meta.insert(QStringLiteral("cols"), cols);
+        e.meta.insert(QStringLiteral("colFrac"), colFrac);
+        e.meta.insert(QStringLiteral("rowFrac"), rowFrac);
+        e.meta.insert(QStringLiteral("cells"), cellArr);
+        // The size the words are written at: what the file says, or something that fits the row.
+        const double fit = xf.len(H / std::max(1, rows)) * 0.55;
+        e.meta.insert(QStringLiteral("textSize"), textH > 1e-9 ? xf.len(textH) : fit);
+        return true;
+    };
+
     // The filled triangle a leader points with: its tip AT the point picked out, lying back along the
     // leader. AutoCAD's proportions - as long as the arrow size, a third of that across.
     auto arrowHead = [](const Vec2& tip, const Vec2& from, double size) {
@@ -1020,6 +1095,15 @@ bool parse(Document& doc, const QString& text, QString*) {
                         Entity dim = e;
                         if (readDimension(dim, g, xf)) {
                             entities.push_back(std::move(dim));
+                            continue;
+                        }
+                    }
+                    // A table likewise: read as a table when it can be, from the rows, columns and cells
+                    // the record states, and only expanded from its baked grid when it cannot.
+                    if (type == "ACAD_TABLE") {
+                        Entity tbl = e;
+                        if (readTable(tbl, g, xf)) {
+                            entities.push_back(std::move(tbl));
                             continue;
                         }
                     }
