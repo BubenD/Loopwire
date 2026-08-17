@@ -40,8 +40,10 @@ class Editor;
 class MechModelsDialog : public QDialog {
     Q_OBJECT
 public:
+    // onEdit is handed the kind AND which model of it is showing: a kind holds several, and editing the
+    // right-angled backshell has to open that one rather than whichever the kind happens to default to.
     explicit MechModelsDialog(Editor* editor, QWidget* parent = nullptr,
-                              std::function<void(MechModelKind)> onEdit = {});
+                              std::function<void(MechModelKind, QString)> onEdit = {});
 
     // The models as they stand, and which one is showing.
     const MechModelSet& models() const { return set_; }
@@ -84,7 +86,7 @@ private:
     MechModel* current();
 
     Editor* editor_ = nullptr;
-    std::function<void(MechModelKind)> onEdit_;
+    std::function<void(MechModelKind, QString)> onEdit_;
     MechModelSet set_;
     std::vector<MechModelKind> kinds_;
     // One entry per ROW of the list: which kind, and which model of it ("" = the kind's first).

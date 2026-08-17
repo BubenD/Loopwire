@@ -102,7 +102,7 @@ QDoubleSpinBox* mmSpin(double max = 2000.0) {
 } // namespace
 
 MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
-                                   std::function<void(MechModelKind)> onEdit)
+                                   std::function<void(MechModelKind, QString)> onEdit)
     : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
     setWindowTitle(QStringLiteral("Default mechanical models"));
     setModal(false);
@@ -616,7 +616,7 @@ void MechModelsDialog::captureSelection() {
 void MechModelsDialog::editOnCanvas() {
     const MechModelKind kind = currentKind();
     if (onEdit_) {
-        onEdit_(kind);
+        onEdit_(kind, currentName());   // the model showing, not the kind's default
         hide();
         return;
     }

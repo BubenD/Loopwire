@@ -1149,6 +1149,34 @@ all.
 Measured: two objects on the sheet, one picked — the model is one object, not two — and cancelling leaves the
 model exactly as it was, whatever is selected at the time.
 
+## Capturing from the canvas saves the model
+
+*Edit on the canvas* opens the model in a document of its own, where the whole ribbon is available and
+everything drawn **is** the model — so Capture there takes the entire canvas rather than asking for a
+selection, which is what the manager's own Capture button is for.
+
+That Capture said *"Saved"*, closed the session and wrote the file back **exactly as it was found**. The model
+was measured off the drawing, normalised, and then never put into the set: `save()` writes out what `load()`
+read, so every model ever drawn this way was reported saved and lost. Three things were wrong in the one step,
+all of them silent:
+
+- **The model was never added to the set.** Everything above it was correct and went nowhere.
+- **The connection point stayed behind.** A model is kept running along +x from the origin and centred across
+  it, so the drawing is moved there on the way out — and the near and far points were carried with it while
+  the connection point was not. A part is then placed by a point nowhere near its own drawing.
+- **Scaling across was switched on by capturing.** `drawnAcrossMm` is the manager's yes-or-no, where zero
+  means leave it alone; measuring it unconditionally turned it on for every model that was ever edited.
+
+Measured: a boot drawn 40 mm long at (100,50) and marked where it connects, captured from the canvas, reads
+back out of the file as two objects (not the guide marks), 40 mm long, with its connection point at the origin
+and scaling across still off.
+
+**And Capture lands on the model that was being edited.** *Edit on the canvas* opened the kind's **default**
+whichever row the manager had selected, so editing the right-angled backshell put the straight one on the
+canvas and captured over it. The name travels with the request now, a session is matched by kind *and* name
+(two models of one kind can be open at once, and the tab says which), and a model with nothing drawn yet is
+still captured under its own name.
+
 ## A cable and a wire are taken as drawn, and leave a gap
 
 A model never carries a length: a cable is drawn at whatever length suits and the harness says how long the

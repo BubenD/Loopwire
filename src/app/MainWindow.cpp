@@ -11004,8 +11004,8 @@ void MainWindow::showMechanicalBuilder() {
 
 void MainWindow::showMechModels() {
     if (!modelsDlg_) {
-        modelsDlg_ = new MechModelsDialog(editor_, this, [this](MechModelKind kind) {
-            openMechModelEditor(kind);
+        modelsDlg_ = new MechModelsDialog(editor_, this, [this](MechModelKind kind, QString name) {
+            openMechModelEditor(kind, name);
         });
         // The same stepping-aside as the parts library: the window goes, the ribbon says what to do, and
         // Enter takes the selection.
@@ -11022,23 +11022,37 @@ void MainWindow::showMechModels() {
 }
 
 void MainWindow::openMechModelEditor(MechModelKind kind) {
+    // Which model of the kind "the model" means, resolved to a name here so everything below works in
+    // names only - a kind holds as many models as an office has drawn.
+    MechModelSet set;
+    set.load();
+    const MechModel* def = set.of(kind);
+    openMechModelEditor(kind, def ? def->name : QString());
+}
+
+void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
+    // Already open? The same MODEL, not merely the same kind. Matching on the kind alone handed back the
+    // session for the straight backshell when the right-angled one was asked for, so the wrong drawing
+    // was edited and then captured over the wrong model.
     for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
-        if (mechModelEdits_.value(docs_[i].get(), MechModelKind::Wire) == kind &&
-            mechModelEdits_.contains(docs_[i].get())) {
-            docTabs_->setCurrentIndex(i);
-            activateIndex(i);
-            return;
-        }
+        Document* d = docs_[i].get();
+        if (!mechModelEdits_.contains(d) || mechModelEdits_.value(d) != kind) continue;
+        if (mechModelSessionModels_.value(d).name != name) continue;
+        docTabs_->setCurrentIndex(i);
+        activateIndex(i);
+        return;
     }
 
     MechModelSet set;
     set.load();
     MechModel model;
     model.kind = kind;
-    if (const MechModel* existing = set.of(kind)) model = *existing;
+    model.name = name;   // a model that has nothing drawn yet is still captured under its own name
+    if (const MechModel* existing = set.of(kind, name)) model = *existing;
 
     auto doc = std::make_unique<Document>(
-        QStringLiteral("Model - %1").arg(mechModelName(kind)));
+        name.isEmpty() ? QStringLiteral("Model - %1").arg(mechModelName(kind))
+                       : QStringLiteral("Model - %1 (%2)").arg(mechModelName(kind), name));
     loadMechModelDocument(*doc, model);
     doc->setDirty(false);
     Document* raw = doc.get();
@@ -11091,13 +11105,25 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     set.load();
     MechModel model = mechModelSessionModels_.value(doc);
     model.kind = kind;
+    // A model is kept running along +x from the origin and centred across it, so the drawing is moved
+    // there. Everything MARKED on it has to travel with it: a connection point left behind in the
+    // coordinates the drawing used to be at places the part by a point that is no longer anywhere near
+    // it - the near and far points were being carried and it was not.
     const Vec2 shift{-bounds.min.x, -(bounds.min.y + bounds.max.y) / 2.0};
     for (Entity& e : drawing) translateEntity(e, shift);
     if (model.hasNearPoint) model.nearPoint += shift;
     if (model.hasFarPoint) model.farPoint += shift;
+    if (model.hasConnect) model.connectPoint += shift;
     model.drawing = partDrawingFromEntities(drawing);
     model.drawnLengthMm = bounds.width();
-    model.drawnAcrossMm = bounds.height();
+    // Scaling across is a yes-or-no the manager holds, where zero means leave it alone. Measuring it
+    // here unconditionally switched it ON for every model that was ever edited on the canvas, so it is
+    // re-measured only for the models that were already being scaled.
+    if (model.drawnAcrossMm > 0.0) model.drawnAcrossMm = bounds.height();
+    // And the model actually goes back INTO the set. Without this the whole capture was built up and
+    // then dropped on the floor: save() writes out what load() read, so a model drawn on the canvas was
+    // reported saved, the session closed, and the file was left exactly as it was found.
+    set.set(model);
     if (!set.save()) {
         QMessageBox::warning(this, QStringLiteral("Save model failed"),
                              QStringLiteral("The mechanical model could not be saved."));
@@ -11105,11 +11131,15 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     }
     doc->setDirty(false);
     if (modelsDlg_) modelsDlg_->setModels(set);
+    // Measured, not whatever the scale-across setting happens to hold: the message says how big the
+    // thing that was just saved is, which is the one number worth reading back.
     statusBar()->showMessage(
-        QStringLiteral("Saved %1 (%2 mm long, %3 mm across)")
-            .arg(mechModelName(kind))
-            .arg(model.drawnLengthMm, 0, 'f', 1)
-            .arg(model.drawnAcrossMm, 0, 'f', 1),
+        QStringLiteral("Saved %1 — %2 object(s), %3 mm long, %4 mm across")
+            .arg(model.name.isEmpty() ? mechModelName(kind)
+                                      : QStringLiteral("%1 (%2)").arg(mechModelName(kind), model.name))
+            .arg(drawing.size())
+            .arg(bounds.width(), 0, 'f', 1)
+            .arg(bounds.height(), 0, 'f', 1),
         5000);
     return true;
 }

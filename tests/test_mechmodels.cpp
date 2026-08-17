@@ -482,6 +482,82 @@ int run_mechmodels_tests() {
         }
     }
 
+    // ---- what is drawn on the canvas is what Capture saves ----------------------------------------
+    {
+        // Editing a model on the canvas and pressing Capture said "Saved", closed the session, and wrote
+        // the file back EXACTLY as it was found: the model was built up out of the drawing and then never
+        // put into the set, and save() writes out what load() read. Every model drawn this way was lost.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+        QFile::remove(modelsFile);   // start from nothing, so what is read back can only be what was saved
+
+        {
+            MainWindow win;
+            win.resize(1200, 800);
+            win.show();
+            QApplication::processEvents();
+            win.openMechModelEditor(MechModelKind::Boot);
+            for (int i = 0; i < 10; ++i) QApplication::processEvents();
+            Editor* ed = win.findChild<Editor*>();
+            Document* doc = ed->document();
+            auto& snap = ed->snapSettings();
+            snap.objectSnap = false;
+            snap.gridSnap = false;
+            snap.ortho = false;
+            snap.polar = false;
+
+            // A boot, drawn well away from the origin and marked where it connects - both of which the
+            // save has to deal with: the drawing is moved to the origin, and the mark must travel with it.
+            for (int i = 0; i < 2; ++i) {
+                Entity e;
+                e.id = QStringLiteral("boot%1").arg(i);
+                e.type = EntityType::Line;
+                e.a = {100.0, 50.0 + (i ? 6.0 : -6.0)};
+                e.b = {140.0, 50.0 + (i ? 6.0 : -6.0)};
+                doc->entities().push_back(e);
+            }
+            ed->setTool(ToolId::ModelConnectPoint);
+            ed->onPointerPress({100.0, 50.0}, Qt::LeftButton, Qt::NoModifier);   // the point
+            ed->onPointerPress({140.0, 50.0}, Qt::LeftButton, Qt::NoModifier);   // the direction
+            QApplication::processEvents();
+
+            win.saveMechModelBeingEdited();
+            for (int i = 0; i < 10; ++i) QApplication::processEvents();
+        }
+
+        MechModelSet back;
+        check(back.load(modelsFile), "canvas capture: a file was actually written");
+        const MechModel* saved = back.of(MechModelKind::Boot);
+        check(saved != nullptr, "canvas capture: the boot drawn on the canvas is in the file");
+        if (saved) {
+            const std::vector<Entity> got = partDrawingEntities(saved->drawing);
+            std::printf("  canvas capture: %d object(s), %.1f long, connect %s\n",
+                        static_cast<int>(got.size()), mechModelDrawnLength(*saved),
+                        saved->hasConnect ? "marked" : "not marked");
+            check(got.size() == 2, "canvas capture: both objects of it, and not the guide marks");
+            check(near(mechModelDrawnLength(*saved), 40.0, 0.5),
+                  "canvas capture: as long as it was drawn");
+            // Moved to the origin, and the connection point moved with it: left behind at 100 it would
+            // place the part by a point nowhere near the drawing.
+            check(saved->hasConnect && near(saved->connectPoint.x, 0.0, 0.5),
+                  "canvas capture: the connection point travels with the drawing");
+            check(near(saved->drawnAcrossMm, 0.0),
+                  "canvas capture: scaling across is left off, not switched on by capturing");
+        }
+
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
     // ---- several models of one kind, and which one a drawing uses ---------------------------------
     {
         // An office draws a straight backshell and a right-angled one. Both are backshells. One model per
