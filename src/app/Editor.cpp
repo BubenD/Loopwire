@@ -1460,7 +1460,17 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints);
 void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModifiers mods) {
     const bool shift = mods & Qt::ShiftModifier;
     const bool ctrl = mods & Qt::ControlModifier;
-    clearCellSelection(); // any click clears the table-cell selection unless it re-picks one
+    // The table-cell selection is NOT dropped here.
+    //
+    // It used to be, first thing, on the grounds that any click clears it unless it re-picks a cell. But
+    // a table's cell handles are placed ON the picked cell - and where they are is worked out from which
+    // cell is picked. Clearing first meant that by the time the click looked for a handle to grab, no
+    // cell was picked, so it looked at the four corners and the middle of the whole table instead: the
+    // handles were drawn in one place and could only be caught in another, which is to say not at all.
+    //
+    // So it is dropped further down, once the handles have had their chance - see (c). Everything between
+    // here and there either places a joint already in hand or acts on a marking, and none of it is about
+    // tables.
 
     // Ctrl+click balloon leaders (AutoCAD Add/Remove Leader gestures):
     //  - near an existing arrow tip -> remove that leader (if the balloon has >1);
@@ -1614,6 +1624,7 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
     }
     // (b) Pending rectangle waiting for its opposite corner.
     if (regionMode_ == RegionMode::RectPending) {
+        clearCellSelection();   // a swept selection is about objects, not about a cell
         finishRegionSelect(shift);
         regionMode_ = RegionMode::None;
         emit changed();
@@ -1644,8 +1655,13 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
                          : QStringLiteral("Pulling the marking along its wire"));
         return;
     }
-    // (c) Click on a joint of a selected entity -> grab it (click to place).
+    // (c) Click on a joint of a selected entity -> grab it (click to place). Asked while the picked cell
+    // is still picked, because that is what says where a table's cell handles are.
     if (beginGripGrab(raw, shift)) return;
+
+    // Nothing was grabbed, so this click is going somewhere else: the cell selection goes now. Either the
+    // table branch below picks a cell again, or the click was elsewhere and there is no cell picked.
+    clearCellSelection();
 
     // (d) Click on an entity body -> select only (Shift removes). Dragging the body
     // does NOT move the object — moving requires the Move command (or a grip).

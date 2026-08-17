@@ -7827,6 +7827,54 @@ int run_editor_tests() {
         ed.onPointerPress({30, 17.0}, Qt::LeftButton, Qt::NoModifier);
         check(ed.selectedCellIndex() == 1,
               "table-pick: the outline band does not swallow the cells behind it");
+
+    }
+
+    // ---- a cell's handles can be CAUGHT where they are drawn --------------------------------------
+    {
+        // A TALL table, deliberately: a cell's handle sits at the middle of that cell, and the handle
+        // this replaced sat at the middle of the whole table. On a short table those two are close enough
+        // that the pick tolerance covers both and either would be caught - which is exactly why the first
+        // version of this test passed against the bug it was written for. Ten rows put them 45 apart.
+        //
+        // The bug: the click cleared the cell selection FIRST, and where a cell's handles are is worked
+        // out from which cell is picked. So the grab looked for handles at the corners and the middle of
+        // the whole table - where they used to be, not where they had just been drawn - and on a real
+        // thirty-four row bill of materials the handle simply could not be caught at all.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3;
+        s.colWidth = 20.0;
+        s.dataRows = 10;
+        s.rowHeight = 10.0;
+        s.title = false;
+        s.header = false;
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 100}, Qt::LeftButton, Qt::NoModifier);   // (0,0)..(60,100)
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities())
+                if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+
+        // Cell 1 is the top row, middle column: x 20..40, y 90..100. Its handles sit at y = 95. The
+        // table's own middle is y = 50, a long way off.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({30, 95}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({30, 95}, Qt::LeftButton);
+        check(ed.selectedCellIndex() == 1, "table-grip: the cell is picked");
+        const double before = table()->meta.value("colFrac").toArray()[0].toDouble();
+        ed.onPointerPress({20, 95}, Qt::LeftButton, Qt::NoModifier);   // grab it at the CELL
+        ed.onPointerMove({26, 95});
+        ed.onPointerPress({26, 95}, Qt::LeftButton, Qt::NoModifier);   // place it
+        const double after = table()->meta.value("colFrac").toArray()[0].toDouble();
+        std::printf("  table-grip: first column %.3f -> %.3f of the table\n", before, after);
+        check(after > before,
+              "table-grip: the handle is caught where it is drawn, and widens the whole column");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
