@@ -7058,21 +7058,30 @@ void Editor::finishDraw() {
     }
     case ToolId::Balloon:
     case ToolId::TextLeader: {
-        // A leader callout: first point = arrow tip, second = the label location.
-        // Stored as a Circle carrying meta["balloon"] + the arrow tip + landing. A
-        // Balloon shows a numbered circle; a TextLeader shows plain text (no circle).
+        // A leader callout: first point = arrow tip, second = the label location. WITH a balloon it is a
+        // Circle carrying meta["balloon"], its number, and the arrow as a leader on it - which is what the
+        // bill of materials numbers, aligns and collects. WITHOUT one it is a Leader.
         if (draftPts_.size() < 2) return;
         const Vec2 tip = draftPts_[0], c = draftPts_[1];
         const bool textOnly = (tool_ == ToolId::TextLeader);
+        // WITHOUT a balloon, a callout is a leader - the same object one read out of a DXF is, so a drawn
+        // one and an imported one are the same thing and behave the same way: held by its tip, its words
+        // changed by a double-click or in Properties. It used to be a Circle carrying balloon meta with
+        // the circle suppressed, which meant the two were different objects that happened to look alike.
+        if (textOnly) {
+            e.type = EntityType::Leader;
+            e.points = {tip, c};
+            e.meta.insert("text", QStringLiteral("Text"));
+            e.meta.insert("size", 2.5);
+            e.meta.insert("arrowSize", 3.3);
+            break;
+        }
         e.type = EntityType::Circle;
         e.center = c;
         e.a = c;
         e.radius = 6.0;
         e.meta.insert("balloon", true);
-        if (textOnly) {
-            e.meta.insert("textLeader", true);
-            e.meta.insert("text", QStringLiteral("Text"));
-        } else {
+        {
             if (!balloonTextNext_.isEmpty()) {
                 // Started from a bill of materials line: it already knows its number.
                 e.meta.insert("text", balloonTextNext_);

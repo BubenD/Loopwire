@@ -990,19 +990,55 @@ int run_editor_tests() {
               "leader-tangent: a coupled circle stays tangent to its neighbour when moved");
     }
 
-    // --- Text leader: two clicks make a leader with a text label and NO number/circle.
+    // --- Leader without a balloon: two clicks make a LEADER - the same object one read out of a DXF
+    //     is, rather than a balloon circle with the circle suppressed. Drawn and imported callouts are
+    //     one kind of thing, so they are held, moved and edited the same way.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::TextLeader);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // tip
-        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier); // label location
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // tip: what it points at
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier); // where its words go
         const Entity* t = nullptr;
-        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) t = &e;
-        check(t && t->meta.value("textLeader").toBool() &&
-                  t->meta.value("leaders").toArray().size() == 1 &&
-                  !t->meta.value("text").toString().isEmpty(),
-              "text-leader: a leader with a text label (no numbered circle) is placed");
+        for (const auto& e : d.entities()) if (e.type == EntityType::Leader) t = &e;
+        check(t != nullptr, "text-leader: a leader without a balloon is placed, as a leader");
+        if (t) {
+            check(t->points.size() == 2 && near(t->points[0].x, 0.0) && near(t->points[1].x, 30.0),
+                  "text-leader: the tip it points with comes first, then where it runs to");
+            check(!t->meta.value("text").toString().isEmpty(),
+                  "text-leader: it starts with a word to replace, not blank");
+            check(!t->meta.value("balloon").toBool(),
+                  "text-leader: and it is not a balloon wearing a disguise");
+        }
+        // Its tip can be taken hold of and pointed somewhere else - the thing a balloon-with-no-circle
+        // could not do, having no joints of its own.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({15, 15}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({15, 15}, Qt::LeftButton);
+        check(ed.selection().size() == 1, "text-leader: clicking its line picks the callout up");
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({-6, 4});
+        ed.onPointerPress({-6, 4}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* after = nullptr;
+        for (const auto& e : d.entities()) if (e.type == EntityType::Leader) after = &e;
+        check(after && near(after->points[0].x, -6.0) && near(after->points[0].y, 4.0),
+              "text-leader: and its arrow can be pointed somewhere else");
+    }
+
+    // --- Leader WITH a balloon: still the numbered circle the bill of materials counts, aligns and
+    //     collects. Choosing whether a callout carries a balloon must not change what a balloon is.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({30, 30}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* b = nullptr;
+        for (const auto& e : d.entities()) if (e.meta.value("balloon").toBool()) b = &e;
+        check(b && b->type == EntityType::Circle &&
+                  b->meta.value("leaders").toArray().size() == 1 &&
+                  b->meta.value("text").toString() == QLatin1String("1"),
+              "balloon-leader: with a balloon it is still the numbered circle, with its arrow on it");
     }
 
     // --- Ctrl+click a balloon circle adds a COUPLED circle (chained, no leader), and

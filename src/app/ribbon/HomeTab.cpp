@@ -105,10 +105,35 @@ void MainWindow::buildHomeTab() {
         tb->setFocusPolicy(Qt::NoFocus);
         tb->setToolTip(QStringLiteral("Insert Table"));
         connect(tb, &QToolButton::clicked, this, [this] { insertTableCommand(); });
+        // A callout is a LEADER: an arrow that points at something and says a word about it. Whether it
+        // carries a numbered balloon is a choice about that one callout, not a different tool - and Home
+        // offered only the balloon, so the plain one could not be reached from the tab most work is done
+        // on. Clicking draws one without a balloon; the menu offers the balloon.
+        auto* leaderBtn = new QToolButton(page);
+        leaderBtn->setIcon(makeToolIcon(ToolId::TextLeader));
+        leaderBtn->setIconSize(QSize(28, 28));
+        leaderBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        leaderBtn->setAutoRaise(true);
+        leaderBtn->setFocusPolicy(Qt::NoFocus);
+        leaderBtn->setToolTip(QStringLiteral(
+            "Leader — click what it points at, then where its words go. The menu draws one with a "
+            "numbered balloon instead."));
+        leaderBtn->setPopupMode(QToolButton::MenuButtonPopup);
+        connect(leaderBtn, &QToolButton::clicked, this,
+                [this] { editor_->setTool(ToolId::TextLeader); });
+        {
+            auto* lm = new QMenu(leaderBtn);
+            QAction* a = lm->addAction(makeToolIcon(ToolId::TextLeader),
+                                       QStringLiteral("Leader — without a balloon"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::TextLeader); });
+            a = lm->addAction(makeToolIcon(ToolId::Balloon),
+                              QStringLiteral("Leader — with a numbered balloon"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
+            leaderBtn->setMenu(lm);
+        }
         addGroup(lay, QStringLiteral("Annotation"),
-                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::Note,
-                          ToolId::Revision},
-                         {tb}));
+                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision},
+                         {leaderBtn, tb}));
     }
 
     // Properties group: Layer + Color dropdowns.
