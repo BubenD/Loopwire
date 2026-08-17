@@ -8,6 +8,7 @@
 
 #include <QFile>
 #include <QHash>
+#include <QJsonArray>   // a polyline's bulges travel with it as meta
 #include <QSaveFile>
 #include <QStringList>
 #include <QTextStream>
@@ -395,6 +396,10 @@ struct Xf {
         // A mirrored insert (one negative scale) reverses the sense of an angle.
         return (sx * sy < 0.0) ? -a + rot : a + rot;
     }
+    // A polyline's bulge is a SIGNED measure of how far a segment arcs, and the sign says which way it
+    // bows. Reflecting the shape bows every arc the other way, for the same reason it reverses an angle,
+    // so a mirrored connector body came out inside-out unless the sign goes round with it.
+    double bulge(double b) const { return (sx * sy < 0.0) ? -b : b; }
     Xf then(const Xf& parent) const {
         Xf out;
         out.sx = sx * parent.sx;
@@ -800,15 +805,30 @@ bool parse(Document& doc, const QString& text, QString*) {
                                          ? indexToColor(std::abs(eci), 0)
                                          : QString());
                     int j = i + 1;
+                    std::vector<double> leaving;   // the bulge of the segment starting at each vertex
                     for (; j < to; ++j) {
                         if (pairs[j].code == "0" && pairs[j].value == "VERTEX") {
                             const auto v = collectGroup(pairs, j + 1);
                             e.points.push_back(xf.apply({findNum(v, "10"), findNum(v, "20")}));
+                            leaving.push_back(xf.bulge(findNum(v, "42", 0.0)));
                         } else if (pairs[j].code == "0" && pairs[j].value == "SEQEND") {
                             break;
                         } else if (pairs[j].code == "0" && pairs[j].value != "VERTEX") {
                             break;
                         }
+                    }
+                    // A closed legacy polyline says so on its head (70 bit 1), the same as an LWPOLYLINE,
+                    // and two vertices are a closed shape once one of the edges is an arc.
+                    const bool anyArc = std::any_of(leaving.begin(), leaving.end(),
+                                                    [](double b) { return std::abs(b) > 1e-9; });
+                    if ((findVal(head, "70", "0").toInt() & 1) &&
+                        (e.points.size() > 2 || (e.points.size() == 2 && anyArc)))
+                        e.points.push_back(e.points.front());
+                    if (anyArc) {
+                        QJsonArray arr;   // shifted along by one, as above
+                        for (size_t k = 0; k < e.points.size(); ++k)
+                            arr.append(k == 0 || k - 1 >= leaving.size() ? 0.0 : leaving[k - 1]);
+                        e.meta.insert("bulges", arr);
                     }
                     if (e.points.size() > 1) entities.push_back(std::move(e));
                     i = j;
@@ -954,7 +974,8 @@ bool parse(Document& doc, const QString& text, QString*) {
                         txt.type = EntityType::Text;
                         txt.a = textAt;
                         txt.meta.insert("text", decodeDxfText(label, true));
-                        txt.meta.insert("size", std::max(0.1, xf.len(height > 0.0 ? height : 2.5)));
+                        txt.meta.insert("size",
+                                        std::max(1e-9, xf.len(height > 0.0 ? height : 2.5)));
                         // A leader's words sit beside where it lands, reading away from it.
                         txt.meta.insert("justify", QStringLiteral("ML"));
                         entities.push_back(std::move(txt));
@@ -1012,23 +1033,57 @@ bool parse(Document& doc, const QString& text, QString*) {
                     e.type = EntityType::Polyline;
                     Vec2 cur;
                     bool have = false;
+                    // A vertex may say that the segment LEAVING it is an arc rather than a straight
+                    // (group 42, the bulge). Read as points alone, every arc became the straight line
+                    // between its ends: a round connector body drawn as four bulged vertices came out a
+                    // DIAMOND, a half-round as a triangle, and a circle written as two 180-degree arcs as
+                    // a single flat line. Kept per vertex here and re-indexed below.
+                    std::vector<double> leaving;   // DXF: the bulge of the segment starting at this vertex
+                    double curBulge = 0.0;
                     for (const auto& p : g) {
                         if (p.code == "10") {
-                            if (have) e.points.push_back(xf.apply(cur));
+                            if (have) {
+                                e.points.push_back(xf.apply(cur));
+                                leaving.push_back(xf.bulge(curBulge));
+                            }
                             cur = {p.value.toDouble(), 0};
+                            curBulge = 0.0;
                             have = true;
                         } else if (p.code == "20" && have) {
                             cur.y = p.value.toDouble();
+                        } else if (p.code == "42" && have) {
+                            curBulge = p.value.toDouble();
                         }
                     }
-                    if (have) e.points.push_back(xf.apply(cur));
+                    if (have) {
+                        e.points.push_back(xf.apply(cur));
+                        leaving.push_back(xf.bulge(curBulge));
+                    }
                     // A CLOSED polyline (flag 1) is a loop, and its last edge - back to where it
                     // started - is drawn like any other. Ignoring the flag left every such shape open:
                     // a connector body missing the side the pins sit against, the sleeve round a cable
                     // label missing an end, the box round the notes missing its edge.
+                    const bool anyArc = std::any_of(leaving.begin(), leaving.end(),
+                                                    [](double b) { return std::abs(b) > 1e-9; });
+                    // TWO vertices can be a closed shape, once arcs are in play: a circle is often
+                    // written as two 180-degree arcs between a pair of opposite points, and that is how
+                    // the round connector bodies on a real sheet are drawn. The closing point was only
+                    // added above two vertices - right when the edges are straight, since closing a pair
+                    // of points with a line just retraces it, and wrong here: it threw away the arc BACK
+                    // to the start, leaving a full circle drawn as a half one.
                     if (type == "LWPOLYLINE" && (findVal(g, "70", "0").toInt() & 1) &&
-                        e.points.size() > 2)
+                        (e.points.size() > 2 || (e.points.size() == 2 && anyArc)))
                         e.points.push_back(e.points.front());
+                    // DXF hangs a bulge on the vertex its segment LEAVES; the drawing side indexes a
+                    // bulge by the point its segment ARRIVES at. So the run is shifted along by one, and
+                    // a closed shape's last bulge - the arc back to where it started - lands exactly on
+                    // the duplicated first point appended above.
+                    if (anyArc) {
+                        QJsonArray arr;
+                        for (size_t k = 0; k < e.points.size(); ++k)
+                            arr.append(k == 0 || k - 1 >= leaving.size() ? 0.0 : leaving[k - 1]);
+                        e.meta.insert("bulges", arr);
+                    }
                     // A leader points with an arrowhead at its FIRST vertex - the point it picks out.
                     // Its size comes from the leader's dimension style, which the leader may override in
                     // its own extended data: 1070 names the setting (41 is the arrow size) and the 1040
@@ -1097,7 +1152,13 @@ bool parse(Document& doc, const QString& text, QString*) {
                     const QString body = decodeDxfText(gatherText(g), mtext);
                     if (body.trimmed().isEmpty()) continue;
                     e.meta.insert("text", body);
-                    e.meta.insert("size", std::max(0.1, xf.len(findNum(g, "40", 8))));
+                    // The height the file states, whatever it is. A floor of 0.1 used to be imposed here
+                    // "so text is never invisible", and on a drawing set up in millimetres-as-units it
+                    // silently inflated most of the sheet: text of 0.05 became 0.1 - twice the size -
+                    // which overflows every cell it was laid inside and, because the wrap box is imported
+                    // too, forces extra wrapped lines that push a title block's rows out of it. A drawing
+                    // states its own text size; how small that looks on screen is what the zoom is for.
+                    e.meta.insert("size", std::max(1e-9, xf.len(findNum(g, "40", 8))));
                     e.rotation = xf.angle(findNum(g, "50") * M_PI / 180.0);
                     if (mtext) {
                         // The box it wraps in, and where the insertion point sits in it: 1..9 run

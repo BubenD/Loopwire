@@ -1794,19 +1794,38 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const bool anchorJust = e.meta.value("anchorJustify").toBool();
         const double totalH = lineH * lines.size();
         const double availH = (boxHpx > 1.0 && !anchorJust) ? boxHpx : 0.0;
-        double blockTop = anchor.y();
+
+        // Text can be written at an ANGLE, and this drew every one of it flat. A drawing states the
+        // angle (group 50, or the direction vector the text runs along, which is how the sheets that
+        // brought this to light state it) and the reader was picking it up correctly all along - it
+        // just never reached the paper. A column of labels turned on their side therefore came out
+        // horizontal, every one of them landing on the same line and printing over its neighbours.
+        //
+        // Turned about the ANCHOR, so the justification below still means what it says: the layout is
+        // worked out from the origin of a turned frame rather than from a point on the sheet.
+        const bool turned = std::abs(e.rotation) > 1e-9;
+        if (turned) {
+            p.save();
+            p.translate(anchor);
+            // The drawing turns anticlockwise and the screen's y grows downward, so the sign goes round.
+            p.rotate(-e.rotation * 180.0 / M_PI);
+        }
+        const QPointF at = turned ? QPointF(0.0, 0.0) : anchor;
+
+        double blockTop = at.y();
         if (vJust == QLatin1Char('M')) blockTop += (availH - totalH) / 2.0;
         else if (vJust == QLatin1Char('B')) blockTop += availH - totalH;
         double y = blockTop + fm.ascent();
         for (const QString& ln : lines) {
             const double lw = fm.horizontalAdvance(ln);
             const double avail = (boxWpx > 1.0 && !anchorJust) ? boxWpx : 0.0;
-            double x = anchor.x();
+            double x = at.x();
             if (hJust == QLatin1Char('C')) x += (avail - lw) / 2.0;
             else if (hJust == QLatin1Char('R')) x += avail - lw;
             p.drawText(QPointF(x, y), ln);
             y += lineH;
         }
+        if (turned) p.restore();
         break;
     }
 

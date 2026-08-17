@@ -1,5 +1,6 @@
 #include "io/Dwx.h"
 #include "io/Dxf.h"
+#include "geometry/Geometry.h"   // expandBulgePolyline: what an imported arc actually draws as
 #include "model/Document.h"
 
 #include <QFile>
@@ -639,6 +640,144 @@ int run_io_tests() {
         dxf::parseBytes(d2, onIt, nullptr);
         check(d2.sheet().valid && std::abs(d2.sheet().max.x - 420.0) < 1e-9,
               "sheet: and a drawing on its own sheet keeps that sheet");
+    }
+
+    // ---- a polyline that arcs, arcs ---------------------------------------------------------------
+    {
+        // A vertex can say that the segment LEAVING it bows out into an arc rather than running straight
+        // (group 42, the bulge). Reading the points and nothing else drew the straight line between every
+        // pair of them, so on a real released sheet a round connector body written as four bulged
+        // vertices came out a DIAMOND, a half-round came out a triangle, and a circle written as two
+        // 180-degree arcs came out one flat line. Nothing about it looked like a failure to read the
+        // file - it looked like the drawing had been made of diamonds.
+        //
+        // Four quarter-turns is a circle: the bulge of a 90-degree arc is tan(90/4) = 0.4142.
+        const QByteArray circle = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n"
+            "10\n-1.0\n20\n0.0\n42\n0.41421356\n"
+            "10\n0.0\n20\n-1.0\n42\n0.41421356\n"
+            "10\n1.0\n20\n0.0\n42\n0.41421356\n"
+            "10\n0.0\n20\n1.0\n42\n0.41421356\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, circle, nullptr) && d.entities().size() == 1,
+              "bulge: the polyline reads");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            const QJsonArray arr = e.meta.value("bulges").toArray();
+            check(!arr.isEmpty(), "bulge: the arcs are carried, not dropped");
+            // Closed, so the first point is repeated: five points, five bulges.
+            check(e.points.size() == 5 && arr.size() == 5,
+                  "bulge: a closed shape's last arc has a segment to sit on");
+            // Shifted along by one: DXF hangs a bulge on the vertex its segment LEAVES, the drawing
+            // side indexes it by the point the segment ARRIVES at. Index 0 is nothing's arrival.
+            check(std::abs(arr[0].toDouble()) < 1e-9,
+                  "bulge: nothing arrives at the first point");
+            bool allFour = true;
+            for (int k = 1; k < arr.size(); ++k)
+                if (std::abs(arr[k].toDouble() - 0.41421356) > 1e-6) allFour = false;
+            check(allFour, "bulge: every one of the four quarter-turns landed on its own segment");
+
+            // And the shape it actually draws as is a CIRCLE of radius 1 - not the diamond through the
+            // same four points, whose edges would pass 0.707 from the centre.
+            std::vector<double> bulges;
+            for (const auto& v : arr) bulges.push_back(v.toDouble());
+            const std::vector<Vec2> run = expandBulgePolyline(e.points, bulges);
+            check(run.size() > 20, "bulge: it expands into a curve, not four straight edges");
+            double lo = 1e9, hi = -1e9;
+            for (const Vec2& q : run) {
+                const double r = std::hypot(q.x, q.y);
+                lo = std::min(lo, r);
+                hi = std::max(hi, r);
+            }
+            std::printf("  bulge: %d points, %.3f..%.3f from the centre\n", int(run.size()), lo, hi);
+            check(lo > 0.99 && hi < 1.01,
+                  "bulge: every point of it is one radius out - it is the circle, not the diamond");
+        }
+
+        // An OPEN run keeps its arcs too, and the bulge hung on the last vertex - the one whose segment
+        // does not exist - is simply never reached.
+        const QByteArray open = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n"
+            "10\n0.0\n20\n0.0\n42\n1.0\n"
+            "10\n2.0\n20\n0.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document o;
+        dxf::parseBytes(o, open, nullptr);
+        check(o.entities().size() == 1, "bulge: an open run reads");
+        if (o.entities().size() == 1) {
+            const QJsonArray arr = o.entities().front().meta.value("bulges").toArray();
+            check(arr.size() == 2 && std::abs(arr[1].toDouble() - 1.0) < 1e-9,
+                  "bulge: a half-turn on an open run lands on the point it arrives at");
+        }
+
+        // TWO vertices are a closed shape once arcs are in play: a circle is very often written as two
+        // 180-degree arcs between a pair of opposite points, which is how the round connector bodies on a
+        // real released sheet are drawn. The closing point was only ever added ABOVE two vertices - right
+        // when the edges are straight, since closing a pair of points with a line only retraces it, and
+        // wrong here, because it threw away the arc BACK to the start. The body drew as a half circle.
+        const QByteArray twoArcs = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n1\n"
+            "10\n-1.0\n20\n0.0\n42\n1.0\n"
+            "10\n1.0\n20\n0.0\n42\n1.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document t;
+        dxf::parseBytes(t, twoArcs, nullptr);
+        check(t.entities().size() == 1, "bulge: a two-vertex closed shape reads");
+        if (t.entities().size() == 1) {
+            const Entity& e = t.entities().front();
+            check(e.points.size() == 3, "bulge: it is closed, so the arc back to the start has a segment");
+            std::vector<double> bulges;
+            for (const auto& v : e.meta.value("bulges").toArray()) bulges.push_back(v.toDouble());
+            const std::vector<Vec2> run = expandBulgePolyline(e.points, bulges);
+            double lo = 1e9, hi = -1e9;
+            for (const Vec2& q : run) {
+                const double r = std::hypot(q.x, q.y);
+                lo = std::min(lo, r);
+                hi = std::max(hi, r);
+            }
+            std::printf("  bulge: two half-turns -> %d points, %.3f..%.3f out\n", int(run.size()), lo, hi);
+            check(run.size() > 20 && lo > 0.99 && hi < 1.01,
+                  "bulge: two half-turns make the whole circle, not half of one");
+        }
+
+        // A polyline with no bulge at all carries none: a straight run must not be handed an array of
+        // zeroes for every renderer and every modify tool to walk.
+        const QByteArray straight = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n"
+            "10\n0.0\n20\n0.0\n10\n5.0\n20\n5.0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document s;
+        dxf::parseBytes(s, straight, nullptr);
+        check(s.entities().size() == 1 &&
+                  !s.entities().front().meta.contains(QStringLiteral("bulges")),
+              "bulge: a straight run is left straight, with nothing to expand");
+    }
+
+    // ---- the text size a drawing states ----------------------------------------------------------
+    {
+        // A floor of 0.1 used to be imposed on every imported text height, so that text could never be
+        // invisible. On a sheet drawn in millimetres-as-units it silently inflated most of the drawing:
+        // a title block's text of 0.05 became 0.1 - twice the size - overflowing every cell it was laid
+        // in, and because the wrap box is imported too, forcing extra wrapped lines that pushed the
+        // lower rows out of the block. It read as a title block with rows missing.
+        const QByteArray small = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nTEXT\n8\n0\n10\n1.0\n20\n1.0\n40\n0.0499\n1\nSMALL\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        dxf::parseBytes(d, small, nullptr);
+        check(d.entities().size() == 1, "text size: the text reads");
+        if (d.entities().size() == 1) {
+            const double size = d.entities().front().meta.value("size").toDouble();
+            std::printf("  text size: stated 0.0499, imported %.4f\n", size);
+            check(std::abs(size - 0.0499) < 1e-9,
+                  "text size: the height the file states is the height it gets");
+        }
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
