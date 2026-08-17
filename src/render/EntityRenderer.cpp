@@ -1529,7 +1529,19 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     QFont f = normal; f.setBold(bold);
                     const QFont keep = p.font();
                     useFont(p, f);
-                    drawWorldText(p, vt.toScreen({x, y}), s, h, vt.scale(), color, flags);
+                    // A cell narrower than its words WRAPS, and the row was made tall enough to hold the
+                    // lines when the column was narrowed. Written a line at a time down from the top of the
+                    // block the cell was given, so the words stay inside the cell instead of running out
+                    // through the column beside it.
+                    const QStringList lines = tableWrapText(s, std::max(0.0, x1 - x0 - 2 * pad), h);
+                    const double pitch = h * 1.35;
+                    double ly = y;
+                    if (lines.size() > 1 && v == 'M') ly = yTop - pad - h;   // a wrapped cell reads down
+                    for (const QString& ln : lines) {
+                        drawWorldText(p, vt.toScreen({x, ly}), ln, h, vt.scale(), color,
+                                      lines.size() > 1 ? (flags & ~Qt::AlignVCenter) : flags);
+                        ly -= pitch;
+                    }
                     useFont(p, keep);
                 };
                 for (int r = 0; r < rows; ++r) {

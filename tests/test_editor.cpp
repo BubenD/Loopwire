@@ -645,23 +645,24 @@ int run_editor_tests() {
         const QString tid = table()->id;
         ed.setTool(ToolId::Select);
         ed.selectById(tid);
-        // Grid line between col 0 and col 1 at x=20 (mid-y=10). Dragging it right to x=30 TRADES width
-        // between those two columns: col 0 goes 20->30, col 1 goes 20->10, col 2 is untouched and the
-        // table keeps its own 60.
+        // THE WHOLE TABLE is picked here, not a cell - which is the case this covers. A grid line dragged
+        // with the table picked belongs to the column on its left: col 0 goes 20->30, the columns right of
+        // it keep their widths and travel, and the table's right edge goes with them, 60->70.
         //
-        // It used to grow the table instead, with every column right of the boundary shifting along. On a
-        // real table that meant dragging one cell's boundary moved most of the drawing - and the faint
-        // ghost of where everything had been made the whole table read double during the drag.
+        // When a CELL is picked the boundary means something else - the cell's own column is the one that
+        // changes and the edge on the dragged side follows - which is what "table-floor" and "table-edge"
+        // below cover. The two cases are different on purpose: with a cell picked, the thing being worked
+        // on is that cell.
         ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({30, 10});
         ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
         const QJsonArray cf = table()->meta.value("colFrac").toArray();
         const double W = tableWidth();
-        check(std::abs(W - 60.0) < 1e-6, "table resize: the table keeps its own width");
+        check(std::abs(W - 70.0) < 1e-6, "table resize: with the table picked, a column drag widens it");
         check(cf.size() == 3 && std::abs(cf[0].toDouble() * W - 30.0) < 1e-6 &&
-                  std::abs(cf[1].toDouble() * W - 10.0) < 1e-6 &&
+                  std::abs(cf[1].toDouble() * W - 20.0) < 1e-6 &&
                   std::abs(cf[2].toDouble() * W - 20.0) < 1e-6,
-              "table resize: the two columns either side trade width; the third is untouched");
+              "table resize: the column left of the line resizes; the others keep their width");
     }
 
     // --- Resize a table ROW by dragging its grid line: only the row above resizes; the
@@ -686,17 +687,17 @@ int run_editor_tests() {
         };
         ed.setTool(ToolId::Select);
         ed.selectById(table()->id);
-        // Row line between row 0 and row 1 at y=10 (mid-x=30). Dragging it down to y=5 trades height
-        // between those two rows: row 0 goes 10->15, row 1 goes 10->5, and the table keeps its own 20.
+        // Again with the whole table picked: the row line belongs to the row above it. Row 0 goes 10->15,
+        // row 1 keeps its 10 and travels down, and the table grows 20->25 with it.
         ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({30, 5});
         ed.onPointerPress({30, 5}, Qt::LeftButton, Qt::NoModifier);
         const QJsonArray rf = table()->meta.value("rowFrac").toArray();
         const double H = tableHeight();
-        check(std::abs(H - 20.0) < 1e-6, "table resize: the table keeps its own height");
+        check(std::abs(H - 25.0) < 1e-6, "table resize: with the table picked, a row drag grows it");
         check(rf.size() == 2 && std::abs(rf[0].toDouble() * H - 15.0) < 1e-6 &&
-                  std::abs(rf[1].toDouble() * H - 5.0) < 1e-6,
-              "table resize: the two rows either side trade height");
+                  std::abs(rf[1].toDouble() * H - 10.0) < 1e-6,
+              "table resize: the row above the line resizes; the other keeps its height");
     }
 
     // --- Committing an inline edit on a balloon saves its number (balloons aren't
@@ -8009,6 +8010,54 @@ int run_editor_tests() {
             check(leftW > 10.0,
                   "table-floor: the column stops at its words rather than collapsing to nothing");
             check(leftW < 40.0, "table-floor: but it did narrow");
+        }
+
+        // ---- a picked cell's row CAN be made taller ----
+        //
+        // It could not be while the two rows either side traded a fixed total between them: on a real
+        // imported table every row already sits near the least its text will fit in, so there was nothing
+        // to take from the neighbour and the row would not budge. Only the picked cell's row changes now,
+        // and the rows past the boundary travel with it.
+        {
+            Document dh;
+            Editor eh;
+            eh.setDocument(&dh);
+            noSnap(eh);
+            Editor::TableSpec ts;
+            ts.cols = 2;
+            ts.colWidth = 30.0;
+            ts.dataRows = 3;
+            ts.rowHeight = 10.0;
+            ts.title = false;
+            ts.header = false;
+            eh.setTableSpec(ts);
+            eh.setTool(ToolId::Table);
+            eh.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);   // (0,0)..(60,30)
+            auto th = [&]() -> const Entity* {
+                for (const auto& e : dh.entities())
+                    if (e.meta.value("table").toBool()) return &e;
+                return nullptr;
+            };
+            eh.setTool(ToolId::Select);
+            eh.onPointerPress({15, 25}, Qt::LeftButton, Qt::NoModifier);   // the top-left cell
+            eh.onPointerRelease({15, 25}, Qt::LeftButton);
+            check(eh.selectedCellIndex() == 0, "table-taller: the cell is picked");
+            const double rowBefore = th()->meta.value("rowFrac").toArray()[0].toDouble() *
+                                     th()->bounds().height();
+            // Its BOTTOM edge is at y = 20, handle at the cell's mid-x = 15. Pull it down to make the row
+            // taller.
+            eh.onPointerPress({15, 20}, Qt::LeftButton, Qt::NoModifier);
+            eh.onPointerMove({15, 14});
+            eh.onPointerPress({15, 14}, Qt::LeftButton, Qt::NoModifier);
+            const double rowAfter = th()->meta.value("rowFrac").toArray()[0].toDouble() *
+                                    th()->bounds().height();
+            std::printf("  table-taller: first row %.1f -> %.1f\n", rowBefore, rowAfter);
+            check(rowAfter > rowBefore + 1.0, "table-taller: the row can be made taller");
+            const QJsonArray rfh = th()->meta.value("rowFrac").toArray();
+            const double Hh = th()->bounds().height();
+            check(std::abs(rfh[1].toDouble() * Hh - 10.0) < 1e-6 &&
+                      std::abs(rfh[2].toDouble() * Hh - 10.0) < 1e-6,
+                  "table-taller: and the rows below keep their own heights");
         }
 
         // ---- an EDGE cell has a handle on the table's own edge too ----

@@ -125,6 +125,20 @@ struct TableMerge {
     }
     bool isAnchor(int r, int c) const { return r == row && c == col; }
 };
+// How wide a piece of a table's text is, and how it breaks when the column is narrower than that.
+//
+// Estimated from the character count and the text height rather than measured with a font, deliberately:
+// the same estimate decides where a drag STOPS and how tall a row has to be, and a limit worked out by
+// measuring glyphs would answer differently at different zooms, so the same drag would stop in a different
+// place depending on how far in somebody was looking. One estimate, used everywhere, agrees with itself.
+double tableTextWidth(const QString& text, double textHeight);
+// The lines `text` breaks into inside a column `avail` wide. Never fewer than one line, and never breaks
+// a word: a column narrower than its longest word simply overflows, which is visible and honest.
+QStringList tableWrapText(const QString& text, double avail, double textHeight);
+// The width below which a column starts to break its words - the longest single word in it. A column may
+// be narrowed past its whole STRING (the words wrap and the row grows) but not past a word.
+double tableLongestWord(const QString& text, double textHeight);
+
 std::vector<TableMerge> tableMerges(const Entity& e);
 void setTableMerges(Entity& e, const std::vector<TableMerge>& merges);
 // The merge covering this cell, if any. True when one does - `out` is then the whole block, whose

@@ -92,6 +92,42 @@ bool dimensionAcrossX(const Entity& e) {
     return dy >= dx;
 }
 
+double tableTextWidth(const QString& text, double textHeight) {
+    if (text.isEmpty()) return 0.0;
+    return std::max(1e-9, textHeight) * 0.62 * text.size();
+}
+
+double tableLongestWord(const QString& text, double textHeight) {
+    double widest = 0.0;
+    for (const QString& line : text.split(QLatin1Char('\n')))
+        for (const QString& word : line.split(QLatin1Char(' ')))
+            widest = std::max(widest, tableTextWidth(word, textHeight));
+    return widest;
+}
+
+QStringList tableWrapText(const QString& text, double avail, double textHeight) {
+    QStringList out;
+    for (const QString& para : text.split(QLatin1Char('\n'))) {
+        if (avail <= 1e-9 || tableTextWidth(para, textHeight) <= avail) {
+            out << para;
+            continue;
+        }
+        QString cur;
+        for (const QString& word : para.split(QLatin1Char(' '))) {
+            const QString test = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
+            if (!cur.isEmpty() && tableTextWidth(test, textHeight) > avail) {
+                out << cur;
+                cur = word;
+            } else {
+                cur = test;
+            }
+        }
+        out << cur;
+    }
+    if (out.isEmpty()) out << QString();
+    return out;
+}
+
 std::vector<TableMerge> tableMerges(const Entity& e) {
     std::vector<TableMerge> out;
     for (const auto v : e.meta.value(QStringLiteral("merges")).toArray()) {

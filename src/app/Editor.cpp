@@ -238,10 +238,19 @@ double tableCellTextWidth(const QString& text, double h) {
     return h * (1.6 + 0.62 * text.size());
 }
 
-double tableColumnFloor(const Entity& e, int col, int rows, int cols) {
-    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
+double tableCellHeight(const Entity& e, int idx) {
     const QJsonArray own = e.meta.value(QStringLiteral("cellTextSize")).toArray();
     const double th = e.meta.value(QStringLiteral("textSize")).toDouble(4.0);
+    return idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
+}
+
+// How narrow a column may be made: down to its longest WORD, not its longest string.
+//
+// A column narrower than its text is not a mistake - the text wraps onto another line and the row grows to
+// hold it, which is what a table is for. A column narrower than one WORD is a mistake, because a word
+// cannot be broken and would simply hang out of the cell.
+double tableColumnFloor(const Entity& e, int col, int rows, int cols) {
+    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
     double need = 0.0;
     for (int r = 0; r < rows; ++r) {
         const int idx = r * cols + col;
@@ -249,26 +258,60 @@ double tableColumnFloor(const Entity& e, int col, int rows, int cols) {
         // A cell whose words are shared across a merged block does not hold this column to its width: the
         // words have the whole block to sit in.
         if (TableMerge m; tableMergeAt(e, r, col, m) && m.colSpan > 1) continue;
-        const double h = idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
-        need = std::max(need, tableCellTextWidth(cells[idx].toString(), h));
+        need = std::max(need, tableLongestWord(cells[idx].toString(), tableCellHeight(e, idx)));
+    }
+    // Room for the word plus the padding it is drawn inside.
+    return need > 0.0 ? need * 1.15 : 0.0;
+}
+
+// The height a row needs to show everything written in it, once the words have wrapped to the width of
+// their columns. This is what makes a narrowed column push its row taller instead of hiding text.
+double tableRowNeeds(const Entity& e, int row, int cols, const std::vector<double>& colW) {
+    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
+    double need = 0.0;
+    for (int c = 0; c < cols && c < static_cast<int>(colW.size()); ++c) {
+        const int idx = row * cols + c;
+        if (idx >= cells.size()) break;
+        const QString s = cells[idx].toString();
+        if (s.trimmed().isEmpty()) continue;
+        if (TableMerge m; tableMergeAt(e, row, c, m) && m.rowSpan > 1) continue;   // shares several rows
+        const double h = tableCellHeight(e, idx);
+        const double pad = h * 0.35;
+        const int lines = tableWrapText(s, std::max(0.0, colW[c] - 2 * pad), h).size();
+        need = std::max(need, lines * h * 1.35 + 2 * pad);
     }
     return need;
 }
 
-double tableRowFloor(const Entity& e, int row, int rows, int cols) {
-    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
-    const QJsonArray own = e.meta.value(QStringLiteral("cellTextSize")).toArray();
-    const double th = e.meta.value(QStringLiteral("textSize")).toDouble(4.0);
-    Q_UNUSED(rows);
-    double need = 0.0;
-    for (int c = 0; c < cols; ++c) {
-        const int idx = row * cols + c;
-        if (idx >= cells.size()) break;
-        if (cells[idx].toString().trimmed().isEmpty()) continue;
-        const double h = idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
-        need = std::max(need, h * 1.6);
+// Grow any row that is now too short for what is written in it, and the table with them. Rows are never
+// SHRUNK here: a row somebody made taller stays as tall as they made it.
+void tableFitRows(Entity& e) {
+    if (e.points.size() != 4) return;
+    QJsonArray rf = e.meta.value(QStringLiteral("rowFrac")).toArray();
+    const QJsonArray cf = e.meta.value(QStringLiteral("colFrac")).toArray();
+    const int rows = rf.size(), cols = cf.size();
+    if (rows == 0 || cols == 0) return;
+    Bounds tb;
+    for (const auto& p : e.points) tb.expand(p);
+    const double W = tb.width(), H = tb.height();
+    if (W < 1e-9 || H < 1e-9) return;
+    std::vector<double> colW(cols), rowH(rows);
+    for (int c = 0; c < cols; ++c) colW[c] = cf[c].toDouble() * W;
+    for (int r = 0; r < rows; ++r) rowH[r] = rf[r].toDouble() * H;
+    double Hp = 0.0;
+    bool grew = false;
+    for (int r = 0; r < rows; ++r) {
+        const double need = tableRowNeeds(e, r, cols, colW);
+        if (need > rowH[r] + 1e-9) { rowH[r] = need; grew = true; }
+        Hp += rowH[r];
     }
-    return need;
+    if (!grew || Hp < 1e-9) return;
+    // The table hangs from its top-left, as it does everywhere else, so the rows below move down rather
+    // than the whole table jumping.
+    const double minY = tb.max.y - Hp;
+    e.points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, tb.max.y}, {tb.min.x, tb.max.y}};
+    for (int r = 0; r < rows; ++r) rf[r] = rowH[r] / Hp;
+    e.meta[QStringLiteral("rowFrac")] = rf;
 }
 
 std::vector<Vec2> regularPolygonPoints(const Vec2& center, const Vec2& vertex, int sides, int vertexIndex = 0) {
@@ -6112,28 +6155,48 @@ void Editor::applyEditDrag(const Vec2& target) {
             double xB = tb.min.x; // current world x of boundary c
             for (int i = 0; i < cf.size(); ++i) { w[i] = cf[i].toDouble() * W; if (i < c) xB += w[i]; }
             const double minW = std::max(1e-4, W * 0.02);
-            // The boundary trades width between the TWO columns it separates: one gives up exactly what
-            // the other takes, and the table's own size does not change.
+            // ONE column changes width: the picked cell's own. Everything on the far side of the boundary
+            // keeps its widths and travels with it.
             //
-            // It used to grow the table instead - the column to the left took the whole change and every
-            // column right of it shifted along, with the right-hand edge moving too. On a real table that
-            // meant dragging one cell's boundary moved most of the drawing, and the faint ghost of where
-            // things were made the whole table read double while the drag was in progress.
+            // Which column that is depends on which of the cell's two sides is being dragged, and that is
+            // the whole point of it. Pull the cell's LEFT side left and the cell gets wider, the columns
+            // left of it moving left to make room. Pull its RIGHT side left and the cell gets narrower,
+            // the columns right of it following. Either way the cell being worked on is the only one whose
+            // width changes - the neighbours are moved, not squeezed.
             const int rowsN = std::max(1, e->meta.value("rows").toInt(1));
             const int colsN = cf.size();
-            // Neither of the two may be squeezed below its own words. This is the "do not go over the
-            // text" limit: dragging left stops where the left column's longest entry stops.
-            const double floorL = std::max(minW, tableColumnFloor(*e, c - 1, rowsN, colsN));
-            const double floorR = std::max(minW, tableColumnFloor(*e, c, rowsN, colsN));
-            const double lo = xB - (w[c - 1] - floorL);   // as far left as the left column allows
-            const double hi = xB + (w[c] - floorR);       // as far right as the right one allows
-            if (hi < lo) break;                           // no room to move at all
-            const double newX = std::clamp(target.x, lo, hi);
-            const double dx = newX - xB;
-            w[c - 1] += dx;
-            w[c] -= dx;
-            for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / W;   // W unchanged: the table stays put
+            int pc = c - 1;              // nothing picked: the boundary belongs to the column on its left
+            bool leftSideOfCell = false;
+            if (int pr = 0, pcol = 0; pickedCellOf(*e, pr, pcol)) {
+                pc = pcol;                       // a cell is picked: its column is the one that changes
+                leftSideOfCell = (c == pcol);    // and this boundary is its left edge or its right
+            }
+            if (pc < 0 || pc >= colsN) break;
+            const double floor = std::max(minW, tableColumnFloor(*e, pc, rowsN, colsN));
+
+            double newX = target.x;
+            if (leftSideOfCell) {
+                // Moving left grows the column; it may not pass its own right-hand edge less the floor.
+                newX = std::min(target.x, xB + (w[pc] - floor));
+                w[pc] += xB - newX;
+            } else {
+                // The right-hand edge: moving left shrinks the column.
+                newX = std::max(target.x, xB - (w[pc] - floor));
+                w[pc] += newX - xB;
+            }
+            double Wp = 0.0;
+            for (double v : w) Wp += v;
+            if (Wp < 1e-9) break;
+            // The side that moved is the side the table's edge follows: dragging the cell's left side moves
+            // the left edge, its right side the right edge, so the rest of the drawing stays put.
+            const double minX = leftSideOfCell ? tb.max.x - Wp : tb.min.x;
+            const double maxX = minX + Wp;
+            e->points = {{minX, tb.min.y}, {maxX, tb.min.y}, {maxX, tb.max.y}, {minX, tb.max.y}};
+            e->a = {minX, tb.max.y};
+            for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / Wp;
             e->meta["colFrac"] = cf;
+            // Narrower columns wrap their words, and a row that now needs more lines is made taller.
+            tableFitRows(*e);
             break;
         }
         case GripRole::TableRowEdge: {
@@ -6185,21 +6248,45 @@ void Editor::applyEditDrag(const Vec2& target) {
             double yB = tb.max.y; // current world y of boundary r
             for (int i = 0; i < rf.size(); ++i) { h[i] = rf[i].toDouble() * H; if (i < r) yB -= h[i]; }
             const double minH = std::max(1e-4, H * 0.02);
-            // The same trade, between the two rows the boundary separates: the table keeps its height and
-            // every other row stays exactly where it is.
-            const int colsN = std::max(1, e->meta.value("cols").toInt(1));
+            // ONE row changes height: the picked cell's own. Everything past the boundary keeps its
+            // heights and travels with it, so a row can be made TALLER - which it could not be while the
+            // two rows either side traded a fixed total between them. On an imported table every row is
+            // already near the least its text will fit in, so there was nothing to take and the row would
+            // not budge.
             const int rowsN = rf.size();
-            const double floorA = std::max(minH, tableRowFloor(*e, r - 1, rowsN, colsN));
-            const double floorB = std::max(minH, tableRowFloor(*e, r, rowsN, colsN));
-            const double lo = yB - (h[r] - floorB);       // as far down as the row below allows
-            const double hi = yB + (h[r - 1] - floorA);   // as far up as the row above allows
-            if (hi < lo) break;
-            const double newY = std::clamp(target.y, lo, hi);
-            const double dy = yB - newY;   // the boundary moving DOWN grows the row above it
-            h[r - 1] += dy;
-            h[r] -= dy;
-            for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / H;   // H unchanged
+            int pr = r - 1;              // nothing picked: the boundary belongs to the row above it
+            bool topSideOfCell = false;
+            if (int prow = 0, pcol = 0; pickedCellOf(*e, prow, pcol)) {
+                pr = prow;
+                topSideOfCell = (r == prow);   // its top edge, or its bottom
+            }
+            if (pr < 0 || pr >= rowsN) break;
+            // A row may be dragged right down to the minimum; tableFitRows below pushes it back up to
+            // whatever its words actually need, so the limit here need only stop it inverting.
+            const double floor = minH;
+
+            double newY = target.y;
+            if (topSideOfCell) {
+                // The top edge: moving UP grows the row (world y is up).
+                newY = std::max(target.y, yB - (h[pr] - floor));
+                h[pr] += newY - yB;
+            } else {
+                // The bottom edge: moving DOWN grows the row.
+                newY = std::min(target.y, yB + (h[pr] - floor));
+                h[pr] += yB - newY;
+            }
+            double Hp = 0.0;
+            for (double v : h) Hp += v;
+            if (Hp < 1e-9) break;
+            // The edge that moved is the one the table follows.
+            const double maxY = topSideOfCell ? tb.min.y + Hp : tb.max.y;
+            const double minY = maxY - Hp;
+            e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, maxY}, {tb.min.x, maxY}};
+            e->a = {tb.min.x, maxY};
+            for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
             e->meta["rowFrac"] = rf;
+            // A row dragged shorter than its words still has to hold them.
+            tableFitRows(*e);
             break;
         }
         case GripRole::ConnDesText:
