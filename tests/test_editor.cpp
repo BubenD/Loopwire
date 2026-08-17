@@ -7589,6 +7589,47 @@ int run_editor_tests() {
               "dim-axis: mirroring across a diagonal swaps the axes, and it follows");
     }
 
+    // ---- a dimension is caught where it is drawn -------------------------------------------------
+    {
+        // Which way a dimension's line runs is answered by dimensionLineEnds, which honours what the
+        // dimension was placed measuring along. The hit test used to work it out AGAIN from the geometry -
+        // taking whichever way the stand-off was further offset - and the two could disagree. A stand-off
+        // further along the run than out to the side (which is most of them on a real drawing) was then
+        // DRAWN across the top and CLICKABLE down the side: it could be seen and not caught, and a
+        // selection window round it came up empty.
+        Document d;
+        Entity dim;
+        dim.id = QStringLiteral("dim");
+        dim.type = EntityType::Dimension;
+        dim.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+        dim.meta.insert(QStringLiteral("dimAcross"), true);   // measured along x
+        dim.a = {10.0, 0.0};
+        dim.b = {30.0, 4.0};
+        // The stand-off is 3 up from the middle and 10 along it. Guessing from those offsets gives the
+        // WRONG axis - it would run the dimension line down the side at x = 30 - while what the dimension
+        // says it measures along (x) runs it across at y = 5, which is where the renderer draws it.
+        dim.points = {dim.a, dim.b, {30.0, 5.0}};
+        d.entities().push_back(dim);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::Select);
+        // The drawn dimension line runs from (10,5) to (30,5). Click the middle of it, well clear of
+        // either extension line.
+        ed.onPointerPress({20.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({20.0, 5.0}, Qt::LeftButton);
+        check(ed.selection().size() == 1 && ed.selection().front() == QLatin1String("dim"),
+              "dim-catch: clicking the line it draws picks the dimension up");
+
+        // A dimension is its lines, not the area between them: the middle of the space it brackets is
+        // empty canvas.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({20.0, 30.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({20.0, 30.0}, Qt::LeftButton);
+        check(ed.selection().empty(), "dim-catch: and it is not lurking where nothing is drawn");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

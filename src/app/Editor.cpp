@@ -1104,18 +1104,17 @@ std::vector<std::pair<Vec2, Vec2>> dimensionSegments(const Entity& e) {
         segs.push_back({e.a, e.b});
     } else { // linear / aligned / arclength
         const Vec2 p1 = e.a, p2 = e.b;
-        const Vec2 off = e.points.size() >= 3 ? e.points[2] : lerp(p1, p2, 0.5);
-        Vec2 d1, d2;
-        if (ty == QLatin1String("linear")) {
-            const Vec2 mid = lerp(p1, p2, 0.5);
-            const bool horiz = std::abs(off.y - mid.y) >= std::abs(off.x - mid.x);
-            if (horiz) { d1 = {p1.x, off.y}; d2 = {p2.x, off.y}; }
-            else { d1 = {off.x, p1.y}; d2 = {off.x, p2.y}; }
-        } else {
-            const Vec2 n = (p2 - p1).normalized().perp();
-            const double t = dot(off - p1, n);
-            d1 = p1 + n * t;
-            d2 = p2 + n * t;
+        // Where the dimension line runs is asked by dimensionLineEnds, which is what the RENDERER asks.
+        // This used to work it out again from the geometry, and the two answers could differ: the renderer
+        // honours what the dimension was placed measuring along (meta "dimAcross") while this read the
+        // stand-off's offset and guessed. A dimension whose stand-off is further along the run than it is
+        // off to the side - which is most of them on a real sheet - was then DRAWN across the top and
+        // CLICKABLE down the side, so it could be seen and not caught: clicking the line it drew found
+        // nothing there, and a selection window round it came up empty.
+        Vec2 d1 = p1, d2 = p2;
+        if (!dimensionLineEnds(e, d1, d2)) {
+            d1 = p1;
+            d2 = p2;
         }
         segs.push_back({d1, d2}); // dimension line
         segs.push_back({p1, d1}); // extension lines
