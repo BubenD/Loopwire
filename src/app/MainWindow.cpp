@@ -2212,7 +2212,24 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     connect(editor_, &Editor::editTableCellRequested, this,
             [this](const QString& id, int cell, const QString& text, Vec2 at, double cw, double ch) {
                 Editor::TextStyle style;
+                // The height the cell is ALREADY written at. This was a flat 4.0, and committing writes
+                // the editor's height back onto the cell - so every edit set the text to 4 units high
+                // whatever it had been. On an imported drawing whose table is written at 0.12 that is
+                // thirty times over: typing in one cell blew its row apart. The height a cell has is the
+                // height it keeps, unless the editor's own toolbar is used to change it.
                 style.size = 4.0;
+                if (doc_) {
+                    for (const Entity& t : doc_->entities()) {
+                        if (t.id != id) continue;
+                        const QJsonArray own = t.meta.value(QStringLiteral("cellTextSize")).toArray();
+                        const double mine = cell < own.size() ? own[cell].toDouble() : 0.0;
+                        style.size = mine > 0.0
+                                         ? mine
+                                         : t.meta.value(QStringLiteral("textSize")).toDouble(4.0);
+                        break;
+                    }
+                }
+                if (!(style.size > 0.0)) style.size = 4.0;
                 style.boxWidth = cw;  // size the editor to the cell so text stays inside it
                 style.boxHeight = ch;
                 beginInlineText(id, text, style, at);

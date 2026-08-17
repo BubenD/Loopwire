@@ -7708,6 +7708,55 @@ int run_editor_tests() {
               "callout: the words moved with it, being part of it");
     }
 
+    // ---- the table itself, or one of its cells ----------------------------------------------------
+    {
+        // Every click inside a table used to take the whole table, so there was no way to say which was
+        // meant - and the corner handle that resizes the table sat on top of the cells being typed into.
+        // The OUTLINE is the table; anywhere inside is the cell.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3;
+        s.colWidth = 20.0;
+        s.dataRows = 2;
+        s.rowHeight = 10.0;
+        s.title = false;
+        s.header = false;
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);   // (0,0)..(60,20)
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities())
+                if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+        const QString tid = table()->id;
+
+        // Well inside a cell: the CELL, and the table is not picked as a whole.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({30, 15}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.selectedCellTable() == tid && ed.selectedCellIndex() == 1,
+              "table-pick: inside a cell picks the cell");
+
+        // ON the outline: the whole table, and no cell.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({30, 20}, Qt::LeftButton, Qt::NoModifier);   // the top border
+        ed.onPointerRelease({30, 20}, Qt::LeftButton);
+        check(ed.selection().size() == 1 && ed.selection().front() == tid,
+              "table-pick: the outline picks the table");
+        check(ed.selectedCells().empty(),
+              "table-pick: and picking the table leaves no cell picked");
+
+        // The band that counts as the outline must not reach into the cells: a click a quarter of the
+        // way down the top row is the cell, not the border.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({30, 17.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.selectedCellIndex() == 1,
+              "table-pick: the outline band does not swallow the cells behind it");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

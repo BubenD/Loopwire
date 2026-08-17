@@ -1645,6 +1645,40 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         // Clicking inside a TABLE selects just that CELL (not the whole table),
         // enabling the row/column/alignment commands.
         if (Entity* he = entityById(*hit); he && he->meta.value("table").toBool() && !shift) {
+            // The OUTLINE is the table itself: clicking it takes the whole table, with the handles that
+            // move and resize the whole of it. Anywhere inside takes the cell. Every click used to take
+            // the table, so there was no way to say which was meant - and moving a table meant grabbing
+            // a corner handle that sat on top of the cells.
+            {
+                // The band counted as "on the outline" is the pick tolerance, but never more than a
+                // quarter of the smallest cell: on a small table the plain tolerance reaches well into
+                // the cells, and every click would be read as the border again.
+                double band = worldTolerance();
+                if (he->points.size() == 4) {
+                    const Bounds tb = he->bounds();
+                    double minFracC = 1.0, minFracR = 1.0;
+                    for (const auto& v : he->meta.value("colFrac").toArray())
+                        minFracC = std::min(minFracC, std::max(1e-6, v.toDouble()));
+                    for (const auto& v : he->meta.value("rowFrac").toArray())
+                        minFracR = std::min(minFracR, std::max(1e-6, v.toDouble()));
+                    const double cellW = tb.width() * minFracC, cellH = tb.height() * minFracR;
+                    const double small = std::min(cellW, cellH);
+                    if (small > 1e-9) band = std::min(band, small * 0.25);
+                }
+                bool onOutline = false;
+                if (he->points.size() == 4)
+                    for (int k = 0; k < 4 && !onOutline; ++k)
+                        if (closestPointOnSegment(p, he->points[k], he->points[(k + 1) % 4]).distance <=
+                            band)
+                            onOutline = true;
+                if (onOutline) {
+                    clearCellSelection();
+                    selected_ = {he->id};
+                    emit message(QStringLiteral("Table picked — click inside it to work on a cell"));
+                    emit selectionChanged();
+                    return;
+                }
+            }
             Vec2 tl; double cw = 0, ch = 0;
             const int idx = tableCellAt(*he, p, tl, cw, ch);
             if (idx >= 0) {
@@ -3111,8 +3145,16 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
     // A placed block shows no grips: it moves and deletes as one object, and its contents are
     // changed in the block editor rather than on the sheet. (Anything done to a copy here would be
     // rebuilt away the next time the block was saved, so grips would promise what they cannot keep.)
+    // A table with one of its CELLS picked is not the same as a table picked. Every handle it has was
+    // being drawn either way - the four corners, the middle, the lot - so working inside a table looked
+    // exactly like having grabbed the whole thing, and the corner that resizes the table sat right next
+    // to the cell being typed into. With a cell picked, only the GRID handles show: those are the ones
+    // that move a column or row boundary, which is what resizing a cell means for a table.
+    const bool cellPicked = e.meta.value("table").toBool() && cellTableId_ == e.id && !cellSel_.empty();
     for (const auto& g : isBlockPiece(e) ? std::vector<Grip>{}
                                          : gripsOf(e, collectPinEnds(doc_), doc_)) {
+        if (cellPicked && g.role != GripRole::TableColEdge && g.role != GripRole::TableRowEdge)
+            continue;
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
