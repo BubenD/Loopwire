@@ -1160,6 +1160,9 @@ private:
     bool extendExistingWire(const std::vector<Vec2>& pts);
     void finishRegionSelect(bool subtract); // shift = remove from selection
     void drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const;
+    // Whether this object is a table with one of its cells picked, and which cell. What is drawn and
+    // what can be grabbed both ask, so they cannot disagree.
+    bool pickedCellOf(const Entity& e, int& row, int& col) const;
     void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
 
     // Direct manipulation (Edraw-style): grab a joint (click-to-place) / apply edit.

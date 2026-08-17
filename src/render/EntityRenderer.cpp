@@ -242,6 +242,67 @@ double wireDrawWidth(const Entity& e, const Document& doc) {
 }
 
 // Draw a small text label at a screen point, scaled to world height.
+// Measuring a font is not free, and a drawing's writing is very nearly all set in the SAME font: one
+// family, one or two sizes. Qt keeps the font engine, but a QFontMetricsF still has to be built for every
+// string, and on a sheet of several hundred labels plus a couple of hundred table cells that came to over
+// half the time spent redrawing the whole drawing.
+//
+// Remembering the last one answers almost every ask without building anything, because the next string is
+// nearly always in the same font as the one before. QFont's own comparison is a cheap check of what the
+// font IS, so a miss costs almost nothing either. Per thread, since a painter belongs to one.
+const QFontMetricsF& metricsFor(const QFont& f) {
+    thread_local QFont known;
+    thread_local QFontMetricsF cached{QFont()};
+    thread_local bool have = false;
+    if (!have || known != f) {
+        known = f;
+        cached = QFontMetricsF(f);
+        have = true;
+    }
+    return cached;
+}
+
+// Setting a painter's font throws away what it had worked out about the old one, so it is worth not
+// doing when the font has not changed - which, string after string, it usually has not.
+void useFont(QPainter& p, const QFont& f) {
+    if (p.font() != f) p.setFont(f);
+}
+
+// The lines a string breaks into when wrapped to a box.
+//
+// Not cached, and it is worth saying why, because caching it was the obvious next thing and it did not
+// work. Removing the wrap boxes from the imported sheet takes the redraw from 23 ms to 15, which reads
+// like eight milliseconds of wrapping to be saved - but it is not. Unwrapped text is FEWER LINES, and the
+// saving is in the glyphs not drawn, not in the measuring not done. Remembering the line breaks bought
+// nothing at all, twice: keyed on the string, then keyed on the object's id. The floor here is Qt putting
+// glyphs on the screen, and no amount of not-re-measuring gets under it.
+QStringList wrappedLines(const QFontMetricsF& fm, const QString& text, double boxWpx,
+                         const QString& list) {
+    QStringList lines;
+    int num = 1;
+    for (const QString& para : text.split(QLatin1Char('\n'))) {
+        QString full = para;
+        if (list == QLatin1String("bullet")) full = QString::fromUtf8("\xE2\x80\xA2 ") + para;
+        else if (list == QLatin1String("number")) full = QString::number(num++) + ". " + para;
+        if (boxWpx <= 1.0) {
+            lines << full;
+            continue;
+        }
+        QString cur;
+        for (const QString& w : full.split(QLatin1Char(' '))) {
+            const QString test = cur.isEmpty() ? w : cur + QLatin1Char(' ') + w;
+            if (!cur.isEmpty() && fm.horizontalAdvance(test) > boxWpx) {
+                lines << cur;
+                cur = w;
+            } else {
+                cur = test;
+            }
+        }
+        lines << cur;
+    }
+    return lines;
+}
+
 void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
                    double worldHeight, double scale, const QColor& color,
                    Qt::Alignment align = Qt::AlignLeft) {
@@ -256,11 +317,11 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
     if (px < 2.0) return;
     QFont f = p.font();
     f.setPixelSize(std::max(1, static_cast<int>(px)));
-    p.setFont(f);
+    useFont(p, f);
     p.setPen(color);
     QPointF pos = at;
     if (align & (Qt::AlignHCenter | Qt::AlignRight | Qt::AlignVCenter)) {
-        const QFontMetricsF fm(f);
+        const QFontMetricsF& fm = metricsFor(f);
         if (align & Qt::AlignHCenter) pos.setX(at.x() - fm.horizontalAdvance(text) / 2.0);
         else if (align & Qt::AlignRight) pos.setX(at.x() - fm.horizontalAdvance(text));
         // Centre the glyph body on `at.y` (baseline sits below the visual middle).
@@ -279,7 +340,7 @@ void drawTextAlongWire(QPainter& p, const ViewTransform& vt, const Vec2& at, con
     if (text.isEmpty()) return;
     QFont f = p.font();
     f.setPixelSize(std::max(1, static_cast<int>(worldHeight * vt.scale())));
-    const QFontMetricsF fm(f);
+    const QFontMetricsF& fm = metricsFor(f);
     // `lift` is the height above the line the text is drawn at, in world units; the small screen
     // floor keeps a zero-lift marking off the line itself at any zoom.
     const double gap = std::max(2.0, worldHeight * vt.scale() * 0.35) + lift * vt.scale();
@@ -1438,10 +1499,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     if (v == 'M') { y = (yTop + yBot) / 2.0; flags |= Qt::AlignVCenter; }
                     else if (v == 'B') { y = yBot + pad; }
                     else { y = yTop - pad - h; }
+                    // Only the FONT changes from cell to cell, so only the font is put back. A full
+                    // painter save and restore per cell hands back the pen, the brush, the clip and the
+                    // transform as well - two hundred and four times over on a bill of materials, which
+                    // was most of what a table cost to draw.
                     QFont f = normal; f.setBold(bold);
-                    p.save(); p.setFont(f);
+                    const QFont keep = p.font();
+                    useFont(p, f);
                     drawWorldText(p, vt.toScreen({x, y}), s, h, vt.scale(), color, flags);
-                    p.restore();
+                    useFont(p, keep);
                 };
                 for (int r = 0; r < rows; ++r) {
                     const bool isTitle = hasTitle && r == 0;
@@ -1498,7 +1564,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 const double pad = th * 0.4;
                 QFont f = p.font();
                 f.setPixelSize(std::max(1, static_cast<int>(th * vt.scale())));
-                const QFontMetricsF fm(f);
+                const QFontMetricsF& fm = metricsFor(f);
                 const double maxWpx = std::max(1.0, (b.width() - 2 * pad) * vt.scale());
                 QStringList lines;
                 for (const QString& para : body.split(QLatin1Char('\n'))) {
@@ -1767,9 +1833,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         f.setUnderline(e.meta.value("underline").toBool());
         f.setStrikeOut(e.meta.value("strike").toBool());
         f.setPixelSize(std::max(1, static_cast<int>(heightWorld * vt.scale())));
-        p.setFont(f);
+        useFont(p, f);
         p.setPen(color);
-        const QFontMetricsF fm(f);
+        const QFontMetricsF& fm = metricsFor(f);
         const double spacing = e.meta.value("lineSpacing").toDouble(1.0);
         const double lineH = fm.height() * (spacing > 0 ? spacing : 1.0);
         const double boxWpx = e.meta.value("boxWidth").toDouble(0.0) * vt.scale();
@@ -1786,27 +1852,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         const QChar vJust = just[0], hJust = just[1];
 
-        // Bullets / numbering: prefix each paragraph; then word-wrap to the box.
-        const QString list = e.meta.value("list").toString();
-        QStringList lines;
-        int num = 1;
-        for (const QString& para : text.split(QLatin1Char('\n'))) {
-            QString full = para;
-            if (list == QLatin1String("bullet")) full = QString::fromUtf8("• ") + para;
-            else if (list == QLatin1String("number")) full = QString::number(num++) + ". " + para;
-            if (boxWpx <= 1.0) { lines << full; continue; }
-            QString cur;
-            for (const QString& w : full.split(QLatin1Char(' '))) {
-                const QString test = cur.isEmpty() ? w : cur + QLatin1Char(' ') + w;
-                if (!cur.isEmpty() && fm.horizontalAdvance(test) > boxWpx) {
-                    lines << cur;
-                    cur = w;
-                } else {
-                    cur = test;
-                }
-            }
-            lines << cur;
-        }
+        // Bullets / numbering: prefix each paragraph; then word-wrap to the box. Worked out once per
+        // distinct string and remembered, because the answer is the same on every redraw.
+        const QStringList lines = wrappedLines(fm, text, boxWpx, e.meta.value("list").toString());
 
         // Vertical placement within the container (screen Y grows downward; anchor
         // is the box top). T = top, M = centre, B = bottom of the box.

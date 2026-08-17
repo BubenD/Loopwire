@@ -3134,6 +3134,58 @@ QColor Editor::paperInk(const QColor& c) {
     return out.toRgb();
 }
 
+namespace {
+
+// The handles a table shows while one of its CELLS is picked: the boundaries of that cell's own column
+// and row, and nothing else.
+//
+// They are moved onto the CELL as well. A column handle is normally put at the middle of the table's
+// whole height and a row handle at the middle of its width, which is right when the table itself is
+// picked - but with one cell picked in a thirty-four row bill of materials, the handles for that cell's
+// own edges sat inches away in the middle of the drawing, nowhere near the cell being worked on. A
+// column boundary's handle now sits at the middle of the picked cell's height, and a row boundary's at
+// the middle of its width, so the four of them frame the cell.
+//
+// The INDEX is untouched, so dragging one still moves the whole grid line and resizes the column or row
+// either side of it - which is what resizing a cell means for a table.
+std::vector<Grip> pickedCellGrips(const Entity& e, const std::vector<Grip>& all, int row, int col) {
+    Bounds tb;
+    for (const auto& pt : e.points) tb.expand(pt);
+    if (!tb.valid) return all;
+    const QJsonArray cf = e.meta.value("colFrac").toArray();
+    const QJsonArray rf = e.meta.value("rowFrac").toArray();
+
+    double x0 = tb.min.x;
+    for (int c = 0; c < col && c < cf.size(); ++c) x0 += cf[c].toDouble() * tb.width();
+    const double cw = col < cf.size() ? cf[col].toDouble() * tb.width() : 0.0;
+    double y0 = tb.max.y;
+    for (int r = 0; r < row && r < rf.size(); ++r) y0 -= rf[r].toDouble() * tb.height();
+    const double chh = row < rf.size() ? rf[row].toDouble() * tb.height() : 0.0;
+    const double cellMidX = x0 + cw / 2.0;
+    const double cellMidY = y0 - chh / 2.0;
+
+    std::vector<Grip> out;
+    for (const Grip& g : all) {
+        if (g.role == GripRole::TableColEdge && (g.index == col || g.index == col + 1))
+            out.push_back({{g.pos.x, cellMidY}, g.role, g.index});
+        else if (g.role == GripRole::TableRowEdge && (g.index == row || g.index == row + 1))
+            out.push_back({{cellMidX, g.pos.y}, g.role, g.index});
+    }
+    return out;
+}
+
+} // namespace
+
+// Whether this object is a table with one of its cells picked, and which cell.
+bool Editor::pickedCellOf(const Entity& e, int& row, int& col) const {
+    if (!e.meta.value(QStringLiteral("table")).toBool()) return false;
+    if (cellTableId_ != e.id || cellSel_.empty()) return false;
+    const int cols = std::max(1, e.meta.value(QStringLiteral("cols")).toInt(1));
+    row = cellSel_.front() / cols;
+    col = cellSel_.front() % cols;
+    return true;
+}
+
 void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const {
     // Show the MTEXT container outline (dashed) so its width/height are visible.
     if (e.type == EntityType::Text) {
@@ -3158,27 +3210,17 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
     // exactly like having grabbed the whole thing, and the corner that resizes the table sat right next
     // to the cell being typed into. With a cell picked, only the GRID handles show: those are the ones
     // that move a column or row boundary, which is what resizing a cell means for a table.
-    const bool cellPicked = e.meta.value("table").toBool() && cellTableId_ == e.id && !cellSel_.empty();
-    // And only the boundaries of the picked cell's OWN row and column: a handle on every grid line of a
-    // thirty-four row table is a hundred handles in a column down the middle of the drawing, none of
-    // which has anything to do with the cell being worked on.
-    int cellRow = -1, cellCol = -1;
-    if (cellPicked) {
-        const int cols = std::max(1, e.meta.value("cols").toInt(1));
-        cellRow = cellSel_.front() / cols;
-        cellCol = cellSel_.front() % cols;
+    // A table with one of its CELLS picked shows only that cell's own four boundary handles, sat on the
+    // cell. Every handle it has was drawn either way - the four corners, the middle, and one on every
+    // grid line in the table - so working inside a table looked exactly like having grabbed the whole
+    // thing, and the handles for the cell's own edges were out in the middle of the drawing.
+    std::vector<Grip> handles;
+    if (!isBlockPiece(e)) {
+        handles = gripsOf(e, collectPinEnds(doc_), doc_);
+        if (int row = 0, col = 0; pickedCellOf(e, row, col))
+            handles = pickedCellGrips(e, handles, row, col);
     }
-    for (const auto& g : isBlockPiece(e) ? std::vector<Grip>{}
-                                         : gripsOf(e, collectPinEnds(doc_), doc_)) {
-        if (cellPicked) {
-            if (g.role == GripRole::TableColEdge) {
-                if (g.index != cellCol && g.index != cellCol + 1) continue;
-            } else if (g.role == GripRole::TableRowEdge) {
-                if (g.index != cellRow && g.index != cellRow + 1) continue;
-            } else {
-                continue;
-            }
-        }
+    for (const auto& g : handles) {
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
@@ -3215,7 +3257,12 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
         Entity* e = entityById(id);
         if (!e) continue;
         if (isBlockPiece(*e)) continue;   // and none to grab, for the same reason
-        for (const auto& gr : gripsOf(*e, pinEnds, doc_)) {
+        // The same handles that are DRAWN, or a table's cell handles would be shown in one place and
+        // grabbable in another.
+        std::vector<Grip> handles = gripsOf(*e, pinEnds, doc_);
+        if (int row = 0, col = 0; pickedCellOf(*e, row, col))
+            handles = pickedCellGrips(*e, handles, row, col);
+        for (const auto& gr : handles) {
             const double d = distance(at, gr.pos);
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
         }
