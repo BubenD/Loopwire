@@ -13346,7 +13346,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // normally - it is the SELECTED look that is withheld - and the row and column headers below
             // stay, being what makes a cell findable.
             const bool onlyACell = isTable && cellTableId_ == e.id && !cellSel_.empty();
-            if (!onlyACell) EntityRenderer::draw(p, e, *doc_, vt, isTable ? kTableChrome : hi);
+            // It has to be drawn HERE whatever happens: the scene cache leaves every selected object out
+            // on purpose, because this pass puts it back. Skipping the draw to withhold the highlight
+            // therefore did not un-highlight the table, it made the table VANISH the moment a cell was
+            // clicked. What is withheld is the colour, not the drawing: an invalid override means "draw
+            // it as it is", so the table stays on the sheet and simply does not look picked.
+            EntityRenderer::draw(p, e, *doc_, vt,
+                                 onlyACell ? QColor() : (isTable ? kTableChrome : hi));
             drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.

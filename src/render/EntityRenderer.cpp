@@ -1528,8 +1528,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             path.closeSubpath();
         }
         drawHatch(p, path, e, color, vt);
-        // A faint boundary so an empty/low-density hatch is still selectable.
-        if (overrideColor.isValid()) {
+        // A faint boundary so an empty/low-density hatch is still selectable - and, for one read out of
+        // a file, so that it reads as a FILLED SHAPE at all.
+        //
+        // A hatch does not normally draw its own edge, because the edge is usually a real object sitting
+        // in the same place. A hatch imported from a DXF may have no such object: its boundary was
+        // "derived" from geometry that need not be in the file. Drawn without it, a round fill came out as
+        // a handful of loose parallel strokes floating in space - a circle with no circle. Where the edge
+        // object does exist, this draws exactly on top of it and costs nothing.
+        if (overrideColor.isValid() || e.meta.value("drawBoundary").toBool()) {
             p.setBrush(Qt::NoBrush);
             p.drawPath(path);
         }

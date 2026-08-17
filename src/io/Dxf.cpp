@@ -1511,6 +1511,10 @@ bool parse(Document& doc, const QString& text, QString*) {
                     for (const Vec2& q : loops[best]) e.points.push_back(xf.apply(q));
                     e.meta.insert(QStringLiteral("pattern"),
                                   solid ? QStringLiteral("solid") : patName.toLower());
+                    // Draw its edge. A hatch's boundary here is often "derived" from objects that need
+                    // not be in the file at all, and without an edge a round ruled fill reads as a few
+                    // loose strokes floating in space rather than as a filled circle.
+                    e.meta.insert(QStringLiteral("drawBoundary"), true);
                     if (!solid) {
                         e.meta.insert(QStringLiteral("hatchAngle"), findNum(g, "52", 0.0));
                         const double sc = findNum(g, "41", 1.0);

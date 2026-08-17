@@ -1055,6 +1055,12 @@ int run_io_tests() {
                         b.height());
             check(std::abs(b.width() - 10.0) < 1e-6 && std::abs(b.height() - 10.0) < 1e-6,
                   "hatch: covering the ground its boundary encloses");
+            // Its EDGE is drawn. A hatch does not normally draw one, because the edge is usually a real
+            // object in the same place - but a boundary read out of a file was "derived" from geometry
+            // that need not be in the file, and without an edge a round fill came out as a few loose
+            // strokes floating in space: a circle with no circle.
+            check(e.meta.value("drawBoundary").toBool(),
+                  "hatch: an imported fill draws its own edge, having no object to borrow one from");
         }
 
         // A ruled fill whose boundary is given as EDGES rather than a polyline, with the pattern's angle
