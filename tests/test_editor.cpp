@@ -829,8 +829,13 @@ int run_editor_tests() {
         check(!r3.snapped, "dim-snap: no object snap when object snap is off");
     }
 
-    // --- Snap to a table's grid joints (cell corners) and cell-edge midpoints.
+    // --- A table's INTERIOR grid is not snapped to; its outline is.
     {
+        // It used to be, and thoroughly: every cell corner an endpoint, every cell edge its own
+        // midpoint and nearest. On a real bill of materials - thirty-four rows by six columns - that is
+        // hundreds of snap points a row apart. The cursor could not be moved across the table without
+        // being seized by one, and nothing lying behind the table could be reached at all. A table's
+        // grid is for reading and typing into; its outline is what a drawing gets lined up against.
         Document d; d.entities().clear();
         Entity t; t.id = "tb"; t.type = EntityType::Rect;
         t.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}}; // 2x2, x[0..40] y[0..20]
@@ -840,14 +845,20 @@ int run_editor_tests() {
         QJsonArray rf; rf.append(0.5); rf.append(0.5);
         t.meta.insert("colFrac", cf); t.meta.insert("rowFrac", rf);
         d.entities().push_back(t);
+
         SnapSettings s; // endpoint on by default
-        auto r = resolveSnap(d, {21, 11}, std::nullopt, 5.0, s, {});
-        check(r.snapped && near(r.point.x, 20.0) && near(r.point.y, 10.0),
-              "table-snap: snaps to an interior grid joint");
+        auto mid = resolveSnap(d, {21, 11}, std::nullopt, 5.0, s, {});
+        check(!(mid.snapped && near(mid.point.x, 20.0) && near(mid.point.y, 10.0)),
+              "table-snap: the middle grid joint is not snapped to");
         SnapSettings m; m.snapEndpoint = false; m.snapNearest = false; m.snapMidpoint = true;
         auto rm = resolveSnap(d, {10, 19}, std::nullopt, 5.0, m, {});
-        check(rm.snapped && near(rm.point.x, 10.0) && near(rm.point.y, 20.0),
-              "table-snap: snaps to a cell-edge midpoint");
+        check(!(rm.snapped && near(rm.point.y, 20.0) && near(rm.point.x, 10.0)),
+              "table-snap: nor a cell-edge midpoint");
+
+        // The four corners of it still are, like any other rectangle.
+        auto corner = resolveSnap(d, {39, 1}, std::nullopt, 5.0, s, {});
+        check(corner.snapped && near(corner.point.x, 40.0) && near(corner.point.y, 0.0),
+              "table-snap: the table's own corners are still snapped to");
     }
 
     // --- A leader can be re-connected to another balloon by dropping its landing

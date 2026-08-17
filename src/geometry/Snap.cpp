@@ -92,16 +92,15 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Image:
         for (size_t i = 0; i < e.points.size(); ++i)
             out.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
-        // A table also snaps along its interior grid lines, broken per cell so each
-        // cell edge gets its own midpoint / nearest snap.
-        if (std::vector<double> xb, yb; tableGridLines(e, xb, yb)) {
-            for (size_t j = 0; j + 1 < yb.size(); ++j)      // horizontal cell edges
-                for (size_t i = 0; i + 1 < xb.size(); ++i)
-                    out.emplace_back(Vec2{xb[i], yb[j]}, Vec2{xb[i + 1], yb[j]});
-            for (size_t i = 0; i + 1 < xb.size(); ++i)      // vertical cell edges
-                for (size_t j = 0; j + 1 < yb.size(); ++j)
-                    out.emplace_back(Vec2{xb[i], yb[j]}, Vec2{xb[i], yb[j + 1]});
-        }
+        // A table's INTERIOR grid lines are deliberately not snapped to.
+        //
+        // They used to be, broken per cell so every cell edge offered its own endpoint, midpoint and
+        // nearest. On a real table that is thousands of snap points packed a row apart: a bill of
+        // materials of thirty-four rows by six columns put a marker on top of every cell corner and
+        // every cell edge midpoint, so the cursor could not be moved across the table without being
+        // caught, and nothing behind the table could be reached at all. The grid is a thing to read and
+        // type into, not a thing to draw to. The table's OUTLINE is still snapped to, above, like any
+        // other rectangle - which is what anybody lining a drawing up against a table actually wants.
         break;
     case EntityType::Connector: {
         // Body-rectangle edges + each pin stub, so nearest / midpoint snap works along
@@ -264,11 +263,11 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::Wipeout:
     case EntityType::Image:
         for (const auto& p : e.points) out.push_back(p);
-        // A table snaps to every grid intersection (all cell corners), not just the
-        // four outer corners.
-        if (std::vector<double> xb, yb; tableGridLines(e, xb, yb))
-            for (double y : yb)
-                for (double x : xb) out.push_back({x, y});
+        // Every grid INTERSECTION of a table used to be an endpoint snap - all the cell corners, not
+        // just the four outer ones. A thirty-four by six bill of materials is two hundred and forty five
+        // of them, a row apart, and the cursor could not cross the table without being seized by one.
+        // The four corners of the table are its endpoints, like any other rectangle; the cells are for
+        // reading and typing into.
         break;
     case EntityType::Text:
     case EntityType::Splice:

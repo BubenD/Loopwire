@@ -609,7 +609,17 @@ void drawHatch(QPainter& p, const QPainterPath& path, const Entity& e, const QCo
     p.setBrush(Qt::NoBrush);
 
     const QRectF bb = path.boundingRect();
-    const double gap = std::max(3.0, 6.0 * scale * vt.scale()); // world ~6 units * scale
+    double gap = std::max(3.0, 6.0 * scale * vt.scale()); // world ~6 units * scale
+    // A spacing of six world units means nothing to a fill that is under one unit across. On an imported
+    // drawing whose fills are a fraction of a millimetre wide, every ruled hatch came out as a SINGLE
+    // stroke through the middle - a stray line sitting where a fill should be, with nothing to say it was
+    // meant to be hatching. The spacing is capped so that any fill big enough to see gets ruled rather
+    // than crossed once.
+    {
+        const QRectF pbb = path.boundingRect();
+        const double across = std::min(pbb.width(), pbb.height());
+        if (across > 8.0) gap = std::min(gap, across / 4.0);
+    }
 
     // Rotate the whole tiled pattern about the boundary centre by the user Angle.
     if (std::abs(userAngle) > 1e-9) {

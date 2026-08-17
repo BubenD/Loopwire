@@ -740,10 +740,18 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             g.push_back({{e.center.x - e.radius, e.center.y}, GripRole::Radius, 0});
             g.push_back({{e.center.x, e.center.y + e.radius}, GripRole::Radius, 0});
             g.push_back({{e.center.x, e.center.y - e.radius}, GripRole::Radius, 0});
-        } else {
-            // Non-associative polygon: full boundary vertex grips for reshaping.
+        } else if (e.points.size() <= 12) {
+            // A boundary somebody drew: every vertex is a joint, and there are few enough to grab.
             for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
                 g.push_back({e.points[i], GripRole::Vertex, i});
+        } else {
+            // A boundary that came out of a FILE is a curve turned into points - sixty, eighty, a
+            // hundred of them round a small circle. A joint on each drew a ring of ticks where the fill
+            // was, which reads as junk on the drawing rather than as a fill that can be taken hold of,
+            // and no single one of them was any use to grab. One joint at the middle moves the whole
+            // fill, which is what there is to do with it.
+            const Bounds b = e.bounds();
+            g.push_back({b.valid ? b.center() : e.points[0], GripRole::Move, 0});
         }
         break;
     case EntityType::Image:   // a picture is resized by dragging a corner, or a side
@@ -3151,10 +3159,26 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
     // to the cell being typed into. With a cell picked, only the GRID handles show: those are the ones
     // that move a column or row boundary, which is what resizing a cell means for a table.
     const bool cellPicked = e.meta.value("table").toBool() && cellTableId_ == e.id && !cellSel_.empty();
+    // And only the boundaries of the picked cell's OWN row and column: a handle on every grid line of a
+    // thirty-four row table is a hundred handles in a column down the middle of the drawing, none of
+    // which has anything to do with the cell being worked on.
+    int cellRow = -1, cellCol = -1;
+    if (cellPicked) {
+        const int cols = std::max(1, e.meta.value("cols").toInt(1));
+        cellRow = cellSel_.front() / cols;
+        cellCol = cellSel_.front() % cols;
+    }
     for (const auto& g : isBlockPiece(e) ? std::vector<Grip>{}
                                          : gripsOf(e, collectPinEnds(doc_), doc_)) {
-        if (cellPicked && g.role != GripRole::TableColEdge && g.role != GripRole::TableRowEdge)
-            continue;
+        if (cellPicked) {
+            if (g.role == GripRole::TableColEdge) {
+                if (g.index != cellCol && g.index != cellCol + 1) continue;
+            } else if (g.role == GripRole::TableRowEdge) {
+                if (g.index != cellRow && g.index != cellRow + 1) continue;
+            } else {
+                continue;
+            }
+        }
         const QPointF s = vt.toScreen(g.pos);
         // Radius/midpoint handles drawn as small squares; vertices/ends larger.
         const double r = (g.role == GripRole::Center) ? 4.0 : 3.5;
@@ -13316,7 +13340,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 continue;
             // A table is highlighted in the table colour, not the ordinary selection blue.
             const bool isTable = e.meta.value("table").toBool();
-            EntityRenderer::draw(p, e, *doc_, vt, isTable ? kTableChrome : hi);
+            // ...but a table with one of its CELLS picked is not a picked table. Redrawing the whole
+            // grid in the selection colour said it was: working in one cell lit up all two hundred of
+            // them, so there was no telling a cell apart from the table it is in. The table still draws
+            // normally - it is the SELECTED look that is withheld - and the row and column headers below
+            // stay, being what makes a cell findable.
+            const bool onlyACell = isTable && cellTableId_ == e.id && !cellSel_.empty();
+            if (!onlyACell) EntityRenderer::draw(p, e, *doc_, vt, isTable ? kTableChrome : hi);
             drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.
