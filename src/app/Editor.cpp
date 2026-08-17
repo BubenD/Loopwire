@@ -226,6 +226,51 @@ struct Grip { Vec2 pos; GripRole role; int index; Vec2 off{0, 0}; };
 // handle that can be snapped to somewhere other than where it is drawn is worse than one that cannot.
 std::vector<Grip> pickedCellGrips(const Entity& e, const std::vector<Grip>& all, int row, int col);
 
+// How narrow a column may be made, and how short a row: never so small that the words in it are cut off.
+//
+// Estimated from the character count and the text height rather than measured with a font. That is the
+// estimate the rest of the drawing already uses for a proportional font (see setTableCellTextHeight), and
+// it is the right tool here for a second reason: a limit worked out by measuring glyphs would come out
+// differently at different zooms and on different machines, so the same drag would stop in a different
+// place depending on how far in somebody happened to be looking.
+double tableCellTextWidth(const QString& text, double h) {
+    if (text.trimmed().isEmpty()) return 0.0;
+    return h * (1.6 + 0.62 * text.size());
+}
+
+double tableColumnFloor(const Entity& e, int col, int rows, int cols) {
+    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
+    const QJsonArray own = e.meta.value(QStringLiteral("cellTextSize")).toArray();
+    const double th = e.meta.value(QStringLiteral("textSize")).toDouble(4.0);
+    double need = 0.0;
+    for (int r = 0; r < rows; ++r) {
+        const int idx = r * cols + col;
+        if (idx >= cells.size()) break;
+        // A cell whose words are shared across a merged block does not hold this column to its width: the
+        // words have the whole block to sit in.
+        if (TableMerge m; tableMergeAt(e, r, col, m) && m.colSpan > 1) continue;
+        const double h = idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
+        need = std::max(need, tableCellTextWidth(cells[idx].toString(), h));
+    }
+    return need;
+}
+
+double tableRowFloor(const Entity& e, int row, int rows, int cols) {
+    const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
+    const QJsonArray own = e.meta.value(QStringLiteral("cellTextSize")).toArray();
+    const double th = e.meta.value(QStringLiteral("textSize")).toDouble(4.0);
+    Q_UNUSED(rows);
+    double need = 0.0;
+    for (int c = 0; c < cols; ++c) {
+        const int idx = row * cols + c;
+        if (idx >= cells.size()) break;
+        if (cells[idx].toString().trimmed().isEmpty()) continue;
+        const double h = idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
+        need = std::max(need, h * 1.6);
+    }
+    return need;
+}
+
 std::vector<Vec2> regularPolygonPoints(const Vec2& center, const Vec2& vertex, int sides, int vertexIndex = 0) {
     const int n = std::clamp(sides, 3, 64);
     const double r = distance(center, vertex);
@@ -6067,14 +6112,27 @@ void Editor::applyEditDrag(const Vec2& target) {
             double xB = tb.min.x; // current world x of boundary c
             for (int i = 0; i < cf.size(); ++i) { w[i] = cf[i].toDouble() * W; if (i < c) xB += w[i]; }
             const double minW = std::max(1e-4, W * 0.02);
-            const double newX = std::max(xB - (w[c - 1] - minW), target.x); // keep col c-1 >= minW
+            // The boundary trades width between the TWO columns it separates: one gives up exactly what
+            // the other takes, and the table's own size does not change.
+            //
+            // It used to grow the table instead - the column to the left took the whole change and every
+            // column right of it shifted along, with the right-hand edge moving too. On a real table that
+            // meant dragging one cell's boundary moved most of the drawing, and the faint ghost of where
+            // things were made the whole table read double while the drag was in progress.
+            const int rowsN = std::max(1, e->meta.value("rows").toInt(1));
+            const int colsN = cf.size();
+            // Neither of the two may be squeezed below its own words. This is the "do not go over the
+            // text" limit: dragging left stops where the left column's longest entry stops.
+            const double floorL = std::max(minW, tableColumnFloor(*e, c - 1, rowsN, colsN));
+            const double floorR = std::max(minW, tableColumnFloor(*e, c, rowsN, colsN));
+            const double lo = xB - (w[c - 1] - floorL);   // as far left as the left column allows
+            const double hi = xB + (w[c] - floorR);       // as far right as the right one allows
+            if (hi < lo) break;                           // no room to move at all
+            const double newX = std::clamp(target.x, lo, hi);
             const double dx = newX - xB;
-            const double Wp = W + dx;
-            if (Wp < 1e-9) break;
             w[c - 1] += dx;
-            const double maxX = tb.min.x + Wp;
-            e->points = {{tb.min.x, tb.min.y}, {maxX, tb.min.y}, {maxX, tb.max.y}, {tb.min.x, tb.max.y}};
-            for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / Wp;
+            w[c] -= dx;
+            for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / W;   // W unchanged: the table stays put
             e->meta["colFrac"] = cf;
             break;
         }
@@ -6127,14 +6185,20 @@ void Editor::applyEditDrag(const Vec2& target) {
             double yB = tb.max.y; // current world y of boundary r
             for (int i = 0; i < rf.size(); ++i) { h[i] = rf[i].toDouble() * H; if (i < r) yB -= h[i]; }
             const double minH = std::max(1e-4, H * 0.02);
-            const double newY = std::min(yB + (h[r - 1] - minH), target.y); // keep row r-1 >= minH
-            const double dy = yB - newY; // boundary moving down (y decreasing) grows row r-1
-            const double Hp = H + dy;
-            if (Hp < 1e-9) break;
+            // The same trade, between the two rows the boundary separates: the table keeps its height and
+            // every other row stays exactly where it is.
+            const int colsN = std::max(1, e->meta.value("cols").toInt(1));
+            const int rowsN = rf.size();
+            const double floorA = std::max(minH, tableRowFloor(*e, r - 1, rowsN, colsN));
+            const double floorB = std::max(minH, tableRowFloor(*e, r, rowsN, colsN));
+            const double lo = yB - (h[r] - floorB);       // as far down as the row below allows
+            const double hi = yB + (h[r - 1] - floorA);   // as far up as the row above allows
+            if (hi < lo) break;
+            const double newY = std::clamp(target.y, lo, hi);
+            const double dy = yB - newY;   // the boundary moving DOWN grows the row above it
             h[r - 1] += dy;
-            const double minY = tb.max.y - Hp;
-            e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, tb.max.y}, {tb.min.x, tb.max.y}};
-            for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
+            h[r] -= dy;
+            for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / H;   // H unchanged
             e->meta["rowFrac"] = rf;
             break;
         }

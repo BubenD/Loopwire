@@ -645,18 +645,23 @@ int run_editor_tests() {
         const QString tid = table()->id;
         ed.setTool(ToolId::Select);
         ed.selectById(tid);
-        // Grid line between col 0 and col 1 at x=20 (mid-y=10). Drag it right to x=30:
-        // col 0 grows 20->30, cols 1 & 2 stay 20 wide, table widens 60->70.
+        // Grid line between col 0 and col 1 at x=20 (mid-y=10). Dragging it right to x=30 TRADES width
+        // between those two columns: col 0 goes 20->30, col 1 goes 20->10, col 2 is untouched and the
+        // table keeps its own 60.
+        //
+        // It used to grow the table instead, with every column right of the boundary shifting along. On a
+        // real table that meant dragging one cell's boundary moved most of the drawing - and the faint
+        // ghost of where everything had been made the whole table read double during the drag.
         ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({30, 10});
         ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
         const QJsonArray cf = table()->meta.value("colFrac").toArray();
         const double W = tableWidth();
-        check(std::abs(W - 70.0) < 1e-6, "table resize: column drag widens the table (60->70)");
+        check(std::abs(W - 60.0) < 1e-6, "table resize: the table keeps its own width");
         check(cf.size() == 3 && std::abs(cf[0].toDouble() * W - 30.0) < 1e-6 &&
-                  std::abs(cf[1].toDouble() * W - 20.0) < 1e-6 &&
+                  std::abs(cf[1].toDouble() * W - 10.0) < 1e-6 &&
                   std::abs(cf[2].toDouble() * W - 20.0) < 1e-6,
-              "table resize: only the left column resizes; the others keep their width");
+              "table resize: the two columns either side trade width; the third is untouched");
     }
 
     // --- Resize a table ROW by dragging its grid line: only the row above resizes; the
@@ -681,17 +686,17 @@ int run_editor_tests() {
         };
         ed.setTool(ToolId::Select);
         ed.selectById(table()->id);
-        // Row line between row 0 and row 1 at y=10 (mid-x=30). Drag it down to y=5:
-        // row 0 grows 10->15, row 1 stays 10 tall, table grows 20->25.
+        // Row line between row 0 and row 1 at y=10 (mid-x=30). Dragging it down to y=5 trades height
+        // between those two rows: row 0 goes 10->15, row 1 goes 10->5, and the table keeps its own 20.
         ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({30, 5});
         ed.onPointerPress({30, 5}, Qt::LeftButton, Qt::NoModifier);
         const QJsonArray rf = table()->meta.value("rowFrac").toArray();
         const double H = tableHeight();
-        check(std::abs(H - 25.0) < 1e-6, "table resize: row drag grows the table (20->25)");
+        check(std::abs(H - 20.0) < 1e-6, "table resize: the table keeps its own height");
         check(rf.size() == 2 && std::abs(rf[0].toDouble() * H - 15.0) < 1e-6 &&
-                  std::abs(rf[1].toDouble() * H - 10.0) < 1e-6,
-              "table resize: only the row above resizes; the other keeps its height");
+                  std::abs(rf[1].toDouble() * H - 5.0) < 1e-6,
+              "table resize: the two rows either side trade height");
     }
 
     // --- Committing an inline edit on a balloon saves its number (balloons aren't
@@ -7956,6 +7961,55 @@ int run_editor_tests() {
         std::printf("  table-grip: first column %.3f -> %.3f of the table\n", before, after);
         check(after > before,
               "table-grip: the handle is caught where it is drawn, and widens the whole column");
+
+        // ---- a column is not squeezed over its own words ----
+        //
+        // Dragging a boundary to the left takes width from the column on the left, and it stops where that
+        // column's longest entry stops: a table that hides what is written in it is worse than a wide one.
+        {
+            Document dw;
+            Editor ew;
+            ew.setDocument(&dw);
+            noSnap(ew);
+            Editor::TableSpec ts;
+            ts.cols = 2;
+            ts.colWidth = 40.0;
+            ts.dataRows = 2;
+            ts.rowHeight = 10.0;
+            ts.title = false;
+            ts.header = false;
+            ew.setTableSpec(ts);
+            ew.setTool(ToolId::Table);
+            ew.onPointerPress({0, 20}, Qt::LeftButton, Qt::NoModifier);   // (0,0)..(80,20)
+            auto tw = [&]() -> const Entity* {
+                for (const auto& e : dw.entities())
+                    if (e.meta.value("table").toBool()) return &e;
+                return nullptr;
+            };
+            const QString id = tw()->id;
+            // Words in the LEFT column that need SOME of its 40, but not all of it - so there is room to
+            // narrow and a point past which there is not. (A string that already overflows its column
+            // cannot be narrowed at all, which is right, and would test nothing.)
+            ew.applyTableCellEdit(id, 0, QStringLiteral("SHORT"));
+            ew.setTool(ToolId::Select);
+            // Pick the cell first. With the whole TABLE picked, every boundary handle sits on the table's
+            // centre lines - so the middle column handle and the middle row handle land on the same point
+            // and a click there is a coin toss between them. Picking a cell puts its handles on the cell,
+            // which is both what a person does and what keeps this test measuring one thing.
+            ew.onPointerPress({20, 15}, Qt::LeftButton, Qt::NoModifier);   // cell 0
+            ew.onPointerRelease({20, 15}, Qt::LeftButton);
+            // Haul its right-hand boundary hard left, far past what the words need. The handle sits at the
+            // cell's own mid-height, y = 15.
+            ew.onPointerPress({40, 15}, Qt::LeftButton, Qt::NoModifier);
+            ew.onPointerMove({2, 15});
+            ew.onPointerPress({2, 15}, Qt::LeftButton, Qt::NoModifier);
+            const QJsonArray cw = tw()->meta.value("colFrac").toArray();
+            const double leftW = cw[0].toDouble() * 80.0;
+            std::printf("  table-floor: left column stopped at %.1f wide\n", leftW);
+            check(leftW > 10.0,
+                  "table-floor: the column stops at its words rather than collapsing to nothing");
+            check(leftW < 40.0, "table-floor: but it did narrow");
+        }
 
         // ---- an EDGE cell has a handle on the table's own edge too ----
         //
