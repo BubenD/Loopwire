@@ -232,6 +232,9 @@ public:
     void setCellSelection(const QString& tableId, int cell);
     void clearCellSelection();
     // Cell editing ops (act on the selected cell / its row / its column).
+    // Join the picked cells into one, and break a joined one back apart.
+    void tableMergeCells();
+    void tableSplitCell();
     void tableInsertRow(bool below);
     void tableDeleteRow();
     void tableInsertColumn(bool right);

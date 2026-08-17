@@ -92,6 +92,41 @@ bool dimensionAcrossX(const Entity& e) {
     return dy >= dx;
 }
 
+std::vector<TableMerge> tableMerges(const Entity& e) {
+    std::vector<TableMerge> out;
+    for (const auto v : e.meta.value(QStringLiteral("merges")).toArray()) {
+        const QJsonArray a = v.toArray();
+        if (a.size() < 4) continue;
+        TableMerge m;
+        m.row = a[0].toInt();
+        m.col = a[1].toInt();
+        m.rowSpan = std::max(1, a[2].toInt());
+        m.colSpan = std::max(1, a[3].toInt());
+        if (m.rowSpan == 1 && m.colSpan == 1) continue;   // a block of one is not a merge
+        out.push_back(m);
+    }
+    return out;
+}
+
+void setTableMerges(Entity& e, const std::vector<TableMerge>& merges) {
+    QJsonArray arr;
+    for (const TableMerge& m : merges) {
+        if (m.rowSpan == 1 && m.colSpan == 1) continue;
+        arr.append(QJsonArray{m.row, m.col, m.rowSpan, m.colSpan});
+    }
+    if (arr.isEmpty()) e.meta.remove(QStringLiteral("merges"));
+    else e.meta.insert(QStringLiteral("merges"), arr);
+}
+
+bool tableMergeAt(const Entity& e, int row, int col, TableMerge& out) {
+    for (const TableMerge& m : tableMerges(e))
+        if (m.covers(row, col)) {
+            out = m;
+            return true;
+        }
+    return false;
+}
+
 bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
     Vec2 p1, p2, off;
     if (!dimStandOff(e, p1, p2, off)) return false;

@@ -932,10 +932,19 @@ bool parse(Document& doc, const QString& text, QString*) {
             while (i < g.size()) {
                 if (g[i].code != QLatin1String("171")) { ++i; continue; }
                 ++i;
-                QString said;
-                for (; i < g.size() && g[i].code != QLatin1String("171"); ++i)
+                // A cell says what is in it in one of two ways, and reading only the first left holes
+                // all over an imported table. Most carry their words as TEXT (code 1). But a cell
+                // holding a plain value - a quantity, a number in a balloon column - carries it as a
+                // VALUE instead, in a little block of its own: 301 says CELL_VALUE, 302 is the value,
+                // 304 closes it. Of the 204 cells in the bill of materials on the sheet this was
+                // written for, 166 are text and 33 are values; the missing 33 were the quantities.
+                QString said, valued;
+                for (; i < g.size() && g[i].code != QLatin1String("171"); ++i) {
                     if (g[i].code == QLatin1String("1") && said.isEmpty()) said = g[i].value;
-                cells.push_back(decodeDxfText(said, true));
+                    else if (g[i].code == QLatin1String("302") && valued.isEmpty())
+                        valued = g[i].value;
+                }
+                cells.push_back(decodeDxfText(said.isEmpty() ? valued : said, true));
             }
         }
         if (static_cast<int>(rowH.size()) < rows || static_cast<int>(colW.size()) < cols) return false;

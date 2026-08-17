@@ -10497,6 +10497,22 @@ int Editor::tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, doubl
         ch = hrow;
         return 0;
     }
+    // A cell inside a MERGED block is that block: the click picks the cell the block starts at, and the
+    // rectangle handed back is the whole block, so an editor opened on it fills the merged cell rather
+    // than one of the cells underneath it.
+    if (TableMerge m; tableMergeAt(e, row, col, m)) {
+        double x = b.min.x;
+        for (int c = 0; c < m.col && c < cols; ++c) x += cf[c].toDouble() * b.width();
+        double top = b.max.y;
+        for (int r = 0; r < m.row && r < rows; ++r) top -= rf[r].toDouble() * b.height();
+        double w = 0.0, h = 0.0;
+        for (int c = m.col; c < m.col + m.colSpan && c < cols; ++c) w += cf[c].toDouble() * b.width();
+        for (int r = m.row; r < m.row + m.rowSpan && r < rows; ++r) h += rf[r].toDouble() * b.height();
+        cellTopLeft = {x, top};
+        cw = w;
+        ch = h;
+        return m.row * cols + m.col;
+    }
     cellTopLeft = {xL, yT};
     cw = wcol;
     ch = hrow;
@@ -10617,6 +10633,93 @@ void rebuildTable(Entity& e, const std::vector<double>& h, const std::vector<dou
     e.meta.insert("colFrac", cf);
 }
 } // namespace
+
+void Editor::tableMergeCells() {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellSel_.size() < 2) {
+        emit message(QStringLiteral("Pick the cells to join first — drag across them"));
+        return;
+    }
+    const int cols = std::max(1, e->meta.value("cols").toInt(1));
+    const int rows = std::max(1, e->meta.value("rows").toInt(1));
+    // The block the picked cells cover. Anything rectangular is joinable; a ragged pick is squared off
+    // to the block that contains it, because a merged cell is a rectangle and there is nothing else it
+    // could sensibly become.
+    int r0 = rows, c0 = cols, r1 = -1, c1 = -1;
+    for (int idx : cellSel_) {
+        if (idx < 0 || idx >= rows * cols) continue;
+        const int r = idx / cols, c = idx % cols;
+        r0 = std::min(r0, r);
+        c0 = std::min(c0, c);
+        r1 = std::max(r1, r);
+        c1 = std::max(c1, c);
+    }
+    if (r1 < r0 || c1 < c0 || (r1 == r0 && c1 == c0)) return;
+    pushUndo();
+
+    // Any merge already touching the block is swallowed by it, so blocks cannot overlap: two merges
+    // covering one cell is a question with no answer.
+    std::vector<TableMerge> keep;
+    for (const TableMerge& m : tableMerges(*e)) {
+        const bool overlaps = m.row <= r1 && m.row + m.rowSpan - 1 >= r0 && m.col <= c1 &&
+                              m.col + m.colSpan - 1 >= c0;
+        if (!overlaps) keep.push_back(m);
+        else {
+            r0 = std::min(r0, m.row);
+            c0 = std::min(c0, m.col);
+            r1 = std::max(r1, m.row + m.rowSpan - 1);
+            c1 = std::max(c1, m.col + m.colSpan - 1);
+        }
+    }
+    keep.push_back({r0, c0, r1 - r0 + 1, c1 - c0 + 1});
+    setTableMerges(*e, keep);
+
+    // The words of the joined cells become the words of the one cell: the first that has any, in reading
+    // order, so joining a row of a table with one thing written in it keeps that thing. The rest are
+    // emptied - they are not shown any more, and leaving text in a cell nobody can see or reach is how a
+    // drawing comes to say something nobody put there.
+    QJsonArray cells = e->meta.value("cells").toArray();
+    while (cells.size() < rows * cols) cells.append(QString());
+    QString kept;
+    for (int r = r0; r <= r1; ++r)
+        for (int c = c0; c <= c1; ++c) {
+            const int idx = r * cols + c;
+            const QString s = cells[idx].toString();
+            if (kept.isEmpty() && !s.trimmed().isEmpty()) kept = s;
+            if (!(r == r0 && c == c0)) cells[idx] = QString();
+        }
+    cells[r0 * cols + c0] = kept;
+    e->meta.insert(QStringLiteral("cells"), cells);
+
+    setCellSelection(e->id, r0 * cols + c0);
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Joined %1 x %2 cells").arg(r1 - r0 + 1).arg(c1 - c0 + 1));
+    emit cellSelectionChanged();
+    emit changed();
+}
+
+void Editor::tableSplitCell() {
+    Entity* e = entityById(cellTableId_);
+    if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;
+    const int cols = std::max(1, e->meta.value("cols").toInt(1));
+    const int row = cellIndex_ / cols, col = cellIndex_ % cols;
+    std::vector<TableMerge> keep;
+    bool split = false;
+    for (const TableMerge& m : tableMerges(*e)) {
+        if (m.covers(row, col)) split = true;
+        else keep.push_back(m);
+    }
+    if (!split) {
+        emit message(QStringLiteral("That cell is not a joined one"));
+        return;
+    }
+    pushUndo();
+    setTableMerges(*e, keep);
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Cell split back into its own cells"));
+    emit cellSelectionChanged();
+    emit changed();
+}
 
 void Editor::tableInsertRow(bool below) {
     Entity* e = entityById(cellTableId_);

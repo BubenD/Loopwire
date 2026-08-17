@@ -4512,6 +4512,25 @@ void MainWindow::buildTableCellRibbonTab() {
         addGroup(QStringLiteral("Rows"), w);
     }
 
+    // ---- Cells: Join / Split ----
+    {
+        auto* w = new QWidget(tableCellTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(1);
+        auto* join = bigButton(w, QStringLiteral("Join\nCells"));
+        auto* split = bigButton(w, QStringLiteral("Split\nCell"));
+        join->setToolTip(QStringLiteral(
+            "Make the picked cells into one cell. Drag across the cells first; the words of the first "
+            "one that has any become the words of the joined cell."));
+        split->setToolTip(QStringLiteral("Break a joined cell back into the cells it was made of."));
+        connect(join, &QToolButton::clicked, this, [this] { editor_->tableMergeCells(); });
+        connect(split, &QToolButton::clicked, this, [this] { editor_->tableSplitCell(); });
+        g->addWidget(join, 0, 0);
+        g->addWidget(split, 0, 1);
+        addGroup(QStringLiteral("Cells"), w);
+    }
+
     // ---- Columns: Insert Left / Insert Right / Delete Column ----
     {
         auto* w = new QWidget(tableCellTab_);

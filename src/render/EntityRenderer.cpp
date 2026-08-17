@@ -1473,11 +1473,34 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 for (int c = 0; c < cols; ++c) xb[c + 1] = xb[c] + cf[c].toDouble() * tb.width();
                 yb[0] = tb.max.y;
                 for (int r = 0; r < rows; ++r) yb[r + 1] = yb[r] - rf[r].toDouble() * tb.height();
-                for (int r = 1; r < rows; ++r)
-                    p.drawLine(vt.toScreen({tb.min.x, yb[r]}), vt.toScreen({tb.max.x, yb[r]}));
+                const std::vector<TableMerge> merges = tableMerges(e);
                 const int vTop = hasTitle ? 1 : 0; // verticals skip the merged title row
-                for (int c = 1; c < cols; ++c)
-                    p.drawLine(vt.toScreen({xb[c], yb[vTop]}), vt.toScreen({xb[c], yb[rows]}));
+                if (merges.empty()) {
+                    // The whole way across and the whole way down: two lines per boundary rather than one
+                    // per cell edge, which on a thirty-four row table is 38 lines instead of 400.
+                    for (int r = 1; r < rows; ++r)
+                        p.drawLine(vt.toScreen({tb.min.x, yb[r]}), vt.toScreen({tb.max.x, yb[r]}));
+                    for (int c = 1; c < cols; ++c)
+                        p.drawLine(vt.toScreen({xb[c], yb[vTop]}), vt.toScreen({xb[c], yb[rows]}));
+                } else {
+                    // With cells joined, a boundary is drawn a cell edge at a time, and the edges INSIDE
+                    // a joined block are left out - that absence is what makes the block read as one cell.
+                    auto joined = [&merges](int r, int c, int r2, int c2) {
+                        for (const TableMerge& m : merges)
+                            if (m.covers(r, c) && m.covers(r2, c2)) return true;
+                        return false;
+                    };
+                    for (int r = 1; r < rows; ++r)
+                        for (int c = 0; c < cols; ++c) {
+                            if (joined(r - 1, c, r, c)) continue;   // same block above and below
+                            p.drawLine(vt.toScreen({xb[c], yb[r]}), vt.toScreen({xb[c + 1], yb[r]}));
+                        }
+                    for (int c = 1; c < cols; ++c)
+                        for (int r = vTop; r < rows; ++r) {
+                            if (joined(r, c - 1, r, c)) continue;   // same block left and right
+                            p.drawLine(vt.toScreen({xb[c], yb[r]}), vt.toScreen({xb[c], yb[r + 1]}));
+                        }
+                }
                 const int headerIdx = hasTitle ? 1 : 0;
                 const QFont normal = p.font();
                 const QJsonArray cellAlign = e.meta.value("cellAlign").toArray();
@@ -1526,7 +1549,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                         if (code.isEmpty()) code = isHeader ? QStringLiteral("MC") : QStringLiteral("TL");
                         // A cell may carry its own text height; the table's is the fallback.
                         const double own = idx < cellText.size() ? cellText[idx].toDouble() : 0.0;
-                        placeCell(xb[c], xb[c + 1], yb[r], yb[r + 1], s, code,
+                        // A joined block writes its words ONCE, across the whole of it, from the cell it
+                        // starts at. The cells it covers write nothing - they are not cells any more.
+                        double x1 = xb[c + 1], yBot = yb[r + 1];
+                        if (TableMerge m; tableMergeAt(e, r, c, m)) {
+                            if (!m.isAnchor(r, c)) continue;
+                            x1 = xb[std::min(cols, m.col + m.colSpan)];
+                            yBot = yb[std::min(rows, m.row + m.rowSpan)];
+                        }
+                        placeCell(xb[c], x1, yb[r], yBot, s, code,
                                   own > 0.0 ? own : th, isHeader);
                     }
                 }

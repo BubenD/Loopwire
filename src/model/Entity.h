@@ -110,6 +110,27 @@ inline constexpr char kConnectionLineKey[] = "connectionLine";
 // saved before that was written has to have it worked out, and reading one stamps it on.
 bool dimensionAcrossX(const Entity& e);
 
+// ---- Merged table cells --------------------------------------------------------------------------
+// A block of a table's cells joined into one: where it starts, and how many rows and columns it covers.
+// The cell it starts at is the one that holds the words and is the one picked; the rest are covered, and
+// the grid lines between them are not drawn.
+//
+// Kept on the table as meta "merges" - an array of [row, col, rowSpan, colSpan] - rather than as a span
+// on each cell, because a merge is one fact about a block and storing it per cell means four ways to say
+// the same thing and four chances to disagree.
+struct TableMerge {
+    int row = 0, col = 0, rowSpan = 1, colSpan = 1;
+    bool covers(int r, int c) const {
+        return r >= row && r < row + rowSpan && c >= col && c < col + colSpan;
+    }
+    bool isAnchor(int r, int c) const { return r == row && c == col; }
+};
+std::vector<TableMerge> tableMerges(const Entity& e);
+void setTableMerges(Entity& e, const std::vector<TableMerge>& merges);
+// The merge covering this cell, if any. True when one does - `out` is then the whole block, whose
+// row/col is the cell that holds the words.
+bool tableMergeAt(const Entity& e, int row, int col, TableMerge& out);
+
 // The two ends of a linear or aligned dimension's line: the points the arrows are at, which is also
 // where its joints for moving the dimension line are. False when the object is not one of those kinds,
 // so the caller can leave it alone.

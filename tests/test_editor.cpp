@@ -7719,6 +7719,67 @@ int run_editor_tests() {
               "callout: the words moved with it, being part of it");
     }
 
+    // ---- cells joined into one, and broken apart again --------------------------------------------
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        Editor::TableSpec s;
+        s.cols = 3;
+        s.colWidth = 20.0;
+        s.dataRows = 3;
+        s.rowHeight = 10.0;
+        s.title = false;
+        s.header = false;
+        ed.setTableSpec(s);
+        ed.setTool(ToolId::Table);
+        ed.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);   // (0,0)..(60,30)
+        auto table = [&]() -> const Entity* {
+            for (const auto& e : d.entities())
+                if (e.meta.value("table").toBool()) return &e;
+            return nullptr;
+        };
+        const QString tid = table()->id;
+        ed.applyTableCellEdit(tid, 0, QStringLiteral("first"));
+        ed.applyTableCellEdit(tid, 1, QStringLiteral("second"));
+
+        // Drag across the top two cells, then join them.
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({10, 25}, Qt::LeftButton, Qt::NoModifier);   // cell 0
+        ed.onPointerMove({30, 25});                                   // ...to cell 1
+        ed.onPointerRelease({30, 25}, Qt::LeftButton);
+        std::printf("  table-join: picked %d cell(s)\n", int(ed.selectedCells().size()));
+        ed.tableMergeCells();
+
+        const std::vector<TableMerge> m = tableMerges(*table());
+        check(m.size() == 1, "table-join: the two cells are one block");
+        if (m.size() == 1)
+            check(m[0].row == 0 && m[0].col == 0 && m[0].rowSpan == 1 && m[0].colSpan == 2,
+                  "table-join: covering the cells that were picked");
+        // The words of the first cell that had any become the joined cell's words, and the covered cell
+        // is emptied - text in a cell nobody can see or reach is how a drawing says what nobody wrote.
+        const QJsonArray cells = table()->meta.value("cells").toArray();
+        check(cells[0].toString() == QLatin1String("first"),
+              "table-join: the joined cell keeps the words");
+        check(cells[1].toString().isEmpty(), "table-join: and the covered cell is emptied");
+
+        // A click anywhere in the block picks the block: the cell it starts at.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({30, 25}, Qt::LeftButton, Qt::NoModifier);   // over what WAS cell 1
+        ed.onPointerRelease({30, 25}, Qt::LeftButton);
+        check(ed.selectedCellIndex() == 0,
+              "table-join: clicking anywhere in the block picks the block");
+
+        // And it comes apart again.
+        ed.tableSplitCell();
+        check(tableMerges(*table()).empty(), "table-join: split gives the cells back");
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({30, 25}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({30, 25}, Qt::LeftButton);
+        check(ed.selectedCellIndex() == 1, "table-join: and cell 1 is its own cell once more");
+    }
+
     // ---- the table itself, or one of its cells ----------------------------------------------------
     {
         // Every click inside a table used to take the whole table, so there was no way to say which was

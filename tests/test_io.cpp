@@ -1008,6 +1008,33 @@ int run_io_tests() {
                   "table: the columns keep their own widths, not an even share");
         }
 
+        // A cell says what is in it in one of TWO ways, and reading only the first left holes all over an
+        // imported table. Most cells carry their words as text (code 1). A cell holding a plain value - a
+        // quantity, a number - carries it as a VALUE instead, in a block of its own: 301 says CELL_VALUE,
+        // 302 is the value, 304 closes it. Of the 204 cells in the bill of materials on the sheet this
+        // came from, 166 were text and 33 were values, and the 33 missing ones were the quantities.
+        const QByteArray valued = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nACAD_TABLE\n8\n0\n2\n*T2\n"
+            "10\n0.0\n20\n10.0\n11\n1.0\n21\n0.0\n"
+            "91\n1\n92\n2\n141\n1.0\n142\n2.0\n142\n2.0\n"
+            "171\n1\n1\nPART\n"                                   // words, as text
+            "171\n1\n301\nCELL_VALUE\n302\n4\n304\nACVALUE_END\n"  // a quantity, as a value
+            "0\nENDSEC\n0\nEOF\n");
+        Document v;
+        dxf::parseBytes(v, valued, nullptr);
+        check(v.entities().size() == 1, "table: the table reads");
+        if (v.entities().size() == 1) {
+            const QJsonArray cells = v.entities().front().meta.value("cells").toArray();
+            std::printf("  table: cells [%s] [%s]\n",
+                        cells.size() > 0 ? qPrintable(cells[0].toString()) : "?",
+                        cells.size() > 1 ? qPrintable(cells[1].toString()) : "?");
+            check(cells.size() == 2 && cells[0].toString() == QLatin1String("PART"),
+                  "table: a cell holding words gives its words");
+            check(cells.size() == 2 && cells[1].toString() == QLatin1String("4"),
+                  "table: and a cell holding a value gives its value, not a blank");
+        }
+
         // A TURNED table is not something this drawing's table can be, so it is not laid out square and
         // wrong - it keeps the baked grid (and with no block in the file to bake from, nothing).
         const QByteArray turned = QByteArrayLiteral(
