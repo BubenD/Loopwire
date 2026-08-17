@@ -956,6 +956,86 @@ int run_io_tests() {
         }
     }
 
+    // ---- a fill that was thrown away --------------------------------------------------------------
+    {
+        // HATCH was not in the list of things worth reading, so every fill on a sheet was dropped: a
+        // solid pad drawn hollow, a section left blank, and nothing to say it had happened.
+        //
+        // It is the fiddliest record in a DXF - 10/20 mean a dozen different things depending where in it
+        // they appear (a polyline vertex, an arc's centre, an ellipse's axis, a spline's control point, a
+        // seed point) - so it is read by walking the codes in order rather than asking for them by name.
+
+        // A solid fill with a POLYLINE boundary: the common case.
+        const QByteArray solid = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nHATCH\n8\n0\n2\nSOLID\n70\n1\n91\n1\n"
+            "92\n3\n"          // external (1) + polyline (2)
+            "72\n0\n73\n1\n93\n4\n"
+            "10\n0.0\n20\n0.0\n10\n10.0\n20\n0.0\n10\n10.0\n20\n10.0\n10\n0.0\n20\n10.0\n"
+            "97\n0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document d;
+        check(dxf::parseBytes(d, solid, nullptr) && d.entities().size() == 1,
+              "hatch: a solid fill is read");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.type == EntityType::Hatch, "hatch: as a hatch");
+            check(e.meta.value("pattern").toString() == QLatin1String("solid"),
+                  "hatch: and it knows it is solid, so it is filled rather than ruled");
+            const Bounds b = e.bounds();
+            std::printf("  hatch: solid, %d pts, %.1f x %.1f\n", int(e.points.size()), b.width(),
+                        b.height());
+            check(std::abs(b.width() - 10.0) < 1e-6 && std::abs(b.height() - 10.0) < 1e-6,
+                  "hatch: covering the ground its boundary encloses");
+        }
+
+        // A ruled fill whose boundary is given as EDGES rather than a polyline, with the pattern's angle
+        // and scale.
+        const QByteArray ruled = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nHATCH\n8\n0\n2\nANSI31\n70\n0\n52\n45.0\n41\n2.0\n91\n1\n"
+            "92\n1\n93\n3\n"   // external, edge data, three edges
+            "72\n1\n10\n0.0\n20\n0.0\n11\n10.0\n21\n0.0\n"
+            "72\n1\n10\n10.0\n20\n0.0\n11\n10.0\n21\n10.0\n"
+            "72\n1\n10\n10.0\n20\n10.0\n11\n0.0\n21\n0.0\n"
+            "97\n0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document r;
+        dxf::parseBytes(r, ruled, nullptr);
+        check(r.entities().size() == 1, "hatch: one given as edges is read too");
+        if (r.entities().size() == 1) {
+            const Entity& e = r.entities().front();
+            check(e.type == EntityType::Hatch && e.points.size() >= 3,
+                  "hatch: the edges close into a boundary");
+            check(e.meta.value("pattern").toString() == QLatin1String("ansi31"),
+                  "hatch: it keeps the pattern it was drawn with");
+            check(std::abs(e.meta.value("hatchAngle").toDouble() - 45.0) < 1e-9 &&
+                      std::abs(e.meta.value("hatchScale").toDouble() - 2.0) < 1e-9,
+                  "hatch: at the angle and scale the file states");
+        }
+
+        // A boundary with an ARC in it comes out curved, not chorded.
+        const QByteArray curved = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nHATCH\n8\n0\n2\nSOLID\n70\n1\n91\n1\n"
+            "92\n1\n93\n2\n"
+            "72\n2\n10\n0.0\n20\n0.0\n40\n5.0\n50\n0.0\n51\n180.0\n73\n1\n"
+            "72\n1\n10\n-5.0\n20\n0.0\n11\n5.0\n21\n0.0\n"
+            "97\n0\n"
+            "0\nENDSEC\n0\nEOF\n");
+        Document c;
+        dxf::parseBytes(c, curved, nullptr);
+        check(c.entities().size() == 1, "hatch: a boundary with an arc in it is read");
+        if (c.entities().size() == 1) {
+            const Entity& e = c.entities().front();
+            std::printf("  hatch: half-round boundary, %d pts\n", int(e.points.size()));
+            check(e.points.size() > 10, "hatch: the arc is followed round, not cut straight across");
+            const Bounds b = e.bounds();
+            check(std::abs(b.width() - 10.0) < 0.1 && std::abs(b.height() - 5.0) < 0.1,
+                  "hatch: and it covers the half-circle it bounds");
+        }
+    }
+
     // ---- the text size a drawing states ----------------------------------------------------------
     {
         // A floor of 0.1 used to be imposed on every imported text height, so that text could never be

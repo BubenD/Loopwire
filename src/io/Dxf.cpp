@@ -992,7 +992,7 @@ bool parse(Document& doc, const QString& text, QString*) {
                 static const QStringList kKnown = {
                     "LINE",   "LWPOLYLINE", "CIRCLE",  "ARC",    "TEXT",      "MTEXT",
                     "INSERT", "ELLIPSE",    "SOLID",   "LEADER", "DIMENSION", "ACAD_TABLE",
-                    "MULTILEADER", "WIPEOUT", "SPLINE"};
+                    "MULTILEADER", "WIPEOUT", "SPLINE", "HATCH"};
                 if (!kKnown.contains(type)) continue;
 
                 const auto g = collectGroup(pairs, i + 1);
@@ -1268,6 +1268,171 @@ bool parse(Document& doc, const QString& text, QString*) {
                         e.meta.insert(QStringLiteral("arrowSize"), xf.len(size));
                     }
                     if (e.points.size() > 1) entities.push_back(std::move(e));
+                } else if (type == "HATCH") {
+                    // A fill was dropped outright. On a released sheet that is a solid pad drawn hollow,
+                    // a section left blank - and, as with the splines, nothing to say it had happened.
+                    //
+                    // A HATCH is the fiddliest record in a DXF: 10/20 mean a dozen different things
+                    // depending where in it they appear - a polyline vertex, an arc's centre, an
+                    // ellipse's axis, a spline's control point, a seed point - so this WALKS the codes in
+                    // order rather than asking for them by name, which is what every other branch here
+                    // can safely do.
+                    const QString patName = findVal(g, "2", "SOLID");
+                    const bool solid = findVal(g, "70", "0").toInt() != 0 ||
+                                       patName.compare(QLatin1String("SOLID"),
+                                                       Qt::CaseInsensitive) == 0;
+                    std::vector<std::vector<Vec2>> loops;
+                    for (size_t i = 0; i < g.size();) {
+                        if (g[i].code != QLatin1String("92")) { ++i; continue; }
+                        const int pathFlags = g[i].value.toInt();
+                        ++i;
+                        std::vector<Vec2> loop;
+                        auto atLoopEnd = [&] {
+                            return i >= g.size() || g[i].code == QLatin1String("92") ||
+                                   g[i].code == QLatin1String("97");
+                        };
+                        if (pathFlags & 2) {
+                            // A POLYLINE boundary: says whether it carries bulges (72), whether it is
+                            // closed (73), how many vertices (93), and then the vertices themselves.
+                            bool hasBulge = false, closed = false;
+                            while (!atLoopEnd() && g[i].code != QLatin1String("10")) {
+                                if (g[i].code == QLatin1String("72")) hasBulge = g[i].value.toInt() != 0;
+                                else if (g[i].code == QLatin1String("73")) closed = g[i].value.toInt() != 0;
+                                ++i;
+                            }
+                            std::vector<Vec2> verts;
+                            std::vector<double> leaving;
+                            Vec2 cur{0.0, 0.0};
+                            bool have = false;
+                            double b = 0.0;
+                            while (!atLoopEnd()) {
+                                if (g[i].code == QLatin1String("10")) {
+                                    if (have) { verts.push_back(cur); leaving.push_back(b); }
+                                    cur = {g[i].value.toDouble(), 0.0};
+                                    b = 0.0;
+                                    have = true;
+                                } else if (g[i].code == QLatin1String("20") && have) {
+                                    cur.y = g[i].value.toDouble();
+                                } else if (g[i].code == QLatin1String("42") && have && hasBulge) {
+                                    b = g[i].value.toDouble();
+                                }
+                                ++i;
+                            }
+                            if (have) { verts.push_back(cur); leaving.push_back(b); }
+                            if (closed && verts.size() > 1) {
+                                verts.push_back(verts.front());
+                                leaving.push_back(0.0);
+                            }
+                            // The same shift by one the polylines need: a bulge belongs to the segment
+                            // its vertex LEAVES, and expandBulgePolyline indexes by the point it reaches.
+                            std::vector<double> bulges(verts.size(), 0.0);
+                            for (size_t k = 1; k < verts.size() && k - 1 < leaving.size(); ++k)
+                                bulges[k] = leaving[k - 1];
+                            loop = expandBulgePolyline(verts, bulges);
+                        } else {
+                            // EDGE data: how many edges (93), then each one led by its kind (72).
+                            while (!atLoopEnd() && g[i].code != QLatin1String("72")) ++i;
+                            while (!atLoopEnd()) {
+                                if (g[i].code != QLatin1String("72")) { ++i; continue; }
+                                const int edge = g[i].value.toInt();
+                                ++i;
+                                // Gather this edge's numbers until the next edge or the end of the loop.
+                                std::vector<Pair> ed;
+                                while (!atLoopEnd() && g[i].code != QLatin1String("72")) {
+                                    ed.push_back(g[i]);
+                                    ++i;
+                                }
+                                auto num = [&ed](const char* c, double dflt = 0.0) {
+                                    for (const auto& pr : ed)
+                                        if (pr.code == QLatin1String(c)) return pr.value.toDouble();
+                                    return dflt;
+                                };
+                                auto add = [&loop](const Vec2& q) {
+                                    if (loop.empty() || distance(loop.back(), q) > 1e-12)
+                                        loop.push_back(q);
+                                };
+                                if (edge == 1) {                       // a straight edge
+                                    add({num("10"), num("20")});
+                                    add({num("11"), num("21")});
+                                } else if (edge == 2) {                // a circular arc
+                                    const Vec2 c{num("10"), num("20")};
+                                    const double r = num("40");
+                                    double a0 = num("50") * M_PI / 180.0;
+                                    double a1 = num("51") * M_PI / 180.0;
+                                    const bool ccw = num("73", 1.0) != 0.0;
+                                    double sweep = a1 - a0;
+                                    if (ccw) { while (sweep <= 0) sweep += 2.0 * M_PI; }
+                                    else { while (sweep >= 0) sweep -= 2.0 * M_PI; }
+                                    const int steps = std::max(6, int(std::abs(sweep) / (M_PI / 24.0)));
+                                    for (int s = 0; s <= steps; ++s) {
+                                        const double a = a0 + sweep * (double(s) / steps);
+                                        add({c.x + r * std::cos(a), c.y + r * std::sin(a)});
+                                    }
+                                } else if (edge == 3) {                // an elliptical arc
+                                    const Vec2 c{num("10"), num("20")};
+                                    const Vec2 maj{num("11"), num("21")};
+                                    const double rx = std::hypot(maj.x, maj.y);
+                                    const double ry = rx * num("40", 1.0);
+                                    const double rot = std::atan2(maj.y, maj.x);
+                                    double t0 = num("50") * M_PI / 180.0;
+                                    double t1 = num("51") * M_PI / 180.0;
+                                    double sweep = t1 - t0;
+                                    while (sweep <= 0) sweep += 2.0 * M_PI;
+                                    const int steps = std::max(8, int(sweep / (M_PI / 24.0)));
+                                    for (int s = 0; s <= steps; ++s)
+                                        add(ellipsePointAt(t0 + sweep * (double(s) / steps), c, rx, ry,
+                                                           rot));
+                                } else if (edge == 4) {                // a spline edge
+                                    std::vector<Vec2> ctrl;
+                                    std::vector<double> knots;
+                                    Vec2 cp{0.0, 0.0};
+                                    bool haveCp = false;
+                                    for (const auto& pr : ed) {
+                                        if (pr.code == QLatin1String("10")) {
+                                            if (haveCp) ctrl.push_back(cp);
+                                            cp = {pr.value.toDouble(), 0.0};
+                                            haveCp = true;
+                                        } else if (pr.code == QLatin1String("20") && haveCp) {
+                                            cp.y = pr.value.toDouble();
+                                        } else if (pr.code == QLatin1String("40")) {
+                                            knots.push_back(pr.value.toDouble());
+                                        }
+                                    }
+                                    if (haveCp) ctrl.push_back(cp);
+                                    const int deg = int(num("94", 3.0));
+                                    for (const Vec2& q : nurbsCurvePoints(ctrl, knots, deg)) add(q);
+                                }
+                            }
+                        }
+                        if (loop.size() >= 3) loops.push_back(std::move(loop));
+                    }
+                    if (loops.empty()) continue;
+                    // Our fill is ONE boundary and has no holes, so the outside of the shape is what is
+                    // filled: the loop enclosing the most ground. A ring imported this way comes out
+                    // filled through the middle, which is worth knowing and still nearer the drawing
+                    // than the nothing that used to be there.
+                    size_t best = 0;
+                    double bestArea = -1.0;
+                    for (size_t k = 0; k < loops.size(); ++k) {
+                        double a2 = 0.0;
+                        const auto& L = loops[k];
+                        for (size_t j = 0, m = L.size(); j < m; ++j) {
+                            const Vec2& u = L[j];
+                            const Vec2& v = L[(j + 1) % m];
+                            a2 += u.x * v.y - v.x * u.y;
+                        }
+                        if (std::abs(a2) > bestArea) { bestArea = std::abs(a2); best = k; }
+                    }
+                    e.type = EntityType::Hatch;
+                    for (const Vec2& q : loops[best]) e.points.push_back(xf.apply(q));
+                    e.meta.insert(QStringLiteral("pattern"),
+                                  solid ? QStringLiteral("solid") : patName.toLower());
+                    if (!solid) {
+                        e.meta.insert(QStringLiteral("hatchAngle"), findNum(g, "52", 0.0));
+                        const double sc = findNum(g, "41", 1.0);
+                        e.meta.insert(QStringLiteral("hatchScale"), sc > 1e-9 ? sc : 1.0);
+                    }
+                    if (e.points.size() >= 3) entities.push_back(std::move(e));
                 } else if (type == "SPLINE") {
                     // A spline was skipped outright, which on a real sheet is not a missing line but a
                     // missing SHAPE: the ovals round the wire groups simply were not there, and nothing

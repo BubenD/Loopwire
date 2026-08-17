@@ -6090,8 +6090,12 @@ void Editor::onDoubleClick(const Vec2& world) {
                     }
                     return;
                 }
-                if (e->type == EntityType::Text || e->meta.value("balloon").toBool() ||
-                    e->meta.value("note").toBool() || e->meta.value("revision").toBool())
+                // A leader carries its words, so double-clicking it edits them - the same gesture that
+                // edits any other text on the sheet. Without this the only way to change a callout's
+                // label was to delete the callout and make another.
+                if (e->type == EntityType::Text || e->type == EntityType::Leader ||
+                    e->meta.value("balloon").toBool() || e->meta.value("note").toBool() ||
+                    e->meta.value("revision").toBool())
                     emit editTextRequested(*hit);
             }
     }

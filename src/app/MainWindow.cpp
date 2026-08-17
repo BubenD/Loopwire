@@ -2193,9 +2193,19 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         if (style.list.isEmpty()) style.list = QStringLiteral("none");
         style.boxWidth = found->meta.value(QStringLiteral("boxWidth")).toDouble(0.0);
         style.boxHeight = found->meta.value(QStringLiteral("boxHeight")).toDouble(0.0);
-        beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, found->a);
-        // A balloon number is a single value: plain Enter (or clicking away) commits it.
-        inlineSingleLine_ = found->meta.value(QStringLiteral("balloon")).toBool();
+        // Where the editor opens: over the words themselves. A leader's words sit at the far end of it -
+        // the end away from what it points at - and `a` is not a point on a leader at all, so editing one
+        // opened the box at the origin of the drawing.
+        Vec2 at = found->a;
+        if (found->type == EntityType::Leader && !found->points.empty()) {
+            at = found->points.back();
+            if (style.size <= 0.0) style.size = 2.5;
+        }
+        beginInlineText(id, found->meta.value(QStringLiteral("text")).toString(), style, at);
+        // A balloon number is a single value: plain Enter (or clicking away) commits it. So is a
+        // callout's label - it is a label, not a paragraph.
+        inlineSingleLine_ = found->meta.value(QStringLiteral("balloon")).toBool() ||
+                            found->type == EntityType::Leader;
     });
     // Double-clicked a table cell: open the inline editor over that cell, writing back
     // to the cell (not a text object) on commit.
@@ -8222,6 +8232,32 @@ void MainWindow::refreshProperties() {
                 editor_->setGeometryValue(QStringLiteral("Height"), picW * h / w);
             refreshProperties();
         });
+    }
+
+    // --- Leader section: the words it carries, and the sizes it is drawn at. ---
+    if (e && e->type == EntityType::Leader) {
+        const QString id = e->id;
+        addHeader(QStringLiteral("Leader"));
+        // A callout's label, changed here or by double-clicking the callout itself. Both were missing:
+        // the only way to correct a label was to delete the whole callout and draw another.
+        {
+            const QString content = mv(QStringLiteral("text")).toString();
+            const int r = propsTable_->rowCount();
+            propsTable_->insertRow(r);
+            auto* key = new QTableWidgetItem(QStringLiteral("Label"));
+            key->setFlags(Qt::ItemIsEnabled);
+            propsTable_->setItem(r, 0, key);
+            auto* btn = new QPushButton(propsTable_);
+            QString oneLine = content;
+            oneLine.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            btn->setText(oneLine.isEmpty() ? QStringLiteral("Edit...") : oneLine.left(40));
+            connect(btn, &QPushButton::clicked, this, [this, id] { editor_->emitEditText(id); });
+            propsTable_->setCellWidget(r, 1, btn);
+        }
+        addNum(QStringLiteral("Text height"), mv(QStringLiteral("size")).toDouble(2.5),
+               [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("size"), v); });
+        addNum(QStringLiteral("Arrow size"), mv(QStringLiteral("arrowSize")).toDouble(3.3),
+               [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), v); });
     }
 
     // --- Text section: editable content, font, height, style, justification. ---
