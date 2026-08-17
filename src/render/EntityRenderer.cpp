@@ -1941,9 +1941,20 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Leader: {
-        // The line, the head on the end it points WITH, and the words it carries - drawn together
-        // because they are one object. points[0] is the tip: the thing being pointed at.
+        // The line, the head on the end it points WITH, the flat landing the words sit on, and the words
+        // themselves - drawn together because they are one object. points[0] is the tip: what is pointed at.
         if (e.points.size() < 2) break;
+        // The landing runs from the last knee, away from where the leader came in, so the words sit at the
+        // far end of it and read away from what is being pointed at.
+        const double landing = e.meta.value("landing").toDouble(0.0);
+        Vec2 wordsAt = e.points.back();
+        if (landing > 1e-9 && e.points.size() >= 2) {
+            const Vec2 from = e.points[e.points.size() - 2];
+            const Vec2 end = e.points.back();
+            const double dir = (end.x >= from.x) ? 1.0 : -1.0;
+            wordsAt = {end.x + dir * landing, end.y};
+            p.drawLine(vt.toScreen(end), vt.toScreen(wordsAt));
+        }
         p.drawPolyline(toScreenPoly(e.points, vt));
         const QPointF tip = vt.toScreen(e.points[0]);
         const QPointF from = vt.toScreen(e.points[1]);
@@ -1959,7 +1970,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QString says = e.meta.value("text").toString();
         if (!says.isEmpty()) {
             const double h = e.meta.value("size").toDouble(2.5) * EntityRenderer::annotationScale();
-            drawWorldText(p, vt.toScreen(e.points.back()) + QPointF(4, -2), says, h, vt.scale(), color);
+            const bool toTheLeft = wordsAt.x < e.points[e.points.size() - 2].x;
+            drawWorldText(p, vt.toScreen(wordsAt) + QPointF(toTheLeft ? -4 : 4, -2), says, h,
+                          vt.scale(), color, toTheLeft ? Qt::AlignRight : Qt::AlignLeft);
         }
         break;
     }

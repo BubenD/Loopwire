@@ -7875,6 +7875,24 @@ int run_editor_tests() {
         std::printf("  table-grip: first column %.3f -> %.3f of the table\n", before, after);
         check(after > before,
               "table-grip: the handle is caught where it is drawn, and widens the whole column");
+
+        // ---- an EDGE cell has a handle on the table's own edge too ----
+        //
+        // Only the interior boundaries used to get a handle, so a cell in the first column had one on its
+        // right and nothing on its left: the edge it shares with the table could not be moved, and that is
+        // the edge a first column is usually widened by. Boundary 0 is that edge.
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        ed.onPointerPress({10, 95}, Qt::LeftButton, Qt::NoModifier);   // pick cell 0, the corner cell
+        ed.onPointerRelease({10, 95}, Qt::LeftButton);
+        check(ed.selectedCellIndex() == 0, "table-edge: the corner cell is picked");
+        const double leftBefore = table()->bounds().min.x;
+        ed.onPointerPress({0, 95}, Qt::LeftButton, Qt::NoModifier);    // the table's own left edge
+        ed.onPointerMove({-8, 95});
+        ed.onPointerPress({-8, 95}, Qt::LeftButton, Qt::NoModifier);
+        const double leftAfter = table()->bounds().min.x;
+        std::printf("  table-edge: left edge %.1f -> %.1f\n", leftBefore, leftAfter);
+        check(leftAfter < leftBefore - 1.0,
+              "table-edge: the outer boundary of an edge cell can be caught and moved");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

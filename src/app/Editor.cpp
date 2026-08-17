@@ -221,6 +221,11 @@ inline Vec2 balloonKnee(const Entity& e) {
 // the cursor: e.a = target - off.
 struct Grip { Vec2 pos; GripRole role; int index; Vec2 off{0, 0}; };
 
+// A table showing one picked cell shows only that cell's own boundary handles, sat on the cell. Defined
+// further down, next to the drawing of them; declared here because the snap wants the same answer, and a
+// handle that can be snapped to somewhere other than where it is drawn is worse than one that cannot.
+std::vector<Grip> pickedCellGrips(const Entity& e, const std::vector<Grip>& all, int row, int col);
+
 std::vector<Vec2> regularPolygonPoints(const Vec2& center, const Vec2& vertex, int sides, int vertexIndex = 0) {
     const int n = std::clamp(sides, 3, 64);
     const double r = distance(center, vertex);
@@ -770,15 +775,20 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             const QJsonArray rf = e.meta.value("rowFrac").toArray();
             const double midY = (tb.min.y + tb.max.y) / 2.0;
             const double midX = (tb.min.x + tb.max.x) / 2.0;
-            double x = tb.min.x;
-            for (int c = 0; c + 1 < cf.size(); ++c) { // interior column boundaries
-                x += cf[c].toDouble() * tb.width();
-                g.push_back({{x, midY}, GripRole::TableColEdge, c + 1});
+            // EVERY boundary, the table's own outer edges included - boundary 0 and boundary `cols` for
+            // the columns, the same for the rows. Only the interior ones used to get a handle, so a cell
+            // in the first or last column had a handle on one side and nothing on the other: the edge it
+            // shares with the table had no way to be moved, and that is the edge a first or last column is
+            // most often widened by.
+            for (int c = 0; c <= cf.size(); ++c) {
+                double x = tb.min.x;
+                for (int i = 0; i < c && i < cf.size(); ++i) x += cf[i].toDouble() * tb.width();
+                g.push_back({{x, midY}, GripRole::TableColEdge, c});
             }
-            double y = tb.max.y; // rows run top -> down (world y-up)
-            for (int r = 0; r + 1 < rf.size(); ++r) { // interior row boundaries
-                y -= rf[r].toDouble() * tb.height();
-                g.push_back({{midX, y}, GripRole::TableRowEdge, r + 1});
+            for (int r = 0; r <= rf.size(); ++r) { // rows run top -> down (world y-up)
+                double y = tb.max.y;
+                for (int i = 0; i < r && i < rf.size(); ++i) y -= rf[i].toDouble() * tb.height();
+                g.push_back({{midX, y}, GripRole::TableRowEdge, r});
             }
         }
         break;
@@ -1856,6 +1866,40 @@ void Editor::onPointerMove(const Vec2& raw) {
                                                 snapResult_.point.y - raw.y)
                                    : 1e300;
         if (toRect < toFound) snapResult_ = rect;
+    }
+    // THE JOINTS ON SCREEN. Whatever is picked is showing its handles, and those are points a drawing
+    // office lines things up against constantly - the end of a run, a table's column boundary, the tip of
+    // a callout - but they are not what an object snap looks for: a snap searches an object's geometry,
+    // and a handle is not always ON the geometry. A table's cell handle is the clearest case, sitting out
+    // in the middle of a cell where there is nothing drawn at all.
+    //
+    // Only what is SELECTED, so this is a handful of points rather than a search of the drawing, and only
+    // when object snap is on: it is a snap, and the switch that turns snapping off turns it off.
+    if (snap_.objectSnap && !selected_.empty()) {
+        const double tol = worldTolerance();
+        double bestDist = snapResult_.snapped
+                              ? std::hypot(snapResult_.point.x - raw.x, snapResult_.point.y - raw.y)
+                              : tol;
+        const std::vector<Vec2> pinEnds = collectPinEnds(doc_);
+        for (const QString& id : selected_) {
+            const Entity* e = entityById(id);
+            if (!e || isBlockPiece(*e)) continue;
+            // Not the object whose joint is in hand. Its OTHER joints are the last thing a dragged joint
+            // should be drawn to: a corner pulled near its neighbour would jump onto it and fold the
+            // object flat. The object snap leaves the edited object out for the same reason.
+            if (editing_ && gripGrab_ && id == editEntityId_) continue;
+            std::vector<Grip> handles = gripsOf(*e, pinEnds, doc_);
+            if (int row = 0, col = 0; pickedCellOf(*e, row, col))
+                handles = pickedCellGrips(*e, handles, row, col);
+            for (const Grip& g : handles) {
+                const double d = distance(g.pos, raw);
+                if (d >= bestDist) continue;
+                bestDist = d;
+                snapResult_.snapped = true;
+                snapResult_.point = g.pos;
+                snapResult_.kind = SnapKind::Endpoint;
+            }
+        }
     }
     cursor_ = snapResult_.point;
 
@@ -5953,9 +5997,44 @@ void Editor::applyEditDrag(const Vec2& target) {
             Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
             QJsonArray cf = e->meta.value("colFrac").toArray();
             const int c = index; // boundary between column c-1 (left) and column c (right)
-            if (c < 1 || c >= cf.size()) break;
+            if (c < 0 || c > cf.size()) break;
             const double W = tb.width();
             if (W < 1e-9) break;
+            // The table's own LEFT edge (boundary 0): the first column takes up the slack, so dragging it
+            // left widens that column and moves the edge, rather than doing nothing as it used to.
+            if (c == 0) {
+                if (cf.isEmpty()) break;
+                const double minW = std::max(1e-4, W * 0.02);
+                const double newX = std::min(tb.min.x + (cf[0].toDouble() * W - minW), target.x);
+                const double Wp = tb.max.x - newX;
+                if (Wp < 1e-9) break;
+                std::vector<double> w(cf.size());
+                for (int i = 0; i < cf.size(); ++i) w[i] = cf[i].toDouble() * W;
+                w[0] += tb.min.x - newX;
+                e->points = {{newX, tb.min.y}, {tb.max.x, tb.min.y}, {tb.max.x, tb.max.y},
+                             {newX, tb.max.y}};
+                e->a = {newX, tb.max.y};
+                for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / Wp;
+                e->meta["colFrac"] = cf;
+                break;
+            }
+            // The RIGHT edge (boundary `cols`): the last column takes up the slack.
+            if (c == cf.size()) {
+                const int last = cf.size() - 1;
+                if (last < 0) break;
+                const double minW = std::max(1e-4, W * 0.02);
+                const double newX = std::max(tb.max.x - (cf[last].toDouble() * W - minW), target.x);
+                const double Wp = newX - tb.min.x;
+                if (Wp < 1e-9) break;
+                std::vector<double> w(cf.size());
+                for (int i = 0; i < cf.size(); ++i) w[i] = cf[i].toDouble() * W;
+                w[last] += newX - tb.max.x;
+                e->points = {{tb.min.x, tb.min.y}, {newX, tb.min.y}, {newX, tb.max.y},
+                             {tb.min.x, tb.max.y}};
+                for (int i = 0; i < cf.size(); ++i) cf[i] = w[i] / Wp;
+                e->meta["colFrac"] = cf;
+                break;
+            }
             std::vector<double> w(cf.size());
             double xB = tb.min.x; // current world x of boundary c
             for (int i = 0; i < cf.size(); ++i) { w[i] = cf[i].toDouble() * W; if (i < c) xB += w[i]; }
@@ -5979,9 +6058,43 @@ void Editor::applyEditDrag(const Vec2& target) {
             Bounds tb; for (const auto& pt : e->points) tb.expand(pt);
             QJsonArray rf = e->meta.value("rowFrac").toArray();
             const int r = index; // boundary between row r-1 (above) and row r (below)
-            if (r < 1 || r >= rf.size()) break;
+            if (r < 0 || r > rf.size()) break;
             const double H = tb.height();
             if (H < 1e-9) break;
+            // The table's own TOP edge (boundary 0): the first row takes up the slack.
+            if (r == 0) {
+                if (rf.isEmpty()) break;
+                const double minH = std::max(1e-4, H * 0.02);
+                const double newY = std::max(tb.max.y - (rf[0].toDouble() * H - minH), target.y);
+                const double Hp = newY - tb.min.y;
+                if (Hp < 1e-9) break;
+                std::vector<double> h(rf.size());
+                for (int i = 0; i < rf.size(); ++i) h[i] = rf[i].toDouble() * H;
+                h[0] += newY - tb.max.y;
+                e->points = {{tb.min.x, tb.min.y}, {tb.max.x, tb.min.y}, {tb.max.x, newY},
+                             {tb.min.x, newY}};
+                e->a = {tb.min.x, newY};
+                for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
+                e->meta["rowFrac"] = rf;
+                break;
+            }
+            // The BOTTOM edge (boundary `rows`): the last row takes up the slack.
+            if (r == rf.size()) {
+                const int last = rf.size() - 1;
+                if (last < 0) break;
+                const double minH = std::max(1e-4, H * 0.02);
+                const double newY = std::min(tb.min.y + (rf[last].toDouble() * H - minH), target.y);
+                const double Hp = tb.max.y - newY;
+                if (Hp < 1e-9) break;
+                std::vector<double> h(rf.size());
+                for (int i = 0; i < rf.size(); ++i) h[i] = rf[i].toDouble() * H;
+                h[last] += tb.min.y - newY;
+                e->points = {{tb.min.x, newY}, {tb.max.x, newY}, {tb.max.x, tb.max.y},
+                             {tb.min.x, tb.max.y}};
+                for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
+                e->meta["rowFrac"] = rf;
+                break;
+            }
             std::vector<double> h(rf.size());
             double yB = tb.max.y; // current world y of boundary r
             for (int i = 0; i < rf.size(); ++i) { h[i] = rf[i].toDouble() * H; if (i < r) yB -= h[i]; }
@@ -7203,6 +7316,10 @@ void Editor::finishDraw() {
             e.meta.insert("text", QStringLiteral("Text"));
             e.meta.insert("size", 2.5);
             e.meta.insert("arrowSize", 3.3);
+            // The short flat run the words sit on, the way a leader is drawn on a real sheet: the line
+            // arrives at an angle and then levels out under the text. Its length is a property, so it can
+            // be lengthened, shortened, or set to nothing at all for a bare arrow.
+            e.meta.insert("landing", 6.0);
             break;
         }
         e.type = EntityType::Circle;
@@ -11308,6 +11425,10 @@ void Editor::handlePlacementPress(const Vec2& p) {
     pushUndo();
     // A non-associative connector is placed as loose primitives (lines + text), not a
     // re-editable Connector object — "explode on drop".
+    // A callout placed WITHOUT a balloon is placed in order to say something, so the words are asked for
+    // straight away rather than left reading "Text" until somebody notices and double-clicks it. Kept
+    // until the end, because the editor opens on an object that has to exist first.
+    const QString sayItNow = tool_ == ToolId::TextLeader ? e.id : QString();
     if (tool_ == ToolId::Connector && !connectorSpec_.associative) {
         auto parts = explodeEntity(e);
         for (Entity& part : parts) addEntity(std::move(part));
@@ -11325,6 +11446,11 @@ void Editor::handlePlacementPress(const Vec2& p) {
         emit message(QStringLiteral("X placed — click to terminate more pins; Esc to finish"));
     else
         setTool(ToolId::Select); // return to Select after placing (Space repeats)
+    if (!sayItNow.isEmpty()) {
+        selected_ = {sayItNow};
+        emit selectionChanged();
+        emit editTextRequested(sayItNow);
+    }
 }
 
 QString Editor::selectedConnectorId() const {

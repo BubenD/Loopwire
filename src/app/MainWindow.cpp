@@ -8294,6 +8294,11 @@ void MainWindow::refreshProperties() {
                [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("size"), v); });
         addNum(QStringLiteral("Arrow size"), mv(QStringLiteral("arrowSize")).toDouble(3.3),
                [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), v); });
+        // The flat run the words sit on. Zero for a bare arrow with the words straight off its end.
+        addNum(QStringLiteral("Landing"), mv(QStringLiteral("landing")).toDouble(0.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("landing"), std::max(0.0, v));
+               });
     }
 
     // --- Text section: editable content, font, height, style, justification. ---
