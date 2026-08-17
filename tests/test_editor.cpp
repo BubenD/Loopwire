@@ -7719,6 +7719,87 @@ int run_editor_tests() {
               "callout: the words moved with it, being part of it");
     }
 
+    // ---- where the middle of something is ---------------------------------------------------------
+    {
+        // Both are PICKED rather than drawn: the geometry already says where the middle is, so making
+        // somebody find it with a cursor is asking them to do arithmetic the program can do exactly.
+        Document d;
+        Entity hole;
+        hole.id = QStringLiteral("hole");
+        hole.type = EntityType::Circle;
+        hole.center = {20.0, 30.0};
+        hole.radius = 4.0;
+        d.entities().push_back(hole);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+
+        ed.setTool(ToolId::CenterMark);
+        ed.onPointerPress({20.0, 34.0}, Qt::LeftButton, Qt::NoModifier);   // on the ring
+        int marks = 0;
+        Bounds span;
+        for (const Entity& e : d.entities())
+            if (e.meta.value("centerMark").toBool()) {
+                ++marks;
+                span.expand(e.a);
+                span.expand(e.b);
+            }
+        check(marks == 2, "centre-mark: a cross - two strokes - is put on the circle");
+        check(std::abs(span.center().x - 20.0) < 1e-6 && std::abs(span.center().y - 30.0) < 1e-6,
+              "centre-mark: centred on the circle's own centre");
+        check(span.width() > 8.0 && span.width() < 10.0,
+              "centre-mark: overshooting the ring a little, so it reads as a centre mark");
+
+        // A centre line between two parallel runs, picked one then the other.
+        Document d2;
+        for (int i = 0; i < 2; ++i) {
+            Entity l;
+            l.id = QStringLiteral("l%1").arg(i);
+            l.type = EntityType::Line;
+            l.a = {0.0, i ? 10.0 : 0.0};
+            l.b = {40.0, i ? 10.0 : 0.0};
+            d2.entities().push_back(l);
+        }
+        Editor e2;
+        e2.setDocument(&d2);
+        noSnap(e2);
+        e2.setTool(ToolId::CenterLine);
+        e2.onPointerPress({20.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({20.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* cl = nullptr;
+        for (const Entity& e : d2.entities())
+            if (e.meta.value("centerLine").toBool()) cl = &e;
+        check(cl != nullptr, "centre-line: a line is drawn between the two");
+        if (cl)
+            check(std::abs(cl->a.y - 5.0) < 1e-6 && std::abs(cl->b.y - 5.0) < 1e-6 &&
+                      std::abs(cl->a.x) < 1e-6 && std::abs(cl->b.x - 40.0) < 1e-6,
+                  "centre-line: down the middle of the gap, end to end");
+
+        // Two that are NOT parallel are refused rather than answered with a line through nothing.
+        Document d3;
+        Entity p1, p2;
+        p1.id = QStringLiteral("p1");
+        p1.type = EntityType::Line;
+        p1.a = {0.0, 0.0};
+        p1.b = {40.0, 0.0};
+        p2.id = QStringLiteral("p2");
+        p2.type = EntityType::Line;
+        p2.a = {0.0, 10.0};
+        p2.b = {40.0, 30.0};   // splayed
+        d3.entities().push_back(p1);
+        d3.entities().push_back(p2);
+        Editor e3;
+        e3.setDocument(&d3);
+        noSnap(e3);
+        e3.setTool(ToolId::CenterLine);
+        e3.onPointerPress({20.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        e3.onPointerPress({20.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+        bool any = false;
+        for (const Entity& e : d3.entities())
+            if (e.meta.value("centerLine").toBool()) any = true;
+        check(!any, "centre-line: two that are not parallel have no middle, and none is invented");
+    }
+
     // ---- cells joined into one, and broken apart again --------------------------------------------
     {
         Document d;

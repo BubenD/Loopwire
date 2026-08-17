@@ -54,6 +54,13 @@ enum class ToolId {
     ModelNearPoint,
     ModelFarPoint,
     ModelConnectPoint,   // where the part connects, and which way it runs from there (two clicks)
+    // The two marks that say where the middle of something is. A centre MARK is put on one round thing -
+    // a circle, an arc - as the little cross at its centre. A centre LINE is drawn BETWEEN two things
+    // that run parallel, down the middle of the gap: two lines, two runs of a polyline, or the two
+    // physical lines of a double run. Both are picked rather than drawn: the geometry already says where
+    // the middle is, and a drawing office should not be made to find it with a cursor.
+    CenterMark,
+    CenterLine,
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -147,6 +154,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::ModelNearPoint: return QStringLiteral("Model near point");
     case ToolId::ModelFarPoint: return QStringLiteral("Model far point");
     case ToolId::ModelConnectPoint: return QStringLiteral("Model connection point");
+    case ToolId::CenterMark: return QStringLiteral("Centre mark");
+    case ToolId::CenterLine: return QStringLiteral("Centre line");
     }
     return QStringLiteral("Select");
 }

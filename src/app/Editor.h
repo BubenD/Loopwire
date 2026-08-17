@@ -232,6 +232,10 @@ public:
     void setCellSelection(const QString& tableId, int cell);
     void clearCellSelection();
     // Cell editing ops (act on the selected cell / its row / its column).
+    // The two centre marks. A centre MARK is the cross at the middle of a round thing; a centre LINE runs
+    // down the middle of the gap between two parallel runs.
+    void placeCenterMark(const QString& id);
+    void placeCenterLine(const QString& firstId, const QString& secondId);
     // Join the picked cells into one, and break a joined one back apart.
     void tableMergeCells();
     void tableSplitCell();
@@ -1250,6 +1254,8 @@ private:
     double pixelTol_ = 10.0;
     // The first click of the connection-point pick, waiting for the second that gives the direction.
     bool haveConnectFirst_ = false;
+    // The first of the two runs a centre line goes between, while waiting for the second.
+    QString centerLineFirst_;
     Vec2 connectFirst_;
     double inputScale_ = 0.0;   // 0 = the document's own view; otherwise px per world unit in use
 

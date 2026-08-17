@@ -39,6 +39,11 @@ namespace Edraw_Desktop {
 void MainWindow::buildAnnotationTab() {
     auto [page, lay] = makeTabPage();
     addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
+    // Where the middle of something is. Both are PICKED rather than drawn: the geometry already says where
+    // the middle is, and making a drawing office find it with a cursor is asking them to do arithmetic the
+    // program can do exactly.
+    addGroup(lay, QStringLiteral("Centre marks"),
+             toolRow({ToolId::CenterMark, ToolId::CenterLine}));
     {
         // Callouts + a Table button that asks rows/cols before you drag the grid.
         // Leader = a split-button: click places a TEXT leader (no circle); the

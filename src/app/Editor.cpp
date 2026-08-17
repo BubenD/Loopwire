@@ -990,6 +990,7 @@ void Editor::setDocument(Document* doc) {
 
 void Editor::setTool(ToolId t) {
     if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
+    if (t != ToolId::CenterLine) centerLineFirst_.clear();
     clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
@@ -2112,6 +2113,33 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
+    // A centre mark is put on the round thing that is clicked; a centre line wants two runs, so the first
+    // click picks one and the second draws the line down the middle between them. Both stay armed, because
+    // a drawing with one hole in it is rare.
+    if (tool_ == ToolId::CenterMark) {
+        if (auto hit = hitTest(p)) placeCenterMark(*hit);
+        else emit message(QStringLiteral("Click a circle or an arc to mark its centre"));
+        return;
+    }
+    if (tool_ == ToolId::CenterLine) {
+        if (auto hit = hitTest(p)) {
+            if (centerLineFirst_.isEmpty()) {
+                centerLineFirst_ = *hit;
+                selected_ = {*hit};
+                emit selectionChanged();
+                emit message(QStringLiteral("Now click the line it runs parallel to"));
+            } else {
+                const QString first = centerLineFirst_;
+                centerLineFirst_.clear();
+                placeCenterLine(first, *hit);
+            }
+        } else {
+            emit message(centerLineFirst_.isEmpty()
+                             ? QStringLiteral("Click the first of two parallel lines")
+                             : QStringLiteral("Click the line it runs parallel to"));
+        }
+        return;
+    }
     if (tool_ == ToolId::ModelNearPoint || tool_ == ToolId::ModelFarPoint) {
         emit modelAnchorPicked(p, tool_ == ToolId::ModelNearPoint);
         setTool(ToolId::Select);
@@ -10767,6 +10795,119 @@ void rebuildTable(Entity& e, const std::vector<double>& h, const std::vector<dou
 }
 } // namespace
 
+// The little cross at the centre of a round thing. Drawn as a pair of crossed lines on the annotation
+// layer rather than as a new kind of object: it is two strokes, and a mark that can be trimmed, moved and
+// coloured like any other line is more use than one that can only be deleted.
+void Editor::placeCenterMark(const QString& id) {
+    const Entity* e = entityById(id);
+    if (!e) return;
+    Vec2 c;
+    double r = 0.0;
+    if (e->type == EntityType::Circle || e->type == EntityType::Arc) {
+        c = e->center;
+        r = std::max(std::abs(e->radius), std::abs(e->radiusY));
+    } else if (e->type == EntityType::Ellipse) {
+        c = e->center;
+        r = std::max(std::abs(e->radius), std::abs(e->radiusY));
+    } else {
+        emit message(QStringLiteral("A centre mark goes on a circle, an arc or an ellipse"));
+        return;
+    }
+    if (r < 1e-9) return;
+    // Overshooting the ring a little is what makes it read as a centre mark rather than as a small cross
+    // sitting inside a hole - the same proportion AutoCAD uses.
+    const double arm = r * 1.15;
+    pushUndo();
+    for (int axis = 0; axis < 2; ++axis) {
+        Entity mark;
+        mark.id = uid();
+        mark.type = EntityType::Line;
+        mark.layer = doc_->activeLayer();
+        mark.a = axis == 0 ? Vec2{c.x - arm, c.y} : Vec2{c.x, c.y - arm};
+        mark.b = axis == 0 ? Vec2{c.x + arm, c.y} : Vec2{c.x, c.y + arm};
+        mark.meta.insert(QStringLiteral("linetype"), QStringLiteral("center"));
+        mark.meta.insert(QStringLiteral("centerMark"), true);
+        doc_->entities().push_back(std::move(mark));
+    }
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Centre mark placed — click another, or Esc to finish"));
+    emit changed();
+}
+
+// The line down the middle of the gap between two things that run parallel.
+void Editor::placeCenterLine(const QString& firstId, const QString& secondId) {
+    const Entity* a = entityById(firstId);
+    const Entity* b = entityById(secondId);
+    if (!a || !b || firstId == secondId) {
+        emit message(QStringLiteral("Pick two different lines"));
+        return;
+    }
+    // Each has to be something with a direction and two ends. A run of a polyline counts: the segment
+    // nearest the other object is the one meant, since that is the one lying alongside it.
+    auto runOf = [](const Entity& e, const Vec2& near, Vec2& p0, Vec2& p1) {
+        if (e.type == EntityType::Line || e.type == EntityType::DoubleLine) {
+            p0 = e.a;
+            p1 = e.b;
+            return true;
+        }
+        if ((e.type == EntityType::Polyline || e.type == EntityType::Rect ||
+             e.type == EntityType::Polygon) &&
+            e.points.size() >= 2) {
+            double best = 1e300;
+            const size_t n = e.points.size();
+            const size_t last = (e.type == EntityType::Line) ? n - 1 : n - 1;
+            for (size_t i = 0; i + 1 <= last; ++i) {
+                const Vec2& s = e.points[i];
+                const Vec2& t = e.points[i + 1];
+                const double d = closestPointOnSegment(near, s, t).distance;
+                if (d < best) { best = d; p0 = s; p1 = t; }
+            }
+            return best < 1e300;
+        }
+        return false;
+    };
+    Vec2 a0, a1, b0, b1;
+    const Vec2 bMid = b->points.size() >= 2 ? lerp(b->points.front(), b->points.back(), 0.5)
+                                            : lerp(b->a, b->b, 0.5);
+    const Vec2 aMid = a->points.size() >= 2 ? lerp(a->points.front(), a->points.back(), 0.5)
+                                            : lerp(a->a, a->b, 0.5);
+    if (!runOf(*a, bMid, a0, a1) || !runOf(*b, aMid, b0, b1)) {
+        emit message(QStringLiteral("A centre line goes between two straight runs"));
+        return;
+    }
+    Vec2 da = a1 - a0, db = b1 - b0;
+    const double la = da.length(), lb = db.length();
+    if (la < 1e-9 || lb < 1e-9) return;
+    da = da * (1.0 / la);
+    db = db * (1.0 / lb);
+    // Parallel either way round: a line drawn back the other way is still parallel, so the second is
+    // turned to agree with the first before the two are averaged.
+    if (dot(da, db) < 0.0) {
+        std::swap(b0, b1);
+        db = db * -1.0;
+    }
+    const double cross = std::abs(da.x * db.y - da.y * db.x);
+    if (cross > 0.03) {   // about 1.7 degrees out
+        emit message(QStringLiteral("Those two are not parallel — a centre line needs a pair that are"));
+        return;
+    }
+    pushUndo();
+    Entity cl;
+    cl.id = uid();
+    cl.type = EntityType::Line;
+    cl.layer = doc_->activeLayer();
+    cl.a = lerp(a0, b0, 0.5);
+    cl.b = lerp(a1, b1, 0.5);
+    cl.meta.insert(QStringLiteral("linetype"), QStringLiteral("center"));
+    cl.meta.insert(QStringLiteral("centerLine"), true);
+    doc_->entities().push_back(cl);
+    selected_ = {cl.id};
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Centre line placed — pick another pair, or Esc to finish"));
+    emit selectionChanged();
+    emit changed();
+}
+
 void Editor::tableMergeCells() {
     Entity* e = entityById(cellTableId_);
     if (!e || !e->meta.value("table").toBool() || cellSel_.size() < 2) {
@@ -13525,6 +13666,39 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ghost = paperInk(paperInk(QColor(150, 162, 178, 110)));
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
+    // Moving a balloon's leader where it MEETS the balloon: dropped inside another balloon it takes the
+    // whole leader over to that one, and there was no way to see which balloon that would be until it was
+    // let go and done. The balloon it would land on is ringed, with a line to say what is about to be
+    // joined to what - and when the cursor is over nothing, the line alone says the leader is only being
+    // moved round the circle it is already on.
+    if (editing_ && gripGrab_ && editRole_ == static_cast<int>(GripRole::LeaderLanding)) {
+        const Entity* onto = nullptr;
+        for (const auto& x : doc_->entities()) {
+            if (!x.meta.value("balloon").toBool() || x.id == editEntityId_) continue;
+            if (distance(x.center, cursor_) <= x.radius) { onto = &x; break; }
+        }
+        p.save();
+        QPen hint(paperInk(QColor(90, 200, 255, 220)));
+        hint.setCosmetic(true);
+        hint.setWidthF(1.6);
+        hint.setStyle(Qt::DashLine);
+        p.setPen(hint);
+        p.setBrush(Qt::NoBrush);
+        if (onto) {
+            const QPointF c = vt.toScreen(onto->center);
+            const double rr = onto->radius * vt.scale();
+            p.drawEllipse(c, rr + 3.0, rr + 3.0);
+            p.drawLine(c, vt.toScreen(cursor_));
+        } else {
+            for (const auto& src : doc_->entities())
+                if (src.id == editEntityId_) {
+                    p.drawLine(vt.toScreen(src.center), vt.toScreen(cursor_));
+                    break;
+                }
+        }
+        p.restore();
     }
 
     // Selected table CELL: a filled highlight over just that cell.
