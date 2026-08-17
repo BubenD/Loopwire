@@ -246,8 +246,16 @@ void drawWorldText(QPainter& p, const QPointF& at, const QString& text,
                    double worldHeight, double scale, const QColor& color,
                    Qt::Alignment align = Qt::AlignLeft) {
     if (text.isEmpty()) return;
+    const double px = worldHeight * scale;
+    // Text too small to be a letter is not drawn. Below about two pixels a glyph is not small writing,
+    // it is a smear the width of a word - nothing can be read from it, and it costs as much to draw as
+    // readable text does. On a real imported sheet that is 352 pieces of text plus a couple of hundred
+    // table cells, over half the time spent redrawing the whole drawing, all of it on marks nobody can
+    // read until they zoom in - at which point it is drawn again, properly. Which is how every drawing
+    // package behaves.
+    if (px < 2.0) return;
     QFont f = p.font();
-    f.setPixelSize(std::max(1, static_cast<int>(worldHeight * scale)));
+    f.setPixelSize(std::max(1, static_cast<int>(px)));
     p.setFont(f);
     p.setPen(color);
     QPointF pos = at;
@@ -1747,6 +1755,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         if (text.isEmpty()) break;
         const double heightWorld = e.meta.value("size").toDouble(
             e.meta.value("height").toDouble(2.5));
+        // Nothing legible at this size: stop before the font work, the wrapping and the per-line
+        // measuring, all of which happen before a single glyph is put down.
+        if (heightWorld * vt.scale() < 2.0) break;
         const QPointF anchor = vt.toScreen(e.a);
         QFont f = p.font();
         const QString family = e.meta.value("font").toString();

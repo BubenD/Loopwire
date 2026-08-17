@@ -353,6 +353,76 @@ QString snapKindLabel(SnapKind k) {
     }
 }
 
+namespace {
+
+// Whether everything an object can be snapped to is guaranteed to lie inside its own bounds().
+//
+// This is what lets the snap throw an object away before looking at it. EVERY snap kind here answers
+// with a point that has to be within the pick tolerance of the cursor to be chosen at all - an endpoint,
+// a midpoint, a centre, the foot of a perpendicular, a tangent point, the nearest point on a segment,
+// an intersection. So if an object's whole reach is further than the tolerance from the cursor, it
+// cannot supply the answer, and building its geometry is wasted work.
+//
+// The ones that are NOT guaranteed are the runs and the harness objects: their drawn shape is worked out
+// from a path and can reach well outside it - a double line's cap stretched to meet something, a
+// connector's pins, a shield's drain legs. Those are never thrown away, so nothing can be lost by this.
+// Answers with a box round everything this object could be snapped to, or false when it cannot be said
+// cheaply - in which case the object is kept and worked out in full, so nothing is ever lost.
+//
+// Built from the object's OWN STORED POINTS: no derived geometry, no offsetting a run, and above all no
+// measuring of text. Entity::bounds() would answer the same question, but it is the wrong tool here -
+// asking it of every object costs more than the work this is meant to save, because for some kinds it
+// builds the shape to measure it. A cull has to be cheaper than what it culls.
+bool snapReachBox(const Entity& e, Vec2& lo, Vec2& hi) {
+    if (e.meta.value(QStringLiteral("double")).toBool()) return false;   // a double run, whatever its type
+    auto fromPoints = [&] {
+        if (e.points.empty()) return false;
+        lo = hi = e.points.front();
+        for (const Vec2& p : e.points) {
+            lo.x = std::min(lo.x, p.x);
+            lo.y = std::min(lo.y, p.y);
+            hi.x = std::max(hi.x, p.x);
+            hi.y = std::max(hi.y, p.y);
+        }
+        return true;
+    };
+    switch (e.type) {
+    case EntityType::Text:
+    case EntityType::Splice:
+    case EntityType::NetLabel:
+    case EntityType::NotConnected:
+        lo = hi = e.a;   // its anchor is the only thing on it that is ever snapped to
+        return true;
+    case EntityType::Circle:
+    case EntityType::Arc:
+    case EntityType::Ellipse: {
+        // Centre, quadrants, endpoints and tangent points all lie within one radius of the centre.
+        const double r = std::max(std::abs(e.radius), std::abs(e.radiusY));
+        lo = {e.center.x - r, e.center.y - r};
+        hi = {e.center.x + r, e.center.y + r};
+        return true;
+    }
+    case EntityType::Line:
+        lo = {std::min(e.a.x, e.b.x), std::min(e.a.y, e.b.y)};
+        hi = {std::max(e.a.x, e.b.x), std::max(e.a.y, e.b.y)};
+        return true;
+    case EntityType::Polyline:
+    case EntityType::Rect:
+    case EntityType::Polygon:
+    case EntityType::Spline:
+    case EntityType::Hatch:
+    case EntityType::Wipeout:
+    case EntityType::Image:
+    case EntityType::Leader:
+    case EntityType::Wire:
+        return fromPoints();
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
 SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                        const std::optional<Vec2>& anchor, double tolWorld,
                        const SnapSettings& s,
@@ -378,6 +448,16 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
         for (const auto& e : doc.entities()) {
             if (ignored(e.id)) continue;
             if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
+            // Nothing further away than the pick tolerance can supply a point inside it. Without this,
+            // every cursor move built the snap geometry of EVERY object on the drawing: an imported sheet
+            // of two thousand objects cost about three and a half milliseconds a move, out of the eight a
+            // mouse gives you, and the cursor visibly dragged behind the hand. Rejecting on the bounding
+            // box first leaves only the handful of objects actually under the cursor to be worked out.
+            if (Vec2 lo, hi; snapReachBox(e, lo, hi)) {
+                if (raw.x < lo.x - tolWorld || raw.x > hi.x + tolWorld ||
+                    raw.y < lo.y - tolWorld || raw.y > hi.y + tolWorld)
+                    continue;
+            }
 
             if (s.snapEndpoint) {
                 std::vector<Vec2> pts;
