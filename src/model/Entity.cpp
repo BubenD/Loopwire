@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 25> kTypeNames = {{
+const std::array<TypeName, 26> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -31,6 +31,7 @@ const std::array<TypeName, 25> kTypeNames = {{
     {EntityType::Splice, "splice"},
     {EntityType::LengthBreak, "lengthbreak"},
     {EntityType::TwistedPair, "twistedpair"},
+    {EntityType::Leader, "leader"},
     {EntityType::Connector, "connector"},
     {EntityType::Breakout, "breakout"},
     {EntityType::Bundle, "bundle"},
@@ -336,6 +337,25 @@ Bounds Entity::bounds() const {
             break;
         }
         bnds.expand(a);
+        break;
+    }
+    case EntityType::Leader: {
+        // The line it turns along, and the words on the end of it. The words are part of the object -
+        // answering with less than an object covers leaves it out of Zoom All and lets the canvas cull one
+        // whose text is on screen. Measured roughly, from the height and the number of characters, which
+        // is all that can be said without a font to hand.
+        for (const auto& p : points) bnds.expand(p);
+        if (points.empty()) {
+            bnds.expand(a);
+            break;
+        }
+        const QString says = meta.value(QStringLiteral("text")).toString();
+        if (!says.isEmpty()) {
+            const double h = std::max(1e-9, meta.value(QStringLiteral("size")).toDouble(2.5));
+            const Vec2 at = points.back();
+            bnds.expand({at.x + h * 0.6 * says.size(), at.y + h});
+            bnds.expand({at.x, at.y - h});
+        }
         break;
     }
     default:

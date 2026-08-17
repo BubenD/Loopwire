@@ -539,6 +539,12 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         }
         break;
     }
+    case EntityType::Leader:
+        // Every point it turns at, the FIRST of them being the tip - the thing it points at. That is the
+        // one that matters: an arrow pointing at the wrong place is the whole reason to touch a callout.
+        for (size_t i = 0; i < e.points.size(); ++i)
+            g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
+        break;
     case EntityType::TwistedPair:
         // A routed pair is held by its knees, like a polyline; a straight one by its two ends. Either
         // way the pair is re-laid along whatever the path becomes - it is a length of twisted pair,
@@ -1162,6 +1168,13 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         // Select by touching the actual drawn geometry (dimension line, extension
         // lines, radius/diameter line, angular arc, ...).
         for (const auto& s : dimensionSegments(e)) best = std::min(best, segDist(s.first, s.second));
+        break;
+    case EntityType::Leader:
+        // The line it turns along - the arrowhead sits on the first segment, so anything that catches
+        // the line catches the arrow too.
+        for (size_t i = 1; i < e.points.size(); ++i)
+            best = std::min(best, segDist(e.points[i - 1], e.points[i]));
+        if (e.points.size() == 1) best = std::min(best, distance(p, e.points[0]));
         break;
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines select the double line — NOT the centerline / gap between
@@ -2497,6 +2510,10 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         for (const auto& s : dimensionSegments(e)) { pts.push_back(s.first); pts.push_back(s.second); }
         if (pts.empty()) pts = {e.a, e.b};
         break;
+    case EntityType::Leader:
+        pts = e.points;
+        if (pts.empty()) pts = {e.a};
+        break;
     case EntityType::DoubleLine: {
         // Region selection tests the two VISIBLE parallel lines' ends only — NOT
         // the centerline or its middle joint. So a crossing box that merely passes
@@ -2646,6 +2663,10 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         // The real drawn lines, so a green crossing zone touching ANY of them selects.
         for (const auto& s : dimensionSegments(e)) segs.emplace_back(s.first, s.second);
         if (segs.empty()) segs.emplace_back(e.a, e.b);
+        break;
+    case EntityType::Leader:
+        for (size_t i = 1; i < e.points.size(); ++i)
+            segs.emplace_back(e.points[i - 1], e.points[i]);
         break;
     case EntityType::DoubleLine: {
         // Crossing-region edges are the two VISIBLE lines (not the centerline),

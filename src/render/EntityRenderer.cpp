@@ -1833,6 +1833,30 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         drawDimensionEntity(p, e, vt, color, g_dimDecimals);
         break;
 
+    case EntityType::Leader: {
+        // The line, the head on the end it points WITH, and the words it carries - drawn together
+        // because they are one object. points[0] is the tip: the thing being pointed at.
+        if (e.points.size() < 2) break;
+        p.drawPolyline(toScreenPoly(e.points, vt));
+        const QPointF tip = vt.toScreen(e.points[0]);
+        const QPointF from = vt.toScreen(e.points[1]);
+        const double dx = tip.x() - from.x(), dy = tip.y() - from.y();
+        const double len = std::hypot(dx, dy);
+        if (len > 1e-9) {
+            const QPointF dir(dx / len, dy / len);
+            const double arrowW = e.meta.value("arrowSize").toDouble(3.3) *
+                                  EntityRenderer::annotationScale();
+            drawArrowHead(p, tip, dir, color, std::clamp(arrowW * vt.scale(), 5.0, 40.0));
+        }
+        // The words sit at the far end - where the leader lands - reading away from what it points at.
+        const QString says = e.meta.value("text").toString();
+        if (!says.isEmpty()) {
+            const double h = e.meta.value("size").toDouble(2.5) * EntityRenderer::annotationScale();
+            drawWorldText(p, vt.toScreen(e.points.back()) + QPointF(4, -2), says, h, vt.scale(), color);
+        }
+        break;
+    }
+
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry g = connectorGeometry(e.a, spec);

@@ -7630,6 +7630,48 @@ int run_editor_tests() {
         check(ed.selection().empty(), "dim-catch: and it is not lurking where nothing is drawn");
     }
 
+    // ---- a callout can be caught and pointed somewhere else --------------------------------------
+    {
+        // The whole point of a leader being an object: it can be picked up and its ARROW can be pointed
+        // somewhere. As a polyline plus a loose filled triangle it was two things to move; grouped, it
+        // moved as one but had no joints at all, so it could be selected and still not aimed.
+        Document d;
+        Entity lead;
+        lead.id = QStringLiteral("callout");
+        lead.type = EntityType::Leader;
+        lead.points = {{10.0, 10.0}, {30.0, 30.0}};   // tip first, then where the words sit
+        lead.meta.insert(QStringLiteral("text"), QStringLiteral("LBL3"));
+        lead.meta.insert(QStringLiteral("size"), 2.0);
+        lead.meta.insert(QStringLiteral("arrowSize"), 3.0);
+        d.entities().push_back(lead);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::Select);
+        // Clicking anywhere along the line it draws picks it up.
+        ed.onPointerPress({20.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({20.0, 20.0}, Qt::LeftButton);
+        check(ed.selection().size() == 1 && ed.selection().front() == QLatin1String("callout"),
+              "callout: clicking the leader picks it up");
+
+        // And it HAS joints - one per point, the first being the tip. Grab the tip and place it
+        // somewhere else: the arrow now points at what it was moved to.
+        ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // grab the tip
+        ed.onPointerMove({4.0, 6.0});
+        ed.onPointerPress({4.0, 6.0}, Qt::LeftButton, Qt::NoModifier);     // place it
+        const Entity& after = d.entities().front();
+        std::printf("  callout: tip moved to (%.1f,%.1f), far end still (%.1f,%.1f)\n",
+                    after.points[0].x, after.points[0].y, after.points[1].x, after.points[1].y);
+        check(std::abs(after.points[0].x - 4.0) < 1e-6 && std::abs(after.points[0].y - 6.0) < 1e-6,
+              "callout: the arrow can be pointed somewhere else");
+        check(std::abs(after.points[1].x - 30.0) < 1e-6,
+              "callout: and the end the words sit on stays where it was");
+        // It is still one object carrying its words - moving the arrow did not shed them.
+        check(after.meta.value(QStringLiteral("text")).toString() == QLatin1String("LBL3"),
+              "callout: the words moved with it, being part of it");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

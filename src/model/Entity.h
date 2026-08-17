@@ -43,6 +43,14 @@ enum class EntityType {
     // Two wires laid up round each other, drawn: straight ends with a run of crossings between them.
     // a / b are the ends of the run; meta twistWidth / twistPitch / twistEnds shape it.
     TwistedPair,
+    // An arrow that points at something, and the words it carries: a callout. ONE object, because that
+    // is what it is to anybody reading the sheet - the arrow left behind after dragging its line away is
+    // exactly the sort of thing that gets released. It used to arrive from a DXF as a polyline and a
+    // separate filled triangle and a separate piece of text, three things to find and move.
+    //
+    // points[0] is the TIP - the thing being pointed AT - and the rest are the knees it turns at, the
+    // last of which is where the words sit. meta "text" / "size" carry the words, "arrowSize" the head.
+    Leader,
 };
 
 EntityType entityTypeFromString(const QString& s);

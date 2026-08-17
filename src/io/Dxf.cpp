@@ -1114,43 +1114,36 @@ bool parse(Document& doc, const QString& text, QString*) {
                     // content's own base point, so a leader given as a single point is a line from
                     // there to the text and not nothing at all.
                     if (verts.size() == 1 && haveText) verts.push_back(textAt);
-                    // A callout is ONE thing: the line, the head on it and the words it carries. There
-                    // is no leader object in this drawing to read it into, so the three pieces are
-                    // stamped as one group instead - picked up, moved and deleted together, rather than
-                    // three separate items to be found and dragged one at a time.
-                    const QString callout = QStringLiteral("mleader-%1").arg(e.id);
+                    // A callout is ONE thing: the line, the head on it, and the words it carries. It used
+                    // to arrive as three separate objects - a polyline, a filled triangle and a text - so
+                    // moving a callout meant finding and dragging three items, and leaving one behind was
+                    // easy. It is a leader, which is a single object that can be taken hold of by its tip.
                     if (verts.size() > 1) {
-                        Entity lead = e;
-                        lead.id = newId();
-                        lead.type = EntityType::Polyline;
-                        lead.points = verts;
-                        stampEntityGroup(lead, callout);
-                        entities.push_back(std::move(lead));
-                        // And the head it points with. A multileader names its style by handle - the
-                        // LAST 340 in the record; the 340 before it is the style its words are set in.
+                        // A multileader names its style by handle - the LAST 340 in the record; the 340
+                        // before it is the style its words are set in.
                         QString styleHandle;
                         for (const auto& gp : g)
                             if (gp.code == QLatin1String("340")) styleHandle = gp.value.trimmed().toUpper();
-                        Entity head = e;
-                        head.id = newId();
-                        head.type = EntityType::Polygon;
-                        head.points = arrowHead(verts[0], verts[1],
-                                                xf.len(mleaderArrow.value(styleHandle, 2.5)));
-                        head.meta.insert("filled", true);
-                        stampEntityGroup(head, callout);
-                        if (head.points.size() == 3) entities.push_back(std::move(head));
-                    }
-                    if (!label.isEmpty() && haveText) {
+                        Entity lead = e;
+                        lead.type = EntityType::Leader;
+                        lead.points = verts;
+                        lead.meta.insert(QStringLiteral("arrowSize"),
+                                         xf.len(mleaderArrow.value(styleHandle, 2.5)));
+                        if (!label.isEmpty()) {
+                            lead.meta.insert(QStringLiteral("text"), decodeDxfText(label, true));
+                            lead.meta.insert(QStringLiteral("size"),
+                                             std::max(1e-9, xf.len(height > 0.0 ? height : 2.5)));
+                        }
+                        entities.push_back(std::move(lead));
+                    } else if (!label.isEmpty() && haveText) {
+                        // Words with no line to point with are just words.
                         Entity txt = e;
-                        txt.id = newId();
                         txt.type = EntityType::Text;
                         txt.a = textAt;
                         txt.meta.insert("text", decodeDxfText(label, true));
                         txt.meta.insert("size",
                                         std::max(1e-9, xf.len(height > 0.0 ? height : 2.5)));
-                        // A leader's words sit beside where it lands, reading away from it.
                         txt.meta.insert("justify", QStringLiteral("ML"));
-                        stampEntityGroup(txt, callout);
                         entities.push_back(std::move(txt));
                     }
                     continue;
@@ -1268,18 +1261,11 @@ bool parse(Document& doc, const QString& text, QString*) {
                                 g[k].value.trimmed() == QLatin1String("41") &&
                                 g[k + 1].code == QLatin1String("1040"))
                                 size = g[k + 1].value.toDouble();
-                        Entity head = e;
-                        head.id = newId();
-                        head.type = EntityType::Polygon;
-                        head.points = arrowHead(e.points[0], e.points[1], xf.len(size));
-                        head.meta.insert("filled", true);
-                        // An arrow and the line it sits on the end of are ONE thing to a person reading
-                        // the sheet, and were two things to move and two to delete. Stamped as a group,
-                        // so picking either takes both.
-                        const QString callout = QStringLiteral("leader-%1").arg(e.id);
-                        stampEntityGroup(head, callout);
-                        stampEntityGroup(e, callout);
-                        if (head.points.size() == 3) entities.push_back(std::move(head));
+                        // ONE object: a leader. It used to be the line plus a separate filled triangle -
+                        // two things to select, two to move, two to delete, and an arrow left behind
+                        // after dragging its line away is exactly what gets released by mistake.
+                        e.type = EntityType::Leader;
+                        e.meta.insert(QStringLiteral("arrowSize"), xf.len(size));
                     }
                     if (e.points.size() > 1) entities.push_back(std::move(e));
                 } else if (type == "SPLINE") {

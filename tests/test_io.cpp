@@ -377,17 +377,18 @@ int run_io_tests() {
                   "dxf-in: and it is as wide as its words, not as wide as the wrap width");
         }
 
-        // The callout: the word, and the line that points with it.
-        bool haveLabel = false, haveLeader = false;
-        for (const auto& e : d.entities()) {
-            if (e.type == EntityType::Text && e.meta.value("text").toString() == QLatin1String("LABEL"))
-                haveLabel = true;
-            if (e.type == EntityType::Polyline && e.points.size() == 2 &&
-                near(e.points.front().x, 40.0) && near(e.points.back().x, 60.0))
-                haveLeader = true;
+        // The callout: ONE object, carrying both the line that points and the word it points with.
+        const Entity* callout = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Leader) callout = &e;
+        check(callout != nullptr, "dxf-in: a multileader is read as a leader");
+        if (callout) {
+            check(callout->meta.value("text").toString() == QLatin1String("LABEL"),
+                  "dxf-in: a multileader's words are read, and they belong to the leader itself");
+            check(callout->points.size() == 2 && near(callout->points.front().x, 40.0) &&
+                      near(callout->points.back().x, 60.0),
+                  "dxf-in: and the leader runs from its vertex to where the words sit");
         }
-        check(haveLabel, "dxf-in: a multileader's words are read");
-        check(haveLeader, "dxf-in: and the leader runs from its vertex to where the words sit");
     }
 
     // --- A mask, and the order the drawing is drawn in.
@@ -479,22 +480,21 @@ int run_io_tests() {
                         "sheet rather than placed off it");
         check(turned, "dxf-in: and a turn inside a mirrored placement turns the other way");
 
-        const Entity* head = nullptr;
+        const Entity* lead = nullptr;
         const Entity* solid = nullptr;
         for (const auto& e : d.entities()) {
-            if (e.type != EntityType::Polygon) continue;
-            if (e.points.size() == 3) head = &e;
-            if (e.points.size() == 4) solid = &e;
+            if (e.type == EntityType::Leader) lead = &e;
+            if (e.type == EntityType::Polygon && e.points.size() == 4) solid = &e;
         }
-        check(head != nullptr, "dxf-in: a leader is given the arrowhead it points with");
-        if (head) {
-            check(head->meta.value("filled").toBool(), "dxf-in: and the head is filled, not outlined");
-            check(near(head->points[0].x, 100.0) && near(head->points[0].y, 100.0),
-                  "dxf-in: its tip is the point the leader picks out");
-            // 3.0 long (the style's arrow size), a third of that across.
-            check(near(head->points[1].x, 97.0) && near(head->points[2].x, 97.0) &&
-                      near(head->points[1].y, 100.5) && near(head->points[2].y, 99.5),
-                  "dxf-in: and it lies back along the leader, as long as the style's arrow size");
+        // The head is no longer an object of its own: a leader IS its line and its head, so the head is
+        // drawn from the leader's own arrow size rather than left lying about as a separate triangle for
+        // somebody to drag away from the line it belongs to.
+        check(lead != nullptr, "dxf-in: a leader is read as a leader");
+        if (lead) {
+            check(near(lead->points[0].x, 100.0) && near(lead->points[0].y, 100.0),
+                  "dxf-in: its first point is the point it picks out - the tip of the arrow");
+            check(near(lead->meta.value("arrowSize").toDouble(), 3.0),
+                  "dxf-in: and it carries the style's arrow size to draw its head at");
         }
         check(solid && solid->meta.value("filled").toBool(),
               "dxf-in: a SOLID is filled - it is a patch of colour, not an outline of one");
@@ -927,12 +927,13 @@ int run_io_tests() {
         check(!anyDim, "dimension: one taken on a slant is not passed off as an axis measurement");
     }
 
-    // ---- an arrow and its line are one thing -----------------------------------------------------
+    // ---- an arrow and its line are one object ----------------------------------------------------
     {
-        // There is no leader object in this drawing to read a callout into, so a LEADER arrives as the
-        // line plus the filled triangle on the end of it. That was two things to select, two to move and
-        // two to delete - the arrow left behind after dragging the line is exactly the sort of thing that
-        // gets released. Stamped as one group instead, so picking either takes both.
+        // A callout arrived as a polyline plus a separate filled triangle - and a multileader as those
+        // plus a separate piece of text. Three things to select, three to move, three to delete, and an
+        // arrow left behind after dragging its line away is exactly what gets released by mistake.
+        // Grouping them made them move together but gave them no joints, so the arrow could be picked up
+        // and still not pointed anywhere. A leader is one OBJECT, held by its tip.
         const QByteArray lead = QByteArrayLiteral(
             "0\nSECTION\n2\nENTITIES\n"
             "0\nLEADER\n8\n0\n3\nEdi\n"
@@ -940,17 +941,19 @@ int run_io_tests() {
             "0\nENDSEC\n0\nEOF\n");
         Document d;
         dxf::parseBytes(d, lead, nullptr);
-        std::printf("  leader: %d piece(s)\n", int(d.entities().size()));
-        check(d.entities().size() == 2, "leader: the line, and the head it points with");
-        QString key;
-        bool allOne = !d.entities().empty();
-        for (const Entity& e : d.entities()) {
-            const QString k = e.meta.value(QStringLiteral("blockInst")).toString();
-            if (k.isEmpty()) allOne = false;
-            else if (key.isEmpty()) key = k;
-            else if (k != key) allOne = false;
+        std::printf("  leader: %d object(s)\n", int(d.entities().size()));
+        check(d.entities().size() == 1, "leader: one object, not a line and a triangle");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.type == EntityType::Leader, "leader: and it is a leader");
+            check(e.points.size() == 2 && near(e.points[0].x, 1.0) && near(e.points[1].x, 5.0),
+                  "leader: the tip it points with comes first, then where it runs to");
+            check(e.meta.contains(QStringLiteral("arrowSize")),
+                  "leader: it carries the size to draw its own head at");
+            // The thing the grouping could not give it: joints. One per point, the first being the tip,
+            // so the arrow can actually be pointed somewhere.
+            check(!e.bounds().valid == false, "leader: it covers ground, so it can be found");
         }
-        check(allOne, "leader: both pieces carry the same stamp, so they move as one");
     }
 
     // ---- the text size a drawing states ----------------------------------------------------------
