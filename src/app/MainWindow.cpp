@@ -1923,7 +1923,20 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
 
 void loadMechModelDocument(Document& doc, const MechModel& model) {
     doc.entities().clear();
-    for (const Entity& e : partDrawingEntities(model.drawing)) doc.entities().push_back(e);
+    // The model comes in as ONE object. It used to arrive as its own loose primitives, which meant the
+    // thing the session is about could not be picked up and moved as the part it is: every line of it had
+    // to be swept up first. Grouped, a click anywhere takes the whole model - and a double-click opens it
+    // up again when it is the lines themselves that need changing.
+    for (const Entity& e : partDrawingEntities(model.drawing)) {
+        doc.entities().push_back(e);
+        Entity& put = doc.entities().back();
+        // partDrawingEntities clears the id on the way out - a stored drawing has no business naming
+        // objects in whatever document it lands in, and the document is meant to give it one. This did
+        // not, so every line of a model being edited was called "", and everything that works by id -
+        // which is the selection, the joints, Delete and undo - resolved all of them to the first.
+        if (put.id.isEmpty()) put.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+        stampEntityGroup(put, QLatin1String(kMechModelGroup));
+    }
     if (!doc.findLayer(QLatin1String(kMechModelGuideLayer)))
         doc.layers().push_back({QLatin1String(kMechModelGuideLayer), "#e6b45a", true, true, 0.25});
     doc.setActiveLayer(QStringLiteral("0"));
@@ -11093,7 +11106,12 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     std::vector<Entity> drawing;
     drawing.reserve(doc->entities().size());
     for (const Entity& e : doc->entities())
-        if (e.layer != QLatin1String(kMechModelGuideLayer)) drawing.push_back(e);
+        if (e.layer != QLatin1String(kMechModelGuideLayer)) {
+            drawing.push_back(e);
+            // The grouping is how the model is HANDLED on the canvas, not part of what it is. Saved with
+            // it, every copy the generator ever placed would carry the editing session's own stamp.
+            clearEntityBlockStamp(drawing.back());
+        }
 
     const Bounds bounds = mechModelBounds(*doc);
     if (drawing.empty() || !bounds.valid) {

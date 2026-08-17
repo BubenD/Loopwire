@@ -114,6 +114,20 @@ BlockDef blockFromEntities(const QString& name, const std::vector<Entity>& ents,
     return b;
 }
 
+void stampEntityGroup(Entity& e, const QString& key) {
+    e.meta.insert(QLatin1String(kInstanceKey), key);
+}
+
+void clearEntityBlockStamp(Entity& e) {
+    // The instance stamp is what makes a set of primitives one object, and the name is what sends a
+    // double-click looking for a block definition. A TEMPLATE group is deliberately left alone: the
+    // sheet frame moves as one because it is the sheet's frame, not because somebody grouped it.
+    e.meta.remove(QLatin1String(kBlockKey));
+    e.meta.remove(QLatin1String(kInstanceKey));
+    e.meta.remove(QLatin1String(kOriginX));
+    e.meta.remove(QLatin1String(kOriginY));
+}
+
 std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
                                           const QString& instanceKey) {
     const QString key = instanceKey.isEmpty()

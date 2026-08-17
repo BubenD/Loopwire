@@ -94,6 +94,15 @@ std::vector<BlockDef> allBlocks(const PartsCatalog* catalog);
 // The blocks that came from the library alone.
 std::vector<BlockDef> libraryBlocks(const PartsCatalog& catalog);
 
+// Stamp an entity as part of ONE object without making it a copy of a named block: a set sharing a key
+// selects and moves as a unit and has no joints of its own, and a double-click on it does not go looking
+// for a block definition, because there is no block - there is a default model, or a fitting the
+// generator placed. Both of those are one thing on the drawing and neither is a file in the block folder.
+void stampEntityGroup(Entity& e, const QString& key);
+// Take the stamps off again: what was one object becomes its own loose primitives, each with its joints
+// back. This is what opening a model up on its canvas does, and what Explode does anywhere else.
+void clearEntityBlockStamp(Entity& e);
+
 // Which block an entity is part of, and which copy. Empty when it is not part of one.
 QString entityBlockName(const Entity& e);
 QString entityBlockInstance(const Entity& e);

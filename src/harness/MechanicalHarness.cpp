@@ -1588,12 +1588,17 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             } else if (MechModelKind mk;
                        mechModelForFitting(f.kind, mk) && mechModelFor(mk, f.modelName)) {
                 const Vec2 from = ps.a + u * along(startMm);
+                // One placed model is ONE object on the sheet. The key is worked out from where it went
+                // rather than made up, so regenerating the drawing gives the same fitting the same key.
+                const QString group = QStringLiteral("%1|%2|%3|seg")
+                                          .arg(QLatin1String(kMechModelGroup), ps.id, mechModelKey(mk));
                 for (Entity& e : mechModelEntities(*mechModelFor(mk, f.modelName), from, rad(ps.dirDeg),
                                                    along(runMm), across(odMm), 0, f.flipped)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
                     e.meta.insert(QStringLiteral("mechSeg"), ps.id);
                     e.meta.insert(QStringLiteral("mechModel"), mechModelKey(mk));
+                    stampEntityGroup(e, group);
                     out.push_back(e);
                 }
             } else {
@@ -1779,12 +1784,15 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 }
                 const Vec2 from = pn.at + u * (into * along(startMm));
                 const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
+                const QString group = QStringLiteral("%1|%2|%3|node")
+                                          .arg(QLatin1String(kMechModelGroup), pn.id, mechModelKey(mk));
                 for (Entity& e : mechModelEntities(model, from, dir, along(lengthMm),
                                                    across(odMm), 0, f.flipped)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
                     e.meta.insert(QStringLiteral("mechNode"), pn.id);
                     e.meta.insert(QStringLiteral("mechModel"), mechModelKey(mk));
+                    stampEntityGroup(e, group);
                     out.push_back(e);
                 }
             } else if (!overTheWires && lengthMm > 0.0 && odMm > endMm) {
@@ -1842,6 +1850,9 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                                : MechModelKind::OpenWires;
             if (const MechModel* om = mechModels().of(openKind)) {
                 const double dir = into < 0.0 ? dirRad + M_PI : dirRad;
+                const QString group = QStringLiteral("%1|%2|%3|wires")
+                                          .arg(QLatin1String(kMechModelGroup), pn.id,
+                                               mechModelKey(openKind));
                 for (Entity& e : mechModelEntities(*om, pn.at, dir, along(openMm),
                                                    across(endMm), drawn)) {
                     e.layer = opt.layer;
@@ -1849,6 +1860,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     e.meta.insert(QStringLiteral("mechNode"), pn.id);
                     e.meta.insert(QStringLiteral("mechSeg"), seg->id);
                     e.meta.insert(QStringLiteral("mechModel"), mechModelKey(openKind));
+                    stampEntityGroup(e, group);
                     out.push_back(e);
                 }
                 drawn = 0;   // drawn from the model: the generator's own fan is not wanted as well

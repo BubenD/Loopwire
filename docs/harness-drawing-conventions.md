@@ -1149,6 +1149,44 @@ all.
 Measured: two objects on the sheet, one picked — the model is one object, not two — and cancelling leaves the
 model exactly as it was, whatever is selected at the time.
 
+## A model is one object, not the lines it happens to be drawn with
+
+A boot is a boot. It is *drawn* with fifteen lines, but nobody wants fifteen lines — on its own editing
+canvas the thing the session is about could not be picked up and moved as the part it is without sweeping
+every line of it up first, and on a generated sheet a released drawing offered no way to take hold of a
+fitting at all.
+
+So a model carries a **group stamp**: on its editing canvas, and on every copy the generator places. A
+click anywhere on it takes the whole thing, it moves as one, and it has no joints of its own. Two ways
+back, because a thing that cannot be opened is a thing that cannot be drawn:
+
+- **Double-click** it on its editing canvas. The grouping comes off, every line has its joints back, and
+  the status bar says how many objects there now are. It is the same gesture a block is opened with.
+- **Explode**, anywhere. What is held together by a group stamp comes apart by having the stamp taken
+  off — there is nothing to break into pieces, since the pieces are already there and merely being
+  treated as one. That covers a placed fitting and a copy of a block as well, which is what EXPLODE does
+  in every other drawing package.
+
+Deliberately **not a block name** — only the instance stamp. A model is not a file in the block folder,
+so a double-click must not go looking for a definition that was never written. A template frame's group
+is left alone too: the sheet frame moves as one because it is the frame, not because somebody grouped it.
+
+The stamps are the way a model is **handled**, not part of what it **is**, so Capture takes them off
+again on the way into the file. Saved with it, every copy the generator ever placed would carry the
+editing session's own stamp. And the generator's keys are worked out from where a fitting went — the
+segment or node it sits on, and which model drew it — rather than made up, so regenerating a drawing
+gives the same fitting the same key.
+
+Measured: a three-line boot opens grouped, one click picks all three, a double-click leaves none of them
+grouped and a click then picks exactly one, and what lands in the file carries no stamp at all.
+
+**A model's lines were all called nothing.** `partDrawingEntities` clears the id on its way out — a
+stored drawing has no business naming objects in whatever document it lands in, and the document is meant
+to give each one a fresh id. Loading a model onto the canvas never did. So every line of a model being
+edited had an empty id, and everything that works by id — the selection, the joints, Delete, undo —
+resolved all of them to the first one. Found by the grouping test above, which could not select the whole
+model because the whole model was, as far as ids went, a single object already.
+
 ## Capturing from the canvas saves the model
 
 *Edit on the canvas* opens the model in a document of its own, where the whole ribbon is available and

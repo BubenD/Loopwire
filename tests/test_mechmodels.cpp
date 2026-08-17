@@ -10,6 +10,7 @@
 #include "app/MainWindow.h"
 #include "app/Editor.h"
 #include "harness/PartsLibrary.h"
+#include "model/Block.h"
 
 #include <QApplication>
 #include <QDoubleSpinBox>
@@ -473,6 +474,95 @@ int run_mechmodels_tests() {
         Entity* connAfterRegen = findByTag("connect");
         check(connAfterRegen && near(connAfterRegen->center.x, 90.0),
               "markers: the moved position survives a fresh regeneration - it reached the model itself");
+
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
+    // ---- a model is one object, on its canvas and on a generated drawing --------------------------
+    {
+        // It used to arrive as its own loose lines, so the thing the session is about could not be picked
+        // up and moved as the part it is - every line of it had to be swept up first.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+        // A boot to open with: three lines, saved as the kind's model.
+        {
+            MechModelSet seed;
+            seed.load();
+            MechModel b;
+            b.kind = MechModelKind::Boot;
+            std::vector<Entity> es;
+            for (int i = 0; i < 3; ++i) {
+                Entity e;
+                e.id = QStringLiteral("seg%1").arg(i);
+                e.type = EntityType::Line;
+                e.a = {static_cast<double>(i) * 10.0, -4.0};
+                e.b = {static_cast<double>(i) * 10.0 + 10.0, 4.0};
+                es.push_back(e);
+            }
+            b.drawing = partDrawingFromEntities(es);
+            seed.set(b);
+            seed.save();
+        }
+
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        win.openMechModelEditor(MechModelKind::Boot);
+        for (int i = 0; i < 10; ++i) QApplication::processEvents();
+        Editor* ed = win.findChild<Editor*>();
+        Document* doc = ed->document();
+        auto& snap = ed->snapSettings();
+        snap.objectSnap = false;
+        snap.gridSnap = false;
+        snap.ortho = false;
+        snap.polar = false;
+
+        int stamped = 0;
+        for (const Entity& e : doc->entities())
+            if (entityBlockInstance(e) == QLatin1String(kMechModelGroup)) ++stamped;
+        check(stamped == 3, "one object: the model comes in grouped, every line of it");
+
+        // A click on any one line takes the WHOLE model.
+        ed->setTool(ToolId::Select);
+        ed->onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerRelease({5.0, 0.0}, Qt::LeftButton);
+        std::printf("  one object: a click on one line picked %d\n",
+                    static_cast<int>(ed->selection().size()));
+        check(ed->selection().size() == 3, "one object: clicking one line picks the model up whole");
+
+        // Double-click opens it: the grouping comes off and the lines are their own again.
+        ed->onDoubleClick({5.0, 0.0});
+        QApplication::processEvents();
+        int stillStamped = 0;
+        for (const Entity& e : doc->entities())
+            if (entityBlockInstance(e) == QLatin1String(kMechModelGroup)) ++stillStamped;
+        check(stillStamped == 0, "one object: a double-click opens the model up for editing");
+        ed->onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerRelease({5.0, 0.0}, Qt::LeftButton);
+        check(ed->selection().size() == 1, "one object: opened up, a click picks one line");
+
+        // And what is saved is the drawing, not the session's own way of handling it.
+        win.saveMechModelBeingEdited();
+        for (int i = 0; i < 10; ++i) QApplication::processEvents();
+        MechModelSet back;
+        back.load(modelsFile);
+        if (const MechModel* saved = back.of(MechModelKind::Boot)) {
+            int leaked = 0;
+            for (const Entity& e : partDrawingEntities(saved->drawing))
+                if (!entityBlockInstance(e).isEmpty()) ++leaked;
+            check(leaked == 0, "one object: the grouping is not saved into the model itself");
+        }
 
         if (hadOne) {
             QFile f(modelsFile);

@@ -44,6 +44,12 @@ enum class MechModelKind {
     CableBody,              // the body of a cable between its ends
 };
 
+// The stamp that makes a model ONE object rather than the loose lines it happens to be drawn with: on its
+// own editing canvas, so it can be picked up and placed as the part it is, and on a generated drawing, so
+// a boot on a released sheet is a boot and not fifteen lines. Shared by both, and deliberately not a
+// block NAME - a model is not a file in the block folder, so a double-click must not go looking for one.
+inline constexpr char kMechModelGroup[] = "«model»";
+
 std::vector<MechModelKind> allMechModelKinds();
 // "Ring terminal" / "Ferrule" - insulation is a model property shown in the properties panel.
 QString mechModelName(MechModelKind kind);

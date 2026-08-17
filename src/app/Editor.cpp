@@ -5,6 +5,7 @@
 
 #include "render/EntityRenderer.h"
 
+#include "harness/MechModels.h"   // kMechModelGroup: a default model is one object on its own canvas
 #include "model/Block.h"
 #include "model/DrawingTemplate.h"
 #include "model/Picture.h"
@@ -926,6 +927,9 @@ bool Editor::expandBlockSelection() {
         if (!block.isEmpty())
             emit message(QStringLiteral("%1 is a block — double-click it to change what is in it")
                              .arg(block));
+        else if (first && entityBlockInstance(*first) == QLatin1String(kMechModelGroup))
+            emit message(QStringLiteral(
+                "The model moves as one — double-click it to open it up and edit the lines"));
         else if (!entityTemplateGroup(*first).isEmpty())
             emit message(
                 tplName.isEmpty()
@@ -5984,6 +5988,26 @@ void Editor::onDoubleClick(const Vec2& world) {
     if (tool_ == ToolId::Select) {
         if (const auto hit = hitTest(world)) {
             if (const Entity* e = entityById(*hit)) {
+                // A default model on its editing canvas is one object, so it can be placed as the part it
+                // is. Double-clicking OPENS IT UP - the grouping comes off and every line of it has its
+                // joints back - which is the same gesture a block is opened with and the only thing
+                // "edit the model" can mean. It is not a block, so there is no definition to go and load.
+                if (entityBlockName(*e).isEmpty() &&
+                    entityBlockInstance(*e) == QLatin1String(kMechModelGroup)) {
+                    pushUndo();
+                    int opened = 0;
+                    for (Entity& x : doc_->entities())
+                        if (entityBlockInstance(x) == QLatin1String(kMechModelGroup)) {
+                            clearEntityBlockStamp(x);
+                            ++opened;
+                        }
+                    selected_.clear();
+                    doc_->setDirty(true);
+                    emit selectionChanged();
+                    emit message(QStringLiteral("The model is open — %1 object(s) to edit").arg(opened));
+                    emit changed();
+                    return;
+                }
                 const QString block = entityBlockName(*e);
                 if (!block.isEmpty()) {
                     emit editBlockRequested(block);
@@ -10183,12 +10207,31 @@ void Editor::explodeSelected() {
     pushUndo();
     std::vector<Entity> additions;
     std::vector<QString> remove;
+    // What is held together by a GROUP stamp comes apart by having the stamp taken off - there is nothing
+    // to break into pieces, because the pieces are already there and merely being treated as one. That is
+    // a copy of a block, a placed fitting, or a default model, and Explode is what anybody reaches for.
+    int ungrouped = 0;
     for (const Entity* e : sel) {
+        if (!entityBlockInstance(*e).isEmpty()) {
+            if (Entity* live = entityById(e->id)) {
+                clearEntityBlockStamp(*live);
+                ++ungrouped;
+            }
+            continue;
+        }
         auto parts = explodeEntity(*e);
         if (!parts.empty()) {
             additions.insert(additions.end(), parts.begin(), parts.end());
             remove.push_back(e->id);
         }
+    }
+    if (ungrouped > 0 && additions.empty() && remove.empty()) {
+        selected_.clear();
+        doc_->setDirty(true);
+        emit selectionChanged();
+        emit message(QStringLiteral("Broken apart into %1 separate object(s)").arg(ungrouped));
+        emit changed();
+        return;
     }
     auto& ents = doc_->entities();
     ents.erase(std::remove_if(ents.begin(), ents.end(),
