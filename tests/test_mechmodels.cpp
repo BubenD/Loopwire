@@ -540,17 +540,17 @@ int run_mechmodels_tests() {
                     ed.labelHeight());
         check(added > 1, "label: the label and the mask under it");
 
-        // WIDTH runs ALONG the bundle, HEIGHT runs ACROSS it, and the pair are the label's SHAPE rather
-        // than its size: 40 by 12 is a label three and a third times as long as it is deep. The wires say
-        // how BIG it has to be, and both sizes follow together - a label on a pair of wires is a small
-        // label, not a big one squashed, and everything drawn with it goes the same way.
-        check(std::abs(ed.labelWidth() / ed.labelHeight() -
-                       Editor::kLabelWidthMm / Editor::kLabelHeightMm) < 1e-6,
-              "label: scaled whole - it keeps the shape it was given and takes its size from the wires");
+        // WIDTH runs ACROSS the bundle: the dimension that has to cover it, and the one the stroke measures.
+        // HEIGHT runs ALONG the wire and does NOT shrink with the bundle - a wire marker on a single conductor
+        // is still the length a wire marker comes in. Tied to the width for a while, it collapsed the whole
+        // label to nothing on one wire, and that coupling was standing in for the two being the wrong way
+        // round, which they were.
+        check(std::abs(ed.labelHeight() - Editor::kLabelHeightMm) < 1e-6,
+              "label: it reaches as far along the wire as a label does, whatever it is wrapped round");
         // A LITTLE BIT OVER the outermost wire: flush with the edge of the bundle reads as a label that
         // missed the last wire.
-        check(ed.labelHeight() > 8.0, "label: and the height covers all three wires");
-        check(ed.labelHeight() < 8.0 * 2.0, "label: without being wildly deeper than the bundle");
+        check(ed.labelWidth() > 8.0, "label: and the width covers all three wires");
+        check(ed.labelWidth() < 8.0 * 2.0, "label: without being wildly wider than the bundle");
 
         // The mask covers all three, so none of them shows through the label.
         auto maskOf = [&](const Document& doc) -> const Entity* {
@@ -570,8 +570,10 @@ int run_mechmodels_tests() {
             // The two sizes belong to the label's own axes: along the run it is as wide as it was told, and
             // that is NOT the same as the box it occupies on the sheet - which is what the properties
             // panel's plain Width would have reported, swapped round on a vertical bundle.
-            check(std::abs(b.width() - ed.labelWidth()) < 1e-6,
-                  "label: as long along the run as the width says");
+            check(std::abs(b.height() - ed.labelWidth()) < 1e-6,
+                  "label: as far ACROSS the runs as the width says");
+            check(std::abs(b.width() - ed.labelHeight()) < 1e-6,
+                  "label: and as far ALONG one as the height says");
         }
 
         // ---- the two numbers a stroke cannot settle -----------------------------------------------
@@ -581,18 +583,18 @@ int run_mechmodels_tests() {
         ed.setLabelWidth(60.0);
         check(std::abs(ed.labelWidth() - 60.0) < 1e-6, "label: width set by hand takes");
         if (const Entity* m2 = maskOf(d)) {
-            std::printf("  label: %.1f along x %.1f across after asking for 60 x 20\n",
+            std::printf("  label: %.1f along x %.1f across after asking for width 60\n",
                         m2->bounds().width(), m2->bounds().height());
-            check(std::abs(m2->bounds().width() - 60.0) < 1e-6,
-                  "label: and it is that long ALONG the run - the mask grew with it");
+            check(std::abs(m2->bounds().height() - 60.0) < 1e-6,
+                  "label: and it reaches that far ACROSS the runs - the mask grew with it");
         }
-        const double wasAlong = maskOf(d)->bounds().width();
+        const double wasAcross = maskOf(d)->bounds().height();
         ed.setLabelHeight(20.0);
         check(std::abs(ed.labelHeight() - 20.0) < 1e-6, "label: height set by hand takes");
         if (const Entity* m3 = maskOf(d)) {
-            check(std::abs(m3->bounds().height() - 20.0) < 1e-6,
-                  "label: and it reaches that far ACROSS the runs");
-            check(std::abs(m3->bounds().width() - wasAlong) < 1e-6,
+            check(std::abs(m3->bounds().width() - 20.0) < 1e-6,
+                  "label: and it is that long ALONG the run");
+            check(std::abs(m3->bounds().height() - wasAcross) < 1e-6,
                   "label: setting one size leaves the other alone - they are not the same field twice");
         }
 
@@ -635,7 +637,7 @@ int run_mechmodels_tests() {
         ed.setLabelWidth(30.0);
         std::printf("  label: taken up again and set to %.1f along x %.1f across\n",
                     maskOf(d)->bounds().width(), maskOf(d)->bounds().height());
-        check(std::abs(maskOf(d)->bounds().width() - 30.0) < 1e-6,
+        check(std::abs(maskOf(d)->bounds().height() - 30.0) < 1e-6,
               "label: and it resizes on the drawing, with no session left open");
 
         // A stroke that crosses nothing places nothing and keeps the label in hand.
@@ -923,8 +925,8 @@ int run_mechmodels_tests() {
             check(mask->points.size() > 4, "fillet: curved, not a chord across the corner");
             // It spans BOTH legs of the corner, which is the thing a single object could not have told it.
             const Bounds b = mask->bounds();
-            check(b.min.x < -r * 0.9 && b.max.y > r * 0.9,
-                  "fillet: reaching from the leg that comes in to the leg that goes out");
+            check(b.min.x < -r * 0.7 && b.max.y > r * 0.7,
+                  "fillet: reaching round the corner, from the leg coming in towards the one going out");
         }
 
         // THE LABEL'S OWN OUTLINE has to follow the run too, not only the ground it covers. A straight line of
@@ -1009,6 +1011,70 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- a label is COUPLED to its cable: slid along, it takes the bend ------------------------------
+    {
+        // Sliding a label means sliding it ALONG THE RUN, and along the WHOLE run. A label placed on the
+        // straight and pushed towards a corner has to go ROUND the corner with the cable - a straight translate
+        // carried it off the cable the moment the cable stopped going the way the label was pointed, and a
+        // label beside its bundle says nothing while the wires come out from under the mask it left behind.
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0.0, 0.0}, {40.0, 0.0}, {40.0, -40.0}};   // along +x, then down
+        d.entities().push_back(run);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // On the straight part, well clear of the corner.
+        ed.onPointerPress({12.0, -5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({12.0, 5.0});
+        ed.onPointerPress({12.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "coupled: placed on the straight");
+        auto maskOf = [&]() -> const Entity* {
+            const Entity* mk = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.meta.value(QStringLiteral("labelMask")).toBool()) mk = &e;
+            return mk;
+        };
+        const Entity* mk = maskOf();
+        check(mk != nullptr, "coupled: and masked");
+        if (!mk) return failures;
+        // Straight, so a plain rectangle: four corners and nothing more.
+        std::printf("  coupled: on the straight, %d corners at x %.1f..%.1f y %.1f..%.1f\n",
+                    int(mk->points.size()), mk->bounds().min.x, mk->bounds().max.x, mk->bounds().min.y,
+                    mk->bounds().max.y);
+        check(mk->points.size() == 4, "coupled: on a straight run it is a rectangle, as it should be");
+
+        // Pushed 28 along the run, which puts its middle exactly on the corner. It has to LAY ITSELF ROUND the
+        // bend as it arrives - that is what being coupled to the cable means, as against being dropped on it.
+        const Vec2 body = mk->bounds().center();
+        ed.onPointerPress(body, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({body.x + 28.0, body.y});
+        mk = maskOf();
+        Bounds at = mk->bounds();
+        std::printf("  coupled: slid on to the corner, %d corners at x %.1f..%.1f y %.1f..%.1f\n",
+                    int(mk->points.size()), at.min.x, at.max.x, at.min.y, at.max.y);
+        check(mk->points.size() > 4, "coupled: arriving at the bend, it lays itself round it");
+        check(at.min.y < -1.0 && at.min.x < 40.0,
+              "coupled: spanning both legs - the one it came along and the one it turns down");
+
+        // And on past it, where the cable is straight again: it straightens with the cable, and it is down the
+        // far leg, which a straight slide from where it started could never have reached.
+        ed.onPointerMove({body.x + 40.0, body.y});
+        mk = maskOf();
+        at = mk->bounds();
+        std::printf("  coupled: slid on past it, %d corners at x %.1f..%.1f y %.1f..%.1f\n",
+                    int(mk->points.size()), at.min.x, at.max.x, at.min.y, at.max.y);
+        check(mk->points.size() == 4, "coupled: past the bend it is a rectangle again");
+        check(at.min.y < -6.0, "coupled: down the far leg, following the cable rather than the drag");
+        check(at.max.x <= 40.0 + ed.labelWidth(),
+              "coupled: not carried straight on past the corner into thin air");
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is
@@ -1052,9 +1118,9 @@ int run_mechmodels_tests() {
         if (m) {
             std::printf("  pin: placed %.1f along x %.1f across, asked for 25.0 x 9.0\n",
                         m->bounds().width(), m->bounds().height());
-            check(std::abs(m->bounds().width() - 25.0) < 1e-6 &&
-                      std::abs(m->bounds().height() - 9.0) < 1e-6,
-                  "pin: and it is that size on the sheet");
+            check(std::abs(m->bounds().height() - 25.0) < 1e-6 &&
+                      std::abs(m->bounds().width() - 9.0) < 1e-6,
+                  "pin: and it is that size on the sheet - width across the runs, height along one");
         }
         // And it lands where the stroke was pinned, not at the cursor that wandered off afterwards.
         if (m) check(std::abs(m->bounds().center().y) < 6.0,

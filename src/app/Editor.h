@@ -510,10 +510,12 @@ public:
     // THE LABEL'S TWO SIZES, whichever stage it is at: still a preview under the cursor, or down on the
     // drawing and selected.
     //
-    // WIDTH is along the runs - the label's own length, which no amount of looking at the wires will tell
-    // you, so it starts at the size labels come in and is set by hand. HEIGHT is across them: the dimension
-    // that has to cover the bundle, which is exactly what the stroke measures, so the stroke settles it
-    // until somebody says otherwise.
+    // WIDTH is ACROSS the runs: the dimension that has to cover the bundle, which is exactly what the stroke
+    // measures, so the stroke settles it until somebody says otherwise. HEIGHT is ALONG them - how far the
+    // label reaches up the wire, which no amount of looking at the bundle will tell you.
+    //
+    // A label is a strip wrapped round a bundle and stood out to one side: 40 ACROSS the bundle and 12 ALONG
+    // the wire, which is why they are named this way round.
     // HOW MUCH BIGGER a detail view is drawn than the thing it is a view of. Two is the drawing-office
     // default: enough to read, and small enough to fit on the sheet beside what it came from.
     double& detailScale() { return detailScale_; }
@@ -530,11 +532,11 @@ public:
     void retakeDetailSnapshot(Entity& e) const;
     Vec2 detailCenter() const { return detailCenter_; }
     double detailRadius() const { return detailRadius_; }
-    static constexpr double kLabelWidthMm = 40.0;    // along the runs
-    static constexpr double kLabelHeightMm = 12.0;   // across them, and at least this
+    static constexpr double kLabelWidthMm = 40.0;    // across the runs
+    static constexpr double kLabelHeightMm = 12.0;   // along them
     bool labelLive() const { return !labelLiveIds_.empty(); }
-    double labelWidth() const { return labelFit_.ok ? labelFit_.alongMm : labelAlongMm_; }
-    double labelHeight() const { return labelFit_.ok ? labelFit_.acrossMm : labelAcrossMm_; }
+    double labelWidth() const { return labelFit_.ok ? labelFit_.acrossMm : labelAcrossMm_; }
+    double labelHeight() const { return labelFit_.ok ? labelFit_.alongMm : labelAlongMm_; }
     void setLabelWidth(double mm);
     void setLabelHeight(double mm);
     // A label already on the drawing, taken up so the ribbon and the properties act on it - read off the
@@ -1345,8 +1347,8 @@ private:
     std::vector<Vec2> labelCovers_;
     // The two sizes as they stand, kept across a session so the next label goes on at the size the last one
     // was set to - a drawing office's labels are all one size, and typing it once should be enough.
-    double labelAlongMm_ = kLabelWidthMm;
-    double labelAcrossMm_ = kLabelHeightMm;
+    double labelAcrossMm_ = kLabelWidthMm;    // "Width"  - across the runs
+    double labelAlongMm_ = kLabelHeightMm;    // "Height" - along them
     // Either size said by hand: the stroke stops deciding that one. Until then the label keeps its SHAPE
     // and changes its SIZE - the wires say how far across it has to reach and the length follows by the same
     // factor, so a label on a pair of wires is a small label and not a big one squashed.
@@ -1365,18 +1367,22 @@ private:
         Vec2 acrossDir{0.0, 1.0};   // square to them
         double alongMm = 0.0;       // along the runs  - "Width"
         double acrossMm = 0.0;      // across the runs - "Height", what has to cover the bundle
-        // THE RUN IT IS LAID ALONG, and how far along it the middle of the label sits.
+        // THE RUN IT IS ON: the whole of it, how far along it the label sits, and how far off it.
         //
-        // A label on a straight run is a rectangle and the direction above says everything about it. A label
-        // on a KNEE is not: a bundle that turns takes the label round with it, and a straight rectangle laid
-        // across a bend leaves the wires going in at one angle and coming out at another with a rigid box in
-        // between - which is not what a label on a bent bundle looks like, and is what it looked like.
+        // A label is COUPLED to its run, and the path is kept whether the run bends or not - because sliding a
+        // label along a straight stretch that turns further on has to take it round the turn rather than carry
+        // it on into thin air.
         //
-        // So the label is laid along the path: every point of it is placed at a distance ALONG the run and an
-        // offset ACROSS it, the way words are set on a curve. Empty for a straight run, where the two are the
-        // same answer and the direction is cheaper.
+        // `bent` is whether the label REACHES a bend and so has to be laid round one: every point placed at a
+        // distance along the run and an offset across it, the way words are set on a curve.
+        //
+        // `midOff` is how far the label's middle sits OFF the run. The middle of the BUNDLE is not the middle
+        // of the one wire the run happens to be, and a label centred on that wire instead has half of itself
+        // hanging off the bundle - which is what a label on a bundle of several wires looked like.
         std::vector<Vec2> path;
         double midS = 0.0;
+        double midOff = 0.0;
+        bool bent = false;
     };
     LabelFit labelFit_;
     // Measured off the stroke a..b: which runs it crosses, how far they spread, and the size that covers

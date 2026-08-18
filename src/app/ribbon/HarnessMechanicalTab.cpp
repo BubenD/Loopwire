@@ -417,10 +417,10 @@ void MainWindow::buildHarnessMechanicalTab() {
     {
         // THE LABEL, once one is on: the two numbers a stroke cannot settle by itself.
         //
-        // The stroke settles the HEIGHT - across the runs, the dimension that has to cover the bundle -
+        // The stroke settles the WIDTH - across the runs, the dimension that has to cover the bundle -
         // because it says which runs are meant, and that is right nearly every time. It says nothing about
-        // the WIDTH, the label's own length along the run: no amount of looking at the wires tells you
-        // that, and it cannot know this office's labels are 40 mm whatever they happen to cover.
+        // the HEIGHT, how far the label reaches along the wire: no amount of looking at the bundle tells you
+        // that, and it cannot know this office's labels are 12 mm whatever they happen to cover.
         //
         // Both fields work on the preview as well as on a label already down, which is why Tab pins the
         // stroke: setting a label's size only after it is placed means placing it at the wrong size first,
@@ -446,12 +446,12 @@ void MainWindow::buildHarnessMechanicalTab() {
             *out = sp;
         };
         field(QStringLiteral("Width"),
-              QStringLiteral("ALONG the run — the label's own length. No amount of looking at the wires "
-                             "tells you this, so it starts at the size labels come in."),
-              &labelWidthSpin_, 0);
-        field(QStringLiteral("Height"),
               QStringLiteral("ACROSS the runs — the dimension that has to cover the bundle. This is what "
                              "the stroke measures, over the outermost wire it crossed."),
+              &labelWidthSpin_, 0);
+        field(QStringLiteral("Height"),
+              QStringLiteral("ALONG the run — how far the label reaches up the wire. No amount of looking "
+                             "at the bundle tells you this, so it starts at the size labels come in."),
               &labelHeightSpin_, 1);
         connect(labelWidthSpin_, &QDoubleSpinBox::valueChanged, this,
                 [this](double v) { editor_->setLabelWidth(v); });

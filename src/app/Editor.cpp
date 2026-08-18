@@ -2004,6 +2004,22 @@ void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
     at = path.back() + dir * (s - acc);
 }
 
+// Does the run bend anywhere under a label of this length, sat at this place along it? Asked by the fit when
+// the label is placed and by the slide when it is pushed along, so a label that slides INTO a bend lays itself
+// round the bend and one that slides out of it straightens - which is what being coupled to the run means.
+bool pathBendsNear(const std::vector<Vec2>& path, double s, double half) {
+    if (path.size() < 3) return false;
+    double acc = 0.0;
+    for (size_t i = 1; i + 1 < path.size(); ++i) {
+        acc += distance(path[i - 1], path[i]);
+        if (std::abs(acc - s) > half) continue;
+        const Vec2 in = (path[i] - path[i - 1]).normalized();
+        const Vec2 out = (path[i + 1] - path[i]).normalized();
+        if (std::abs(dot(in, out) - 1.0) > 1e-6) return true;
+    }
+    return false;
+}
+
 // Where a point sits on the path: how far ALONG, and how far ACROSS (signed, to the left of travel).
 void placeOnPath(const std::vector<Vec2>& path, const Vec2& p, double& s, double& off) {
     s = 0.0;
@@ -2356,86 +2372,85 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     }
     if (hits.empty()) return fit;
 
-    // The runs' own direction, averaged, and square to it the way the label reaches across. bundlePerpRot
-    // gives the perpendicular of the mean, which IS the across direction - the same answer the break mark
-    // uses to lie square through a bundle that fans.
-    const double perpRot = bundlePerpRot(dirs);
-    fit.acrossDir = Vec2{std::cos(perpRot), std::sin(perpRot)};
-    fit.runDir = fit.acrossDir.perp();
-    Vec2 centre;
-    double spread = 0.0;
-    shieldExtent(hits, fit.acrossDir, centre, spread);
+    // WHICH RUN THE LABEL IS ON: the one crossed nearest the middle of the stroke, which with one run crossed
+    // is that run. The WHOLE of it, chained through whatever joins on at either end - a filleted corner is a
+    // line, an arc and another line, each trimmed to meet the next, and a label laid along only the piece it
+    // crossed would follow that piece, walk off its end and hang in the air where the fillet turns away.
+    const Vec2 strokeMid = (a + b) * 0.5;
+    size_t host = 0;
+    {
+        double bestD = 1e300;
+        for (size_t i = 0; i < hits.size(); ++i) {
+            const double dd = distance(hits[i], strokeMid);
+            if (dd < bestD) { bestD = dd; host = i; }
+        }
+    }
+    fit.path = host < owners.size() ? runPathThrough(owners[host]) : std::vector<Vec2>{};
 
-    fit.mid = centre;
+    double spread = 0.0;
+    if (fit.path.size() >= 2) {
+        // SQUARE TO THE RUN ITSELF, where the label goes. The averaged crossing direction was square to
+        // neither leg of a bend, so on a corner the bundle was measured across a slant and came out wider than
+        // it is - the label too deep, and turned to a direction the wires do not run in.
+        double s0 = 0.0, off0 = 0.0;
+        placeOnPath(fit.path, strokeMid, s0, off0);
+        Vec2 at, dir;
+        frameOnPath(fit.path, s0, at, dir);
+        fit.runDir = dir;
+        fit.acrossDir = dir.perp();
+        double lo = 1e300, hi = -1e300;
+        for (const Vec2& h : hits) {
+            const double t = dot(h - at, fit.acrossDir);
+            lo = std::min(lo, t);
+            hi = std::max(hi, t);
+        }
+        spread = std::max(0.0, hi - lo);
+        fit.midS = s0;
+        // HOW FAR OFF THE RUN the label's middle sits. The middle of the BUNDLE is not the middle of the one
+        // wire the run happens to be: measured from a wire at the edge of a bundle and centred on it, half the
+        // label hung off the bundle it was supposed to be covering.
+        fit.midOff = (lo + hi) / 2.0;
+        fit.mid = at + fit.acrossDir * fit.midOff;
+    } else {
+        // No run to speak of - a single loose segment - so the averaged direction of what was crossed, which
+        // is what the break mark uses to lie square through a bundle that fans.
+        const double perpRot = bundlePerpRot(dirs);
+        fit.acrossDir = Vec2{std::cos(perpRot), std::sin(perpRot)};
+        fit.runDir = fit.acrossDir.perp();
+        Vec2 centre;
+        shieldExtent(hits, fit.acrossDir, centre, spread);
+        fit.mid = centre;
+    }
+
     if (labelAcrossManual_) {
         fit.acrossMm = labelAcrossMm_;
     } else {
         // A LITTLE BIT OVER the outermost run, because a label flush with the edge of a bundle reads as a
-        // label that missed the last wire. HOW MUCH is the model's own figure, set in the manager: an
-        // office that draws 2 mm clear draws 2 mm clear whether the bundle is three wires or thirty, and
-        // working it out from the bundle's own width gave a different answer every time - which is the one
-        // thing a house style must not do. No figure falls back to that proportion, so a model captured
-        // before there was one places as it did.
-        const double margin = labelExceedMm_ > 1e-9
-                                  ? labelExceedMm_
-                                  : std::max(labelAcrossMm_ * 0.12, spread * 0.10);
+        // label that missed the last wire. HOW MUCH is the model's own figure, set in the manager: an office
+        // that draws 2 mm clear draws 2 mm clear whether the bundle is three wires or thirty, and working it
+        // out from the bundle's own width gave a different answer every time - which is the one thing a house
+        // style must not do. No figure falls back to that proportion, so a model captured before there was one
+        // places as it did.
+        // No figure given: a proportion of what it is covering, with a small floor so a single wire still gets
+        // a label that clears it. Taken off the LABEL's own width it was nearly five millimetres on a bundle
+        // three millimetres across.
+        const double margin = labelExceedMm_ > 1e-9 ? labelExceedMm_ : std::max(1.0, spread * 0.12);
         fit.acrossMm = std::max(spread + 2.0 * margin, 1e-3);
     }
-    // THE WHOLE LABEL IS SCALED, not stretched across and left long. The two sizes are the label's SHAPE -
-    // 40 by 12 is a label three and a third times as long as it is deep - and the wires say how BIG it has
-    // to be. Holding the length at 40 while the depth followed the bundle gave a label that was the right
-    // depth and far too long the moment it went on a pair of wires instead of a bundle of ten: it read as a
-    // label off some other drawing. So the length follows the depth by the same factor, and everything drawn
-    // with it - a sleeve over it included - goes with them.
-    fit.alongMm = labelAlongManual_ || labelAcrossMm_ < 1e-9
-                      ? labelAlongMm_
-                      : labelAlongMm_ * (fit.acrossMm / labelAcrossMm_);
+    // HOW FAR IT REACHES ALONG THE WIRE does not shrink with the bundle. A wire marker on a single conductor
+    // is still the length a wire marker comes in: what changes with the bundle is how far the label has to
+    // reach ACROSS it, and that is the dimension the stroke measures.
+    //
+    // It was tied to the width for a while, and on one wire that collapsed the whole label to nothing - the
+    // width had shrunk to a couple of millimetres and took the length down with it. That coupling was standing
+    // in for the two sizes being the wrong way round, which they were.
+    fit.alongMm = labelAlongMm_;
 
-    // THE RUN IT IS LAID ALONG: the one crossed nearest the middle, which with one run crossed is that run.
-    // A label on a KNEE goes ROUND it - a bundle that turns takes the label with it - so the path is kept and
-    // not just the direction. Kept only when the label actually reaches a bend: on a straight run the two say
-    // the same thing, and the direction is the cheaper of the two to lay a rectangle by.
-    {
-        size_t host = 0;
-        double bestD = 1e300;
-        for (size_t i = 0; i < hits.size(); ++i) {
-            const double dd = distance(hits[i], fit.mid);
-            if (dd < bestD) { bestD = dd; host = i; }
-        }
-        // THE WHOLE RUN through it, not just the one object. A FILLETED corner is a line, an arc and another
-        // line, each trimmed to meet the next: a label laid along only the line it crossed would follow it,
-        // walk off its end and hang in the air where the fillet turns away. Chained, the three are the one run
-        // they are on the sheet, and the label hugs the fillet instead of cutting the corner.
-        const std::vector<Vec2> path =
-            host < owners.size() ? runPathThrough(owners[host]) : std::vector<Vec2>{};
-        if (path.size() > 2) {
-            double s = 0.0, off = 0.0;
-            placeOnPath(path, fit.mid, s, off);
-            // Does the label reach a bend at all? Only then is there anything to go round.
-            bool bends = false;
-            double acc = 0.0;
-            const double half = fit.alongMm / 2.0;
-            for (size_t i = 1; i + 1 < path.size(); ++i) {
-                acc += distance(path[i - 1], path[i]);
-                if (std::abs(acc - s) > half) continue;
-                const Vec2 in = (path[i] - path[i - 1]).normalized();
-                const Vec2 out = (path[i + 1] - path[i]).normalized();
-                if (std::abs(dot(in, out) - 1.0) > 1e-6) { bends = true; break; }
-            }
-            if (bends) {
-                fit.path = path;
-                fit.midS = s;
-                // The label is laid ON the run, so a middle taken off the crossings is pulled back on to it:
-                // it is the run that the label follows, and a middle beside the run would offset the whole of
-                // it by however far the crossings happened to sit off the centreline.
-                Vec2 at, dir;
-                frameOnPath(path, s, at, dir);
-                fit.mid = at + dir.perp() * off;
-                fit.runDir = dir;
-                fit.acrossDir = dir.perp();
-            }
-        }
-    }
+    // DOES IT REACH A BEND? Only then is there anything to go round, and only then is it laid along the path
+    // rather than as a rectangle. The path is kept EITHER WAY, because the label is coupled to its run: slid
+    // along a straight stretch that turns further on, it has to take the turn rather than carry on into the
+    // air.
+    fit.bent = pathBendsNear(fit.path, fit.midS, fit.alongMm / 2.0);
     fit.ok = true;
     return fit;
 }
@@ -2450,7 +2465,7 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
 std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
     if (!fit.ok) return {};
     const double half = fit.alongMm / 2.0, side = fit.acrossMm / 2.0;
-    if (fit.path.size() < 2) {
+    if (!fit.bent || fit.path.size() < 2) {
         const Vec2 a = fit.runDir * half;
         const Vec2 c = fit.acrossDir * side;
         return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
@@ -2465,8 +2480,10 @@ std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
         Vec2 at, dir;
         frameOnPath(fit.path, s, at, dir);
         const Vec2 n = dir.perp();
-        lo.push_back(at - n * side);
-        hi.push_back(at + n * side);
+        // Off the run by however far the label's middle is off it: the middle of the BUNDLE, not of the one
+        // wire the run happens to be.
+        lo.push_back(at + n * (fit.midOff - side));
+        hi.push_back(at + n * (fit.midOff + side));
     }
     std::vector<Vec2> out = lo;
     for (auto it = hi.rbegin(); it != hi.rend(); ++it) out.push_back(*it);
@@ -2489,14 +2506,14 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     // set on a curve - so the label goes round the knee with the bundle. A straight rectangle laid across a
     // bend leaves the wires going in at one angle and coming out at another with a rigid box between them,
     // which is not what a label on a bent bundle looks like.
-    const bool bent = fit.path.size() >= 2;
+    const bool bent = fit.bent && fit.path.size() >= 2;
     auto place = [&](const Vec2& p) {
         const double u = (p.x - midX) * sa;   // along the run: the label's own length
         const double v = (p.y - midY) * sc;   // across it: what has to cover the bundle
         if (bent) {
             Vec2 at, dir;
             frameOnPath(fit.path, fit.midS + u, at, dir);
-            return at + dir.perp() * v;
+            return at + dir.perp() * (v + fit.midOff);
         }
         return Vec2{fit.mid.x + fit.runDir.x * u + fit.acrossDir.x * v,
                     fit.mid.y + fit.runDir.y * u + fit.acrossDir.y * v};
@@ -2575,6 +2592,9 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
     //
     // So a bent label keeps the drawing it was laid from and is laid out AGAIN - the same code that placed it,
     // which cannot drift from itself. It is a handful of objects, and only for the labels that need it.
+    // Kept whenever the label has a RUN, not only when it is already bent: a label slid along a straight
+    // stretch that turns further on has to be laid out again when it reaches the turn, and it cannot be laid
+    // out again without the drawing it was laid from.
     if (fit.path.size() >= 2 && !proto.isEmpty()) e.meta.insert(QStringLiteral("labelProto"), proto);
     else e.meta.remove(QStringLiteral("labelProto"));
     e.meta.insert(labelGroupKey(), group);
@@ -2595,9 +2615,13 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
         }
         e.meta.insert(QStringLiteral("labelPath"), arr);
         e.meta.insert(QStringLiteral("labelMidS"), fit.midS);
+        e.meta.insert(QStringLiteral("labelMidOff"), fit.midOff);
+        e.meta.insert(QStringLiteral("labelBent"), fit.bent);
     } else {
         e.meta.remove(QStringLiteral("labelPath"));
         e.meta.remove(QStringLiteral("labelMidS"));
+        e.meta.remove(QStringLiteral("labelMidOff"));
+        e.meta.remove(QStringLiteral("labelBent"));
     }
 }
 
@@ -2703,6 +2727,8 @@ bool Editor::adoptLabelFromSelection() {
             for (int k = 0; k + 1 < arr.size(); k += 2)
                 labelFit_.path.push_back({arr[k].toDouble(), arr[k + 1].toDouble()});
             labelFit_.midS = e.meta.value(QStringLiteral("labelMidS")).toDouble();
+            labelFit_.midOff = e.meta.value(QStringLiteral("labelMidOff")).toDouble();
+            labelFit_.bent = e.meta.value(QStringLiteral("labelBent")).toBool();
             // And the drawing it was laid from, on a bent one: what lets it be laid out again.
             labelProto_.clear();
             const QJsonArray pr = e.meta.value(QStringLiteral("labelProto")).toArray();
@@ -2743,7 +2769,7 @@ bool Editor::adoptLabelFromSelection() {
 // with it - and the caller falls back to pushing the points about, which for a straight label is exact.
 bool Editor::relayPlacedLabel() {
     if (!doc_ || labelLiveIds_.empty() || !labelFit_.ok) return false;
-    if (labelProto_.empty() || labelFit_.path.size() < 2) return false;
+    if (labelProto_.empty()) return false;
     std::vector<Vec2> covers;
     const std::vector<Entity> laid = labelEntities(labelFit_, covers);
     if (laid.size() != labelLiveIds_.size()) return false;
@@ -2786,7 +2812,7 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
     if (std::abs(fa - 1.0) < 1e-12 && std::abs(fc - 1.0) < 1e-12) return false;
     // A BENT label is laid out again from its own drawing rather than having its points pushed about. See
     // relayPlacedLabel: on the inside of a bend, asking where a point sits on the run has more than one answer.
-    if (labelFit_.path.size() >= 2 && !labelProto_.empty()) {
+    if (labelFit_.bent && !labelProto_.empty()) {
         labelFit_.alongMm = alongMm;
         labelFit_.acrossMm = acrossMm;
         if (relayPlacedLabel()) {
@@ -2798,7 +2824,7 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
     // ON A BEND the point is read off the RUN and put back on it - how far along, how far across, both scaled
     // - so a bent label resized stays bent. Scaling its points about the middle along two straight axes, which
     // is right for a straight label, would iron the bend out of it.
-    const bool bent = labelFit_.path.size() >= 2;
+    const bool bent = labelFit_.bent && labelFit_.path.size() >= 2;
     const double midS = labelFit_.midS;
     const std::vector<Vec2>& path = labelFit_.path;
     auto scale = [&](const Vec2& p) {
@@ -2844,23 +2870,12 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
 
 // The ribbon's and the properties panel's two fields, whichever stage the label is at: still under the
 // cursor as a preview, or down on the drawing.
+// WIDTH is ACROSS the runs - the dimension that covers the bundle, and the one the stroke measures. Setting it
+// by hand stops the stroke deciding it.
 void Editor::setLabelWidth(double mm) {
     if (mm <= 1e-6) return;
-    labelAlongMm_ = mm;
-    labelAlongManual_ = true;   // said by hand, so it stops following the depth
-    if (labelPlacing_) {
-        relayLabelPreview();
-        return;
-    }
-    if (labelLiveIds_.empty()) return;
-    pushUndo();
-    scalePlacedLabel(mm, labelFit_.acrossMm);
-}
-
-void Editor::setLabelHeight(double mm) {
-    if (mm <= 1e-6) return;
     labelAcrossMm_ = mm;
-    labelAcrossManual_ = true;   // said by hand, so the stroke stops deciding it
+    labelAcrossManual_ = true;
     if (labelPlacing_) {
         relayLabelPreview();
         return;
@@ -2868,6 +2883,20 @@ void Editor::setLabelHeight(double mm) {
     if (labelLiveIds_.empty()) return;
     pushUndo();
     scalePlacedLabel(labelFit_.alongMm, mm);
+}
+
+// HEIGHT is ALONG the run - how far the label reaches up the wire.
+void Editor::setLabelHeight(double mm) {
+    if (mm <= 1e-6) return;
+    labelAlongMm_ = mm;
+    labelAlongManual_ = true;
+    if (labelPlacing_) {
+        relayLabelPreview();
+        return;
+    }
+    if (labelLiveIds_.empty()) return;
+    pushUndo();
+    scalePlacedLabel(mm, labelFit_.acrossMm);
 }
 
 // The preview, laid out again for the sizes it now has. Only meaningful while the stroke is down.
@@ -2891,20 +2920,21 @@ bool Editor::slideLiveLabel(const Vec2& delta) {
             return false;   // something else is in the selection: an ordinary move
     const double travel = dot(delta, labelFit_.runDir);
     if (std::abs(travel) < 1e-9) return true;   // took the drag, and threw all of it away
-    // ON A BEND, sliding it means sliding it ALONG THE RUN - round the corner and out the other side, which is
-    // where a label pushed along a bundle goes. A straight translate would carry it off the run the moment it
-    // reached the knee.
+    // A LABEL IS COUPLED TO ITS CABLE. Sliding it means sliding it ALONG THE RUN, and along the WHOLE run:
+    // round a bend and out the other side, however the cable turns. A straight translate carried it off the
+    // cable the moment the cable stopped going the way the label was pointed - a label beside its bundle says
+    // nothing, and the wires come out from under the mask it left behind.
+    //
+    // So it is walked along the path, re-asked whether the run bends under it where it now sits, and laid out
+    // again: it lays itself ROUND a bend it slides into, and straightens as it slides out.
     if (labelFit_.path.size() >= 2 && !labelProto_.empty()) {
-        // ON A BEND, sliding it means sliding it ALONG THE RUN - round the corner and out the other side,
-        // which is where a label pushed along a bundle goes. A straight translate would carry it off the run
-        // the moment it reached the knee. Laid out again at the new place along the run rather than having its
-        // points walked forward, for the same reason a resize is.
         labelFit_.midS += travel;
         Vec2 at, dir;
         frameOnPath(labelFit_.path, labelFit_.midS, at, dir);
-        labelFit_.mid = at;
         labelFit_.runDir = dir;
         labelFit_.acrossDir = dir.perp();
+        labelFit_.mid = at + labelFit_.acrossDir * labelFit_.midOff;
+        labelFit_.bent = pathBendsNear(labelFit_.path, labelFit_.midS, labelFit_.alongMm / 2.0);
         if (relayPlacedLabel()) return true;
     }
     const Vec2 step = labelFit_.runDir * travel;
