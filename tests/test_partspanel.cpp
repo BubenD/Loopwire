@@ -32,6 +32,13 @@
 
 using namespace Edraw_Desktop;
 
+// The side panel's columns. It gained a leading "#" line number - which counts POSITIONS, so a line moved
+// is renumbered rather than carrying its old number - and everything after it shifted along by one. Named
+// rather than written as digits so the next column added moves one line of code instead of thirty.
+constexpr int kNum = 0;
+constexpr int kDesc = 1;
+constexpr int kQty = 4;
+
 namespace {
 
 int panelFailures = 0;
@@ -315,17 +322,38 @@ int run_partspanel_tests() {
             check(bom->rowCount() == before + 1, "bom: a part added from the library is a line on it");
             int row = -1;
             for (int i = 0; i < bom->rowCount(); ++i)
-                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) row = i;
+                if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) row = i;
             check(row >= 0, "bom: and the line is the part that was added");
+
+            // The line NUMBER down the left counts POSITIONS: 1, 2, 3 down the panel whatever order the
+            // lines are in. That is the whole point of the column - a drawing's balloons read against a
+            // settled order, and a list whose numbering shuffles when it is re-sorted cannot be read
+            // against anything. So it never carries a line's old number along with it.
+            {
+                bool inOrder = true;
+                for (int i = 0; i < bom->rowCount(); ++i) {
+                    const QTableWidgetItem* n = bom->item(i, kNum);
+                    if (!n || n->text() != QString::number(i + 1)) inOrder = false;
+                }
+                std::printf("  bom: %d line(s), numbered 1..%d down the panel\n", bom->rowCount(),
+                            bom->rowCount());
+                check(bom->rowCount() > 0 && inOrder,
+                      "bom: the # column numbers the positions, 1 downwards, in constant order");
+                // And it says nothing about the part - the description cell is what carries that, so a
+                // number is only ever a place in the list.
+                const QTableWidgetItem* n0 = bom->item(0, kNum);
+                check(n0 && n0->data(Qt::UserRole + 2).toString().isEmpty(),
+                      "bom: a number is a position and holds nothing about the part in it");
+            }
             if (row >= 0) {
-                check(bom->item(row, 0)->data(Qt::UserRole + 1).toBool(),
+                check(bom->item(row, kDesc)->data(Qt::UserRole + 1).toBool(),
                       "bom: marked as put there by hand, which is what makes it removable");
                 win.removeBomPanelRow(row);
                 QApplication::processEvents();
                 check(bom->rowCount() == before, "bom: and it can be taken off again");
                 bool stillThere = false;
                 for (int i = 0; i < bom->rowCount(); ++i)
-                    if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
+                    if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing")))
                         stillThere = true;
                 check(!stillThere, "bom: it is the line that was asked for that went");
             }
@@ -337,7 +365,7 @@ int run_partspanel_tests() {
             QApplication::processEvents();
             int twice = -1;
             for (int i = 0; i < bom->rowCount(); ++i)
-                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
+                if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing")))
                     twice = i;
             check(twice >= 0, "bom: a part added twice is one line, totalled");
             if (twice >= 0) {
@@ -345,7 +373,7 @@ int run_partspanel_tests() {
                 QApplication::processEvents();
                 bool leftOver = false;
                 for (int i = 0; i < bom->rowCount(); ++i)
-                    if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
+                    if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing")))
                         leftOver = true;
                 check(!leftOver, "bom: and taking that line off takes both of the rows behind it");
             }
@@ -399,21 +427,21 @@ int run_partspanel_tests() {
         putOneDown();
         int line = -1;
         for (int i = 0; i < bom->rowCount(); ++i)
-            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) line = i;
+            if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) line = i;
         std::printf("  rules: placed one - %d lines, the part on line %d\n", bom->rowCount(), line);
         check(bom->rowCount() == before + 1 && line >= 0,
               "rules: a part put on the sheet is on the bill of materials, without being asked twice");
-        const QString qtyOne = line >= 0 && bom->item(line, 3) ? bom->item(line, 3)->text() : QString();
+        const QString qtyOne = line >= 0 && bom->item(line, kQty) ? bom->item(line, kQty)->text() : QString();
 
         // The same part again: one line, counted twice - not a second line.
         putOneDown();
         int lines = 0, only = -1;
         for (int i = 0; i < bom->rowCount(); ++i)
-            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) {
+            if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) {
                 ++lines;
                 only = i;
             }
-        const QString qtyTwo = only >= 0 && bom->item(only, 3) ? bom->item(only, 3)->text() : QString();
+        const QString qtyTwo = only >= 0 && bom->item(only, kQty) ? bom->item(only, kQty)->text() : QString();
         std::printf("  rules: placed a second - %d line(s), quantity %s -> %s\n", lines,
                     qPrintable(qtyOne), qPrintable(qtyTwo));
         check(lines == 1, "rules: the same part number twice is ONE line");
@@ -424,7 +452,7 @@ int run_partspanel_tests() {
         QApplication::processEvents();
         int apart = 0;
         for (int i = 0; i < bom->rowCount(); ++i)
-            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++apart;
+            if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) ++apart;
         std::printf("  rules: not adding up - %d lines\n", apart);
         check(apart == 2, "rules: switched off, two of the same part are two lines");
 
@@ -433,7 +461,7 @@ int run_partspanel_tests() {
         QApplication::processEvents();
         int counted = 0;
         for (int i = 0; i < bom->rowCount(); ++i)
-            if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++counted;
+            if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) ++counted;
         check(counted == 0,
               "rules: with the switch off the bill lists only what was added to it by hand");
         // Left as they were found, so the rest of the run sees the ordinary rules.
@@ -577,8 +605,8 @@ int run_partspanel_tests() {
         if (editor && bom && part) {
             auto qty = [bom]() -> QString {
                 for (int i = 0; i < bom->rowCount(); ++i)
-                    if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
-                        return bom->item(i, 3) ? bom->item(i, 3)->text() : QString();
+                    if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing")))
+                        return bom->item(i, kQty) ? bom->item(i, kQty)->text() : QString();
                 return QStringLiteral("0");
             };
             editor->selectAll();
@@ -634,14 +662,14 @@ int run_partspanel_tests() {
 
         auto qtyOfTheConnector = [bom]() -> QString {
             for (int i = 0; i < bom->rowCount(); ++i)
-                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing")))
-                    return bom->item(i, 3) ? bom->item(i, 3)->text() : QString();
+                if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing")))
+                    return bom->item(i, kQty) ? bom->item(i, kQty)->text() : QString();
             return QString();
         };
         auto linesOfTheConnector = [bom] {
             int n = 0;
             for (int i = 0; i < bom->rowCount(); ++i)
-                if (bom->item(i, 0) && bom->item(i, 0)->text().contains(QStringLiteral("housing"))) ++n;
+                if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) ++n;
             return n;
         };
 

@@ -8497,9 +8497,15 @@ void MainWindow::refreshBomPanel() {
     // the table placed on the sheet. (1 = description, 3 = manufacturer's P/N, 4 = manufacturer,
     // 5 = quantity, 6 = units.)
     bomPanel_->clear();
-    bomPanel_->setColumnCount(5);
-    bomPanel_->setHorizontalHeaderLabels({table.header(1), table.header(3), table.header(4),
-                                          table.header(5), table.header(6)});
+    // A LINE NUMBER down the left, which is what a balloon on the drawing calls a part out by.
+    //
+    // It counts POSITIONS, not lines: it is 1, 2, 3 down the panel whatever order the lines are in, so
+    // moving a line moves it to a numbered place rather than carrying its old number along with it. That is
+    // what makes the column worth having - a drawing's balloons read against a settled order, and a list
+    // whose numbering shuffles when it is re-sorted cannot be read against anything.
+    bomPanel_->setColumnCount(6);
+    bomPanel_->setHorizontalHeaderLabels({QStringLiteral("#"), table.header(1), table.header(3),
+                                          table.header(4), table.header(5), table.header(6)});
     bomPanel_->setRowCount(static_cast<int>(rows.size()));
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const BomRow& r = rows[static_cast<size_t>(i)];
@@ -8508,23 +8514,33 @@ void MainWindow::refreshBomPanel() {
             it->setToolTip(text);
             bomPanel_->setItem(i, col, it);
         };
-        cell(0, r.description.isEmpty() ? r.ref : r.description);
+        {
+            auto* num = new QTableWidgetItem(QString::number(i + 1));
+            num->setTextAlignment(Qt::AlignCenter);
+            num->setToolTip(QStringLiteral("Line %1 — the number a balloon calls this part out by")
+                                .arg(i + 1));
+            bomPanel_->setItem(i, 0, num);
+        }
+        cell(1, r.description.isEmpty() ? r.ref : r.description);
         // Where the line came from, and what it names: what the right-click menu needs to know whether the
-        // line can be taken off, and which of the drawing's own rows to take off with it.
-        if (QTableWidgetItem* it = bomPanel_->item(i, 0)) {
+        // line can be taken off, and which of the drawing's own rows to take off with it. Carried on the
+        // DESCRIPTION cell, as before - the number cell is a position, and holds nothing about the part.
+        if (QTableWidgetItem* it = bomPanel_->item(i, 1)) {
             it->setData(Qt::UserRole + 1, !r.fromDrawing);
             it->setData(Qt::UserRole + 2, r.partId);
             it->setData(Qt::UserRole + 3, r.mfrPn);
         }
-        cell(1, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn);
-        cell(2, r.mfrName);
-        cell(3, r.qtyText(table.config.qtyDecimals));
-        cell(4, r.unit);
+        cell(2, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn);
+        cell(3, r.mfrName);
+        cell(4, r.qtyText(table.config.qtyDecimals));
+        cell(5, r.unit);
     }
     bomPanel_->horizontalHeader()->setStretchLastSection(false);
-    // The description takes what is left over; the rest are as wide as they need to be.
-    bomPanel_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int c = 1; c < 5; ++c)
+    // The number is as narrow as it needs to be, the description takes what is left over, and the rest are
+    // as wide as they need to be.
+    bomPanel_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    bomPanel_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    for (int c = 2; c < 6; ++c)
         bomPanel_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
 }
 
@@ -11665,7 +11681,9 @@ void MainWindow::showBomPanelMenu(const QPoint& at) {
     const int row = cell ? cell->row() : -1;
     QMenu menu(this);
     if (row >= 0) {
-        QTableWidgetItem* first = bomPanel_->item(row, 0);
+        // Column 1, the DESCRIPTION: column 0 is the line number now, and a position knows nothing about
+        // the part it happens to be numbering.
+        QTableWidgetItem* first = bomPanel_->item(row, 1);
         const bool byHand = first && first->data(Qt::UserRole + 1).toBool();
         const QString what = first ? first->text() : QString();
         if (byHand) {
@@ -11689,7 +11707,7 @@ void MainWindow::showBomPanelMenu(const QPoint& at) {
 void MainWindow::removeBomPanelRow(int row) {
     Document* doc = editDoc();
     if (!doc || !bomPanel_) return;
-    QTableWidgetItem* first = bomPanel_->item(row, 0);
+    QTableWidgetItem* first = bomPanel_->item(row, 1);   // the description, not the line number
     if (!first) return;
     const QString partId = first->data(Qt::UserRole + 2).toString();
     const QString mfrPn = first->data(Qt::UserRole + 3).toString();

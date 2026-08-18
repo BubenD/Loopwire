@@ -8007,9 +8007,12 @@ int run_editor_tests() {
             const QJsonArray cw = tw()->meta.value("colFrac").toArray();
             const double leftW = cw[0].toDouble() * 80.0;
             std::printf("  table-floor: left column stopped at %.1f wide\n", leftW);
-            check(leftW > 10.0,
-                  "table-floor: the column stops at its words rather than collapsing to nothing");
-            check(leftW < 40.0, "table-floor: but it did narrow");
+            // It goes right down to about a letter's width. It used to stop at the column's longest WORD,
+            // on the grounds that a word cannot be broken - it can, the wrap breaks one that will not fit -
+            // so there was no reason to stop the drag at all. What is left is only enough to keep the
+            // column from vanishing.
+            check(leftW > 1.0, "table-floor: the column does not vanish altogether");
+            check(leftW < 15.0, "table-floor: but it narrows right down to about a letter");
         }
 
         // ---- a picked cell's row CAN be made taller ----

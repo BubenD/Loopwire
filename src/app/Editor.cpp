@@ -244,24 +244,25 @@ double tableCellHeight(const Entity& e, int idx) {
     return idx < own.size() && own[idx].toDouble() > 0.0 ? own[idx].toDouble() : th;
 }
 
-// How narrow a column may be made: down to its longest WORD, not its longest string.
+// How narrow a column may be made: down to ONE LETTER.
 //
-// A column narrower than its text is not a mistake - the text wraps onto another line and the row grows to
-// hold it, which is what a table is for. A column narrower than one WORD is a mistake, because a word
-// cannot be broken and would simply hang out of the cell.
+// It used to stop at the column's longest word, on the grounds that a word cannot be broken. It can - the
+// wrap breaks one that will not fit rather than let it hang out of the cell - so there is no reason to stop
+// the drag at all. A column squeezed to a letter runs its text down the cell a letter at a time, and the
+// row grows to hold it: very tall, entirely readable, nothing hidden. The floor is now only what is needed
+// to keep a column from vanishing altogether.
 double tableColumnFloor(const Entity& e, int col, int rows, int cols) {
     const QJsonArray cells = e.meta.value(QStringLiteral("cells")).toArray();
     double need = 0.0;
     for (int r = 0; r < rows; ++r) {
         const int idx = r * cols + col;
         if (idx >= cells.size()) break;
-        // A cell whose words are shared across a merged block does not hold this column to its width: the
-        // words have the whole block to sit in.
         if (TableMerge m; tableMergeAt(e, r, col, m) && m.colSpan > 1) continue;
-        need = std::max(need, tableLongestWord(cells[idx].toString(), tableCellHeight(e, idx)));
+        if (cells[idx].toString().trimmed().isEmpty()) continue;
+        need = std::max(need, tableTextWidth(QStringLiteral("W"), tableCellHeight(e, idx)));
     }
-    // Room for the word plus the padding it is drawn inside.
-    return need > 0.0 ? need * 1.15 : 0.0;
+    // One letter, and the padding it sits inside.
+    return need > 0.0 ? need * 1.9 : 0.0;
 }
 
 // The height a row needs to show everything written in it, once the words have wrapped to the width of
@@ -283,12 +284,18 @@ double tableRowNeeds(const Entity& e, int row, int cols, const std::vector<doubl
     return need;
 }
 
-// Grow any row that is now too short for what is written in it, and the table with them. Rows are never
-// SHRUNK here: a row somebody made taller stays as tall as they made it.
+// Fit every row to what is written in it: taller when the words need more lines, and back DOWN again when
+// a column is widened and they no longer do.
+//
+// A row somebody set the height of themselves is left alone in the shrinking direction - it is marked when
+// its boundary is dragged. Without that mark, a row deliberately made taller would snap back the next time
+// anything else was resized, and "make this row taller" would be impossible to make stick. Growing still
+// applies to every row, marked or not: a row must always be able to hold its own text.
 void tableFitRows(Entity& e) {
     if (e.points.size() != 4) return;
     QJsonArray rf = e.meta.value(QStringLiteral("rowFrac")).toArray();
     const QJsonArray cf = e.meta.value(QStringLiteral("colFrac")).toArray();
+    const QJsonArray fixed = e.meta.value(QStringLiteral("rowFixed")).toArray();
     const int rows = rf.size(), cols = cf.size();
     if (rows == 0 || cols == 0) return;
     Bounds tb;
@@ -299,13 +306,20 @@ void tableFitRows(Entity& e) {
     for (int c = 0; c < cols; ++c) colW[c] = cf[c].toDouble() * W;
     for (int r = 0; r < rows; ++r) rowH[r] = rf[r].toDouble() * H;
     double Hp = 0.0;
-    bool grew = false;
+    bool changed = false;
     for (int r = 0; r < rows; ++r) {
         const double need = tableRowNeeds(e, r, cols, colW);
-        if (need > rowH[r] + 1e-9) { rowH[r] = need; grew = true; }
+        const bool userSet = r < fixed.size() && fixed[r].toBool();
+        if (need > rowH[r] + 1e-9) {
+            rowH[r] = need;   // it has to hold its words, whoever set the height
+            changed = true;
+        } else if (!userSet && need > 0.0 && need < rowH[r] - 1e-9) {
+            rowH[r] = need;   // the words fit in less now: give the space back
+            changed = true;
+        }
         Hp += rowH[r];
     }
-    if (!grew || Hp < 1e-9) return;
+    if (!changed || Hp < 1e-9) return;
     // The table hangs from its top-left, as it does everywhere else, so the rows below move down rather
     // than the whole table jumping.
     const double minY = tb.max.y - Hp;
@@ -6275,6 +6289,15 @@ void Editor::applyEditDrag(const Vec2& target) {
                          {tb.min.x, tb.max.y}};
             for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
             e->meta["rowFrac"] = rf;
+            // This row's height was set by hand, so the auto-fit below leaves it alone in the shrinking
+            // direction. Otherwise a row deliberately made taller would give the space straight back the
+            // next time a column was widened, and there would be no way to make it stick.
+            {
+                QJsonArray fixed = e->meta.value(QStringLiteral("rowFixed")).toArray();
+                while (fixed.size() < rf.size()) fixed.append(false);
+                fixed[pr] = true;
+                e->meta[QStringLiteral("rowFixed")] = fixed;
+            }
             // A row dragged shorter than its words still has to hold them.
             tableFitRows(*e);
             break;

@@ -107,13 +107,29 @@ double tableLongestWord(const QString& text, double textHeight) {
 
 QStringList tableWrapText(const QString& text, double avail, double textHeight) {
     QStringList out;
+    // How many characters fit across. A column may be taken all the way down to ONE letter, at which point
+    // the words run down the cell a letter at a time - which is what a column squeezed to nothing looks
+    // like in every drawing package, and is honest: the text is all still there and still readable, just
+    // very tall. Nothing is hidden and nothing hangs out of the cell.
+    const int perLine = avail <= 1e-9 ? 0
+                                      : std::max(1, static_cast<int>(avail / std::max(1e-9, textHeight * 0.62)));
     for (const QString& para : text.split(QLatin1Char('\n'))) {
         if (avail <= 1e-9 || tableTextWidth(para, textHeight) <= avail) {
             out << para;
             continue;
         }
         QString cur;
+        auto flush = [&] {
+            if (!cur.isEmpty()) { out << cur; cur.clear(); }
+        };
         for (const QString& word : para.split(QLatin1Char(' '))) {
+            // A word too long for the whole line is BROKEN across lines rather than left to hang out of
+            // the cell. Only then: a word that fits is never split, so ordinary text still reads as words.
+            if (word.size() > perLine) {
+                flush();
+                for (int i = 0; i < word.size(); i += perLine) out << word.mid(i, perLine);
+                continue;
+            }
             const QString test = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
             if (!cur.isEmpty() && tableTextWidth(test, textHeight) > avail) {
                 out << cur;
@@ -122,7 +138,7 @@ QStringList tableWrapText(const QString& text, double avail, double textHeight) 
                 cur = test;
             }
         }
-        out << cur;
+        flush();
     }
     if (out.isEmpty()) out << QString();
     return out;
