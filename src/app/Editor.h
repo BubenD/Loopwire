@@ -158,13 +158,13 @@ public:
     bool isDrafting() const { return drafting_; }
     // Which side of the drawn line the SECOND line of a double run goes. Ctrl swaps it while drawing.
     bool doubleSecondBelow() const { return !dpolySwap_; }
-    // The point ortho and polar tracking are measured FROM while a joint is being dragged, and where
-    // the green lock line is drawn from. On a double run's rail joint this is the adjacent point on
-    // THAT rail, not the centreline point beside it - the line being pulled is the one to track along.
-    std::optional<Vec2> trackingAnchor() const {
-        if (!editing_ || editMode_ != 1) return std::nullopt;
-        return editAnchor_;
-    }
+    // The point ortho and polar tracking are measured FROM, and where the green lock line is drawn from.
+    //
+    // Asked in two places - by the snap, to work the angle out, and by the overlay, to draw the ray along
+    // it - and it was written out twice, in neither case as this function. So when the two-click picks
+    // were given an anchor, the snap began tracking and the ray still was not drawn: only one of the two
+    // copies had been told about them. One answer, in one place, asked by both.
+    std::optional<Vec2> trackingAnchor() const;
 
     // Command-line input typed during drawing (AutoCAD-style). Handles the `g`
     // gap option for double line/polyline and direct distance entry. Returns
@@ -483,6 +483,15 @@ public:
     // its own extent, which is what a pasted set of objects has always done.
     void placeEntities(const std::vector<Entity>& ents,
                        const std::optional<Vec2>& heldAt = std::nullopt);
+    // A LABEL laid across the runs it is put on, rather than dropped at a fixed size.
+    //
+    // A label wraps round what it labels, so how wide it has to be is not the drawing office's decision -
+    // it is however wide the bundle is at the point the label goes. So this follows the cursor, measures the
+    // runs under it, and stretches ACROSS to cover all of them; the length it takes up along the run is the
+    // label's own. What it covers is masked, because a label is opaque: the wires do not show through it,
+    // and a label with the bundle drawn straight over the top of it reads as a label BEHIND the harness.
+    void beginLabelPlacement(const std::vector<Entity>& drawing);
+    bool placingLabel() const { return labelPlacing_; }
     void appendEntities(const std::vector<Entity>& ents);
     // Everything currently selected, copied out (the parts library captures a part's drawing from
     // the sheet this way).
@@ -1263,6 +1272,15 @@ private:
     // The first end of an output line, while waiting for the second.
     bool haveOutputFirst_ = false;
     Vec2 outputFirst_;
+    // A label being laid on the runs: the drawing as it was captured, and what it looks like where the
+    // cursor is now - worked out on every move, because what it has to cover changes as it is moved.
+    bool labelPlacing_ = false;
+    std::vector<Entity> labelProto_;
+    std::vector<Entity> labelPreview_;
+    Bounds labelCovers_;
+    // The runs the label lies across, and the size and place it therefore takes. Built by labelAt().
+    bool labelAt(const Vec2& at, std::vector<Entity>& out, Bounds& covers) const;
+    void commitLabel();
     // The first of the two runs a centre line goes between, while waiting for the second.
     QString centerLineFirst_;
     Vec2 connectFirst_;

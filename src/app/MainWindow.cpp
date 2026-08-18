@@ -11283,8 +11283,14 @@ void MainWindow::placeMechModel(MechModelKind kind) {
         statusBar()->showMessage(tr("That model has nothing drawn in it"), 4000);
         return;
     }
-    // Held by its connection point when it has one - that is the point somebody means to put it on -
-    // and by the middle of its own extent otherwise.
+    // A LABEL is laid on the runs rather than dropped at a fixed size: how wide it has to be is however
+    // wide the bundle is where it goes, which is not something to be typed in beforehand. Everything else
+    // is placed as drawn, held by its connection point - the point somebody means to put it on.
+    if (kind == MechModelKind::Label || kind == MechModelKind::LabelUnderHeatshrink) {
+        editor_->beginLabelPlacement(partDrawingEntities(model.drawing));
+        canvas_->setFocus();
+        return;
+    }
     std::optional<Vec2> heldAt;
     if (model.hasConnect) heldAt = model.connectPoint;
     editor_->placeEntities(ents, heldAt);

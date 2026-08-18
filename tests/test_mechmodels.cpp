@@ -505,6 +505,70 @@ int run_mechmodels_tests() {
         }
     }
 
+    // ---- a label is laid on the runs, and covers them ---------------------------------------------
+    {
+        // How wide a label has to be is not a number to be typed in beforehand: a label wraps round what it
+        // labels, so it is however wide the bundle is at the point it goes. So it follows the cursor,
+        // measures what is under it, and stretches across to cover the lot - and masks them, because a label
+        // is opaque and a bundle drawn straight through one reads as a label BEHIND the harness.
+        Document d;
+        for (int i = 0; i < 3; ++i) {   // three wires running along x, 4 apart
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 4.0};
+            w.b = {100.0, static_cast<double>(i) * 4.0};
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const int before = static_cast<int>(d.entities().size());
+        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        check(ed.placingLabel(), "label: it is being laid rather than dropped");
+
+        // Over the middle wire, so the band across catches all three.
+        ed.onPointerMove({50.0, 4.0});
+        ed.onPointerPress({50.0, 4.0}, Qt::LeftButton, Qt::NoModifier);
+        check(!ed.placingLabel(), "label: the click places it");
+        const int added = static_cast<int>(d.entities().size()) - before;
+        std::printf("  label: %d object(s) added over three wires\n", added);
+        check(added > 1, "label: the label and the mask under it");
+
+        // The mask covers all three wires, so none of them shows through the label.
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "label: what it covers is masked");
+        if (mask) {
+            const Bounds b = mask->bounds();
+            std::printf("  label: mask spans y %.1f..%.1f (wires at 0, 4, 8)\n", b.min.y, b.max.y);
+            check(b.min.y <= 0.0 && b.max.y >= 8.0,
+                  "label: stretched across ALL the runs it lies on, not just the one under the cursor");
+            check(b.min.x < 50.0 && b.max.x > 50.0, "label: and sits where it was put along them");
+        }
+
+        // Laying a SECOND label must not measure the first one's mask as though it were a wire.
+        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        ed.onPointerMove({80.0, 4.0});
+        ed.onPointerPress({80.0, 4.0}, Qt::LeftButton, Qt::NoModifier);
+        int masks = 0;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) ++masks;
+        check(masks == 2, "label: a second one goes on the same way");
+
+        // And in mid-air it is refused: a label with nothing under it is a note, and there is a tool for those.
+        Document empty;
+        Editor e2;
+        e2.setDocument(&empty);
+        noSnap(e2);
+        e2.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        e2.onPointerMove({10.0, 10.0});
+        e2.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        check(empty.entities().empty(), "label: nothing to label means nothing is placed");
+        check(e2.placingLabel(), "label: and it is still waiting to be put somewhere it can go");
+    }
+
     // ---- a label can be placed before anybody has drawn one ---------------------------------------
     {
         // A button that places nothing until somebody has drawn the part is a button nobody can use. So a

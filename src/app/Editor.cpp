@@ -1923,22 +1923,207 @@ bool Editor::tryHatchAt(const Vec2& p) {
     return false;
 }
 
+void Editor::beginLabelPlacement(const std::vector<Entity>& drawing) {
+    if (!doc_ || drawing.empty()) {
+        emit message(QStringLiteral("Nothing to place"));
+        return;
+    }
+    labelProto_ = drawing;
+    labelPlacing_ = true;
+    labelPreview_.clear();
+    labelCovers_ = Bounds();
+    setTool(ToolId::Select);
+    emit message(QStringLiteral(
+        "Move the label over the runs it goes on — it stretches to cover them — then click to place it"));
+    emit overlayChanged();
+}
+
+// The label as it would be at `at`: turned to lie along the runs there, stretched across to cover all of
+// them, and told what ground it covers so the runs underneath can be masked.
+//
+// False when there is nothing under the cursor to label. A label in mid-air is not a label; it is a note,
+// and there is a tool for those.
+bool Editor::labelAt(const Vec2& at, std::vector<Entity>& out, Bounds& covers) const {
+    out.clear();
+    covers = Bounds();
+    if (!doc_ || labelProto_.empty()) return false;
+    // How big the label was drawn: its length along the run, and how far the flag stands off it.
+    Bounds proto;
+    for (const Entity& e : labelProto_) {
+        const Bounds b = e.bounds();
+        if (b.valid) { proto.expand(b.min); proto.expand(b.max); }
+    }
+    if (!proto.valid || proto.width() < 1e-9) return false;
+    const double along = proto.width();
+
+    // What lies under the cursor, found by laying a band ACROSS the runs there - long enough to catch a
+    // whole bundle, and square to the run it is over. The direction comes from the nearest run, because a
+    // label is laid square to what it labels and not to the sheet.
+    Vec2 runDir{1.0, 0.0};
+    double nearest = 1e300;
+    auto consider = [&](const Vec2& p1, const Vec2& p2) {
+        const double d = closestPointOnSegment(at, p1, p2).distance;
+        if (d < nearest && distance(p1, p2) > 1e-9) { nearest = d; runDir = (p2 - p1).normalized(); }
+    };
+    for (const Entity& e : doc_->entities()) {
+        if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;   // not the masks of other labels
+        switch (e.type) {
+        case EntityType::Line:
+        case EntityType::DoubleLine:
+            consider(e.a, e.b);
+            break;
+        case EntityType::Wire:
+        case EntityType::Polyline:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) consider(e.points[i - 1], e.points[i]);
+            break;
+        default:
+            break;
+        }
+    }
+    if (nearest > along * 4.0) return false;   // nothing near enough to be what is being labelled
+
+    // The band, square to the run, and everything it crosses.
+    const Vec2 across = runDir.perp();
+    constexpr double kReach = 1e4;
+    Entity ignored;
+    std::vector<Vec2> hits;
+    {
+        const Vec2 b0 = at - across * kReach, b1 = at + across * kReach;
+        auto tryLine = [&](const Vec2& p1, const Vec2& p2) {
+            if (auto x = segmentSegmentIntersection(b0, b1, p1, p2)) hits.push_back(*x);
+        };
+        for (const Entity& e : doc_->entities()) {
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+            switch (e.type) {
+            case EntityType::Line:
+                tryLine(e.a, e.b);
+                break;
+            case EntityType::DoubleLine: {
+                const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+                tryLine(e.a + off, e.b + off);
+                tryLine(e.a - off, e.b - off);
+                break;
+            }
+            case EntityType::Wire:
+            case EntityType::Spline:
+                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
+                break;
+            case EntityType::Polyline: {
+                if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
+                    const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                    for (double sgn : {gap / 2.0, -gap / 2.0}) {
+                        const auto run = offsetPolyline(e.points, sgn);
+                        for (size_t i = 1; i < run.size(); ++i) tryLine(run[i - 1], run[i]);
+                    }
+                } else {
+                    for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        }
+    }
+    if (hits.empty()) return false;
+    // How far the crossings reach along the band: that span, plus a little either side, is what the label
+    // has to cover. One wire gives a span of nothing, so a minimum stands in - a label on a single wire is
+    // still a label of some size.
+    double lo = 1e300, hi = -1e300;
+    for (const Vec2& h : hits) {
+        const double t = dot(h - at, across);
+        lo = std::min(lo, t);
+        hi = std::max(hi, t);
+    }
+    const double margin = std::max(1.0, along * 0.18);
+    const double spanLo = lo - margin, spanHi = hi + margin;
+    const double span = std::max(along * 0.5, spanHi - spanLo);
+    const Vec2 mid = at + across * ((spanLo + spanHi) / 2.0);
+
+    // The proto is drawn along +x with its flag standing in +y. Laid on the runs it turns so that +x runs
+    // ACROSS them - the label lies over the bundle - and stretches along that axis to the span measured.
+    const double sx = span / along;
+    const double protoMidX = (proto.min.x + proto.max.x) / 2.0;
+    // Centred on the point it was put, along the run as well as across it. Measured from the proto's own
+    // middle rather than its origin: hung off the origin the label sat entirely downstream of the cursor, so
+    // it went where it was pointed but did not sit there.
+    const double protoMidY = (proto.min.y + proto.max.y) / 2.0;
+    auto place = [&](const Vec2& p) {
+        const double u = (p.x - protoMidX) * sx;   // across the runs, stretched to span them
+        const double v = p.y - protoMidY;          // along the run, at the size it was drawn
+        return Vec2{mid.x + across.x * u + runDir.x * v, mid.y + across.y * u + runDir.y * v};
+    };
+    for (const Entity& src : labelProto_) {
+        Entity e = src;
+        e.id = QString();
+        e.a = place(src.a);
+        e.b = place(src.b);
+        e.center = place(src.center);
+        for (Vec2& q : e.points) q = place(q);
+        out.push_back(e);
+    }
+    for (const Entity& e : out) {
+        const Bounds b = e.bounds();
+        if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
+    }
+    return !out.empty();
+}
+
+void Editor::commitLabel() {
+    if (!doc_ || labelPreview_.empty()) return;
+    pushUndo();
+    // The mask goes UNDER the label and over the runs: a label is opaque, and a bundle drawn straight
+    // through it reads as a label behind the harness rather than on it. Marked as a label's own mask so
+    // that laying the next label does not measure this one as though it were a wire.
+    if (labelCovers_.valid) {
+        Entity mask;
+        mask.id = uid();
+        mask.type = EntityType::Wipeout;
+        mask.layer = doc_->activeLayer();
+        mask.points = {{labelCovers_.min.x, labelCovers_.min.y},
+                       {labelCovers_.max.x, labelCovers_.min.y},
+                       {labelCovers_.max.x, labelCovers_.max.y},
+                       {labelCovers_.min.x, labelCovers_.max.y}};
+        mask.meta.insert(QStringLiteral("labelMask"), true);
+        doc_->entities().push_back(std::move(mask));
+    }
+    std::vector<QString> placed;
+    for (Entity e : labelPreview_) {
+        e.id = uid();
+        e.layer = doc_->activeLayer();
+        placed.push_back(e.id);
+        doc_->entities().push_back(std::move(e));
+    }
+    labelPlacing_ = false;
+    labelPreview_.clear();
+    labelProto_.clear();
+    labelCovers_ = Bounds();
+    selected_ = placed;
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Label placed across the runs, which are masked under it"));
+    emit selectionChanged();
+    emit changed();
+}
+
+std::optional<Vec2> Editor::trackingAnchor() const {
+    if (drafting_ && !draftPts_.empty()) return draftPts_.back();
+    if (!modifyPts_.empty()) return modifyPts_.back();
+    if (editing_ && editMode_ == 1) return editAnchor_;   // ortho/polar vs the fixed end
+    // A model's DIRECTION VECTOR is picked as two clicks and the second is nothing but an angle: it says
+    // which way the part runs, and the distance is thrown away. So it is the pick that most wants polar
+    // tracking, and it was the one that could not have it - the first click sat in a variable of its own
+    // that nothing else looked at. An output face wants it for the same reason: a face across a part is
+    // square to it or at a stated angle, not at wherever the cursor happened to be.
+    if (haveConnectFirst_) return connectFirst_;
+    if (haveOutputFirst_) return outputFirst_;
+    return std::nullopt;
+}
+
 void Editor::onPointerMove(const Vec2& raw) {
     if (!doc_) return;
-    std::optional<Vec2> anchor;
-    if (drafting_ && !draftPts_.empty()) anchor = draftPts_.back();
-    else if (!modifyPts_.empty()) anchor = modifyPts_.back();
-    else if (editing_ && editMode_ == 1) anchor = editAnchor_; // ortho/polar vs fixed end
-    // A model's DIRECTION VECTOR is picked as two clicks, and the second one is nothing but an angle - it
-    // says which way the part runs, and the distance is thrown away. So it is the one pick that most wants
-    // polar tracking, and it was the one pick that could not have it: tracking measures from an anchor, and
-    // the first click was never handed over as one. The comment on the pick claimed polar would "give 0, 30,
-    // 45, 90 exactly"; nothing was making that true.
-    //
-    // An output face wants it for the same reason - a face across a part is square to it or at a stated
-    // angle, not at whatever the cursor happened to be at.
-    else if (haveConnectFirst_) anchor = connectFirst_;
-    else if (haveOutputFirst_) anchor = outputFirst_;
+    const std::optional<Vec2> anchor = trackingAnchor();
 
     std::vector<QString> ignore;
     if (editing_ && editMode_ == 1) ignore.push_back(editEntityId_); // don't snap to self
@@ -2016,6 +2201,16 @@ void Editor::onPointerMove(const Vec2& raw) {
         }
     }
     cursor_ = snapResult_.point;
+
+    // A label being laid on the runs is re-measured on every move: how wide it has to be is however wide the
+    // bundle is where it now sits, so the preview is the answer to a question the cursor keeps changing.
+    if (labelPlacing_) {
+        if (!labelAt(cursor_, labelPreview_, labelCovers_)) {
+            labelPreview_.clear();
+            labelCovers_ = Bounds();
+        }
+        emit overlayChanged();
+    }
 
     // Dragging across a table's cells picks the block between the cell the drag started on and the
     // one under the cursor now.
@@ -2226,6 +2421,16 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
+    if (labelPlacing_) {
+        if (labelPreview_.empty()) {
+            emit message(QStringLiteral(
+                "Move it over the runs it labels - a label in mid-air is a note, and there is a tool for "
+                "those"));
+            return;
+        }
+        commitLabel();
+        return;
+    }
     // A centre mark is put on the round thing that is clicked; a centre line wants two runs, so the first
     // click picks one and the second draws the line down the middle between them. Both stay armed, because
     // a drawing with one hole in it is rare.
@@ -13367,6 +13572,11 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         filletInputMode_ = false;
         awaitClipBase_ = false;
         pastePlacing_ = false;
+        // A label being laid on the runs is abandoned the same way anything else being placed is.
+        labelPlacing_ = false;
+        labelPreview_.clear();
+        labelProto_.clear();
+        labelCovers_ = Bounds();
         placeRot_ = 0.0;
         clipCut_ = false;
         cutPending_.clear();
@@ -13670,10 +13880,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // continuing to the canvas edge. The reference is the draft anchor while
     // drawing, or the untouched joint point while moving a joint.
     if (snapResult_.snapped && snapResult_.kind == SnapKind::Polar) {
-        std::optional<Vec2> ref;
-        if (drafting_ && !draftPts_.empty()) ref = draftPts_.back();
-        else if (editing_ && editMode_ == 1) ref = editAnchor_;
-        else if (!modifyPts_.empty()) ref = modifyPts_.back(); // during a modify command
+        const std::optional<Vec2> ref = trackingAnchor();
         if (ref) {
             const QPointF as = vt.toScreen(*ref);
             const QPointF cs = vt.toScreen(cursor_);
@@ -13858,6 +14065,25 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ghost = paperInk(paperInk(QColor(150, 162, 178, 110)));
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
+    // A label being laid on the runs, at the size it would be if placed here - and the ground it would
+    // cover, outlined, because what a label HIDES is as much a part of placing it as where it goes.
+    if (labelPlacing_ && !labelPreview_.empty()) {
+        if (labelCovers_.valid) {
+            p.save();
+            QPen mask(paperInk(QColor(120, 200, 255, 150)));
+            mask.setCosmetic(true);
+            mask.setWidthF(1.0);
+            mask.setStyle(Qt::DashLine);
+            p.setPen(mask);
+            p.setBrush(QColor(40, 48, 60, 140));   // as opaque as the mask itself will be
+            p.drawRect(QRectF(vt.toScreen({labelCovers_.min.x, labelCovers_.max.y}),
+                              vt.toScreen({labelCovers_.max.x, labelCovers_.min.y})).normalized());
+            p.restore();
+        }
+        const QColor ink = paperInk(QColor("#8fd3ff"));
+        for (const Entity& e : labelPreview_) EntityRenderer::draw(p, e, *doc_, vt, ink);
     }
 
     // Moving a balloon's leader where it MEETS the balloon: dropped inside another balloon it takes the
