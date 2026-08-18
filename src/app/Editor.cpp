@@ -6248,41 +6248,31 @@ void Editor::applyEditDrag(const Vec2& target) {
             double yB = tb.max.y; // current world y of boundary r
             for (int i = 0; i < rf.size(); ++i) { h[i] = rf[i].toDouble() * H; if (i < r) yB -= h[i]; }
             const double minH = std::max(1e-4, H * 0.02);
-            // ONE row changes height: the picked cell's own. Everything past the boundary keeps its
-            // heights and travels with it, so a row can be made TALLER - which it could not be while the
-            // two rows either side traded a fixed total between them. On an imported table every row is
-            // already near the least its text will fit in, so there was nothing to take and the row would
-            // not budge.
+            // THE TABLE HANGS FROM ITS TOP. Whatever is dragged, the top edge stays where it is and the
+            // rows below travel; only the bottom edge of the whole table moves.
+            //
+            // This is not a free choice, it is forced. A boundary's position is the top of the table less
+            // the heights of the rows above it - so with the top fixed, the only way to MOVE boundary r is
+            // to change the height of row r-1, the row above it. Making it change the row BELOW instead
+            // meant the top of the table had to move to keep the boundary under the cursor, and a drag on
+            // one cell's top edge hauled the whole table down the sheet. That is what was reported, and it
+            // is worse than the handle resizing the row above it.
+            //
+            // So: a cell's BOTTOM edge resizes that cell's own row, which is the one that matters - it is
+            // how a row is made taller - and its TOP edge resizes the row above. Neither moves the table.
             const int rowsN = rf.size();
-            int pr = r - 1;              // nothing picked: the boundary belongs to the row above it
-            bool topSideOfCell = false;
-            if (int prow = 0, pcol = 0; pickedCellOf(*e, prow, pcol)) {
-                pr = prow;
-                topSideOfCell = (r == prow);   // its top edge, or its bottom
-            }
+            const int pr = r - 1;   // the boundary belongs to the row above it, always
             if (pr < 0 || pr >= rowsN) break;
-            // A row may be dragged right down to the minimum; tableFitRows below pushes it back up to
-            // whatever its words actually need, so the limit here need only stop it inverting.
-            const double floor = minH;
-
-            double newY = target.y;
-            if (topSideOfCell) {
-                // The top edge: moving UP grows the row (world y is up).
-                newY = std::max(target.y, yB - (h[pr] - floor));
-                h[pr] += newY - yB;
-            } else {
-                // The bottom edge: moving DOWN grows the row.
-                newY = std::min(target.y, yB + (h[pr] - floor));
-                h[pr] += yB - newY;
-            }
+            // Draggable down to the minimum; tableFitRows below pushes it back up to whatever the words in
+            // it actually need, so the limit here need only stop the row inverting.
+            const double newY = std::min(target.y, yB + (h[pr] - minH));
+            h[pr] += yB - newY;   // the boundary moving DOWN grows the row above it
             double Hp = 0.0;
             for (double v : h) Hp += v;
             if (Hp < 1e-9) break;
-            // The edge that moved is the one the table follows.
-            const double maxY = topSideOfCell ? tb.min.y + Hp : tb.max.y;
-            const double minY = maxY - Hp;
-            e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, maxY}, {tb.min.x, maxY}};
-            e->a = {tb.min.x, maxY};
+            const double minY = tb.max.y - Hp;   // top anchored
+            e->points = {{tb.min.x, minY}, {tb.max.x, minY}, {tb.max.x, tb.max.y},
+                         {tb.min.x, tb.max.y}};
             for (int i = 0; i < rf.size(); ++i) rf[i] = h[i] / Hp;
             e->meta["rowFrac"] = rf;
             // A row dragged shorter than its words still has to hold them.

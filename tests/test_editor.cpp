@@ -8060,6 +8060,46 @@ int run_editor_tests() {
                   "table-taller: and the rows below keep their own heights");
         }
 
+        // ---- and the table stays where it is put ----
+        //
+        // A boundary's position is the top of the table less the heights of the rows above it, so with the
+        // top fixed the only way to MOVE boundary r is to change row r-1. Making it change the row BELOW
+        // instead meant the top of the table had to travel to keep the boundary under the cursor - and a
+        // drag on one cell's top edge hauled the whole table down the sheet, which is what was reported.
+        {
+            Document dt;
+            Editor et;
+            et.setDocument(&dt);
+            noSnap(et);
+            Editor::TableSpec ts;
+            ts.cols = 2;
+            ts.colWidth = 30.0;
+            ts.dataRows = 3;
+            ts.rowHeight = 10.0;
+            ts.title = false;
+            ts.header = false;
+            et.setTableSpec(ts);
+            et.setTool(ToolId::Table);
+            et.onPointerPress({0, 30}, Qt::LeftButton, Qt::NoModifier);   // top-left at (0,30)
+            auto tt = [&]() -> const Entity* {
+                for (const auto& e : dt.entities())
+                    if (e.meta.value("table").toBool()) return &e;
+                return nullptr;
+            };
+            et.setTool(ToolId::Select);
+            // The MIDDLE row's cell, so its top edge is a real interior boundary at y = 20.
+            et.onPointerPress({15, 15}, Qt::LeftButton, Qt::NoModifier);
+            et.onPointerRelease({15, 15}, Qt::LeftButton);
+            const double topBefore = tt()->bounds().max.y;
+            et.onPointerPress({15, 20}, Qt::LeftButton, Qt::NoModifier);   // its TOP edge
+            et.onPointerMove({15, 16});                                    // pull it down
+            et.onPointerPress({15, 16}, Qt::LeftButton, Qt::NoModifier);
+            const double topAfter = tt()->bounds().max.y;
+            std::printf("  table-anchor: top edge %.1f -> %.1f\n", topBefore, topAfter);
+            check(std::abs(topAfter - topBefore) < 1e-6,
+                  "table-anchor: dragging a cell's top edge does not move the table");
+        }
+
         // ---- an EDGE cell has a handle on the table's own edge too ----
         //
         // Only the interior boundaries used to get a handle, so a cell in the first column had one on its
