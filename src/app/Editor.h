@@ -498,17 +498,28 @@ public:
     bool placingLabel() const { return labelPlacing_; }
     bool labelStrokeStarted() const { return labelPlacing_ && labelStrokeHasStart_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
-    // The label just placed, still being fitted. The stroke measures a size that is right most of the
-    // time; the two numbers are there for the times it is not, so a label can be matched to a drawing's
-    // house size by hand instead of by re-stroking it until it comes out right.
+    Vec2 labelStrokeEnd() const;
+    // Tab pins the preview, so the two sizes can be tried on the real thing instead of on something
+    // jumping about under the cursor. The same gesture that pins a break mark and a twisted bundle.
+    void freezeLabelPreview();
+    bool labelFrozen() const { return labelFrozen_; }
+    // THE LABEL'S TWO SIZES, whichever stage it is at: still a preview under the cursor, or down on the
+    // drawing and selected.
     //
-    // WIDTH is across the runs - what the stroke measured. HEIGHT is along them, which the stroke cannot
-    // measure at all: it is the label's own reach up the bundle, and comes from the drawing as captured.
+    // WIDTH is along the runs - the label's own length, which no amount of looking at the wires will tell
+    // you, so it starts at the size labels come in and is set by hand. HEIGHT is across them: the dimension
+    // that has to cover the bundle, which is exactly what the stroke measures, so the stroke settles it
+    // until somebody says otherwise.
+    static constexpr double kLabelWidthMm = 40.0;    // along the runs
+    static constexpr double kLabelHeightMm = 12.0;   // across them, and at least this
     bool labelLive() const { return !labelLiveIds_.empty(); }
-    double labelWidth() const { return labelFit_.width; }
-    double labelHeight() const { return labelFit_.height; }
+    double labelWidth() const { return labelFit_.ok ? labelFit_.alongMm : labelAlongMm_; }
+    double labelHeight() const { return labelFit_.ok ? labelFit_.acrossMm : labelAcrossMm_; }
     void setLabelWidth(double mm);
     void setLabelHeight(double mm);
+    // A label already on the drawing, taken up so the ribbon and the properties act on it - read off the
+    // label's own meta, so one placed last week resizes the same as one placed a second ago.
+    bool adoptLabelFromSelection();
     // Done fitting: the label stays where it is and the ribbon goes back to normal.
     void endLabelEdit();
     void appendEntities(const std::vector<Entity>& ents);
@@ -1300,20 +1311,27 @@ private:
     // has to cover changes as the stroke is drawn.
     bool labelPlacing_ = false;
     bool labelStrokeHasStart_ = false;
+    bool labelFrozen_ = false;      // the stroke pinned with Tab, so the ribbon can be used on it
     Vec2 labelStrokeStart_;
+    Vec2 labelFrozenAt_;
     std::vector<Entity> labelProto_;
     std::vector<Entity> labelPreview_;
     Bounds labelCovers_;
+    // The two sizes as they stand, kept across a session so the next label goes on at the size the last one
+    // was set to - a drawing office's labels are all one size, and typing it once should be enough.
+    double labelAlongMm_ = kLabelWidthMm;
+    double labelAcrossMm_ = kLabelHeightMm;
+    bool labelAcrossManual_ = false;   // the across size said by hand: the stroke stops deciding it
     // HOW A LABEL SITS: where its middle is, which way the runs it is on go, and the size it takes. Kept
     // apart from the drawing so that a width typed on the ribbon, or a slide along the runs, is a change to
     // three numbers and a redraw rather than a re-measure of the sheet.
     struct LabelFit {
         bool ok = false;
         Vec2 mid;
-        Vec2 runDir{1.0, 0.0};   // the way the runs it is on run
-        Vec2 across{0.0, 1.0};   // square to them: the way the label is stretched
-        double width = 0.0;      // across the runs
-        double height = 0.0;     // along them
+        Vec2 runDir{1.0, 0.0};      // the way the runs it is on run
+        Vec2 acrossDir{0.0, 1.0};   // square to them
+        double alongMm = 0.0;       // along the runs  - "Width"
+        double acrossMm = 0.0;      // across the runs - "Height", what has to cover the bundle
     };
     LabelFit labelFit_;
     // Measured off the stroke a..b: which runs it crosses, how far they spread, and the size that covers
@@ -1322,11 +1340,19 @@ private:
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, Bounds& covers) const;
     void commitLabel();
-    // The label placed and still being fitted: its objects, and its mask, so a width typed on the ribbon
-    // or a slide along the runs redraws THAT label rather than making another one.
+    // The fit written on to every piece of the label, so it travels with the label in the file: a label
+    // that has to be re-measured off the sheet before it can be resized is a label that cannot be resized
+    // once the drawing has been closed and opened.
+    static void stampLabelFit(Entity& e, const QString& group, const LabelFit& fit);
+    // The label being fitted: its objects, its mask and its group key, so a size typed on the ribbon or a
+    // slide along the runs acts on THAT label rather than making another one.
     std::vector<QString> labelLiveIds_;
     QString labelMaskId_;
-    void redrawLiveLabel();
+    QString labelGroup_;
+    // Resize a label already on the drawing: its geometry is scaled about its own middle along its own axes,
+    // rather than laid out again from the captured drawing, which may be long gone.
+    bool scalePlacedLabel(double alongMm, double acrossMm);
+    void relayLabelPreview();
     // Clicking away ends the fitting; clicking the label again does not. `emptying` is the case where the
     // selection is being dropped outright, which always ends it.
     void dropLabelEditIfDeselected(bool emptying = false);

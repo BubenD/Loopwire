@@ -1431,6 +1431,12 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
         editor_->freezeBreakPreview();
         return true;
     }
+    // Tab while a label's stroke is down: pin it, so its width and height can be set on the ribbon with the
+    // real thing on screen rather than with a preview jumping about under the cursor.
+    if (editor_ && next && editor_->labelStrokeStarted()) {
+        editor_->freezeLabelPreview();
+        return true;
+    }
     // Tab while placing a connector: hand focus to the Connector build ribbon so its
     // preferences can be edited; the placement preview stays live.
     if (editor_ && next && editor_->tool() == ToolId::Connector) {

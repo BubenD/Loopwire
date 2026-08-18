@@ -540,10 +540,15 @@ int run_mechmodels_tests() {
                     ed.labelHeight());
         check(added > 1, "label: the label and the mask under it");
 
+        // WIDTH runs ALONG the bundle and is the label's own length - no amount of looking at the wires
+        // tells you it, so it starts at the size labels come in. HEIGHT runs ACROSS them and is the one the
+        // stroke is for: the dimension that has to cover the bundle.
+        check(std::abs(ed.labelWidth() - Editor::kLabelWidthMm) < 1e-6,
+              "label: the width is the label's own, not measured off the wires");
         // A LITTLE BIT OVER the outermost wire: flush with the edge of the bundle reads as a label that
         // missed the last wire.
-        check(ed.labelWidth() > 8.0, "label: wide enough to cover all three wires");
-        check(ed.labelWidth() < 8.0 * 2.0, "label: and not wildly wider than the bundle it covers");
+        check(ed.labelHeight() > 8.0, "label: and the height covers all three wires");
+        check(ed.labelHeight() < 8.0 * 2.0, "label: without being wildly deeper than the bundle");
 
         // The mask covers all three, so none of them shows through the label.
         auto maskOf = [&](const Document& doc) -> const Entity* {
@@ -560,24 +565,34 @@ int run_mechmodels_tests() {
             check(b.min.y < 0.0 && b.max.y > 8.0,
                   "label: stretched over ALL the runs the stroke crossed, and a little past them");
             check(b.min.x < 50.0 && b.max.x > 50.0, "label: and sits where the stroke was made");
+            // The two sizes belong to the label's own axes: along the run it is as wide as it was told, and
+            // that is NOT the same as the box it occupies on the sheet - which is what the properties
+            // panel's plain Width would have reported, swapped round on a vertical bundle.
+            check(std::abs(b.width() - Editor::kLabelWidthMm) < 1e-6,
+                  "label: as long along the run as the width says");
         }
 
         // ---- the two numbers a stroke cannot settle -----------------------------------------------
         // The stroke says how wide, because it says which runs are meant. It says nothing about the height:
         // a label's reach up the bundle is a property of the label stock, not of the wires. So both are
         // set by hand afterwards, and the label redraws under them rather than being placed again.
-        const double wasWide = ed.labelWidth();
-        ed.setLabelWidth(wasWide + 10.0);
-        check(std::abs(ed.labelWidth() - (wasWide + 10.0)) < 1e-6, "label: width set by hand takes");
+        ed.setLabelWidth(60.0);
+        check(std::abs(ed.labelWidth() - 60.0) < 1e-6, "label: width set by hand takes");
         if (const Entity* m2 = maskOf(d)) {
-            const double now = m2->bounds().height();
-            std::printf("  label: mask %.1f across after widening by 10\n", now);
-            check(now > 8.0 + 10.0, "label: and the mask grew with it - what it hides follows its size");
+            std::printf("  label: %.1f along x %.1f across after asking for 60 x 20\n",
+                        m2->bounds().width(), m2->bounds().height());
+            check(std::abs(m2->bounds().width() - 60.0) < 1e-6,
+                  "label: and it is that long ALONG the run - the mask grew with it");
         }
+        const double wasAlong = maskOf(d)->bounds().width();
         ed.setLabelHeight(20.0);
         check(std::abs(ed.labelHeight() - 20.0) < 1e-6, "label: height set by hand takes");
-        if (const Entity* m3 = maskOf(d))
-            check(m3->bounds().width() > 15.0, "label: and it reaches that far along the run");
+        if (const Entity* m3 = maskOf(d)) {
+            check(std::abs(m3->bounds().height() - 20.0) < 1e-6,
+                  "label: and it reaches that far ACROSS the runs");
+            check(std::abs(m3->bounds().width() - wasAlong) < 1e-6,
+                  "label: setting one size leaves the other alone - they are not the same field twice");
+        }
 
         // ---- and it slides ALONG the runs, never off them ------------------------------------------
         // A label sits ON a bundle. One nudged sideways by a careless drag leaves the wires showing from
@@ -602,10 +617,24 @@ int run_mechmodels_tests() {
         ed.onPointerPress({body.x + 20.0, body.y + 26.0}, Qt::LeftButton, Qt::NoModifier);
         check(ed.labelLive(), "label: putting it down does not end the fitting");
 
-        // Letting go of it ends the fitting: the fields on the ribbon act on the selected label, so a
-        // session outliving the selection would be two fields editing nothing.
+        // ---- and a label already on the drawing can still be resized -------------------------------
+        // The size travels with the label, written on every piece of it, so a label placed last week is
+        // taken up and resized exactly like one placed a second ago. Without that, "set its width" is a
+        // thing you can only do in the seconds after placing it, which is the one moment you least know
+        // what size it should be.
         ed.clearSelection();
         check(!ed.labelLive(), "label: letting go of it stops fitting it");
+        const Vec2 again = maskOf(d)->bounds().center();
+        ed.onPointerPress(again, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease(again, Qt::LeftButton);
+        check(ed.labelLive(), "label: clicking a label already on the drawing takes it up again");
+        check(std::abs(ed.labelWidth() - 60.0) < 1e-6, "label: the width it was left at");
+        check(std::abs(ed.labelHeight() - 20.0) < 1e-6, "label: and the height");
+        ed.setLabelWidth(30.0);
+        std::printf("  label: taken up again and set to %.1f along x %.1f across\n",
+                    maskOf(d)->bounds().width(), maskOf(d)->bounds().height());
+        check(std::abs(maskOf(d)->bounds().width() - 30.0) < 1e-6,
+              "label: and it resizes on the drawing, with no session left open");
 
         // A stroke that crosses nothing places nothing and keeps the label in hand.
         Document empty;
@@ -618,6 +647,58 @@ int run_mechmodels_tests() {
         e2.onPointerPress({10.0, 30.0}, Qt::LeftButton, Qt::NoModifier);
         check(empty.entities().empty(), "label: a stroke across nothing places nothing");
         check(e2.placingLabel(), "label: and it is still in hand, waiting for a stroke that crosses");
+    }
+
+    // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
+    {
+        // Setting a label's size only after it is placed means placing it at the wrong size first, which is
+        // the one moment you least know what size it should be. So Tab pins the stroke where it is and the
+        // ribbon's two fields work on the preview - the same gesture that pins a break mark.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("w");
+        w.type = EntityType::Line;
+        w.a = {0.0, 0.0};
+        w.b = {100.0, 0.0};
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        ed.onPointerPress({50.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 6.0});
+        check(!ed.labelFrozen(), "pin: not pinned until it is asked for");
+        ed.freezeLabelPreview();
+        check(ed.labelFrozen(), "pin: Tab pins the stroke where it is");
+
+        // Pinned, the preview stops following the cursor - which is the point of pinning it.
+        const double heightWhenPinned = ed.labelHeight();
+        ed.onPointerMove({50.0, 400.0});
+        check(std::abs(ed.labelHeight() - heightWhenPinned) < 1e-6,
+              "pin: and it stops following the cursor, or there would be nothing to set the size on");
+
+        // The fields work on the preview, and the label goes down at the size that was set rather than at
+        // the size it happened to be measured at.
+        ed.setLabelWidth(25.0);
+        ed.setLabelHeight(9.0);
+        ed.onPointerPress({50.0, 400.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "pin: the click places it");
+        check(std::abs(ed.labelWidth() - 25.0) < 1e-6 && std::abs(ed.labelHeight() - 9.0) < 1e-6,
+              "pin: at the size set on the ribbon, not the one measured before pinning");
+        const Entity* m = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) m = &e;
+        check(m != nullptr, "pin: masked as usual");
+        if (m) {
+            std::printf("  pin: placed %.1f along x %.1f across, asked for 25.0 x 9.0\n",
+                        m->bounds().width(), m->bounds().height());
+            check(std::abs(m->bounds().width() - 25.0) < 1e-6 &&
+                      std::abs(m->bounds().height() - 9.0) < 1e-6,
+                  "pin: and it is that size on the sheet");
+        }
+        // And it lands where the stroke was pinned, not at the cursor that wandered off afterwards.
+        if (m) check(std::abs(m->bounds().center().y) < 6.0,
+                     "pin: on the run the stroke crossed, not 400 away where the cursor went");
     }
 
     // ---- a label can be placed before anybody has drawn one ---------------------------------------

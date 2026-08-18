@@ -417,12 +417,15 @@ void MainWindow::buildHarnessMechanicalTab() {
     {
         // THE LABEL, once one is on: the two numbers a stroke cannot settle by itself.
         //
-        // The stroke says how wide the label has to be, because it says which runs are meant, and that is
-        // right nearly every time. It says nothing about the height - a label's reach up the bundle is a
-        // property of the label stock, not of the wires - and it cannot know that this office's labels are
-        // 12 mm whatever they happen to cover. So both are here, seeded from what was measured, and the
-        // label redraws under the fields as they are turned. It is a group of its own and it takes the tab
-        // while it is up, because two fields among forty buttons is two fields nobody finds.
+        // The stroke settles the HEIGHT - across the runs, the dimension that has to cover the bundle -
+        // because it says which runs are meant, and that is right nearly every time. It says nothing about
+        // the WIDTH, the label's own length along the run: no amount of looking at the wires tells you
+        // that, and it cannot know this office's labels are 40 mm whatever they happen to cover.
+        //
+        // Both fields work on the preview as well as on a label already down, which is why Tab pins the
+        // stroke: setting a label's size only after it is placed means placing it at the wrong size first,
+        // and that is the one moment you least know what size it should be. It is a group of its own and it
+        // takes the tab while it is up, because two fields among forty buttons is two fields nobody finds.
         auto* labW = new QWidget(page);
         auto* lfg = new QGridLayout(labW);
         lfg->setContentsMargins(6, 2, 6, 2);
@@ -443,12 +446,12 @@ void MainWindow::buildHarnessMechanicalTab() {
             *out = sp;
         };
         field(QStringLiteral("Width"),
-              QStringLiteral("Across the runs — what the stroke measured, over the outermost wire it "
-                             "crossed. Set it by hand to match a house size."),
+              QStringLiteral("ALONG the run — the label's own length. No amount of looking at the wires "
+                             "tells you this, so it starts at the size labels come in."),
               &labelWidthSpin_, 0);
         field(QStringLiteral("Height"),
-              QStringLiteral("Along the runs — the label's own reach up the bundle. The stroke cannot "
-                             "measure this: it comes from the label as it was drawn."),
+              QStringLiteral("ACROSS the runs — the dimension that has to cover the bundle. This is what "
+                             "the stroke measures, over the outermost wire it crossed."),
               &labelHeightSpin_, 1);
         connect(labelWidthSpin_, &QDoubleSpinBox::valueChanged, this,
                 [this](double v) { editor_->setLabelWidth(v); });

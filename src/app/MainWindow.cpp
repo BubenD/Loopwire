@@ -4014,22 +4014,23 @@ void MainWindow::updateMechanicalRibbonGroups() {
 // being turned would write its own rounded value back into the label as a change of its own.
 void MainWindow::syncLabelOptions() {
     if (!editor_) return;
-    const bool live = editor_->labelLive();
-    if (live && labelWidthSpin_ && labelHeightSpin_) {
+    // Live at BOTH stages: a preview under the cursor and a label down on the drawing. Setting a label's
+    // size only after it is placed means placing it at the wrong size first, which is why Tab pins the
+    // preview - the two fields are meant to be used on it before the click, not only after.
+    const bool usable = editor_->labelLive() || editor_->placingLabel();
+    if (usable && labelWidthSpin_ && labelHeightSpin_) {
         QSignalBlocker bw(labelWidthSpin_);
         QSignalBlocker bh(labelHeightSpin_);
         labelWidthSpin_->setValue(editor_->labelWidth());
         labelHeightSpin_->setValue(editor_->labelHeight());
     }
-    // The fields only mean anything once a label is down: while the stroke is still being drawn there is
-    // no size to show, so they are there but dead, and the group says which stage it is at.
-    if (labelWidthSpin_) labelWidthSpin_->setEnabled(live);
-    if (labelHeightSpin_) labelHeightSpin_->setEnabled(live);
+    if (labelWidthSpin_) labelWidthSpin_->setEnabled(usable);
+    if (labelHeightSpin_) labelHeightSpin_->setEnabled(usable);
     updateMechanicalRibbonGroups();
     if (labelFitGroup_) {
         // The Harness-mechanical tab is where the label button lives, so that is where its fields are; a
         // label placed from anywhere else still wants them, so the tab is brought forward.
-        if ((editor_->placingLabel() || live) && ribbon_) {
+        if (usable && ribbon_) {
             for (int i = 0; i < ribbon_->count(); ++i)
                 if (ribbon_->tabText(i) == QStringLiteral("Harness mechanical") &&
                     ribbon_->tabBar()->isTabVisible(i))
@@ -8279,6 +8280,20 @@ void MainWindow::refreshProperties() {
         if (e->type == EntityType::Circle || e->type == EntityType::Arc)
             addNum(QStringLiteral("Radius"), nv([](const Entity& x) { return x.radius; }),
                    [this](double v) { editor_->setGeometryValue("Radius", v); });
+        // A LABEL'S OWN two sizes, which are not the same thing as the box it happens to occupy. Width runs
+        // ALONG the bundle and height ACROSS it, whichever way round the bundle itself is drawn - the pair
+        // above would report a label on a vertical run with its width and height swapped, and setting either
+        // of them would stretch the label out of square with the wires. These stay square to the run.
+        if (mv(QStringLiteral("labelAlong")).contains()) {
+            addNum(QStringLiteral("Label width"), mv(QStringLiteral("labelAlong")).toDouble(),
+                   [this](double v) {
+                       if (editor_->adoptLabelFromSelection()) editor_->setLabelWidth(v);
+                   });
+            addNum(QStringLiteral("Label height"), mv(QStringLiteral("labelAcross")).toDouble(),
+                   [this](double v) {
+                       if (editor_->adoptLabelFromSelection()) editor_->setLabelHeight(v);
+                   });
+        }
         // Double line / double polyline: the parallel spacing between the two runs.
         const bool isDoubleLine = e->type == EntityType::DoubleLine;
         const bool isDoublePoly =
