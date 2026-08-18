@@ -6,6 +6,7 @@
 #include "app/Editor.h"
 #include "model/Document.h"
 
+#include <QJsonArray>
 #include <QStringList>
 
 #include <cmath>
@@ -240,17 +241,90 @@ int run_detailview_tests() {
             if (e.type == EntityType::DetailView) dv = &e;
         check(dv != nullptr, "says: placed");
         if (dv) {
-            // ORANGE, so it reads as a ring drawn ROUND the drawing rather than as a circle that is part of
-            // it. A detail circle in the same white as the geometry has to be worked out not to be a hole.
-            std::printf("  says: drawn in %s, letter %s\n", qPrintable(dv->color),
+            // It is drawn in the LAYER'S colour like everything else, and orange only when SELECTED - which
+            // is where a colour of its own actually helps, on a sheet where every other circle is a hole. A
+            // ring that is orange all the time is an orange ring on a released drawing, and the colours on a
+            // sheet are the drawing office's to choose.
+            std::printf("  says: colour %s, letter %s\n",
+                        dv->color.isEmpty() ? "the layer's" : qPrintable(dv->color),
                         qPrintable(dv->meta.value(QStringLiteral("detailTag")).toString()));
-            check(!dv->color.isEmpty() && dv->color != QStringLiteral("#ffffff"),
-                  "says: drawn in its own colour, not in the geometry's");
+            check(dv->color.isEmpty(),
+                  "says: no colour forced on it - orange is the SELECTED look, not the drawn one");
             // The heading is empty to start with, which is what makes it default to DETAIL and the letter -
             // the convention - while still being anything an office wants to write instead.
             check(dv->meta.value(QStringLiteral("detailBigText")).toString().isEmpty(),
                   "says: the heading starts as the convention rather than as a copy of the letter");
         }
+    }
+
+
+    // ---- an ordinary detail is a PICTURE; only an annotative one passes changes both ways -----------
+    {
+        // The switch decides where the view is READ FROM, which is the whole difference between the two.
+        // Annotative, it comes out of the document every time it is drawn, so the two circles are the same
+        // thing seen twice. Ordinary, it comes from the copy taken when it was placed - so drawing something
+        // new by the small circle leaves the enlargement alone, and the two stop passing anything to each
+        // other, which is what an ordinary detail view IS.
+        Document d;
+        Entity l;
+        l.id = QStringLiteral("first");
+        l.type = EntityType::Line;
+        l.a = {8.0, 10.0};
+        l.b = {12.0, 10.0};
+        d.entities().push_back(l);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::DetailView);
+        ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({80.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* dv = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) dv = &e;
+        check(dv != nullptr, "picture: placed");
+        if (!dv) return failures;
+
+        // Neither switch is on to begin with: a detail is drawn to show a SHAPE, and dimensions sized for the
+        // small version become the biggest thing in the circle and cover what they were measuring. And a live
+        // window is the special case, not the ordinary one.
+        check(!dv->meta.value(QStringLiteral("detailAnnotative")).toBool(),
+              "picture: not annotative unless it is asked for");
+        check(!dv->meta.value(QStringLiteral("detailShowDims")).toBool(),
+              "picture: and it does not catch the dimensions unless it is asked to");
+
+        // It has something to be a picture OF, taken when it was placed.
+        const int snapWhenPlaced = dv->meta.value(QStringLiteral("detailSnap")).toArray().size();
+        std::printf("  picture: it is a picture of %d object(s)\n", snapWhenPlaced);
+        check(snapWhenPlaced == 1, "picture: the one line that was inside its circle");
+
+        // Something new drawn by the small circle does NOT get into that picture. This is the "not passed to
+        // each other" the switch is for: a picture is of how the thing WAS.
+        Entity later;
+        later.id = QStringLiteral("later");
+        later.type = EntityType::Line;
+        later.a = {8.0, 11.0};
+        later.b = {12.0, 11.0};
+        d.entities().push_back(later);
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) dv = &e;
+        check(dv->meta.value(QStringLiteral("detailSnap")).toArray().size() == snapWhenPlaced,
+              "picture: something drawn afterwards does not appear in it");
+
+        // Pointing it somewhere else re-takes the picture, because a view that kept the old copy would show
+        // the bit of drawing it USED to be over, which is a detail view telling a lie.
+        ed.setTool(ToolId::Select);   // the tool stays armed after a placement, so put it away first
+        ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // pick it by its ring
+        ed.onPointerRelease({14.0, 10.0}, Qt::LeftButton);
+        check(ed.selection().size() == 1, "picture: its ring picks it up");
+        ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // its centre handle
+        ed.onPointerMove({10.0, 10.5});                                    // over both lines now
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) dv = &e;
+        const int snapAfter = dv->meta.value(QStringLiteral("detailSnap")).toArray().size();
+
+        std::printf("  picture: pointed at both lines, it is now a picture of %d\n", snapAfter);
+        check(snapAfter == 2, "picture: moved, it is a picture of what it is over NOW");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

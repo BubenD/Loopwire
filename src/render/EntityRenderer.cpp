@@ -25,6 +25,24 @@ QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 // Drawing the inside of a detail view. A detail drawn inside a detail would draw itself for ever, and it is
 // not something a drawing office asks for - so the inner one is simply left out.
 bool g_inDetailView = false;
+} // namespace
+
+Vec2 detailViewTextAt(const Entity& e, bool big) {
+    const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+    const double capH = std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+    const Vec2 c = big ? e.b : e.center;
+    const double r = big ? e.radius * scale : e.radius;
+    const double ang =
+        e.meta.value(big ? QStringLiteral("detailBigAngle") : QStringLiteral("detailTagAngle"))
+            .toDouble(big ? -90.0 : 45.0);
+    const double gap =
+        e.meta.value(big ? QStringLiteral("detailBigGap") : QStringLiteral("detailTagGap"))
+            .toDouble(big ? capH * 1.1 : capH * 0.6);
+    const double a = ang * M_PI / 180.0;
+    return {c.x + (r + gap) * std::cos(a), c.y + (r + gap) * std::sin(a)};
+}
+
+namespace {
 bool g_monochrome = false;
 bool g_plotLineweights = true;   // a plot may be asked for without them
 double g_annotationScale = 1.0;  // how much bigger annotation is drawn than it is written
@@ -2007,24 +2025,13 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
-        // WHERE THE WORDS SIT ROUND A CIRCLE: an angle to move them along it, and a distance to stand them
-        // off it. A letter fixed at one o'clock lands on top of the geometry about half the time, and there is
-        // no arranging a sheet with several details on it when none of the letters can be moved.
-        auto roundCircle = [&](const QPointF& c, double r, double angDeg, double gap) {
-            const double a = angDeg * M_PI / 180.0;
-            const double out = r + gap * vs;
-            return QPointF(c.x() + out * std::cos(a), c.y() - out * std::sin(a));
-        };
-
         // The circle round the thing itself, and its letter beside it. It is an annotation over the drawing
         // rather than part of what is drawn, so it goes on at the pen it was given and no heavier.
         const QPointF sc = vt.toScreen(e.center);
         const double sr = e.radius * vs;
         p.drawEllipse(sc, sr, sr);
-        drawWorldText(p,
-                      roundCircle(sc, sr, e.meta.value("detailTagAngle").toDouble(45.0),
-                                  e.meta.value("detailTagGap").toDouble(capH * 0.6)),
-                      tag, capH, vs, color, Qt::AlignHCenter | Qt::AlignVCenter);
+        drawWorldText(p, vt.toScreen(detailViewTextAt(e, false)), tag, capH, vs, color,
+                      Qt::AlignHCenter | Qt::AlignVCenter);
 
         // The enlargement. Its OUTLINE is a switch: the ring is the convention and says where the view stops,
         // but a detail drawn into a clear part of the sheet reads perfectly well without one, and on a busy
@@ -2056,8 +2063,34 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             // biggest thing in the circle and they cover the shape they were measuring. But a detail drawn
             // BECAUSE the dimensions would not fit at the small size needs them, and needs them enlarged.
             // Both are ordinary, so it is a switch and not a rule.
-            const bool withDims = e.meta.value("detailShowDims").toBool(true);
-            for (const Entity& x : doc.entities()) {
+            // OFF unless it is asked for. A detail is drawn to show a SHAPE, and dimensions sized for the
+            // small version become the biggest thing in the circle and cover the very thing they were
+            // measuring. The drawing that wants them is the exception, so it is the one that asks.
+            const bool withDims = e.meta.value("detailShowDims").toBool(false);
+            // ANNOTATIVE OR NOT decides WHERE THE VIEW IS READ FROM, which is the whole difference between
+            // them.
+            //
+            // Annotative, it is read out of the DOCUMENT every time it is drawn: the enlargement is a live
+            // window, so anything added at the small circle appears in the large one and anything drawn in the
+            // large one - which the cursor reaches through to the real geometry - appears in the small. The two
+            // are the same thing seen twice.
+            //
+            // Not annotative, it is read from the SNAPSHOT taken when it was placed. The two stop passing
+            // anything to each other: draw something new by the small circle and the enlargement does not
+            // change, draw something over the enlargement and it stays there and only there. Which is what an
+            // ordinary detail view is - a picture of how the thing was - and is why the switch exists.
+            const bool live = e.meta.value("detailAnnotative").toBool(false);
+            std::vector<Entity> snap;
+            if (!live) {
+                const QJsonArray arr = e.meta.value("detailSnap").toArray();
+                for (const auto& v : arr) {
+                    Entity x;
+                    x.fromJson(v.toObject());
+                    snap.push_back(x);
+                }
+            }
+            const std::vector<Entity>& shown = live ? doc.entities() : snap;
+            for (const Entity& x : shown) {
                 if (x.id == e.id) continue;                       // never itself
                 if (x.type == EntityType::DetailView) continue;   // nor any other detail's circles
                 if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
@@ -2088,8 +2121,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                          : QStringLiteral("SCALE 1:%1").arg(1.0 / scale, 0, 'g', 3);
         // Round the enlargement the same way, so a caption that lands on something can be moved off it.
         // Straight down is the convention, so that is where it starts.
-        const QPointF capAt = roundCircle(bc, br, e.meta.value("detailBigAngle").toDouble(-90.0),
-                                          e.meta.value("detailBigGap").toDouble(capH * 1.1));
+        const QPointF capAt = vt.toScreen(detailViewTextAt(e, true));
         drawWorldText(p, capAt, head, capH, vs, color, Qt::AlignHCenter | Qt::AlignVCenter);
         drawWorldText(p, QPointF(capAt.x(), capAt.y() + capH * vs * 1.25), sub, capH * 0.8, vs, color,
                       Qt::AlignHCenter | Qt::AlignVCenter);

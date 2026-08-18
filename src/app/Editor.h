@@ -17,6 +17,7 @@
 
 #include <functional>
 #include <QSet>
+#include <QJsonArray>
 #include <QString>
 #include <algorithm>
 #include <optional>
@@ -518,6 +519,15 @@ public:
     double& detailScale() { return detailScale_; }
     double detailScale() const { return detailScale_; }
     int detailStage() const { return detailStage_; }
+    // WHAT AN ORDINARY DETAIL VIEW SHOWS: a copy of what was inside its circle when it was placed.
+    //
+    // An annotative view is read out of the document every time it is drawn, so the two circles are the same
+    // thing seen twice. An ordinary one is a PICTURE of how the thing was, and the two stop passing anything
+    // to each other - which is what the switch is for, and needs something to be a picture OF.
+    //
+    // Re-taken whenever the view is moved, resized or switched back off annotative, because those are the
+    // moments the picture is meant to be of something else.
+    void retakeDetailSnapshot(Entity& e) const;
     Vec2 detailCenter() const { return detailCenter_; }
     double detailRadius() const { return detailRadius_; }
     static constexpr double kLabelWidthMm = 40.0;    // along the runs
@@ -1385,6 +1395,7 @@ private:
     // Arcs and polyline bulges are flattened, because a label is laid by arc length and a path of points is
     // what that needs.
     std::vector<Vec2> runPathThrough(const QString& hostId) const;
+
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const;
@@ -1394,7 +1405,12 @@ private:
     // The fit written on to every piece of the label, so it travels with the label in the file: a label
     // that has to be re-measured off the sheet before it can be resized is a label that cannot be resized
     // once the drawing has been closed and opened.
-    static void stampLabelFit(Entity& e, const QString& group, const LabelFit& fit);
+    static void stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
+                              const QJsonArray& proto = QJsonArray());
+    // Lay a placed label out again from the drawing it keeps, at the fit it now has. What a resize and a slide
+    // both come down to on a bent one: reading a point's place on the run back off its geometry is ambiguous on
+    // the inside of a bend, and doing it on every change compounded the error until the label crumpled.
+    bool relayPlacedLabel();
     // The label being fitted: its objects, its mask and its group key, so a size typed on the ribbon or a
     // slide along the runs acts on THAT label rather than making another one.
     std::vector<QString> labelLiveIds_;

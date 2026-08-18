@@ -647,15 +647,23 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::DetailView: {
-        // FOUR handles, because a detail view has four things anybody wants to change: which bit of the
-        // drawing it is a view OF (the source circle, moved and sized) and where the enlargement sits and
-        // how big it is. The enlargement's edge handle IS the magnification - dragging it out is what
-        // "show it bigger" means, and a number in a dialog is not.
+        // SIX handles. Four for the view itself: which bit of the drawing it is a view OF (the source circle,
+        // moved and sized) and where the enlargement sits and how big it is - the enlargement's edge handle IS
+        // the magnification, because dragging it out is what "show it bigger" means and a number in a dialog
+        // is not.
+        //
+        // And two for the WORDS, one on each. A letter is dragged round its circle to get it off whatever it
+        // landed on, which is a thing done by eye: an angle typed into a field is the wrong tool for "not
+        // there, a bit further round".
         const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        const double capH = std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
         g.push_back({e.center, GripRole::Center, 0});
         g.push_back({{e.center.x + e.radius, e.center.y}, GripRole::Radius, 0});
         g.push_back({e.b, GripRole::LineB, 0});
         g.push_back({{e.b.x + e.radius * scale, e.b.y}, GripRole::Radius, 1});
+        g.push_back({detailViewTextAt(e, false), GripRole::Vertex, 0});
+        g.push_back({detailViewTextAt(e, true), GripRole::Vertex, 1});
+        Q_UNUSED(capH);
         break;
     }
     case EntityType::Leader:
@@ -2056,6 +2064,27 @@ static std::vector<Vec2> entityPathPoints(const Entity& e) {
     }
 }
 
+// A copy of what is inside a detail view's circle, kept on the view. This is what an ordinary - not
+// annotative - detail view shows: a picture of how the thing was when the view was placed, so the two circles
+// stop passing anything to each other. Draw something new by the small circle and the enlargement does not
+// change; draw something over the enlargement and it stays there and only there.
+//
+// Only what the circle can reach is kept, so the copy is a handful of objects and not the whole sheet.
+void Editor::retakeDetailSnapshot(Entity& e) const {
+    if (!doc_ || e.type != EntityType::DetailView || e.radius <= 1e-9) return;
+    QJsonArray arr;
+    for (const Entity& x : doc_->entities()) {
+        if (x.id == e.id || x.type == EntityType::DetailView) continue;
+        const Bounds xb = x.bounds();
+        if (!xb.valid) continue;
+        if (xb.max.x < e.center.x - e.radius || xb.min.x > e.center.x + e.radius ||
+            xb.max.y < e.center.y - e.radius || xb.min.y > e.center.y + e.radius)
+            continue;
+        arr.append(x.toJson());
+    }
+    e.meta.insert(QStringLiteral("detailSnap"), arr);
+}
+
 std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
     if (!doc_) return {};
     const Entity* host = nullptr;
@@ -2067,8 +2096,15 @@ std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
     // Whatever joins on at either end, taken in turn until nothing more does. A fillet is a line, an arc and
     // another line; a run drawn in pieces is however many pieces somebody drew it in.
     const double tol = std::max(worldTolerance() * 0.5, 1e-6);
+    // A run doubling back on itself is not a run a label can be laid along: laid by arc length, a path that
+    // folds puts the far half of the label back over the near half, which is what a label on a bend looked
+    // like. So a piece that comes back the way the last one went is refused - a corner is a corner, but a
+    // hairpin is two runs that happen to touch.
+    auto foldsBack = [](const Vec2& wasDir, const Vec2& nowDir) {
+        return dot(wasDir.normalized(), nowDir.normalized()) < -0.25;
+    };
     std::vector<QString> used{hostId};
-    for (int guard = 0; guard < 24; ++guard) {
+    for (int guard = 0; guard < 12; ++guard) {
         bool joined = false;
         for (const Entity& e : doc_->entities()) {
             if (std::find(used.begin(), used.end(), e.id) != used.end()) continue;
@@ -2076,18 +2112,24 @@ std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
             if (!e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
             std::vector<Vec2> add = entityPathPoints(e);
             if (add.size() < 2) continue;
+            const Vec2 endDir = path[path.size() - 1] - path[path.size() - 2];
+            const Vec2 startDir = path[0] - path[1];
             // Which end meets which. A piece drawn the other way round is reversed rather than refused: a run
             // is a run whichever direction each piece of it happened to be drawn in.
             if (distance(add.front(), path.back()) < tol) {
+                if (foldsBack(endDir, add[1] - add[0])) continue;
                 path.insert(path.end(), add.begin() + 1, add.end());
             } else if (distance(add.back(), path.back()) < tol) {
                 std::reverse(add.begin(), add.end());
+                if (foldsBack(endDir, add[1] - add[0])) continue;
                 path.insert(path.end(), add.begin() + 1, add.end());
             } else if (distance(add.back(), path.front()) < tol) {
+                if (foldsBack(startDir, add[add.size() - 2] - add.back())) continue;
                 add.pop_back();
                 path.insert(path.begin(), add.begin(), add.end());
             } else if (distance(add.front(), path.front()) < tol) {
                 std::reverse(add.begin(), add.end());
+                if (foldsBack(startDir, add[add.size() - 2] - add.back())) continue;
                 add.pop_back();
                 path.insert(path.begin(), add.begin(), add.end());
             } else {
@@ -2483,8 +2525,17 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
 // Write the fit on to every piece of the label. This is what makes a label something that can be picked up
 // again a week later and still be resized: the size and the axes travel with it in the file, so nothing has
 // to be re-measured off the sheet and no session has to be still open.
-void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit) {
+void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
+                           const QJsonArray& proto) {
     stampEntityGroup(e, group);
+    // THE DRAWING ITSELF, on a bent label. A label laid along a bend cannot be resized by pushing its points
+    // about: to move a point you must first ask where on the run it is, and on the INSIDE of a bend that
+    // question has more than one answer. Every resize compounded the error and the label crumpled.
+    //
+    // So a bent label keeps the drawing it was laid from and is laid out AGAIN - the same code that placed it,
+    // which cannot drift from itself. It is a handful of objects, and only for the labels that need it.
+    if (fit.path.size() >= 2 && !proto.isEmpty()) e.meta.insert(QStringLiteral("labelProto"), proto);
+    else e.meta.remove(QStringLiteral("labelProto"));
     e.meta.insert(labelGroupKey(), group);
     e.meta.insert(labelAlongKey(), fit.alongMm);
     e.meta.insert(labelAcrossKey(), fit.acrossMm);
@@ -2518,6 +2569,9 @@ void Editor::commitLabel() {
     // as the label it is. The key has an id of its own in it, because two labels on one sheet are two
     // objects - the bare model key would make every label on the drawing one group.
     labelGroup_ = QStringLiteral("%1:label:%2").arg(QLatin1String(kMechModelGroup), uid());
+    // The drawing it was laid from, so a bent one can be laid out again rather than pushed about.
+    QJsonArray protoJson;
+    for (const Entity& src : labelProto_) protoJson.append(src.toJson());
     // The mask goes UNDER the label and over the runs: a label is opaque, and a bundle drawn straight
     // through it reads as a label behind the harness rather than on it. Marked as a label's own mask so
     // that laying the next label does not measure this one as though it were a wire, and it is IN the
@@ -2536,14 +2590,14 @@ void Editor::commitLabel() {
         // the label's own rectangle - so the frame drew that rectangle a second time, a hair outside the
         // first, and the pair read as a box round the label that is not part of the label.
         mask.meta.insert(QStringLiteral("noFrame"), true);
-        stampLabelFit(mask, labelGroup_, labelFit_);
+        stampLabelFit(mask, labelGroup_, labelFit_, protoJson);
         labelMaskId_ = mask.id;
         doc_->entities().push_back(std::move(mask));
     }
     for (Entity e : labelPreview_) {
         e.id = uid();
         e.layer = doc_->activeLayer();
-        stampLabelFit(e, labelGroup_, labelFit_);
+        stampLabelFit(e, labelGroup_, labelFit_, protoJson);
         labelLiveIds_.push_back(e.id);
         doc_->entities().push_back(std::move(e));
     }
@@ -2608,6 +2662,14 @@ bool Editor::adoptLabelFromSelection() {
             for (int k = 0; k + 1 < arr.size(); k += 2)
                 labelFit_.path.push_back({arr[k].toDouble(), arr[k + 1].toDouble()});
             labelFit_.midS = e.meta.value(QStringLiteral("labelMidS")).toDouble();
+            // And the drawing it was laid from, on a bent one: what lets it be laid out again.
+            labelProto_.clear();
+            const QJsonArray pr = e.meta.value(QStringLiteral("labelProto")).toArray();
+            for (const auto& v : pr) {
+                Entity src;
+                src.fromJson(v.toObject());
+                labelProto_.push_back(src);
+            }
             labelFit_.ok = labelFit_.alongMm > 1e-9 && labelFit_.acrossMm > 1e-9;
         }
     }
@@ -2628,12 +2690,69 @@ bool Editor::adoptLabelFromSelection() {
 // scaled rather than laid out again from the captured drawing, because a label on a sheet has to be
 // resizable whether or not the model that made it is still in hand - and after a file has been reopened, it
 // is not.
+// Lay a placed label out again from the drawing it keeps, at the fit it now has - the same code that placed
+// it, so it cannot drift from itself. This is what a resize and a slide come down to on a BENT label.
+//
+// The alternative was to push the existing points about: for each one, ask where on the run it sits, scale
+// that, and put it back. But on the INSIDE of a bend "where on the run does this point sit" has more than one
+// answer, so points swapped places, and doing it again on every change compounded the error until the label
+// was a crumple.
+//
+// False when there is nothing to lay out again - a straight label, or one placed before its drawing travelled
+// with it - and the caller falls back to pushing the points about, which for a straight label is exact.
+bool Editor::relayPlacedLabel() {
+    if (!doc_ || labelLiveIds_.empty() || !labelFit_.ok) return false;
+    if (labelProto_.empty() || labelFit_.path.size() < 2) return false;
+    std::vector<Vec2> covers;
+    const std::vector<Entity> laid = labelEntities(labelFit_, covers);
+    if (laid.size() != labelLiveIds_.size()) return false;
+    for (Entity& e : doc_->entities()) {
+        if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+        if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
+            if (covers.size() >= 3) e.points = covers;
+            e.meta.insert(labelAlongKey(), labelFit_.alongMm);
+            e.meta.insert(labelAcrossKey(), labelFit_.acrossMm);
+            e.meta.insert(labelMidXKey(), labelFit_.mid.x);
+            e.meta.insert(labelMidYKey(), labelFit_.mid.y);
+            e.meta.insert(QStringLiteral("labelMidS"), labelFit_.midS);
+            continue;
+        }
+        const auto it = std::find(labelLiveIds_.begin(), labelLiveIds_.end(), e.id);
+        if (it == labelLiveIds_.end()) continue;
+        Entity next = laid[static_cast<size_t>(it - labelLiveIds_.begin())];
+        next.id = e.id;
+        next.layer = e.layer;
+        next.meta = e.meta;   // the group stamp and the fit stay; only the geometry is new
+        next.meta.insert(labelAlongKey(), labelFit_.alongMm);
+        next.meta.insert(labelAcrossKey(), labelFit_.acrossMm);
+        next.meta.insert(labelDirXKey(), labelFit_.runDir.x);
+        next.meta.insert(labelDirYKey(), labelFit_.runDir.y);
+        next.meta.insert(labelMidXKey(), labelFit_.mid.x);
+        next.meta.insert(labelMidYKey(), labelFit_.mid.y);
+        next.meta.insert(QStringLiteral("labelMidS"), labelFit_.midS);
+        e = next;
+    }
+    doc_->setDirty(true);
+    emit changed();
+    return true;
+}
+
 bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
     if (!doc_ || labelLiveIds_.empty() || !labelFit_.ok) return false;
     if (alongMm <= 1e-6 || acrossMm <= 1e-6) return false;
     const double fa = alongMm / labelFit_.alongMm;
     const double fc = acrossMm / labelFit_.acrossMm;
     if (std::abs(fa - 1.0) < 1e-12 && std::abs(fc - 1.0) < 1e-12) return false;
+    // A BENT label is laid out again from its own drawing rather than having its points pushed about. See
+    // relayPlacedLabel: on the inside of a bend, asking where a point sits on the run has more than one answer.
+    if (labelFit_.path.size() >= 2 && !labelProto_.empty()) {
+        labelFit_.alongMm = alongMm;
+        labelFit_.acrossMm = acrossMm;
+        if (relayPlacedLabel()) {
+            emit labelChanged();
+            return true;
+        }
+    }
     const Vec2 mid = labelFit_.mid, along = labelFit_.runDir, across = labelFit_.acrossDir;
     // ON A BEND the point is read off the RUN and put back on it - how far along, how far across, both scaled
     // - so a bent label resized stays bent. Scaling its points about the middle along two straight axes, which
@@ -2734,39 +2853,18 @@ bool Editor::slideLiveLabel(const Vec2& delta) {
     // ON A BEND, sliding it means sliding it ALONG THE RUN - round the corner and out the other side, which is
     // where a label pushed along a bundle goes. A straight translate would carry it off the run the moment it
     // reached the knee.
-    if (labelFit_.path.size() >= 2) {
-        const double wasS = labelFit_.midS;
+    if (labelFit_.path.size() >= 2 && !labelProto_.empty()) {
+        // ON A BEND, sliding it means sliding it ALONG THE RUN - round the corner and out the other side,
+        // which is where a label pushed along a bundle goes. A straight translate would carry it off the run
+        // the moment it reached the knee. Laid out again at the new place along the run rather than having its
+        // points walked forward, for the same reason a resize is.
         labelFit_.midS += travel;
-        const std::vector<Vec2>& path = labelFit_.path;
-        const double midS = labelFit_.midS;
-        for (Entity& e : doc_->entities()) {
-            if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
-            auto move = [&](const Vec2& p) {
-                double s = 0.0, off = 0.0;
-                placeOnPath(path, p, s, off);
-                Vec2 at, dir;
-                frameOnPath(path, s + (midS - wasS), at, dir);
-                return at + dir.perp() * off;
-            };
-            e.a = move(e.a);
-            e.b = move(e.b);
-            e.center = move(e.center);
-            for (Vec2& q : e.points) q = move(q);
-        }
         Vec2 at, dir;
-        frameOnPath(path, midS, at, dir);
+        frameOnPath(labelFit_.path, labelFit_.midS, at, dir);
         labelFit_.mid = at;
         labelFit_.runDir = dir;
         labelFit_.acrossDir = dir.perp();
-        for (Entity& e : doc_->entities())
-            if (e.meta.value(labelGroupKey()).toString() == labelGroup_) {
-                e.meta.insert(labelMidXKey(), labelFit_.mid.x);
-                e.meta.insert(labelMidYKey(), labelFit_.mid.y);
-                e.meta.insert(QStringLiteral("labelMidS"), midS);
-            }
-        doc_->setDirty(true);
-        emit changed();
-        return true;
+        if (relayPlacedLabel()) return true;
     }
     const Vec2 step = labelFit_.runDir * travel;
     labelFit_.mid = labelFit_.mid + step;
@@ -3207,12 +3305,14 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         d.center = detailCenter_;
         d.radius = detailRadius_;
         d.b = p;
-        // ORANGE, so it reads as what it is: a ring drawn ROUND the drawing to say "look at this bit", not a
-        // circle that is part of what is being drawn. A detail circle in the same white as the geometry is a
-        // circle somebody has to work out is not a hole.
-        d.color = QStringLiteral("#e6a23c");
+        // Drawn in the layer's own colour like everything else. It is ORANGE when SELECTED - see the
+        // selection pass - which is where a colour of its own actually helps: a ring that is orange all the
+        // time is a released sheet with an orange ring on it, and a drawing office chooses its own colours.
         d.meta.insert(QStringLiteral("detailScale"), std::max(0.01, detailScale_));
         d.meta.insert(QStringLiteral("detailTag"), nextDetailTag());
+        // What it is a picture OF, taken now. An ordinary detail view shows this rather than the live drawing,
+        // which is what stops the two circles passing anything to each other.
+        retakeDetailSnapshot(d);
         const QString tag = d.meta.value(QStringLiteral("detailTag")).toString();
         doc_->entities().push_back(std::move(d));
         doc_->setDirty(true);
@@ -6971,8 +7071,30 @@ void Editor::applyEditDrag(const Vec2& target) {
         // means, and a number in a dialog is not.
         if (e->type == EntityType::DetailView) {
             switch (role) {
+            case GripRole::Vertex: {
+                // A WORD DRAGGED ROUND ITS CIRCLE. The angle comes from where the cursor is relative to the
+                // circle's middle and the distance from how far out it is - so it goes exactly where it is
+                // put, round and out, which is what dragging a piece of text means.
+                const bool big = index == 1;
+                const double scale =
+                    std::max(0.01, e->meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+                const Vec2 c = big ? e->b : e->center;
+                const double r = big ? e->radius * scale : e->radius;
+                const Vec2 d = target - c;
+                const double len = d.length();
+                if (len < 1e-9) return;
+                e->meta.insert(big ? QStringLiteral("detailBigAngle") : QStringLiteral("detailTagAngle"),
+                               std::atan2(d.y, d.x) * 180.0 / M_PI);
+                e->meta.insert(big ? QStringLiteral("detailBigGap") : QStringLiteral("detailTagGap"),
+                               std::max(0.0, len - r));
+                return;
+            }
             case GripRole::Center:
                 e->center = target;      // which bit of the drawing it is a view of - that alone
+                // Pointed at something else, so the picture is of something else. An ordinary view that kept
+                // the old copy would show the bit of drawing it used to be over, which is a detail view
+                // telling a lie.
+                retakeDetailSnapshot(*e);
                 return;
             case GripRole::LineB:
                 e->b = target;           // where the enlargement sits - that alone
@@ -6980,6 +7102,7 @@ void Editor::applyEditDrag(const Vec2& target) {
             case GripRole::Radius:
                 if (index == 0) {
                     e->radius = std::max(1e-6, distance(e->center, target));   // how much it shows
+                    retakeDetailSnapshot(*e);   // it shows more, or less, so the picture is re-taken
                 } else if (e->radius > 1e-9) {
                     e->meta.insert(QStringLiteral("detailScale"),
                                    std::max(0.05, distance(e->b, target) / e->radius));
@@ -15180,6 +15303,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 continue;
             // A table is highlighted in the table colour, not the ordinary selection blue.
             const bool isTable = e.meta.value("table").toBool();
+            // AND A DETAIL VIEW IN ORANGE, which is where a colour of its own is worth having: it says which
+            // ring belongs to the view you have hold of, on a sheet where every other circle is a hole. All
+            // the time it would be an orange ring on a released drawing, and the colours on a sheet are the
+            // drawing office's to choose.
+            const bool isDetail = e.type == EntityType::DetailView;
             // ...but a table with one of its CELLS picked is not a picked table. Redrawing the whole
             // grid in the selection colour said it was: working in one cell lit up all two hundred of
             // them, so there was no telling a cell apart from the table it is in. The table still draws
@@ -15192,7 +15320,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // clicked. What is withheld is the colour, not the drawing: an invalid override means "draw
             // it as it is", so the table stays on the sheet and simply does not look picked.
             EntityRenderer::draw(p, e, *doc_, vt,
-                                 onlyACell ? QColor() : (isTable ? kTableChrome : hi));
+                                 onlyACell ? QColor()
+                                           : (isTable ? kTableChrome
+                                                      : (isDetail ? paperInk(QColor("#e6a23c")) : hi)));
             drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.

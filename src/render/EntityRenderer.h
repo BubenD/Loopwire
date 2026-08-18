@@ -16,6 +16,15 @@ namespace Edraw_Desktop {
 // World <-> screen mapping, matching Edraw's worldToScreen/screenToWorld:
 //   screen.x =  world.x * scale + view.x
 //   screen.y = -world.y * scale + view.y
+// WHERE A DETAIL VIEW'S WORDS SIT, in world coordinates: the letter beside the circle round the thing
+// (big = false) or the heading on the enlargement (big = true). An angle round the circle and a distance out
+// from it, both stored on the view and both there to be moved - a letter fixed at one o'clock lands on the
+// geometry about half the time.
+//
+// Asked by the renderer that draws them AND by the handle that drags them, because a handle in one place and
+// the text it moves in another is a handle nobody can find.
+Vec2 detailViewTextAt(const Entity& e, bool big);
+
 struct ViewTransform {
     ViewState view;
 

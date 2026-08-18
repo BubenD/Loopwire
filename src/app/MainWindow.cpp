@@ -2245,6 +2245,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         // opens the "Hatch Creation" tab.
         updateHatchContext();
         updateConnectorContext(); // the Connector tool opens the "Connector build" tab
+        updateDetailContext();    // and the Detail view tool opens its own, and keeps it while armed
         updateModelRibbonTabs();
         if (connectorPlaceBtn_) // "Place connector" is pressed only while placement is armed
             connectorPlaceBtn_->setChecked(editor_->connectorArmed());
@@ -4645,6 +4646,9 @@ void MainWindow::buildDetailRibbonTab() {
         for (Entity& e : editDoc()->entities()) {
             if (e.id != detailEditId_) continue;
             e.meta.insert(key, v);
+            // Switched off annotative, it becomes a picture again - of how the thing is NOW, not of how it was
+            // when the view was first placed, which by then may be several edits ago.
+            if (key == QStringLiteral("detailAnnotative") && !v.toBool()) editor_->retakeDetailSnapshot(e);
             editDoc()->setDirty(true);
             canvas_->invalidateScene();
             canvas_->update();
@@ -4724,6 +4728,7 @@ void MainWindow::buildDetailRibbonTab() {
             for (Entity& e : editDoc()->entities())
                 if (e.id == detailEditId_) {
                     e.radius = std::max(1e-6, v);
+                    editor_->retakeDetailSnapshot(e);   // it shows more, or less
                     editDoc()->setDirty(true);
                     canvas_->invalidateScene();
                     canvas_->update();
@@ -4822,8 +4827,19 @@ void MainWindow::updateDetailContext() {
         for (const auto& e : editDoc()->entities())
             if (e.id == id && e.type == EntityType::DetailView) { sel = id; break; }
     }
+    // ARMING THE TOOL brings the tab up too, and it STAYS while the tool is armed. Pressing the button and
+    // getting nothing until after the third click means finding out how the settings read only once the view
+    // is already down - and the tab going away again the instant the tool is used would be worse, because
+    // placing several details is the ordinary case and the settings are the same for all of them.
+    //
+    // With nothing selected the tab is pointed at the LAST detail placed, so the settings act on the one just
+    // put down; before there is one, the fields simply have nothing to write to.
+    const bool arming = editor_->tool() == ToolId::DetailView;
+    if (sel.isEmpty() && arming && doc_)
+        for (const auto& e : editDoc()->entities())
+            if (e.type == EntityType::DetailView) sel = e.id;   // the last one in the drawing
     detailEditId_ = sel;
-    showDetailRibbon(!sel.isEmpty());
+    showDetailRibbon(!sel.isEmpty() || arming);
 }
 
 void MainWindow::showDetailRibbon(bool on) {
@@ -4847,7 +4863,20 @@ void MainWindow::showDetailRibbon(bool on) {
 // The fields, from the detail view they are pointed at. Guarded, or writing them back would read them
 // straight out again and fight whoever is typing.
 void MainWindow::syncDetailRibbon() {
-    if (detailEditId_.isEmpty() || !doc_) return;
+    // Armed but nothing placed yet: the fields are there, showing what a new one will look like, and dead
+    // until there is something to change. A row of live-looking fields that write to nothing is worse.
+    const bool haveOne = !detailEditId_.isEmpty();
+    for (QWidget* w : {static_cast<QWidget*>(detailSmallText_), static_cast<QWidget*>(detailBigText_),
+                       static_cast<QWidget*>(detailScaleSpin_), static_cast<QWidget*>(detailShowsSpin_),
+                       static_cast<QWidget*>(detailTagAngleSpin_),
+                       static_cast<QWidget*>(detailTagGapSpin_),
+                       static_cast<QWidget*>(detailBigAngleSpin_),
+                       static_cast<QWidget*>(detailBigGapSpin_),
+                       static_cast<QWidget*>(detailBoundaryBox_),
+                       static_cast<QWidget*>(detailAnnotativeBox_),
+                       static_cast<QWidget*>(detailDimsBox_)})
+        if (w) w->setEnabled(haveOne);
+    if (!haveOne || !doc_) return;
     const Entity* dv = nullptr;
     for (const auto& e : editDoc()->entities())
         if (e.id == detailEditId_ && e.type == EntityType::DetailView) { dv = &e; break; }
@@ -4876,7 +4905,7 @@ void MainWindow::syncDetailRibbon() {
         detailAnnotativeBox_->setChecked(
             dv->meta.value(QStringLiteral("detailAnnotative")).toBool(false));
     if (detailDimsBox_)
-        detailDimsBox_->setChecked(dv->meta.value(QStringLiteral("detailShowDims")).toBool(true));
+        detailDimsBox_->setChecked(dv->meta.value(QStringLiteral("detailShowDims")).toBool(false));
     detailSyncing_ = false;
 }
 
@@ -8688,8 +8717,8 @@ void MainWindow::refreshProperties() {
             // detail is usually drawn to show a SHAPE, and dimensions sized for the small version become the
             // biggest thing in the circle and cover what they were measuring. But a detail drawn BECAUSE the
             // dimensions would not fit at the small size needs them. Both are ordinary, so it is a switch.
-            addCombo(QStringLiteral("Catch dimensions"), {"Yes", "No"},
-                     yesNo(mv(QStringLiteral("detailShowDims")), true), false,
+            addCombo(QStringLiteral("Catch dimensions"), {"No", "Yes"},
+                     yesNo(mv(QStringLiteral("detailShowDims")), false), false,
                      [this](const QString& v) {
                          editor_->setSelectionMetaBool(QStringLiteral("detailShowDims"),
                                                        v == QLatin1String("Yes"));
