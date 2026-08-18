@@ -5870,10 +5870,11 @@ void MainWindow::applyTheme(bool dark) {
     // Ribbon tool icons: light on a dark ribbon, dark on a light ribbon. Retint
     // EVERY tool button instance (a ToolId can appear on several tabs, so the
     // ToolId-keyed map alone would miss the duplicates).
-    // The same blue the geometry previews and the fall-menu method icons are drawn in, so the ribbon reads
-    // as one set rather than as four coloured buttons among eight grey ones. Darkened for a light scheme,
-    // where a mid blue on white is too faint to make out.
-    const QColor ink = dark ? kGeoBlue : QColor("#1d4e8f");
+    // Light on a dark ribbon, dark on a light one - the ordinary tool icons stay as they were. Recolouring
+    // the lot blue was the wrong reading of "the icons are grey": the complaint was about the FALL-MENU
+    // buttons showing a generic grey shape instead of the method they are set to, which is put right below.
+    // A tool icon is white here because the ribbon is dark, and that is all it needs to be.
+    const QColor ink = dark ? QColor("#d6dae1") : QColor("#33373f");
     for (QAction* a : allToolActions_)
         a->setIcon(makeToolIcon(static_cast<ToolId>(a->data().toInt()), ink));
     // AND PUT THE METHOD ICONS BACK.

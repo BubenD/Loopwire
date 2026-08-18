@@ -39,7 +39,9 @@ namespace Edraw_Desktop {
 namespace {
 // Room for an icon and two short lines of caption. The same idea as the model session's own cell: a row of
 // buttons of different widths reads as a row of different things.
-constexpr QSize kSpecialCell(86, 68);
+// Icon only, so the section is a row of pictures rather than a wall of two-line captions. The name is on
+// hover instead - which is where every other icon-only group on the ribbon puts it.
+constexpr QSize kSpecialCell(40, 40);
 } // namespace
 
 // ---- HARNESS MECHANICAL ---- the physical side of the harness: the bundle and its
@@ -109,8 +111,20 @@ void MainWindow::buildHarnessMechanicalTab() {
         // column, and Qt elides the text inside it rather than growing. Fixed, so each is the same and each
         // has room - the same thing the model-session buttons do, for the same reason.
         auto sizeCell = [](QWidget* w) {
-            for (QToolButton* b : w->findChildren<QToolButton*>()) b->setFixedSize(kSpecialCell);
-            if (auto* b = qobject_cast<QToolButton*>(w)) b->setFixedSize(kSpecialCell);
+            auto oneButton = [](QToolButton* b) {
+                // The caption becomes the TOOLTIP, unless the button already had one worth more than the
+                // caption - the label button's tip explains what a label under clear heatshrink is for, and
+                // that is not something to throw away for the word "Label".
+                QString caption = b->text();
+                caption.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                caption = caption.trimmed();
+                if (b->toolTip().isEmpty() && !caption.isEmpty()) b->setToolTip(caption);
+                b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                b->setIconSize(QSize(26, 26));
+                b->setFixedSize(kSpecialCell);
+            };
+            for (QToolButton* b : w->findChildren<QToolButton*>()) oneButton(b);
+            if (auto* b = qobject_cast<QToolButton*>(w)) oneButton(b);
         };
         auto lgAdd = [&](QWidget* w) {
             sizeCell(w);
@@ -371,19 +385,25 @@ void MainWindow::buildHarnessMechanicalTab() {
                 a->setToolTip(QString::fromLatin1(sort.tip));
                 const MechModelKind kind = sort.kind;
                 const QString text = QString::fromLatin1(sort.onButton);
-                connect(a, &QAction::triggered, this, [this, labelBtn, kind, ic, text] {
+                const QString tip = QString::fromLatin1(sort.tip);
+                connect(a, &QAction::triggered, this, [this, labelBtn, kind, ic, text, tip] {
                     labelBtn->setIcon(ic);            // the button wears what was chosen
-                    labelBtn->setText(text);
+                    labelBtn->setText(text);          // kept for the tooltip, not shown on the button
+                    labelBtn->setToolTip(tip);
+                    // WHICH sort, held on the button rather than read back out of its caption: the caption
+                    // is not shown any more, and a choice remembered as display text is a choice that
+                    // breaks the moment the display changes.
+                    labelBtn->setProperty("mechKind", static_cast<int>(kind));
                     placeMechModel(kind);
                 });
             }
             labelBtn->setIcon(makeMechModelIcon(sorts[0].kind));   // the first of the list, to begin with
             labelBtn->setToolTip(QString::fromLatin1(sorts[0].tip));
             labelBtn->setMenu(lm);
-            connect(labelBtn, &QToolButton::clicked, this,
-                    [this, labelBtn] { placeMechModel(labelBtn->text() == QStringLiteral("Label")
-                                                          ? MechModelKind::Label
-                                                          : MechModelKind::LabelUnderHeatshrink); });
+            labelBtn->setProperty("mechKind", static_cast<int>(sorts[0].kind));
+            connect(labelBtn, &QToolButton::clicked, this, [this, labelBtn] {
+                placeMechModel(static_cast<MechModelKind>(labelBtn->property("mechKind").toInt()));
+            });
             lgAdd(labelBtn);
         }
         // Room for the WORDS. Two rows of buttons sized to their icons cut the labels off - "Twisted
