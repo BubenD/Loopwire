@@ -3615,8 +3615,12 @@ void MainWindow::normaliseRibbonPages() {
         QWidget* page = ribbon_->widget(i);
         if (page && page != cur && page->isVisible()) page->hide();
     }
+    // EVERY contextual page has to be in this list. They are children of the ribbon but not tabs of it, so
+    // one left out stays visible and floats over whichever page IS showing - its groups drawn on top of that
+    // page's, with that page's group titles underneath them. Which is what the detail-view tab did the moment
+    // it was added, and is why a new contextual tab is not finished until its name is here.
     for (QWidget* page : {templateTab_, hatchTab_, tableCellTab_, arrayTab_, connectorTab_, wireTab_,
-                          captureTab_})
+                          captureTab_, detailTab_})
         if (page && ribbon_->indexOf(page) < 0 && page->isVisible()) page->hide();
     if (cur) cur->show();
 }
@@ -4803,6 +4807,9 @@ void MainWindow::buildDetailRibbonTab() {
         addGroup(tr("The view"), w);
     }
     lay->addStretch(1);
+    // Out of sight until a detail view is selected. It is a child of the ribbon but not a tab of it, and a
+    // contextual page left showing floats over whichever page IS showing.
+    detailTab_->hide();
 }
 
 // Which detail view the tab is pointed at: the one selected, or none. Unlike the hatch tab there is nothing

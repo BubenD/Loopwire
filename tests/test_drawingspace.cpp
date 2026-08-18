@@ -821,6 +821,41 @@ int run_drawingspace_tests() {
         check(ragged == 0, "rows: every button in a row of icons is the same square, split buttons and all");
     }
 
+    // ---- no contextual page shows while it is not a tab --------------------------------------------
+    {
+        // The contextual tabs - Hatch Creation, Table Cell, Array, Detail view and the rest - are children of
+        // the ribbon but are only TABS of it while they apply. One left showing does not sit quietly out of
+        // the way: it floats over whichever page is showing, its groups drawn on top of that page's with that
+        // page's group titles underneath them, and the ribbon reads as though two tabs have been dealt into
+        // one. Which is what happened the moment the detail-view tab was added and left out of the list that
+        // hides them, so this asks the question of ALL of them rather than of that one.
+        QTabWidget* ribbon = nullptr;
+        for (QTabWidget* tw : win.findChildren<QTabWidget*>())
+            if (tw->count() > 3) { ribbon = tw; break; }
+        check(ribbon != nullptr, "contextual: the ribbon is there to ask about");
+        if (ribbon) {
+            QStringList floating;
+            for (QWidget* w : ribbon->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+                if (ribbon->indexOf(w) >= 0) continue;          // it is a tab: it is meant to show
+                if (!w->isVisible()) continue;
+                if (w->layout() == nullptr) continue;           // the tab bar and the like
+                if (w->objectName().startsWith(QStringLiteral("qt_"))) continue;   // Qt's own plumbing
+                // A page is a page if it holds ribbon groups. Anything else that hangs off a QTabWidget -
+                // the bar, the stack, a corner widget - is not what this is about.
+                bool holdsGroups = false;
+                for (QWidget* g : w->findChildren<QWidget*>())
+                    if (g->objectName() == QStringLiteral("ribbonGroupTitle")) { holdsGroups = true; break; }
+                if (holdsGroups) floating << (w->objectName().isEmpty() ? w->metaObject()->className()
+                                                                       : w->objectName());
+            }
+            std::printf("  contextual: %lld page(s) showing without being a tab%s%s\n",
+                        static_cast<long long>(floating.size()), floating.isEmpty() ? "" : ": ",
+                        qPrintable(floating.join(QStringLiteral(", "))));
+            check(floating.isEmpty(),
+                  "contextual: a page that is not a tab is hidden, not floating over the one that is");
+        }
+    }
+
     // ---- one colour over a selection of several KINDS of object ------------------------------------
     {
         // Colour, layer, linetype and lineweight belong to every object whatever kind it is. The panel only

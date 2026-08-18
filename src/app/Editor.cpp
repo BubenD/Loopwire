@@ -2018,6 +2018,90 @@ void placeOnPath(const std::vector<Vec2>& path, const Vec2& p, double& s, double
 
 } // namespace
 
+// One object's geometry as a path, curves flattened. A label is laid by arc length along a run, and arc
+// length needs points - so an arc is sampled and a polyline's bulged segments are expanded.
+static std::vector<Vec2> entityPathPoints(const Entity& e) {
+    switch (e.type) {
+    case EntityType::Line:
+    case EntityType::DoubleLine:
+        // The CENTRELINE of a double run: a label goes round the run, and the run is the pair of them.
+        return {e.a, e.b};
+    case EntityType::Wire:
+    case EntityType::Spline:
+        return e.points;
+    case EntityType::Polyline: {
+        const QJsonArray arr = e.meta.value(QStringLiteral("bulges")).toArray();
+        if (arr.isEmpty()) return e.points;
+        std::vector<double> bulges;
+        for (const auto& v : arr) bulges.push_back(v.toDouble());
+        return expandBulgePolyline(e.points, bulges);
+    }
+    case EntityType::Arc: {
+        if (e.radius <= 1e-9) return {};
+        double sweep = e.endAngle - e.startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * M_PI;
+        // Enough steps that the fillet a label hugs is a curve and not a chord: a corner is where all the
+        // shape is, and a fillet drawn with four points is a chamfer.
+        const int steps = std::clamp(static_cast<int>(sweep / (M_PI / 32.0)) + 2, 4, 96);
+        std::vector<Vec2> out;
+        out.reserve(steps + 1);
+        for (int i = 0; i <= steps; ++i) {
+            const double t = e.startAngle + sweep * i / double(steps);
+            out.push_back({e.center.x + e.radius * std::cos(t), e.center.y + e.radius * std::sin(t)});
+        }
+        return out;
+    }
+    default:
+        return {};
+    }
+}
+
+std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
+    if (!doc_) return {};
+    const Entity* host = nullptr;
+    for (const Entity& e : doc_->entities())
+        if (e.id == hostId) { host = &e; break; }
+    if (!host) return {};
+    std::vector<Vec2> path = entityPathPoints(*host);
+    if (path.size() < 2) return path;
+    // Whatever joins on at either end, taken in turn until nothing more does. A fillet is a line, an arc and
+    // another line; a run drawn in pieces is however many pieces somebody drew it in.
+    const double tol = std::max(worldTolerance() * 0.5, 1e-6);
+    std::vector<QString> used{hostId};
+    for (int guard = 0; guard < 24; ++guard) {
+        bool joined = false;
+        for (const Entity& e : doc_->entities()) {
+            if (std::find(used.begin(), used.end(), e.id) != used.end()) continue;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+            if (!e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+            std::vector<Vec2> add = entityPathPoints(e);
+            if (add.size() < 2) continue;
+            // Which end meets which. A piece drawn the other way round is reversed rather than refused: a run
+            // is a run whichever direction each piece of it happened to be drawn in.
+            if (distance(add.front(), path.back()) < tol) {
+                path.insert(path.end(), add.begin() + 1, add.end());
+            } else if (distance(add.back(), path.back()) < tol) {
+                std::reverse(add.begin(), add.end());
+                path.insert(path.end(), add.begin() + 1, add.end());
+            } else if (distance(add.back(), path.front()) < tol) {
+                add.pop_back();
+                path.insert(path.begin(), add.begin(), add.end());
+            } else if (distance(add.front(), path.front()) < tol) {
+                std::reverse(add.begin(), add.end());
+                add.pop_back();
+                path.insert(path.begin(), add.begin(), add.end());
+            } else {
+                continue;
+            }
+            used.push_back(e.id);
+            joined = true;
+            break;
+        }
+        if (!joined) break;
+    }
+    return path;
+}
+
 // A point inside an annotative detail view, in the coordinates of the thing the detail is a view OF.
 //
 // This is what makes such a view a WINDOW rather than a picture: everything downstream - the snaps, the
@@ -2166,43 +2250,51 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     // WHICH RUN the label is laid along, and where along it. A run that turns takes the label round with it,
     // so the label has to know the path and not only the direction: the run crossed nearest the middle of the
     // stroke is the one it is laid on, which with one run crossed is simply that run.
-    std::vector<std::vector<Vec2>> paths;
+    std::vector<QString> owners;
     auto tryLine = [&](const Vec2& p1, const Vec2& p2) {
         if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
             hits.push_back(*x);
             dirs.push_back(p2 - p1);
-            paths.push_back({});
+            owners.push_back(QString());
         }
     };
-    // The whole run a crossing belongs to, filled in after each entity is tried: the crossing test works
-    // segment by segment and a label wraps round more of the run than one segment.
-    auto ownPath = [&](size_t from, const std::vector<Vec2>& whole) {
-        for (size_t i = from; i < paths.size(); ++i) paths[i] = whole;
+    // WHICH OBJECT a crossing belongs to, filled in after each one is tried: the crossing test works segment
+    // by segment, and a label wraps round more of a run than one segment of it.
+    auto ownPath = [&](size_t from, const QString& id) {
+        for (size_t i = from; i < owners.size(); ++i) owners[i] = id;
     };
     for (const Entity& e : doc_->entities()) {
         if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
         if (!e.meta.value(labelGroupKey()).toString().isEmpty()) continue;   // nor other labels
-        const size_t was = paths.size();
+        const size_t was = owners.size();
         switch (e.type) {
         case EntityType::Line:
             tryLine(e.a, e.b);
-            ownPath(was, {e.a, e.b});
+            ownPath(was, e.id);
             break;
         case EntityType::DoubleLine: {
             const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
             const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
             tryLine(e.a + off, e.b + off);
             tryLine(e.a - off, e.b - off);
-            // The CENTRELINE is the path a label is laid along, not either of the two drawn lines: a label
-            // over a double run goes round the run, and the run is the pair of them.
-            ownPath(was, {e.a, e.b});
+            ownPath(was, e.id);
             break;
         }
         case EntityType::Wire:
         case EntityType::Spline:
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
-            ownPath(was, e.points);
+            ownPath(was, e.id);
             break;
+        case EntityType::Arc: {
+            // AN ARC IS PART OF A RUN when it is the fillet on a corner - which is the one place a label is
+            // most likely to be put and was the one place the stroke could not catch anything, because arcs
+            // were not being tested at all. A stroke drawn squarely across a rounded corner crossed nothing
+            // and placed nothing.
+            const std::vector<Vec2> pts = entityPathPoints(e);
+            for (size_t i = 1; i < pts.size(); ++i) tryLine(pts[i - 1], pts[i]);
+            ownPath(was, e.id);
+            break;
+        }
         case EntityType::Polyline: {
             if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
                 const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
@@ -2213,7 +2305,7 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
             } else {
                 for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
             }
-            ownPath(was, e.points);
+            ownPath(was, e.id);
             break;
         }
         default:
@@ -2268,8 +2360,13 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
             const double dd = distance(hits[i], fit.mid);
             if (dd < bestD) { bestD = dd; host = i; }
         }
-        if (host < paths.size() && paths[host].size() > 2) {
-            const std::vector<Vec2>& path = paths[host];
+        // THE WHOLE RUN through it, not just the one object. A FILLETED corner is a line, an arc and another
+        // line, each trimmed to meet the next: a label laid along only the line it crossed would follow it,
+        // walk off its end and hang in the air where the fillet turns away. Chained, the three are the one run
+        // they are on the sheet, and the label hugs the fillet instead of cutting the corner.
+        const std::vector<Vec2> path =
+            host < owners.size() ? runPathThrough(owners[host]) : std::vector<Vec2>{};
+        if (path.size() > 2) {
             double s = 0.0, off = 0.0;
             placeOnPath(path, fit.mid, s, off);
             // Does the label reach a bend at all? Only then is there anything to go round.

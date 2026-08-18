@@ -853,6 +853,81 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- and it hugs a FILLETED corner, which is three objects ---------------------------------------
+    {
+        // A filleted corner is not one object. It is a line, an arc, and another line, each trimmed to meet
+        // the next. A label laid along only the line it crossed would follow that line, walk off the end of it
+        // and hang in the air where the fillet turns away - so the run is chained through whatever joins on at
+        // either end, and the three read as the one run they are on the sheet.
+        //
+        // A right angle at the origin, rounded with a radius of 10: in along -x to (-10,0), round to (0,10),
+        // then up +y.
+        Document d;
+        const double r = 10.0;
+        Entity in;
+        in.id = QStringLiteral("in");
+        in.type = EntityType::Line;
+        in.a = {-60.0, 0.0};
+        in.b = {-r, 0.0};
+        d.entities().push_back(in);
+        Entity fil;
+        fil.id = QStringLiteral("fillet");
+        fil.type = EntityType::Arc;
+        fil.center = {-r, r};
+        fil.radius = r;
+        fil.startAngle = -M_PI / 2.0;   // at (-10, 0)
+        fil.endAngle = 0.0;             // at (0, 10)
+        d.entities().push_back(fil);
+        Entity up;
+        up.id = QStringLiteral("up");
+        up.type = EntityType::Line;
+        up.a = {0.0, r};
+        up.b = {0.0, 60.0};
+        d.entities().push_back(up);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // A stroke across the arc at its middle - the 45-degree point, at (-10,10) + 10*(cos-45, sin-45).
+        const double k = std::sqrt(0.5);
+        const Vec2 on{-r + r * k, r - r * k};
+        const Vec2 nrm{k, -k};   // outward from the arc centre
+        ed.onPointerPress({on.x + nrm.x * 5.0, on.y + nrm.y * 5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({on.x - nrm.x * 5.0, on.y - nrm.y * 5.0});
+        ed.onPointerPress({on.x - nrm.x * 5.0, on.y - nrm.y * 5.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "fillet: the label goes on at the rounded corner");
+
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "fillet: and covers what it covers");
+        if (mask) {
+            // EVERY corner of the cover sits near the fillet's own radius from its centre - which is what
+            // hugging it means. Cutting the corner would put the middle of the label well inside that radius,
+            // and following only the straight line would leave half the cover nowhere near it.
+            double worst = 0.0;
+            for (const Vec2& q : mask->points)
+                worst = std::max(worst, std::abs(distance(q, fil.center) - r));
+            std::printf("  fillet: the cover stays within %.2f of the fillet's own radius\n", worst);
+            // Half the label's depth, plus a little: the cover reaches across the run, so it is a band from
+            // r - depth/2 to r + depth/2 and nothing outside that.
+            const double depth = ed.labelHeight();
+            check(worst <= depth / 2.0 + 0.35,
+                  "fillet: it hugs the arc - every corner of it is a band about the fillet's radius");
+            // And it really did go round: a label that cut the corner would be a rectangle, four corners.
+            std::printf("  fillet: covered by %d corners, %.1f long by %.1f deep\n",
+                        int(mask->points.size()), ed.labelWidth(), depth);
+            check(mask->points.size() > 4, "fillet: curved, not a chord across the corner");
+            // It spans BOTH legs of the corner, which is the thing a single object could not have told it.
+            const Bounds b = mask->bounds();
+            check(b.min.x < -r * 0.9 && b.max.y > r * 0.9,
+                  "fillet: reaching from the leg that comes in to the leg that goes out");
+        }
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is

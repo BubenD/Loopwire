@@ -1375,6 +1375,16 @@ private:
     // when nothing is marked. A label under clear heatshrink is a label with a sleeve over it, and it is the
     // label that has to match the bundle.
     Bounds labelReferenceBounds() const;
+    // THE WHOLE RUN through one object, as a path: itself, and whatever joins on at either end.
+    //
+    // A filleted corner is not one object. It is a line, an arc, and another line, each trimmed to meet the
+    // next - so a label laid along "the run it crossed" would follow one straight line, walk off the end of it
+    // and hang in the air where the fillet turns away. Chained, the three read as the one run they are on the
+    // sheet, and the label hugs the fillet.
+    //
+    // Arcs and polyline bulges are flattened, because a label is laid by arc length and a path of points is
+    // what that needs.
+    std::vector<Vec2> runPathThrough(const QString& hostId) const;
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const;
