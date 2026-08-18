@@ -117,6 +117,8 @@ private:
     QFormLayout* figuresForm_ = nullptr;
     QFormLayout* tryForm_ = nullptr;
     QDoubleSpinBox* gap_ = nullptr;       // cable and wire: the piece of the run they do not cover
+    // The labels: how far past the first and last run crossed the label goes, at each end.
+    QDoubleSpinBox* exceed_ = nullptr;
     QDoubleSpinBox* head_ = nullptr;
     QDoubleSpinBox* tail_ = nullptr;
     QSpinBox* wires_ = nullptr;

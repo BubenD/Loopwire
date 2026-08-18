@@ -58,6 +58,13 @@ enum class ToolId {
     // split has one per branch, in the order they are marked. The wires are spread along it and may not run
     // off either end, which a single connection point cannot say.
     ModelOutputLine,
+    // WHICH OBJECT THE APP SCALES BY. A model is scaled to fit what it is placed on, and until now that
+    // meant the whole drawing - which is wrong the moment a model is a thing inside another thing. A label
+    // under clear heatshrink is a label with a sleeve over it: what has to match the bundle is the LABEL,
+    // and the sleeve stands outside it. Scaling the pair together fits the sleeve to the bundle and leaves
+    // the label too small, which is exactly backwards. So one object in the drawing is marked as the
+    // reference, and the rest is carried along by the same scale.
+    ModelScaleRef,
     // The two marks that say where the middle of something is. A centre MARK is put on one round thing -
     // a circle, an arc - as the little cross at its centre. A centre LINE is drawn BETWEEN two things
     // that run parallel, down the middle of the gap: two lines, two runs of a polyline, or the two
@@ -159,6 +166,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::ModelFarPoint: return QStringLiteral("Model far point");
     case ToolId::ModelConnectPoint: return QStringLiteral("Model connection point");
     case ToolId::ModelOutputLine: return QStringLiteral("Model output line");
+    case ToolId::ModelScaleRef: return QStringLiteral("Model scale reference");
     case ToolId::CenterMark: return QStringLiteral("Centre mark");
     case ToolId::CenterLine: return QStringLiteral("Centre line");
     }

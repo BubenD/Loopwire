@@ -498,6 +498,9 @@ private:
     void clearMechModelOutputs();
     QToolButton* markConnectMechModelBtn_ = nullptr;
     QToolButton* markOutputMechModelBtn_ = nullptr;
+    // WHICH OBJECT THE APP SCALES THE MODEL BY, marked on the drawing itself. See armMechModelScaleRef.
+    QToolButton* markScaleRefMechModelBtn_ = nullptr;
+    void armMechModelScaleRef();
     bool saveMechModelDocument(Document* doc);
 
     // Blocks.

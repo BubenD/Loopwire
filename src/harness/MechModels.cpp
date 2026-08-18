@@ -67,25 +67,34 @@ std::vector<Entity> builtInLabel(bool underShrink) {
         if (dashed) e.meta.insert(QStringLiteral("linetype"), QStringLiteral("HIDDEN"));
         es.push_back(e);
     };
-    // The run it sits on: a label is placed ON a wire, so the wire is part of the picture and is what the
-    // connection point sits on.
-    line("run", {0.0, 0.0}, {16.0, 0.0});
-    // The flag: a rectangle standing up off the run, the shape a wrapped-and-stuck-out label makes.
-    const double x0 = 5.0, x1 = 11.0, yTop = 7.0;
-    line("flagL", {x0, 0.0}, {x0, yTop});
-    line("flagR", {x1, 0.0}, {x1, yTop});
-    line("flagTop", {x0, yTop}, {x1, yTop});
-    // Where the marking goes, so the flag reads as a label rather than as a blank tab.
+    // The label itself: a rectangle wrapped round the run. It is drawn as a closed rectangle rather than as
+    // three sides off a reference wire, because the wire it goes on is already on the drawing it is placed on
+    // - a fourth line along the run added nothing and, once the label was scaled by the label rather than by
+    // the whole picture, stuck a hundred millimetres out of either end of a forty-millimetre label.
+    //
+    // MARKED AS WHAT THE APP SCALES BY. For a plain label that is the whole of it and changes nothing; under
+    // a clear sleeve it is the difference between fitting the label to the bundle and fitting the sleeve to
+    // it and leaving the label short.
+    const double x0 = 0.0, x1 = 6.0, yBot = 0.0, yTop = 7.0;
+    Entity body;
+    body.id = QStringLiteral("label");
+    body.type = EntityType::Polyline;
+    body.points = {{x0, yBot}, {x1, yBot}, {x1, yTop}, {x0, yTop}, {x0, yBot}};
+    body.meta.insert(QStringLiteral("modelScaleRef"), true);
+    es.push_back(body);
+    // Where the marking goes, so it reads as a label rather than as a blank tab.
     line("text1", {x0 + 1.0, yTop - 2.0}, {x1 - 1.0, yTop - 2.0});
     line("text2", {x0 + 1.0, yTop - 4.0}, {x1 - 1.6, yTop - 4.0});
     if (underShrink) {
         // The clear sleeve over the whole of it, standing off all round. Dashed: it is transparent, and a
-        // solid second outline would read as a second label.
+        // solid second outline would read as a second label. It is NOT the scale reference and it is not
+        // masked - the wires under the sleeve but outside the label are meant to show, which is the one
+        // thing that says the sleeve is clear.
         const double m = 1.6;
-        line("shrinkL", {x0 - m, -m}, {x0 - m, yTop + m}, true);
-        line("shrinkR", {x1 + m, -m}, {x1 + m, yTop + m}, true);
+        line("shrinkL", {x0 - m, yBot - m}, {x0 - m, yTop + m}, true);
+        line("shrinkR", {x1 + m, yBot - m}, {x1 + m, yTop + m}, true);
         line("shrinkTop", {x0 - m, yTop + m}, {x1 + m, yTop + m}, true);
-        line("shrinkBot", {x0 - m, -m}, {x1 + m, -m}, true);
+        line("shrinkBot", {x0 - m, yBot - m}, {x1 + m, yBot - m}, true);
     }
     return es;
 }
@@ -109,15 +118,18 @@ MechModel builtInMechModel(MechModelKind kind) {
     if (kind != MechModelKind::Label && kind != MechModelKind::LabelUnderHeatshrink) return m;
     const std::vector<Entity> es = builtInLabel(kind == MechModelKind::LabelUnderHeatshrink);
     m.drawing = partDrawingFromEntities(es);
-    m.drawnLengthMm = 16.0;
+    m.drawnLengthMm = 6.0;
     // It goes ON the run, at the middle of the piece of run it covers, running along it.
     m.hasConnect = true;
-    m.connectPoint = {8.0, 0.0};
+    m.connectPoint = {3.0, 0.0};
     m.connectAngleRad = 0.0;
-    // The flag itself is what must not stretch when the label covers a longer piece of run: a label is one
-    // size whatever it is wrapped round.
-    m.headMm = 5.0;
-    m.tailMm = 5.0;
+    // A label does not stretch at all: it is one size whatever it is wrapped round, and a longer run gets
+    // the same label, not a longer one. So the whole of it is held: head and tail meet in the middle.
+    m.headMm = 3.0;
+    m.tailMm = 3.0;
+    // Clear of the first and last wire it crosses, at each end. A number rather than a proportion, because
+    // an office that draws 2 mm clear draws 2 mm clear whether the bundle is three wires or thirty.
+    m.exceedMm = 2.0;
     return m;
 }
 
@@ -203,6 +215,7 @@ QJsonObject MechModel::toJson() const {
         o.insert(QStringLiteral("connectAngle"), connectAngleRad);
     }
     if (gapMm > 0.0) o.insert(QStringLiteral("gap"), gapMm);
+    if (exceedMm > 0.0) o.insert(QStringLiteral("exceed"), exceedMm);
     // The faces the wires leave by, in the order they were marked - which is the order the generator hands
     // a split's branches out in, so it is written down rather than sorted.
     if (!outputs.empty()) {
@@ -236,6 +249,7 @@ void MechModel::fromJson(const QJsonObject& o) {
                         connect.value(QStringLiteral("y")).toDouble()};
     connectAngleRad = o.value(QStringLiteral("connectAngle")).toDouble();
     gapMm = o.value(QStringLiteral("gap")).toDouble();
+    exceedMm = o.value(QStringLiteral("exceed")).toDouble();
     outputs.clear();
     for (const auto v : o.value(QStringLiteral("outputs")).toArray()) {
         const QJsonArray l = v.toArray();

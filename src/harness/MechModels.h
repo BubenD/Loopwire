@@ -141,6 +141,22 @@ struct MechModel {
         return kind == MechModelKind::Cable || kind == MechModelKind::Wire;
     }
 
+    // HOW FAR PAST THE OUTERMOST RUN it goes, at each end, when it is placed across a set of them.
+    //
+    // A label is laid across the runs it labels and has to cover all of them, and a label that stops flush
+    // with the first and last wire reads as a label that missed them - so it goes a little over. How much is
+    // a house style, not a calculation: an office that draws 2 mm clear draws 2 mm clear on every sheet it
+    // releases, whether the bundle is three wires or thirty. Guessing it from the bundle's own width gave a
+    // different answer every time, which is the one thing a house style must not do.
+    //
+    // Zero falls back to a proportion of the size, so a model captured before this existed places as it did.
+    double exceedMm = 0.0;
+    // Which kinds it means anything for: the two that are placed ACROSS a set of runs by a stroke rather
+    // than along one run.
+    static bool kindHasExceed(MechModelKind kind) {
+        return kind == MechModelKind::Label || kind == MechModelKind::LabelUnderHeatshrink;
+    }
+
     bool isEmpty() const { return drawing.isEmpty(); }
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& o);

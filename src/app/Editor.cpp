@@ -1936,12 +1936,35 @@ inline QString labelMidXKey() { return QStringLiteral("labelMidX"); }
 inline QString labelMidYKey() { return QStringLiteral("labelMidY"); }
 } // namespace
 
-void Editor::beginLabelPlacement(const std::vector<Entity>& drawing) {
+// WHAT THE LABEL IS MEASURED BY: the object marked as the model's scale reference, or the whole drawing when
+// nothing is marked - which is right for a model that is one thing.
+//
+// It matters the moment a model is a thing inside another thing. A label under clear heatshrink is a label
+// with a sleeve over it: what has to match the bundle is the LABEL, and the sleeve stands outside it. Measure
+// the pair together and the sleeve fits the bundle while the label comes out too small, which is exactly
+// backwards - and it is what the drawing looked like.
+Bounds Editor::labelReferenceBounds() const {
+    Bounds ref, all;
+    for (const Entity& e : labelProto_) {
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        all.expand(b.min);
+        all.expand(b.max);
+        if (e.meta.value(QStringLiteral("modelScaleRef")).toBool()) {
+            ref.expand(b.min);
+            ref.expand(b.max);
+        }
+    }
+    return ref.valid ? ref : all;
+}
+
+void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exceedMm) {
     if (!doc_ || drawing.empty()) {
         emit message(QStringLiteral("Nothing to place"));
         return;
     }
     endLabelEdit();          // one label being fitted at a time
+    labelExceedMm_ = std::max(0.0, exceedMm);
     labelProto_ = drawing;
     labelPlacing_ = true;
     labelStrokeHasStart_ = false;
@@ -1984,11 +2007,7 @@ Vec2 Editor::labelStrokeEnd() const { return labelFrozen_ ? labelFrozenAt_ : cur
 Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     LabelFit fit;
     if (!doc_ || labelProto_.empty()) return fit;
-    Bounds proto;
-    for (const Entity& e : labelProto_) {
-        const Bounds pb = e.bounds();
-        if (pb.valid) { proto.expand(pb.min); proto.expand(pb.max); }
-    }
+    const Bounds proto = labelReferenceBounds();
     if (!proto.valid || proto.width() < 1e-9) return fit;
 
     // Everything the stroke crosses, and which way it was going where it was crossed. The masks other
@@ -2054,9 +2073,14 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
         fit.acrossMm = labelAcrossMm_;
     } else {
         // A LITTLE BIT OVER the outermost run, because a label flush with the edge of a bundle reads as a
-        // label that missed the last wire. A thin bundle does not shrink the label below the size labels
-        // come in: one wire still gets a whole label.
-        const double margin = std::max(labelAcrossMm_ * 0.12, spread * 0.10);
+        // label that missed the last wire. HOW MUCH is the model's own figure, set in the manager: an
+        // office that draws 2 mm clear draws 2 mm clear whether the bundle is three wires or thirty, and
+        // working it out from the bundle's own width gave a different answer every time - which is the one
+        // thing a house style must not do. No figure falls back to that proportion, so a model captured
+        // before there was one places as it did.
+        const double margin = labelExceedMm_ > 1e-9
+                                  ? labelExceedMm_
+                                  : std::max(labelAcrossMm_ * 0.12, spread * 0.10);
         fit.acrossMm = std::max(labelAcrossMm_, spread + 2.0 * margin);
     }
     fit.ok = true;
@@ -2071,11 +2095,7 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, Bounds& covers) c
     std::vector<Entity> out;
     covers = Bounds();
     if (!fit.ok || labelProto_.empty()) return out;
-    Bounds proto;
-    for (const Entity& e : labelProto_) {
-        const Bounds b = e.bounds();
-        if (b.valid) { proto.expand(b.min); proto.expand(b.max); }
-    }
+    const Bounds proto = labelReferenceBounds();
     if (!proto.valid || proto.width() < 1e-9) return out;
     const double sa = fit.alongMm / proto.width();
     const double sc = proto.height() > 1e-9 ? fit.acrossMm / proto.height() : 1.0;
@@ -2100,10 +2120,20 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, Bounds& covers) c
         if (h > 1e-9) e.meta.insert(QStringLiteral("height"), h * std::min(sa, sc));
         out.push_back(e);
     }
-    for (const Entity& e : out) {
-        const Bounds b = e.bounds();
-        if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
+    // WHAT IS MASKED is what is OPAQUE, which is the label - the reference object - and not everything drawn
+    // with it. A clear sleeve is clear: the wires under the sleeve but outside the label are meant to show,
+    // and masking to the sleeve's edge would hide the very thing that says the sleeve is transparent.
+    bool masked = false;
+    for (size_t i = 0; i < out.size() && i < labelProto_.size(); ++i) {
+        if (!labelProto_[i].meta.value(QStringLiteral("modelScaleRef")).toBool()) continue;
+        const Bounds b = out[i].bounds();
+        if (b.valid) { covers.expand(b.min); covers.expand(b.max); masked = true; }
     }
+    if (!masked)
+        for (const Entity& e : out) {
+            const Bounds b = e.bounds();
+            if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
+        }
     return out;
 }
 
@@ -2759,6 +2789,20 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             return;
         }
         emit modelOutputPicked(outputFirst_, p);
+        return;
+    }
+    // WHICH OBJECT THE APP SCALES BY: one click on it, not two on a pair of points. What is being said here
+    // is "this thing, of the things drawn" - so the thing is picked, the way a block or a hatch boundary is,
+    // rather than described with coordinates that would stop meaning anything the moment it was moved.
+    if (tool_ == ToolId::ModelScaleRef) {
+        const auto hit = hitTest(p);
+        if (!hit) {
+            emit message(QStringLiteral(
+                "Click the object the model is scaled by — the label inside a sleeve, not the sleeve"));
+            return;
+        }
+        emit modelScaleRefPicked(*hit);
+        setTool(ToolId::Select);
         return;
     }
     if (tool_ == ToolId::ModelConnectPoint) {

@@ -1937,6 +1937,29 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
             doc.entities().push_back(barb);
         }
     }
+    // The object the app scales by, boxed in cyan so it can be SEEN which one it is. A mark that cannot be
+    // seen is a mark nobody trusts: the whole point of picking the label inside a sleeve is knowing you
+    // picked the label and not the sleeve, and the two are drawn one inside the other.
+    for (const Entity& e : doc.entities()) {
+        if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
+        if (!e.meta.value(QStringLiteral("modelScaleRef")).toBool()) continue;
+        const Bounds rb = e.bounds();
+        if (!rb.valid) continue;
+        const double pad = std::max(0.6, std::max(rb.width(), rb.height()) * 0.05);
+        Entity box;
+        box.id = QStringLiteral("scaleref");
+        box.type = EntityType::Polyline;
+        box.layer = QLatin1String(kMechModelGuideLayer);
+        box.color = QStringLiteral("#2bd0ff");
+        box.points = {{rb.min.x - pad, rb.min.y - pad},
+                      {rb.max.x + pad, rb.min.y - pad},
+                      {rb.max.x + pad, rb.max.y + pad},
+                      {rb.min.x - pad, rb.max.y + pad},
+                      {rb.min.x - pad, rb.min.y - pad}};
+        box.meta.insert(QStringLiteral("lineType"), QStringLiteral("dashed"));
+        doc.entities().push_back(box);
+        break;
+    }
     if (!mechModelStretches(model.kind)) return;
     const double length = model.drawnLengthMm > 0.0 ? model.drawnLengthMm
                                                     : mechModelDrawnLength(model);
@@ -2108,6 +2131,29 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         statusBar()->showMessage(near ? QStringLiteral("Near point marked in orange")
                                       : QStringLiteral("Far point marked in green"),
                                  3000);
+    });
+    // One object marked as the one the app scales by - and only one, so marking another moves the mark
+    // rather than adding a second. Two references would be two answers to a question with one answer.
+    connect(editor_, &Editor::modelScaleRefPicked, this, [this](const QString& id) {
+        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+        QString what;
+        for (Entity& e : doc_->entities()) {
+            if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
+            if (e.id == id) {
+                e.meta.insert(QStringLiteral("modelScaleRef"), true);
+                const Bounds b = e.bounds();
+                if (b.valid)
+                    what = tr("%1 long by %2 across").arg(b.width(), 0, 'f', 1).arg(b.height(), 0, 'f', 1);
+            } else {
+                e.meta.remove(QStringLiteral("modelScaleRef"));
+            }
+        }
+        doc_->setDirty(true);
+        canvas_->invalidateScene();
+        canvas_->update();
+        statusBar()->showMessage(
+            tr("Scaled by this object — %1. Everything else is carried along by the same scale.").arg(what),
+            6000);
     });
     connect(editor_, &Editor::modelOutputPicked, this, [this](Vec2 a, Vec2 b) {
         if (!doc_ || !mechModelEdits_.contains(doc_)) return;
@@ -11347,7 +11393,7 @@ void MainWindow::placeMechModel(MechModelKind kind) {
     // wide the bundle is where it goes, which is not something to be typed in beforehand. Everything else
     // is placed as drawn, held by its connection point - the point somebody means to put it on.
     if (kind == MechModelKind::Label || kind == MechModelKind::LabelUnderHeatshrink) {
-        editor_->beginLabelPlacement(partDrawingEntities(model.drawing));
+        editor_->beginLabelPlacement(partDrawingEntities(model.drawing), model.exceedMm);
         canvas_->setFocus();
         return;
     }
@@ -11377,6 +11423,17 @@ QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
         p.drawRect(QRectF(5, 4, 18, 20));
     }
     return QIcon(pm);
+}
+
+// WHICH OBJECT THE APP SCALES THE MODEL BY, marked on the object itself rather than kept beside the model
+// as an id or an index. A drawing is captured, moved, re-captured and re-ordered; a mark that travels IN the
+// object survives all of that, and a number kept next to the model does not.
+void MainWindow::armMechModelScaleRef() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    editor_->setTool(ToolId::ModelScaleRef);
+    canvas_->setFocus();
+    statusBar()->showMessage(
+        tr("Click the object the model is scaled by - the label inside a sleeve, not the sleeve"), 6000);
 }
 
 void MainWindow::armMechModelOutput() {
@@ -11622,6 +11679,7 @@ void MainWindow::activateIndex(int index) {
     // Marking a face the wires leave by is worth doing on ANY model, stretched or not: a connector, a
     // backshell and a split all have one, and the run-to-a-length kinds have them at each end.
     if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(editingMechModel);
+    if (markScaleRefMechModelBtn_) markScaleRefMechModelBtn_->setEnabled(editingMechModel);
     if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(editingMechModel);
     for (QToolButton* b : tplSessionBtns_)
         if (b) b->setEnabled(editingTemplate);

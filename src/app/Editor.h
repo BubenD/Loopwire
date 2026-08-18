@@ -494,7 +494,10 @@ public:
     // It exceeds the outermost run it crosses a little, because a label flush with the edge of a bundle
     // reads as a label that missed. What it covers is masked: a label is opaque, and a label with the wires
     // drawn straight over the top of it reads as a label BEHIND the harness.
-    void beginLabelPlacement(const std::vector<Entity>& drawing);
+    // `exceedMm` is how far past the first and last run crossed the label goes, at each end - the model's
+    // own house figure. Zero falls back to a proportion of the label's size, which is what it did before
+    // there was a figure to ask for.
+    void beginLabelPlacement(const std::vector<Entity>& drawing, double exceedMm = 0.0);
     bool placingLabel() const { return labelPlacing_; }
     bool labelStrokeStarted() const { return labelPlacing_ && labelStrokeHasStart_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
@@ -1053,6 +1056,8 @@ signals:
     // The hatch live-edit target changed (a hatch was created, or the session
     // ended) — the host re-points the contextual Hatch tab.
     void hatchTargetChanged();
+    // An object on a model's editing canvas picked as the one the app scales the model by.
+    void modelScaleRefPicked(const QString& id);
     // A label was armed, placed, resized or let go of - the host shows the label's own ribbon group while
     // one is being fitted, and puts the rest of the tab away while it is, because hunting for the two
     // fields that matter among forty buttons is what makes a drawing slow to make.
@@ -1322,6 +1327,9 @@ private:
     double labelAlongMm_ = kLabelWidthMm;
     double labelAcrossMm_ = kLabelHeightMm;
     bool labelAcrossManual_ = false;   // the across size said by hand: the stroke stops deciding it
+    // How far past the outermost run crossed it goes, at each end: the model's house figure, or 0 for a
+    // proportion of the label's own size.
+    double labelExceedMm_ = 0.0;
     // HOW A LABEL SITS: where its middle is, which way the runs it is on go, and the size it takes. Kept
     // apart from the drawing so that a width typed on the ribbon, or a slide along the runs, is a change to
     // three numbers and a redraw rather than a re-measure of the sheet.
@@ -1336,6 +1344,10 @@ private:
     LabelFit labelFit_;
     // Measured off the stroke a..b: which runs it crosses, how far they spread, and the size that covers
     // them. Does not touch any state, so the preview and the commit can ask the same question.
+    // What the label is measured BY: the object marked as the model's scale reference, or the whole drawing
+    // when nothing is marked. A label under clear heatshrink is a label with a sleeve over it, and it is the
+    // label that has to match the bundle.
+    Bounds labelReferenceBounds() const;
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, Bounds& covers) const;

@@ -288,12 +288,25 @@ void MainWindow::buildHomeTab() {
             connect(a, &QAction::triggered, this, [this] { clearMechModelOutputs(); });
             markOutputMechModelBtn_->setMenu(om);
         }
+        // WHICH OBJECT THE APP SCALES THE MODEL BY. A model is scaled to fit what it is placed on, and
+        // "the whole drawing" is the wrong answer as soon as a model is a thing inside another thing: a
+        // label under clear heatshrink is a label with a sleeve over it, and what has to match the bundle
+        // is the LABEL. Scale the pair together and the sleeve fits the bundle while the label comes out
+        // too small, which is exactly backwards.
+        sessionButton(markScaleRefMechModelBtn_, tr("Scale\nby"), modelAnchorIcon(QColor("#2bd0ff")),
+                      tr("Click the object the app scales this model by - the label inside a sleeve, not "
+                         "the sleeve. Everything else in the drawing is carried along by the same scale, "
+                         "so a sleeve stays a sleeve and ends up standing outside the label. Nothing "
+                         "marked means the whole drawing, which is right for a model that is one thing."));
+        connect(markScaleRefMechModelBtn_, &QToolButton::clicked, this,
+                [this] { armMechModelScaleRef(); });
         sg->addWidget(captureMechModelBtn_, 0, 0);
         sg->addWidget(cancelMechModelBtn_, 0, 1);
         sg->addWidget(markConnectMechModelBtn_, 0, 2);
         sg->addWidget(markNearMechModelBtn_, 0, 3);
         sg->addWidget(markFarMechModelBtn_, 0, 4);
         sg->addWidget(markOutputMechModelBtn_, 0, 5);
+        sg->addWidget(markScaleRefMechModelBtn_, 0, 6);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);

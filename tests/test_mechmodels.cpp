@@ -649,6 +649,80 @@ int run_mechmodels_tests() {
         check(e2.placingLabel(), "label: and it is still in hand, waiting for a stroke that crosses");
     }
 
+    // ---- what the app scales BY, and how far past the wires it goes ------------------------------
+    {
+        // A model is scaled to fit what it is placed on, and "the whole drawing" is the wrong answer the
+        // moment a model is a thing INSIDE another thing. A label under clear heatshrink is a label with a
+        // sleeve over it: what has to match the bundle is the LABEL, and the sleeve stands outside it. Scale
+        // the pair together and the sleeve fits the bundle while the label comes out too small - which is
+        // exactly backwards, and is what the drawing looked like.
+        Document d;
+        for (int i = 0; i < 2; ++i) {   // two wires 10 apart, running along x
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 10.0};
+            w.b = {100.0, static_cast<double>(i) * 10.0};
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::LabelUnderHeatshrink);
+        check(m.exceedMm > 0.0, "scale-by: a label says how far clear of the wires it goes");
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        ed.onPointerPress({50.0, -4.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 14.0});
+        ed.onPointerPress({50.0, 14.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "scale-by: the label is placed");
+
+        // The MASK is the label, because the label is what is opaque. So the mask says where the label is,
+        // and it must reach past the wires by the model's own figure - not by a proportion of whatever
+        // bundle it happened to land on.
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "scale-by: and masked");
+        double labelLo = 0.0, labelHi = 0.0;
+        if (mask) {
+            const Bounds b = mask->bounds();
+            labelLo = b.min.y;
+            labelHi = b.max.y;
+            std::printf("  scale-by: label covers y %.1f..%.1f, wires at 0 and 10, asked for %.1f clear\n",
+                        labelLo, labelHi, m.exceedMm);
+            check(std::abs(labelLo - (0.0 - m.exceedMm)) < 1e-6 &&
+                      std::abs(labelHi - (10.0 + m.exceedMm)) < 1e-6,
+                  "scale-by: the LABEL clears the first and last wire by the figure asked for");
+        }
+
+        // And the sleeve stands OUTSIDE the label - it is the label that was fitted to the bundle, not the
+        // pair of them. Measured on the whole of what was placed, which includes the sleeve.
+        Bounds whole;
+        for (const Entity& e : d.entities()) {
+            if (e.type == EntityType::Line && e.id.startsWith(QStringLiteral("w"))) continue;
+            const Bounds b = e.bounds();
+            if (b.valid) { whole.expand(b.min); whole.expand(b.max); }
+        }
+        std::printf("  scale-by: with the sleeve, y %.1f..%.1f\n", whole.min.y, whole.max.y);
+        check(whole.min.y < labelLo - 1e-6 && whole.max.y > labelHi + 1e-6,
+              "scale-by: the sleeve stands outside the label, not the label inside a fitted sleeve");
+        // The wires between the label's edge and the sleeve's are NOT masked: a clear sleeve is clear, and
+        // hiding them would hide the one thing that says so.
+        check(labelLo > whole.min.y && labelHi < whole.max.y,
+              "scale-by: so the wires show under the sleeve where the label does not cover them");
+
+        // No figure means the old behaviour: a proportion, so a drawing captured before there was a figure
+        // to ask for still places.
+        Editor e2;
+        e2.setDocument(&d);
+        noSnap(e2);
+        e2.beginLabelPlacement(partDrawingEntities(m.drawing), 0.0);
+        e2.onPointerPress({20.0, -4.0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({20.0, 14.0});
+        e2.onPointerPress({20.0, 14.0}, Qt::LeftButton, Qt::NoModifier);
+        check(e2.labelLive(), "scale-by: and no figure at all still places a label");
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is
@@ -712,14 +786,23 @@ int run_mechmodels_tests() {
             const std::vector<Entity> es = partDrawingEntities(m.drawing);
             std::printf("  built-in: %s is %d object(s)\n", qPrintable(mechModelName(kind)),
                         int(es.size()));
-            check(es.size() >= 6, "built-in: the run, the flag round it, and the marking on it");
+            check(es.size() >= 3, "built-in: the label, and the marking on it");
+            // ONE object in it is marked as what the app scales the model by. Without that, a label under a
+            // clear sleeve is scaled as a pair - the sleeve is fitted to the bundle and the label inside it
+            // comes out too small, which is exactly backwards.
+            int refs = 0;
+            for (const Entity& e : es)
+                if (e.meta.value(QStringLiteral("modelScaleRef")).toBool()) ++refs;
+            check(refs == 1, "built-in: exactly one object says what the model is scaled by");
+            // And how far clear of the first and last wire it goes, as a figure rather than a proportion.
+            check(m.exceedMm > 0.0, "built-in: and how far clear of the wires it goes");
             // It goes ON a run, so it knows where it attaches and which way it lies - otherwise the wizard
             // could not place it and it would land by the corner of its own extent.
             check(m.hasConnect, "built-in: it knows where it sits on the run");
             // And it does not stretch its own flag when it covers a longer piece of run: a label is one size
             // whatever it is wrapped round.
             check(m.headMm > 0.0 && m.tailMm > 0.0,
-                  "built-in: the flag keeps its size at any length of run");
+                  "built-in: the label keeps its size at any length of run");
             const std::vector<Entity> longer =
                 mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 60.0);
             check(!longer.empty(), "built-in: it can be drawn at a length");

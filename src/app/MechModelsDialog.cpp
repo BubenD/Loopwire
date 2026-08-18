@@ -220,6 +220,17 @@ void MechModelsDialog::buildUi() {
         "is not asked for: it comes from the harness when the drawing is generated."));
     connect(gap_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
     figuresForm_->addRow(QStringLiteral("Gap left at each end"), gap_);
+    // A label is placed ACROSS the runs, not along one, and it has to cover all of them. Flush with the
+    // first and last wire it reads as a label that missed them, so it goes a little over - and how much is a
+    // house style, the same on every sheet an office releases, not something to be worked out from the width
+    // of whatever bundle it happens to land on.
+    exceed_ = mmSpin();
+    exceed_->setToolTip(QStringLiteral(
+        "How far past the first and last run it crosses the label goes, at each end. On zero: a proportion "
+        "of the label's own size, which gives a different answer on every bundle - set a number and every "
+        "label on every sheet clears its bundle by the same amount."));
+    connect(exceed_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
+    figuresForm_->addRow(QStringLiteral("Clear of the first and last run"), exceed_);
     wires_ = new QSpinBox;
     wires_->setRange(0, 200);
     wires_->setKeyboardTracking(false);
@@ -437,14 +448,18 @@ void MechModelsDialog::refreshDetails() {
     const bool stretches = mechModelStretches(kind);
     const bool perWire = mechModelPerWire(kind);
     const bool hasGap = MechModel::kindHasGap(kind);
+    const bool hasExceed = MechModel::kindHasExceed(kind);
     if (figuresForm_) {
         figuresForm_->setRowVisible(head_, stretches);
         figuresForm_->setRowVisible(tail_, stretches);
         figuresForm_->setRowVisible(gap_, hasGap);
+        figuresForm_->setRowVisible(exceed_, hasExceed);
         figuresForm_->setRowVisible(wires_, perWire);
         figuresForm_->setRowVisible(insulation_, hasInsulationProperty(kind));
     }
-    if (figures_) figures_->setVisible(stretches || hasGap || perWire || hasInsulationProperty(kind));
+    if (figures_)
+        figures_->setVisible(stretches || hasGap || hasExceed || perWire ||
+                             hasInsulationProperty(kind));
     if (tryForm_) {
         tryForm_->setRowVisible(tryLen_, stretches);
         tryForm_->setRowVisible(tryWires_, perWire);
@@ -456,6 +471,7 @@ void MechModelsDialog::refreshDetails() {
     if (head_) head_->setValue(m ? m->headMm : 0.0);
     if (tail_) tail_->setValue(m ? m->tailMm : 0.0);
     if (gap_) gap_->setValue(m ? m->gapMm : 0.0);
+    if (exceed_) exceed_->setValue(m ? m->exceedMm : 0.0);
     if (wires_) wires_->setValue(m ? m->drawnWireCount : 0);
     if (scaleAcross_) scaleAcross_->setChecked(m && m->drawnAcrossMm > 0.0);
 
@@ -542,6 +558,7 @@ void MechModelsDialog::applyFigures() {
     m.headMm = head_ && mechModelStretches(kind) ? head_->value() : 0.0;
     m.tailMm = tail_ && mechModelStretches(kind) ? tail_->value() : 0.0;
     m.gapMm = gap_ && MechModel::kindHasGap(kind) ? gap_->value() : 0.0;
+    m.exceedMm = exceed_ && MechModel::kindHasExceed(kind) ? exceed_->value() : 0.0;
     m.drawnWireCount = wires_ && mechModelPerWire(kind) ? wires_->value() : 0;
     // Scaling across is a yes or no, and the size it was drawn at is measured: the two used to be one field
     // where zero meant no, which is a number standing in for a decision.
