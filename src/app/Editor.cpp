@@ -1929,6 +1929,16 @@ void Editor::onPointerMove(const Vec2& raw) {
     if (drafting_ && !draftPts_.empty()) anchor = draftPts_.back();
     else if (!modifyPts_.empty()) anchor = modifyPts_.back();
     else if (editing_ && editMode_ == 1) anchor = editAnchor_; // ortho/polar vs fixed end
+    // A model's DIRECTION VECTOR is picked as two clicks, and the second one is nothing but an angle - it
+    // says which way the part runs, and the distance is thrown away. So it is the one pick that most wants
+    // polar tracking, and it was the one pick that could not have it: tracking measures from an anchor, and
+    // the first click was never handed over as one. The comment on the pick claimed polar would "give 0, 30,
+    // 45, 90 exactly"; nothing was making that true.
+    //
+    // An output face wants it for the same reason - a face across a part is square to it or at a stated
+    // angle, not at whatever the cursor happened to be at.
+    else if (haveConnectFirst_) anchor = connectFirst_;
+    else if (haveOutputFirst_) anchor = outputFirst_;
 
     std::vector<QString> ignore;
     if (editing_ && editMode_ == 1) ignore.push_back(editEntityId_); // don't snap to self

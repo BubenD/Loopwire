@@ -77,6 +77,9 @@ public:
     bool breakBandStarted() const { return tool_ == ToolId::LengthBreak && wireBandHasStart_; }
     Vec2 breakBandStart() const { return wireBandStart_; }
     Vec2 breakBandEnd() const { return breakFrozen_ ? breakFrozenAt_ : cursor_; }
+    // Where the cursor actually IS once the snaps have had it - the point a click would use, rather than
+    // the raw position of the mouse. What the status readout shows, and what a test of a snap has to ask.
+    Vec2 snappedCursor() const { return cursor_; }
     // Tab: pin the preview where it is, so the numbers on the ribbon can be tried on the real thing
     // without the cursor moving it. The next click on the drawing places it and resumes.
     void freezeBreakPreview();

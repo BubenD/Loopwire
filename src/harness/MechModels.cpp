@@ -53,6 +53,43 @@ const std::array<KindName, 16> kKinds = {{
      "Label under clear heatshrink"},
 }};
 
+// A label on a run, as one is drawn: the run through it, a flag standing on the run, and a line inside the
+// flag for the text that goes on it. Under clear heatshrink, a second outline over the top, drawn dashed
+// because that is how a see-through sleeve is shown.
+std::vector<Entity> builtInLabel(bool underShrink) {
+    std::vector<Entity> es;
+    auto line = [&](const char* id, Vec2 a, Vec2 b, bool dashed = false) {
+        Entity e;
+        e.id = QString::fromLatin1(id);
+        e.type = EntityType::Line;
+        e.a = a;
+        e.b = b;
+        if (dashed) e.meta.insert(QStringLiteral("linetype"), QStringLiteral("HIDDEN"));
+        es.push_back(e);
+    };
+    // The run it sits on: a label is placed ON a wire, so the wire is part of the picture and is what the
+    // connection point sits on.
+    line("run", {0.0, 0.0}, {16.0, 0.0});
+    // The flag: a rectangle standing up off the run, the shape a wrapped-and-stuck-out label makes.
+    const double x0 = 5.0, x1 = 11.0, yTop = 7.0;
+    line("flagL", {x0, 0.0}, {x0, yTop});
+    line("flagR", {x1, 0.0}, {x1, yTop});
+    line("flagTop", {x0, yTop}, {x1, yTop});
+    // Where the marking goes, so the flag reads as a label rather than as a blank tab.
+    line("text1", {x0 + 1.0, yTop - 2.0}, {x1 - 1.0, yTop - 2.0});
+    line("text2", {x0 + 1.0, yTop - 4.0}, {x1 - 1.6, yTop - 4.0});
+    if (underShrink) {
+        // The clear sleeve over the whole of it, standing off all round. Dashed: it is transparent, and a
+        // solid second outline would read as a second label.
+        const double m = 1.6;
+        line("shrinkL", {x0 - m, -m}, {x0 - m, yTop + m}, true);
+        line("shrinkR", {x1 + m, -m}, {x1 + m, yTop + m}, true);
+        line("shrinkTop", {x0 - m, yTop + m}, {x1 + m, yTop + m}, true);
+        line("shrinkBot", {x0 - m, -m}, {x1 + m, -m}, true);
+    }
+    return es;
+}
+
 MechModelKind canonicalKind(MechModelKind kind) {
     if (kind == MechModelKind::RingUninsulated) return MechModelKind::RingInsulated;
     if (kind == MechModelKind::FerruleUninsulated) return MechModelKind::FerruleInsulated;
@@ -65,6 +102,24 @@ bool isInsulationKind(MechModelKind kind) {
 }
 
 } // namespace
+
+MechModel builtInMechModel(MechModelKind kind) {
+    MechModel m;
+    m.kind = kind;
+    if (kind != MechModelKind::Label && kind != MechModelKind::LabelUnderHeatshrink) return m;
+    const std::vector<Entity> es = builtInLabel(kind == MechModelKind::LabelUnderHeatshrink);
+    m.drawing = partDrawingFromEntities(es);
+    m.drawnLengthMm = 16.0;
+    // It goes ON the run, at the middle of the piece of run it covers, running along it.
+    m.hasConnect = true;
+    m.connectPoint = {8.0, 0.0};
+    m.connectAngleRad = 0.0;
+    // The flag itself is what must not stretch when the label covers a longer piece of run: a label is one
+    // size whatever it is wrapped round.
+    m.headMm = 5.0;
+    m.tailMm = 5.0;
+    return m;
+}
 
 std::vector<MechModelKind> allMechModelKinds() {
     std::vector<MechModelKind> out;

@@ -505,6 +505,39 @@ int run_mechmodels_tests() {
         }
     }
 
+    // ---- a label can be placed before anybody has drawn one ---------------------------------------
+    {
+        // A button that places nothing until somebody has drawn the part is a button nobody can use. So a
+        // label - a flag standing on the run - and the same under a clear sleeve are built in. It is a
+        // starting point, not a house style: capturing a drawing of your own replaces it for good.
+        for (const MechModelKind kind : {MechModelKind::Label, MechModelKind::LabelUnderHeatshrink}) {
+            const MechModel m = builtInMechModel(kind);
+            check(!m.isEmpty(), "built-in: a label has a drawing without one being captured first");
+            const std::vector<Entity> es = partDrawingEntities(m.drawing);
+            std::printf("  built-in: %s is %d object(s)\n", qPrintable(mechModelName(kind)),
+                        int(es.size()));
+            check(es.size() >= 6, "built-in: the run, the flag round it, and the marking on it");
+            // It goes ON a run, so it knows where it attaches and which way it lies - otherwise the wizard
+            // could not place it and it would land by the corner of its own extent.
+            check(m.hasConnect, "built-in: it knows where it sits on the run");
+            // And it does not stretch its own flag when it covers a longer piece of run: a label is one size
+            // whatever it is wrapped round.
+            check(m.headMm > 0.0 && m.tailMm > 0.0,
+                  "built-in: the flag keeps its size at any length of run");
+            const std::vector<Entity> longer =
+                mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, 60.0);
+            check(!longer.empty(), "built-in: it can be drawn at a length");
+        }
+        // The clear sleeve is what tells the two apart, so the second must have more in it than the first.
+        check(partDrawingEntities(builtInMechModel(MechModelKind::LabelUnderHeatshrink).drawing).size() >
+                  partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing).size(),
+              "built-in: the one under heatshrink has the sleeve drawn over it");
+        // Nothing is invented for the kinds that are too much somebody's own drawing to guess at.
+        check(builtInMechModel(MechModelKind::CircularConnector).isEmpty() &&
+                  builtInMechModel(MechModelKind::CircularBackshell).isEmpty(),
+              "built-in: a connector and a backshell are left to the office that draws them");
+    }
+
     // ---- the faces the wires come out of ----------------------------------------------------------
     {
         // A connection point says where the part meets the run and nothing about the face the conductors
@@ -550,6 +583,36 @@ int run_mechmodels_tests() {
             // each is worse than pressing Esc at the end.
             check(ed->tool() == ToolId::ModelOutputLine,
                   "outputs: the tool stays armed for the next branch");
+
+            // POLAR TRACKING on the second click of a two-click pick. Tracking measures from an anchor, and
+            // the first click was never handed over as one - so the pick that is nothing BUT an angle was
+            // the one pick that could not snap to one. Marked here on the output face; the connection
+            // point's direction click works the same way and for the same reason.
+            {
+                auto& s = ed->snapSettings();
+                s.polar = true;
+                s.polarStepDeg = 45.0;
+                s.objectSnap = false;
+                ed->setTool(ToolId::ModelOutputLine);
+                ed->onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // the first end
+                // Polar jumps to an increment only within about 2 degrees of it, the way AutoCAD's does -
+                // otherwise the angle stays free and the cursor is where you put it. So it is checked on
+                // both sides of that: 1.1 degrees off horizontal is pulled flat, 8.5 degrees off is left
+                // alone. My first version of this used the 8.5 and called the correct answer a failure.
+                ed->onPointerMove({10.0, 0.2});
+                const Vec2 close = ed->snappedCursor();
+                std::printf("  outputs: polar took (10.0,0.2) to (%.2f,%.2f)\n", close.x, close.y);
+                check(std::abs(close.y) < 1e-6,
+                      "outputs: polar tracking pulls the second click onto an exact angle");
+                ed->onPointerMove({10.0, 1.5});
+                const Vec2 wide = ed->snappedCursor();
+                check(std::abs(wide.y - 1.5) < 1e-6,
+                      "outputs: and well off an increment the angle is left free");
+                ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+                s.polar = false;
+                s.objectSnap = true;
+                ed->setTool(ToolId::ModelOutputLine);
+            }
             int bars = 0;
             for (const Entity& e : doc->entities())
                 if (e.meta.contains(QStringLiteral("modelOutput"))) ++bars;

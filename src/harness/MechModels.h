@@ -146,6 +146,18 @@ struct MechModel {
     void fromJson(const QJsonObject& o);
 };
 
+// A drawing the program itself knows how to make, for the kinds where a sensible one can be stated in
+// geometry rather than having to be drawn by hand.
+//
+// It is a STARTING POINT, not a house style: the whole reason default models exist is that every office
+// draws these its own way, and one captured off a real sheet always beats one written in code. But a button
+// that places nothing until somebody has drawn a part is a button nobody can use, so a label - a flag on the
+// run, and the same under a clear sleeve - is built in. Capturing over it replaces it for good.
+//
+// Returns an empty model for a kind with nothing built in, which is most of them: a connector, a backshell
+// or a Y-split is too much somebody's own drawing to be guessed at here.
+MechModel builtInMechModel(MechModelKind kind);
+
 // Every model there is, saved as one file in the application's data folder - a drawing office's house
 // style, in one place, moved from machine to machine as one file.
 class MechModelSet {

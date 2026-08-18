@@ -11264,8 +11264,12 @@ void MainWindow::armMechModelConnect() {
 void MainWindow::placeMechModel(MechModelKind kind) {
     MechModelSet set;
     set.load();
-    const MechModel* model = set.of(kind);
-    if (!model || model->isEmpty()) {
+    const MechModel* found = set.of(kind);
+    // The office's own drawing when there is one, and the built-in otherwise - a button that places nothing
+    // until somebody has drawn a part is a button nobody can use. Capturing a drawing of your own replaces
+    // this for good; it is a starting point, not a house style.
+    MechModel model = found && !found->isEmpty() ? *found : builtInMechModel(kind);
+    if (model.isEmpty()) {
         statusBar()->showMessage(
             tr("No %1 has been drawn yet — draw one in Default models and it will be placed here")
                 .arg(mechModelName(kind).toLower()),
@@ -11274,7 +11278,7 @@ void MainWindow::placeMechModel(MechModelKind kind) {
         return;
     }
     const std::vector<Entity> ents =
-        mechModelEntities(*model, Vec2{0.0, 0.0}, 0.0, mechModelDrawnLength(*model));
+        mechModelEntities(model, Vec2{0.0, 0.0}, 0.0, mechModelDrawnLength(model));
     if (ents.empty()) {
         statusBar()->showMessage(tr("That model has nothing drawn in it"), 4000);
         return;
@@ -11282,7 +11286,7 @@ void MainWindow::placeMechModel(MechModelKind kind) {
     // Held by its connection point when it has one - that is the point somebody means to put it on -
     // and by the middle of its own extent otherwise.
     std::optional<Vec2> heldAt;
-    if (model->hasConnect) heldAt = model->connectPoint;
+    if (model.hasConnect) heldAt = model.connectPoint;
     editor_->placeEntities(ents, heldAt);
     canvas_->setFocus();
     statusBar()->showMessage(tr("%1 — click to place it").arg(mechModelName(kind)), 4000);
