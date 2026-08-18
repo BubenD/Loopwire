@@ -972,6 +972,9 @@ signals:
     // the direction - so the polar tracking and the object snaps give the angle, rather than a number typed
     // into a box that nobody can check against the drawing.
     void modelConnectPicked(Vec2 point, double angleRad);
+    // A face the wires leave the model by, marked across it: the wires are spread along this line and may
+    // not run off either end of it.
+    void modelOutputPicked(Vec2 a, Vec2 b);
     // Double-clicked a table cell — the host opens the inline editor for that cell.
     void editTableCellRequested(const QString& id, int cell, const QString& text, Vec2 at,
                                 double cellW, double cellH);
@@ -1254,6 +1257,9 @@ private:
     double pixelTol_ = 10.0;
     // The first click of the connection-point pick, waiting for the second that gives the direction.
     bool haveConnectFirst_ = false;
+    // The first end of an output line, while waiting for the second.
+    bool haveOutputFirst_ = false;
+    Vec2 outputFirst_;
     // The first of the two runs a centre line goes between, while waiting for the second.
     QString centerLineFirst_;
     Vec2 connectFirst_;

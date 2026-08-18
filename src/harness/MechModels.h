@@ -42,6 +42,16 @@ enum class MechModelKind {
     Heatshrink,             // a length of heatshrink over a bundle
     Boot,                   // a boot behind a connector
     CableBody,              // the body of a cable between its ends
+    // The pieces a harness drawing is actually made of, each drawn once by an office. Several of these are
+    // ONE KIND with several SUB-DRAWINGS rather than a kind each - a backshell is a backshell whether it
+    // leaves straight, at 45 or at 90 degrees - because a kind holds as many named models as are drawn and
+    // the wizard picks between them by name. A kind per angle would put the same part in three places and
+    // give the generator three things to keep in step.
+    CircularConnector,      // a circular connector, MIL-DTL-38999 and its like
+    CircularBackshell,      // straight / 45 degrees / 90 degrees, as named models of this one kind
+    BranchSplitHeatshrink,  // the moulded boot over a branch, as opposed to plain shrink over a bundle
+    Label,                  // a label on a run
+    LabelUnderHeatshrink,   // the same, covered over with clear heatshrink
 };
 
 // The stamp that makes a model ONE object rather than the loose lines it happens to be drawn with: on its
@@ -102,6 +112,22 @@ struct MechModel {
     bool hasConnect = false;
     Vec2 connectPoint;
     double connectAngleRad = 0.0;
+
+    // WHERE THE WIRES COME OUT, and how much room they have.
+    //
+    // A connection point says where the part meets the run; it says nothing about the face the conductors
+    // leave by. On a real part that face is a LINE across the end - the back of a connector, the mouth of a
+    // backshell, each branch of a split - and the wires leaving it must be spread ALONG that line and must
+    // not run off either end of it. A generator that only knows a point either fans the wires out of one
+    // spot or spreads them past the edge of the part, and both are drawings that get sent back.
+    //
+    // So a model marks its output lines: two points each, in the model's own coordinates. A part with one
+    // face has one; a Y-split has one per branch, in the order they were marked, which is the order the
+    // generator hands the branches out in.
+    struct OutputLine {
+        Vec2 a, b;
+    };
+    std::vector<OutputLine> outputs;
 
     // The GAP a cable or a wire leaves at each end: the piece of the run it does not cover, where the
     // conductors come out and are worked on. It is a property of how the office draws them - the LENGTH is

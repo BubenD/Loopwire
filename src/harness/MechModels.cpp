@@ -1,5 +1,7 @@
 #include "harness/MechModels.h"
 
+#include <QJsonArray>
+
 #include "harness/PartsLibrary.h"
 #include "io/AppPaths.h"
 #include "tools/EntityTransforms.h"
@@ -25,7 +27,7 @@ struct KindName {
 };
 
 // The order the window lists them in: the ends first, then the lengths, then the pieces at a junction.
-const std::array<KindName, 11> kKinds = {{
+const std::array<KindName, 16> kKinds = {{
     {MechModelKind::RingInsulated, "ring", "Ring terminal"},
     {MechModelKind::FerruleInsulated, "ferrule", "Ferrule"},
     {MechModelKind::TransitionHeatshrink, "transition-heatshrink", "Transition heatshrink"},
@@ -38,6 +40,17 @@ const std::array<KindName, 11> kKinds = {{
     {MechModelKind::Heatshrink, "heatshrink", "Heatshrink"},
     {MechModelKind::Boot, "boot", "Boot"},
     {MechModelKind::CableBody, "cable-body", "Cable body"},
+    // The pieces a real harness drawing is made of. Several are ONE KIND with several sub-drawings, held
+    // as named models of that kind: a backshell is a backshell whether it leaves straight, at 45 or at 90
+    // degrees, and a split is a split whether it makes three branches, four, or a T. A kind per angle
+    // would put the same part in three places and give the generator three things to keep in step.
+    {MechModelKind::CircularConnector, "circular-connector", "Circular connector (MIL-DTL)"},
+    {MechModelKind::CircularBackshell, "circular-backshell",
+     "Circular backshell (straight / 45 / 90)"},
+    {MechModelKind::BranchSplitHeatshrink, "branch-split-heatshrink", "Branch split heatshrink"},
+    {MechModelKind::Label, "label", "Label"},
+    {MechModelKind::LabelUnderHeatshrink, "label-under-heatshrink",
+     "Label under clear heatshrink"},
 }};
 
 MechModelKind canonicalKind(MechModelKind kind) {
@@ -108,6 +121,10 @@ bool mechModelStretches(MechModelKind kind) {
     case MechModelKind::Heatshrink:
     case MechModelKind::Boot:
     case MechModelKind::CableBody:
+    // A label and a label under heatshrink are drawn along the run and cover a length of it; the
+    // connectors, backshells and split boots are things of their own size, placed.
+    case MechModelKind::Label:
+    case MechModelKind::LabelUnderHeatshrink:
         return true;
     default:
         // A ring, a ferrule, a Y-split: a thing of its own size, placed and not stretched.
@@ -131,6 +148,14 @@ QJsonObject MechModel::toJson() const {
         o.insert(QStringLiteral("connectAngle"), connectAngleRad);
     }
     if (gapMm > 0.0) o.insert(QStringLiteral("gap"), gapMm);
+    // The faces the wires leave by, in the order they were marked - which is the order the generator hands
+    // a split's branches out in, so it is written down rather than sorted.
+    if (!outputs.empty()) {
+        QJsonArray outs;
+        for (const OutputLine& l : outputs)
+            outs.append(QJsonArray{l.a.x, l.a.y, l.b.x, l.b.y});
+        o.insert(QStringLiteral("outputs"), outs);
+    }
     o.insert(QStringLiteral("kind"), mechModelKey(kind));
     if (isInsulationKind(kind)) o.insert(QStringLiteral("insulated"), insulated);
     if (hasNearPoint)
@@ -156,6 +181,12 @@ void MechModel::fromJson(const QJsonObject& o) {
                         connect.value(QStringLiteral("y")).toDouble()};
     connectAngleRad = o.value(QStringLiteral("connectAngle")).toDouble();
     gapMm = o.value(QStringLiteral("gap")).toDouble();
+    outputs.clear();
+    for (const auto v : o.value(QStringLiteral("outputs")).toArray()) {
+        const QJsonArray l = v.toArray();
+        if (l.size() < 4) continue;
+        outputs.push_back({{l[0].toDouble(), l[1].toDouble()}, {l[2].toDouble(), l[3].toDouble()}});
+    }
     const QString key = o.value(QStringLiteral("kind")).toString();
     MechModelKind k = MechModelKind::Wire;
     if (mechModelKindFromKey(key, k)) kind = canonicalKind(k);

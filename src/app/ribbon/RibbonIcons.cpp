@@ -188,6 +188,27 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         p.drawText(QRectF(3, 3, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
         break;
     }
+    case ToolId::CenterMark: {
+        // A ring with the little cross at its middle, overshooting it - which is what a centre mark IS,
+        // so the icon is the thing rather than a symbol for it.
+        p.drawEllipse(QPointF(12, 12), 6, 6);
+        p.drawLine(12, 3, 12, 21);
+        p.drawLine(3, 12, 21, 12);
+        break;
+    }
+    case ToolId::CenterLine: {
+        // Two parallel runs with the dashed middle between them: the two solid lines are the geometry, the
+        // broken one is what the tool adds.
+        p.drawLine(3, 5, 21, 5);
+        p.drawLine(3, 19, 21, 19);
+        QPen dash = p.pen();
+        dash.setStyle(Qt::DashLine);
+        p.save();
+        p.setPen(dash);
+        p.drawLine(3, 12, 21, 12);
+        p.restore();
+        break;
+    }
     case ToolId::TextLeader: {
         // A leader arrow up to a short landing, with text lines (no circle).
         p.drawLine(4, 20, 12, 12);          // leader

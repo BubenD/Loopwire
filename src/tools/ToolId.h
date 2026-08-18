@@ -54,6 +54,10 @@ enum class ToolId {
     ModelNearPoint,
     ModelFarPoint,
     ModelConnectPoint,   // where the part connects, and which way it runs from there (two clicks)
+    // The face the wires leave the part by: a LINE across it, two clicks. A part with one face has one; a
+    // split has one per branch, in the order they are marked. The wires are spread along it and may not run
+    // off either end, which a single connection point cannot say.
+    ModelOutputLine,
     // The two marks that say where the middle of something is. A centre MARK is put on one round thing -
     // a circle, an arc - as the little cross at its centre. A centre LINE is drawn BETWEEN two things
     // that run parallel, down the middle of the gap: two lines, two runs of a polyline, or the two
@@ -154,6 +158,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::ModelNearPoint: return QStringLiteral("Model near point");
     case ToolId::ModelFarPoint: return QStringLiteral("Model far point");
     case ToolId::ModelConnectPoint: return QStringLiteral("Model connection point");
+    case ToolId::ModelOutputLine: return QStringLiteral("Model output line");
     case ToolId::CenterMark: return QStringLiteral("Centre mark");
     case ToolId::CenterLine: return QStringLiteral("Centre line");
     }

@@ -38,6 +38,15 @@ void check(bool ok, const char* what) {
 
 bool near(double a, double b, double eps = 1e-6) { return std::abs(a - b) < eps; }
 
+// Snaps off: a test clicks exact coordinates and means them.
+void noSnap(Editor& ed) {
+    auto& s = ed.snapSettings();
+    s.objectSnap = false;
+    s.gridSnap = false;
+    s.ortho = false;
+    s.polar = false;
+}
+
 
 // A wire model: 60 long, with a flush end 4 long at each side of it. The ends are drawn as bars across
 // and the wire itself as two lines along.
@@ -103,7 +112,20 @@ int run_mechmodels_tests() {
     check(near(mechModelDrawnLength(m), 60.0), "the model knows how long it was drawn");
     check(mechModelStretches(MechModelKind::Wire), "a wire is a thing drawn to a length");
     check(!mechModelStretches(MechModelKind::RingInsulated), "a ring terminal is not");
-    check(allMechModelKinds().size() == 11, "insulated variants share one model kind");
+    // The insulated and uninsulated forms of a ring and a ferrule are ONE kind each, not two: insulation is
+    // a property of the model, not a different sort of thing. The count is the kinds an office draws.
+    std::printf("  kinds: %d\n", int(allMechModelKinds().size()));
+    check(allMechModelKinds().size() == 16, "insulated variants share one model kind");
+    // Several of the pieces a real harness is made of are one kind with several SUB-DRAWINGS - a backshell
+    // is a backshell whether it leaves straight, at 45 or at 90 - because a kind holds as many named models
+    // as are drawn. A kind per angle would put the same part in three places.
+    check(!mechModelStretches(MechModelKind::CircularConnector) &&
+              !mechModelStretches(MechModelKind::CircularBackshell) &&
+              !mechModelStretches(MechModelKind::BranchSplitHeatshrink),
+          "a connector, a backshell and a split boot are placed at their own size, not stretched");
+    check(mechModelStretches(MechModelKind::Label) &&
+              mechModelStretches(MechModelKind::LabelUnderHeatshrink),
+          "a label and a label under heatshrink cover a length of the run, so they stretch");
 
     for (double want : {60.0, 500.0, 12.0, 6.0}) {
         const std::vector<Entity> ents = mechModelEntities(m, Vec2{0.0, 0.0}, 0.0, want);
@@ -474,6 +496,99 @@ int run_mechmodels_tests() {
         Entity* connAfterRegen = findByTag("connect");
         check(connAfterRegen && near(connAfterRegen->center.x, 90.0),
               "markers: the moved position survives a fresh regeneration - it reached the model itself");
+
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
+    // ---- the faces the wires come out of ----------------------------------------------------------
+    {
+        // A connection point says where the part meets the run and nothing about the face the conductors
+        // leave by. On a real part that face is a LINE across the end - the back of a connector, the mouth
+        // of a backshell, each branch of a split - and the wires must spread ALONG it without running off
+        // either end. A generator that only knows a point either fans the wires out of one spot or spreads
+        // them past the edge of the part, and both are drawings that come back.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+        QFile::remove(modelsFile);
+
+        {
+            MainWindow win;
+            win.resize(1200, 800);
+            win.show();
+            QApplication::processEvents();
+            win.openMechModelEditor(MechModelKind::YSplit);
+            for (int i = 0; i < 10; ++i) QApplication::processEvents();
+            Editor* ed = win.findChild<Editor*>();
+            Document* doc = ed->document();
+            noSnap(*ed);
+            Entity body;
+            body.id = QStringLiteral("body");
+            body.type = EntityType::Line;
+            body.a = {0.0, 0.0};
+            body.b = {30.0, 0.0};
+            doc->entities().push_back(body);
+
+            // A split with THREE branches: three faces, marked in the order the generator hands them out.
+            ed->setTool(ToolId::ModelOutputLine);
+            const double ys[3] = {6.0, 0.0, -6.0};
+            for (double y : ys) {
+                ed->onPointerPress({30.0, y - 2.0}, Qt::LeftButton, Qt::NoModifier);
+                ed->onPointerPress({30.0, y + 2.0}, Qt::LeftButton, Qt::NoModifier);
+            }
+            QApplication::processEvents();
+            // The tool stays armed - a split has one face per branch, and going back to the ribbon between
+            // each is worse than pressing Esc at the end.
+            check(ed->tool() == ToolId::ModelOutputLine,
+                  "outputs: the tool stays armed for the next branch");
+            int bars = 0;
+            for (const Entity& e : doc->entities())
+                if (e.meta.contains(QStringLiteral("modelOutput"))) ++bars;
+            std::printf("  outputs: %d face(s) drawn as guides\n", bars);
+            check(bars == 3, "outputs: each marked face is drawn, so which is which can be checked");
+
+            // Two clicks in the same place is not a face: a face is something the wires spread along.
+            ed->onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+            ed->onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+            QApplication::processEvents();
+            bars = 0;
+            for (const Entity& e : doc->entities())
+                if (e.meta.contains(QStringLiteral("modelOutput"))) ++bars;
+            check(bars == 3, "outputs: two clicks in one place is refused, not kept as a zero-length face");
+
+            win.saveMechModelBeingEdited();
+            for (int i = 0; i < 10; ++i) QApplication::processEvents();
+        }
+
+        MechModelSet back;
+        back.load(modelsFile);
+        const MechModel* saved = back.of(MechModelKind::YSplit);
+        check(saved != nullptr, "outputs: the split was saved");
+        if (saved) {
+            check(saved->outputs.size() == 3, "outputs: all three faces are kept, in order");
+            if (saved->outputs.size() == 3) {
+                // The drawing is moved to the origin on the way into the file, and the faces travel with
+                // it: left behind, a part would put its wires out through a line nowhere near itself.
+                std::printf("  outputs: first face (%.1f,%.1f)-(%.1f,%.1f) after normalising\n",
+                            saved->outputs[0].a.x, saved->outputs[0].a.y, saved->outputs[0].b.x,
+                            saved->outputs[0].b.y);
+                check(std::abs(saved->outputs[0].a.x - 30.0) < 0.5,
+                      "outputs: and they are moved with the drawing, not left behind");
+                // The order is the order they were marked - top branch first, as clicked.
+                check(saved->outputs[0].a.y > saved->outputs[1].a.y &&
+                          saved->outputs[1].a.y > saved->outputs[2].a.y,
+                      "outputs: kept in the order they were marked, which is the order they are used");
+            }
+        }
 
         if (hadOne) {
             QFile f(modelsFile);

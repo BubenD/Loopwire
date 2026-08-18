@@ -157,8 +157,10 @@ public:
     void openMechModelEditor(MechModelKind kind);
     void openMechModelEditor(MechModelKind kind, const QString& name);
     // Capture: take what is drawn on that canvas as the model and close the session. Public for the same
-    // reason - what the ribbon's own Capture button does is worth being able to ask for directly.
+    // reason - what the ribbon's own Capture button does is worth being able to ask for directly. Cancel
+    // likewise: the two ways a session ends are the two things a test of one has to be able to do.
     void saveMechModelBeingEdited();
+    void cancelMechModelEdit();
     void savePanelLayout();
     void restorePanelLayout();
 
@@ -488,8 +490,11 @@ private:
     void showTemplateDialog();
     void armMechModelAnchor(bool near);
     void armMechModelConnect();          // the connection point, and the direction the part runs from it
+    // The faces the wires leave by, one line per branch, and a way to start the list again.
+    void armMechModelOutput();
+    void clearMechModelOutputs();
     QToolButton* markConnectMechModelBtn_ = nullptr;
-    void cancelMechModelEdit();
+    QToolButton* markOutputMechModelBtn_ = nullptr;
     bool saveMechModelDocument(Document* doc);
 
     // Blocks.

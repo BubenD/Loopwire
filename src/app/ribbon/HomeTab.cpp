@@ -131,8 +131,11 @@ void MainWindow::buildHomeTab() {
             connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
             leaderBtn->setMenu(lm);
         }
+        // The centre marks belong here as well as on the Annotation tab: they are used while drawing, and
+        // a tool that is only on a tab you have to go to is a tool nobody uses.
         addGroup(lay, QStringLiteral("Annotation"),
-                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision},
+                 toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision,
+                          ToolId::CenterMark, ToolId::CenterLine},
                          {leaderBtn, tb}));
     }
 
@@ -267,11 +270,30 @@ void MainWindow::buildHomeTab() {
         sessionButton(markFarMechModelBtn_, tr("Far\npoint"), modelAnchorIcon(QColor("#62c370")),
                       tr("The far end of the model - marked in green"));
         connect(markFarMechModelBtn_, &QToolButton::clicked, this, [this] { armMechModelAnchor(false); });
+        // The faces the wires leave by. A split has one per branch, so the button stays armed and the
+        // fall-menu is where the list is started again.
+        sessionButton(markOutputMechModelBtn_, tr("Output\nface"), modelAnchorIcon(QColor("#c678dd")),
+                      tr("Click across the face the wires come out of - the back of a connector, the "
+                         "mouth of a backshell, each branch of a split. The wires are spread ALONG that "
+                         "line and may not run off either end of it, which a connection point alone "
+                         "cannot say. One line per branch, in the order the generator hands them out."));
+        markOutputMechModelBtn_->setPopupMode(QToolButton::MenuButtonPopup);
+        connect(markOutputMechModelBtn_, &QToolButton::clicked, this,
+                [this] { armMechModelOutput(); });
+        {
+            auto* om = new QMenu(markOutputMechModelBtn_);
+            QAction* a = om->addAction(tr("Mark an output face"));
+            connect(a, &QAction::triggered, this, [this] { armMechModelOutput(); });
+            a = om->addAction(tr("Clear the marked faces"));
+            connect(a, &QAction::triggered, this, [this] { clearMechModelOutputs(); });
+            markOutputMechModelBtn_->setMenu(om);
+        }
         sg->addWidget(captureMechModelBtn_, 0, 0);
         sg->addWidget(cancelMechModelBtn_, 0, 1);
         sg->addWidget(markConnectMechModelBtn_, 0, 2);
         sg->addWidget(markNearMechModelBtn_, 0, 3);
         sg->addWidget(markFarMechModelBtn_, 0, 4);
+        sg->addWidget(markOutputMechModelBtn_, 0, 5);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);

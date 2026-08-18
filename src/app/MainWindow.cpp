@@ -1873,6 +1873,45 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
         marker.meta.insert(QStringLiteral("modelAnchor"), marks[i].tag);
         doc.entities().push_back(marker);
     }
+    // The faces the wires come out of, each as a bar across the part with a tick at each end, and its
+    // number beside it - the order they were marked is the order the generator hands the branches out in,
+    // so which one is which has to be visible or a three-branch split cannot be checked.
+    for (size_t i = 0; i < model.outputs.size(); ++i) {
+        const MechModel::OutputLine& o = model.outputs[i];
+        Entity bar;
+        bar.id = QStringLiteral("model-output-%1").arg(i);
+        bar.type = EntityType::Line;
+        bar.layer = QLatin1String(kMechModelGuideLayer);
+        bar.a = o.a;
+        bar.b = o.b;
+        bar.color = QStringLiteral("#c678dd");
+        bar.meta.insert(QStringLiteral("modelOutput"), static_cast<int>(i));
+        doc.entities().push_back(bar);
+        // A stop at each end, across the face, so it reads as a face with limits rather than as a line
+        // somebody drew: the wires may not run off either end of it.
+        const Vec2 along = (o.b - o.a).normalized();
+        const Vec2 across = along.perp() * std::max(1.0, markerRadius * 0.9);
+        for (int end = 0; end < 2; ++end) {
+            const Vec2 at = end == 0 ? o.a : o.b;
+            Entity stop;
+            stop.id = QStringLiteral("model-output-%1-end%2").arg(i).arg(end);
+            stop.type = EntityType::Line;
+            stop.layer = QLatin1String(kMechModelGuideLayer);
+            stop.a = at + across;
+            stop.b = at - across;
+            stop.color = QStringLiteral("#c678dd");
+            doc.entities().push_back(stop);
+        }
+        Entity num;
+        num.id = QStringLiteral("model-output-%1-no").arg(i);
+        num.type = EntityType::Text;
+        num.layer = QLatin1String(kMechModelGuideLayer);
+        num.a = lerp(o.a, o.b, 0.5) + across * 1.6;
+        num.color = QStringLiteral("#c678dd");
+        num.meta.insert(QStringLiteral("text"), QString::number(i + 1));
+        num.meta.insert(QStringLiteral("size"), std::max(1.5, markerRadius * 1.2));
+        doc.entities().push_back(num);
+    }
     // An arrow along the direction the part runs from the connection point - drawn, because the whole
     // reason for marking any of these on the model is to be able to SEE what the wizard will do with it.
     if (model.hasConnect) {
@@ -2072,6 +2111,19 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         statusBar()->showMessage(near ? QStringLiteral("Near point marked in orange")
                                       : QStringLiteral("Far point marked in green"),
                                  3000);
+    });
+    connect(editor_, &Editor::modelOutputPicked, this, [this](Vec2 a, Vec2 b) {
+        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+        MechModel& model = mechModelSessionModels_[doc_];
+        model.outputs.push_back({a, b});
+        addMechModelGuides(*doc_, model);
+        doc_->setDirty(true);
+        canvas_->invalidateScene();
+        statusBar()->showMessage(
+            tr("Output face %1 marked — the wires spread along it and stay inside it. Click another "
+               "for the next branch, or Esc to finish")
+                .arg(model.outputs.size()),
+            6000);
     });
     connect(editor_, &Editor::modelConnectPicked, this, [this](Vec2 point, double angleRad) {
         if (!doc_ || !mechModelEdits_.contains(doc_)) return;
@@ -3907,18 +3959,21 @@ void MainWindow::updateModelRibbonTabs() {
     for (int i = 0; i < ribbon_->count(); ++i) {
         if (ribbon_->tabText(i) == QStringLiteral("Home")) home = i;
     }
-    if (modelEdit && home >= 0) {
-        const QString current = ribbon_->tabText(ribbon_->currentIndex());
-        if (current != QStringLiteral("Home") && current != QStringLiteral("Modify") &&
-            current != QStringLiteral("Annotation"))
-            ribbon_->setCurrentIndex(home);
-    }
-    for (int i = 0; i < ribbon_->count(); ++i) {
-        const QString title = ribbon_->tabText(i);
-        const bool allowed = title == QStringLiteral("Home") || title == QStringLiteral("Modify") ||
-                             title == QStringLiteral("Annotation");
-        ribbon_->tabBar()->setTabVisible(i, !modelEdit || allowed);
-    }
+    // What a model session puts away, and what it must not.
+    //
+    // Only the two HARNESS tabs go: a default model is one part drawn on its own, so the tools that build a
+    // schematic or lay out a harness have nothing to act on. Everything else stays. View went too, and that
+    // was wrong - zooming, panning and the layers are exactly what somebody drawing a part needs, and a
+    // session that takes them away is a session you cannot draw in. Import stays for the same reason: a
+    // part is often traced from a supplier's DXF, and that is the one thing you most want to bring in here.
+    auto putAway = [](const QString& title) {
+        return title == QStringLiteral("Schematic build") ||
+               title == QStringLiteral("Harness mechanical");
+    };
+    if (modelEdit && home >= 0 && putAway(ribbon_->tabText(ribbon_->currentIndex())))
+        ribbon_->setCurrentIndex(home);
+    for (int i = 0; i < ribbon_->count(); ++i)
+        ribbon_->tabBar()->setTabVisible(i, !modelEdit || !putAway(ribbon_->tabText(i)));
     normaliseRibbonPages();
 }
 
@@ -11184,6 +11239,28 @@ void MainWindow::armMechModelConnect() {
         tr("Click where the part connects — then click along the direction it runs from there"), 6000);
 }
 
+void MainWindow::armMechModelOutput() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    editor_->setTool(ToolId::ModelOutputLine);
+    canvas_->setFocus();
+    statusBar()->showMessage(
+        tr("Click across the face the wires come out of - one line per branch; Esc to finish"), 6000);
+}
+
+void MainWindow::clearMechModelOutputs() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    MechModel& model = mechModelSessionModels_[doc_];
+    if (model.outputs.empty()) {
+        statusBar()->showMessage(tr("No output faces are marked on this model"), 3000);
+        return;
+    }
+    model.outputs.clear();
+    addMechModelGuides(*doc_, model);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    statusBar()->showMessage(tr("Output faces cleared — mark them again from the first branch"), 4000);
+}
+
 void MainWindow::armMechModelAnchor(bool near) {
     if (!doc_ || !mechModelEdits_.contains(doc_)) return;
     editor_->setTool(near ? ToolId::ModelNearPoint : ToolId::ModelFarPoint);
@@ -11225,6 +11302,12 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     if (model.hasNearPoint) model.nearPoint += shift;
     if (model.hasFarPoint) model.farPoint += shift;
     if (model.hasConnect) model.connectPoint += shift;
+    // The output faces travel with the drawing too. Left behind, a part would be told to put its wires out
+    // through a line that is no longer anywhere near it - the same mistake the connection point made.
+    for (MechModel::OutputLine& o : model.outputs) {
+        o.a += shift;
+        o.b += shift;
+    }
     model.drawing = partDrawingFromEntities(drawing);
     model.drawnLengthMm = bounds.width();
     // Scaling across is a yes-or-no the manager holds, where zero means leave it alone. Measuring it
@@ -11396,6 +11479,9 @@ void MainWindow::activateIndex(int index) {
     if (captureMechModelBtn_) captureMechModelBtn_->setEnabled(editingMechModel);
     if (markNearMechModelBtn_) markNearMechModelBtn_->setEnabled(anchorableMechModel);
     if (markFarMechModelBtn_) markFarMechModelBtn_->setEnabled(anchorableMechModel);
+    // Marking a face the wires leave by is worth doing on ANY model, stretched or not: a connector, a
+    // backshell and a split all have one, and the run-to-a-length kinds have them at each end.
+    if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(editingMechModel);
     if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(editingMechModel);
     for (QToolButton* b : tplSessionBtns_)
         if (b) b->setEnabled(editingTemplate);

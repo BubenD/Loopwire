@@ -1093,6 +1093,7 @@ void Editor::setDocument(Document* doc) {
 void Editor::setTool(ToolId t) {
     if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
     if (t != ToolId::CenterLine) centerLineFirst_.clear();
+    if (t != ToolId::ModelOutputLine) haveOutputFirst_ = false;
     clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
@@ -2245,6 +2246,23 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     if (tool_ == ToolId::ModelNearPoint || tool_ == ToolId::ModelFarPoint) {
         emit modelAnchorPicked(p, tool_ == ToolId::ModelNearPoint);
         setTool(ToolId::Select);
+        return;
+    }
+    // The face the wires leave by: two clicks across the part. Stays armed, because a split has one per
+    // branch and going back to the ribbon between each is worse than pressing Esc at the end.
+    if (tool_ == ToolId::ModelOutputLine) {
+        if (!haveOutputFirst_) {
+            outputFirst_ = p;
+            haveOutputFirst_ = true;
+            emit message(QStringLiteral("Now click the other end of the face the wires come out of"));
+            return;
+        }
+        haveOutputFirst_ = false;
+        if (distance(outputFirst_, p) < 1e-9) {
+            emit message(QStringLiteral("A face needs two different points - the wires spread along it"));
+            return;
+        }
+        emit modelOutputPicked(outputFirst_, p);
         return;
     }
     if (tool_ == ToolId::ModelConnectPoint) {
