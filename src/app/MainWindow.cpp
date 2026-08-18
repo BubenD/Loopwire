@@ -8316,32 +8316,79 @@ void MainWindow::refreshProperties() {
                    return bb.valid ? bb.center().y : 0.0;
                }),
                [this](double v) { editor_->setGeometryValue("Center Y", v); });
-        addNum(QStringLiteral("Width"), nv([](const Entity& x) {
-                   const Bounds bb = x.bounds();
-                   return bb.valid ? bb.width() : 0.0;
-               }),
-               [this](double v) { editor_->setGeometryValue("Width", v); });
-        addNum(QStringLiteral("Height"), nv([](const Entity& x) {
-                   const Bounds bb = x.bounds();
-                   return bb.valid ? bb.height() : 0.0;
-               }),
-               [this](double v) { editor_->setGeometryValue("Height", v); });
+        // A LABEL answers Width and Height with ITS OWN two sizes, not with the box it happens to occupy.
+        //
+        // The box is the wrong answer twice over: on a bundle drawn vertically it reports the label's length
+        // as its height, and a label under a clear sleeve is measured out to the sleeve rather than to the
+        // label. Setting either of them by the box would stretch the label out of square with the wires. So
+        // these rows ARE the label's width and height - along the run and across it - and they take, which is
+        // what was asked for and what the two greyed-looking zeroes were failing to do: with the whole label
+        // selected the box varies from piece to piece, so every row read "#Value" and showed nothing.
+        const bool isLabel = mv(QStringLiteral("labelAlong")).contains();
+        addNum(QStringLiteral("Width"),
+               isLabel ? mv(QStringLiteral("labelAlong")).toDouble()
+                       : nv([](const Entity& x) {
+                             const Bounds bb = x.bounds();
+                             return bb.valid ? bb.width() : 0.0;
+                         }),
+               [this, isLabel](double v) {
+                   if (isLabel) {
+                       if (editor_->adoptLabelFromSelection()) editor_->setLabelWidth(v);
+                   } else {
+                       editor_->setGeometryValue("Width", v);
+                   }
+               });
+        addNum(QStringLiteral("Height"),
+               isLabel ? mv(QStringLiteral("labelAcross")).toDouble()
+                       : nv([](const Entity& x) {
+                             const Bounds bb = x.bounds();
+                             return bb.valid ? bb.height() : 0.0;
+                         }),
+               [this, isLabel](double v) {
+                   if (isLabel) {
+                       if (editor_->adoptLabelFromSelection()) editor_->setLabelHeight(v);
+                   } else {
+                       editor_->setGeometryValue("Height", v);
+                   }
+               });
         if (e->type == EntityType::Circle || e->type == EntityType::Arc)
             addNum(QStringLiteral("Radius"), nv([](const Entity& x) { return x.radius; }),
                    [this](double v) { editor_->setGeometryValue("Radius", v); });
-        // A LABEL'S OWN two sizes, which are not the same thing as the box it happens to occupy. Width runs
-        // ALONG the bundle and height ACROSS it, whichever way round the bundle itself is drawn - the pair
-        // above would report a label on a vertical run with its width and height swapped, and setting either
-        // of them would stretch the label out of square with the wires. These stay square to the run.
-        if (mv(QStringLiteral("labelAlong")).contains()) {
-            addNum(QStringLiteral("Label width"), mv(QStringLiteral("labelAlong")).toDouble(),
+        // A DETAIL VIEW: how much bigger it is drawn, its letter, and the two switches.
+        if (e->type == EntityType::DetailView) {
+            addNum(QStringLiteral("How much it shows"), nv([](const Entity& x) { return x.radius; }),
+                   [this](double v) { editor_->setGeometryValue("Radius", v); });
+            addNum(QStringLiteral("Enlarged by"), mv(QStringLiteral("detailScale")).toDouble(2.0),
                    [this](double v) {
-                       if (editor_->adoptLabelFromSelection()) editor_->setLabelWidth(v);
+                       editor_->setSelectionMetaNumber(QStringLiteral("detailScale"),
+                                                       std::max(0.01, v));
                    });
-            addNum(QStringLiteral("Label height"), mv(QStringLiteral("labelAcross")).toDouble(),
-                   [this](double v) {
-                       if (editor_->adoptLabelFromSelection()) editor_->setLabelHeight(v);
-                   });
+            addText(QStringLiteral("Detail letter"), mv(QStringLiteral("detailTag")).toString("A"),
+                    [this](const QString& t) {
+                        editor_->setSelectionMeta(QStringLiteral("detailTag"), t.trimmed().toUpper());
+                    });
+            // ANNOTATIVE: the enlarged circle is a live WINDOW on the drawing rather than a picture of it.
+            // Ticked, the cursor reaches through it - pick something in the big circle and it is the real
+            // object that is picked, drag it and the real object moves, and the change shows in both circles
+            // at once, because the detail is drawn out of the document every time it is drawn. Which is the
+            // point: a detail is drawn BECAUSE the thing is too small to work on, and a view you can only
+            // look at sends you back to the small version to do the work at the size you could not read.
+            addCombo(QStringLiteral("Annotative"), {"No", "Yes"},
+                     yesNo(mv(QStringLiteral("detailAnnotative")), false), false,
+                     [this](const QString& v) {
+                         editor_->setSelectionMetaBool(QStringLiteral("detailAnnotative"),
+                                                       v == QLatin1String("Yes"));
+                     });
+            // The dimensions in the source circle, enlarged with everything else - or left out. A detail is
+            // usually drawn to show a SHAPE, and dimensions sized for the small version become the biggest
+            // thing in the circle and cover what they were measuring. But a detail drawn because the
+            // dimensions would not fit at the small size needs them. Both are ordinary, so it is a switch.
+            addCombo(QStringLiteral("Show dimensions in it"), {"Yes", "No"},
+                     yesNo(mv(QStringLiteral("detailShowDims")), true), false,
+                     [this](const QString& v) {
+                         editor_->setSelectionMetaBool(QStringLiteral("detailShowDims"),
+                                                       v == QLatin1String("Yes"));
+                     });
         }
         // Double line / double polyline: the parallel spacing between the two runs.
         const bool isDoubleLine = e->type == EntityType::DoubleLine;

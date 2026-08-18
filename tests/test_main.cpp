@@ -19,6 +19,7 @@ int run_pdftext_tests();
 int run_pdfimport_tests();
 int run_sizetable_tests();
 int run_cable_tests();
+int run_detailview_tests();
 int run_mechmodels_tests();
 int run_mechmodelcanvas_tests();
 int run_drawingspace_tests();
@@ -56,6 +57,7 @@ int main(int argc, char** argv) {
     failures += run_pdfimport_tests();
     failures += run_sizetable_tests();
     failures += run_cable_tests();
+    failures += run_detailview_tests();
     failures += run_mechmodels_tests();
     failures += run_mechmodelcanvas_tests();
     failures += run_drawingspace_tests();

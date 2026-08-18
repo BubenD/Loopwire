@@ -44,6 +44,9 @@ void MainWindow::buildAnnotationTab() {
     // program can do exactly.
     addGroup(lay, QStringLiteral("Centre marks"),
              toolRow({ToolId::CenterMark, ToolId::CenterLine}));
+    // The small thing drawn again bigger. It belongs with the annotations rather than with the drawing tools
+    // because it draws nothing: it is a view OF the drawing, and what it says is "look at this bit".
+    addGroup(lay, QStringLiteral("Detail"), toolRow({ToolId::DetailView}));
     {
         // Callouts + a Table button that asks rows/cols before you drag the grid.
         // Leader = a split-button: click places a TEXT leader (no circle); the

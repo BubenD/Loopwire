@@ -70,6 +70,10 @@ enum class ToolId {
     // that run parallel, down the middle of the gap: two lines, two runs of a polyline, or the two
     // physical lines of a double run. Both are picked rather than drawn: the geometry already says where
     // the middle is, and a drawing office should not be made to find it with a cursor.
+    // A DETAIL VIEW: circle the thing that is too small to read, and it is drawn again bigger somewhere
+    // there is room, with a letter tying the two together. Three clicks - the middle of what is wanted, how
+    // much of it, and where the enlargement goes.
+    DetailView,
     CenterMark,
     CenterLine,
 };
@@ -167,6 +171,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::ModelConnectPoint: return QStringLiteral("Model connection point");
     case ToolId::ModelOutputLine: return QStringLiteral("Model output line");
     case ToolId::ModelScaleRef: return QStringLiteral("Model scale reference");
+    case ToolId::DetailView: return QStringLiteral("Detail view");
     case ToolId::CenterMark: return QStringLiteral("Centre mark");
     case ToolId::CenterLine: return QStringLiteral("Centre line");
     }

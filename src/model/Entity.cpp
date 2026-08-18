@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 26> kTypeNames = {{
+const std::array<TypeName, 27> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -32,6 +32,7 @@ const std::array<TypeName, 26> kTypeNames = {{
     {EntityType::LengthBreak, "lengthbreak"},
     {EntityType::TwistedPair, "twistedpair"},
     {EntityType::Leader, "leader"},
+    {EntityType::DetailView, "detailview"},
     {EntityType::Connector, "connector"},
     {EntityType::Breakout, "breakout"},
     {EntityType::Bundle, "bundle"},
@@ -424,6 +425,21 @@ Bounds Entity::bounds() const {
             break;
         }
         bnds.expand(a);
+        break;
+    }
+    case EntityType::DetailView: {
+        // BOTH circles, and the caption under the enlarged one. A detail view is one object in two places -
+        // the circle round the thing and the circle it is drawn bigger in - and answering with less than
+        // both leaves half of it out of Zoom All and lets the canvas cull the half that is on screen.
+        bnds.expand({center.x - radius, center.y - radius});
+        bnds.expand({center.x + radius, center.y + radius});
+        const double scale = std::max(0.01, meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        const double big = radius * scale;
+        bnds.expand({b.x - big, b.y - big});
+        bnds.expand({b.x + big, b.y + big});
+        // The words under it, roughly: two short lines at the caption height.
+        const double h = std::max(1e-9, meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+        bnds.expand({b.x - big, b.y - big - h * 3.0});
         break;
     }
     case EntityType::Leader: {

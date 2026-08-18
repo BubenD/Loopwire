@@ -39,7 +39,8 @@ namespace Edraw_Desktop {
 // ---- INSERT ----
 void MainWindow::buildInsertTab() {
     auto [page, lay] = makeTabPage();
-    addGroup(lay, QStringLiteral("Annotation"), toolRow({ToolId::Text, ToolId::Dimension}));
+    addGroup(lay, QStringLiteral("Annotation"),
+             toolRow({ToolId::Text, ToolId::Dimension, ToolId::DetailView}));
 
     // ---- Pictures ----
     // A logo, a photograph of the loom, a screenshot of a connector drawing: on the sheet as an

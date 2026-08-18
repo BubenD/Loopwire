@@ -51,6 +51,18 @@ enum class EntityType {
     // points[0] is the TIP - the thing being pointed AT - and the rest are the knees it turns at, the
     // last of which is where the words sit. meta "text" / "size" carry the words, "arrowSize" the head.
     Leader,
+    // A DETAIL VIEW: the small thing on the drawing, drawn again bigger somewhere there is room for it.
+    //
+    // Two circles and a magnification. `center` / `radius` is the circle drawn round the thing itself,
+    // where it actually is; `b` is where the enlarged circle goes, and its radius is `radius * scale`. What
+    // is inside the source circle is drawn inside the target one, scaled about the source centre - so the
+    // detail is not a copy of the geometry but a VIEW of it, and the drawing it is a view of can be changed
+    // afterwards without the detail going stale.
+    //
+    // meta "detailTag" is the letter ("A", "B", ...) that ties the two circles together, and "detailScale"
+    // the magnification. A drawing office numbers its details in the order they were made and never
+    // renumbers them, so the letter is fixed when the view is placed and kept.
+    DetailView,
 };
 
 EntityType entityTypeFromString(const QString& s);

@@ -513,6 +513,13 @@ public:
     // you, so it starts at the size labels come in and is set by hand. HEIGHT is across them: the dimension
     // that has to cover the bundle, which is exactly what the stroke measures, so the stroke settles it
     // until somebody says otherwise.
+    // HOW MUCH BIGGER a detail view is drawn than the thing it is a view of. Two is the drawing-office
+    // default: enough to read, and small enough to fit on the sheet beside what it came from.
+    double& detailScale() { return detailScale_; }
+    double detailScale() const { return detailScale_; }
+    int detailStage() const { return detailStage_; }
+    Vec2 detailCenter() const { return detailCenter_; }
+    double detailRadius() const { return detailRadius_; }
     static constexpr double kLabelWidthMm = 40.0;    // along the runs
     static constexpr double kLabelHeightMm = 12.0;   // across them, and at least this
     bool labelLive() const { return !labelLiveIds_.empty(); }
@@ -1381,6 +1388,30 @@ private:
     // A drag on the live label slides it ALONG the runs it crosses. True when it took the drag: a label
     // sits on a bundle, and one nudged off the bundle by a careless drag is a drawing sent back.
     bool slideLiveLabel(const Vec2& delta);
+    // A DETAIL VIEW being placed: the middle of what is wanted, then how much of it, then where the
+    // enlargement goes. Three clicks, because that is three separate decisions and none can be guessed from
+    // the others.
+    double detailScale_ = 2.0;
+    // Whether the cursor is CURRENTLY reaching through an annotative detail's window. Held rather than
+    // re-asked mid-drag: a drag that started on an object seen through the window has to go on being read in
+    // that object's own space, and the cursor leaving the circle part-way must not throw it into the other
+    // one. Settled on every move that is not a drag, which is every move before a drag begins.
+    bool detailThrough_ = false;
+    int detailStage_ = 0;          // 0 = waiting for the centre, 1 = for the radius, 2 = for the placement
+    Vec2 detailCenter_;
+    double detailRadius_ = 0.0;
+    // AN ANNOTATIVE DETAIL VIEW IS A LIVE WINDOW ON THE DRAWING, not a picture of it. A point inside the
+    // enlarged circle is mapped back to the place in the drawing it is a view OF, so the cursor works on the
+    // real geometry: pick something in the big circle and it is the real object that is picked, drag it there
+    // and the real object moves, and because the detail is drawn from the document every time, the change
+    // shows in both circles at once.
+    //
+    // Returns the point unchanged when it is not inside an annotative detail, which is the ordinary case.
+    Vec2 throughDetailWindow(const Vec2& p) const;
+    // The next free letter for a detail on this drawing. An office letters its details in the order they
+    // were made and never renumbers them, so a letter is taken once and kept: the next one is the lowest
+    // that is not in use, which after deleting B gives B back rather than jumping to D.
+    QString nextDetailTag() const;
     // The first of the two runs a centre line goes between, while waiting for the second.
     QString centerLineFirst_;
     Vec2 connectFirst_;

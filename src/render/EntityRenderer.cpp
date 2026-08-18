@@ -22,6 +22,9 @@ namespace Edraw_Desktop {
 namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
 QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
+// Drawing the inside of a detail view. A detail drawn inside a detail would draw itself for ever, and it is
+// not something a drawing office asks for - so the inner one is simply left out.
+bool g_inDetailView = false;
 bool g_monochrome = false;
 bool g_plotLineweights = true;   // a plot may be asked for without them
 double g_annotationScale = 1.0;  // how much bigger annotation is drawn than it is written
@@ -1985,6 +1988,93 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Dimension:
         drawDimensionEntity(p, e, vt, color, g_dimDecimals);
         break;
+
+    case EntityType::DetailView: {
+        // THE SMALL THING, DRAWN AGAIN BIGGER. Two circles: one round the thing where it actually is, one
+        // somewhere there is room for it, with whatever is inside the first drawn inside the second at a
+        // magnification.
+        //
+        // It is a VIEW and not a copy. What goes in the big circle is read out of the document every time it
+        // is drawn, so changing the thing changes its detail. A detail that is a copy of the geometry goes
+        // stale the first time somebody edits what it was a copy of, and a stale detail on a released sheet
+        // is worse than no detail at all.
+        if (e.radius <= 1e-9) break;
+        const double scale = std::max(0.01, e.meta.value("detailScale").toDouble(2.0));
+        const QString tag = e.meta.value("detailTag").toString(QStringLiteral("A"));
+        const double big = e.radius * scale;
+        const double capH = std::max(1e-9, e.meta.value("detailTextSize").toDouble(3.5));
+        const double vs = vt.scale();
+
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        // The circle round the thing itself, and its letter beside it. It is an annotation over the drawing
+        // rather than part of what is drawn, so it goes on at the pen it was given and no heavier.
+        const QPointF sc = vt.toScreen(e.center);
+        const double sr = e.radius * vs;
+        p.drawEllipse(sc, sr, sr);
+        drawWorldText(p, QPointF(sc.x() + sr * 0.75, sc.y() - sr * 0.75), tag, capH, vs, color);
+
+        // The enlargement.
+        const QPointF bc = vt.toScreen(e.b);
+        const double br = big * vs;
+        p.drawEllipse(bc, br, br);
+        if (!g_inDetailView && br > 3.0) {
+            // NOT RECURSIVE. A detail view drawn inside a detail view would draw itself for ever, and a
+            // detail of a detail is not something a drawing office asks for.
+            g_inDetailView = true;
+            p.save();
+            QPainterPath clip;
+            clip.addEllipse(bc, br, br);
+            p.setClipPath(clip, Qt::IntersectClip);
+            // The view is made by moving the VIEW, not the geometry: scale up, and shift so the source
+            // centre lands on the target centre. Everything then comes out enlarged exactly as it would if
+            // the sheet itself were zoomed in - text heights, line weights, hatch spacing and all - which is
+            // what a detail view is, and is not what scaling a pile of copied geometry gives you.
+            //
+            // toScreen is (x*s + view.x, -y*s + view.y), so with s' = s*scale:
+            //   view.x' = b.x*s + view.x - centre.x*s'      view.y' = -b.y*s + view.y + centre.y*s'
+            ViewTransform inner = vt;
+            inner.view.scale = vs * scale;
+            inner.view.x = e.b.x * vs + vt.view.x - e.center.x * inner.view.scale;
+            inner.view.y = -e.b.y * vs + vt.view.y + e.center.y * inner.view.scale;
+            // WHETHER THE DIMENSIONS COME WITH IT. A detail is usually drawn to show a shape, and the
+            // dimensions on the small version are sized for the small version - blown up they are the
+            // biggest thing in the circle and they cover the shape they were measuring. But a detail drawn
+            // BECAUSE the dimensions would not fit at the small size needs them, and needs them enlarged.
+            // Both are ordinary, so it is a switch and not a rule.
+            const bool withDims = e.meta.value("detailShowDims").toBool(true);
+            for (const Entity& x : doc.entities()) {
+                if (x.id == e.id) continue;                       // never itself
+                if (x.type == EntityType::DetailView) continue;   // nor any other detail's circles
+                if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
+                                  x.type == EntityType::Text || x.type == EntityType::NetLabel))
+                    continue;
+                if (const Layer* ly = doc.findLayer(x.layer); ly && !ly->visible) continue;
+                // Only what the source circle can reach: its box against the circle's, which is cheap and
+                // leaves the exact edge to the clip.
+                const Bounds xb = x.bounds();
+                if (xb.valid && (xb.max.x < e.center.x - e.radius || xb.min.x > e.center.x + e.radius ||
+                                 xb.max.y < e.center.y - e.radius || xb.min.y > e.center.y + e.radius))
+                    continue;
+                EntityRenderer::draw(p, x, doc, inner, overrideColor);
+            }
+            p.restore();
+            g_inDetailView = false;
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+        }
+
+        // The caption, which is what makes the two circles one drawing instead of two: the letter, and the
+        // magnification - a detail with no scale on it cannot be measured off.
+        const QString head = QStringLiteral("DETAIL %1").arg(tag);
+        const QString sub = scale >= 1.0 ? QStringLiteral("SCALE %1:1").arg(scale, 0, 'g', 3)
+                                         : QStringLiteral("SCALE 1:%1").arg(1.0 / scale, 0, 'g', 3);
+        const double y = bc.y() + br + capH * vs * 1.3;
+        drawWorldText(p, QPointF(bc.x(), y), head, capH, vs, color, Qt::AlignHCenter);
+        drawWorldText(p, QPointF(bc.x(), y + capH * vs * 1.3), sub, capH * 0.8, vs, color,
+                      Qt::AlignHCenter);
+        break;
+    }
 
     case EntityType::Leader: {
         // The line, the head on the end it points WITH, the flat landing the words sit on, and the words

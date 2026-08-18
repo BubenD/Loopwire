@@ -87,7 +87,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         mechGroups_ << addGroupKeep(
             lay, QStringLiteral("Annotation"),
             toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
-                     ToolId::Revision},
+                     ToolId::Revision, ToolId::DetailView},
                     {tb}));
     }
     // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break

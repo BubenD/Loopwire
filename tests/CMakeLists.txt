@@ -13,6 +13,7 @@ add_executable(edraw_tests
     test_pdfimport.cpp
     test_sizetable.cpp
     test_cable.cpp
+    test_detailview.cpp
     test_mechmodels.cpp
     test_output.cpp
     test_connectorparts.cpp

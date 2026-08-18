@@ -646,6 +646,18 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         }
         break;
     }
+    case EntityType::DetailView: {
+        // FOUR handles, because a detail view has four things anybody wants to change: which bit of the
+        // drawing it is a view OF (the source circle, moved and sized) and where the enlargement sits and
+        // how big it is. The enlargement's edge handle IS the magnification - dragging it out is what
+        // "show it bigger" means, and a number in a dialog is not.
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        g.push_back({e.center, GripRole::Center, 0});
+        g.push_back({{e.center.x + e.radius, e.center.y}, GripRole::Radius, 0});
+        g.push_back({e.b, GripRole::LineB, 0});
+        g.push_back({{e.b.x + e.radius * scale, e.b.y}, GripRole::Radius, 1});
+        break;
+    }
     case EntityType::Leader:
         // Every point it turns at, the FIRST of them being the tip - the thing it points at. That is the
         // one that matters: an arrow pointing at the wrong place is the whole reason to touch a callout.
@@ -1094,6 +1106,7 @@ void Editor::setTool(ToolId t) {
     if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
     if (t != ToolId::CenterLine) centerLineFirst_.clear();
     if (t != ToolId::ModelOutputLine) haveOutputFirst_ = false;
+    if (t != ToolId::DetailView) { detailStage_ = 0; detailRadius_ = 0.0; }
     clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
@@ -1291,6 +1304,14 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         // lines, radius/diameter line, angular arc, ...).
         for (const auto& s : dimensionSegments(e)) best = std::min(best, segDist(s.first, s.second));
         break;
+    case EntityType::DetailView: {
+        // EITHER circle catches it - it is one object in two places, and the half you happen to be looking
+        // at is the half you will click on.
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        best = std::min(best, std::abs(distance(p, e.center) - e.radius));
+        best = std::min(best, std::abs(distance(p, e.b) - e.radius * scale));
+        break;
+    }
     case EntityType::Leader:
         // The line it turns along - the arrowhead sits on the first segment, so anything that catches
         // the line catches the arrow too.
@@ -1936,6 +1957,71 @@ inline QString labelMidXKey() { return QStringLiteral("labelMidX"); }
 inline QString labelMidYKey() { return QStringLiteral("labelMidY"); }
 } // namespace
 
+// A point inside an annotative detail view, in the coordinates of the thing the detail is a view OF.
+//
+// This is what makes such a view a WINDOW rather than a picture: everything downstream - the snaps, the
+// pick, the grips, the drag - is handed a point in the real drawing, so it acts on the real objects without
+// knowing it was reached through a magnifying circle. A view that could only be looked at would send anybody
+// wanting to change what is in it back to the small version to work on it at the size it was too small to
+// read at, which is the whole reason the detail was drawn.
+//
+// The innermost matching view wins, so a detail placed over another detail's circle behaves like the one on
+// top rather than like whichever happened to be first in the file.
+Vec2 Editor::throughDetailWindow(const Vec2& p) const {
+    if (!doc_) return p;
+    // Placing a detail view is not looking through one: the cursor means the place it is, or a detail put
+    // down inside another would land wherever that one is a view of instead of where it was pointed.
+    if (tool_ == ToolId::DetailView) return p;
+    const double tol = worldTolerance();
+    const Entity* best = nullptr;
+    double bestR = 1e300;
+    for (const Entity& e : doc_->entities()) {
+        if (e.type != EntityType::DetailView || e.radius <= 1e-9) continue;
+        if (!e.meta.value(QStringLiteral("detailAnnotative")).toBool()) continue;
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        const double big = e.radius * scale;
+        const double d = distance(p, e.b);
+        // The view's OWN edge is not looked through: it is what you take hold of to pick the view up, and a
+        // window with no frame you can grab is a window that can never be moved off whatever it ended up
+        // covering.
+        if (d > big - tol) continue;
+        // Its centre HANDLE is not looked through either - but only while the view is selected, because that
+        // is the only time there is a handle there. Kept out of the way otherwise: a dead spot the size of
+        // the pick tolerance in the middle of every enlargement, on a view nobody has selected, is a hole in
+        // the window with nothing behind it.
+        if (d < tol &&
+            std::find(selected_.begin(), selected_.end(), e.id) != selected_.end())
+            continue;
+        if (big < bestR) { bestR = big; best = &e; }
+    }
+    if (!best) return p;
+    const double scale = std::max(0.01, best->meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+    return best->center + (p - best->b) * (1.0 / scale);
+}
+
+// The next free letter. An office letters its details in the order they were made and never renumbers them,
+// so a letter is taken once and kept - and the next one is the lowest NOT in use, which after deleting B
+// gives B back rather than leaving a hole and jumping to D.
+QString Editor::nextDetailTag() const {
+    if (!doc_) return QStringLiteral("A");
+    QSet<QString> taken;
+    for (const Entity& e : doc_->entities())
+        if (e.type == EntityType::DetailView)
+            taken.insert(e.meta.value(QStringLiteral("detailTag")).toString().toUpper());
+    for (int i = 0; i < 26 * 27; ++i) {
+        // A..Z, then AA..AZ, BA.. - which is as far as any real sheet ever gets.
+        QString tag;
+        if (i < 26) {
+            tag = QChar('A' + i);
+        } else {
+            const int n = i - 26;
+            tag = QString(QChar('A' + n / 26)) + QChar('A' + n % 26);
+        }
+        if (!taken.contains(tag)) return tag;
+    }
+    return QStringLiteral("A");
+}
+
 // WHAT THE LABEL IS MEASURED BY: the object marked as the model's scale reference, or the whole drawing when
 // nothing is marked - which is right for a model that is one thing.
 //
@@ -2501,6 +2587,22 @@ void Editor::onPointerMove(const Vec2& raw) {
         }
     }
     cursor_ = snapResult_.point;
+    // AND THROUGH THE WINDOW, if the cursor is in one. An annotative detail view is a live window on the
+    // drawing, so a cursor inside the enlarged circle is really at the place in the drawing that circle is a
+    // view of - and everything from here on works on the real objects there. Done once, at the end of the
+    // one function every pointer path goes through, because a remap taught to some of the paths and not the
+    // others is a drawing where half the tools reach through the window and half do not.
+    //
+    // Mid-drag the answer is HELD rather than re-asked: a drag that started on something seen through the
+    // window goes on being read in that thing's own space, and the cursor wandering out of the circle
+    // part-way through must not throw the drag into the other one.
+    if (editing_ || gripGrab_ || markGrab_) {
+        if (detailThrough_) cursor_ = throughDetailWindow(cursor_);
+    } else {
+        const Vec2 mapped = throughDetailWindow(cursor_);
+        detailThrough_ = std::abs(mapped.x - cursor_.x) > 1e-12 || std::abs(mapped.y - cursor_.y) > 1e-12;
+        cursor_ = mapped;
+    }
 
     // A label being STROKED on is re-measured on every move: the stroke grows as the cursor moves, so the
     // runs it crosses - and therefore how wide the label has to be - is a question the cursor keeps
@@ -2746,6 +2848,54 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             return;
         }
         commitLabel();
+        return;
+    }
+    // A DETAIL VIEW goes on in three clicks, because it is three separate decisions: WHAT is wanted (the
+    // middle of it), HOW MUCH of it (the radius), and WHERE the enlargement goes. None of the three can be
+    // guessed from the others - a circle sized to what is under the cursor would guess wrong on a dense
+    // drawing every time, and "somewhere there is room" is not something a program knows.
+    if (tool_ == ToolId::DetailView) {
+        if (detailStage_ == 0) {
+            detailCenter_ = p;
+            detailRadius_ = 0.0;
+            detailStage_ = 1;
+            emit message(QStringLiteral("Now click how much of it to show — the edge of the circle"));
+            emit overlayChanged();
+            return;
+        }
+        if (detailStage_ == 1) {
+            const double r = distance(detailCenter_, p);
+            if (r < 1e-9) {
+                emit message(QStringLiteral("A detail of nothing is nothing — click clear of the centre"));
+                return;
+            }
+            detailRadius_ = r;
+            detailStage_ = 2;
+            emit message(QStringLiteral(
+                "Now click where the enlargement goes — somewhere there is room for it"));
+            emit overlayChanged();
+            return;
+        }
+        pushUndo();
+        Entity d;
+        d.id = uid();
+        d.type = EntityType::DetailView;
+        d.layer = doc_->activeLayer();
+        d.center = detailCenter_;
+        d.radius = detailRadius_;
+        d.b = p;
+        d.meta.insert(QStringLiteral("detailScale"), std::max(0.01, detailScale_));
+        d.meta.insert(QStringLiteral("detailTag"), nextDetailTag());
+        const QString tag = d.meta.value(QStringLiteral("detailTag")).toString();
+        doc_->entities().push_back(std::move(d));
+        doc_->setDirty(true);
+        // Armed still: a drawing with one detail on it is rare, and the letters run on from where they got
+        // to rather than starting again at A.
+        detailStage_ = 0;
+        detailRadius_ = 0.0;
+        emit message(QStringLiteral("Detail %1 placed — click the middle of the next one, or Esc").arg(tag));
+        emit overlayChanged();
+        emit changed();
         return;
     }
     // A centre mark is put on the round thing that is clicked; a centre line wants two runs, so the first
@@ -3310,6 +3460,15 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         for (const auto& s : dimensionSegments(e)) { pts.push_back(s.first); pts.push_back(s.second); }
         if (pts.empty()) pts = {e.a, e.b};
         break;
+    case EntityType::DetailView: {
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        const double big = e.radius * scale;
+        pts = {{e.center.x - e.radius, e.center.y}, {e.center.x + e.radius, e.center.y},
+               {e.center.x, e.center.y - e.radius}, {e.center.x, e.center.y + e.radius},
+               {e.b.x - big, e.b.y},                {e.b.x + big, e.b.y},
+               {e.b.x, e.b.y - big},                {e.b.x, e.b.y + big}};
+        break;
+    }
     case EntityType::Leader:
         pts = e.points;
         if (pts.empty()) pts = {e.a};
@@ -3464,6 +3623,22 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         for (const auto& s : dimensionSegments(e)) segs.emplace_back(s.first, s.second);
         if (segs.empty()) segs.emplace_back(e.a, e.b);
         break;
+    case EntityType::DetailView: {
+        // Both circles, as a ring of chords each: a crossing zone touching either one selects the view.
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        for (const auto& ring : {std::pair<Vec2, double>{e.center, e.radius},
+                                 std::pair<Vec2, double>{e.b, e.radius * scale}}) {
+            Vec2 prev{ring.first.x + ring.second, ring.first.y};
+            for (int k = 1; k <= 16; ++k) {
+                const double t = k * 2.0 * M_PI / 16.0;
+                const Vec2 at{ring.first.x + ring.second * std::cos(t),
+                              ring.first.y + ring.second * std::sin(t)};
+                segs.emplace_back(prev, at);
+                prev = at;
+            }
+        }
+        break;
+    }
     case EntityType::Leader:
         for (size_t i = 1; i < e.points.size(); ++i)
             segs.emplace_back(e.points[i - 1], e.points[i]);
@@ -13517,7 +13692,13 @@ void Editor::setGeometryValue(const QString& key, double v) {
     };
     if (key == "Center X") translateEntity(*e, {v - c.x, 0});
     else if (key == "Center Y") translateEntity(*e, {0, v - c.y});
-    else if (key == "Radius") { if (e->type == EntityType::Circle || e->type == EntityType::Arc) e->radius = std::max(1e-6, v); }
+    else if (key == "Radius") {
+        // A detail view's radius is how much of the drawing it is a view OF, which is the one number about it
+        // that cannot be read off anything else - and it is a radius, so it belongs on this row.
+        if (e->type == EntityType::Circle || e->type == EntityType::Arc ||
+            e->type == EntityType::DetailView)
+            e->radius = std::max(1e-6, v);
+    }
     else if (key == "Width") {
         if (e->type == EntityType::Circle) e->radius = std::max(1e-6, v / 2.0);
         else if (e->type == EntityType::Ellipse) e->radius = std::max(1e-6, v / 2.0);
@@ -13951,6 +14132,8 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // A label being laid on the runs is abandoned the same way anything else being placed is, and one
         // already placed stops being fitted - the label stays, the ribbon goes back.
         endLabelEdit();
+        detailStage_ = 0;   // and a half-drawn detail circle goes with it
+        detailRadius_ = 0.0;
         placeRot_ = 0.0;
         clipCut_ = false;
         cutPending_.clear();
@@ -14439,6 +14622,32 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ghost = paperInk(paperInk(QColor(150, 162, 178, 110)));
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
+    // A DETAIL VIEW being placed: the circle round what is wanted as it is being sized, and once it is
+    // sized, the circle the enlargement will be drawn in, following the cursor at the magnification set.
+    // Both, because where the enlargement goes depends on how big it is going to be - a detail placed in a
+    // gap that turns out to be too small for it is a detail that has to be placed again.
+    if (tool_ == ToolId::DetailView && detailStage_ > 0) {
+        p.save();
+        QPen dv(paperInk(QColor("#ffd166")));
+        dv.setCosmetic(true);
+        dv.setWidthF(1.2);
+        dv.setStyle(Qt::DashLine);
+        p.setPen(dv);
+        p.setBrush(Qt::NoBrush);
+        const double r = detailStage_ == 1 ? distance(detailCenter_, cursor_) : detailRadius_;
+        if (r > 1e-9) {
+            const QPointF c = vt.toScreen(detailCenter_);
+            p.drawEllipse(c, r * vt.scale(), r * vt.scale());
+            if (detailStage_ == 2) {
+                const double big = r * std::max(0.01, detailScale_) * vt.scale();
+                const QPointF at = vt.toScreen(cursor_);
+                p.drawEllipse(at, big, big);
+                p.drawLine(c, at);   // which circle is a view of what, while it is being placed
+            }
+        }
+        p.restore();
     }
 
     // The stroke being drawn across the runs the label goes on: the same line the length-break mark is

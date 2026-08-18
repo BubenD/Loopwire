@@ -188,6 +188,19 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         p.drawText(QRectF(3, 3, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
         break;
     }
+    case ToolId::DetailView: {
+        // The thing itself, and the thing drawn again bigger: a small circle with a couple of marks in it and
+        // a large circle with the same marks larger. That is what a detail view IS, so the icon is the thing
+        // and not a magnifying glass - which is what every other program draws and says nothing about
+        // enlarging one part of a drawing on to another part of the same drawing.
+        p.drawEllipse(QPointF(6.5, 7), 4.5, 4.5);
+        p.drawLine(5, 6, 8, 6);
+        p.drawLine(5, 8, 7, 8);
+        p.drawEllipse(QPointF(15, 16), 7.5, 7.5);
+        p.drawLine(12, 14, 18, 14);
+        p.drawLine(12, 18, 16, 18);
+        break;
+    }
     case ToolId::CenterMark: {
         // A ring with the little cross at its middle, overshooting it - which is what a centre mark IS,
         // so the icon is the thing rather than a symbol for it.
