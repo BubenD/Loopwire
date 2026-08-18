@@ -779,14 +779,11 @@ QIcon linetypeIcon(const QString& name) {
     QPen pen(QColor("#dfe6f0"));
     pen.setWidthF(1.3);
     pen.setCapStyle(Qt::FlatCap);
-    const QString n = name.toUpper();
-    if (n == "CENTER") pen.setDashPattern({12, 3, 2, 3});
-    else if (n == "CENTERX2") pen.setDashPattern({20, 4, 3, 4});
-    else if (n == "DOT2" || n == "DOTTED") pen.setDashPattern({1, 3});
-    else if (n == "HIDDEN" || n == "DASHED") pen.setDashPattern({5, 3});
-    else if (n == "PHANTOM") pen.setDashPattern({14, 3, 3, 3, 3, 3});
-    else if (n == "DASHDOT") pen.setDashPattern({8, 3, 1, 3});
-    // Continuous / ByLayer / ByBlock -> solid line
+    // The SAME table the drawing uses. This little sample is the only thing anybody has to go on when
+    // choosing a linetype, so it must not be able to disagree with the line that comes out - which it
+    // could while the patterns were written down twice.
+    if (const QVector<qreal> dashes = linetypeDashes(name, 1.0, pen.widthF()); !dashes.isEmpty())
+        pen.setDashPattern(dashes);
     p.setPen(pen);
     p.drawLine(2, 7, 70, 7);
     p.end();

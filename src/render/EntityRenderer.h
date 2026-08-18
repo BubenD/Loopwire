@@ -49,6 +49,14 @@ std::vector<std::vector<Vec2>> splitRailAtHoles(const std::vector<Vec2>& rail, c
 // an object whose lines are on screen because the path between them is not.
 Bounds drawnBounds(const Entity& e);
 
+// The dash pattern a NAMED linetype draws with - CENTER, CENTERX2, HIDDEN, DOT2, PHANTOM, DASHDOT - in
+// units of the PEN WIDTH, which is how Qt measures one, or an empty list for a solid line.
+//
+// One table, in one place, because the Properties dropdown draws a little sample of each and the drawing
+// draws the line itself: two tables would let the sample and the line disagree, and the sample is the only
+// thing anybody has to go on when choosing. `scale` is the object's own linetype scale.
+QVector<qreal> linetypeDashes(const QString& name, double scale, double penWidth);
+
 // Stateless entity painter. Draws a single entity in screen space using the
 // supplied transform; resolves color/weight against the document's layers.
 class EntityRenderer {

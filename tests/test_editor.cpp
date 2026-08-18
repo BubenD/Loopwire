@@ -7725,6 +7725,66 @@ int run_editor_tests() {
               "callout: the words moved with it, being part of it");
     }
 
+    // ---- a named linetype actually draws dashed ---------------------------------------------------
+    {
+        // The Linetype property offers CENTER, HIDDEN, DOT2, PHANTOM and draws a little sample of each, and
+        // choosing one had never once changed what came out. The renderer honoured meta "lineType" - a
+        // capital T, and only the single value "dashed" - while the property writes meta "linetype" with a
+        // name. Two keys a letter apart. So every linetype on the list was decoration, and a centre mark
+        // came out as two solid strokes.
+        check(linetypeDashes(QStringLiteral("CONTINUOUS"), 1.0, 1.0).isEmpty() &&
+                  linetypeDashes(QStringLiteral("ByLayer"), 1.0, 1.0).isEmpty(),
+              "linetype: a solid one has no pattern");
+        check(!linetypeDashes(QStringLiteral("CENTER"), 1.0, 1.0).isEmpty() &&
+                  !linetypeDashes(QStringLiteral("HIDDEN"), 1.0, 1.0).isEmpty(),
+              "linetype: a named one has a pattern");
+        // A name from a file that means nothing here draws SOLID rather than something guessed at.
+        check(linetypeDashes(QStringLiteral("SOMETHING_ELSE"), 1.0, 1.0).isEmpty(),
+              "linetype: an unknown name draws solid rather than invented");
+
+        // And it reaches the paper. Counted as runs of ink across the line: a solid one is a single run, a
+        // dashed one is many. Drawing it is the only way to catch the two-keys mistake.
+        Document d;
+        auto runsOf = [](const Entity& e) {
+            QImage img(400, 40, QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::black);
+            Document doc;
+            ViewTransform vt;
+            vt.view.scale = 1.0;
+            vt.view.x = 0.0;
+            vt.view.y = 20.0;
+            {
+                QPainter p(&img);
+                EntityRenderer::draw(p, e, doc, vt);
+            }
+            int runs = 0;
+            bool on = false;
+            for (int x = 0; x < img.width(); ++x) {
+                bool any = false;
+                for (int y = 0; y < img.height(); ++y) {
+                    const QRgb px = img.pixel(x, y);
+                    if (qRed(px) + qGreen(px) + qBlue(px) > 90) any = true;
+                }
+                if (any && !on) ++runs;
+                on = any;
+            }
+            return runs;
+        };
+        Entity plain;
+        plain.id = QStringLiteral("plain");
+        plain.type = EntityType::Line;
+        plain.a = {10.0, 0.0};
+        plain.b = {390.0, 0.0};
+        Entity centred = plain;
+        centred.id = QStringLiteral("centred");
+        centred.meta.insert(QStringLiteral("linetype"), QStringLiteral("CENTER"));
+        const int plainRuns = runsOf(plain), centredRuns = runsOf(centred);
+        std::printf("  linetype: plain %d run(s) of ink, CENTER %d\n", plainRuns, centredRuns);
+        check(plainRuns == 1, "linetype: a plain line is one unbroken run");
+        check(centredRuns > 8, "linetype: a CENTER line is drawn broken, on the paper and not just in the "
+                               "dropdown");
+    }
+
     // ---- where the middle of something is ---------------------------------------------------------
     {
         // Both are PICKED rather than drawn: the geometry already says where the middle is, so making

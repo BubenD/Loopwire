@@ -11007,7 +11007,7 @@ void Editor::placeCenterMark(const QString& id) {
         mark.layer = doc_->activeLayer();
         mark.a = axis == 0 ? Vec2{c.x - arm, c.y} : Vec2{c.x, c.y - arm};
         mark.b = axis == 0 ? Vec2{c.x + arm, c.y} : Vec2{c.x, c.y + arm};
-        mark.meta.insert(QStringLiteral("linetype"), QStringLiteral("center"));
+        mark.meta.insert(QStringLiteral("linetype"), QStringLiteral("CENTER"));
         mark.meta.insert(QStringLiteral("centerMark"), true);
         doc_->entities().push_back(std::move(mark));
     }
@@ -11080,7 +11080,7 @@ void Editor::placeCenterLine(const QString& firstId, const QString& secondId) {
     cl.layer = doc_->activeLayer();
     cl.a = lerp(a0, b0, 0.5);
     cl.b = lerp(a1, b1, 0.5);
-    cl.meta.insert(QStringLiteral("linetype"), QStringLiteral("center"));
+    cl.meta.insert(QStringLiteral("linetype"), QStringLiteral("CENTER"));
     cl.meta.insert(QStringLiteral("centerLine"), true);
     doc_->entities().push_back(cl);
     selected_ = {cl.id};

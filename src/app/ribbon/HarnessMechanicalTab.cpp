@@ -368,6 +368,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                                                           : MechModelKind::LabelUnderHeatshrink); });
             lgAdd(labelBtn);
         }
+        // Room for the WORDS. Two rows of buttons sized to their icons cut the labels off - "Twisted
+        // route" and "Label under..." are wider than a 26-pixel icon - and a label that cannot be read is
+        // worse than no label. Each column is given enough for a two-line caption, so the group is as wide
+        // as it needs to be and no wider.
+        for (int col = 0; col <= (specialAt - 1) / 2; ++col) lg->setColumnMinimumWidth(col, 78);
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }

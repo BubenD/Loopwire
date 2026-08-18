@@ -129,6 +129,29 @@ QString EntityRenderer::formatLength(double world, int decimals) {
     return g_dualUnits ? QStringLiteral("%1 (%2)").arg(mmStr, inStr) : mmStr;
 }
 
+QVector<qreal> linetypeDashes(const QString& name, double scale, double penWidth) {
+    const QString n = name.trimmed().toUpper();
+    // Solid, and the two that mean "whatever it inherits" - which, until there is a linetype on a layer or
+    // a block to inherit, is solid.
+    if (n.isEmpty() || n == QLatin1String("CONTINUOUS") || n == QLatin1String("BYLAYER") ||
+        n == QLatin1String("BYBLOCK") || n == QLatin1String("SOLID"))
+        return {};
+    QVector<qreal> dashes;
+    if (n == QLatin1String("CENTER")) dashes = {12, 3, 2, 3};
+    else if (n == QLatin1String("CENTERX2")) dashes = {20, 4, 3, 4};
+    else if (n == QLatin1String("DOT2") || n == QLatin1String("DOTTED")) dashes = {1, 3};
+    else if (n == QLatin1String("HIDDEN") || n == QLatin1String("DASHED")) dashes = {5, 3};
+    else if (n == QLatin1String("PHANTOM")) dashes = {14, 3, 3, 3, 3, 3};
+    else if (n == QLatin1String("DASHDOT")) dashes = {8, 3, 1, 3};
+    else return {};   // a name from a file that means nothing here draws solid rather than guessed at
+    // Qt measures a dash pattern in units of the PEN WIDTH, so a raw pattern on a hairline collapses to
+    // nothing. Normalising by the width makes a dash the same length on screen whatever it is drawn with.
+    const double w = penWidth > 0.0 ? penWidth : 1.0;
+    const double s = std::max(0.05, scale);
+    for (qreal& d : dashes) d = d * s / w;
+    return dashes;
+}
+
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     QString layerHex = QStringLiteral("#ffffff");
     if (const Layer* layer = doc.findLayer(e.layer); layer && QColor(layer->color).isValid())
@@ -1195,6 +1218,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double we = pen.widthF() > 0.0 ? pen.widthF() : 1.0;
         pen.setDashPattern({6.0 * ds / we, 4.0 * ds / we});
         pen.setCapStyle(Qt::FlatCap);   // a round cap on a short dash fills the gap back in
+    } else if (const QVector<qreal> dashes =
+                   linetypeDashes(e.meta.value("linetype").toString(),
+                                  e.meta.value("ltscale").toDouble(1.0), pen.widthF());
+               !dashes.isEmpty()) {
+        // A NAMED linetype, which is what the Linetype property sets and what a centre mark and a centre
+        // line are drawn with. Nothing read it: the renderer honoured only meta "lineType" (a capital T,
+        // and the single value "dashed"), while the property writes meta "linetype" with a name like
+        // CENTER. Two keys a letter apart, so choosing a linetype in Properties had never once changed
+        // what was drawn, and a centre mark came out as two solid strokes.
+        pen.setDashPattern(dashes);
+        pen.setCapStyle(Qt::FlatCap);
     }
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
