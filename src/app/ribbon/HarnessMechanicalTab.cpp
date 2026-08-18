@@ -415,6 +415,59 @@ void MainWindow::buildHarnessMechanicalTab() {
         mechGroups_ << mechBreakGroup_;
     }
     {
+        // THE LABEL, once one is on: the two numbers a stroke cannot settle by itself.
+        //
+        // The stroke says how wide the label has to be, because it says which runs are meant, and that is
+        // right nearly every time. It says nothing about the height - a label's reach up the bundle is a
+        // property of the label stock, not of the wires - and it cannot know that this office's labels are
+        // 12 mm whatever they happen to cover. So both are here, seeded from what was measured, and the
+        // label redraws under the fields as they are turned. It is a group of its own and it takes the tab
+        // while it is up, because two fields among forty buttons is two fields nobody finds.
+        auto* labW = new QWidget(page);
+        auto* lfg = new QGridLayout(labW);
+        lfg->setContentsMargins(6, 2, 6, 2);
+        lfg->setSpacing(3);
+        auto field = [&](const QString& text, const QString& tip, QDoubleSpinBox** out, int row) {
+            auto* l = new QLabel(text, labW);
+            l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            auto* sp = new QDoubleSpinBox(labW);
+            sp->setRange(0.1, 5000.0);
+            sp->setSingleStep(1.0);
+            sp->setDecimals(1);
+            sp->setSuffix(QStringLiteral(" mm"));
+            sp->setMinimumWidth(84);
+            sp->setToolTip(tip);
+            l->setToolTip(tip);
+            lfg->addWidget(l, row, 0);
+            lfg->addWidget(sp, row, 1);
+            *out = sp;
+        };
+        field(QStringLiteral("Width"),
+              QStringLiteral("Across the runs — what the stroke measured, over the outermost wire it "
+                             "crossed. Set it by hand to match a house size."),
+              &labelWidthSpin_, 0);
+        field(QStringLiteral("Height"),
+              QStringLiteral("Along the runs — the label's own reach up the bundle. The stroke cannot "
+                             "measure this: it comes from the label as it was drawn."),
+              &labelHeightSpin_, 1);
+        connect(labelWidthSpin_, &QDoubleSpinBox::valueChanged, this,
+                [this](double v) { editor_->setLabelWidth(v); });
+        connect(labelHeightSpin_, &QDoubleSpinBox::valueChanged, this,
+                [this](double v) { editor_->setLabelHeight(v); });
+        // Done. The label stays where it is; the tab comes back.
+        auto* done = new QToolButton(labW);
+        done->setText(QStringLiteral("Done"));
+        done->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        done->setAutoRaise(true);
+        done->setFocusPolicy(Qt::NoFocus);
+        done->setToolTip(QStringLiteral("Finish fitting the label and bring the tab back"));
+        connect(done, &QToolButton::clicked, this, [this] { editor_->endLabelEdit(); });
+        lfg->addWidget(done, 0, 2, 2, 1);
+        labelFitGroup_ = addGroupKeep(lay, QStringLiteral("Label"), labW);
+        labelFitGroup_->setVisible(false);
+        connect(editor_, &Editor::labelChanged, this, [this] { syncLabelOptions(); });
+    }
+    {
         // The parts behind the drawing: the same bill of materials the "bom" command opens.
         auto* dataW = new QWidget(page);
         auto* dg = new QGridLayout(dataW);

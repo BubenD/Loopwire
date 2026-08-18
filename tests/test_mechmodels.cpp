@@ -505,12 +505,12 @@ int run_mechmodels_tests() {
         }
     }
 
-    // ---- a label is laid on the runs, and covers them ---------------------------------------------
+    // ---- a label goes on with a stroke, and is fitted afterwards ----------------------------------
     {
-        // How wide a label has to be is not a number to be typed in beforehand: a label wraps round what it
-        // labels, so it is however wide the bundle is at the point it goes. So it follows the cursor,
-        // measures what is under it, and stretches across to cover the lot - and masks them, because a label
-        // is opaque and a bundle drawn straight through one reads as a label BEHIND the harness.
+        // A label goes on the way it is drawn by hand: a stroke ACROSS the runs it covers. That is not a
+        // flourish - how wide a label has to be is however wide the bundle is at the point it goes, and only
+        // the person placing it knows which runs are meant. A bundle of eight passing a bundle of three is
+        // one click either way, so the label takes its width from what the stroke crossed and nothing else.
         Document d;
         for (int i = 0; i < 3; ++i) {   // three wires running along x, 4 apart
             Entity w;
@@ -526,47 +526,98 @@ int run_mechmodels_tests() {
         const int before = static_cast<int>(d.entities().size());
         ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
         check(ed.placingLabel(), "label: it is being laid rather than dropped");
+        check(!ed.labelStrokeStarted(), "label: and no stroke drawn yet");
 
-        // Over the middle wire, so the band across catches all three.
-        ed.onPointerMove({50.0, 4.0});
-        ed.onPointerPress({50.0, 4.0}, Qt::LeftButton, Qt::NoModifier);
-        check(!ed.placingLabel(), "label: the click places it");
+        // The stroke: down through all three wires at x = 50.
+        ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelStrokeStarted(), "label: the first click starts the stroke");
+        ed.onPointerMove({50.0, 11.0});
+        ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
+        check(!ed.placingLabel(), "label: the second click places it");
+        check(ed.labelLive(), "label: and it is the label now being fitted");
         const int added = static_cast<int>(d.entities().size()) - before;
-        std::printf("  label: %d object(s) added over three wires\n", added);
+        std::printf("  label: %d object(s) added, %.1f wide x %.1f high\n", added, ed.labelWidth(),
+                    ed.labelHeight());
         check(added > 1, "label: the label and the mask under it");
 
-        // The mask covers all three wires, so none of them shows through the label.
-        const Entity* mask = nullptr;
-        for (const Entity& e : d.entities())
-            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        // A LITTLE BIT OVER the outermost wire: flush with the edge of the bundle reads as a label that
+        // missed the last wire.
+        check(ed.labelWidth() > 8.0, "label: wide enough to cover all three wires");
+        check(ed.labelWidth() < 8.0 * 2.0, "label: and not wildly wider than the bundle it covers");
+
+        // The mask covers all three, so none of them shows through the label.
+        auto maskOf = [&](const Document& doc) -> const Entity* {
+            const Entity* m = nullptr;
+            for (const Entity& e : doc.entities())
+                if (e.meta.value(QStringLiteral("labelMask")).toBool()) m = &e;
+            return m;
+        };
+        const Entity* mask = maskOf(d);
         check(mask != nullptr, "label: what it covers is masked");
         if (mask) {
             const Bounds b = mask->bounds();
             std::printf("  label: mask spans y %.1f..%.1f (wires at 0, 4, 8)\n", b.min.y, b.max.y);
-            check(b.min.y <= 0.0 && b.max.y >= 8.0,
-                  "label: stretched across ALL the runs it lies on, not just the one under the cursor");
-            check(b.min.x < 50.0 && b.max.x > 50.0, "label: and sits where it was put along them");
+            check(b.min.y < 0.0 && b.max.y > 8.0,
+                  "label: stretched over ALL the runs the stroke crossed, and a little past them");
+            check(b.min.x < 50.0 && b.max.x > 50.0, "label: and sits where the stroke was made");
         }
 
-        // Laying a SECOND label must not measure the first one's mask as though it were a wire.
-        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
-        ed.onPointerMove({80.0, 4.0});
-        ed.onPointerPress({80.0, 4.0}, Qt::LeftButton, Qt::NoModifier);
-        int masks = 0;
-        for (const Entity& e : d.entities())
-            if (e.meta.value(QStringLiteral("labelMask")).toBool()) ++masks;
-        check(masks == 2, "label: a second one goes on the same way");
+        // ---- the two numbers a stroke cannot settle -----------------------------------------------
+        // The stroke says how wide, because it says which runs are meant. It says nothing about the height:
+        // a label's reach up the bundle is a property of the label stock, not of the wires. So both are
+        // set by hand afterwards, and the label redraws under them rather than being placed again.
+        const double wasWide = ed.labelWidth();
+        ed.setLabelWidth(wasWide + 10.0);
+        check(std::abs(ed.labelWidth() - (wasWide + 10.0)) < 1e-6, "label: width set by hand takes");
+        if (const Entity* m2 = maskOf(d)) {
+            const double now = m2->bounds().height();
+            std::printf("  label: mask %.1f across after widening by 10\n", now);
+            check(now > 8.0 + 10.0, "label: and the mask grew with it - what it hides follows its size");
+        }
+        ed.setLabelHeight(20.0);
+        check(std::abs(ed.labelHeight() - 20.0) < 1e-6, "label: height set by hand takes");
+        if (const Entity* m3 = maskOf(d))
+            check(m3->bounds().width() > 15.0, "label: and it reaches that far along the run");
 
-        // And in mid-air it is refused: a label with nothing under it is a note, and there is a tool for those.
+        // ---- and it slides ALONG the runs, never off them ------------------------------------------
+        // A label sits ON a bundle. One nudged sideways by a careless drag leaves the wires showing from
+        // under the mask it left behind, so a drag is projected on to the run and the sideways half is
+        // thrown away.
+        const Bounds beforeSlide = maskOf(d)->bounds();
+        const Vec2 body{(beforeSlide.min.x + beforeSlide.max.x) / 2.0,
+                        (beforeSlide.min.y + beforeSlide.max.y) / 2.0};
+        // Taken hold of anywhere on its body - a label is a grouped object with no joints to offer, and one
+        // handle in the middle of something the size of a postage stamp is a handle nobody finds - and moved
+        // 20 along the run and 26 across it.
+        ed.onPointerPress(body, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({body.x + 20.0, body.y + 26.0});
+        const Bounds afterSlide = maskOf(d)->bounds();
+        std::printf("  label: slid x %+.1f, y %+.1f (dragged 20 along, 26 across)\n",
+                    afterSlide.min.x - beforeSlide.min.x, afterSlide.min.y - beforeSlide.min.y);
+        check(afterSlide.min.x - beforeSlide.min.x > 15.0, "label: the drag slid it along the run");
+        check(std::abs(afterSlide.min.y - beforeSlide.min.y) < 1e-6,
+              "label: and not one bit off it, whatever the cursor did across");
+        // The next click puts it down, and it is still the label being fitted - the ribbon's two fields
+        // have not gone anywhere just because it was moved.
+        ed.onPointerPress({body.x + 20.0, body.y + 26.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "label: putting it down does not end the fitting");
+
+        // Letting go of it ends the fitting: the fields on the ribbon act on the selected label, so a
+        // session outliving the selection would be two fields editing nothing.
+        ed.clearSelection();
+        check(!ed.labelLive(), "label: letting go of it stops fitting it");
+
+        // A stroke that crosses nothing places nothing and keeps the label in hand.
         Document empty;
         Editor e2;
         e2.setDocument(&empty);
         noSnap(e2);
         e2.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
-        e2.onPointerMove({10.0, 10.0});
         e2.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
-        check(empty.entities().empty(), "label: nothing to label means nothing is placed");
-        check(e2.placingLabel(), "label: and it is still waiting to be put somewhere it can go");
+        e2.onPointerMove({10.0, 30.0});
+        e2.onPointerPress({10.0, 30.0}, Qt::LeftButton, Qt::NoModifier);
+        check(empty.entities().empty(), "label: a stroke across nothing places nothing");
+        check(e2.placingLabel(), "label: and it is still in hand, waiting for a stroke that crosses");
     }
 
     // ---- a label can be placed before anybody has drawn one ---------------------------------------

@@ -2153,6 +2153,9 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         updateHatchContext();
         updateModelRibbonTabs();
     });
+    // A label armed, placed, resized or let go of: its own group comes up, the rest of the tab goes away,
+    // and the two fields track the size the stroke measured.
+    connect(editor_, &Editor::labelChanged, this, [this] { syncLabelOptions(); });
     // Clicking a table cell opens the contextual "Table Cell" tab (row/col + align ops).
     connect(editor_, &Editor::cellSelectionChanged, this, [this] {
         updateTableCellContext();
@@ -3980,6 +3983,16 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // settings and nothing else. The tools that cannot be used during it are noise, and hunting for the
     // two fields that matter among forty buttons is what makes a drawing slow to make.
     const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
+    // A label being stroked on or fitted takes the tab outright: its own two fields, and nothing else,
+    // because nothing else on the tab applies to a label until it is let go of.
+    const bool labelling = editor_->placingLabel() || editor_->labelLive();
+    if (labelFitGroup_) labelFitGroup_->setVisible(labelling && !modelEdit);
+    if (labelling && !modelEdit) {
+        for (QWidget* g : mechGroups_)
+            if (g) g->setVisible(false);
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
+        return;
+    }
     if (modelEdit) {
         for (QWidget* g : mechModelHiddenGroups_)
             if (g) g->setVisible(false);
@@ -3990,7 +4003,39 @@ void MainWindow::updateMechanicalRibbonGroups() {
         editor_->tool() == ToolId::LengthBreak || Editor::isTwistedTool(editor_->tool());
     for (QWidget* g : mechGroups_)
         if (g && g != mechBreakGroup_) g->setVisible(!armed);
+    // Special is the one group an armed tool does NOT put away - the tool being used is on it. But the
+    // label branch above puts away everything, Special included, so it is turned back on here by name:
+    // without this, fitting one label hid the button that places the next one.
+    if (mechBreakGroup_) mechBreakGroup_->setVisible(true);
     if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
+}
+
+// The label's two fields, seeded from what the stroke measured. Blocked while they are set, or the field
+// being turned would write its own rounded value back into the label as a change of its own.
+void MainWindow::syncLabelOptions() {
+    if (!editor_) return;
+    const bool live = editor_->labelLive();
+    if (live && labelWidthSpin_ && labelHeightSpin_) {
+        QSignalBlocker bw(labelWidthSpin_);
+        QSignalBlocker bh(labelHeightSpin_);
+        labelWidthSpin_->setValue(editor_->labelWidth());
+        labelHeightSpin_->setValue(editor_->labelHeight());
+    }
+    // The fields only mean anything once a label is down: while the stroke is still being drawn there is
+    // no size to show, so they are there but dead, and the group says which stage it is at.
+    if (labelWidthSpin_) labelWidthSpin_->setEnabled(live);
+    if (labelHeightSpin_) labelHeightSpin_->setEnabled(live);
+    updateMechanicalRibbonGroups();
+    if (labelFitGroup_) {
+        // The Harness-mechanical tab is where the label button lives, so that is where its fields are; a
+        // label placed from anywhere else still wants them, so the tab is brought forward.
+        if ((editor_->placingLabel() || live) && ribbon_) {
+            for (int i = 0; i < ribbon_->count(); ++i)
+                if (ribbon_->tabText(i) == QStringLiteral("Harness mechanical") &&
+                    ribbon_->tabBar()->isTabVisible(i))
+                    ribbon_->setCurrentIndex(i);
+        }
+    }
 }
 
 void MainWindow::syncBreakOptions() {

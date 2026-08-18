@@ -1928,132 +1928,127 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing) {
         emit message(QStringLiteral("Nothing to place"));
         return;
     }
+    endLabelEdit();          // one label being fitted at a time
     labelProto_ = drawing;
     labelPlacing_ = true;
+    labelStrokeHasStart_ = false;
     labelPreview_.clear();
     labelCovers_ = Bounds();
+    labelFit_ = LabelFit();
     setTool(ToolId::Select);
     emit message(QStringLiteral(
-        "Move the label over the runs it goes on — it stretches to cover them — then click to place it"));
+        "Draw a stroke across the runs the label goes on — it takes its width from what it crosses"));
+    emit labelChanged();
     emit overlayChanged();
 }
 
-// The label as it would be at `at`: turned to lie along the runs there, stretched across to cover all of
-// them, and told what ground it covers so the runs underneath can be masked.
+// What the stroke a..b says about the label: which runs it crosses, which way those runs go, and how far
+// across they spread.
 //
-// False when there is nothing under the cursor to label. A label in mid-air is not a label; it is a note,
-// and there is a tool for those.
-bool Editor::labelAt(const Vec2& at, std::vector<Entity>& out, Bounds& covers) const {
-    out.clear();
+// The label lies square to THE RUNS, not to the stroke: a swipe made at a careless angle still puts the
+// label on straight, which is the point of measuring the runs' own direction rather than using the stroke's.
+Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
+    LabelFit fit;
+    if (!doc_ || labelProto_.empty()) return fit;
+    Bounds proto;
+    for (const Entity& e : labelProto_) {
+        const Bounds pb = e.bounds();
+        if (pb.valid) { proto.expand(pb.min); proto.expand(pb.max); }
+    }
+    if (!proto.valid || proto.width() < 1e-9) return fit;
+    const double protoW = proto.width();
+
+    // Everything the stroke crosses, and which way it was going where it was crossed. The masks other
+    // labels laid are skipped: a label measured against the last label's mask comes out the size of the
+    // mask, and every label after the first grows.
+    std::vector<Vec2> hits;
+    std::vector<Vec2> dirs;
+    auto tryLine = [&](const Vec2& p1, const Vec2& p2) {
+        if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
+            hits.push_back(*x);
+            dirs.push_back(p2 - p1);
+        }
+    };
+    for (const Entity& e : doc_->entities()) {
+        if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+        if (std::find(labelLiveIds_.begin(), labelLiveIds_.end(), e.id) != labelLiveIds_.end()) continue;
+        switch (e.type) {
+        case EntityType::Line:
+            tryLine(e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            tryLine(e.a + off, e.b + off);
+            tryLine(e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Polyline: {
+            if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                for (double sgn : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, sgn);
+                    for (size_t i = 1; i < run.size(); ++i) tryLine(run[i - 1], run[i]);
+                }
+            } else {
+                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    if (hits.empty()) return fit;
+
+    // The runs' own direction, averaged, and square to it the way the label is stretched. bundlePerpRot
+    // gives the perpendicular of the mean, which IS the across direction - the same answer the break mark
+    // uses to lie square through a bundle that fans.
+    const double perpRot = bundlePerpRot(dirs);
+    fit.across = Vec2{std::cos(perpRot), std::sin(perpRot)};
+    fit.runDir = fit.across.perp();
+    Vec2 centre;
+    double spread = 0.0;
+    shieldExtent(hits, fit.across, centre, spread);
+
+    // A LITTLE BIT OVER the outermost run, because a label flush with the edge of a bundle reads as a
+    // label that missed the last wire. One run has no spread of its own, so a workable size stands in - a
+    // label on a single wire is still a label.
+    const double margin = std::max(protoW * 0.12, spread * 0.10);
+    fit.mid = centre;
+    fit.width = std::max(protoW * 0.4, spread + 2.0 * margin);
+    fit.height = std::max(proto.height(), protoW * 0.05);   // along the run: the label as it was drawn
+    fit.ok = true;
+    return fit;
+}
+
+// The captured drawing laid out to a fit. The proto is drawn along +x with its flag standing in +y; laid on
+// the runs, +x runs ACROSS them (the label lies over the bundle, stretched to the width measured) and +y
+// runs along them (the label's height). Centred on the fit's middle both ways, so a label goes where it was
+// put rather than hanging off downstream of it.
+std::vector<Entity> Editor::labelEntities(const LabelFit& fit, Bounds& covers) const {
+    std::vector<Entity> out;
     covers = Bounds();
-    if (!doc_ || labelProto_.empty()) return false;
-    // How big the label was drawn: its length along the run, and how far the flag stands off it.
+    if (!fit.ok || labelProto_.empty()) return out;
     Bounds proto;
     for (const Entity& e : labelProto_) {
         const Bounds b = e.bounds();
         if (b.valid) { proto.expand(b.min); proto.expand(b.max); }
     }
-    if (!proto.valid || proto.width() < 1e-9) return false;
-    const double along = proto.width();
-
-    // What lies under the cursor, found by laying a band ACROSS the runs there - long enough to catch a
-    // whole bundle, and square to the run it is over. The direction comes from the nearest run, because a
-    // label is laid square to what it labels and not to the sheet.
-    Vec2 runDir{1.0, 0.0};
-    double nearest = 1e300;
-    auto consider = [&](const Vec2& p1, const Vec2& p2) {
-        const double d = closestPointOnSegment(at, p1, p2).distance;
-        if (d < nearest && distance(p1, p2) > 1e-9) { nearest = d; runDir = (p2 - p1).normalized(); }
-    };
-    for (const Entity& e : doc_->entities()) {
-        if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;   // not the masks of other labels
-        switch (e.type) {
-        case EntityType::Line:
-        case EntityType::DoubleLine:
-            consider(e.a, e.b);
-            break;
-        case EntityType::Wire:
-        case EntityType::Polyline:
-        case EntityType::Spline:
-            for (size_t i = 1; i < e.points.size(); ++i) consider(e.points[i - 1], e.points[i]);
-            break;
-        default:
-            break;
-        }
-    }
-    if (nearest > along * 4.0) return false;   // nothing near enough to be what is being labelled
-
-    // The band, square to the run, and everything it crosses.
-    const Vec2 across = runDir.perp();
-    constexpr double kReach = 1e4;
-    Entity ignored;
-    std::vector<Vec2> hits;
-    {
-        const Vec2 b0 = at - across * kReach, b1 = at + across * kReach;
-        auto tryLine = [&](const Vec2& p1, const Vec2& p2) {
-            if (auto x = segmentSegmentIntersection(b0, b1, p1, p2)) hits.push_back(*x);
-        };
-        for (const Entity& e : doc_->entities()) {
-            if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
-            switch (e.type) {
-            case EntityType::Line:
-                tryLine(e.a, e.b);
-                break;
-            case EntityType::DoubleLine: {
-                const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
-                const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
-                tryLine(e.a + off, e.b + off);
-                tryLine(e.a - off, e.b - off);
-                break;
-            }
-            case EntityType::Wire:
-            case EntityType::Spline:
-                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
-                break;
-            case EntityType::Polyline: {
-                if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
-                    const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
-                    for (double sgn : {gap / 2.0, -gap / 2.0}) {
-                        const auto run = offsetPolyline(e.points, sgn);
-                        for (size_t i = 1; i < run.size(); ++i) tryLine(run[i - 1], run[i]);
-                    }
-                } else {
-                    for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
-                }
-                break;
-            }
-            default:
-                break;
-            }
-        }
-    }
-    if (hits.empty()) return false;
-    // How far the crossings reach along the band: that span, plus a little either side, is what the label
-    // has to cover. One wire gives a span of nothing, so a minimum stands in - a label on a single wire is
-    // still a label of some size.
-    double lo = 1e300, hi = -1e300;
-    for (const Vec2& h : hits) {
-        const double t = dot(h - at, across);
-        lo = std::min(lo, t);
-        hi = std::max(hi, t);
-    }
-    const double margin = std::max(1.0, along * 0.18);
-    const double spanLo = lo - margin, spanHi = hi + margin;
-    const double span = std::max(along * 0.5, spanHi - spanLo);
-    const Vec2 mid = at + across * ((spanLo + spanHi) / 2.0);
-
-    // The proto is drawn along +x with its flag standing in +y. Laid on the runs it turns so that +x runs
-    // ACROSS them - the label lies over the bundle - and stretches along that axis to the span measured.
-    const double sx = span / along;
-    const double protoMidX = (proto.min.x + proto.max.x) / 2.0;
-    // Centred on the point it was put, along the run as well as across it. Measured from the proto's own
-    // middle rather than its origin: hung off the origin the label sat entirely downstream of the cursor, so
-    // it went where it was pointed but did not sit there.
-    const double protoMidY = (proto.min.y + proto.max.y) / 2.0;
+    if (!proto.valid || proto.width() < 1e-9) return out;
+    const double sx = fit.width / proto.width();
+    const double sy = proto.height() > 1e-9 ? fit.height / proto.height() : 1.0;
+    const double midX = (proto.min.x + proto.max.x) / 2.0;
+    const double midY = (proto.min.y + proto.max.y) / 2.0;
     auto place = [&](const Vec2& p) {
-        const double u = (p.x - protoMidX) * sx;   // across the runs, stretched to span them
-        const double v = p.y - protoMidY;          // along the run, at the size it was drawn
-        return Vec2{mid.x + across.x * u + runDir.x * v, mid.y + across.y * u + runDir.y * v};
+        const double u = (p.x - midX) * sx;   // across the runs, stretched to cover them
+        const double v = (p.y - midY) * sy;   // along the runs, the label's own height
+        return Vec2{fit.mid.x + fit.across.x * u + fit.runDir.x * v,
+                    fit.mid.y + fit.across.y * u + fit.runDir.y * v};
     };
     for (const Entity& src : labelProto_) {
         Entity e = src;
@@ -2062,21 +2057,32 @@ bool Editor::labelAt(const Vec2& at, std::vector<Entity>& out, Bounds& covers) c
         e.b = place(src.b);
         e.center = place(src.center);
         for (Vec2& q : e.points) q = place(q);
+        // Text is drawn at its own height, so it has to be told the label was stretched, or a label
+        // scaled to a bundle of ten keeps writing at the size it was captured at.
+        const double h = e.meta.value(QStringLiteral("height")).toDouble();
+        if (h > 1e-9) e.meta.insert(QStringLiteral("height"), h * std::min(sx, sy));
         out.push_back(e);
     }
     for (const Entity& e : out) {
         const Bounds b = e.bounds();
         if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
     }
-    return !out.empty();
+    return out;
 }
 
 void Editor::commitLabel() {
     if (!doc_ || labelPreview_.empty()) return;
     pushUndo();
+    labelLiveIds_.clear();
+    labelMaskId_.clear();
+    // ONE OBJECT, and its own: a label is a dozen lines and a mask, and it is picked up, slid and deleted
+    // as the label it is. The key has the label's own id in it, because two labels on one sheet are two
+    // objects - the bare model key would make every label on the drawing one group.
+    const QString group = QStringLiteral("%1:label:%2").arg(QLatin1String(kMechModelGroup), uid());
     // The mask goes UNDER the label and over the runs: a label is opaque, and a bundle drawn straight
     // through it reads as a label behind the harness rather than on it. Marked as a label's own mask so
-    // that laying the next label does not measure this one as though it were a wire.
+    // that laying the next label does not measure this one as though it were a wire, and it is IN the
+    // group, so clicking the body of the label - which is mostly mask - picks the label up.
     if (labelCovers_.valid) {
         Entity mask;
         mask.id = uid();
@@ -2087,24 +2093,117 @@ void Editor::commitLabel() {
                        {labelCovers_.max.x, labelCovers_.max.y},
                        {labelCovers_.min.x, labelCovers_.max.y}};
         mask.meta.insert(QStringLiteral("labelMask"), true);
+        stampEntityGroup(mask, group);
+        labelMaskId_ = mask.id;
         doc_->entities().push_back(std::move(mask));
     }
-    std::vector<QString> placed;
     for (Entity e : labelPreview_) {
         e.id = uid();
         e.layer = doc_->activeLayer();
-        placed.push_back(e.id);
+        stampEntityGroup(e, group);
+        labelLiveIds_.push_back(e.id);
         doc_->entities().push_back(std::move(e));
     }
     labelPlacing_ = false;
+    labelStrokeHasStart_ = false;
+    labelPreview_.clear();
+    labelCovers_ = Bounds();
+    selected_ = labelLiveIds_;
+    doc_->setDirty(true);
+    emit message(QStringLiteral(
+        "Label placed — set its width and height on the ribbon, or drag it along the runs"));
+    emit labelChanged();
+    emit selectionChanged();
+    emit changed();
+}
+
+// Redraw the placed label to the fit it now has, in place: same ids, same mask, new geometry. This is what a
+// width typed on the ribbon and a slide along the runs both come down to.
+void Editor::redrawLiveLabel() {
+    if (!doc_ || labelLiveIds_.empty() || !labelFit_.ok) return;
+    Bounds covers;
+    const std::vector<Entity> laid = labelEntities(labelFit_, covers);
+    if (laid.size() != labelLiveIds_.size()) return;
+    int n = 0;
+    for (Entity& e : doc_->entities()) {
+        const auto it = std::find(labelLiveIds_.begin(), labelLiveIds_.end(), e.id);
+        if (it == labelLiveIds_.end()) continue;
+        Entity next = laid[static_cast<size_t>(it - labelLiveIds_.begin())];
+        next.id = e.id;
+        next.layer = e.layer;
+        e = next;
+        ++n;
+    }
+    if (n == 0) return;
+    if (!labelMaskId_.isEmpty() && covers.valid) {
+        for (Entity& e : doc_->entities()) {
+            if (e.id != labelMaskId_) continue;
+            e.points = {{covers.min.x, covers.min.y},
+                        {covers.max.x, covers.min.y},
+                        {covers.max.x, covers.max.y},
+                        {covers.min.x, covers.max.y}};
+            break;
+        }
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setLabelWidth(double mm) {
+    if (labelLiveIds_.empty() || mm <= 1e-6 || std::abs(mm - labelFit_.width) < 1e-9) return;
+    pushUndo();
+    labelFit_.width = mm;
+    redrawLiveLabel();
+}
+
+void Editor::setLabelHeight(double mm) {
+    if (labelLiveIds_.empty() || mm <= 1e-6 || std::abs(mm - labelFit_.height) < 1e-9) return;
+    pushUndo();
+    labelFit_.height = mm;
+    redrawLiveLabel();
+}
+
+// A drag on the label it has just placed slides it ALONG the runs it crosses, and only along them. A label
+// sits ON a bundle: one nudged sideways off the bundle by a careless drag is a drawing sent back, and the
+// wires would come out from under the mask it left behind.
+bool Editor::slideLiveLabel(const Vec2& delta) {
+    if (labelLiveIds_.empty() || !labelFit_.ok || selected_.empty()) return false;
+    for (const QString& id : selected_)
+        if (id != labelMaskId_ &&
+            std::find(labelLiveIds_.begin(), labelLiveIds_.end(), id) == labelLiveIds_.end())
+            return false;   // something else is in the selection: an ordinary move
+    labelFit_.mid = labelFit_.mid + labelFit_.runDir * dot(delta, labelFit_.runDir);
+    redrawLiveLabel();
+    return true;
+}
+
+// Clicking away from the label ends the fitting; clicking the label again does not. Asked once the new
+// selection has settled, because a pick clears the old selection before it makes the new one and a session
+// ended on the clearing could never survive being clicked on.
+void Editor::dropLabelEditIfDeselected(bool emptying) {
+    if (labelLiveIds_.empty()) return;
+    if (!emptying)
+        for (const QString& id : selected_)
+            if (id == labelMaskId_ ||
+                std::find(labelLiveIds_.begin(), labelLiveIds_.end(), id) != labelLiveIds_.end())
+                return;   // still the label that is selected: still the label being fitted
+    endLabelEdit();
+}
+
+void Editor::endLabelEdit() {
+    const bool had = !labelLiveIds_.empty() || labelPlacing_;
+    labelLiveIds_.clear();
+    labelMaskId_.clear();
+    labelPlacing_ = false;
+    labelStrokeHasStart_ = false;
     labelPreview_.clear();
     labelProto_.clear();
     labelCovers_ = Bounds();
-    selected_ = placed;
-    doc_->setDirty(true);
-    emit message(QStringLiteral("Label placed across the runs, which are masked under it"));
-    emit selectionChanged();
-    emit changed();
+    labelFit_ = LabelFit();
+    if (had) {
+        emit labelChanged();
+        emit overlayChanged();
+    }
 }
 
 std::optional<Vec2> Editor::trackingAnchor() const {
@@ -2202,13 +2301,13 @@ void Editor::onPointerMove(const Vec2& raw) {
     }
     cursor_ = snapResult_.point;
 
-    // A label being laid on the runs is re-measured on every move: how wide it has to be is however wide the
-    // bundle is where it now sits, so the preview is the answer to a question the cursor keeps changing.
-    if (labelPlacing_) {
-        if (!labelAt(cursor_, labelPreview_, labelCovers_)) {
-            labelPreview_.clear();
-            labelCovers_ = Bounds();
-        }
+    // A label being STROKED on is re-measured on every move: the stroke grows as the cursor moves, so the
+    // runs it crosses - and therefore how wide the label has to be - is a question the cursor keeps
+    // changing the answer to.
+    if (labelPlacing_ && labelStrokeHasStart_) {
+        labelFit_ = labelFitFor(labelStrokeStart_, cursor_);
+        labelPreview_ = labelEntities(labelFit_, labelCovers_);
+        if (labelPreview_.empty()) labelCovers_ = Bounds();
         emit overlayChanged();
     }
 
@@ -2421,11 +2520,24 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
+    // A label goes on with a stroke across the runs it covers: the first click starts the stroke, and the
+    // second ends it and places the label on whatever the stroke crossed.
     if (labelPlacing_) {
+        if (!labelStrokeHasStart_) {
+            labelStrokeStart_ = p;
+            labelStrokeHasStart_ = true;
+            emit message(QStringLiteral(
+                "Now draw across the runs the label covers, and click to place it"));
+            emit overlayChanged();
+            return;
+        }
+        labelFit_ = labelFitFor(labelStrokeStart_, p);
+        labelPreview_ = labelEntities(labelFit_, labelCovers_);
         if (labelPreview_.empty()) {
             emit message(QStringLiteral(
-                "Move it over the runs it labels - a label in mid-air is a note, and there is a tool for "
-                "those"));
+                "The stroke crossed nothing — draw it ACROSS the runs the label goes on"));
+            labelStrokeHasStart_ = false;
+            emit overlayChanged();
             return;
         }
         commitLabel();
@@ -2784,6 +2896,10 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
+    // The click that just settled: if it landed on something other than the label being fitted, the fitting
+    // is over. Asked here rather than on the pick itself, because a pick clears the old selection before it
+    // makes the new one - and a session ended on the clearing could never survive being clicked on.
+    if (!editing_ && !labelPlacing_) dropLabelEditIfDeselected();
     // Trim's cut line is two clicks (handled in onPointerPress), so the release does
     // nothing for it.
     if (!selectionTool()) return;
@@ -3662,6 +3778,36 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
 bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     if (!doc_) return false;
     const double tol = worldTolerance();
+    // THE LABEL BEING FITTED is taken hold of anywhere on its body, not by a joint. It is a grouped object,
+    // so it has no joints to offer - and it would not want them if it had: there is only one thing a label
+    // can be moved, which is along the bundle it sits on, and one handle in the middle of a label the size
+    // of a postage stamp is a handle nobody finds. So the whole label is the handle.
+    if (!labelLiveIds_.empty() && labelFit_.ok && !shift) {
+        Bounds body;
+        for (const QString& id : labelLiveIds_)
+            if (const Entity* e = entityById(id)) {
+                const Bounds b = e->bounds();
+                if (b.valid) { body.expand(b.min); body.expand(b.max); }
+            }
+        if (body.valid && at.x >= body.min.x - tol && at.x <= body.max.x + tol &&
+            at.y >= body.min.y - tol && at.y <= body.max.y + tol) {
+            editing_ = true;
+            gripGrab_ = true;   // follows the cursor until the next click places it
+            editMode_ = 1;
+            editEntityId_ = labelLiveIds_.front();
+            editRole_ = static_cast<int>(GripRole::Move);
+            editIndex_ = 0;
+            editLast_ = at;
+            editAnchor_ = labelFit_.mid;
+            editMoved_ = false;
+            editGrips_.clear();   // nothing is mutated joint-by-joint; the whole label slides
+            editGhost_.clear();
+            for (const QString& id : labelLiveIds_)
+                if (const Entity* e = entityById(id)) editGhost_.push_back(*e);
+            emit message(QStringLiteral("Sliding the label along the runs — click to put it down"));
+            return true;
+        }
+    }
     // A "point joint" is a movable endpoint/vertex/corner whose position is set
     // directly to the cursor (shareable between coincident primitives).
     auto isPointJoint = [](GripRole r) {
@@ -6053,6 +6199,14 @@ void Editor::applyEditDrag(const Vec2& target) {
         if (delta.lengthSq() < 1e-18) return; // ignore until the cursor truly moves
         pushUndo();
         editMoved_ = true;
+    }
+    // The label being fitted slides ALONG the runs it crosses and nowhere else - taken as ONE move for the
+    // whole label, because a label is a mask and a dozen lines, and moving them one at a time would pull it
+    // apart. Ahead of the two modes below because it belongs to neither: it is not a joint being dragged
+    // and not a free translate, it is a label sliding up and down a bundle.
+    if (slideLiveLabel(delta)) {
+        editLast_ = target;
+        return;
     }
     // A double line is stored as a centerline (a..b) + gap; the two VISIBLE lines
     // are the centerline offset by ±perp*(gap/2). A grip sits on a visible corner
@@ -12488,6 +12642,9 @@ void Editor::clearMarkSelection() {
 }
 
 void Editor::clearSelection() {
+    // Letting go of the label lets go of fitting it: the ribbon's width and height act on the label that is
+    // selected, so a session that outlived the selection would be two fields editing nothing visible.
+    dropLabelEditIfDeselected(/*emptying=*/true);
     selected_.clear();
     markSel_.clear();
     markGrab_ = false;
@@ -13572,11 +13729,9 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         filletInputMode_ = false;
         awaitClipBase_ = false;
         pastePlacing_ = false;
-        // A label being laid on the runs is abandoned the same way anything else being placed is.
-        labelPlacing_ = false;
-        labelPreview_.clear();
-        labelProto_.clear();
-        labelCovers_ = Bounds();
+        // A label being laid on the runs is abandoned the same way anything else being placed is, and one
+        // already placed stops being fitted - the label stays, the ribbon goes back.
+        endLabelEdit();
         placeRot_ = 0.0;
         clipCut_ = false;
         cutPending_.clear();
@@ -14065,6 +14220,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ghost = paperInk(paperInk(QColor(150, 162, 178, 110)));
         for (const auto& e : editGhost_)
             EntityRenderer::draw(p, e, *doc_, vt, ghost);
+    }
+
+    // The stroke being drawn across the runs the label goes on: the same line the length-break mark is
+    // placed with, so the two read as the one gesture they are.
+    if (labelPlacing_ && labelStrokeHasStart_) {
+        p.save();
+        QPen stroke(paperInk(QColor("#8fd3ff")));
+        stroke.setCosmetic(true);
+        stroke.setWidthF(1.4);
+        stroke.setStyle(Qt::DashLine);
+        p.setPen(stroke);
+        p.drawLine(vt.toScreen(labelStrokeStart_), vt.toScreen(cursor_));
+        p.restore();
     }
 
     // A label being laid on the runs, at the size it would be if placed here - and the ground it would

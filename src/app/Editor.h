@@ -485,13 +485,32 @@ public:
                        const std::optional<Vec2>& heldAt = std::nullopt);
     // A LABEL laid across the runs it is put on, rather than dropped at a fixed size.
     //
-    // A label wraps round what it labels, so how wide it has to be is not the drawing office's decision -
-    // it is however wide the bundle is at the point the label goes. So this follows the cursor, measures the
-    // runs under it, and stretches ACROSS to cover all of them; the length it takes up along the run is the
-    // label's own. What it covers is masked, because a label is opaque: the wires do not show through it,
-    // and a label with the bundle drawn straight over the top of it reads as a label BEHIND the harness.
+    // It goes on with a STROKE, the way the length-break mark does: draw a line across the runs the label
+    // covers, and the label is however wide those runs are. That is the whole reason it is a stroke and not
+    // a click - how wide a label has to be is not the drawing office's decision, it is however wide the
+    // bundle is at the point the label goes, and only the person placing it knows which runs are meant. A
+    // bundle of eight passing a bundle of three is one click either way.
+    //
+    // It exceeds the outermost run it crosses a little, because a label flush with the edge of a bundle
+    // reads as a label that missed. What it covers is masked: a label is opaque, and a label with the wires
+    // drawn straight over the top of it reads as a label BEHIND the harness.
     void beginLabelPlacement(const std::vector<Entity>& drawing);
     bool placingLabel() const { return labelPlacing_; }
+    bool labelStrokeStarted() const { return labelPlacing_ && labelStrokeHasStart_; }
+    Vec2 labelStrokeStart() const { return labelStrokeStart_; }
+    // The label just placed, still being fitted. The stroke measures a size that is right most of the
+    // time; the two numbers are there for the times it is not, so a label can be matched to a drawing's
+    // house size by hand instead of by re-stroking it until it comes out right.
+    //
+    // WIDTH is across the runs - what the stroke measured. HEIGHT is along them, which the stroke cannot
+    // measure at all: it is the label's own reach up the bundle, and comes from the drawing as captured.
+    bool labelLive() const { return !labelLiveIds_.empty(); }
+    double labelWidth() const { return labelFit_.width; }
+    double labelHeight() const { return labelFit_.height; }
+    void setLabelWidth(double mm);
+    void setLabelHeight(double mm);
+    // Done fitting: the label stays where it is and the ribbon goes back to normal.
+    void endLabelEdit();
     void appendEntities(const std::vector<Entity>& ents);
     // Everything currently selected, copied out (the parts library captures a part's drawing from
     // the sheet this way).
@@ -1023,6 +1042,10 @@ signals:
     // The hatch live-edit target changed (a hatch was created, or the session
     // ended) — the host re-points the contextual Hatch tab.
     void hatchTargetChanged();
+    // A label was armed, placed, resized or let go of - the host shows the label's own ribbon group while
+    // one is being fitted, and puts the rest of the tab away while it is, because hunting for the two
+    // fields that matter among forty buttons is what makes a drawing slow to make.
+    void labelChanged();
 
 private:
     double worldTolerance() const;
@@ -1272,15 +1295,44 @@ private:
     // The first end of an output line, while waiting for the second.
     bool haveOutputFirst_ = false;
     Vec2 outputFirst_;
-    // A label being laid on the runs: the drawing as it was captured, and what it looks like where the
-    // cursor is now - worked out on every move, because what it has to cover changes as it is moved.
+    // A label being laid on the runs: the drawing as it was captured, the stroke being drawn across the
+    // runs it goes on, and what it looks like for that stroke - worked out on every move, because what it
+    // has to cover changes as the stroke is drawn.
     bool labelPlacing_ = false;
+    bool labelStrokeHasStart_ = false;
+    Vec2 labelStrokeStart_;
     std::vector<Entity> labelProto_;
     std::vector<Entity> labelPreview_;
     Bounds labelCovers_;
-    // The runs the label lies across, and the size and place it therefore takes. Built by labelAt().
-    bool labelAt(const Vec2& at, std::vector<Entity>& out, Bounds& covers) const;
+    // HOW A LABEL SITS: where its middle is, which way the runs it is on go, and the size it takes. Kept
+    // apart from the drawing so that a width typed on the ribbon, or a slide along the runs, is a change to
+    // three numbers and a redraw rather than a re-measure of the sheet.
+    struct LabelFit {
+        bool ok = false;
+        Vec2 mid;
+        Vec2 runDir{1.0, 0.0};   // the way the runs it is on run
+        Vec2 across{0.0, 1.0};   // square to them: the way the label is stretched
+        double width = 0.0;      // across the runs
+        double height = 0.0;     // along them
+    };
+    LabelFit labelFit_;
+    // Measured off the stroke a..b: which runs it crosses, how far they spread, and the size that covers
+    // them. Does not touch any state, so the preview and the commit can ask the same question.
+    LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
+    // The captured drawing laid out to that fit, and the ground it covers.
+    std::vector<Entity> labelEntities(const LabelFit& fit, Bounds& covers) const;
     void commitLabel();
+    // The label placed and still being fitted: its objects, and its mask, so a width typed on the ribbon
+    // or a slide along the runs redraws THAT label rather than making another one.
+    std::vector<QString> labelLiveIds_;
+    QString labelMaskId_;
+    void redrawLiveLabel();
+    // Clicking away ends the fitting; clicking the label again does not. `emptying` is the case where the
+    // selection is being dropped outright, which always ends it.
+    void dropLabelEditIfDeselected(bool emptying = false);
+    // A drag on the live label slides it ALONG the runs it crosses. True when it took the drag: a label
+    // sits on a bundle, and one nudged off the bundle by a careless drag is a drawing sent back.
+    bool slideLiveLabel(const Vec2& delta);
     // The first of the two runs a centre line goes between, while waiting for the second.
     QString centerLineFirst_;
     Vec2 connectFirst_;

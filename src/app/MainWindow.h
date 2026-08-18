@@ -657,6 +657,13 @@ private:
     QVector<QWidget*> mechGroups_;
     QVector<QWidget*> mechModelHiddenGroups_;
     QWidget* mechBreakGroup_ = nullptr;
+    // THE LABEL'S OWN GROUP, and nothing else on the tab while a label is being fitted. The stroke
+    // measures a width that is right most of the time; these are for the times it is not, so a label can be
+    // matched to a drawing's house size by hand instead of by re-stroking it until it comes out right.
+    QWidget* labelFitGroup_ = nullptr;
+    QDoubleSpinBox* labelWidthSpin_ = nullptr;
+    QDoubleSpinBox* labelHeightSpin_ = nullptr;
+    void syncLabelOptions();
     void updateMechanicalRibbonGroups();
     QDoubleSpinBox* breakGapSpin_ = nullptr;
     QDoubleSpinBox* breakSizeSpin_ = nullptr;
