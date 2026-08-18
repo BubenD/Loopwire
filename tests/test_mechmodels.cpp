@@ -683,6 +683,16 @@ int run_mechmodels_tests() {
         for (const Entity& e : d.entities())
             if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
         check(mask != nullptr, "scale-by: and masked");
+        // The ribbon's Label group goes away with the click that places it: its two fields are for BEFORE
+        // the click, which is what pinning with Tab is for, and a group left up after the function has
+        // finished is a tab taken over by nothing.
+        check(!ed.placingLabel(), "scale-by: placing it closes the label's ribbon group");
+        // And the mask is NOT framed. It sits exactly under the label's own rectangle, so an outline on it
+        // drew that rectangle a second time a hair outside the first, and the pair read as a box round the
+        // label that is no part of the label.
+        if (mask)
+            check(mask->meta.value(QStringLiteral("noFrame")).toBool(),
+                  "scale-by: and the mask draws no rectangle of its own over the label's");
         double labelLo = 0.0, labelHi = 0.0;
         if (mask) {
             const Bounds b = mask->bounds();
@@ -796,6 +806,19 @@ int run_mechmodels_tests() {
             check(refs == 1, "built-in: exactly one object says what the model is scaled by");
             // And how far clear of the first and last wire it goes, as a figure rather than a proportion.
             check(m.exceedMm > 0.0, "built-in: and how far clear of the wires it goes");
+            // The run CONNECTS TO THE INNER RECTANGLE - the label - and not to the sleeve over it. A clear
+            // sleeve is clear and transparent: a wire drawn up to the outside of it stops short of the thing
+            // it is labelled by, with a gap of nothing in between.
+            Bounds ref;
+            for (const Entity& e : es)
+                if (e.meta.value(QStringLiteral("modelScaleRef")).toBool()) {
+                    const Bounds b = e.bounds();
+                    if (b.valid) { ref.expand(b.min); ref.expand(b.max); }
+                }
+            check(ref.valid && m.connectPoint.x >= ref.min.x - 1e-9 &&
+                      m.connectPoint.x <= ref.max.x + 1e-9 &&
+                      m.connectPoint.y >= ref.min.y - 1e-9 && m.connectPoint.y <= ref.max.y + 1e-9,
+                  "built-in: the run connects to the label itself, not to the sleeve over it");
             // It goes ON a run, so it knows where it attaches and which way it lies - otherwise the wizard
             // could not place it and it would land by the corner of its own extent.
             check(m.hasConnect, "built-in: it knows where it sits on the run");

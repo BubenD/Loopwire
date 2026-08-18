@@ -2174,6 +2174,10 @@ void Editor::commitLabel() {
                        {labelCovers_.max.x, labelCovers_.max.y},
                        {labelCovers_.min.x, labelCovers_.max.y}};
         mask.meta.insert(QStringLiteral("labelMask"), true);
+        // NOT FRAMED. A mask is normally outlined so it can be seen at all, but this one sits exactly under
+        // the label's own rectangle - so the frame drew that rectangle a second time, a hair outside the
+        // first, and the pair read as a box round the label that is not part of the label.
+        mask.meta.insert(QStringLiteral("noFrame"), true);
         stampLabelFit(mask, labelGroup_, labelFit_);
         labelMaskId_ = mask.id;
         doc_->entities().push_back(std::move(mask));
@@ -2192,9 +2196,12 @@ void Editor::commitLabel() {
     labelCovers_ = Bounds();
     selected_ = labelLiveIds_;
     doc_->setDirty(true);
+    // The label's ribbon group goes away with the click that places it. Its two fields are for BEFORE the
+    // click - that is what pinning with Tab is for - and a group that stays up afterwards leaves the tab
+    // taken over by a function that has finished. The sizes are still there in the properties, and the
+    // label is still in hand, so it can be dragged along the runs straight away.
     emit message(QStringLiteral(
-        "Label placed — set its width and height on the ribbon or in the properties, or drag it along "
-        "the runs"));
+        "Label placed — drag it along the runs, or set its width and height in the properties"));
     emit labelChanged();
     emit selectionChanged();
     emit changed();

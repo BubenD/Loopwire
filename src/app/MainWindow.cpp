@@ -4029,9 +4029,12 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // settings and nothing else. The tools that cannot be used during it are noise, and hunting for the
     // two fields that matter among forty buttons is what makes a drawing slow to make.
     const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
-    // A label being stroked on or fitted takes the tab outright: its own two fields, and nothing else,
-    // because nothing else on the tab applies to a label until it is let go of.
-    const bool labelling = editor_->placingLabel() || editor_->labelLive();
+    // A label being STROKED ON takes the tab outright: its own two fields, and nothing else, because
+    // nothing else on the tab applies while one is going down. It gives the tab back with the click that
+    // places it - the fields are for before the click, which is what pinning with Tab is for, and a group
+    // that stays up afterwards leaves the tab taken over by a function that has finished. A placed label's
+    // sizes live in the properties.
+    const bool labelling = editor_->placingLabel();
     if (labelFitGroup_) labelFitGroup_->setVisible(labelling && !modelEdit);
     if (labelling && !modelEdit) {
         for (QWidget* g : mechGroups_)
@@ -4063,7 +4066,7 @@ void MainWindow::syncLabelOptions() {
     // Live at BOTH stages: a preview under the cursor and a label down on the drawing. Setting a label's
     // size only after it is placed means placing it at the wrong size first, which is why Tab pins the
     // preview - the two fields are meant to be used on it before the click, not only after.
-    const bool usable = editor_->labelLive() || editor_->placingLabel();
+    const bool usable = editor_->placingLabel();
     if (usable && labelWidthSpin_ && labelHeightSpin_) {
         QSignalBlocker bw(labelWidthSpin_);
         QSignalBlocker bh(labelHeightSpin_);
