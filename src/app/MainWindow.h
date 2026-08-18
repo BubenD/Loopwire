@@ -262,6 +262,9 @@ private:
     QCheckBox* detailBoundaryBox_ = nullptr;
     QCheckBox* detailAnnotativeBox_ = nullptr;
     QCheckBox* detailDimsBox_ = nullptr;
+    QComboBox* detailFontCombo_ = nullptr;
+    QDoubleSpinBox* detailTextSizeSpin_ = nullptr;
+    QLineEdit* detailLetter_ = nullptr;
     void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
     void updateHatchContext();         // open/close + target the tab based on tool/selection
     void applyHatchControl(const QString& key, const QJsonValue& value); // -> selected hatch or default

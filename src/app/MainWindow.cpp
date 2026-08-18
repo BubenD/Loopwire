@@ -4694,19 +4694,59 @@ void MainWindow::buildDetailRibbonTab() {
             *out = le;
         };
         row(0, tr("On the small circle"),
-            tr("The letter beside the circle round the thing itself. It is a pointer: it says \"the "
-               "enlargement of this one is called A\"."),
+            tr("What is written beside the circle round the thing itself. Both circles say \"Detail A\" "
+               "unless something else is typed: a bare letter on a sheet is a thing to be worked out - it "
+               "could be a note, a zone, a revision - and the two circles reading the same is what ties "
+               "them together at a glance."),
             &detailSmallText_);
         row(1, tr("On the large circle"),
-            tr("The heading on the enlargement. Empty writes DETAIL and the letter, which is the "
+            tr("The heading on the enlargement. Empty writes \"Detail\" and the letter, which is the "
                "convention; anything typed here is used instead."),
             &detailBigText_);
+        row(2, tr("Letter"),
+            tr("The letter that ties the two together - A, B, C. It is what both default texts are built "
+               "from, and what the next detail's letter runs on from."),
+            &detailLetter_);
         connect(detailSmallText_, &QLineEdit::textEdited, this, [write](const QString& t) {
-            write(QStringLiteral("detailTag"), t.trimmed().toUpper());
+            write(QStringLiteral("detailTagText"), t.trimmed());
         });
         connect(detailBigText_, &QLineEdit::textEdited, this, [write](const QString& t) {
             write(QStringLiteral("detailBigText"), t.trimmed());
         });
+        connect(detailLetter_, &QLineEdit::textEdited, this, [write](const QString& t) {
+            write(QStringLiteral("detailTag"), t.trimmed().toUpper());
+        });
+        // HOW IT IS WRITTEN. A drawing office's details have to read like the rest of its sheet, and a
+        // caption at whatever height the program felt like is the one thing that says they do not.
+        {
+            auto* l = new QLabel(tr("Text height"), w);
+            l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            detailTextSizeSpin_ = new QDoubleSpinBox(w);
+            detailTextSizeSpin_->setRange(0.1, 500.0);
+            detailTextSizeSpin_->setSingleStep(0.5);
+            detailTextSizeSpin_->setDecimals(1);
+            detailTextSizeSpin_->setKeyboardTracking(false);
+            detailTextSizeSpin_->setToolTip(
+                tr("How tall the words are, in drawing units. The scale line under the heading is drawn a "
+                   "little smaller than this, as it is on a drawn sheet."));
+            g->addWidget(l, 3, 0);
+            g->addWidget(detailTextSizeSpin_, 3, 1);
+            connect(detailTextSizeSpin_, &QDoubleSpinBox::valueChanged, this,
+                    [write](double v) { write(QStringLiteral("detailTextSize"), std::max(0.1, v)); });
+            auto* fl = new QLabel(tr("Font"), w);
+            fl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            detailFontCombo_ = new QComboBox(w);
+            detailFontCombo_->setEditable(true);
+            detailFontCombo_->addItem(tr("Default"));
+            detailFontCombo_->addItems(QFontDatabase::families());
+            detailFontCombo_->setMinimumWidth(140);
+            detailFontCombo_->setToolTip(tr("The face the words are set in. Default follows the drawing."));
+            g->addWidget(fl, 4, 0);
+            g->addWidget(detailFontCombo_, 4, 1);
+            connect(detailFontCombo_, &QComboBox::currentTextChanged, this, [write](const QString& f) {
+                write(QStringLiteral("detailFont"), f == QStringLiteral("Default") ? QString() : f);
+            });
+        }
         addGroup(tr("What it says"), w);
     }
 
@@ -4874,7 +4914,9 @@ void MainWindow::syncDetailRibbon() {
                        static_cast<QWidget*>(detailBigGapSpin_),
                        static_cast<QWidget*>(detailBoundaryBox_),
                        static_cast<QWidget*>(detailAnnotativeBox_),
-                       static_cast<QWidget*>(detailDimsBox_)})
+                       static_cast<QWidget*>(detailDimsBox_), static_cast<QWidget*>(detailFontCombo_),
+                       static_cast<QWidget*>(detailTextSizeSpin_),
+                       static_cast<QWidget*>(detailLetter_)})
         if (w) w->setEnabled(haveOne);
     if (!haveOne || !doc_) return;
     const Entity* dv = nullptr;
@@ -4883,9 +4925,18 @@ void MainWindow::syncDetailRibbon() {
     if (!dv) return;
     detailSyncing_ = true;
     const double capH = std::max(1e-9, dv->meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+    const QString letter = dv->meta.value(QStringLiteral("detailTag")).toString(QStringLiteral("A"));
+    const QString both = QStringLiteral("Detail %1").arg(letter);
     if (detailSmallText_)
-        detailSmallText_->setText(dv->meta.value(QStringLiteral("detailTag")).toString(QStringLiteral("A")));
-    if (detailBigText_) detailBigText_->setText(dv->meta.value(QStringLiteral("detailBigText")).toString());
+        detailSmallText_->setText(dv->meta.value(QStringLiteral("detailTagText")).toString(both));
+    if (detailBigText_)
+        detailBigText_->setText(dv->meta.value(QStringLiteral("detailBigText")).toString(both));
+    if (detailLetter_) detailLetter_->setText(letter);
+    if (detailTextSizeSpin_) detailTextSizeSpin_->setValue(capH);
+    if (detailFontCombo_) {
+        const QString f = dv->meta.value(QStringLiteral("detailFont")).toString();
+        detailFontCombo_->setCurrentText(f.isEmpty() ? tr("Default") : f);
+    }
     if (detailShowsSpin_) detailShowsSpin_->setValue(dv->radius);
     if (detailScaleSpin_)
         detailScaleSpin_->setValue(dv->meta.value(QStringLiteral("detailScale")).toDouble(2.0));
@@ -8663,14 +8714,32 @@ void MainWindow::refreshProperties() {
             // pointer, and the one on the enlargement is a heading. Tied together by convention rather than
             // by code - "DETAIL A" is what an office writes beside A - so the heading defaults to that and
             // can be anything instead.
-            addText(QStringLiteral("On the small circle"), mv(QStringLiteral("detailTag")).toString("A"),
-                    [this](const QString& t) {
-                        editor_->setSelectionMeta(QStringLiteral("detailTag"), t.trimmed().toUpper());
+            const QString letter = mv(QStringLiteral("detailTag")).toString(QStringLiteral("A"));
+            const QString both = QStringLiteral("Detail %1").arg(letter);
+            addText(QStringLiteral("On the small circle"),
+                    mv(QStringLiteral("detailTagText")).toString(both), [this](const QString& t) {
+                        editor_->setSelectionMeta(QStringLiteral("detailTagText"), t.trimmed());
                     });
             addText(QStringLiteral("On the large circle"),
-                    mv(QStringLiteral("detailBigText")).toString(), [this](const QString& t) {
+                    mv(QStringLiteral("detailBigText")).toString(both), [this](const QString& t) {
                         editor_->setSelectionMeta(QStringLiteral("detailBigText"), t.trimmed());
                     });
+            addText(QStringLiteral("Letter"), letter, [this](const QString& t) {
+                editor_->setSelectionMeta(QStringLiteral("detailTag"), t.trimmed().toUpper());
+            });
+            addNum(QStringLiteral("Text height"), mv(QStringLiteral("detailTextSize")).toDouble(3.5),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("detailTextSize"),
+                                                       std::max(0.1, v));
+                   });
+            const QString dFont = mv(QStringLiteral("detailFont")).toString();
+            addCombo(QStringLiteral("Font"), QStringList{QStringLiteral("Default")}
+                                                 + QFontDatabase::families(),
+                     dFont.isEmpty() ? QStringLiteral("Default") : dFont, true,
+                     [this](const QString& f) {
+                         editor_->setSelectionMeta(QStringLiteral("detailFont"),
+                                                   f == QLatin1String("Default") ? QString() : f);
+                     });
             // WHERE THE WORDS SIT ROUND EACH CIRCLE. A letter fixed at one o'clock lands on the geometry
             // about half the time, and a sheet with several details on it cannot be arranged at all if none
             // of the letters can be moved off what they are sitting on.
@@ -8760,6 +8829,21 @@ void MainWindow::refreshProperties() {
                          editor_->setSelectionMeta(QStringLiteral("text"), t);
                      });
         }
+    } else if (mv(QStringLiteral("labelAlong")).contains()) {
+        // A LABEL IS MANY KINDS OF OBJECT - a rectangle, some lines, and the mask under it - so a selected
+        // label is a MIXED selection, and the mixed branch below is four dead rows reading zero. Which is
+        // exactly what "cannot modify the width and height" was: the rows were there, they were the
+        // no-single-object placeholders, and nothing could be typed into them.
+        //
+        // A label has its own two sizes whatever it is made of, so it answers with them: along the run and
+        // across it. Not the bounding box - on a bundle drawn vertically the box reports the length as the
+        // height, and a label bent round a knee has no box worth the name.
+        addNum(QStringLiteral("Width"), mv(QStringLiteral("labelAlong")).toDouble(), [this](double v) {
+            if (editor_->adoptLabelFromSelection()) editor_->setLabelWidth(v);
+        });
+        addNum(QStringLiteral("Height"), mv(QStringLiteral("labelAcross")).toDouble(), [this](double v) {
+            if (editor_->adoptLabelFromSelection()) editor_->setLabelHeight(v);
+        });
     } else {
         addRow(QStringLiteral("Center X"), QStringLiteral("0"));
         addRow(QStringLiteral("Center Y"), QStringLiteral("0"));

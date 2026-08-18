@@ -2501,13 +2501,54 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
         return Vec2{fit.mid.x + fit.runDir.x * u + fit.acrossDir.x * v,
                     fit.mid.y + fit.runDir.y * u + fit.acrossDir.y * v};
     };
+    // A STRAIGHT LINE OF THE LABEL IS A CURVE ONCE THE LABEL IS BENT, and a curve drawn with two points is a
+    // chord. That is what went wrong: the ground the label covered was walked round the bend in small steps
+    // and came out smooth, while the label's OWN outline had four corners and cut straight across - and
+    // because the two ends of it are turned relative to each other, those straight edges crossed over each
+    // other. A crumple.
+    //
+    // So every segment is walked along the run as well, in steps small enough that the outline follows the
+    // same curve its cover does. A segment that spans no distance along the run - the two short ends of the
+    // label, square across the bundle - stays a straight line, because that is what it is.
+    const double stepAlong = std::max(fit.alongMm / 24.0, 1e-6);
+    auto walk = [&](const Vec2& from, const Vec2& to, std::vector<Vec2>& into, bool first) {
+        const double du = std::abs((to.x - from.x) * sa);
+        const int steps = std::clamp(static_cast<int>(std::ceil(du / stepAlong)), 1, 96);
+        if (first) into.push_back(place(from));
+        for (int i = 1; i <= steps; ++i) {
+            const double t = double(i) / steps;
+            into.push_back(place({from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t}));
+        }
+    };
     for (const Entity& src : labelProto_) {
         Entity e = src;
         e.id = QString();
-        e.a = place(src.a);
-        e.b = place(src.b);
-        e.center = place(src.center);
-        for (Vec2& q : e.points) q = place(q);
+        if (bent && (src.type == EntityType::Line || src.type == EntityType::Polyline ||
+                     src.type == EntityType::Wire || src.type == EntityType::Spline)) {
+            std::vector<Vec2> from = src.points;
+            if (from.size() < 2) from = {src.a, src.b};
+            std::vector<Vec2> pts;
+            for (size_t i = 1; i < from.size(); ++i) walk(from[i - 1], from[i], pts, i == 1);
+            if (pts.size() >= 2) {
+                // A line that has become a curve is a polyline. It is the same line on the sheet - the label
+                // is drawn as it was drawn - it simply has to follow the bundle to stay on it.
+                if (src.type == EntityType::Line) e.type = EntityType::Polyline;
+                e.points = pts;
+                e.a = pts.front();
+                e.b = pts.back();
+                e.center = place(src.center);
+            } else {
+                e.a = place(src.a);
+                e.b = place(src.b);
+                e.center = place(src.center);
+                for (Vec2& q : e.points) q = place(q);
+            }
+        } else {
+            e.a = place(src.a);
+            e.b = place(src.b);
+            e.center = place(src.center);
+            for (Vec2& q : e.points) q = place(q);
+        }
         // Text is drawn at its own height, so it has to be told the label was stretched, or a label
         // scaled up keeps writing at the size it was captured at.
         const double h = e.meta.value(QStringLiteral("height")).toDouble();

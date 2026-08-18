@@ -2022,6 +2022,19 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double big = e.radius * scale;
         const double capH = std::max(1e-9, e.meta.value("detailTextSize").toDouble(3.5));
         const double vs = vt.scale();
+        // BOTH CIRCLES SAY "Detail A". The letter alone beside the small circle is the terse convention, but a
+        // bare A on a sheet is a thing to be worked out - it could be a note, a zone, a revision - and the two
+        // circles reading the same is what ties them together at a glance. Either can be typed over.
+        QString smallSays = e.meta.value("detailTagText").toString();
+        if (smallSays.isEmpty()) smallSays = QStringLiteral("Detail %1").arg(tag);
+        // The font, so a drawing office's details read like the rest of its sheet.
+        const QString face = e.meta.value("detailFont").toString();
+        QFont saved = p.font();
+        if (!face.isEmpty()) {
+            QFont f = p.font();
+            f.setFamily(face);
+            p.setFont(f);
+        }
 
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
@@ -2030,7 +2043,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPointF sc = vt.toScreen(e.center);
         const double sr = e.radius * vs;
         p.drawEllipse(sc, sr, sr);
-        drawWorldText(p, vt.toScreen(detailViewTextAt(e, false)), tag, capH, vs, color,
+        drawWorldText(p, vt.toScreen(detailViewTextAt(e, false)), smallSays, capH, vs, color,
                       Qt::AlignHCenter | Qt::AlignVCenter);
 
         // The enlargement. Its OUTLINE is a switch: the ring is the convention and says where the view stops,
@@ -2089,7 +2102,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     snap.push_back(x);
                 }
             }
-            const std::vector<Entity>& shown = live ? doc.entities() : snap;
+            // A view with no picture yet - one made before the picture was a thing, or one whose copy was
+            // lost - falls back to the drawing. An empty circle is not "not annotative", it is broken.
+            const std::vector<Entity>& shown = (live || snap.empty()) ? doc.entities() : snap;
             for (const Entity& x : shown) {
                 if (x.id == e.id) continue;                       // never itself
                 if (x.type == EntityType::DetailView) continue;   // nor any other detail's circles
@@ -2116,7 +2131,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // apart because they say different things - one is a pointer, the other is a heading. It defaults to
         // "DETAIL <letter>", which is the convention, and can be anything an office writes instead.
         QString head = e.meta.value("detailBigText").toString();
-        if (head.isEmpty()) head = QStringLiteral("DETAIL %1").arg(tag);
+        if (head.isEmpty()) head = QStringLiteral("Detail %1").arg(tag);
         const QString sub = scale >= 1.0 ? QStringLiteral("SCALE %1:1").arg(scale, 0, 'g', 3)
                                          : QStringLiteral("SCALE 1:%1").arg(1.0 / scale, 0, 'g', 3);
         // Round the enlargement the same way, so a caption that lands on something can be moved off it.
@@ -2125,6 +2140,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         drawWorldText(p, capAt, head, capH, vs, color, Qt::AlignHCenter | Qt::AlignVCenter);
         drawWorldText(p, QPointF(capAt.x(), capAt.y() + capH * vs * 1.25), sub, capH * 0.8, vs, color,
                       Qt::AlignHCenter | Qt::AlignVCenter);
+        p.setFont(saved);
         break;
     }
 

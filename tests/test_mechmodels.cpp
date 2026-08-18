@@ -926,6 +926,87 @@ int run_mechmodels_tests() {
             check(b.min.x < -r * 0.9 && b.max.y > r * 0.9,
                   "fillet: reaching from the leg that comes in to the leg that goes out");
         }
+
+        // THE LABEL'S OWN OUTLINE has to follow the run too, not only the ground it covers. A straight line of
+        // the label is a CURVE once the label is bent, and a curve drawn with two points is a chord: the cover
+        // came round the bend smoothly while the outline cut straight across it, and because the two ends of a
+        // bent label are turned relative to each other those straight edges crossed over each other. A
+        // crumple - which is what it looked like.
+        int longEdges = 0, crossings = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+            if (e.points.size() < 3) continue;   // the two short ends stay straight: that is what they are
+            ++longEdges;
+            // Every part of it stays within a band about the fillet's radius, the same test the cover passes.
+            // A chord across the corner leaves the middle of the edge well inside that band.
+            for (const Vec2& q : e.points)
+                if (std::abs(distance(q, fil.center) - r) > ed.labelHeight() / 2.0 + 0.35) ++crossings;
+        }
+        std::printf("  fillet: %d of the label's own edges follow the run, %d point(s) off the band\n",
+                    longEdges, crossings);
+        check(longEdges >= 2, "fillet: the label's own long edges are laid along the run, not across it");
+        check(crossings == 0,
+              "fillet: so every part of the label stays on the bundle instead of cutting the corner");
+    }
+
+    // ---- the label's two sizes are its OWN, whatever it is made of ---------------------------------
+    {
+        // A label is a rectangle, some lines and the mask under it - so a selected label is a MIXED selection,
+        // and the properties panel's Geometry rows for a mixed selection are dead placeholders reading zero.
+        // Which is exactly what "cannot modify the width and height" was: the rows were there, and nothing
+        // could be typed into them. A label answers with its own two sizes whatever it is made of.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("w");
+        w.type = EntityType::Line;
+        w.a = {0.0, 0.0};
+        w.b = {100.0, 0.0};
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        ed.onPointerPress({50.0, -5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 5.0});
+        ed.onPointerPress({50.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "sizes: placed");
+        // Several kinds of object selected, which is what made the panel give up.
+        std::vector<int> kinds;
+        for (const QString& id : ed.selection())
+            for (const Entity& e : d.entities())
+                if (e.id == id) kinds.push_back(static_cast<int>(e.type));
+        bool mixed = false;
+        for (size_t i = 1; i < kinds.size(); ++i)
+            if (kinds[i] != kinds[0]) mixed = true;
+        std::printf("  sizes: %d object(s) selected, mixed kinds: %s\n", int(kinds.size()),
+                    mixed ? "yes" : "no");
+        // Every piece of it carries the two sizes, which is what lets the panel answer at all.
+        for (const QString& id : ed.selection())
+            for (const Entity& e : d.entities())
+                if (e.id == id)
+                    check(e.meta.contains(QStringLiteral("labelAlong")) &&
+                              e.meta.contains(QStringLiteral("labelAcross")),
+                          "sizes: every piece of the label carries them, so a mixed selection can still say");
+        // And letting go and picking it up again finds them, which is the path the panel takes.
+        ed.clearSelection();
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "sizes: masked");
+        if (mask) {
+            const Vec2 body = mask->bounds().center();
+            ed.onPointerPress(body, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(body, Qt::LeftButton);
+            check(ed.adoptLabelFromSelection(), "sizes: picked up again, it knows it is a label");
+            ed.setLabelWidth(55.0);
+            ed.setLabelHeight(9.0);
+            std::printf("  sizes: set to %.1f by %.1f from the panel\n", ed.labelWidth(),
+                        ed.labelHeight());
+            check(std::abs(ed.labelWidth() - 55.0) < 1e-6 && std::abs(ed.labelHeight() - 9.0) < 1e-6,
+                  "sizes: and both take");
+        }
     }
 
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
