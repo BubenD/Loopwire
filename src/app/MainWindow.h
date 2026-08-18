@@ -492,6 +492,9 @@ private:
     void armMechModelConnect();          // the connection point, and the direction the part runs from it
     // The faces the wires leave by, one line per branch, and a way to start the list again.
     void armMechModelOutput();
+    // A default model put on the sheet by hand, at the size the office drew it.
+    void placeMechModel(MechModelKind kind);
+    static QIcon makeMechModelIcon(MechModelKind kind);
     void clearMechModelOutputs();
     QToolButton* markConnectMechModelBtn_ = nullptr;
     QToolButton* markOutputMechModelBtn_ = nullptr;

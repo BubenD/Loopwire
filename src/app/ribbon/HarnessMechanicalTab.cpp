@@ -88,9 +88,17 @@ void MainWindow::buildHarnessMechanicalTab() {
     // place on the tab rather than being scattered among the general tools.
     {
         auto* lenW = new QWidget(page);
-        auto* lg = new QHBoxLayout(lenW);
+        // TWO ROWS, not one. Six wide buttons in a single row made this the widest group on the tab by a
+        // long way, pushing the data group off the end of the ribbon on a narrow window. The pieces of
+        // furniture a mechanical drawing needs sit two deep like every other group here.
+        auto* lg = new QGridLayout(lenW);
         lg->setContentsMargins(0, 0, 0, 0);
         lg->setSpacing(2);
+        int specialAt = 0;
+        auto lgAdd = [&](QWidget* w) {
+            lg->addWidget(w, specialAt % 2, specialAt / 2);
+            ++specialAt;
+        };
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
         // loom on an A3 sheet - and the mark is how a drawing says so: the run is interrupted, the
         // dimension says the real length.
@@ -228,7 +236,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             bg->addWidget(optW, 0, 1);
         }
         connect(editor_, &Editor::toolChanged, this, [this](ToolId) { syncBreakOptions(); });
-        lg->addWidget(breakW);
+        lgAdd(breakW);
         // The twisted pair, beside it: two wires laid up round each other, drawn between the two points
         // it runs between. Straight at both ends, because that is where a pair is worked on - stripped,
         // crimped, spliced - and twisted in between, which is what the drawing is saying.
@@ -244,7 +252,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             tpBtn->setToolTip(QStringLiteral(
                 "Draw a twisted pair: click the two ends. The wires run straight at both ends and lay "
                 "up round each other in between."));
-            lg->addWidget(tpBtn);
+            lgAdd(tpBtn);
         }
         // And the same pair routed: as many knees as the run needs, drawn like a polyline. A pair in a
         // harness rarely goes straight from one end to the other - it follows the loom round the
@@ -261,7 +269,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             trBtn->setToolTip(QStringLiteral(
                 "Route a twisted pair through as many knees as it needs: click each knee, Enter "
                 "finishes. Straight at both ends, woven in between, all one length of pair."));
-            lg->addWidget(trBtn);
+            lgAdd(trBtn);
         }
         // And a whole bundle: every wire of it laid up together, however many it fans out to. Two wires
         // is a pair, so this is the same drawing with a count on it rather than a second one.
@@ -310,12 +318,56 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);
             }
-            lg->addWidget(thW);
+            lgAdd(thW);
         }
         // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
         // the bundle actually takes up on the board. They belong here for the same reason the break
         // mark does - they are the furniture of this kind of drawing.
-        lg->addWidget(makePartSymbolButton(lenW, /*schematic=*/false));
+        lgAdd(makePartSymbolButton(lenW, /*schematic=*/false));
+        // A LABEL on a run, and the same label covered over with clear heatshrink - which is how a label
+        // that has to survive a wash or a wipe-down is actually built. One button with the two hung off it
+        // rather than a button each: it places a label, and the arrow says which sort. Whichever is chosen
+        // stays chosen and the button wears it, so the next one needs no menu at all.
+        {
+            auto* labelBtn = new QToolButton(lenW);
+            labelBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            labelBtn->setIconSize(QSize(26, 26));
+            labelBtn->setAutoRaise(true);
+            labelBtn->setFocusPolicy(Qt::NoFocus);
+            labelBtn->setPopupMode(QToolButton::MenuButtonPopup);
+            labelBtn->setText(QStringLiteral("Label"));
+            auto* lm = new QMenu(labelBtn);
+            // Two sorts of label, each with the short name the button wears and the long one the menu
+            // shows. Kept apart so neither has to carry a line break through a string.
+            struct Sort { MechModelKind kind; const char* onButton; const char* inMenu;
+                          const char* tip; };
+            const Sort sorts[2] = {
+                {MechModelKind::Label, "Label", "Label",
+                 "A label on the run, as this office draws one"},
+                {MechModelKind::LabelUnderHeatshrink, "Label+", "Label under clear heatshrink",
+                 "A label covered over with clear heatshrink - how one that has to survive a wash or a "
+                 "wipe-down is actually built"}};
+            for (const Sort& sort : sorts) {
+                const QIcon ic = makeMechModelIcon(sort.kind);
+                QAction* a = lm->addAction(ic, QString::fromLatin1(sort.inMenu));
+                a->setToolTip(QString::fromLatin1(sort.tip));
+                const MechModelKind kind = sort.kind;
+                const QString text = QString::fromLatin1(sort.onButton);
+                connect(a, &QAction::triggered, this, [this, labelBtn, kind, ic, text] {
+                    labelBtn->setIcon(ic);            // the button wears what was chosen
+                    labelBtn->setText(text);
+                    placeMechModel(kind);
+                });
+            }
+            labelBtn->setIcon(makeMechModelIcon(sorts[0].kind));   // the first of the list, to begin with
+            labelBtn->setToolTip(QString::fromLatin1(sorts[0].tip));
+            labelBtn->setMenu(lm);
+            connect(labelBtn, &QToolButton::clicked, this,
+                    [this, labelBtn] { placeMechModel(labelBtn->text() == QStringLiteral("Label")
+                                                          ? MechModelKind::Label
+                                                          : MechModelKind::LabelUnderHeatshrink); });
+            lgAdd(labelBtn);
+        }
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }

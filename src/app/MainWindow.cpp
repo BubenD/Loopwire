@@ -11239,6 +11239,56 @@ void MainWindow::armMechModelConnect() {
         tr("Click where the part connects — then click along the direction it runs from there"), 6000);
 }
 
+// A default model put on the sheet by hand, at the size it was drawn. The office's own drawing of the
+// thing, rather than a shape made up here - which is the whole point of keeping default models.
+void MainWindow::placeMechModel(MechModelKind kind) {
+    MechModelSet set;
+    set.load();
+    const MechModel* model = set.of(kind);
+    if (!model || model->isEmpty()) {
+        statusBar()->showMessage(
+            tr("No %1 has been drawn yet — draw one in Default models and it will be placed here")
+                .arg(mechModelName(kind).toLower()),
+            6000);
+        showMechModels();
+        return;
+    }
+    const std::vector<Entity> ents =
+        mechModelEntities(*model, Vec2{0.0, 0.0}, 0.0, mechModelDrawnLength(*model));
+    if (ents.empty()) {
+        statusBar()->showMessage(tr("That model has nothing drawn in it"), 4000);
+        return;
+    }
+    // Held by its connection point when it has one - that is the point somebody means to put it on -
+    // and by the middle of its own extent otherwise.
+    std::optional<Vec2> heldAt;
+    if (model->hasConnect) heldAt = model->connectPoint;
+    editor_->placeEntities(ents, heldAt);
+    canvas_->setFocus();
+    statusBar()->showMessage(tr("%1 — click to place it").arg(mechModelName(kind)), 4000);
+}
+
+// A small picture of a kind, drawn as the thing rather than as a symbol for it.
+QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor("#cfe3ff"), 1.6));
+    // The run it sits on, and the label wrapped round it.
+    p.drawLine(2, 14, 26, 14);
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(QRectF(8, 7, 12, 14));
+    if (kind == MechModelKind::LabelUnderHeatshrink) {
+        // The clear shrink over the top: a second, wider outline, dashed to read as transparent.
+        QPen dash(QColor("#8fd3ff"), 1.2);
+        dash.setStyle(Qt::DashLine);
+        p.setPen(dash);
+        p.drawRect(QRectF(5, 4, 18, 20));
+    }
+    return QIcon(pm);
+}
+
 void MainWindow::armMechModelOutput() {
     if (!doc_ || !mechModelEdits_.contains(doc_)) return;
     editor_->setTool(ToolId::ModelOutputLine);
