@@ -5870,9 +5870,31 @@ void MainWindow::applyTheme(bool dark) {
     // Ribbon tool icons: light on a dark ribbon, dark on a light ribbon. Retint
     // EVERY tool button instance (a ToolId can appear on several tabs, so the
     // ToolId-keyed map alone would miss the duplicates).
-    const QColor ink = dark ? QColor("#d6dae1") : QColor("#33373f");
+    // The same blue the geometry previews and the fall-menu method icons are drawn in, so the ribbon reads
+    // as one set rather than as four coloured buttons among eight grey ones. Darkened for a light scheme,
+    // where a mid blue on white is too faint to make out.
+    const QColor ink = dark ? kGeoBlue : QColor("#1d4e8f");
     for (QAction* a : allToolActions_)
         a->setIcon(makeToolIcon(static_cast<ToolId>(a->data().toInt()), ink));
+    // AND PUT THE METHOD ICONS BACK.
+    //
+    // A tool with a fall-menu wears the method it is set to - Circle wearing "centre, radius", Arc wearing
+    // "three point" - and this pass had just overwritten every one of them with the plain tool icon. It runs
+    // when a scheme is applied, which includes startup, so the method icons were wiped before they were ever
+    // seen: the flyout buttons showed the generic shape, in grey, and only started showing a method once one
+    // was picked from the menu by hand.
+    if (editor_) {
+        auto wear = [this](ToolId id, const QIcon& ic) {
+            if (QAction* a = toolActions_.value(static_cast<int>(id), nullptr)) a->setIcon(ic);
+            for (QAction* a : allToolActions_)
+                if (static_cast<ToolId>(a->data().toInt()) == id) a->setIcon(ic);
+        };
+        wear(ToolId::Circle, makeCircleMethodIcon(static_cast<int>(editor_->circleMode())));
+        wear(ToolId::Arc, makeArcMethodIcon(static_cast<int>(editor_->arcMode())));
+        wear(ToolId::Ellipse, makeEllipseMethodIcon(static_cast<int>(editor_->ellipseMode())));
+        wear(ToolId::Spline, makeSplineMethodIcon(static_cast<int>(editor_->splineMode())));
+        wear(ToolId::Dimension, makeDimMethodIcon(static_cast<int>(editor_->dimMode())));
+    }
     // Modify "Operations" icon buttons follow the same ink as the tool icons.
     for (const auto& ob : opButtons_)
         ob.second->setIcon(makeOpIcon(ob.first, ink));

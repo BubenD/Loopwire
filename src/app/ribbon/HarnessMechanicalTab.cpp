@@ -36,6 +36,12 @@
 
 namespace Edraw_Desktop {
 
+namespace {
+// Room for an icon and two short lines of caption. The same idea as the model session's own cell: a row of
+// buttons of different widths reads as a row of different things.
+constexpr QSize kSpecialCell(86, 68);
+} // namespace
+
 // ---- HARNESS MECHANICAL ---- the physical side of the harness: the bundle and its
 //      branches drawn to shape, their lengths dimensioned, and the parts called out.
 //      (The schematic side lives on Schematic build.) ----
@@ -95,7 +101,19 @@ void MainWindow::buildHarnessMechanicalTab() {
         lg->setContentsMargins(0, 0, 0, 0);
         lg->setSpacing(2);
         int specialAt = 0;
+        // ONE SIZE for every button here, wide enough for two short lines under the icon.
+        //
+        // Sizing each to its own icon let the captions be cut off - "Twisted harness", "Bill of materials",
+        // "Label under clear heatshrink" are all wider than a 26-pixel icon, and a caption that cannot be
+        // read is worse than none. A column minimum was not enough: a button is free to be narrower than its
+        // column, and Qt elides the text inside it rather than growing. Fixed, so each is the same and each
+        // has room - the same thing the model-session buttons do, for the same reason.
+        auto sizeCell = [](QWidget* w) {
+            for (QToolButton* b : w->findChildren<QToolButton*>()) b->setFixedSize(kSpecialCell);
+            if (auto* b = qobject_cast<QToolButton*>(w)) b->setFixedSize(kSpecialCell);
+        };
         auto lgAdd = [&](QWidget* w) {
+            sizeCell(w);
             lg->addWidget(w, specialAt % 2, specialAt / 2);
             ++specialAt;
         };
