@@ -540,11 +540,13 @@ int run_mechmodels_tests() {
                     ed.labelHeight());
         check(added > 1, "label: the label and the mask under it");
 
-        // WIDTH runs ALONG the bundle and is the label's own length - no amount of looking at the wires
-        // tells you it, so it starts at the size labels come in. HEIGHT runs ACROSS them and is the one the
-        // stroke is for: the dimension that has to cover the bundle.
-        check(std::abs(ed.labelWidth() - Editor::kLabelWidthMm) < 1e-6,
-              "label: the width is the label's own, not measured off the wires");
+        // WIDTH runs ALONG the bundle, HEIGHT runs ACROSS it, and the pair are the label's SHAPE rather
+        // than its size: 40 by 12 is a label three and a third times as long as it is deep. The wires say
+        // how BIG it has to be, and both sizes follow together - a label on a pair of wires is a small
+        // label, not a big one squashed, and everything drawn with it goes the same way.
+        check(std::abs(ed.labelWidth() / ed.labelHeight() -
+                       Editor::kLabelWidthMm / Editor::kLabelHeightMm) < 1e-6,
+              "label: scaled whole - it keeps the shape it was given and takes its size from the wires");
         // A LITTLE BIT OVER the outermost wire: flush with the edge of the bundle reads as a label that
         // missed the last wire.
         check(ed.labelHeight() > 8.0, "label: and the height covers all three wires");
@@ -568,7 +570,7 @@ int run_mechmodels_tests() {
             // The two sizes belong to the label's own axes: along the run it is as wide as it was told, and
             // that is NOT the same as the box it occupies on the sheet - which is what the properties
             // panel's plain Width would have reported, swapped round on a vertical bundle.
-            check(std::abs(b.width() - Editor::kLabelWidthMm) < 1e-6,
+            check(std::abs(b.width() - ed.labelWidth()) < 1e-6,
                   "label: as long along the run as the width says");
         }
 
@@ -731,6 +733,66 @@ int run_mechmodels_tests() {
         e2.onPointerMove({20.0, 14.0});
         e2.onPointerPress({20.0, 14.0}, Qt::LeftButton, Qt::NoModifier);
         check(e2.labelLive(), "scale-by: and no figure at all still places a label");
+    }
+
+    // ---- a bundle at an angle turns the label, and what it covers -------------------------------
+    {
+        // A label lies square to the runs whichever way they go, so on a bundle drawn at 45 degrees the
+        // label is at 45 degrees. What it COVERS has to turn with it. Taken as a box round the label it
+        // stood square to the sheet with the label lying across it corner to corner - hiding ground the
+        // label is nowhere near, and at 45 degrees half again as much of it.
+        Document d;
+        const double k = std::sqrt(0.5);
+        for (int i = 0; i < 2; ++i) {   // two parallel runs at 45 degrees, 6 apart across
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.type = EntityType::Line;
+            const Vec2 off{-k * i * 6.0, k * i * 6.0};   // square to the run
+            w.a = {0.0 + off.x, 0.0 + off.y};
+            w.b = {100.0 * k + off.x, 100.0 * k + off.y};
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // A stroke square to the runs, across both of them, at about a third of the way along.
+        const Vec2 on{30.0 * k, 30.0 * k};
+        ed.onPointerPress({on.x + k * 4.0, on.y - k * 4.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({on.x - k * 10.0, on.y + k * 10.0});
+        ed.onPointerPress({on.x - k * 10.0, on.y + k * 10.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "turned: the label goes on a bundle drawn at an angle");
+
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr && mask->points.size() == 4, "turned: and what it covers has four corners");
+        if (mask && mask->points.size() == 4) {
+            // The area of what is covered is the label's own area. A box round a label at 45 degrees is
+            // half again as big, so this is the check that says the cover TURNED rather than merely grew.
+            double area = 0.0;
+            for (size_t i = 0; i < 4; ++i) {
+                const Vec2& a = mask->points[i];
+                const Vec2& b = mask->points[(i + 1) % 4];
+                area += a.x * b.y - b.x * a.y;
+            }
+            area = std::abs(area) / 2.0;
+            const double own = ed.labelWidth() * ed.labelHeight();
+            const Bounds bb = mask->bounds();
+            std::printf("  turned: covers %.1f, the label is %.1f, a box round it would be %.1f\n",
+                        area, own, bb.width() * bb.height());
+            check(std::abs(area - own) < 1e-3,
+                  "turned: it covers the label and not a box round it");
+            check(bb.width() * bb.height() > own * 1.2,
+                  "turned: and a box round it really would have been bigger, so this was worth doing");
+            // Its edges run WITH the bundle, not with the sheet.
+            const Vec2 edge = (mask->points[1] - mask->points[0]).normalized();
+            std::printf("  turned: its long edge runs %.1f deg\n",
+                        std::atan2(edge.y, edge.x) * 180.0 / M_PI);
+            check(std::abs(std::abs(edge.x) - k) < 1e-6 && std::abs(std::abs(edge.y) - k) < 1e-6,
+                  "turned: laid along the run at 45 degrees, square to nothing on the sheet");
+        }
     }
 
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------

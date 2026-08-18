@@ -226,11 +226,12 @@ void MechModelsDialog::buildUi() {
     // of whatever bundle it happens to land on.
     exceed_ = mmSpin();
     exceed_->setToolTip(QStringLiteral(
-        "How far past the first and last run it crosses the label goes, at each end. On zero: a proportion "
-        "of the label's own size, which gives a different answer on every bundle - set a number and every "
-        "label on every sheet clears its bundle by the same amount."));
+        "How far past the first and last line it crosses the label goes, at each end - vertical for a run "
+        "drawn across the sheet, and square to the runs whichever way they go. On zero: a proportion of the "
+        "label's own size, which gives a different answer on every bundle - set a number and every label on "
+        "every sheet clears its bundle by the same amount."));
     connect(exceed_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    figuresForm_->addRow(QStringLiteral("Clear of the first and last run"), exceed_);
+    figuresForm_->addRow(QStringLiteral("Vertical exceed from the lines"), exceed_);
     wires_ = new QSpinBox;
     wires_->setRange(0, 200);
     wires_->setKeyboardTracking(false);

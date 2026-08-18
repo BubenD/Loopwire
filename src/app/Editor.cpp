@@ -1970,9 +1970,10 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exce
     labelStrokeHasStart_ = false;
     labelFrozen_ = false;
     labelPreview_.clear();
-    labelCovers_ = Bounds();
+    labelCovers_.clear();
     labelFit_ = LabelFit();
     labelAcrossManual_ = false;   // the stroke measures the across size until somebody says otherwise
+    labelAlongManual_ = false;    // and the length follows it, so the label keeps its shape
     setTool(ToolId::Select);
     emit message(QStringLiteral(
         "Draw a stroke across the runs the label goes on — Tab pins it so the ribbon's size can be set"));
@@ -2068,7 +2069,6 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     shieldExtent(hits, fit.acrossDir, centre, spread);
 
     fit.mid = centre;
-    fit.alongMm = labelAlongMm_;   // the label's own length: the ribbon's business, not the wires'
     if (labelAcrossManual_) {
         fit.acrossMm = labelAcrossMm_;
     } else {
@@ -2081,8 +2081,17 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
         const double margin = labelExceedMm_ > 1e-9
                                   ? labelExceedMm_
                                   : std::max(labelAcrossMm_ * 0.12, spread * 0.10);
-        fit.acrossMm = std::max(labelAcrossMm_, spread + 2.0 * margin);
+        fit.acrossMm = std::max(spread + 2.0 * margin, 1e-3);
     }
+    // THE WHOLE LABEL IS SCALED, not stretched across and left long. The two sizes are the label's SHAPE -
+    // 40 by 12 is a label three and a third times as long as it is deep - and the wires say how BIG it has
+    // to be. Holding the length at 40 while the depth followed the bundle gave a label that was the right
+    // depth and far too long the moment it went on a pair of wires instead of a bundle of ten: it read as a
+    // label off some other drawing. So the length follows the depth by the same factor, and everything drawn
+    // with it - a sleeve over it included - goes with them.
+    fit.alongMm = labelAlongManual_ || labelAcrossMm_ < 1e-9
+                      ? labelAlongMm_
+                      : labelAlongMm_ * (fit.acrossMm / labelAcrossMm_);
     fit.ok = true;
     return fit;
 }
@@ -2091,9 +2100,19 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
 // standing off in +y, so +x runs ALONG the runs and +y ACROSS them - the label lies the way it was drawn,
 // which is the whole reason a model is captured off a sheet rather than described in numbers. Centred on the
 // fit's middle both ways, so a label goes where it was put rather than hanging off downstream of it.
-std::vector<Entity> Editor::labelEntities(const LabelFit& fit, Bounds& covers) const {
+// The ground a label covers: its own rectangle, at its own angle. The reference object is laid centred on
+// the fit's middle at exactly alongMm by acrossMm, so those four corners ARE the label - nothing to measure,
+// and nothing square to the sheet about it.
+std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
+    if (!fit.ok) return {};
+    const Vec2 a = fit.runDir * (fit.alongMm / 2.0);
+    const Vec2 c = fit.acrossDir * (fit.acrossMm / 2.0);
+    return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
+}
+
+std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const {
     std::vector<Entity> out;
-    covers = Bounds();
+    covers.clear();
     if (!fit.ok || labelProto_.empty()) return out;
     const Bounds proto = labelReferenceBounds();
     if (!proto.valid || proto.width() < 1e-9) return out;
@@ -2122,18 +2141,9 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, Bounds& covers) c
     }
     // WHAT IS MASKED is what is OPAQUE, which is the label - the reference object - and not everything drawn
     // with it. A clear sleeve is clear: the wires under the sleeve but outside the label are meant to show,
-    // and masking to the sleeve's edge would hide the very thing that says the sleeve is transparent.
-    bool masked = false;
-    for (size_t i = 0; i < out.size() && i < labelProto_.size(); ++i) {
-        if (!labelProto_[i].meta.value(QStringLiteral("modelScaleRef")).toBool()) continue;
-        const Bounds b = out[i].bounds();
-        if (b.valid) { covers.expand(b.min); covers.expand(b.max); masked = true; }
-    }
-    if (!masked)
-        for (const Entity& e : out) {
-            const Bounds b = e.bounds();
-            if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
-        }
+    // and masking to the sleeve's edge would hide the very thing that says the sleeve is transparent. That
+    // is exactly the reference rectangle at the fit's angle, so it comes straight off the fit.
+    covers = labelMaskQuad(fit);
     return out;
 }
 
@@ -2164,15 +2174,12 @@ void Editor::commitLabel() {
     // through it reads as a label behind the harness rather than on it. Marked as a label's own mask so
     // that laying the next label does not measure this one as though it were a wire, and it is IN the
     // group, so clicking the body of the label - which is mostly mask - picks the label up.
-    if (labelCovers_.valid) {
+    if (labelCovers_.size() >= 3) {
         Entity mask;
         mask.id = uid();
         mask.type = EntityType::Wipeout;
         mask.layer = doc_->activeLayer();
-        mask.points = {{labelCovers_.min.x, labelCovers_.min.y},
-                       {labelCovers_.max.x, labelCovers_.min.y},
-                       {labelCovers_.max.x, labelCovers_.max.y},
-                       {labelCovers_.min.x, labelCovers_.max.y}};
+        mask.points = labelCovers_;
         mask.meta.insert(QStringLiteral("labelMask"), true);
         // NOT FRAMED. A mask is normally outlined so it can be seen at all, but this one sits exactly under
         // the label's own rectangle - so the frame drew that rectangle a second time, a hair outside the
@@ -2193,7 +2200,7 @@ void Editor::commitLabel() {
     labelStrokeHasStart_ = false;
     labelFrozen_ = false;
     labelPreview_.clear();
-    labelCovers_ = Bounds();
+    labelCovers_.clear();
     selected_ = labelLiveIds_;
     doc_->setDirty(true);
     // The label's ribbon group goes away with the click that places it. Its two fields are for BEFORE the
@@ -2278,11 +2285,15 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
     };
     labelFit_.alongMm = alongMm;
     labelFit_.acrossMm = acrossMm;
-    Bounds covers;
+    // The mask follows what the label now covers - its own rectangle at its own angle, which the fit gives
+    // outright. A label that grew and left the old mask behind would show the wires coming out from under
+    // one edge of it.
+    const std::vector<Vec2> quad = labelMaskQuad(labelFit_);
     for (Entity& e : doc_->entities()) {
         if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
-        const bool isMask = e.meta.value(QStringLiteral("labelMask")).toBool();
-        if (!isMask) {
+        if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
+            if (quad.size() >= 3) e.points = quad;
+        } else {
             e.a = scale(e.a);
             e.b = scale(e.b);
             e.center = scale(e.center);
@@ -2290,23 +2301,10 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
             if (e.radius > 1e-9) e.radius *= std::min(fa, fc);
             const double h = e.meta.value(QStringLiteral("height")).toDouble();
             if (h > 1e-9) e.meta.insert(QStringLiteral("height"), h * std::min(fa, fc));
-            const Bounds b = e.bounds();
-            if (b.valid) { covers.expand(b.min); covers.expand(b.max); }
         }
         e.meta.insert(labelAlongKey(), alongMm);
         e.meta.insert(labelAcrossKey(), acrossMm);
     }
-    // The mask follows what the label now covers: a label that grew and left the old mask behind would show
-    // the wires coming out from under one edge of it.
-    if (covers.valid && !labelMaskId_.isEmpty())
-        for (Entity& e : doc_->entities())
-            if (e.id == labelMaskId_) {
-                e.points = {{covers.min.x, covers.min.y},
-                            {covers.max.x, covers.min.y},
-                            {covers.max.x, covers.max.y},
-                            {covers.min.x, covers.max.y}};
-                break;
-            }
     doc_->setDirty(true);
     emit labelChanged();
     emit changed();
@@ -2318,6 +2316,7 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
 void Editor::setLabelWidth(double mm) {
     if (mm <= 1e-6) return;
     labelAlongMm_ = mm;
+    labelAlongManual_ = true;   // said by hand, so it stops following the depth
     if (labelPlacing_) {
         relayLabelPreview();
         return;
@@ -2345,7 +2344,7 @@ void Editor::relayLabelPreview() {
     if (!labelPlacing_ || !labelStrokeHasStart_) return;
     labelFit_ = labelFitFor(labelStrokeStart_, labelStrokeEnd());
     labelPreview_ = labelEntities(labelFit_, labelCovers_);
-    if (labelPreview_.empty()) labelCovers_ = Bounds();
+    if (labelPreview_.empty()) labelCovers_.clear();
     emit labelChanged();
     emit overlayChanged();
 }
@@ -2400,7 +2399,7 @@ void Editor::endLabelEdit() {
     labelFrozen_ = false;
     labelPreview_.clear();
     labelProto_.clear();
-    labelCovers_ = Bounds();
+    labelCovers_.clear();
     labelFit_ = LabelFit();
     if (had) {
         emit labelChanged();
@@ -2509,7 +2508,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     if (labelPlacing_ && labelStrokeHasStart_ && !labelFrozen_) {
         labelFit_ = labelFitFor(labelStrokeStart_, cursor_);
         labelPreview_ = labelEntities(labelFit_, labelCovers_);
-        if (labelPreview_.empty()) labelCovers_ = Bounds();
+        if (labelPreview_.empty()) labelCovers_.clear();
         emit labelChanged();   // the ribbon shows the size that has just been measured
         emit overlayChanged();
     }
@@ -14458,7 +14457,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // A label being laid on the runs, at the size it would be if placed here - and the ground it would
     // cover, outlined, because what a label HIDES is as much a part of placing it as where it goes.
     if (labelPlacing_ && !labelPreview_.empty()) {
-        if (labelCovers_.valid) {
+        if (labelCovers_.size() >= 3) {
             p.save();
             QPen mask(paperInk(QColor(120, 200, 255, 150)));
             mask.setCosmetic(true);
@@ -14466,8 +14465,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             mask.setStyle(Qt::DashLine);
             p.setPen(mask);
             p.setBrush(QColor(40, 48, 60, 140));   // as opaque as the mask itself will be
-            p.drawRect(QRectF(vt.toScreen({labelCovers_.min.x, labelCovers_.max.y}),
-                              vt.toScreen({labelCovers_.max.x, labelCovers_.min.y})).normalized());
+            // The label's own four corners, at the label's own angle. Drawn as a box round them it stood
+            // square to the sheet with the label lying across it corner to corner - showing ground the
+            // label is nowhere near, and at 45 degrees half again as much of it.
+            QPolygonF quad;
+            for (const Vec2& q : labelCovers_) quad << vt.toScreen(q);
+            p.drawPolygon(quad);
             p.restore();
         }
         const QColor ink = paperInk(QColor("#8fd3ff"));

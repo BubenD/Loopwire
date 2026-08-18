@@ -1321,12 +1321,20 @@ private:
     Vec2 labelFrozenAt_;
     std::vector<Entity> labelProto_;
     std::vector<Entity> labelPreview_;
-    Bounds labelCovers_;
+    // WHAT THE LABEL COVERS, as the label's own four corners rather than as a box round them. A bundle that
+    // runs at an angle gets a label that runs at that angle, and a mask taken as the bounding box of it
+    // stood square to the sheet with the label lying across it corner to corner - covering ground the label
+    // is nowhere near and, at 45 degrees, half again as much of it.
+    std::vector<Vec2> labelCovers_;
     // The two sizes as they stand, kept across a session so the next label goes on at the size the last one
     // was set to - a drawing office's labels are all one size, and typing it once should be enough.
     double labelAlongMm_ = kLabelWidthMm;
     double labelAcrossMm_ = kLabelHeightMm;
-    bool labelAcrossManual_ = false;   // the across size said by hand: the stroke stops deciding it
+    // Either size said by hand: the stroke stops deciding that one. Until then the label keeps its SHAPE
+    // and changes its SIZE - the wires say how far across it has to reach and the length follows by the same
+    // factor, so a label on a pair of wires is a small label and not a big one squashed.
+    bool labelAcrossManual_ = false;
+    bool labelAlongManual_ = false;
     // How far past the outermost run crossed it goes, at each end: the model's house figure, or 0 for a
     // proportion of the label's own size.
     double labelExceedMm_ = 0.0;
@@ -1350,7 +1358,9 @@ private:
     Bounds labelReferenceBounds() const;
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
     // The captured drawing laid out to that fit, and the ground it covers.
-    std::vector<Entity> labelEntities(const LabelFit& fit, Bounds& covers) const;
+    std::vector<Entity> labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const;
+    // The four corners of the ground a label covers, turned with it.
+    static std::vector<Vec2> labelMaskQuad(const LabelFit& fit);
     void commitLabel();
     // The fit written on to every piece of the label, so it travels with the label in the file: a label
     // that has to be re-measured off the sheet before it can be resized is a label that cannot be resized
