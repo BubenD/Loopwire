@@ -795,6 +795,64 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- a label on a knee goes ROUND it -----------------------------------------------------------
+    {
+        // A bundle that turns takes the label round with it. A straight rectangle laid across a bend leaves
+        // the wires going in at one angle and coming out at another with a rigid box in between, which is not
+        // what a label on a bent bundle looks like - and is what it looked like.
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0.0, 0.0}, {50.0, 0.0}, {80.0, 30.0}};   // straight, then away at 45 degrees
+        d.entities().push_back(run);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // A stroke across the run right at the knee, so the label reaches both sides of it.
+        ed.onPointerPress({50.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 6.0});
+        ed.onPointerPress({50.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "knee: the label goes on at the bend");
+
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "knee: and covers what it covers");
+        if (mask) {
+            // A straight label would cover a rectangle: four corners. One that goes round the knee is a BENT
+            // band, and it has to have more than four - the corner is where all the shape is.
+            std::printf("  knee: covered by %d corners\n", int(mask->points.size()));
+            check(mask->points.size() > 4, "knee: the cover is a bent band, not a rectangle");
+
+            // And it follows the run: the far end of the label is off along the SECOND leg, not carried
+            // straight on past the corner where there is no bundle at all. Straight on from the knee would
+            // reach about x = 70, y = 0; round the corner it reaches up and to the right.
+            const Bounds b = mask->bounds();
+            std::printf("  knee: reaching x %.1f..%.1f, y %.1f..%.1f\n", b.min.x, b.max.x, b.min.y, b.max.y);
+            check(b.max.y > 4.0,
+                  "knee: it turned up the second leg with the bundle instead of carrying straight on");
+            check(b.min.y < -1.0, "knee: while still covering the first");
+        }
+
+        // Resizing it must not iron the bend out. The points would be scaled about the middle along two
+        // straight axes, which is right for a straight label and wrong for this one.
+        const int cornersBefore = mask ? int(mask->points.size()) : 0;
+        ed.setLabelWidth(70.0);
+        const Entity* after = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) after = &e;
+        if (after) {
+            std::printf("  knee: after widening to 70 it still has %d corners and reaches y %.1f\n",
+                        int(after->points.size()), after->bounds().max.y);
+            check(int(after->points.size()) == cornersBefore && after->bounds().max.y > 4.0,
+                  "knee: widened, it is still bent - resizing does not straighten it out");
+        }
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is

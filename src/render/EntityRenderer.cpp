@@ -2007,17 +2007,31 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
+        // WHERE THE WORDS SIT ROUND A CIRCLE: an angle to move them along it, and a distance to stand them
+        // off it. A letter fixed at one o'clock lands on top of the geometry about half the time, and there is
+        // no arranging a sheet with several details on it when none of the letters can be moved.
+        auto roundCircle = [&](const QPointF& c, double r, double angDeg, double gap) {
+            const double a = angDeg * M_PI / 180.0;
+            const double out = r + gap * vs;
+            return QPointF(c.x() + out * std::cos(a), c.y() - out * std::sin(a));
+        };
+
         // The circle round the thing itself, and its letter beside it. It is an annotation over the drawing
         // rather than part of what is drawn, so it goes on at the pen it was given and no heavier.
         const QPointF sc = vt.toScreen(e.center);
         const double sr = e.radius * vs;
         p.drawEllipse(sc, sr, sr);
-        drawWorldText(p, QPointF(sc.x() + sr * 0.75, sc.y() - sr * 0.75), tag, capH, vs, color);
+        drawWorldText(p,
+                      roundCircle(sc, sr, e.meta.value("detailTagAngle").toDouble(45.0),
+                                  e.meta.value("detailTagGap").toDouble(capH * 0.6)),
+                      tag, capH, vs, color, Qt::AlignHCenter | Qt::AlignVCenter);
 
-        // The enlargement.
+        // The enlargement. Its OUTLINE is a switch: the ring is the convention and says where the view stops,
+        // but a detail drawn into a clear part of the sheet reads perfectly well without one, and on a busy
+        // sheet the ring is one more circle to be mistaken for geometry.
         const QPointF bc = vt.toScreen(e.b);
         const double br = big * vs;
-        p.drawEllipse(bc, br, br);
+        if (e.meta.value("detailBoundary").toBool(true)) p.drawEllipse(bc, br, br);
         if (!g_inDetailView && br > 3.0) {
             // NOT RECURSIVE. A detail view drawn inside a detail view would draw itself for ever, and a
             // detail of a detail is not something a drawing office asks for.
@@ -2064,15 +2078,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.setBrush(Qt::NoBrush);
         }
 
-        // The caption, which is what makes the two circles one drawing instead of two: the letter, and the
-        // magnification - a detail with no scale on it cannot be measured off.
-        const QString head = QStringLiteral("DETAIL %1").arg(tag);
+        // The caption, which is what makes the two circles one drawing instead of two. Two separate texts:
+        // the letter goes on the circle round the thing, and this goes on the enlargement, and they are set
+        // apart because they say different things - one is a pointer, the other is a heading. It defaults to
+        // "DETAIL <letter>", which is the convention, and can be anything an office writes instead.
+        QString head = e.meta.value("detailBigText").toString();
+        if (head.isEmpty()) head = QStringLiteral("DETAIL %1").arg(tag);
         const QString sub = scale >= 1.0 ? QStringLiteral("SCALE %1:1").arg(scale, 0, 'g', 3)
                                          : QStringLiteral("SCALE 1:%1").arg(1.0 / scale, 0, 'g', 3);
-        const double y = bc.y() + br + capH * vs * 1.3;
-        drawWorldText(p, QPointF(bc.x(), y), head, capH, vs, color, Qt::AlignHCenter);
-        drawWorldText(p, QPointF(bc.x(), y + capH * vs * 1.3), sub, capH * 0.8, vs, color,
-                      Qt::AlignHCenter);
+        // Round the enlargement the same way, so a caption that lands on something can be moved off it.
+        // Straight down is the convention, so that is where it starts.
+        const QPointF capAt = roundCircle(bc, br, e.meta.value("detailBigAngle").toDouble(-90.0),
+                                          e.meta.value("detailBigGap").toDouble(capH * 1.1));
+        drawWorldText(p, capAt, head, capH, vs, color, Qt::AlignHCenter | Qt::AlignVCenter);
+        drawWorldText(p, QPointF(capAt.x(), capAt.y() + capH * vs * 1.25), sub, capH * 0.8, vs, color,
+                      Qt::AlignHCenter | Qt::AlignVCenter);
         break;
     }
 

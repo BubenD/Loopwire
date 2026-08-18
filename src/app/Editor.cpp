@@ -1957,6 +1957,67 @@ inline QString labelMidXKey() { return QStringLiteral("labelMidX"); }
 inline QString labelMidYKey() { return QStringLiteral("labelMidY"); }
 } // namespace
 
+// ---- laying something along a run ---------------------------------------------------------------------
+// A label on a knee has to go round it. These put a point at a distance ALONG a path and an offset ACROSS it,
+// and read the same pair back off a point - which is all that is needed to lay a drawing along a bend and to
+// resize it afterwards without straightening it out.
+namespace {
+
+double pathTotalLength(const std::vector<Vec2>& path) {
+    double t = 0.0;
+    for (size_t i = 1; i < path.size(); ++i) t += distance(path[i - 1], path[i]);
+    return t;
+}
+
+// The point at arc-length `s` along the path, and the direction of travel there. Past either end it carries
+// on in the end segment's direction, so a label that overhangs the end of a run still comes out straight
+// rather than folding back on itself.
+void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
+    at = path.empty() ? Vec2{0.0, 0.0} : path.front();
+    dir = Vec2{1.0, 0.0};
+    if (path.size() < 2) return;
+    if (s <= 0.0) {
+        dir = (path[1] - path[0]).normalized();
+        at = path[0] + dir * s;
+        return;
+    }
+    double acc = 0.0;
+    for (size_t i = 1; i < path.size(); ++i) {
+        const double seg = distance(path[i - 1], path[i]);
+        if (seg < 1e-12) continue;
+        if (s <= acc + seg) {
+            dir = (path[i] - path[i - 1]).normalized();
+            at = path[i - 1] + dir * (s - acc);
+            return;
+        }
+        acc += seg;
+    }
+    dir = (path.back() - path[path.size() - 2]).normalized();
+    at = path.back() + dir * (s - acc);
+}
+
+// Where a point sits on the path: how far ALONG, and how far ACROSS (signed, to the left of travel).
+void placeOnPath(const std::vector<Vec2>& path, const Vec2& p, double& s, double& off) {
+    s = 0.0;
+    off = 0.0;
+    if (path.size() < 2) return;
+    double acc = 0.0, best = 1e300;
+    for (size_t i = 1; i < path.size(); ++i) {
+        const double seg = distance(path[i - 1], path[i]);
+        if (seg < 1e-12) continue;
+        const ClosestOnSegment c = closestPointOnSegment(p, path[i - 1], path[i]);
+        if (c.distance < best) {
+            best = c.distance;
+            const Vec2 dir = (path[i] - path[i - 1]).normalized();
+            s = acc + c.t * seg;
+            off = dot(p - c.point, dir.perp());
+        }
+        acc += seg;
+    }
+}
+
+} // namespace
+
 // A point inside an annotative detail view, in the coordinates of the thing the detail is a view OF.
 //
 // This is what makes such a view a WINDOW rather than a picture: everything downstream - the snaps, the
@@ -2102,29 +2163,45 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     // mask, and every label after the first grows.
     std::vector<Vec2> hits;
     std::vector<Vec2> dirs;
+    // WHICH RUN the label is laid along, and where along it. A run that turns takes the label round with it,
+    // so the label has to know the path and not only the direction: the run crossed nearest the middle of the
+    // stroke is the one it is laid on, which with one run crossed is simply that run.
+    std::vector<std::vector<Vec2>> paths;
     auto tryLine = [&](const Vec2& p1, const Vec2& p2) {
         if (auto x = segmentSegmentIntersection(a, b, p1, p2)) {
             hits.push_back(*x);
             dirs.push_back(p2 - p1);
+            paths.push_back({});
         }
+    };
+    // The whole run a crossing belongs to, filled in after each entity is tried: the crossing test works
+    // segment by segment and a label wraps round more of the run than one segment.
+    auto ownPath = [&](size_t from, const std::vector<Vec2>& whole) {
+        for (size_t i = from; i < paths.size(); ++i) paths[i] = whole;
     };
     for (const Entity& e : doc_->entities()) {
         if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
         if (!e.meta.value(labelGroupKey()).toString().isEmpty()) continue;   // nor other labels
+        const size_t was = paths.size();
         switch (e.type) {
         case EntityType::Line:
             tryLine(e.a, e.b);
+            ownPath(was, {e.a, e.b});
             break;
         case EntityType::DoubleLine: {
             const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
             const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
             tryLine(e.a + off, e.b + off);
             tryLine(e.a - off, e.b - off);
+            // The CENTRELINE is the path a label is laid along, not either of the two drawn lines: a label
+            // over a double run goes round the run, and the run is the pair of them.
+            ownPath(was, {e.a, e.b});
             break;
         }
         case EntityType::Wire:
         case EntityType::Spline:
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
+            ownPath(was, e.points);
             break;
         case EntityType::Polyline: {
             if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
@@ -2136,6 +2213,7 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
             } else {
                 for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
             }
+            ownPath(was, e.points);
             break;
         }
         default:
@@ -2178,6 +2256,47 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
     fit.alongMm = labelAlongManual_ || labelAcrossMm_ < 1e-9
                       ? labelAlongMm_
                       : labelAlongMm_ * (fit.acrossMm / labelAcrossMm_);
+
+    // THE RUN IT IS LAID ALONG: the one crossed nearest the middle, which with one run crossed is that run.
+    // A label on a KNEE goes ROUND it - a bundle that turns takes the label with it - so the path is kept and
+    // not just the direction. Kept only when the label actually reaches a bend: on a straight run the two say
+    // the same thing, and the direction is the cheaper of the two to lay a rectangle by.
+    {
+        size_t host = 0;
+        double bestD = 1e300;
+        for (size_t i = 0; i < hits.size(); ++i) {
+            const double dd = distance(hits[i], fit.mid);
+            if (dd < bestD) { bestD = dd; host = i; }
+        }
+        if (host < paths.size() && paths[host].size() > 2) {
+            const std::vector<Vec2>& path = paths[host];
+            double s = 0.0, off = 0.0;
+            placeOnPath(path, fit.mid, s, off);
+            // Does the label reach a bend at all? Only then is there anything to go round.
+            bool bends = false;
+            double acc = 0.0;
+            const double half = fit.alongMm / 2.0;
+            for (size_t i = 1; i + 1 < path.size(); ++i) {
+                acc += distance(path[i - 1], path[i]);
+                if (std::abs(acc - s) > half) continue;
+                const Vec2 in = (path[i] - path[i - 1]).normalized();
+                const Vec2 out = (path[i + 1] - path[i]).normalized();
+                if (std::abs(dot(in, out) - 1.0) > 1e-6) { bends = true; break; }
+            }
+            if (bends) {
+                fit.path = path;
+                fit.midS = s;
+                // The label is laid ON the run, so a middle taken off the crossings is pulled back on to it:
+                // it is the run that the label follows, and a middle beside the run would offset the whole of
+                // it by however far the crossings happened to sit off the centreline.
+                Vec2 at, dir;
+                frameOnPath(path, s, at, dir);
+                fit.mid = at + dir.perp() * off;
+                fit.runDir = dir;
+                fit.acrossDir = dir.perp();
+            }
+        }
+    }
     fit.ok = true;
     return fit;
 }
@@ -2191,9 +2310,28 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
 // and nothing square to the sheet about it.
 std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
     if (!fit.ok) return {};
-    const Vec2 a = fit.runDir * (fit.alongMm / 2.0);
-    const Vec2 c = fit.acrossDir * (fit.acrossMm / 2.0);
-    return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
+    const double half = fit.alongMm / 2.0, side = fit.acrossMm / 2.0;
+    if (fit.path.size() < 2) {
+        const Vec2 a = fit.runDir * half;
+        const Vec2 c = fit.acrossDir * side;
+        return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
+    }
+    // ON A BEND it is a bent band, not a rectangle: walked along the run in steps, out to one side and back
+    // along the other. Enough steps to take the corners cleanly - the run is straight lines, so the corners
+    // are where all the shape is, and a band drawn with four points would cut them off.
+    constexpr int kSteps = 24;
+    std::vector<Vec2> lo, hi;
+    for (int i = 0; i <= kSteps; ++i) {
+        const double s = fit.midS - half + fit.alongMm * i / double(kSteps);
+        Vec2 at, dir;
+        frameOnPath(fit.path, s, at, dir);
+        const Vec2 n = dir.perp();
+        lo.push_back(at - n * side);
+        hi.push_back(at + n * side);
+    }
+    std::vector<Vec2> out = lo;
+    for (auto it = hi.rbegin(); it != hi.rend(); ++it) out.push_back(*it);
+    return out;
 }
 
 std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const {
@@ -2206,9 +2344,21 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     const double sc = proto.height() > 1e-9 ? fit.acrossMm / proto.height() : 1.0;
     const double midX = (proto.min.x + proto.max.x) / 2.0;
     const double midY = (proto.min.y + proto.max.y) / 2.0;
+    // Straight run: one direction says everything, and a rectangle is laid by it.
+    //
+    // BENT run: every point is placed at a distance ALONG the run and an offset ACROSS it - the way words are
+    // set on a curve - so the label goes round the knee with the bundle. A straight rectangle laid across a
+    // bend leaves the wires going in at one angle and coming out at another with a rigid box between them,
+    // which is not what a label on a bent bundle looks like.
+    const bool bent = fit.path.size() >= 2;
     auto place = [&](const Vec2& p) {
-        const double u = (p.x - midX) * sa;   // along the runs: the label's own length
-        const double v = (p.y - midY) * sc;   // across them: what has to cover the bundle
+        const double u = (p.x - midX) * sa;   // along the run: the label's own length
+        const double v = (p.y - midY) * sc;   // across it: what has to cover the bundle
+        if (bent) {
+            Vec2 at, dir;
+            frameOnPath(fit.path, fit.midS + u, at, dir);
+            return at + dir.perp() * v;
+        }
         return Vec2{fit.mid.x + fit.runDir.x * u + fit.acrossDir.x * v,
                     fit.mid.y + fit.runDir.y * u + fit.acrossDir.y * v};
     };
@@ -2245,6 +2395,21 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit)
     e.meta.insert(labelDirYKey(), fit.runDir.y);
     e.meta.insert(labelMidXKey(), fit.mid.x);
     e.meta.insert(labelMidYKey(), fit.mid.y);
+    // The run it was laid along, when it was laid along a bent one. Without it, resizing a label bent round a
+    // knee straightens it out - the points would be scaled about the middle along two straight axes, which is
+    // the very thing the bend was there to avoid.
+    if (fit.path.size() >= 2) {
+        QJsonArray arr;
+        for (const Vec2& q : fit.path) {
+            arr.append(q.x);
+            arr.append(q.y);
+        }
+        e.meta.insert(QStringLiteral("labelPath"), arr);
+        e.meta.insert(QStringLiteral("labelMidS"), fit.midS);
+    } else {
+        e.meta.remove(QStringLiteral("labelPath"));
+        e.meta.remove(QStringLiteral("labelMidS"));
+    }
 }
 
 void Editor::commitLabel() {
@@ -2260,6 +2425,9 @@ void Editor::commitLabel() {
     // through it reads as a label behind the harness rather than on it. Marked as a label's own mask so
     // that laying the next label does not measure this one as though it were a wire, and it is IN the
     // group, so clicking the body of the label - which is mostly mask - picks the label up.
+    // THE RUN IT WAS LAID ALONG, kept with it. A bent label resized by scaling its points about its middle
+    // comes out straightened - so the path is stored and the label is laid along it again instead, which is
+    // also what lets a label bent round a knee be resized a week later with the drawing reopened.
     if (labelCovers_.size() >= 3) {
         Entity mask;
         mask.id = uid();
@@ -2336,6 +2504,13 @@ bool Editor::adoptLabelFromSelection() {
             if (labelFit_.runDir.lengthSq() < 1e-12) labelFit_.runDir = Vec2{1.0, 0.0};
             labelFit_.runDir = labelFit_.runDir.normalized();
             labelFit_.acrossDir = labelFit_.runDir.perp();
+            // And the run it was laid along, if it was bent. A label taken up without it would be resized as
+            // a straight one and come out straightened.
+            labelFit_.path.clear();
+            const QJsonArray arr = e.meta.value(QStringLiteral("labelPath")).toArray();
+            for (int k = 0; k + 1 < arr.size(); k += 2)
+                labelFit_.path.push_back({arr[k].toDouble(), arr[k + 1].toDouble()});
+            labelFit_.midS = e.meta.value(QStringLiteral("labelMidS")).toDouble();
             labelFit_.ok = labelFit_.alongMm > 1e-9 && labelFit_.acrossMm > 1e-9;
         }
     }
@@ -2363,7 +2538,20 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
     const double fc = acrossMm / labelFit_.acrossMm;
     if (std::abs(fa - 1.0) < 1e-12 && std::abs(fc - 1.0) < 1e-12) return false;
     const Vec2 mid = labelFit_.mid, along = labelFit_.runDir, across = labelFit_.acrossDir;
+    // ON A BEND the point is read off the RUN and put back on it - how far along, how far across, both scaled
+    // - so a bent label resized stays bent. Scaling its points about the middle along two straight axes, which
+    // is right for a straight label, would iron the bend out of it.
+    const bool bent = labelFit_.path.size() >= 2;
+    const double midS = labelFit_.midS;
+    const std::vector<Vec2>& path = labelFit_.path;
     auto scale = [&](const Vec2& p) {
+        if (bent) {
+            double s = 0.0, off = 0.0;
+            placeOnPath(path, p, s, off);
+            Vec2 at, dir;
+            frameOnPath(path, midS + (s - midS) * fa, at, dir);
+            return at + dir.perp() * (off * fc);
+        }
         const Vec2 d = p - mid;
         const double u = dot(d, along) * fa;
         const double v = dot(d, across) * fc;
@@ -2444,8 +2632,46 @@ bool Editor::slideLiveLabel(const Vec2& delta) {
         if (id != labelMaskId_ &&
             std::find(labelLiveIds_.begin(), labelLiveIds_.end(), id) == labelLiveIds_.end())
             return false;   // something else is in the selection: an ordinary move
-    const Vec2 step = labelFit_.runDir * dot(delta, labelFit_.runDir);
-    if (step.lengthSq() < 1e-18) return true;   // took the drag, and threw all of it away
+    const double travel = dot(delta, labelFit_.runDir);
+    if (std::abs(travel) < 1e-9) return true;   // took the drag, and threw all of it away
+    // ON A BEND, sliding it means sliding it ALONG THE RUN - round the corner and out the other side, which is
+    // where a label pushed along a bundle goes. A straight translate would carry it off the run the moment it
+    // reached the knee.
+    if (labelFit_.path.size() >= 2) {
+        const double wasS = labelFit_.midS;
+        labelFit_.midS += travel;
+        const std::vector<Vec2>& path = labelFit_.path;
+        const double midS = labelFit_.midS;
+        for (Entity& e : doc_->entities()) {
+            if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+            auto move = [&](const Vec2& p) {
+                double s = 0.0, off = 0.0;
+                placeOnPath(path, p, s, off);
+                Vec2 at, dir;
+                frameOnPath(path, s + (midS - wasS), at, dir);
+                return at + dir.perp() * off;
+            };
+            e.a = move(e.a);
+            e.b = move(e.b);
+            e.center = move(e.center);
+            for (Vec2& q : e.points) q = move(q);
+        }
+        Vec2 at, dir;
+        frameOnPath(path, midS, at, dir);
+        labelFit_.mid = at;
+        labelFit_.runDir = dir;
+        labelFit_.acrossDir = dir.perp();
+        for (Entity& e : doc_->entities())
+            if (e.meta.value(labelGroupKey()).toString() == labelGroup_) {
+                e.meta.insert(labelMidXKey(), labelFit_.mid.x);
+                e.meta.insert(labelMidYKey(), labelFit_.mid.y);
+                e.meta.insert(QStringLiteral("labelMidS"), midS);
+            }
+        doc_->setDirty(true);
+        emit changed();
+        return true;
+    }
+    const Vec2 step = labelFit_.runDir * travel;
     labelFit_.mid = labelFit_.mid + step;
     for (Entity& e : doc_->entities()) {
         if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
@@ -2884,6 +3110,10 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         d.center = detailCenter_;
         d.radius = detailRadius_;
         d.b = p;
+        // ORANGE, so it reads as what it is: a ring drawn ROUND the drawing to say "look at this bit", not a
+        // circle that is part of what is being drawn. A detail circle in the same white as the geometry is a
+        // circle somebody has to work out is not a hole.
+        d.color = QStringLiteral("#e6a23c");
         d.meta.insert(QStringLiteral("detailScale"), std::max(0.01, detailScale_));
         d.meta.insert(QStringLiteral("detailTag"), nextDetailTag());
         const QString tag = d.meta.value(QStringLiteral("detailTag")).toString();
@@ -6633,6 +6863,35 @@ void Editor::applyEditDrag(const Vec2& target) {
         // A hosted break mark slides along its run whichever way it was taken hold of - by its body or
         // by one of its grips. Without this, grabbing it by a grip lifted it off the run.
         if (e->type == EntityType::LengthBreak && slideBreakAlongHost(*e, delta)) return;
+        // A DETAIL VIEW IS ONE OBJECT IN TWO PLACES, and its four handles move one place each.
+        //
+        // Moving the circle round the thing must NOT drag the enlargement along with it: the two are in
+        // different parts of the sheet for a reason, and a source circle that tows its enlargement across the
+        // drawing every time it is nudged on to the right bit of geometry is unusable. The generic centre
+        // handle translated the whole entity, which moved both.
+        //
+        // And the enlargement's edge handle IS the magnification - dragging it out is what "show it bigger"
+        // means, and a number in a dialog is not.
+        if (e->type == EntityType::DetailView) {
+            switch (role) {
+            case GripRole::Center:
+                e->center = target;      // which bit of the drawing it is a view of - that alone
+                return;
+            case GripRole::LineB:
+                e->b = target;           // where the enlargement sits - that alone
+                return;
+            case GripRole::Radius:
+                if (index == 0) {
+                    e->radius = std::max(1e-6, distance(e->center, target));   // how much it shows
+                } else if (e->radius > 1e-9) {
+                    e->meta.insert(QStringLiteral("detailScale"),
+                                   std::max(0.05, distance(e->b, target) / e->radius));
+                }
+                return;
+            default:
+                break;
+            }
+        }
         switch (role) {
         case GripRole::LineA: e->a = solveEnd(true, e, off); break;
         case GripRole::LineB:

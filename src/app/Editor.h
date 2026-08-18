@@ -1351,10 +1351,22 @@ private:
     struct LabelFit {
         bool ok = false;
         Vec2 mid;
-        Vec2 runDir{1.0, 0.0};      // the way the runs it is on run
+        Vec2 runDir{1.0, 0.0};      // the way the runs it is on run, at the middle of the label
         Vec2 acrossDir{0.0, 1.0};   // square to them
         double alongMm = 0.0;       // along the runs  - "Width"
         double acrossMm = 0.0;      // across the runs - "Height", what has to cover the bundle
+        // THE RUN IT IS LAID ALONG, and how far along it the middle of the label sits.
+        //
+        // A label on a straight run is a rectangle and the direction above says everything about it. A label
+        // on a KNEE is not: a bundle that turns takes the label round with it, and a straight rectangle laid
+        // across a bend leaves the wires going in at one angle and coming out at another with a rigid box in
+        // between - which is not what a label on a bent bundle looks like, and is what it looked like.
+        //
+        // So the label is laid along the path: every point of it is placed at a distance ALONG the run and an
+        // offset ACROSS it, the way words are set on a curve. Empty for a straight run, where the two are the
+        // same answer and the direction is cheaper.
+        std::vector<Vec2> path;
+        double midS = 0.0;
     };
     LabelFit labelFit_;
     // Measured off the stroke a..b: which runs it crosses, how far they spread, and the size that covers

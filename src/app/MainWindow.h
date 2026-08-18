@@ -237,6 +237,31 @@ private:
     void updateSchematicRibbonGroups();
     void buildHatchRibbonTab();        // build the contextual "Hatch Creation" tab (hidden)
     void showHatchRibbon(bool on);     // add/select or remove the contextual tab
+    // THE DETAIL VIEW'S OWN TAB. Clicking a detail view brings up everything about it in one place: which
+    // letter goes on the circle round the thing, what heading goes on the enlargement, how much bigger it is
+    // drawn, whether the enlargement has a ring round it, whether it is a live window on the drawing, and
+    // whether the dimensions come with it. The properties panel has the same settings - the panel is where
+    // somebody changes one thing on one object, the tab is where somebody works through several - so both.
+    void buildDetailRibbonTab();
+    void updateDetailContext();
+    void showDetailRibbon(bool on);
+    void syncDetailRibbon();
+    // Which detail view the tab is pointed at, and a guard so writing the fields back does not read them
+    // straight out again and fight the person typing.
+    QString detailEditId_;
+    bool detailSyncing_ = false;
+    QWidget* detailTab_ = nullptr;
+    QLineEdit* detailSmallText_ = nullptr;
+    QLineEdit* detailBigText_ = nullptr;
+    QDoubleSpinBox* detailScaleSpin_ = nullptr;
+    QDoubleSpinBox* detailShowsSpin_ = nullptr;
+    QDoubleSpinBox* detailTagAngleSpin_ = nullptr;
+    QDoubleSpinBox* detailTagGapSpin_ = nullptr;
+    QDoubleSpinBox* detailBigAngleSpin_ = nullptr;
+    QDoubleSpinBox* detailBigGapSpin_ = nullptr;
+    QCheckBox* detailBoundaryBox_ = nullptr;
+    QCheckBox* detailAnnotativeBox_ = nullptr;
+    QCheckBox* detailDimsBox_ = nullptr;
     void syncHatchRibbon();            // reflect the current HatchStyle in the tab controls
     void updateHatchContext();         // open/close + target the tab based on tool/selection
     void applyHatchControl(const QString& key, const QJsonValue& value); // -> selected hatch or default

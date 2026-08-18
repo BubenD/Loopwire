@@ -183,6 +183,76 @@ int run_detailview_tests() {
               "window: while placing one, the cursor means the place it is");
     }
 
+
+    // ---- one object in two places, and each place moves on its own ---------------------------------
+    {
+        // The circle round the thing and the circle it is enlarged in are in different parts of the sheet for
+        // a reason. A source circle that tows its enlargement across the drawing every time it is nudged on
+        // to the right bit of geometry is unusable - and that is what the generic centre handle did, because
+        // it translated the whole object.
+        Document d;
+        Entity dv;
+        dv.id = QStringLiteral("dv");
+        dv.type = EntityType::DetailView;
+        dv.center = {10.0, 10.0};
+        dv.radius = 4.0;
+        dv.b = {100.0, 100.0};
+        dv.meta.insert(QStringLiteral("detailScale"), 2.0);
+        d.entities().push_back(dv);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        // Pick it by the edge of the circle round the thing, then take hold of that circle's centre handle.
+        ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({14.0, 10.0}, Qt::LeftButton);
+        check(ed.selection().size() == 1, "apart: the ring round the thing picks the view up");
+        ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // its centre handle
+        ed.onPointerMove({20.0, 10.0});
+        const Entity* now = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) now = &e;
+        check(now != nullptr, "apart: still there");
+        if (now) {
+            std::printf("  apart: the thing moved to %.1f,%.1f, the enlargement stayed at %.1f,%.1f\n",
+                        now->center.x, now->center.y, now->b.x, now->b.y);
+            check(distance(now->center, Vec2{20.0, 10.0}) < 1e-6,
+                  "apart: moving the small circle moves which bit of the drawing it is a view of");
+            check(distance(now->b, Vec2{100.0, 100.0}) < 1e-6,
+                  "apart: and leaves the enlargement exactly where it was put");
+        }
+    }
+
+    // ---- what it says, and where -------------------------------------------------------------------
+    {
+        // Two texts, because they say different things: the letter on the circle round the thing is a
+        // pointer, and the heading on the enlargement is a heading. And each runs round its own circle,
+        // because a letter fixed at one o'clock lands on the geometry about half the time.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::DetailView);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* dv = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) dv = &e;
+        check(dv != nullptr, "says: placed");
+        if (dv) {
+            // ORANGE, so it reads as a ring drawn ROUND the drawing rather than as a circle that is part of
+            // it. A detail circle in the same white as the geometry has to be worked out not to be a hole.
+            std::printf("  says: drawn in %s, letter %s\n", qPrintable(dv->color),
+                        qPrintable(dv->meta.value(QStringLiteral("detailTag")).toString()));
+            check(!dv->color.isEmpty() && dv->color != QStringLiteral("#ffffff"),
+                  "says: drawn in its own colour, not in the geometry's");
+            // The heading is empty to start with, which is what makes it default to DETAIL and the letter -
+            // the convention - while still being anything an office wants to write instead.
+            check(dv->meta.value(QStringLiteral("detailBigText")).toString().isEmpty(),
+                  "says: the heading starts as the convention rather than as a copy of the letter");
+        }
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;
