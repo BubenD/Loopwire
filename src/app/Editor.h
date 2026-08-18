@@ -510,12 +510,15 @@ public:
     // THE LABEL'S TWO SIZES, whichever stage it is at: still a preview under the cursor, or down on the
     // drawing and selected.
     //
-    // WIDTH is ACROSS the runs: the dimension that has to cover the bundle, which is exactly what the stroke
-    // measures, so the stroke settles it until somebody says otherwise. HEIGHT is ALONG them - how far the
-    // label reaches up the wire, which no amount of looking at the bundle will tell you.
+    // WIDTH IS THE DISTANCE LEFT TO RIGHT AND HEIGHT THE DISTANCE UP AND DOWN. Not along the run and across
+    // it - those are the label's own axes, and naming the fields after them was wrong twice over in opposite
+    // directions, because it made the answer depend on which way the cable happens to run.
     //
-    // A label is a strip wrapped round a bundle and stood out to one side: 40 ACROSS the bundle and 12 ALONG
-    // the wire, which is why they are named this way round.
+    // Nobody reads a label that way. So Width is whichever of the label's two dimensions lies nearer the
+    // horizontal where it sits, and Height is the other: on a bundle drawn across the sheet Width is the length
+    // along the wire, and on one drawn up the sheet it is the reach across the bundle. It follows the eye
+    // rather than the geometry, which is the only reading of those two words that does not change meaning with
+    // the cable.
     // HOW MUCH BIGGER a detail view is drawn than the thing it is a view of. Two is the drawing-office
     // default: enough to read, and small enough to fit on the sheet beside what it came from.
     double& detailScale() { return detailScale_; }
@@ -532,13 +535,19 @@ public:
     void retakeDetailSnapshot(Entity& e) const;
     Vec2 detailCenter() const { return detailCenter_; }
     double detailRadius() const { return detailRadius_; }
-    static constexpr double kLabelWidthMm = 40.0;    // across the runs
-    static constexpr double kLabelHeightMm = 12.0;   // along them
+    static constexpr double kLabelWidthMm = 40.0;    // along the run, on a bundle drawn across the sheet
+    static constexpr double kLabelHeightMm = 12.0;   // across the runs, on that same bundle
     bool labelLive() const { return !labelLiveIds_.empty(); }
-    double labelWidth() const { return labelFit_.ok ? labelFit_.acrossMm : labelAcrossMm_; }
-    double labelHeight() const { return labelFit_.ok ? labelFit_.alongMm : labelAlongMm_; }
+    // Whether the label's ALONG axis - the way the run goes - is the one lying nearer the horizontal. This is
+    // what decides which of its two sizes answers to Width and which to Height.
+    bool labelAlongIsHorizontal() const;
+    double labelWidth() const;
+    double labelHeight() const;
     void setLabelWidth(double mm);
     void setLabelHeight(double mm);
+    // One place both go through: `horizontal` says which way ON THE SHEET the number is meant, and it is
+    // applied to whichever of the label's own axes is lying that way.
+    void setLabelSize(bool horizontal, double mm);
     // A label already on the drawing, taken up so the ribbon and the properties act on it - read off the
     // label's own meta, so one placed last week resizes the same as one placed a second ago.
     bool adoptLabelFromSelection();
@@ -1347,8 +1356,8 @@ private:
     std::vector<Vec2> labelCovers_;
     // The two sizes as they stand, kept across a session so the next label goes on at the size the last one
     // was set to - a drawing office's labels are all one size, and typing it once should be enough.
-    double labelAcrossMm_ = kLabelWidthMm;    // "Width"  - across the runs
-    double labelAlongMm_ = kLabelHeightMm;    // "Height" - along them
+    double labelAlongMm_ = kLabelWidthMm;     // along the run
+    double labelAcrossMm_ = kLabelHeightMm;   // across the runs
     // Either size said by hand: the stroke stops deciding that one. Until then the label keeps its SHAPE
     // and changes its SIZE - the wires say how far across it has to reach and the length follows by the same
     // factor, so a label on a pair of wires is a small label and not a big one squashed.

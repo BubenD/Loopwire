@@ -2004,6 +2004,32 @@ void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
     at = path.back() + dir * (s - acc);
 }
 
+// The piece of a path between two arc-lengths, keeping every vertex in between. This is what a label laid on a
+// bend is built from: the cable's own corners are in here, so offsetting it puts the label's lines round those
+// corners at the cable's radius rather than sampling a curve through them.
+std::vector<Vec2> pathPiece(const std::vector<Vec2>& path, double s0, double s1) {
+    std::vector<Vec2> out;
+    if (path.size() < 2 || s1 <= s0) return out;
+    Vec2 at, dir;
+    frameOnPath(path, s0, at, dir);
+    out.push_back(at);
+    double acc = 0.0;
+    for (size_t i = 1; i < path.size(); ++i) {
+        const double seg = distance(path[i - 1], path[i]);
+        if (seg < 1e-12) continue;
+        const double sEnd = acc + seg;
+        if (sEnd > s0 && sEnd < s1) out.push_back(path[i]);   // a corner of the cable, kept
+        acc = sEnd;
+    }
+    frameOnPath(path, s1, at, dir);
+    out.push_back(at);
+    // A vertex landing on top of the piece's own end would make a zero-length segment, which offsetting cannot
+    // take a direction from.
+    for (size_t i = out.size(); i-- > 1;)
+        if (distance(out[i], out[i - 1]) < 1e-9) out.erase(out.begin() + i);
+    return out;
+}
+
 // Does the run bend anywhere under a label of this length, sat at this place along it? Asked by the fit when
 // the label is placed and by the slide when it is pushed along, so a label that slides INTO a bend lays itself
 // round the bend and one that slides out of it straightens - which is what being coupled to the run means.
@@ -2470,23 +2496,22 @@ std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
         const Vec2 c = fit.acrossDir * side;
         return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
     }
-    // ON A BEND it is a bent band, not a rectangle: walked along the run in steps, out to one side and back
-    // along the other. Enough steps to take the corners cleanly - the run is straight lines, so the corners
-    // are where all the shape is, and a band drawn with four points would cut them off.
-    constexpr int kSteps = 24;
-    std::vector<Vec2> lo, hi;
-    for (int i = 0; i <= kSteps; ++i) {
-        const double s = fit.midS - half + fit.alongMm * i / double(kSteps);
-        Vec2 at, dir;
-        frameOnPath(fit.path, s, at, dir);
-        const Vec2 n = dir.perp();
-        // Off the run by however far the label's middle is off it: the middle of the BUNDLE, not of the one
-        // wire the run happens to be.
-        lo.push_back(at + n * (fit.midOff - side));
-        hi.push_back(at + n * (fit.midOff + side));
+    // ON A BEND it is the piece of cable the label lies over, offset to either side: the cable's own corners
+    // come through as corners, rounded where the cable is rounded, and the two long edges of the label stay
+    // the straight lines they were drawn as in between. Sampled as a curve instead, the edges folded over each
+    // other on the inside of the bend.
+    //
+    // Offset by however far the label's middle sits off the run as well - the middle of the BUNDLE, not of the
+    // one wire the run happens to be.
+    const std::vector<Vec2> piece = pathPiece(fit.path, fit.midS - half, fit.midS + half);
+    if (piece.size() < 2) {
+        const Vec2 a = fit.runDir * half;
+        const Vec2 c = fit.acrossDir * side;
+        return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
     }
-    std::vector<Vec2> out = lo;
-    for (auto it = hi.rbegin(); it != hi.rend(); ++it) out.push_back(*it);
+    std::vector<Vec2> out = offsetPolyline(piece, fit.midOff - side);
+    const std::vector<Vec2> far = offsetPolyline(piece, fit.midOff + side);
+    for (auto it = far.rbegin(); it != far.rend(); ++it) out.push_back(*it);
     return out;
 }
 
@@ -2518,6 +2543,23 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
         return Vec2{fit.mid.x + fit.runDir.x * u + fit.acrossDir.x * v,
                     fit.mid.y + fit.runDir.y * u + fit.acrossDir.y * v};
     };
+    // A LINE OF THE LABEL THAT RUNS ALONG THE CABLE is a straight line with the CABLE'S OWN CORNER in it - a
+    // straight length, the corner taken at the cable's radius, and a straight length out the other side. It is
+    // not a curve, and it was being drawn as one: every point of it placed independently by arc length, which
+    // on the inside of a bend put points out of order and folded the label over itself.
+    //
+    // Offsetting the piece of cable it lies over gives it exactly: the cable's corners come through as corners,
+    // rounded to the cable's radius where the cable is rounded, and the label's lines stay the straight lines
+    // they were drawn as in between.
+    auto railAlong = [&](double u0, double u1, double v) {
+        const double lo = std::min(u0, u1), hi = std::max(u0, u1);
+        std::vector<Vec2> piece = pathPiece(fit.path, fit.midS + lo, fit.midS + hi);
+        if (piece.size() < 2) return std::vector<Vec2>{};
+        std::vector<Vec2> rail = offsetPolyline(piece, v + fit.midOff);
+        if (rail.size() < 2) return std::vector<Vec2>{};
+        if (u1 < u0) std::reverse(rail.begin(), rail.end());
+        return rail;
+    };
     // A STRAIGHT LINE OF THE LABEL IS A CURVE ONCE THE LABEL IS BENT, and a curve drawn with two points is a
     // chord. That is what went wrong: the ground the label covered was walked round the bend in small steps
     // and came out smooth, while the label's OWN outline had four corners and cut straight across - and
@@ -2527,15 +2569,22 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     // So every segment is walked along the run as well, in steps small enough that the outline follows the
     // same curve its cover does. A segment that spans no distance along the run - the two short ends of the
     // label, square across the bundle - stays a straight line, because that is what it is.
-    const double stepAlong = std::max(fit.alongMm / 24.0, 1e-6);
     auto walk = [&](const Vec2& from, const Vec2& to, std::vector<Vec2>& into, bool first) {
-        const double du = std::abs((to.x - from.x) * sa);
-        const int steps = std::clamp(static_cast<int>(std::ceil(du / stepAlong)), 1, 96);
-        if (first) into.push_back(place(from));
-        for (int i = 1; i <= steps; ++i) {
-            const double t = double(i) / steps;
-            into.push_back(place({from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t}));
+        const double u0 = (from.x - midX) * sa, u1 = (to.x - midX) * sa;
+        const double v0 = (from.y - midY) * sc, v1 = (to.y - midY) * sc;
+        // ALONG the cable, at a fixed distance across it: an offset of the cable itself, so the cable's corners
+        // are the label's corners and the label's lines stay straight between them.
+        if (std::abs(u1 - u0) > 1e-9 && std::abs(v1 - v0) < 1e-9) {
+            const std::vector<Vec2> rail = railAlong(u0, u1, v0);
+            if (!rail.empty()) {
+                for (size_t i = first ? 0 : 1; i < rail.size(); ++i) into.push_back(rail[i]);
+                return;
+            }
         }
+        // ACROSS the cable, or a diagonal: a straight line between its two ends, which is what it is. The two
+        // short ends of a label are square across the bundle and stay square across it.
+        if (first) into.push_back(place(from));
+        into.push_back(place(to));
     };
     for (const Entity& src : labelProto_) {
         Entity e = src;
@@ -2732,11 +2781,12 @@ bool Editor::adoptLabelFromSelection() {
             // And the drawing it was laid from, on a bent one: what lets it be laid out again.
             labelProto_.clear();
             const QJsonArray pr = e.meta.value(QStringLiteral("labelProto")).toArray();
-            for (const auto& v : pr) {
-                Entity src;
-                src.fromJson(v.toObject());
-                labelProto_.push_back(src);
-            }
+            // Entity::fromJson is STATIC and RETURNS the entity - it does not fill one in. Called as though
+            // it were a setter, it built an entity, threw it away, and left a default one behind: every
+            // object of the stored drawing came back blank, so a bent label picked up again had nothing to be
+            // laid out from and fell back to having its points pushed about, which is the very thing that
+            // crumples it.
+            for (const auto& v : pr) labelProto_.push_back(Entity::fromJson(v.toObject()));
             labelFit_.ok = labelFit_.alongMm > 1e-9 && labelFit_.acrossMm > 1e-9;
         }
     }
@@ -2870,34 +2920,55 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
 
 // The ribbon's and the properties panel's two fields, whichever stage the label is at: still under the
 // cursor as a preview, or down on the drawing.
-// WIDTH is ACROSS the runs - the dimension that covers the bundle, and the one the stroke measures. Setting it
-// by hand stops the stroke deciding it.
-void Editor::setLabelWidth(double mm) {
-    if (mm <= 1e-6) return;
-    labelAcrossMm_ = mm;
-    labelAcrossManual_ = true;
-    if (labelPlacing_) {
-        relayLabelPreview();
-        return;
-    }
-    if (labelLiveIds_.empty()) return;
-    pushUndo();
-    scalePlacedLabel(labelFit_.alongMm, mm);
+// Whether the label's ALONG axis - the way the run goes - lies nearer the horizontal than its across axis.
+// This is what decides which of a label's two dimensions answers to Width and which to Height.
+//
+// A label has its own two axes, along the run and across it, and they are the honest way to describe it. But
+// nobody reads a label that way: they read its width as the distance left to right and its height as the
+// distance up and down, whatever the cable under it is doing. Naming the fields after the label's own axes made
+// the answer depend on which way the cable happened to run, which is why they read backwards.
+bool Editor::labelAlongIsHorizontal() const {
+    const Vec2 d = labelFit_.ok ? labelFit_.runDir : Vec2{1.0, 0.0};
+    return std::abs(d.x) >= std::abs(d.y);
 }
 
-// HEIGHT is ALONG the run - how far the label reaches up the wire.
-void Editor::setLabelHeight(double mm) {
+double Editor::labelWidth() const {
+    const bool alongIsH = labelAlongIsHorizontal();
+    if (!labelFit_.ok) return alongIsH ? labelAlongMm_ : labelAcrossMm_;
+    return alongIsH ? labelFit_.alongMm : labelFit_.acrossMm;
+}
+
+double Editor::labelHeight() const {
+    const bool alongIsH = labelAlongIsHorizontal();
+    if (!labelFit_.ok) return alongIsH ? labelAcrossMm_ : labelAlongMm_;
+    return alongIsH ? labelFit_.acrossMm : labelFit_.alongMm;
+}
+
+// WIDTH is the distance LEFT TO RIGHT and HEIGHT the distance UP AND DOWN, so each is applied to whichever of
+// the label's own two axes lies that way where it sits. Typing 22 into Width makes the label 22 across the
+// sheet, on a bundle running any way at all - the only reading of those two words that does not change meaning
+// with the cable.
+void Editor::setLabelSize(bool horizontal, double mm) {
     if (mm <= 1e-6) return;
-    labelAlongMm_ = mm;
-    labelAlongManual_ = true;
+    const bool toAlong = labelAlongIsHorizontal() == horizontal;
+    if (toAlong) {
+        labelAlongMm_ = mm;
+        labelAlongManual_ = true;
+    } else {
+        labelAcrossMm_ = mm;
+        labelAcrossManual_ = true;
+    }
     if (labelPlacing_) {
         relayLabelPreview();
         return;
     }
     if (labelLiveIds_.empty()) return;
     pushUndo();
-    scalePlacedLabel(mm, labelFit_.acrossMm);
+    scalePlacedLabel(toAlong ? mm : labelFit_.alongMm, toAlong ? labelFit_.acrossMm : mm);
 }
+
+void Editor::setLabelWidth(double mm) { setLabelSize(/*horizontal=*/true, mm); }
+void Editor::setLabelHeight(double mm) { setLabelSize(/*horizontal=*/false, mm); }
 
 // The preview, laid out again for the sizes it now has. Only meaningful while the stroke is down.
 void Editor::relayLabelPreview() {

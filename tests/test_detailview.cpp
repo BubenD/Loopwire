@@ -6,7 +6,11 @@
 #include "app/Editor.h"
 #include "model/Document.h"
 
+#include "render/EntityRenderer.h"
+
+#include <QImage>
 #include <QJsonArray>
+#include <QPainter>
 #include <QStringList>
 
 #include <cmath>
@@ -325,6 +329,95 @@ int run_detailview_tests() {
 
         std::printf("  picture: pointed at both lines, it is now a picture of %d\n", snapAfter);
         check(snapAfter == 2, "picture: moved, it is a picture of what it is over NOW");
+    }
+
+
+    // ---- what an ordinary detail view actually DRAWS in its big circle ------------------------------
+    {
+        // The copy being taken is not the same thing as the copy being SHOWN. So this one paints the view and
+        // counts the ink: an enlargement that draws nothing is an empty circle, and an empty circle is not "not
+        // annotative", it is broken.
+        Document d;
+        Entity l;
+        l.id = QStringLiteral("thing");
+        l.type = EntityType::Line;
+        l.a = {8.0, 10.0};
+        l.b = {12.0, 10.0};
+        d.entities().push_back(l);
+        Entity dv;
+        dv.id = QStringLiteral("dv");
+        dv.type = EntityType::DetailView;
+        dv.center = {10.0, 10.0};
+        dv.radius = 4.0;
+        dv.b = {60.0, 10.0};
+        dv.meta.insert(QStringLiteral("detailScale"), 4.0);
+        dv.meta.insert(QStringLiteral("detailTag"), QStringLiteral("A"));
+        d.entities().push_back(dv);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        for (Entity& e : d.entities())
+            if (e.id == QStringLiteral("dv")) ed.retakeDetailSnapshot(e);
+
+        // Paint the sheet, then count the ink strictly INSIDE the enlargement - clear of its own ring and clear
+        // of the caption under it, so what is counted can only be the view of the thing.
+        EntityRenderer::setBackgroundColor(QColor(0, 0, 0));
+        auto inkInside = [&](const Entity& view) {
+            QImage img(420, 220, QImage::Format_RGB32);
+            img.fill(Qt::black);
+            ViewTransform vt;
+            vt.view.scale = 2.0;
+            vt.view.x = 20.0;
+            vt.view.y = 120.0;
+            {
+                QPainter p(&img);
+                for (const Entity& e : d.entities()) EntityRenderer::draw(p, e, d, vt, QColor());
+            }
+            const double scale = view.meta.value(QStringLiteral("detailScale")).toDouble(2.0);
+            const QPointF c = vt.toScreen(view.b);
+            const double rr = view.radius * scale * vt.scale() * 0.8;   // inside the ring, clear of it
+            int lit = 0;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = 0; x < img.width(); ++x) {
+                    const double dx = x - c.x(), dy = y - c.y();
+                    if (dx * dx + dy * dy > rr * rr) continue;
+                    if (qGray(img.pixel(x, y)) > 40) ++lit;
+                }
+            return lit;
+        };
+        const Entity* view = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) view = &e;
+        check(view != nullptr, "draws: the view is there");
+        // The copy decodes back to the object it was taken of. Entity::fromJson is STATIC and RETURNS the
+        // entity, and calling it as though it were a setter left a blank object behind - which is what made an
+        // ordinary detail view draw an empty circle while an annotative one, reading the document directly, was
+        // fine. So this checks the decode as well as the picture.
+        if (view) {
+            const QJsonArray arr = view->meta.value(QStringLiteral("detailSnap")).toArray();
+            check(arr.size() == 1, "draws: the copy holds the one object that was in the circle");
+            for (const auto& v : arr) {
+                const Entity x = Entity::fromJson(v.toObject());
+                check(x.type == EntityType::Line && x.bounds().valid,
+                      "draws: and it decodes back to that object, geometry and all");
+            }
+        }
+        if (view) {
+            const int ordinary = inkInside(*view);
+            std::printf("  draws: not annotative, %d lit pixel(s) inside the enlargement\n", ordinary);
+            check(ordinary > 0,
+                  "draws: an ordinary detail view DRAWS the copy it took - an empty circle is not a detail");
+        }
+        // And annotative draws it too, from the document rather than the copy.
+        for (Entity& e : d.entities())
+            if (e.id == QStringLiteral("dv")) e.meta.insert(QStringLiteral("detailAnnotative"), true);
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) view = &e;
+        if (view) {
+            const int live = inkInside(*view);
+            std::printf("  draws: annotative, %d lit pixel(s)\n", live);
+            check(live > 0, "draws: and so does an annotative one, out of the document");
+        }
     }
 
     if (failures == 0) std::printf("  -> ok\n");

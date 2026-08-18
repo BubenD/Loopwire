@@ -446,12 +446,13 @@ void MainWindow::buildHarnessMechanicalTab() {
             *out = sp;
         };
         field(QStringLiteral("Width"),
-              QStringLiteral("ACROSS the runs — the dimension that has to cover the bundle. This is what "
-                             "the stroke measures, over the outermost wire it crossed."),
+              QStringLiteral("How far the label reaches ACROSS the sheet, left to right. On a bundle drawn "
+                             "across the sheet that is its length along the wire; on one drawn up the sheet "
+                             "it is its reach across the bundle."),
               &labelWidthSpin_, 0);
         field(QStringLiteral("Height"),
-              QStringLiteral("ALONG the run — how far the label reaches up the wire. No amount of looking "
-                             "at the bundle tells you this, so it starts at the size labels come in."),
+              QStringLiteral("How far the label reaches UP the sheet. Whichever of its two dimensions is "
+                             "lying that way where it sits — so what is typed is what is seen."),
               &labelHeightSpin_, 1);
         connect(labelWidthSpin_, &QDoubleSpinBox::valueChanged, this,
                 [this](double v) { editor_->setLabelWidth(v); });

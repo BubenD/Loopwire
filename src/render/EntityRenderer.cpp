@@ -2096,11 +2096,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             std::vector<Entity> snap;
             if (!live) {
                 const QJsonArray arr = e.meta.value("detailSnap").toArray();
-                for (const auto& v : arr) {
-                    Entity x;
-                    x.fromJson(v.toObject());
-                    snap.push_back(x);
-                }
+                // Entity::fromJson is STATIC and RETURNS the entity. Called as though it were a setter it
+                // built one, threw it away, and pushed a DEFAULT entity instead - so the copy an ordinary
+                // detail view had faithfully taken came back as a pile of blank objects with no geometry, and
+                // the enlargement drew nothing at all.
+                for (const auto& v : arr) snap.push_back(Entity::fromJson(v.toObject()));
             }
             // A view with no picture yet - one made before the picture was a thing, or one whose copy was
             // lost - falls back to the drawing. An empty circle is not "not annotative", it is broken.
