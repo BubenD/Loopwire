@@ -1008,6 +1008,45 @@ int run_io_tests() {
                   "table: the columns keep their own widths, not an even share");
         }
 
+        // A cell can SPAN several columns, and it says WHERE IN ITSELF its words sit. Reading neither, the
+        // title row of an imported bill of materials came out as "Bom List" in the first column with five
+        // empty cells beside it, and every cell in the table read top-left - so a list whose quantities and
+        // headings are centred came out as a ragged left-hand column.
+        const QByteArray spanned = QByteArrayLiteral(
+            "0\nSECTION\n2\nENTITIES\n"
+            "0\nACAD_TABLE\n8\n0\n2\n*T3\n"
+            "10\n0.0\n20\n10.0\n11\n1.0\n21\n0.0\n"
+            "91\n2\n92\n3\n"
+            "141\n1.0\n141\n1.0\n142\n2.0\n142\n2.0\n142\n2.0\n"
+            "171\n1\n170\n5\n175\n3\n176\n1\n1\nTITLE\n"   // one cell, three columns wide, centred
+            "171\n1\n175\n1\n176\n1\n"                     // the two it covers
+            "171\n1\n175\n1\n176\n1\n"
+            "171\n1\n170\n4\n1\nleft\n"                    // middle-left
+            "171\n1\n170\n5\n1\nmid\n"                     // middle-centre
+            "171\n1\n170\n6\n1\nright\n"                   // middle-right
+            "0\nENDSEC\n0\nEOF\n");
+        Document sp2;
+        dxf::parseBytes(sp2, spanned, nullptr);
+        check(sp2.entities().size() == 1, "table: the spanned table reads");
+        if (sp2.entities().size() == 1) {
+            const Entity& e = sp2.entities().front();
+            const std::vector<TableMerge> m = tableMerges(e);
+            check(m.size() == 1, "table: the spanning cell is a merged block");
+            if (m.size() == 1) {
+                std::printf("  table: merged r%d c%d, %d x %d\n", m[0].row, m[0].col, m[0].rowSpan,
+                            m[0].colSpan);
+                check(m[0].row == 0 && m[0].col == 0 && m[0].colSpan == 3 && m[0].rowSpan == 1,
+                      "table: covering the columns it said it spans");
+            }
+            const QJsonArray al = e.meta.value("cellAlign").toArray();
+            check(al.size() == 6 && al[0].toString() == QLatin1String("MC"),
+                  "table: a centred title is centred");
+            check(al[3].toString() == QLatin1String("ML") &&
+                      al[4].toString() == QLatin1String("MC") &&
+                      al[5].toString() == QLatin1String("MR"),
+                  "table: and 1..9 map to this drawing's own corner codes, in the same order");
+        }
+
         // A cell says what is in it in one of TWO ways, and reading only the first left holes all over an
         // imported table. Most cells carry their words as text (code 1). A cell holding a plain value - a
         // quantity, a number - carries it as a VALUE instead, in a block of its own: 301 says CELL_VALUE,

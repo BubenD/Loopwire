@@ -917,6 +917,8 @@ bool parse(Document& doc, const QString& text, QString*) {
 
         std::vector<double> rowH, colW;
         std::vector<QString> cells;
+        std::vector<QString> aligns;
+        std::vector<TableMerge> merges;
         double textH = 0.0;
         {
             size_t i = 0;
@@ -939,12 +941,37 @@ bool parse(Document& doc, const QString& text, QString*) {
                 // 304 closes it. Of the 204 cells in the bill of materials on the sheet this was
                 // written for, 166 are text and 33 are values; the missing 33 were the quantities.
                 QString said, valued;
+                int alignAt = 0, colSpan = 1, rowSpan = 1;
                 for (; i < g.size() && g[i].code != QLatin1String("171"); ++i) {
                     if (g[i].code == QLatin1String("1") && said.isEmpty()) said = g[i].value;
                     else if (g[i].code == QLatin1String("302") && valued.isEmpty())
                         valued = g[i].value;
+                    else if (g[i].code == QLatin1String("170") && alignAt == 0)
+                        alignAt = g[i].value.toInt();
+                    else if (g[i].code == QLatin1String("175")) colSpan = g[i].value.toInt();
+                    else if (g[i].code == QLatin1String("176")) rowSpan = g[i].value.toInt();
                 }
+                const int at = static_cast<int>(cells.size());
                 cells.push_back(decodeDxfText(said.isEmpty() ? valued : said, true));
+                // WHERE IN THE CELL the words sit. 1..9 run top-left, top-centre, top-right, middle-left,
+                // ... bottom-right, which is the same order this drawing's own codes run in. Read as
+                // nothing, every cell of an imported table came out top-left: a bill of materials whose
+                // quantities and headings should be centred read as a ragged left-hand column.
+                static const char* const kWhere[9] = {"TL", "TC", "TR", "ML", "MC",
+                                                      "MR", "BL", "BC", "BR"};
+                aligns.push_back(alignAt >= 1 && alignAt <= 9 ? QLatin1String(kWhere[alignAt - 1])
+                                                             : QString());
+                // A cell that SPANS several columns or rows is a merged block, and its title row is the
+                // one everybody notices: "Bom List" is one cell six columns wide, centred over the lot.
+                // Read as nothing, it came out in the first column with five empty cells beside it.
+                if (colSpan > 1 || rowSpan > 1) {
+                    TableMerge m;
+                    m.row = cols > 0 ? at / cols : 0;
+                    m.col = cols > 0 ? at % cols : 0;
+                    m.colSpan = std::max(1, colSpan);
+                    m.rowSpan = std::max(1, rowSpan);
+                    merges.push_back(m);
+                }
             }
         }
         if (static_cast<int>(rowH.size()) < rows || static_cast<int>(colW.size()) < cols) return false;
@@ -967,7 +994,16 @@ bool parse(Document& doc, const QString& text, QString*) {
         for (double cw : colW) colFrac.append(cw / W);
         for (double rh : rowH) rowFrac.append(rh / H);
         cells.resize(static_cast<size_t>(rows) * cols);   // pad short, drop long
+        aligns.resize(static_cast<size_t>(rows) * cols);
         for (const QString& s : cells) cellArr.append(s);
+        QJsonArray alignArr;
+        bool anyAlign = false;
+        for (const QString& s : aligns) {
+            alignArr.append(s);
+            if (!s.isEmpty()) anyAlign = true;
+        }
+        if (anyAlign) e.meta.insert(QStringLiteral("cellAlign"), alignArr);
+        setTableMerges(e, merges);
         e.meta.insert(QStringLiteral("table"), true);
         e.meta.insert(QStringLiteral("rows"), rows);
         e.meta.insert(QStringLiteral("cols"), cols);
