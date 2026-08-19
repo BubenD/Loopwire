@@ -112,10 +112,11 @@ int run_mechmodels_tests() {
     check(near(mechModelDrawnLength(m), 60.0), "the model knows how long it was drawn");
     check(mechModelStretches(MechModelKind::Wire), "a wire is a thing drawn to a length");
     check(!mechModelStretches(MechModelKind::RingInsulated), "a ring terminal is not");
-    // The insulated and uninsulated forms of a ring and a ferrule are ONE kind each, not two: insulation is
-    // a property of the model, not a different sort of thing. The count is the kinds an office draws.
+    // The insulated and uninsulated forms of a ring and a ferrule are ONE kind each, not two: insulation is a
+    // property of the model, and the two DRAWINGS are sub-drawings of that one kind. The count is the kinds an
+    // office draws - a T-split and a D-type are things of their own, which is why it is 18 rather than 16.
     std::printf("  kinds: %d\n", int(allMechModelKinds().size()));
-    check(allMechModelKinds().size() == 16, "insulated variants share one model kind");
+    check(allMechModelKinds().size() == 18, "insulated variants share one model kind");
     // Several of the pieces a real harness is made of are one kind with several SUB-DRAWINGS - a backshell
     // is a backshell whether it leaves straight, at 45 or at 90 - because a kind holds as many named models
     // as are drawn. A kind per angle would put the same part in three places.
@@ -1908,6 +1909,54 @@ int run_mechmodels_tests() {
                     ed.labelWidth(), after ? after->bounds().width() : 0.0);
         check(after != nullptr && std::abs(after->bounds().width() - (was + 15.0)) < 1e-6,
               "reach: and sizing it there sizes the one on the drawing, which is the same one");
+    }
+
+    // ---- every kind shows the sub-drawings it comes in ---------------------------------------------
+    {
+        // Most of these parts are not one drawing. A boot leaves straight, at 45 or at 90; a ring is insulated or
+        // it is not; the wires between a connector and its cable are two run straight, or two spread, or three,
+        // or eight. Each is a drawing an office draws once, and they are all the same KIND - the generator asks
+        // for "the boot" and the wizard picks which one by name.
+        //
+        // A kind listed as one bare line told you none of that. "Draw the eight variants this needs" is not
+        // something anybody should have to know, so the standard names are listed whether or not any of them has
+        // been drawn.
+        struct Want { MechModelKind kind; int least; const char* one; };
+        const Want wants[] = {
+            {MechModelKind::Boot, 3, "Straight"},
+            {MechModelKind::RingInsulated, 2, "Insulated"},
+            {MechModelKind::FerruleInsulated, 2, "Uninsulated"},
+            {MechModelKind::CircularConnector, 2, "Type 1"},
+            {MechModelKind::CircularBackshell, 3, "90 degrees"},
+            {MechModelKind::DTypeConnector, 1, "Male"},
+            {MechModelKind::YSplit, 2, "3 branches"},
+            {MechModelKind::BranchSplitHeatshrink, 2, "4 branches"},
+            {MechModelKind::ConnectorToCableWires, 8, "8 wires spread"},
+        };
+        for (const Want& w : wants) {
+            const std::vector<QString> names = defaultSubModelNames(w.kind);
+            const bool has = std::find(names.begin(), names.end(), QString::fromLatin1(w.one)) != names.end();
+            std::printf("  sub: %s comes in %d - %s\n", qPrintable(mechModelName(w.kind)), int(names.size()),
+                        has ? "including the one asked for" : "MISSING the one asked for");
+            check(static_cast<int>(names.size()) >= w.least,
+                  "sub: the kind offers at least the sub-drawings it is made of");
+            check(has, "sub: and the one named here is among them");
+        }
+        // And a T-split is a thing of its own, not a sort of Y: it goes both ways at once.
+        bool haveT = false, haveD = false;
+        for (const MechModelKind k : allMechModelKinds()) {
+            if (k == MechModelKind::TSplit) haveT = true;
+            if (k == MechModelKind::DTypeConnector) haveD = true;
+        }
+        check(haveT, "sub: a T-split is a kind of its own");
+        check(haveD, "sub: and so is a D-type");
+        // Every kind still round-trips through its key, new ones included - a file names them by key, so a key
+        // that does not come back is a model an office loses.
+        for (const MechModelKind k : allMechModelKinds()) {
+            MechModelKind back = MechModelKind::Wire;
+            check(mechModelKindFromKey(mechModelKey(k), back) && back == k,
+                  "sub: and every kind is still written and read back by its own key");
+        }
     }
 
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------

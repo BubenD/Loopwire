@@ -52,7 +52,21 @@ enum class MechModelKind {
     BranchSplitHeatshrink,  // the moulded boot over a branch, as opposed to plain shrink over a bundle
     Label,                  // a label on a run
     LabelUnderHeatshrink,   // the same, covered over with clear heatshrink
+    TSplit,                 // a split that goes both ways at once, as against a Y
+    DTypeConnector,         // a D-type, which is a different shape of thing from a circular
 };
+
+// THE SUB-DRAWINGS A KIND COMES IN, by name.
+//
+// Most of these parts are not one drawing. A boot leaves straight, at 45 or at 90; a ring is insulated or it is
+// not; the wires between a connector and its cable are two run straight, or two spread, or three, or eight. Each
+// of those is a drawing of its own that an office draws once - and they are all the same KIND, because the
+// generator asks for "the boot" and the wizard picks which one by name.
+//
+// They are listed here so the manager can show them before anybody has drawn one: a kind with nothing under it
+// tells you nothing about what it wants, and "draw the eight variants this needs" is not something to have to
+// know. An office that wants another one adds it; one it never uses it simply never draws.
+std::vector<QString> defaultSubModelNames(MechModelKind kind);
 
 // The stamp that makes a model ONE object rather than the loose lines it happens to be drawn with: on its
 // own editing canvas, so it can be picked up and placed as the part it is, and on a generated drawing, so

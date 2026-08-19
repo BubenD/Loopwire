@@ -1,3 +1,5 @@
+#include <QFont>
+#include <algorithm>
 #include "app/MechModelsDialog.h"
 
 #include "app/DrawingPreview.h"
@@ -306,7 +308,41 @@ void MechModelsDialog::refreshList() {
     list_->clear();
     rows_.clear();
     for (MechModelKind k : kinds_) {
-        const std::vector<const MechModel*> models = set_.all(k);
+        std::vector<const MechModel*> models = set_.all(k);
+        // THE SUB-DRAWINGS THIS KIND COMES IN, whether or not any of them has been drawn yet. A boot leaves
+        // straight, at 45 or at 90; the wires between a connector and its cable are two run straight or two to
+        // eight spread. Each is a drawing of its own, and a kind listed as one bare line told you none of that -
+        // "draw the eight variants this needs" is not something anybody should have to know.
+        //
+        // So the standard names are always listed, and one an office has actually drawn simply lands on its own
+        // row instead of the placeholder. Anything the office added itself is listed after them.
+        const std::vector<QString> standard = defaultSubModelNames(k);
+        if (!standard.empty()) {
+            auto* head = new QListWidgetItem(mechModelName(k));
+            head->setToolTip(hintFor(k));
+            QFont hf = head->font();
+            hf.setBold(true);
+            head->setFont(hf);
+            head->setFlags(Qt::ItemIsEnabled);   // a heading, not a thing to select
+            list_->addItem(head);
+            rows_.push_back({k, QStringLiteral("«heading»")});
+            std::vector<QString> shown = standard;
+            for (const MechModel* m : models)
+                if (!m->name.isEmpty() &&
+                    std::find(shown.begin(), shown.end(), m->name) == shown.end())
+                    shown.push_back(m->name);
+            for (const QString& name : shown) {
+                const MechModel* m = set_.of(k, name);
+                QString label = QStringLiteral("    ") + name;
+                label += (m && !m->isEmpty()) ? QStringLiteral("   ✓") : QStringLiteral("   —");
+                if (m && m->isDefault) label += QStringLiteral("   (default)");
+                auto* item = new QListWidgetItem(label);
+                item->setToolTip(hintFor(k));
+                list_->addItem(item);
+                rows_.push_back({k, name});
+            }
+            continue;
+        }
         if (models.empty()) {
             auto* item = new QListWidgetItem(mechModelName(k) + QStringLiteral("   —"));
             item->setToolTip(hintFor(k));
@@ -339,12 +375,16 @@ MechModelKind MechModelsDialog::currentKind() const {
 QString MechModelsDialog::currentName() const {
     const int row = list_ ? list_->currentRow() : -1;
     if (row < 0 || row >= static_cast<int>(rows_.size())) return QString();
-    return rows_[static_cast<size_t>(row)].name;
+    // A heading is the kind's own name over its sub-drawings, not a model. It cannot be selected - the item is
+    // not selectable - but a stale current row could still land on one, and a heading answering as a model name
+    // would have the office capturing a drawing into a model called "«heading»".
+    const QString name = rows_[static_cast<size_t>(row)].name;
+    return name == QStringLiteral("«heading»") ? QString() : name;
 }
 
 bool MechModelsDialog::selectKind(MechModelKind kind) {
     for (size_t i = 0; i < rows_.size(); ++i)
-        if (rows_[i].kind == kind) {
+        if (rows_[i].kind == kind && rows_[i].name != QStringLiteral("«heading»")) {
             if (list_) list_->setCurrentRow(static_cast<int>(i));
             return true;
         }

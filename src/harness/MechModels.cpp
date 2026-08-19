@@ -27,7 +27,7 @@ struct KindName {
 };
 
 // The order the window lists them in: the ends first, then the lengths, then the pieces at a junction.
-const std::array<KindName, 16> kKinds = {{
+const std::array<KindName, 18> kKinds = {{
     {MechModelKind::RingInsulated, "ring", "Ring terminal"},
     {MechModelKind::FerruleInsulated, "ferrule", "Ferrule"},
     {MechModelKind::TransitionHeatshrink, "transition-heatshrink", "Transition heatshrink"},
@@ -51,6 +51,8 @@ const std::array<KindName, 16> kKinds = {{
     {MechModelKind::Label, "label", "Label"},
     {MechModelKind::LabelUnderHeatshrink, "label-under-heatshrink",
      "Label under clear heatshrink"},
+    {MechModelKind::TSplit, "t-split", "T-split"},
+    {MechModelKind::DTypeConnector, "d-type-connector", "D-type connector"},
 }};
 
 // A label on a run, as one is drawn: the run through it, a flag standing on the run, and a line inside the
@@ -201,6 +203,42 @@ bool mechModelStretches(MechModelKind kind) {
 
 bool mechModelPerWire(MechModelKind kind) {
     return kind == MechModelKind::OpenWires || kind == MechModelKind::ConnectorToCableWires;
+}
+
+std::vector<QString> defaultSubModelNames(MechModelKind kind) {
+    switch (kind) {
+    case MechModelKind::Label:
+    case MechModelKind::LabelUnderHeatshrink:
+        // These two are already a kind each - the one under a sleeve is built differently, not just drawn
+        // differently - so between them they ARE the two sub-drawings a label comes in.
+        return {};
+    case MechModelKind::Boot:
+        return {QStringLiteral("Straight"), QStringLiteral("45 degrees"), QStringLiteral("90 degrees")};
+    case MechModelKind::RingInsulated:
+    case MechModelKind::FerruleInsulated:
+        // Insulation is also a property on the model, which is what the generator reads. These are the two
+        // DRAWINGS: an insulated crimp is drawn with the sleeve on it, and they are not the same picture.
+        return {QStringLiteral("Insulated"), QStringLiteral("Uninsulated")};
+    case MechModelKind::CircularConnector:
+        return {QStringLiteral("Type 1"), QStringLiteral("Type 2")};
+    case MechModelKind::CircularBackshell:
+        return {QStringLiteral("Straight"), QStringLiteral("45 degrees"), QStringLiteral("90 degrees")};
+    case MechModelKind::DTypeConnector:
+        return {QStringLiteral("Male")};
+    case MechModelKind::YSplit:
+        return {QStringLiteral("3 branches"), QStringLiteral("4 branches")};
+    case MechModelKind::BranchSplitHeatshrink:
+        return {QStringLiteral("3 branches"), QStringLiteral("4 branches")};
+    case MechModelKind::ConnectorToCableWires:
+        // Two run straight, then two to eight spread out. How far they spread is drawn rather than worked out:
+        // it is the one thing about this part that is entirely a house style.
+        return {QStringLiteral("2 wires straight"), QStringLiteral("2 wires spread"),
+                QStringLiteral("3 wires spread"),   QStringLiteral("4 wires spread"),
+                QStringLiteral("5 wires spread"),   QStringLiteral("6 wires spread"),
+                QStringLiteral("7 wires spread"),   QStringLiteral("8 wires spread")};
+    default:
+        return {};
+    }
 }
 
 // ---- one model ----------------------------------------------------------------------------------
