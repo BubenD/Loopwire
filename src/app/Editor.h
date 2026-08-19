@@ -541,6 +541,15 @@ public:
     bool labelAlongIsHorizontal() const;
     double labelWidth() const;
     double labelHeight() const;
+    // The label's OWN two sizes, in its own axes rather than the sheet's: along the run it is on, and across it.
+    // Width and Height above are what somebody reads off the sheet; these are what the geometry is built from,
+    // and the pair a test has to ask for if it wants to know how deep the band should be.
+    double labelAlongMm() const { return labelFit_.ok ? labelFit_.alongMm : labelAlongMm_; }
+    double labelAcrossMm() const { return labelFit_.ok ? labelFit_.acrossMm : labelAcrossMm_; }
+    // How far the label's middle sits OFF the run it is laid along. The middle of a BUNDLE is not the middle of
+    // the one run the label is measured from, so the two rails of the band are at midOff +/- half the depth from
+    // that run rather than symmetrically either side of it.
+    double labelMidOffMm() const { return labelFit_.ok ? labelFit_.midOff : 0.0; }
     void setLabelWidth(double mm);
     void setLabelHeight(double mm);
     // One place both go through: `horizontal` says which way ON THE SHEET the number is meant, and it is
@@ -1412,6 +1421,10 @@ private:
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const;
+    // The layout itself. labelEntities calls it, CHECKS what came back, and falls back to a straight label if
+    // anything the bent one is made of crosses itself - so a fold can never reach the drawing whatever the cable
+    // is doing, including whatever case has not been thought of yet.
+    std::vector<Entity> labelEntitiesRaw(const LabelFit& fit, std::vector<Vec2>& covers) const;
     // The four corners of the ground a label covers, turned with it.
     static std::vector<Vec2> labelMaskQuad(const LabelFit& fit);
     void commitLabel();

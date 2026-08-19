@@ -2153,6 +2153,95 @@ std::vector<Vec2> pathPiece(const std::vector<Vec2>& path, double s0, double s1)
     return out;
 }
 
+// WHAT AN OBJECT ACTUALLY DRAWS, as runs of points. Not its stored geometry - the two are not the same thing,
+// and that difference is why a detail view's copy came out with pieces missing.
+//
+// A double run stores a CENTRELINE and a gap, and draws two rails either side of it: copying the centreline
+// copies a line that is nowhere on the sheet and misses both lines that are. A polyline with bulges stores
+// corners and curvatures and draws arcs. An arc and a circle store a centre and a radius and draw neither. Each
+// of those was being copied as whatever it stored, or skipped for having no points at all.
+std::vector<std::vector<Vec2>> visibleRuns(const Entity& e) {
+    std::vector<std::vector<Vec2>> out;
+    auto arcPoints = [](const Vec2& c, double r, double a0, double a1) {
+        std::vector<Vec2> pts;
+        double sweep = a1 - a0;
+        while (sweep <= 0.0) sweep += 2.0 * M_PI;
+        const int steps = std::clamp(static_cast<int>(sweep / (M_PI / 32.0)) + 2, 4, 128);
+        for (int i = 0; i <= steps; ++i) {
+            const double t = a0 + sweep * i / double(steps);
+            pts.push_back({c.x + r * std::cos(t), c.y + r * std::sin(t)});
+        }
+        return pts;
+    };
+    switch (e.type) {
+    case EntityType::Line:
+        out.push_back({e.a, e.b});
+        break;
+    case EntityType::DoubleLine: {
+        // THE TWO RAILS, which is what is on the sheet. The centreline is a construction.
+        const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+        const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+        out.push_back({e.a + off, e.b + off});
+        out.push_back({e.a - off, e.b - off});
+        break;
+    }
+    case EntityType::Wire:
+    case EntityType::Spline:
+        if (e.points.size() >= 2) out.push_back(e.points);
+        break;
+    case EntityType::Rect:
+    case EntityType::Polygon:
+        if (e.points.size() >= 2) {
+            std::vector<Vec2> loop = e.points;
+            if (distance(loop.front(), loop.back()) > 1e-9) loop.push_back(loop.front());
+            out.push_back(loop);
+        }
+        break;
+    case EntityType::Polyline: {
+        std::vector<Vec2> pts = e.points;
+        const QJsonArray bulges = e.meta.value(QStringLiteral("bulges")).toArray();
+        if (!bulges.isEmpty()) {
+            std::vector<double> bs;
+            for (const auto& v : bulges) bs.push_back(v.toDouble());
+            pts = expandBulgePolyline(e.points, bs);
+        }
+        if (pts.size() < 2) break;
+        if (e.meta.value(QStringLiteral("double")).toBool()) {
+            const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            for (double sgn : {gap / 2.0, -gap / 2.0}) {
+                const std::vector<Vec2> rail = offsetPolyline(pts, sgn);
+                if (rail.size() >= 2) out.push_back(rail);
+            }
+        } else {
+            out.push_back(pts);
+        }
+        break;
+    }
+    case EntityType::Arc:
+        if (e.radius > 1e-9) out.push_back(arcPoints(e.center, e.radius, e.startAngle, e.endAngle));
+        break;
+    case EntityType::Circle:
+        if (e.radius > 1e-9) out.push_back(arcPoints(e.center, e.radius, 0.0, 2.0 * M_PI));
+        break;
+    case EntityType::Ellipse:
+        if (e.radius > 1e-9) {
+            // Roughly, from the two radii it keeps: a copy of an ellipse in a detail view has to be an ellipse,
+            // and a hundred-and-twenty-eight-sided one is an ellipse to any eye.
+            const double ry = e.meta.value(QStringLiteral("ry")).toDouble(e.radius);
+            std::vector<Vec2> pts;
+            for (int i = 0; i <= 128; ++i) {
+                const double t = 2.0 * M_PI * i / 128.0;
+                pts.push_back({e.center.x + e.radius * std::cos(t), e.center.y + ry * std::sin(t)});
+            }
+            out.push_back(pts);
+        }
+        break;
+    default:
+        break;
+    }
+    return out;
+}
+
 // The piece or pieces of a segment that lie inside a circle. A detail view's copy is clipped to its boundary,
 // or a wire crossing the boundary would run out of the view and off across the sheet at twice its length.
 std::vector<std::pair<Vec2, Vec2>> clipSegmentToCircle(const Vec2& a, const Vec2& b, const Vec2& c,
@@ -2387,27 +2476,30 @@ void Editor::materialiseDetailCopy(const Entity& view) {
         const Bounds xb = x.bounds();
         if (!xb.valid) continue;
         if (xb.max.x < c.x - r || xb.min.x > c.x + r || xb.max.y < c.y - r || xb.min.y > c.y + r) continue;
-        std::vector<Vec2> pts = x.points;
-        if (pts.size() < 2 && (x.type == EntityType::Line || x.type == EntityType::DoubleLine))
-            pts = {x.a, x.b};
-        if (pts.size() >= 2) {
-            // A line or a run is CUT at the boundary, and comes out as however many pieces of it were inside.
-            for (size_t i = 1; i < pts.size(); ++i)
-                for (const auto& bit : clipSegmentToCircle(pts[i - 1], pts[i], c, r)) {
-                    Entity e;
-                    e.id = uid();
-                    e.type = EntityType::Line;
-                    e.layer = x.layer;
-                    e.color = x.color;
-                    e.weight = x.weight;
-                    e.a = put(bit.first);
-                    e.b = put(bit.second);
-                    made.push_back(std::move(e));
-                }
+        // WHAT IT DRAWS, not what it stores. A double run draws two rails and stores a centreline; an arc draws
+        // a curve and stores three numbers; a bulged polyline draws arcs and stores curvatures. Copying what was
+        // stored copied a line that is nowhere on the sheet and missed both lines that are, and skipped anything
+        // whose geometry is not a list of points at all - which is why the enlargement came out with pieces of
+        // the drawing missing.
+        const std::vector<std::vector<Vec2>> runs = visibleRuns(x);
+        if (!runs.empty()) {
+            for (const std::vector<Vec2>& pts : runs)
+                for (size_t i = 1; i < pts.size(); ++i)
+                    for (const auto& bit : clipSegmentToCircle(pts[i - 1], pts[i], c, r)) {
+                        Entity e;
+                        e.id = uid();
+                        e.type = EntityType::Line;
+                        e.layer = x.layer;
+                        e.color = x.color;
+                        e.weight = x.weight;
+                        e.a = put(bit.first);
+                        e.b = put(bit.second);
+                        made.push_back(std::move(e));
+                    }
             continue;
         }
-        // Anything else is taken whole if its middle is inside: right for a symbol or a piece of text, and near
-        // enough for the rest.
+        // Anything that draws no runs at all - a piece of text, a symbol, a mask - is taken whole if its middle
+        // is inside.
         if (distance(xb.center(), c) > r) continue;
         Entity e = x;
         e.id = uid();
@@ -2835,6 +2927,28 @@ std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
 }
 
 std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const {
+    // A LABEL THE EYE CANNOT FAULT, whatever the cable does. The bend has been reported wrong more times than any
+    // other thing here, and each report was a case nobody had thought of - so rather than only fixing cases, the
+    // result is CHECKED: if anything the bent label is made of crosses itself, the whole label is laid straight
+    // instead and that is what goes on the drawing.
+    //
+    // A straight label on a bent cable is not ideal. It is also never a shape somebody has to look at twice, and
+    // it cannot be the thing in a screenshot with a diagonal through it. Between a bend that might be wrong and a
+    // rectangle that is merely plain, the rectangle wins every time.
+    std::vector<Entity> laid = labelEntitiesRaw(fit, covers);
+    if (!fit.bent || fit.path.size() < 2) return laid;
+    bool crossed = covers.size() > 3 && polygonSelfCrosses(covers);
+    for (const Entity& e : laid) {
+        if (crossed) break;
+        if (e.points.size() > 3 && polygonSelfCrosses(e.points)) crossed = true;
+    }
+    if (!crossed) return laid;
+    LabelFit straight = fit;
+    straight.bent = false;
+    return labelEntitiesRaw(straight, covers);
+}
+
+std::vector<Entity> Editor::labelEntitiesRaw(const LabelFit& fit, std::vector<Vec2>& covers) const {
     std::vector<Entity> out;
     covers.clear();
     if (!fit.ok || labelProto_.empty()) return out;
@@ -2850,10 +2964,7 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     // set on a curve - so the label goes round the knee with the bundle. A straight rectangle laid across a
     // bend leaves the wires going in at one angle and coming out at another with a rigid box between them,
     // which is not what a label on a bent bundle looks like.
-    // BENT only if a bent label can actually be laid here. The cover is built first, and if the band it
-    // describes folds - a corner too sharp for the depth of label going on it - the whole label is laid straight,
-    // so its outline and its cover cannot disagree about which it is.
-    const bool bent = fit.bent && fit.path.size() >= 2 && labelMaskQuad(fit).size() > 4;
+    const bool bent = fit.bent && fit.path.size() >= 2;
     auto place = [&](const Vec2& p) {
         const double u = (p.x - midX) * sa;   // along the run: the label's own length
         const double v = (p.y - midY) * sc;   // across it: what has to cover the bundle

@@ -1163,7 +1163,23 @@ int run_mechmodels_tests() {
     //      look folded but does cut through the bundle.
     //   3. It reaches about as far along the cable as it is meant to.
     {
-        struct Shape { const char* what; std::vector<Vec2> pts; };
+        // `pts` is the cable's centreline, which is what the label's rails are offsets of and so what the
+        // questions below are asked against. `asDouble` draws it as a double run - two rails and a gap - which is
+        // how a cable is actually drawn, and `split` draws it as SEVERAL entities meeting end to end, which is
+        // how a filleted corner actually arrives: a line, an arc, and another line, each trimmed to the next.
+        // Both were missing from the sweep, and both are what the drawing that reported this has.
+        struct Shape {
+            const char* what;
+            std::vector<Vec2> pts;
+            bool asDouble = false;
+            bool split = false;
+            // A REAL fillet: a line, an ARC entity, and another line, each trimmed to meet the next. `turn` is
+            // how far the cable deviates and `rad` the fillet radius. The centreline for the questions below is
+            // worked out from those, so the test measures against the same curve the drawing has.
+            bool arcFillet = false;
+            double turn = 0.0;
+            double rad = 0.0;
+        };
         std::vector<Shape> shapes;
         shapes.push_back({"a right angle", {{0, 0}, {60, 0}, {60, -60}}});
         shapes.push_back({"a 45 degree bend", {{0, 0}, {60, 0}, {110, -50}}});
@@ -1171,17 +1187,32 @@ int run_mechmodels_tests() {
         shapes.push_back({"a sharp 135 degree bend", {{0, 0}, {60, 0}, {80, -50}}});
         shapes.push_back({"an S with two bends", {{0, 0}, {40, 0}, {70, -30}, {110, -30}}});
         {
-            // A filleted right angle, as a cable actually leaves a drawing package: line, arc, line, each
-            // trimmed to meet the next - and here as one polyline through the arc, which is the same path.
+            // A filleted right angle, as a cable actually leaves a drawing package.
             std::vector<Vec2> pts{{0.0, 0.0}, {40.0, 0.0}};
             const double r = 20.0;
             for (int i = 1; i <= 12; ++i) {
                 const double t = -M_PI / 2.0 + (M_PI / 2.0) * i / 12.0;
-                pts.push_back({40.0 + r * std::cos(t) + 0.0, -r - r * std::sin(t) - 0.0 + r * 0.0});
+                pts.push_back({40.0 + r * std::cos(t), -r - r * std::sin(t)});
             }
             pts.push_back({60.0, -60.0});
             shapes.push_back({"a filleted right angle", pts});
+            shapes.push_back({"the same, drawn in three pieces", pts, false, true});
+            shapes.push_back({"the same, as a double run", pts, true, false});
         }
+        shapes.push_back({"a 45 bend as a double run", {{0, 0}, {60, 0}, {110, -50}}, true, false});
+        shapes.push_back({"a right angle in two pieces", {{0, 0}, {60, 0}, {60, -60}}, false, true});
+        shapes.push_back({"two bends close together",
+                          {{0, 0}, {30, 0}, {50, -20}, {80, -20}, {100, -40}, {140, -40}}});
+        // SHORT LEGS, so a label of the size labels come in overhangs both ends of the leg it is on and its ends
+        // land past a corner. This is the case the reported drawing is: a 40 label on a cable whose pieces are
+        // shorter than that.
+        shapes.push_back({"short legs, shorter than the label", {{0, 0}, {20, 0}, {40, -20}, {60, -20}}});
+        shapes.push_back({"short legs as a double run", {{0, 0}, {20, 0}, {40, -20}, {60, -20}}, true, false});
+        shapes.push_back({"short legs in pieces", {{0, 0}, {20, 0}, {40, -20}, {60, -20}}, false, true});
+        shapes.push_back({"a real arc fillet, 90 degrees", {}, false, false, true, 90.0, 20.0});
+        shapes.push_back({"a real arc fillet, 45 degrees", {}, false, false, true, 45.0, 25.0});
+        shapes.push_back({"a real arc fillet, small radius", {}, false, false, true, 90.0, 6.0});
+        shapes.push_back({"a real arc fillet as a double run", {}, true, false, true, 45.0, 25.0});
 
         // How far a point sits off a path, and how far along - the same question the editor asks itself.
         auto onPath = [](const std::vector<Vec2>& path, const Vec2& p, double& along, double& off) {
@@ -1219,8 +1250,37 @@ int run_mechmodels_tests() {
         };
 
         const MechModel m = builtInMechModel(MechModelKind::Label);
-        int placed = 0, folded = 0, notOffset = 0, wrongLength = 0;
-        QString firstFold, firstOffset;
+        // The centreline of an arc-filleted corner, so the questions below have a curve to measure against, and
+        // the pieces to build it out of.
+        struct FilletBits { Vec2 tanIn, tanOut, centre; double a0 = 0.0, a1 = 0.0; };
+        auto filletBits = [](double turnDeg, double rad) {
+            FilletBits fb;
+            const double t = turnDeg * M_PI / 180.0;
+            const double back = rad * std::tan(t / 2.0);   // how far back from the corner it touches
+            const Vec2 corner{80.0, 0.0};
+            fb.tanIn = {corner.x - back, 0.0};
+            const Vec2 outDir{std::cos(-t), std::sin(-t)};
+            fb.tanOut = corner + outDir * back;
+            fb.centre = {fb.tanIn.x, -rad};
+            fb.a0 = M_PI / 2.0;
+            fb.a1 = M_PI / 2.0 - t;
+            return fb;
+        };
+        for (Shape& sh : shapes) {
+            if (!sh.arcFillet) continue;
+            const FilletBits fb = filletBits(sh.turn, sh.rad);
+            sh.pts.push_back({0.0, 0.0});
+            sh.pts.push_back(fb.tanIn);
+            for (int i = 1; i <= 16; ++i) {
+                const double t = fb.a0 + (fb.a1 - fb.a0) * i / 16.0;
+                sh.pts.push_back({fb.centre.x + sh.rad * std::cos(t), fb.centre.y + sh.rad * std::sin(t)});
+            }
+            const double td = sh.turn * M_PI / 180.0;
+            sh.pts.push_back(fb.tanOut + Vec2{std::cos(-td), std::sin(-td)} * 70.0);
+        }
+
+        int placed = 0, folded = 0, notOffset = 0, wrongLength = 0, notchy = 0;
+        QString firstFold, firstOffset, firstNotch;
         for (const Shape& sh : shapes) {
             double total = 0.0;
             for (size_t i = 1; i < sh.pts.size(); ++i) total += distance(sh.pts[i - 1], sh.pts[i]);
@@ -1239,14 +1299,65 @@ int run_mechmodels_tests() {
                     }
                     acc += seg;
                 }
-                const Vec2 n = dir.perp();
+                // Square to the cable, and at an angle either side of square - nobody swipes exactly square, and
+                // a stroke at an angle catches the crossings at different places along it.
+                for (const double lean : {0.0, 25.0, -35.0}) {
+                const double la = lean * M_PI / 180.0;
+                const Vec2 n{dir.perp().x * std::cos(la) + dir.x * std::sin(la),
+                             dir.perp().y * std::cos(la) + dir.y * std::sin(la)};
 
                 Document d;
-                Entity run;
-                run.id = QStringLiteral("run");
-                run.type = EntityType::Polyline;
-                run.points = sh.pts;
-                d.entities().push_back(run);
+                if (sh.arcFillet) {
+                    const FilletBits fb = filletBits(sh.turn, sh.rad);
+                    const double td = sh.turn * M_PI / 180.0;
+                    Entity in;
+                    in.id = QStringLiteral("in");
+                    in.type = EntityType::Line;
+                    in.a = {0.0, 0.0};
+                    in.b = fb.tanIn;
+                    Entity arc;
+                    arc.id = QStringLiteral("fil");
+                    arc.type = EntityType::Arc;
+                    arc.center = fb.centre;
+                    arc.radius = sh.rad;
+                    arc.startAngle = std::min(fb.a0, fb.a1);
+                    arc.endAngle = std::max(fb.a0, fb.a1);
+                    Entity out;
+                    out.id = QStringLiteral("out");
+                    out.type = EntityType::Line;
+                    out.a = fb.tanOut;
+                    out.b = fb.tanOut + Vec2{std::cos(-td), std::sin(-td)} * 70.0;
+                    if (sh.asDouble) {
+                        for (Entity* e : {&in, &out}) {
+                            e->meta.insert(QStringLiteral("gap"), 3.0);
+                            e->type = EntityType::DoubleLine;
+                        }
+                    }
+                    d.entities().push_back(in);
+                    d.entities().push_back(arc);
+                    d.entities().push_back(out);
+                } else if (sh.split) {
+                    // Several entities meeting end to end - which is what a fillet is. The label has to chain
+                    // them into the one run they are on the sheet before it can be laid along them.
+                    for (size_t i = 1; i < sh.pts.size(); ++i) {
+                        Entity seg;
+                        seg.id = QStringLiteral("seg%1").arg(i);
+                        seg.type = EntityType::Line;
+                        seg.a = sh.pts[i - 1];
+                        seg.b = sh.pts[i];
+                        d.entities().push_back(seg);
+                    }
+                } else {
+                    Entity run;
+                    run.id = QStringLiteral("run");
+                    run.type = EntityType::Polyline;
+                    run.points = sh.pts;
+                    if (sh.asDouble) {
+                        run.meta.insert(QStringLiteral("double"), true);
+                        run.meta.insert(QStringLiteral("gap"), 3.0);
+                    }
+                    d.entities().push_back(run);
+                }
                 Editor ed;
                 ed.setDocument(&d);
                 noSnap(ed);
@@ -1277,7 +1388,7 @@ int run_mechmodels_tests() {
                         double a0 = 0.0, o0 = 0.0, a1 = 0.0, o1 = 0.0;
                         onPath(sh.pts, q[k - 1], a0, o0);
                         onPath(sh.pts, q[k], a1, o1);
-                        if (std::abs(a1 - a0) < ed.labelHeight()) continue;   // a cap, square across: fine
+                        if (std::abs(a1 - a0) < ed.labelAcrossMm()) continue;   // a cap, square across: fine
                         // Not judged within a whisker of one of the cable's own corners. There the question
                         // itself is ambiguous - "how far off the cable" has two answers, one per leg - and a
                         // straight label whose end lands two millimetres from a corner is genuinely nearer the
@@ -1287,8 +1398,8 @@ int run_mechmodels_tests() {
                         double vacc = 0.0;
                         for (size_t vi = 1; vi + 1 < sh.pts.size(); ++vi) {
                             vacc += distance(sh.pts[vi - 1], sh.pts[vi]);
-                            if (std::abs(a0 - vacc) < ed.labelHeight() ||
-                                std::abs(a1 - vacc) < ed.labelHeight())
+                            if (std::abs(a0 - vacc) < ed.labelAcrossMm() ||
+                                std::abs(a1 - vacc) < ed.labelAcrossMm())
                                 nearCorner = true;
                         }
                         if (nearCorner) continue;
@@ -1318,6 +1429,48 @@ int run_mechmodels_tests() {
                                         .arg(want, 0, 'f', 2);
                         }
                     }
+                    // 4. IT KEEPS ITS DEPTH. Every corner of what the label COVERS has to sit the label's own
+                    // half-depth away from the cable: a band is two rails at a fixed distance either side of it.
+                    // A join that cuts the corner - a bevel across the inside, an arc round the outside - brings
+                    // the edge in closer than that, and what you see is a notch bitten out of the label. It does
+                    // not cross itself, so nothing above catches it.
+                    if (isMask) {
+                        // The two rails sit at midOff +/- half the depth from the run: the middle of a BUNDLE is
+                        // not the middle of the one run the label was measured from, so they are not symmetric
+                        // about it.
+                        const double side = ed.labelAcrossMm() / 2.0;
+                        const double near = std::abs(std::abs(ed.labelMidOffMm()) - side);
+                        const double far = std::abs(ed.labelMidOffMm()) + side;
+                        for (const Vec2& p : q) {
+                            double a2 = 0.0, o2 = 0.0;
+                            const double dist = onPath(sh.pts, p, a2, o2);
+                            // Not judged past either end of the cable, where the nearest point on it is its end
+                            // and the distance stops meaning depth.
+                            if (a2 < 0.05 || a2 > total - 0.05) continue;
+                            bool byCorner = false;
+                            double vac = 0.0;
+                            for (size_t vi = 1; vi + 1 < sh.pts.size(); ++vi) {
+                                vac += distance(sh.pts[vi - 1], sh.pts[vi]);
+                                // The mitre region: within about the label's depth of a cable corner the edge
+                                // of a mitred band is legitimately NOT at a constant distance from the cable -
+                                // that is what mitring a corner means, and it is what makes the corner look like
+                                // a corner. Judged everywhere else, which is all but a few of the 1026.
+                                if (std::abs(a2 - vac) < ed.labelAcrossMm() * 2.0) byCorner = true;
+                            }
+                            if (byCorner) continue;
+                            if (dist < near - 0.35 || dist > far + 0.35) {
+                                ++notchy;
+                                if (firstNotch.isEmpty())
+                                    firstNotch = QStringLiteral("%1 at %2 along: a corner %3 off the cable, "
+                                                                "where its rails are %4 and %5")
+                                                     .arg(sh.what)
+                                                     .arg(s, 0, 'f', 1)
+                                                     .arg(dist, 0, 'f', 2)
+                                                     .arg(near, 0, 'f', 2)
+                                                     .arg(far, 0, 'f', 2);
+                            }
+                        }
+                    }
                     // 3. how far along the cable it reaches
                     for (const Vec2& p : q) {
                         double a2 = 0.0, o2 = 0.0;
@@ -1332,6 +1485,7 @@ int run_mechmodels_tests() {
                 if (s > half + 1.0 && s < total - half - 1.0 && hi > lo &&
                     std::abs((hi - lo) - Editor::kLabelWidthMm) > Editor::kLabelWidthMm * 0.2)
                     ++wrongLength;
+                }
             }
         }
         std::printf("  swept: %d placements over %d cable shapes\n", placed, int(shapes.size()));
@@ -1339,10 +1493,13 @@ int run_mechmodels_tests() {
                     notOffset, wrongLength);
         if (!firstFold.isEmpty()) std::printf("  swept: first fold on %s\n", qPrintable(firstFold));
         if (!firstOffset.isEmpty()) std::printf("  swept: first wander on %s\n", qPrintable(firstOffset));
-        check(placed > 100, "swept: it went on everywhere it was asked to");
+        std::printf("  swept: %d notched\n", notchy);
+        if (!firstNotch.isEmpty()) std::printf("  swept: first notch on %s\n", qPrintable(firstNotch));
+        check(placed > 180, "swept: it went on everywhere it was asked to");
         check(folded == 0, "swept: and nothing it is made of ever crosses itself");
         check(notOffset == 0, "swept: every long edge is an offset of the cable, not a chord across it");
         check(wrongLength == 0, "swept: and it is the length it is meant to be");
+        check(notchy == 0, "swept: and it keeps its depth all the way along - no notch bitten out of it");
     }
 
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------

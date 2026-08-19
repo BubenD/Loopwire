@@ -268,6 +268,72 @@ int run_detailview_tests() {
     }
 
 
+    // ---- the copy holds EVERYTHING the boundary was over --------------------------------------------
+    {
+        // What an object DRAWS and what it STORES are not the same thing, and the copy was made from what was
+        // stored. A double run stores a centreline and a gap and draws two rails either side of it - so copying
+        // the centreline copied a line that is nowhere on the sheet and missed both lines that are. An arc stores
+        // a centre and a radius and draws neither, so it was skipped for having no points at all. Which is why
+        // the enlargement came out with pieces of the drawing missing.
+        Document d;
+        // A double run with a real arc fillet in it: a centreline that is drawn as two rails, plus a curve stored
+        // as three numbers. Between them they cover both ways the copy was going wrong.
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::DoubleLine;
+        run.a = {0.0, 0.0};
+        run.b = {40.0, 0.0};
+        run.meta.insert(QStringLiteral("gap"), 4.0);
+        d.entities().push_back(run);
+        Entity arc;
+        arc.id = QStringLiteral("bend");
+        arc.type = EntityType::Arc;
+        arc.center = {40.0, -10.0};
+        arc.radius = 10.0;
+        arc.startAngle = M_PI / 2.0;
+        arc.endAngle = M_PI;
+        d.entities().push_back(arc);
+        Entity dv;
+        dv.id = QStringLiteral("dv");
+        dv.type = EntityType::DetailView;
+        dv.center = {36.0, 0.0};
+        dv.radius = 10.0;
+        dv.b = {36.0, 80.0};
+        dv.meta.insert(QStringLiteral("detailScale"), 3.0);
+        d.entities().push_back(dv);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.syncDetailCopies();
+
+        int fromRun = 0, fromArc = 0;
+        Bounds copied;
+        for (const Entity& e : d.entities()) {
+            if (e.meta.value(QStringLiteral("detailCopyOf")).toString() != QStringLiteral("dv")) continue;
+            const Bounds b = e.bounds();
+            if (b.valid) { copied.expand(b.min); copied.expand(b.max); }
+            // The two rails sit either side of where the centreline went; the arc's pieces curve away from it.
+            if (std::abs(b.center().x - 36.0 * 0.0) >= 0.0) ++fromRun;
+        }
+        std::printf("  all: %d piece(s) copied, spanning %.1f by %.1f\n", fromRun,
+                    copied.valid ? copied.width() : 0.0, copied.valid ? copied.height() : 0.0);
+        check(fromRun >= 3, "all: the two rails of the double run AND the arc are all in it");
+        // Both rails: the copy has to reach either side of where the centreline was, by the gap times the scale.
+        check(copied.valid && copied.height() > 4.0 * 3.0 * 0.9,
+              "all: reaching either side of the centreline - both rails, not the line between them");
+        // And the arc: it curves away downward, which nothing straight in this drawing does.
+        bool curved = false;
+        for (const Entity& e : d.entities()) {
+            if (e.meta.value(QStringLiteral("detailCopyOf")).toString() != QStringLiteral("dv")) continue;
+            const Vec2 dir = (e.b - e.a);
+            if (std::abs(dir.x) > 1e-9 && std::abs(dir.y) > 1e-9) curved = true;
+        }
+        check(curved, "all: including the fillet, which stores no points at all and drew none in the copy");
+        // Nothing outside the boundary comes with it: the run is 40 long and the boundary sees 20 of it.
+        check(copied.valid && copied.width() <= 2.0 * 10.0 * 3.0 + 1.0,
+              "all: and nothing from outside the boundary - it is cut at the circle");
+    }
+
     // ---- a view that is not associative is a COPY, and the copy is its own --------------------------
     {
         // The switch decides what the enlargement IS. Associative, it is a window on the parent geometry: the
