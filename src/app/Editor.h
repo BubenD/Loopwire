@@ -566,6 +566,19 @@ public:
     // the one run the label is measured from, so the two rails of the band are at midOff +/- half the depth from
     // that run rather than symmetrically either side of it.
     double labelMidOffMm() const { return labelFit_.ok ? labelFit_.midOff : 0.0; }
+    // THE LABEL'S OWN JOINTS: one at each end of it and one on each side, in that order - along the run one way,
+    // along it the other, across it one way, across it the other.
+    //
+    // A label is a grouped object, so it has none of the joints its lines would have had, and until now the only
+    // thing that could be done to it by hand was to slide it: its size had to be typed. A label is sized by eye
+    // more often than by number - it is as wide as the bundle it covers and as long as it needs to be to be read -
+    // and every other object on the sheet is sized by dragging a corner of it.
+    //
+    // Four rather than eight: a label is symmetrical about the run it sits on, so pulling one end out lengthens it
+    // both ways about its middle. Dragging one corner of a label to stretch it off-centre would take it off the
+    // bundle, which is the one place it has to stay.
+    std::vector<Vec2> labelJoints() const;
+
     void setLabelWidth(double mm);
     void setLabelHeight(double mm);
     // One place both go through: `horizontal` says which way ON THE SHEET the number is meant, and it is
@@ -1462,6 +1475,9 @@ private:
     // rather than laid out again from the captured drawing, which may be long gone.
     bool scalePlacedLabel(double alongMm, double acrossMm);
     void relayLabelPreview();
+    // Which of them is being dragged, or -1. Held rather than derived, because the drag has to go on meaning the
+    // same joint after the cursor has moved away from where it started.
+    int labelJoint_ = -1;
     // Clicking away ends the fitting; clicking the label again does not. `emptying` is the case where the
     // selection is being dropped outright, which always ends it.
     void dropLabelEditIfDeselected(bool emptying = false);

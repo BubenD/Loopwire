@@ -1684,6 +1684,7 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
             editing_ = false;
             gripGrab_ = false;
             editMoved_ = false;
+            labelJoint_ = -1;
             editGhost_.clear();
             emit changed();
             return;
@@ -1759,6 +1760,7 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         editing_ = false;
         gripGrab_ = false;
         editMoved_ = false;
+        labelJoint_ = -1;   // the label's own joint, let go of with everything else
         editGhost_.clear(); // source ghost cleared now that it's placed
         emit message(capped
                          ? QStringLiteral("Connected — both physical lines capped to the target")
@@ -3421,6 +3423,16 @@ void Editor::relayLabelPreview() {
     emit overlayChanged();
 }
 
+// One at each end of the label and one on each side of it. Order matters: 0 and 1 are the ends, along the run;
+// 2 and 3 are the sides, across it. The middle is not one of them - the whole body is the handle for sliding, and
+// a joint there would sit on top of that.
+std::vector<Vec2> Editor::labelJoints() const {
+    if (labelLiveIds_.empty() || !labelFit_.ok) return {};
+    const Vec2 a = labelFit_.runDir * (labelFit_.alongMm / 2.0);
+    const Vec2 c = labelFit_.acrossDir * (labelFit_.acrossMm / 2.0);
+    return {labelFit_.mid + a, labelFit_.mid - a, labelFit_.mid + c, labelFit_.mid - c};
+}
+
 // A drag on the label slides it ALONG the runs it crosses, and only along them. A label sits ON a bundle:
 // one nudged sideways off the bundle by a careless drag is a drawing sent back, and the wires would come out
 // from under the mask it left behind.
@@ -3481,6 +3493,7 @@ void Editor::dropLabelEditIfDeselected(bool emptying) {
 
 void Editor::endLabelEdit() {
     const bool had = !labelLiveIds_.empty() || labelPlacing_;
+    labelJoint_ = -1;
     labelLiveIds_.clear();
     labelMaskId_.clear();
     labelGroup_.clear();
@@ -5180,8 +5193,14 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
     // cell. Every handle it has was drawn either way - the four corners, the middle, and one on every
     // grid line in the table - so working inside a table looked exactly like having grabbed the whole
     // thing, and the handles for the cell's own edges were out in the middle of the drawing.
+    // A LABEL'S OWN JOINTS, on the one object of it that spans the whole thing. A label is grouped, so it has
+    // none of the joints its lines would have had - these are its own: the two ends and the two sides.
     std::vector<Grip> handles;
-    if (!isBlockPiece(e)) {
+    if (!labelLiveIds_.empty() && e.meta.value(QStringLiteral("labelMask")).toBool() &&
+        e.meta.value(QStringLiteral("labelGroup")).toString() == labelGroup_) {
+        int idx = 0;
+        for (const Vec2& j : labelJoints()) handles.push_back({j, GripRole::Radius, idx++});
+    } else if (!isBlockPiece(e)) {
         handles = gripsOf(e, collectPinEnds(doc_), doc_);
         if (int row = 0, col = 0; pickedCellOf(e, row, col))
             handles = pickedCellGrips(e, handles, row, col);
@@ -5210,6 +5229,40 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     // can be moved, which is along the bundle it sits on, and one handle in the middle of a label the size
     // of a postage stamp is a handle nobody finds. So the whole label is the handle.
     if (!labelLiveIds_.empty() && labelFit_.ok && !shift) {
+        // ITS OWN JOINTS FIRST: one at each end and one on each side. Before the body, because the body is the
+        // whole label and would swallow every one of them.
+        const std::vector<Vec2> joints = labelJoints();
+        // NEARER A JOINT THAN THE MIDDLE. A grip inside the pick tolerance normally wins outright, and on a small
+        // label the whole body is inside the tolerance of a joint - which would leave a small label with no way to
+        // be slid at all. So the two share the label between them: out towards an end or a side is a resize, in
+        // towards the middle is a slide, and both are always possible whatever size the label is.
+        const double toMid = distance(at, labelFit_.mid);
+        for (size_t j = 0; j < joints.size(); ++j) {
+            if (distance(at, joints[j]) > tol || distance(at, joints[j]) >= toMid) continue;
+            editing_ = true;
+            gripGrab_ = true;
+            editMode_ = 1;
+            editEntityId_ = labelLiveIds_.front();
+            editRole_ = static_cast<int>(GripRole::Radius);
+            editIndex_ = static_cast<int>(j);
+            editLast_ = joints[j];
+            editAnchor_ = labelFit_.mid;
+            editDragFrom_ = joints[j];
+            editHasFrom_ = true;
+            editMoved_ = false;
+            labelJoint_ = static_cast<int>(j);
+            editGrips_.clear();
+            editGhost_.clear();
+            for (const QString& id : labelLiveIds_)
+                if (const Entity* e = entityById(id)) editGhost_.push_back(*e);
+            emit message(j < 2
+                             ? QStringLiteral("Pulling the end of the label — it lengthens both ways about "
+                                              "the middle, so it stays on the bundle")
+                             : QStringLiteral("Pulling the side of the label — it deepens both ways about "
+                                              "the run it sits on"));
+            return true;
+        }
+        labelJoint_ = -1;
         Bounds body;
         for (const QString& id : labelLiveIds_)
             if (const Entity* e = entityById(id)) {
@@ -7635,6 +7688,20 @@ void Editor::applyEditDrag(const Vec2& target) {
     // whole label, because a label is a mask and a dozen lines, and moving them one at a time would pull it
     // apart. Ahead of the two modes below because it belongs to neither: it is not a joint being dragged
     // and not a free translate, it is a label sliding up and down a bundle.
+    // A LABEL'S OWN JOINT: an end sets how long it is, a side sets how deep. Both about the middle, because a
+    // label is symmetrical about the run it sits on and one stretched off-centre comes off the bundle.
+    if (labelJoint_ >= 0 && !labelLiveIds_.empty() && labelFit_.ok) {
+        const Vec2 from = target - labelFit_.mid;
+        const bool alongEnd = labelJoint_ < 2;
+        const double reach =
+            std::abs(dot(from, alongEnd ? labelFit_.runDir : labelFit_.acrossDir)) * 2.0;
+        if (reach > 1e-3) {
+            if (alongEnd) scalePlacedLabel(reach, labelFit_.acrossMm);
+            else scalePlacedLabel(labelFit_.alongMm, reach);
+        }
+        editLast_ = target;
+        return;
+    }
     if (slideLiveLabel(delta)) {
         editLast_ = target;
         return;
@@ -10080,6 +10147,7 @@ bool Editor::applyMoveDistance(double mm) {
     pressed_ = false;
     editMoved_ = false;
     editHasFrom_ = false;
+    labelJoint_ = -1;
     editGhost_.clear();
     emit message(QStringLiteral("Moved %1").arg(mm, 0, 'f', 3));
     emit changed();

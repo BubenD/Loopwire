@@ -1959,6 +1959,88 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- a label has joints ------------------------------------------------------------------------
+    {
+        // A label is a grouped object, so it has none of the joints its lines would have had: the only thing that
+        // could be done to it by hand was to slide it, and its size had to be typed. But a label is sized by eye
+        // more often than by number - it is as wide as the bundle it covers and as long as it needs to be to be
+        // read - and every other object on the sheet is sized by dragging a corner.
+        //
+        // Four joints: one at each END, along the run, and one on each SIDE, across it. Not eight - a label is
+        // symmetrical about the run it sits on, so an end pulled out lengthens it BOTH ways about its middle. One
+        // dragged off-centre would take the label off the bundle, which is the one place it has to stay.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("w");
+        w.type = EntityType::Line;
+        w.a = {0.0, 0.0};
+        w.b = {200.0, 0.0};
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        ed.onPointerPress({100.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100.0, 6.0});
+        ed.onPointerPress({100.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "joint: the label is on the wire");
+
+        const std::vector<Vec2> joints = ed.labelJoints();
+        std::printf("  joint: %d joint(s)\n", int(joints.size()));
+        check(joints.size() == 4, "joint: one at each end and one on each side");
+        if (joints.size() != 4) return failures;
+        const double along0 = ed.labelAlongMm(), across0 = ed.labelAcrossMm();
+        // They are where they should be: the ends half the length out along the run, the sides half the depth out
+        // across it. A joint drawn anywhere else is a joint that cannot be found.
+        check(std::abs(distance(joints[0], joints[1]) - along0) < 1e-6,
+              "joint: the two ends are the label's length apart");
+        check(std::abs(distance(joints[2], joints[3]) - across0) < 1e-6,
+              "joint: and the two sides its depth apart");
+
+        // PULL AN END. It lengthens about the middle, so the far end comes out with it and the label stays
+        // centred on the same place on the wire.
+        auto maskOf = [&]() -> const Entity* {
+            const Entity* mk = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.meta.value(QStringLiteral("labelMask")).toBool()) mk = &e;
+            return mk;
+        };
+        const Vec2 wasMid = maskOf()->bounds().center();
+        ed.onPointerPress(joints[0], Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({joints[0].x + 20.0, joints[0].y});
+        std::printf("  joint: an end pulled out 20 - now %.1f long, was %.1f\n", ed.labelAlongMm(), along0);
+        check(std::abs(ed.labelAlongMm() - (along0 + 40.0)) < 1e-6,
+              "joint: pulled out 20, it grew 20 at each end - it lengthens about its middle");
+        check(std::abs(ed.labelAcrossMm() - across0) < 1e-6,
+              "joint: and is no deeper than it was - one joint changes one thing");
+        check(distance(maskOf()->bounds().center(), wasMid) < 1e-6,
+              "joint: and has not moved along the wire - it is the same label, longer");
+        ed.onPointerPress({joints[0].x + 20.0, joints[0].y}, Qt::LeftButton, Qt::NoModifier);
+
+        // PULL A SIDE. The same, across.
+        const std::vector<Vec2> now = ed.labelJoints();
+        const double along1 = ed.labelAlongMm();
+        ed.onPointerPress(now[2], Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({now[2].x, now[2].y + 7.0});
+        std::printf("  joint: a side pulled out 7 - now %.1f deep, was %.1f\n", ed.labelAcrossMm(), across0);
+        check(std::abs(ed.labelAcrossMm() - (across0 + 14.0)) < 1e-6,
+              "joint: pulled out 7, it deepened 7 either side of the run");
+        check(std::abs(ed.labelAlongMm() - along1) < 1e-6, "joint: and is no longer than it was");
+        ed.onPointerPress({now[2].x, now[2].y + 7.0}, Qt::LeftButton, Qt::NoModifier);
+
+        // And the body is still the handle for sliding it: the joints did not take that away.
+        const Vec2 body = maskOf()->bounds().center();
+        ed.onPointerPress(body, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({body.x + 30.0, body.y + 9.0});
+        std::printf("  joint: body dragged 30 along and 9 across - moved %+.1f,%+.1f\n",
+                    maskOf()->bounds().center().x - body.x, maskOf()->bounds().center().y - body.y);
+        check(std::abs(maskOf()->bounds().center().x - (body.x + 30.0)) < 1e-6 &&
+                  std::abs(maskOf()->bounds().center().y - body.y) < 1e-6,
+              "joint: the body still slides it along the wire, and only along it");
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is
