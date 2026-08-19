@@ -1982,6 +1982,11 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
 
 void loadMechModelDocument(Document& doc, const MechModel& model) {
     doc.entities().clear();
+    // A PART IS NOT A SHEET. Fit looks at the drawing's stated sheet first, which is right for a drawing - what a
+    // sheet is FOR is being the thing you look at - and wrong here: this window holds one part a few millimetres
+    // across, and fitting to a sheet round it opened the window on a page of empty grey with the part a speck in
+    // the middle of it. Left unstated, Fit fits what is actually drawn, which is the part.
+    doc.sheet() = Bounds();
     // The model comes in as ONE object. It used to arrive as its own loose primitives, which meant the
     // thing the session is about could not be picked up and moved as the part it is: every line of it had
     // to be swept up first. Grouped, a click anywhere takes the whole model - and a double-click opens it
@@ -11819,7 +11824,14 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
     mechModelEdits_.insert(raw, kind);
     mechModelSessionModels_.insert(raw, model);
     addDocument(std::move(doc), QString());
-    canvas_->fitView();
+    // Where it was left, if it has been open before; otherwise fitted to the part - which is what it now fits,
+    // the part having no sheet round it to fit instead.
+    const QString viewKey = mechModelViewKey(kind, name);
+    if (mechModelViews_.contains(viewKey))
+        raw->view() = mechModelViews_.value(viewKey);
+    else
+        canvas_->fitView();
+    canvas_->invalidateScene();
     if (modelsDlg_) modelsDlg_->hide();
     statusBar()->showMessage(
         QStringLiteral("Editing %1 in the main canvas — use Place and Modify, then Capture to default model")
@@ -12008,8 +12020,23 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     return true;
 }
 
+// One key per sub-drawing, so a boot at 45 and a boot at 90 keep their own view.
+QString MainWindow::mechModelViewKey(MechModelKind kind, const QString& name) {
+    return mechModelKey(kind) + QLatin1Char('/') + name;
+}
+
+// How this model is being looked at, written down before the window closes. Drawing a part is not one sitting: it
+// is opened, zoomed in on the end that matters, closed to go and check something, and opened again - and a window
+// that fits the whole part every time is one that makes you find that place again every time.
+void MainWindow::rememberMechModelView(Document* doc) {
+    if (!doc || !mechModelEdits_.contains(doc)) return;
+    const MechModel& m = mechModelSessionModels_[doc];
+    mechModelViews_.insert(mechModelViewKey(mechModelEdits_.value(doc), m.name), doc->view());
+}
+
 void MainWindow::saveMechModelBeingEdited() {
     if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    rememberMechModelView(doc_);
     if (saveMechModelDocument(doc_)) {
         closeDocument(activeIndex());
         showMechModels();
@@ -12018,6 +12045,9 @@ void MainWindow::saveMechModelBeingEdited() {
 
 void MainWindow::cancelMechModelEdit() {
     if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    // The view is kept even when the drawing is not: how you were looking at it is not part of what was changed,
+    // and leaving a session to go and check something should not cost the place you were looking at.
+    rememberMechModelView(doc_);
     doc_->setDirty(false);
     closeDocument(activeIndex());
     showMechModels();
@@ -12761,6 +12791,9 @@ void MainWindow::closeDocument(int index) {
         blockEdits_.remove(docs_[index].get());
         templateEdits_.remove(docs_[index].get());
         templateEditPaths_.remove(docs_[index].get());
+        // How the model was being looked at, before the window that was looking at it goes. Closed by the tab's X
+        // rather than by Capture or Cancel, this is the only place that hears about it.
+        rememberMechModelView(docs_[index].get());
         mechModelEdits_.remove(docs_[index].get());
         mechModelSessionModels_.remove(docs_[index].get());
         // And its paper spaces, for the same reason: the next document allocated at that address must

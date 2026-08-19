@@ -293,6 +293,13 @@ private:
     // has to be enforced rather than left to the tab widget.
     void normaliseRibbonPages();
     void updateModelRibbonTabs();
+    // HOW A MODEL WAS LAST LOOKED AT, kept per model. Drawing a part is not one sitting: it is opened, zoomed in
+    // on the end that matters, closed to go and check something, and opened again - and a window that goes back to
+    // fitting the whole part every time means finding that place again every time. Keyed by kind and name, so each
+    // sub-drawing keeps its own.
+    QHash<QString, ViewState> mechModelViews_;
+    static QString mechModelViewKey(MechModelKind kind, const QString& name);
+    void rememberMechModelView(Document* doc);
     // The contextual "Capture" tab: shown while the library window has stepped aside so objects can be
     // selected for a part's drawing. Enter finishes it; Esc drops it.
     void buildCaptureRibbonTab();

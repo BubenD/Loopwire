@@ -5,12 +5,15 @@
 // same tools, over a scratch drawing that holds nothing else - and what is drawn there comes back in the
 // model's own coordinates.
 #include "app/Editor.h"
+#include "app/MainWindow.h"
+#include "model/Document.h"
 #include "app/MechModelCanvasDialog.h"
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include "render/CanvasWidget.h"
 #include "tools/ToolId.h"
 
+#include <QApplication>
 #include <QLineEdit>
 #include <QTabBar>
 #include <QToolButton>
@@ -127,6 +130,74 @@ int run_mechmodelcanvas_tests() {
                   "cursor: the field a value is typed into shows a text cursor");
         }
         check(sawField, "cursor: the canvas has that field");
+    }
+
+
+    // ---- the model canvas fits the PART, and keeps where it was left --------------------------------
+    {
+        // Fit looks at the drawing's stated sheet first, which is right for a drawing - being the thing you look
+        // at is what a sheet is FOR - and wrong for this window, which holds one part a few millimetres across. A
+        // sheet round it opened the window on a page of empty grey with the part a speck in the middle of it.
+        //
+        // And how a part is being looked at has to survive the window closing. Drawing one is not a single
+        // sitting: it is opened, zoomed in on the end that matters, closed to check something, opened again.
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        auto* canvas = win.findChild<CanvasWidget*>();
+        auto* ed = win.findChild<Editor*>();
+        check(canvas != nullptr && ed != nullptr, "grey: there is a canvas and an editor");
+        if (canvas && ed) {
+            win.openMechModelEditor(MechModelKind::Label, QString());
+            QApplication::processEvents();
+            Document* modelDoc = ed->document();
+            check(modelDoc != nullptr, "grey: the model opened in a window of its own");
+            if (modelDoc) {
+                // Nothing has been captured for this kind on this machine, so the session opens empty - which is
+                // the ordinary way to start one. A part is drawn on it: that is what the window is for.
+                Entity drawn;
+                drawn.id = QStringLiteral("part");
+                drawn.type = EntityType::Line;
+                drawn.a = {0.0, 0.0};
+                drawn.b = {12.0, 5.0};
+                modelDoc->entities().push_back(drawn);
+                check(!modelDoc->entities().empty(), "grey: with a part drawn on it");
+                check(!modelDoc->sheet().valid,
+                      "grey: and no sheet round it - a part is not a sheet, so Fit fits the part");
+                canvas->fitView();
+                Bounds part;
+                for (const Entity& e : modelDoc->entities()) part.expand(e.bounds());
+                check(part.valid, "grey: the part has an extent");
+                const double onScreen = std::max(part.width(), part.height()) * modelDoc->view().scale;
+                const double win2 = std::min(canvas->width(), canvas->height());
+                std::printf("  grey: fitted, the part is %.0f px across in a window %.0f px\n", onScreen, win2);
+                check(onScreen > win2 * 0.4,
+                      "grey: it fills the window rather than sitting a speck in the middle of a fitted sheet");
+
+                // Zoomed in on some corner of it, then closed and opened again: the same view.
+                modelDoc->view().scale *= 4.0;
+                modelDoc->view().x -= 137.0;
+                modelDoc->view().y += 61.0;
+                const ViewState was = modelDoc->view();
+                win.cancelMechModelEdit();
+                QApplication::processEvents();
+                win.openMechModelEditor(MechModelKind::Label, QString());
+                QApplication::processEvents();
+                Document* again = ed->document();
+                check(again != nullptr, "grey: it opened again");
+                if (again) {
+                    std::printf("  grey: left at %.2f/%.0f/%.0f, came back at %.2f/%.0f/%.0f\n", was.scale,
+                                was.x, was.y, again->view().scale, again->view().x, again->view().y);
+                    check(std::abs(again->view().scale - was.scale) < 1e-9 &&
+                              std::abs(again->view().x - was.x) < 1e-6 &&
+                              std::abs(again->view().y - was.y) < 1e-6,
+                          "grey: and came back looking at exactly what it was left looking at");
+                }
+                win.cancelMechModelEdit();
+                QApplication::processEvents();
+            }
+        }
     }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");
