@@ -2118,7 +2118,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 if (xb.valid && (xb.max.x < e.center.x - e.radius || xb.min.x > e.center.x + e.radius ||
                                  xb.max.y < e.center.y - e.radius || xb.min.y > e.center.y + e.radius))
                     continue;
-                EntityRenderer::draw(p, x, doc, inner, overrideColor);
+                // NOT in the override colour. Selecting a detail view lights up the RINGS - that is what says
+                // which view you have hold of - but what is inside the enlargement is the drawing, and the
+                // drawing's colours are the drawing's. An enlargement that turns orange with its ring says the
+                // geometry has been selected, which it has not.
+                EntityRenderer::draw(p, x, doc, inner, QColor());
             }
             p.restore();
             g_inDetailView = false;

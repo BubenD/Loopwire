@@ -2004,6 +2004,121 @@ void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
     at = path.back() + dir * (s - acc);
 }
 
+// ONE RAIL of a band laid along a path, offset by `d` (positive to the left of travel).
+//
+// offsetPolyline mitres its corners, and a mitre is only safe while the offset is small next to the segments it
+// joins. A label is 5 mm deep on a cable whose corner may be a sharp mitre and whose pieces near a bend may be
+// a couple of millimetres long, and there the mitre point shoots off past the ends of both segments: the two
+// rails cross each other and the label comes out as a bowtie. Which is what it came out as.
+//
+// So: ROUND on the outside of a turn, where an arc about the corner can never overshoot, and on the inside the
+// mitre only while it stays within reach of the segments it belongs to - otherwise cut straight across, which
+// is short of ideal and cannot fold.
+std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
+    std::vector<Vec2> out;
+    if (path.size() < 2) return out;
+    if (std::abs(d) < 1e-12) return path;
+    std::vector<Vec2> dirs;
+    for (size_t i = 1; i < path.size(); ++i) {
+        const Vec2 seg = path[i] - path[i - 1];
+        if (seg.lengthSq() < 1e-24) continue;
+        dirs.push_back(seg.normalized());
+    }
+    if (dirs.empty()) return out;
+    out.push_back(path.front() + dirs.front().perp() * d);
+    size_t k = 0;
+    for (size_t i = 1; i + 1 < path.size(); ++i) {
+        if ((path[i] - path[i - 1]).lengthSq() < 1e-24) continue;
+        if (k + 1 >= dirs.size()) break;
+        const Vec2 in = dirs[k], nextDir = dirs[k + 1];
+        ++k;
+        const double cr = cross(in, nextDir);
+        if (std::abs(cr) < 1e-9) continue;   // straight through: nothing to join
+        const Vec2 a = path[i] + in.perp() * d;
+        const Vec2 b = path[i] + nextDir.perp() * d;
+        // OUTSIDE of the turn: an arc about the corner, which cannot overshoot however sharp the corner or
+        // however deep the label.
+        const bool inner = (cr > 0.0) == (d > 0.0);
+        if (!inner) {
+            const double a0 = std::atan2(a.y - path[i].y, a.x - path[i].x);
+            double sweep = std::atan2(b.y - path[i].y, b.x - path[i].x) - a0;
+            while (sweep > M_PI) sweep -= 2.0 * M_PI;
+            while (sweep < -M_PI) sweep += 2.0 * M_PI;
+            const int steps = std::clamp(static_cast<int>(std::abs(sweep) / (M_PI / 24.0)) + 1, 1, 48);
+            for (int j = 0; j <= steps; ++j) {
+                const double t = a0 + sweep * j / double(steps);
+                out.push_back({path[i].x + std::abs(d) * std::cos(t), path[i].y + std::abs(d) * std::sin(t)});
+            }
+            continue;
+        }
+        // INSIDE: the mitre, while it stays within reach of the two segments it belongs to. Past that it is cut
+        // straight across - a corner slightly too full, and one that cannot fold back through the label.
+        const double half = std::abs(std::tan(std::acos(std::clamp(dot(in, nextDir), -1.0, 1.0)) / 2.0));
+        const double reach = std::abs(d) * half;
+        const double room = std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
+        if (reach < room * 0.9) {
+            out.push_back(path[i] + (in.perp() + nextDir.perp()).normalized() *
+                                        (d / std::max(1e-9, std::cos(std::acos(std::clamp(
+                                                                 dot(in, nextDir), -1.0, 1.0)) / 2.0))));
+        } else {
+            out.push_back(a);
+            out.push_back(b);
+        }
+    }
+    out.push_back(path.back() + dirs.back().perp() * d);
+    return out;
+}
+
+// Does this closed band cross itself? A folded label is worse than a straight one, so when the band comes out
+// folded the label is laid straight instead - which is never wrong-looking, only less clever.
+bool polygonSelfCrosses(const std::vector<Vec2>& poly) {
+    const size_t n = poly.size();
+    if (n < 4) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const Vec2 a1 = poly[i], a2 = poly[(i + 1) % n];
+        for (size_t j = i + 2; j < n; ++j) {
+            if (i == 0 && j == n - 1) continue;   // they share a corner
+            const Vec2 b1 = poly[j], b2 = poly[(j + 1) % n];
+            if (auto x = segmentSegmentIntersection(a1, a2, b1, b2)) {
+                // Touching at a shared corner is not crossing.
+                if (distance(*x, a1) < 1e-9 || distance(*x, a2) < 1e-9 || distance(*x, b1) < 1e-9 ||
+                    distance(*x, b2) < 1e-9)
+                    continue;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// THE BUNDLE THE STROKE WAS DRAWN ACROSS, out of everything the stroke happened to cross.
+//
+// A bundle is a set of runs with no big empty gap in it. A stroke drawn at an angle across a cable that bends
+// can cross the cable TWICE - once on each leg - and taking all of it as one bundle gave a label as deep as the
+// distance between the two legs, which on the drawing that reported this was most of the sheet.
+//
+// So the crossings are sorted, seeded with the one nearest the middle of the stroke, and grown outwards while
+// the next one is close enough to be part of the same bundle. Anything past a real gap is a different part of
+// the run that the stroke also happened to catch.
+void bundleAround(std::vector<double>& offs, double seed, double floorGap, double& lo, double& hi) {
+    lo = hi = seed;
+    if (offs.empty()) return;
+    std::sort(offs.begin(), offs.end());
+    size_t at = 0;
+    double best = 1e300;
+    for (size_t i = 0; i < offs.size(); ++i)
+        if (std::abs(offs[i] - seed) < best) { best = std::abs(offs[i] - seed); at = i; }
+    lo = hi = offs[at];
+    size_t low = at, high = at;
+    auto joins = [&](double gap) { return gap <= std::max(floorGap, (hi - lo) * 0.6); };
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        if (low > 0 && joins(lo - offs[low - 1])) { --low; lo = offs[low]; grew = true; }
+        if (high + 1 < offs.size() && joins(offs[high + 1] - hi)) { ++high; hi = offs[high]; grew = true; }
+    }
+}
+
 // The piece of a path between two arc-lengths, keeping every vertex in between. This is what a label laid on a
 // bend is built from: the cable's own corners are in here, so offsetting it puts the label's lines round those
 // corners at the cable's radius rather than sampling a curve through them.
@@ -2424,12 +2539,16 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
         frameOnPath(fit.path, s0, at, dir);
         fit.runDir = dir;
         fit.acrossDir = dir.perp();
-        double lo = 1e300, hi = -1e300;
-        for (const Vec2& h : hits) {
-            const double t = dot(h - at, fit.acrossDir);
-            lo = std::min(lo, t);
-            hi = std::max(hi, t);
-        }
+        // Only the BUNDLE the stroke was drawn across. A stroke at an angle over a cable that bends crosses
+        // the cable twice, once on each leg, and taking the lot as one bundle gave a label as deep as the
+        // distance between the two legs.
+        std::vector<double> offs;
+        for (const Vec2& h : hits) offs.push_back(dot(h - at, fit.acrossDir));
+        double lo = 0.0, hi = 0.0;
+        // The floor is the label's own drawn depth: wires a few millimetres apart are one bundle, and the gap
+        // this is here to reject - to another leg of the same cable that the stroke also crossed - is tens of
+        // millimetres. A quarter of the depth was too mean and split an ordinary bundle three wires wide.
+        bundleAround(offs, dot(strokeMid - at, fit.acrossDir), std::max(2.0, labelAcrossMm_), lo, hi);
         spread = std::max(0.0, hi - lo);
         fit.midS = s0;
         // HOW FAR OFF THE RUN the label's middle sits. The middle of the BUNDLE is not the middle of the one
@@ -2509,9 +2628,17 @@ std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
         const Vec2 c = fit.acrossDir * side;
         return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
     }
-    std::vector<Vec2> out = offsetPolyline(piece, fit.midOff - side);
-    const std::vector<Vec2> far = offsetPolyline(piece, fit.midOff + side);
+    std::vector<Vec2> out = offsetRailRound(piece, fit.midOff - side);
+    const std::vector<Vec2> far = offsetRailRound(piece, fit.midOff + side);
     for (auto it = far.rbegin(); it != far.rend(); ++it) out.push_back(*it);
+    // A FOLDED BAND IS WORSE THAN A STRAIGHT ONE. If the two rails have crossed each other - which they can on a
+    // corner too sharp for the depth of label being laid on it, however carefully the joins are made - the label
+    // is laid straight instead. Straight is never wrong-looking; folded always is.
+    if (out.size() < 4 || polygonSelfCrosses(out)) {
+        const Vec2 a = fit.runDir * half;
+        const Vec2 c = fit.acrossDir * side;
+        return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
+    }
     return out;
 }
 
@@ -2531,7 +2658,10 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     // set on a curve - so the label goes round the knee with the bundle. A straight rectangle laid across a
     // bend leaves the wires going in at one angle and coming out at another with a rigid box between them,
     // which is not what a label on a bent bundle looks like.
-    const bool bent = fit.bent && fit.path.size() >= 2;
+    // BENT only if a bent label can actually be laid here. The cover is built first, and if the band it
+    // describes folds - a corner too sharp for the depth of label going on it - the whole label is laid straight,
+    // so its outline and its cover cannot disagree about which it is.
+    const bool bent = fit.bent && fit.path.size() >= 2 && labelMaskQuad(fit).size() > 4;
     auto place = [&](const Vec2& p) {
         const double u = (p.x - midX) * sa;   // along the run: the label's own length
         const double v = (p.y - midY) * sc;   // across it: what has to cover the bundle
@@ -2555,7 +2685,7 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
         const double lo = std::min(u0, u1), hi = std::max(u0, u1);
         std::vector<Vec2> piece = pathPiece(fit.path, fit.midS + lo, fit.midS + hi);
         if (piece.size() < 2) return std::vector<Vec2>{};
-        std::vector<Vec2> rail = offsetPolyline(piece, v + fit.midOff);
+        std::vector<Vec2> rail = offsetRailRound(piece, v + fit.midOff);
         if (rail.size() < 2) return std::vector<Vec2>{};
         if (u1 < u0) std::reverse(rail.begin(), rail.end());
         return rail;
@@ -3456,13 +3586,20 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // which is what stops the two circles passing anything to each other.
         retakeDetailSnapshot(d);
         const QString tag = d.meta.value(QStringLiteral("detailTag")).toString();
+        const QString placedId = d.id;
         doc_->entities().push_back(std::move(d));
         doc_->setDirty(true);
-        // Armed still: a drawing with one detail on it is rare, and the letters run on from where they got
-        // to rather than starting again at A.
         detailStage_ = 0;
         detailRadius_ = 0.0;
-        emit message(QStringLiteral("Detail %1 placed — click the middle of the next one, or Esc").arg(tag));
+        // AND THE CURSOR GOES BACK TO SELECT, with the view it just placed picked up. A tool that stays armed
+        // is right for a mark you put several of in a row; a detail view is a thing you place and then arrange -
+        // move it, size it, letter it - and being still armed means the first click meant to take hold of it
+        // starts another one instead.
+        selected_ = {placedId};
+        setTool(ToolId::Select);
+        emit message(QStringLiteral("Detail %1 placed — set it up on the ribbon or drag it where it goes")
+                         .arg(tag));
+        emit selectionChanged();
         emit overlayChanged();
         emit changed();
         return;

@@ -67,7 +67,12 @@ int run_detailview_tests() {
         check(ed.detailStage() == 2, "detail: the second says how much of it");
         check(std::abs(ed.detailRadius() - 4.0) < 1e-6, "detail: measured off the centre");
         ed.onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
-        check(ed.detailStage() == 0, "detail: the third places it, and it stays armed for the next");
+        check(ed.detailStage() == 0, "detail: the third places it");
+        // AND THE CURSOR GOES BACK TO SELECT, with the view it just placed picked up. A detail view is a thing
+        // you place and then arrange - move it, size it, letter it - and still armed, the first click meant to
+        // take hold of it starts another one instead.
+        check(ed.tool() == ToolId::Select, "detail: and the cursor goes back to select");
+        check(ed.selection().size() == 1, "detail: with the view it placed picked up, ready to be arranged");
 
         const Entity* dv = nullptr;
         for (const Entity& e : d.entities())
@@ -92,6 +97,7 @@ int run_detailview_tests() {
         }
 
         // The letters run on, and a letter is taken once and kept.
+        ed.setTool(ToolId::DetailView);
         ed.onPointerPress({30.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({33.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({30.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
@@ -317,7 +323,10 @@ int run_detailview_tests() {
 
         // Pointing it somewhere else re-takes the picture, because a view that kept the old copy would show
         // the bit of drawing it USED to be over, which is a detail view telling a lie.
-        ed.setTool(ToolId::Select);   // the tool stays armed after a placement, so put it away first
+        // It is already selected and already in Select - placing it does both - so this only has to take hold
+        // of its centre handle. Cleared first, or the click on the ring would catch the radius handle that is
+        // sitting on it rather than picking the view.
+        ed.clearSelection();
         ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // pick it by its ring
         ed.onPointerRelease({14.0, 10.0}, Qt::LeftButton);
         check(ed.selection().size() == 1, "picture: its ring picks it up");

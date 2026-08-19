@@ -1076,6 +1076,80 @@ int run_mechmodels_tests() {
               "coupled: not carried straight on past the corner into thin air");
     }
 
+
+    // ---- the two ways a bent label came out wrong ---------------------------------------------------
+    {
+        // ONE: a stroke drawn at an angle over a cable that BENDS crosses the cable twice, once on each leg.
+        // Taken as one bundle that made the label as deep as the distance between the legs, which on the sheet
+        // that reported it was most of the sheet. A bundle is a set of runs with no big empty gap in it.
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0.0, 60.0}, {60.0, 60.0}, {60.0, 0.0}};   // across, then down: two legs 60 apart
+        d.entities().push_back(run);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // A long diagonal stroke: it crosses the top leg near the left AND the right-hand leg lower down.
+        ed.onPointerPress({10.0, 80.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({90.0, 20.0});
+        ed.onPointerPress({90.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "sane: it goes on somewhere");
+        std::printf("  sane: across a stroke catching both legs, %.1f wide by %.1f high\n", ed.labelWidth(),
+                    ed.labelHeight());
+        // It is a label, not a sheet-wide slab: the two legs are 60 apart, and it must not have taken that as
+        // the width of the bundle.
+        check(std::max(ed.labelWidth(), ed.labelHeight()) < 60.0,
+              "sane: it labelled the run it was drawn across, not the gap between two legs of it");
+
+        // TWO: a corner too SHARP for the depth of label going on it. Offsetting a mitre by more than the
+        // corner can take sends the mitre point past the ends of both segments, the two rails of the label cross
+        // each other, and the label comes out as a bowtie. Straight is never wrong-looking; folded always is.
+        Document d2;
+        Entity zig;
+        zig.id = QStringLiteral("zig");
+        zig.type = EntityType::Polyline;
+        // Two short legs meeting at a hairpin - about as bad as a corner gets.
+        zig.points = {{0.0, 0.0}, {8.0, 0.0}, {0.5, 3.0}};
+        d2.entities().push_back(zig);
+        Editor e2;
+        e2.setDocument(&d2);
+        noSnap(e2);
+        e2.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        e2.onPointerPress({8.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({8.0, 6.0});
+        e2.onPointerPress({8.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        if (e2.labelLive()) {
+            const Entity* mk = nullptr;
+            for (const Entity& e : d2.entities())
+                if (e.meta.value(QStringLiteral("labelMask")).toBool()) mk = &e;
+            check(mk != nullptr, "sane: masked");
+            if (mk) {
+                // Whatever it decided to do - bend it or lay it straight - what it covers must not cross itself.
+                bool crosses = false;
+                const std::vector<Vec2>& q = mk->points;
+                for (size_t i = 0; i < q.size() && !crosses; ++i)
+                    for (size_t j = i + 2; j < q.size(); ++j) {
+                        if (i == 0 && j == q.size() - 1) continue;
+                        const auto x = segmentSegmentIntersection(q[i], q[(i + 1) % q.size()], q[j],
+                                                                  q[(j + 1) % q.size()]);
+                        if (!x) continue;
+                        if (distance(*x, q[i]) < 1e-9 || distance(*x, q[(i + 1) % q.size()]) < 1e-9 ||
+                            distance(*x, q[j]) < 1e-9 || distance(*x, q[(j + 1) % q.size()]) < 1e-9)
+                            continue;
+                        crosses = true;
+                        break;
+                    }
+                std::printf("  sane: on a hairpin, %d corners and %s\n", int(q.size()),
+                            crosses ? "FOLDED" : "not folded");
+                check(!crosses, "sane: on a corner too sharp for it, the label does not fold over itself");
+            }
+        }
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is
