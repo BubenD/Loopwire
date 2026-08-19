@@ -1279,8 +1279,8 @@ int run_mechmodels_tests() {
             sh.pts.push_back(fb.tanOut + Vec2{std::cos(-td), std::sin(-td)} * 70.0);
         }
 
-        int placed = 0, folded = 0, notOffset = 0, wrongLength = 0, notchy = 0;
-        QString firstFold, firstOffset, firstNotch;
+        int placed = 0, folded = 0, notOffset = 0, wrongLength = 0, notchy = 0, disagreed = 0;
+        QString firstFold, firstOffset, firstNotch, firstDisagree;
         for (const Shape& sh : shapes) {
             double total = 0.0;
             for (size_t i = 1; i < sh.pts.size(); ++i) total += distance(sh.pts[i - 1], sh.pts[i]);
@@ -1368,6 +1368,33 @@ int run_mechmodels_tests() {
                 if (!ed.labelLive()) continue;
                 ++placed;
 
+                // Did the COVER go round the corner? What the label's own pieces have to do depends on it: if the
+                // cover bends, every piece of the label that runs along the cable has to bend too.
+                bool coverBent = false;
+                for (const Entity& e : d.entities())
+                    if (e.meta.value(QStringLiteral("labelMask")).toBool() && e.points.size() > 4)
+                        coverBent = true;
+                // A BENT COVER WITH A STRAIGHT LABEL IN IT is the reported symptom - "hatch does make bend and a
+                // rectangle not doing fillet bend". Asked of the whole label rather than edge by edge: an outer
+                // rail legitimately runs past a corner in one straight piece, because its mitre point sits beyond
+                // the corner, so asking edge by edge flags good rails. Asked of the label as a whole it is exact -
+                // when the cover bends, at least one piece of the label has to have a corner in it too.
+                if (coverBent) {
+                    bool anyPieceBent = false;
+                    for (const Entity& e : d.entities()) {
+                        if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                        if (e.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+                        if (e.points.size() > 4) anyPieceBent = true;
+                    }
+                    if (!anyPieceBent) {
+                        ++disagreed;
+                        if (firstDisagree.isEmpty())
+                            firstDisagree = QStringLiteral("%1 at %2 along: the cover went round the corner and "
+                                                          "nothing the label is made of did")
+                                                .arg(sh.what)
+                                                .arg(s, 0, 'f', 1);
+                    }
+                }
                 double lo = 1e300, hi = -1e300;
                 for (const Entity& e : d.entities()) {
                     if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
@@ -1495,11 +1522,16 @@ int run_mechmodels_tests() {
         if (!firstOffset.isEmpty()) std::printf("  swept: first wander on %s\n", qPrintable(firstOffset));
         std::printf("  swept: %d notched\n", notchy);
         if (!firstNotch.isEmpty()) std::printf("  swept: first notch on %s\n", qPrintable(firstNotch));
+        std::printf("  swept: %d where the cover bent and the label did not\n", disagreed);
+        if (!firstDisagree.isEmpty())
+            std::printf("  swept: first disagreement on %s\n", qPrintable(firstDisagree));
         check(placed > 180, "swept: it went on everywhere it was asked to");
         check(folded == 0, "swept: and nothing it is made of ever crosses itself");
         check(notOffset == 0, "swept: every long edge is an offset of the cable, not a chord across it");
         check(wrongLength == 0, "swept: and it is the length it is meant to be");
         check(notchy == 0, "swept: and it keeps its depth all the way along - no notch bitten out of it");
+        check(disagreed == 0,
+              "swept: and where the cover goes round a corner, so does the label - they never disagree");
     }
 
 
@@ -1616,6 +1648,64 @@ int run_mechmodels_tests() {
                       "jump: it either bends properly or lies straight - never a thorn off one edge");
             }
         }
+    }
+
+    // ---- a label drawn with the RECTANGLE tool bends too --------------------------------------------
+    {
+        // "A rectangle not doing fillet bend." The bending only knew how to walk a Line, a Polyline, a Wire and a
+        // Spline. A rectangle drawn with the rectangle tool is none of those - it is a Rect - so it fell through
+        // to having each of its four corners placed on the bent cable independently, with straight lines between
+        // them. Which is a straight quad sitting in a bent cover: exactly the picture.
+        //
+        // The built-in label is drawn as a closed polyline, which is why nothing here had caught it. A label
+        // captured off a real sheet is drawn with the tools a drawing office uses, and one of those is Rect.
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0.0, 0.0}, {40.0, 0.0}, {75.0, -35.0}};
+        d.entities().push_back(run);
+
+        // A label whose body is a Rect, marked as what the model is scaled by, with a Polygon inside it for good
+        // measure - both of the closed kinds that were falling through.
+        std::vector<Entity> proto;
+        Entity body;
+        body.id = QStringLiteral("body");
+        body.type = EntityType::Rect;
+        body.points = {{0.0, 0.0}, {6.0, 0.0}, {6.0, 7.0}, {0.0, 7.0}};
+        body.meta.insert(QStringLiteral("modelScaleRef"), true);
+        proto.push_back(body);
+        Entity inner;
+        inner.id = QStringLiteral("inner");
+        inner.type = EntityType::Polygon;
+        inner.points = {{1.0, 1.5}, {5.0, 1.5}, {5.0, 5.5}, {1.0, 5.5}};
+        proto.push_back(inner);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.beginLabelPlacement(proto, 2.0);
+        ed.onPointerPress({40.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({40.0, 6.0});
+        ed.onPointerPress({40.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "rect: a label drawn as a rectangle goes on");
+
+        int coverPts = 0, bentPieces = 0, straightPieces = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
+                coverPts = static_cast<int>(e.points.size());
+                continue;
+            }
+            if (e.points.size() > 4) ++bentPieces;
+            else ++straightPieces;
+        }
+        std::printf("  rect: cover has %d corners, %d bent piece(s), %d straight\n", coverPts, bentPieces,
+                    straightPieces);
+        check(coverPts > 4, "rect: the cover goes round the corner");
+        check(bentPieces >= 2, "rect: and so do the rectangle and the polygon inside it");
+        check(straightPieces == 0,
+              "rect: nothing is left lying straight in a bent cover - which is what the picture was");
     }
 
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------

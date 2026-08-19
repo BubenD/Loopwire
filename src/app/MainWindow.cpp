@@ -4839,10 +4839,11 @@ void MainWindow::buildDetailRibbonTab() {
                "it. A detail view is made BECAUSE the geometry is too small to work on."),
             &detailAnnotativeBox_);
         box(2, tr("Include annotations"),
-            tr("Whether the dimensions and text inside the boundary are shown in the view, enlarged with "
-               "everything else. A detail view is usually made to show a SHAPE, and dimensions sized for "
-               "the parent view become the largest thing in it and cover what they were measuring — but a "
-               "view made BECAUSE the dimensions would not fit at parent scale needs them."),
+            tr("Whether the DIMENSIONS inside the boundary are shown in the view, enlarged with everything "
+               "else. A detail view is usually made to show a SHAPE, and a dimension sized for the parent "
+               "view becomes the largest thing in the detail and covers what it was measuring — but a view "
+               "made BECAUSE the dimensions would not fit at parent scale needs them. Labels and text come "
+               "with the view either way: the marking on a thing is part of what the thing is."),
             &detailDimsBox_);
         connect(detailBoundaryBox_, &QCheckBox::toggled, this,
                 [write](bool on) { write(QStringLiteral("detailBoundary"), on); });

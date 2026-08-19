@@ -318,6 +318,36 @@ int run_detailview_tests() {
         std::printf("  all: %d piece(s) copied, spanning %.1f by %.1f\n", fromRun,
                     copied.valid ? copied.width() : 0.0, copied.valid ? copied.height() : 0.0);
         check(fromRun >= 3, "all: the two rails of the double run AND the arc are all in it");
+        // AND THE LABELS COME WITH IT. The marking on a bundle - the piece of text that says which conductor it
+        // is - is part of what the bundle IS, and a copy of a bundle with the labels left off is a copy of the
+        // wrong bundle. Only the measuring annotations are the switch's business.
+        {
+            Entity mark;
+            mark.id = QStringLiteral("mark");
+            mark.type = EntityType::Text;
+            mark.a = {34.0, 1.0};
+            mark.meta.insert(QStringLiteral("text"), QStringLiteral("W1"));
+            mark.meta.insert(QStringLiteral("size"), 2.0);
+            d.entities().push_back(mark);
+            Entity dim;
+            dim.id = QStringLiteral("dim");
+            dim.type = EntityType::Dimension;
+            dim.a = {30.0, -3.0};
+            dim.b = {40.0, -3.0};
+            d.entities().push_back(dim);
+            for (Entity& e : d.entities())
+                if (e.id == QStringLiteral("dv")) ed.clearDetailCopy(e.id);
+            ed.syncDetailCopies();
+            int texts = 0, dims = 0;
+            for (const Entity& e : d.entities()) {
+                if (e.meta.value(QStringLiteral("detailCopyOf")).toString() != QStringLiteral("dv")) continue;
+                if (e.type == EntityType::Text) ++texts;
+                if (e.type == EntityType::Dimension) ++dims;
+            }
+            std::printf("  all: %d label(s) and %d dimension(s) came with it\n", texts, dims);
+            check(texts == 1, "all: the marking on the bundle is copied with it, switch or no switch");
+            check(dims == 0, "all: and the dimension is not, the switch being off");
+        }
         // Both rails: the copy has to reach either side of where the centreline was, by the gap times the scale.
         check(copied.valid && copied.height() > 4.0 * 3.0 * 0.9,
               "all: reaching either side of the centreline - both rails, not the line between them");

@@ -2471,9 +2471,13 @@ void Editor::materialiseDetailCopy(const Entity& view) {
     for (const Entity& x : doc_->entities()) {
         if (x.id == viewId || x.type == EntityType::DetailView) continue;
         if (!x.meta.value(QStringLiteral("detailCopyOf")).toString().isEmpty()) continue;   // not another copy
-        if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
-                          x.type == EntityType::Text || x.type == EntityType::NetLabel))
-            continue;
+        // THE LABELS COME WITH IT. What a detail view is a view OF includes the marking on the thing - the wire
+        // label, the piece of text that says which conductor it is - because that is part of what the thing IS,
+        // and a copy of a bundle with the labels left off is a copy of the wrong bundle.
+        //
+        // The switch is about the MEASURING annotations: a dimension sized for the parent view becomes the largest
+        // thing in an enlargement and covers what it was measuring, which is why it is off unless asked for.
+        if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader)) continue;
         const Bounds xb = x.bounds();
         if (!xb.valid) continue;
         if (xb.max.x < c.x - r || xb.min.x > c.x + r || xb.max.y < c.y - r || xb.min.y > c.y + r) continue;
@@ -3021,16 +3025,30 @@ std::vector<Entity> Editor::labelEntitiesRaw(const LabelFit& fit, std::vector<Ve
     for (const Entity& src : labelProto_) {
         Entity e = src;
         e.id = QString();
+        // WHICH KINDS BEND. This was Line, Polyline, Wire and Spline - and a rectangle drawn with the rectangle
+        // tool is none of them. It is a Rect, so it fell through to having each of its four corners placed on the
+        // bent cable independently with straight lines between them: a straight quad sitting inside a cover that
+        // had gone round the corner properly, which is what "a rectangle not doing fillet bend" was.
+        //
+        // The built-in label is drawn as a closed polyline, which is why no test here had caught it. A label
+        // captured off a real sheet is drawn with the tools a drawing office actually uses, and one of those is
+        // the rectangle tool.
+        const bool closedKind = src.type == EntityType::Rect || src.type == EntityType::Polygon;
         if (bent && (src.type == EntityType::Line || src.type == EntityType::Polyline ||
-                     src.type == EntityType::Wire || src.type == EntityType::Spline)) {
+                     src.type == EntityType::Wire || src.type == EntityType::Spline || closedKind)) {
             std::vector<Vec2> from = src.points;
             if (from.size() < 2) from = {src.a, src.b};
+            // A closed shape is walked all the way round, so the edge back to where it started bends as well.
+            if (closedKind && from.size() > 2 && distance(from.front(), from.back()) > 1e-9)
+                from.push_back(from.front());
             std::vector<Vec2> pts;
             for (size_t i = 1; i < from.size(); ++i) walk(from[i - 1], from[i], pts, i == 1);
             if (pts.size() >= 2) {
-                // A line that has become a curve is a polyline. It is the same line on the sheet - the label
-                // is drawn as it was drawn - it simply has to follow the bundle to stay on it.
-                if (src.type == EntityType::Line) e.type = EntityType::Polyline;
+                // A line that has become a curve is a polyline, and so is a rectangle that has: the corners of a
+                // Rect are its two opposite ends, and a rectangle bent round a cable has more corners than that.
+                // It is the same shape on the sheet - the label is drawn as it was drawn - it simply has to
+                // follow the bundle to stay on it.
+                if (src.type == EntityType::Line || closedKind) e.type = EntityType::Polyline;
                 e.points = pts;
                 e.a = pts.front();
                 e.b = pts.back();

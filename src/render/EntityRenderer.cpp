@@ -2100,9 +2100,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             for (const Entity& x : live ? doc.entities() : std::vector<Entity>{}) {
                 if (x.id == e.id) continue;                       // never itself
                 if (x.type == EntityType::DetailView) continue;   // nor any other detail's circles
-                if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
-                                  x.type == EntityType::Text || x.type == EntityType::NetLabel))
-                    continue;
+                // The LABELS come with it either way - the marking on a bundle is part of what the bundle is.
+                // The switch is about the measuring annotations, which blow up and cover what they measure.
+                if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader)) continue;
                 if (const Layer* ly = doc.findLayer(x.layer); ly && !ly->visible) continue;
                 // Only what the source circle can reach: its box against the circle's, which is cheap and
                 // leaves the exact edge to the clip.
