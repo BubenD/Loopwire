@@ -1708,6 +1708,208 @@ int run_mechmodels_tests() {
               "rect: nothing is left lying straight in a bent cover - which is what the picture was");
     }
 
+
+    // ---- the clear sleeve bends with the label, and fillets with it ---------------------------------
+    {
+        // The label under clear heatshrink is a label with a sleeve round it. Everything that is true of the
+        // label is true of the sleeve: it goes round the corner with the cable, and where the cable is filleted
+        // it is filleted. A sleeve that stayed straight round a bent label would read as a label that had come
+        // out of its sleeve.
+        //
+        // Whichever way an office draws its sleeve - four lines, a rectangle, a closed polyline - it bends. The
+        // built-in one is four lines; a captured one is whatever tool it was drawn with, and the rectangle tool is
+        // the likely one.
+        for (int kind = 0; kind < 2; ++kind) {
+            Document d;
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{0.0, 0.0}, {50.0, 0.0}, {90.0, -40.0}};   // along, then away at 45
+            d.entities().push_back(run);
+
+            std::vector<Entity> proto;
+            if (kind == 0) {
+                proto = partDrawingEntities(
+                    builtInMechModel(MechModelKind::LabelUnderHeatshrink).drawing);
+            } else {
+                // The same thing an office would draw: the label as a rectangle, the sleeve as a rectangle
+                // round it.
+                Entity body;
+                body.id = QStringLiteral("body");
+                body.type = EntityType::Rect;
+                body.points = {{0.0, 0.0}, {6.0, 0.0}, {6.0, 7.0}, {0.0, 7.0}};
+                body.meta.insert(QStringLiteral("modelScaleRef"), true);
+                proto.push_back(body);
+                Entity sleeve;
+                sleeve.id = QStringLiteral("sleeve");
+                sleeve.type = EntityType::Rect;
+                sleeve.points = {{-1.6, -1.6}, {7.6, -1.6}, {7.6, 8.6}, {-1.6, 8.6}};
+                sleeve.meta.insert(QStringLiteral("linetype"), QStringLiteral("HIDDEN"));
+                proto.push_back(sleeve);
+            }
+
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.beginLabelPlacement(proto, 2.0);
+            ed.onPointerPress({50.0, -7.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({50.0, 7.0});
+            ed.onPointerPress({50.0, 7.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.labelLive(), "sleeve: it goes on at the bend");
+
+            // Every piece that runs ALONG the cable has to have turned: two points and nothing between them is a
+            // piece that cut the corner. The short ends, square across the cable, stay straight - that is what
+            // they are.
+            int alongPieces = 0, alongBent = 0, coverPts = 0;
+            for (const Entity& e : d.entities()) {
+                if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
+                    coverPts = static_cast<int>(e.points.size());
+                    continue;
+                }
+                std::vector<Vec2> q = e.points;
+                if (q.size() < 2) q = {e.a, e.b};
+                // Runs ALONG the cable if it reaches further along it than the label is deep. Measured along the
+                // cable rather than by the bigger side of a bounding box: the sleeve's short ends are square
+                // across the cable and are taller than the label is deep, so a box would call them lengthwise.
+                double lo2 = 1e300, hi2 = -1e300;
+                for (const Vec2& pt : q) {
+                    double a2 = 0.0, o2 = 0.0;
+                    double acc2 = 0.0, best2 = 1e300;
+                    for (size_t i = 1; i < run.points.size(); ++i) {
+                        const double seg = distance(run.points[i - 1], run.points[i]);
+                        const ClosestOnSegment c2 =
+                            closestPointOnSegment(pt, run.points[i - 1], run.points[i]);
+                        if (c2.distance < best2) { best2 = c2.distance; a2 = acc2 + c2.t * seg; }
+                        acc2 += seg;
+                    }
+                    Q_UNUSED(o2);
+                    lo2 = std::min(lo2, a2);
+                    hi2 = std::max(hi2, a2);
+                }
+                if (hi2 - lo2 < ed.labelAcrossMm() * 1.2) continue;
+                ++alongPieces;
+                if (q.size() > 2) ++alongBent;
+            }
+            std::printf("  sleeve: %s - cover %d corners, %d of %d lengthwise pieces bent\n",
+                        kind == 0 ? "as four lines" : "as rectangles", coverPts, alongBent, alongPieces);
+            check(coverPts > 4, "sleeve: the cover goes round the corner");
+            check(alongPieces >= 2, "sleeve: there is a label and a sleeve to look at");
+            check(alongBent == alongPieces,
+                  "sleeve: and every lengthwise piece of BOTH of them turned with the cable");
+        }
+    }
+
+    // ---- a stroke across two wires covers both of them ---------------------------------------------
+    {
+        // If you draw across two wires you meant both of them, however far apart they are. Judging the bundle by
+        // how big the gaps in it are meant a label drawn across a pair of wires covered one of them and left the
+        // other showing.
+        Document d;
+        for (int i = 0; i < 2; ++i) {
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, i * 55.0};
+            w.b = {200.0, i * 55.0};     // 55 apart: much further than a label is deep
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        // A stroke at an angle across both, as it would be drawn by hand.
+        ed.onPointerPress({80.0, -8.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({110.0, 63.0});
+        ed.onPointerPress({110.0, 63.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "both: the label goes on");
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "both: and covers what it covers");
+        if (mask) {
+            const Bounds b = mask->bounds();
+            std::printf("  both: covers y %.1f..%.1f, the two wires at 0 and 55\n", b.min.y, b.max.y);
+            check(b.min.y < 0.0 && b.max.y > 55.0,
+                  "both: it covers BOTH wires the stroke crossed, not just the nearer one");
+            check(b.min.y > -12.0 && b.max.y < 67.0,
+                  "both: and does not go wildly past them either");
+        }
+    }
+
+
+    // ---- a label picked THROUGH the window is the label on the drawing -------------------------------
+    {
+        // An associative detail view is a window on the parent geometry, and a label is the thing you are most
+        // likely to want to reach through it for: it is the thing that was too small to read, which is why the
+        // view was made. Clicking its body in the enlargement has to pick the LABEL - the real one, in the small
+        // circle - and changing it there has to change it there.
+        //
+        // A label is mostly its cover. So this clicks the cover, which is the part of a label there is most of.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("wire");
+        w.type = EntityType::Line;
+        w.a = {0.0, 0.0};
+        w.b = {100.0, 0.0};
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+        ed.onPointerPress({50.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 6.0});
+        ed.onPointerPress({50.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "reach: the label is on the wire");
+        const Entity* mask = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) mask = &e;
+        check(mask != nullptr, "reach: and has a cover");
+        if (!mask) return failures;
+        const Vec2 labelAt = mask->bounds().center();
+        const QString labelGroup = mask->meta.value(QStringLiteral("labelGroup")).toString();
+        ed.clearSelection();
+
+        // An associative view over the label, its enlargement well clear of the drawing.
+        Entity dv;
+        dv.id = QStringLiteral("dv");
+        dv.type = EntityType::DetailView;
+        dv.center = labelAt;
+        dv.radius = 30.0;
+        dv.b = {50.0, 200.0};
+        dv.meta.insert(QStringLiteral("detailScale"), 4.0);
+        dv.meta.insert(QStringLiteral("detailAnnotative"), true);
+        d.entities().push_back(dv);
+
+        // The middle of the enlargement is the middle of the label, four times bigger.
+        ed.onPointerPress({50.0, 200.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({50.0, 200.0}, Qt::LeftButton);
+        QString picked;
+        for (const QString& id : ed.selection())
+            for (const Entity& e : d.entities())
+                if (e.id == id) picked = e.meta.value(QStringLiteral("labelGroup")).toString();
+        std::printf("  reach: clicking the middle of the enlargement picked %lld object(s), label group %s\n",
+                    static_cast<long long>(ed.selection().size()),
+                    picked.isEmpty() ? "(none)" : "yes");
+        check(!picked.isEmpty() && picked == labelGroup,
+              "reach: it picked the LABEL on the drawing, reaching through the enlargement to get it");
+
+        // And it is the label ITSELF, so changing it changes what is in the small circle - there is only one of
+        // it. Sized from the panel by the same route the panel takes.
+        check(ed.adoptLabelFromSelection(), "reach: picked through the window, it is a label that knows itself");
+        const double was = ed.labelWidth();
+        ed.setLabelWidth(was + 15.0);
+        const Entity* after = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) after = &e;
+        std::printf("  reach: sized from %.1f to %.1f, the cover on the drawing now %.1f wide\n", was,
+                    ed.labelWidth(), after ? after->bounds().width() : 0.0);
+        check(after != nullptr && std::abs(after->bounds().width() - (was + 15.0)) < 1e-6,
+              "reach: and sizing it there sizes the one on the drawing, which is the same one");
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is

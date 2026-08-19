@@ -25,6 +25,13 @@ namespace Edraw_Desktop {
 // the text it moves in another is a handle nobody can find.
 Vec2 detailViewTextAt(const Entity& e, bool big);
 
+// A detail view's words, when nobody has said otherwise. The height is what a drawing office writes at rather
+// than what happens to fit; the source label goes straight ABOVE the boundary, where it is clear of the geometry
+// the boundary is drawn round - at an angle it lands on whatever the circle was put over.
+inline constexpr double kDetailTextMm = 5.0;
+inline constexpr double kDetailTagAngleDeg = 90.0;
+inline constexpr double kDetailViewAngleDeg = -90.0;
+
 struct ViewTransform {
     ViewState view;
 

@@ -438,7 +438,7 @@ Bounds Entity::bounds() const {
         bnds.expand({b.x - big, b.y - big});
         bnds.expand({b.x + big, b.y + big});
         // The words under it, roughly: two short lines at the caption height.
-        const double h = std::max(1e-9, meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+        const double h = std::max(1e-9, meta.value(QStringLiteral("detailTextSize")).toDouble(5.0));
         bnds.expand({b.x - big, b.y - big - h * 3.0});
         break;
     }

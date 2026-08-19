@@ -6,6 +6,8 @@
 #include "app/Editor.h"
 #include "model/Document.h"
 
+#include "harness/MechModels.h"
+#include "harness/PartsLibrary.h"
 #include "render/EntityRenderer.h"
 
 #include <QImage>
@@ -362,6 +364,53 @@ int run_detailview_tests() {
         // Nothing outside the boundary comes with it: the run is 40 long and the boundary sees 20 of it.
         check(copied.valid && copied.width() <= 2.0 * 10.0 * 3.0 + 1.0,
               "all: and nothing from outside the boundary - it is cut at the circle");
+    }
+
+    // ---- a copy does not claim to be the thing it is a copy of --------------------------------------
+    {
+        // The stamps that say which object something belongs to must not travel with a copy. A label's cover,
+        // copied whole into an enlargement, arrived still claiming to be part of that label - so clicking it in
+        // the window picked something that said it was the label, and sizing "it" acted on a group spanning the
+        // real label AND its copy. Which is a label in the window that selects and does nothing.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("wire");
+        w.type = EntityType::Line;
+        w.a = {0.0, 0.0};
+        w.b = {100.0, 0.0};
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing), 2.0);
+        ed.onPointerPress({50.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 6.0});
+        ed.onPointerPress({50.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.labelLive(), "stamp: a label is on the wire");
+        ed.clearSelection();
+
+        Entity dv;
+        dv.id = QStringLiteral("dv");
+        dv.type = EntityType::DetailView;
+        dv.center = {50.0, 0.0};
+        dv.radius = 30.0;
+        dv.b = {50.0, 200.0};
+        dv.meta.insert(QStringLiteral("detailScale"), 3.0);
+        d.entities().push_back(dv);
+        ed.syncDetailCopies();
+
+        int copies = 0, claiming = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.meta.value(QStringLiteral("detailCopyOf")).toString() != QStringLiteral("dv")) continue;
+            ++copies;
+            if (!e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) ++claiming;
+            if (!e.meta.value(QStringLiteral("blockInst")).toString().isEmpty()) ++claiming;
+        }
+        std::printf("  stamp: %d copied object(s), %d of them claiming to belong to something else\n", copies,
+                    claiming);
+        check(copies > 0, "stamp: the label was copied into the view");
+        check(claiming == 0,
+              "stamp: and not one piece of the copy claims to be part of the label it is a copy of");
     }
 
     // ---- a view that is not associative is a COPY, and the copy is its own --------------------------

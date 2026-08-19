@@ -656,7 +656,8 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         // landed on, which is a thing done by eye: an angle typed into a field is the wrong tool for "not
         // there, a bit further round".
         const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
-        const double capH = std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+        const double capH =
+            std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(kDetailTextMm));
         g.push_back({e.center, GripRole::Center, 0});
         g.push_back({{e.center.x + e.radius, e.center.y}, GripRole::Radius, 0});
         g.push_back({e.b, GripRole::LineB, 0});
@@ -2115,34 +2116,6 @@ bool polygonSelfCrosses(const std::vector<Vec2>& poly) {
     return false;
 }
 
-// THE BUNDLE THE STROKE WAS DRAWN ACROSS, out of everything the stroke happened to cross.
-//
-// A bundle is a set of runs with no big empty gap in it. A stroke drawn at an angle across a cable that bends
-// can cross the cable TWICE - once on each leg - and taking all of it as one bundle gave a label as deep as the
-// distance between the two legs, which on the drawing that reported this was most of the sheet.
-//
-// So the crossings are sorted, seeded with the one nearest the middle of the stroke, and grown outwards while
-// the next one is close enough to be part of the same bundle. Anything past a real gap is a different part of
-// the run that the stroke also happened to catch.
-void bundleAround(std::vector<double>& offs, double seed, double floorGap, double& lo, double& hi) {
-    lo = hi = seed;
-    if (offs.empty()) return;
-    std::sort(offs.begin(), offs.end());
-    size_t at = 0;
-    double best = 1e300;
-    for (size_t i = 0; i < offs.size(); ++i)
-        if (std::abs(offs[i] - seed) < best) { best = std::abs(offs[i] - seed); at = i; }
-    lo = hi = offs[at];
-    size_t low = at, high = at;
-    auto joins = [&](double gap) { return gap <= std::max(floorGap, (hi - lo) * 0.6); };
-    bool grew = true;
-    while (grew) {
-        grew = false;
-        if (low > 0 && joins(lo - offs[low - 1])) { --low; lo = offs[low]; grew = true; }
-        if (high + 1 < offs.size() && joins(offs[high + 1] - hi)) { ++high; hi = offs[high]; grew = true; }
-    }
-}
-
 // The piece of a path between two arc-lengths, keeping every vertex in between. This is what a label laid on a
 // bend is built from: the cable's own corners are in here, so offsetting it puts the label's lines round those
 // corners at the cable's radius rather than sampling a curve through them.
@@ -2517,6 +2490,15 @@ void Editor::materialiseDetailCopy(const Entity& view) {
             const double v = e.meta.value(QLatin1String(key)).toDouble();
             if (v > 1e-9) e.meta.insert(QLatin1String(key), v * scale);
         }
+        // A COPY IS NOT THE THING IT IS A COPY OF, and the stamps that say which object something belongs to
+        // must not come with it. Copied whole, a label's cover arrived still claiming to be part of that label -
+        // so clicking it in the enlargement picked something that said it was the label, and sizing "it" acted on
+        // a group spanning the real label AND its copy. Which is the label in the window being selected and
+        // nothing sensible happening to the one on the drawing.
+        for (const char* stamp : {"labelGroup", "labelProto", "labelPath", "labelAlong", "labelAcross",
+                                  "labelMidS", "labelMidOff", "labelBent", "blockInst", "block",
+                                  "blockOriginX", "blockOriginY", "detailCopyOf"})
+            e.meta.remove(QLatin1String(stamp));
         made.push_back(std::move(e));
     }
     for (Entity& e : made) {
@@ -2828,16 +2810,25 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
         frameOnPath(fit.path, s0, at, dir);
         fit.runDir = dir;
         fit.acrossDir = dir.perp();
-        // Only the BUNDLE the stroke was drawn across. A stroke at an angle over a cable that bends crosses
-        // the cable twice, once on each leg, and taking the lot as one bundle gave a label as deep as the
-        // distance between the two legs.
-        std::vector<double> offs;
-        for (const Vec2& h : hits) offs.push_back(dot(h - at, fit.acrossDir));
-        double lo = 0.0, hi = 0.0;
-        // The floor is the label's own drawn depth: wires a few millimetres apart are one bundle, and the gap
-        // this is here to reject - to another leg of the same cable that the stroke also crossed - is tens of
-        // millimetres. A quarter of the depth was too mean and split an ordinary bundle three wires wide.
-        bundleAround(offs, dot(strokeMid - at, fit.acrossDir), std::max(2.0, labelAcrossMm_), lo, hi);
+        // EVERY RUN THE STROKE CROSSED IS IN THE BUNDLE. If you draw across two wires you meant both of them,
+        // however far apart they are - that is what the stroke is for, and judging it by how big the gaps
+        // between them are meant a label placed across a pair of wires covered one of them.
+        //
+        // With ONE exception: another part of the run the label is laid ALONG. A stroke drawn at an angle over a
+        // cable that bends crosses that cable twice, once on each leg, and taking the far leg as part of the
+        // bundle gave a label as deep as the distance between the two legs. It is told apart by where it sits
+        // ALONG the run rather than by how far off it is: a wire beside this one projects to about the same place
+        // along, and the other leg of the same cable projects a long way off.
+        double lo = 1e300, hi = -1e300;
+        for (const Vec2& h : hits) {
+            double hs = 0.0, hoff = 0.0;
+            placeOnPath(fit.path, h, hs, hoff);
+            if (std::abs(hs - s0) > std::max(labelAlongMm_, 1.0)) continue;
+            const double t = dot(h - at, fit.acrossDir);
+            lo = std::min(lo, t);
+            hi = std::max(hi, t);
+        }
+        if (lo > hi) { lo = hi = 0.0; }   // nothing left: the stroke was all on some other part of the run
         spread = std::max(0.0, hi - lo);
         fit.midS = s0;
         // HOW FAR OFF THE RUN the label's middle sits. The middle of the BUNDLE is not the middle of the one

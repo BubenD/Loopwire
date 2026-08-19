@@ -4631,7 +4631,9 @@ void MainWindow::showHatchRibbon(bool on) {
 void MainWindow::buildDetailRibbonTab() {
     detailTab_ = new QWidget(ribbon_);
     auto* lay = new QHBoxLayout(detailTab_);
-    lay->setContentsMargins(6, 4, 6, 2);
+    // TIGHT. Eleven fields over four groups is a tab you read across rather than glance at, and the space between
+    // them was doing nothing but making it wider.
+    lay->setContentsMargins(4, 2, 4, 1);
     lay->setSpacing(0);
     lay->setAlignment(Qt::AlignLeft);
     auto addGroup = [&](const QString& title, QWidget* content) {
@@ -4665,7 +4667,7 @@ void MainWindow::buildDetailRibbonTab() {
         s->setRange(lo, hi);
         s->setSingleStep(step);
         s->setDecimals(1);
-        s->setMinimumWidth(78);
+        s->setMinimumWidth(64);
         s->setKeyboardTracking(false);
         s->setToolTip(tip);
         g->addWidget(l, row, 0);
@@ -4680,14 +4682,14 @@ void MainWindow::buildDetailRibbonTab() {
     {
         auto* w = new QWidget(detailTab_);
         auto* g = new QGridLayout(w);
-        g->setContentsMargins(4, 2, 4, 2);
-        g->setSpacing(3);
+        g->setContentsMargins(3, 0, 3, 0);
+        g->setSpacing(1);
         auto row = [&](int r, const QString& caption, const QString& tip, QLineEdit** out) {
             auto* l = new QLabel(caption, w);
             l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
             l->setToolTip(tip);
             auto* le = new QLineEdit(w);
-            le->setMinimumWidth(120);
+            le->setMinimumWidth(96);
             le->setToolTip(tip);
             g->addWidget(l, r, 0);
             g->addWidget(le, r, 1);
@@ -4738,7 +4740,7 @@ void MainWindow::buildDetailRibbonTab() {
             detailFontCombo_->setEditable(true);
             detailFontCombo_->addItem(tr("Default"));
             detailFontCombo_->addItems(QFontDatabase::families());
-            detailFontCombo_->setMinimumWidth(140);
+            detailFontCombo_->setMinimumWidth(104);
             detailFontCombo_->setToolTip(tr("The face the words are set in. Default follows the drawing."));
             g->addWidget(fl, 4, 0);
             g->addWidget(detailFontCombo_, 4, 1);
@@ -4753,8 +4755,8 @@ void MainWindow::buildDetailRibbonTab() {
     {
         auto* w = new QWidget(detailTab_);
         auto* g = new QGridLayout(w);
-        g->setContentsMargins(4, 2, 4, 2);
-        g->setSpacing(3);
+        g->setContentsMargins(3, 0, 3, 0);
+        g->setSpacing(1);
         spin(w, g, 0, tr("Boundary radius"), 0.1, 100000.0, 1.0,
              tr("The radius of the detail boundary on the parent view — how much of the drawing this view "
                 "is of."),
@@ -4788,8 +4790,8 @@ void MainWindow::buildDetailRibbonTab() {
     {
         auto* w = new QWidget(detailTab_);
         auto* g = new QGridLayout(w);
-        g->setContentsMargins(4, 2, 4, 2);
-        g->setSpacing(3);
+        g->setContentsMargins(3, 0, 3, 0);
+        g->setSpacing(1);
         spin(w, g, 0, tr("Source label angle"), -360.0, 360.0, 15.0,
              tr("Where the source label sits round the boundary, in degrees: 0 is to the right, 90 straight "
                 "up. Move it clear of the geometry it landed on."),
@@ -4817,8 +4819,8 @@ void MainWindow::buildDetailRibbonTab() {
     {
         auto* w = new QWidget(detailTab_);
         auto* g = new QGridLayout(w);
-        g->setContentsMargins(4, 2, 4, 2);
-        g->setSpacing(3);
+        g->setContentsMargins(3, 0, 3, 0);
+        g->setSpacing(1);
         auto box = [&](int row, const QString& caption, const QString& tip, QCheckBox** out) {
             auto* c = new QCheckBox(caption, w);
             c->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -4926,7 +4928,8 @@ void MainWindow::syncDetailRibbon() {
         if (e.id == detailEditId_ && e.type == EntityType::DetailView) { dv = &e; break; }
     if (!dv) return;
     detailSyncing_ = true;
-    const double capH = std::max(1e-9, dv->meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+    const double capH =
+        std::max(1e-9, dv->meta.value(QStringLiteral("detailTextSize")).toDouble(5.0));
     const QString letter = dv->meta.value(QStringLiteral("detailTag")).toString(QStringLiteral("A"));
     const QString both = QStringLiteral("Detail %1").arg(letter);
     if (detailSmallText_)
@@ -4943,7 +4946,7 @@ void MainWindow::syncDetailRibbon() {
     if (detailScaleSpin_)
         detailScaleSpin_->setValue(dv->meta.value(QStringLiteral("detailScale")).toDouble(2.0));
     if (detailTagAngleSpin_)
-        detailTagAngleSpin_->setValue(dv->meta.value(QStringLiteral("detailTagAngle")).toDouble(45.0));
+        detailTagAngleSpin_->setValue(dv->meta.value(QStringLiteral("detailTagAngle")).toDouble(90.0));
     if (detailTagGapSpin_)
         detailTagGapSpin_->setValue(
             dv->meta.value(QStringLiteral("detailTagGap")).toDouble(capH * 0.6));
@@ -8729,7 +8732,7 @@ void MainWindow::refreshProperties() {
                     mv(QStringLiteral("detailBigText")).toString(both), [this](const QString& t) {
                         editor_->setSelectionMeta(QStringLiteral("detailBigText"), t.trimmed());
                     });
-            addNum(QStringLiteral("Text height"), mv(QStringLiteral("detailTextSize")).toDouble(3.5),
+            addNum(QStringLiteral("Text height"), mv(QStringLiteral("detailTextSize")).toDouble(5.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTextSize"),
                                                        std::max(0.1, v));
@@ -8746,11 +8749,11 @@ void MainWindow::refreshProperties() {
             // about half the time, and a sheet with several details on it cannot be arranged at all if none
             // of the letters can be moved off what they are sitting on.
             addNum(QStringLiteral("Source label angle"),
-                   mv(QStringLiteral("detailTagAngle")).toDouble(45.0), [this](double v) {
+                   mv(QStringLiteral("detailTagAngle")).toDouble(90.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTagAngle"), v);
                    });
             addNum(QStringLiteral("Source label offset"),
-                   mv(QStringLiteral("detailTagGap")).toDouble(2.1), [this](double v) {
+                   mv(QStringLiteral("detailTagGap")).toDouble(3.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTagGap"),
                                                        std::max(0.0, v));
                    });
@@ -8759,7 +8762,7 @@ void MainWindow::refreshProperties() {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailBigAngle"), v);
                    });
             addNum(QStringLiteral("View label offset"),
-                   mv(QStringLiteral("detailBigGap")).toDouble(3.85), [this](double v) {
+                   mv(QStringLiteral("detailBigGap")).toDouble(5.5), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailBigGap"),
                                                        std::max(0.0, v));
                    });

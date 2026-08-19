@@ -29,12 +29,13 @@ bool g_inDetailView = false;
 
 Vec2 detailViewTextAt(const Entity& e, bool big) {
     const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
-    const double capH = std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(3.5));
+    const double capH =
+        std::max(1e-9, e.meta.value(QStringLiteral("detailTextSize")).toDouble(kDetailTextMm));
     const Vec2 c = big ? e.b : e.center;
     const double r = big ? e.radius * scale : e.radius;
     const double ang =
         e.meta.value(big ? QStringLiteral("detailBigAngle") : QStringLiteral("detailTagAngle"))
-            .toDouble(big ? -90.0 : 45.0);
+            .toDouble(big ? kDetailViewAngleDeg : kDetailTagAngleDeg);
     const double gap =
         e.meta.value(big ? QStringLiteral("detailBigGap") : QStringLiteral("detailTagGap"))
             .toDouble(big ? capH * 1.1 : capH * 0.6);
@@ -2020,7 +2021,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double scale = std::max(0.01, e.meta.value("detailScale").toDouble(2.0));
         const QString tag = e.meta.value("detailTag").toString(QStringLiteral("A"));
         const double big = e.radius * scale;
-        const double capH = std::max(1e-9, e.meta.value("detailTextSize").toDouble(3.5));
+        const double capH = std::max(1e-9, e.meta.value("detailTextSize").toDouble(kDetailTextMm));
         const double vs = vt.scale();
         // BOTH CIRCLES SAY "Detail A". The letter alone beside the small circle is the terse convention, but a
         // bare A on a sheet is a thing to be worked out - it could be a note, a zone, a revision - and the two
