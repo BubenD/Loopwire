@@ -2006,14 +2006,15 @@ void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
 
 // ONE RAIL of a band laid along a path, offset by `d` (positive to the left of travel).
 //
-// offsetPolyline mitres its corners, and a mitre is only safe while the offset is small next to the segments it
-// joins. A label is 5 mm deep on a cable whose corner may be a sharp mitre and whose pieces near a bend may be
-// a couple of millimetres long, and there the mitre point shoots off past the ends of both segments: the two
-// rails cross each other and the label comes out as a bowtie. Which is what it came out as.
+// THE CORNER IS MITRED, which is what a cable's own corner is and what a label wrapped round one looks like: the
+// label's long edge comes in straight, turns at the corner, and goes out straight. A cable drawn with a fillet
+// gives a filleted rail for nothing, because the fillet is in the path as an arc and offsetting an arc is an arc.
 //
-// So: ROUND on the outside of a turn, where an arc about the corner can never overshoot, and on the inside the
-// mitre only while it stays within reach of the segments it belongs to - otherwise cut straight across, which
-// is short of ideal and cannot fold.
+// A mitre is only safe while the offset is small next to the segments it joins, and a label five deep on a sharp
+// corner - or on the couple-of-millimetre pieces a cable is made of near a bend - sends the mitre point past the
+// ends of both segments: the two rails cross and the label comes out as a bowtie. So the mitre is used while it
+// stays within reach, and past that the outside is taken round on an arc (which cannot overshoot) and the inside
+// cut straight across (which is a corner slightly too full, and cannot fold).
 std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
     std::vector<Vec2> out;
     if (path.size() < 2) return out;
@@ -2036,8 +2037,20 @@ std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
         if (std::abs(cr) < 1e-9) continue;   // straight through: nothing to join
         const Vec2 a = path[i] + in.perp() * d;
         const Vec2 b = path[i] + nextDir.perp() * d;
-        // OUTSIDE of the turn: an arc about the corner, which cannot overshoot however sharp the corner or
-        // however deep the label.
+        // THE MITRE, which is the corner a label wrapped round a cable actually has - as long as it fits. How
+        // far it reaches out from the corner is the offset times the tangent of half the turn, and it has to
+        // stay inside the two segments it belongs to or it lands beyond the end of one of them.
+        const double turn = std::acos(std::clamp(dot(in, nextDir), -1.0, 1.0));
+        const double halfT = std::tan(turn / 2.0);
+        const double reach = std::abs(d) * std::abs(halfT);
+        const double room = std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
+        if (reach < room * 0.9 && std::cos(turn / 2.0) > 1e-6) {
+            const Vec2 bis = (in.perp() + nextDir.perp()).normalized();
+            out.push_back(path[i] + bis * (d / std::cos(turn / 2.0)));
+            continue;
+        }
+        // It does not fit. OUTSIDE of the turn, round the corner on an arc - which cannot overshoot however
+        // sharp the corner or however deep the label. INSIDE, cut straight across.
         const bool inner = (cr > 0.0) == (d > 0.0);
         if (!inner) {
             const double a0 = std::atan2(a.y - path[i].y, a.x - path[i].x);
@@ -2049,17 +2062,6 @@ std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
                 const double t = a0 + sweep * j / double(steps);
                 out.push_back({path[i].x + std::abs(d) * std::cos(t), path[i].y + std::abs(d) * std::sin(t)});
             }
-            continue;
-        }
-        // INSIDE: the mitre, while it stays within reach of the two segments it belongs to. Past that it is cut
-        // straight across - a corner slightly too full, and one that cannot fold back through the label.
-        const double half = std::abs(std::tan(std::acos(std::clamp(dot(in, nextDir), -1.0, 1.0)) / 2.0));
-        const double reach = std::abs(d) * half;
-        const double room = std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
-        if (reach < room * 0.9) {
-            out.push_back(path[i] + (in.perp() + nextDir.perp()).normalized() *
-                                        (d / std::max(1e-9, std::cos(std::acos(std::clamp(
-                                                                 dot(in, nextDir), -1.0, 1.0)) / 2.0))));
         } else {
             out.push_back(a);
             out.push_back(b);
@@ -2301,6 +2303,40 @@ std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
     return path;
 }
 
+// Which detail view's enlargement a point falls inside, or empty. The same test the remap makes, asked for the
+// view rather than for the point.
+QString Editor::detailWindowId(const Vec2& p) const {
+    if (!doc_) return QString();
+    const double tol = worldTolerance();
+    QString best;
+    double bestR = 1e300;
+    for (const Entity& e : doc_->entities()) {
+        if (e.type != EntityType::DetailView || e.radius <= 1e-9) continue;
+        const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+        const double big = e.radius * scale;
+        const double d = distance(p, e.b);
+        if (d > big - tol) continue;
+        if (d < tol && std::find(selected_.begin(), selected_.end(), e.id) != selected_.end()) continue;
+        if (big < bestR) { bestR = big; best = e.id; }
+    }
+    return best;
+}
+
+// Something has been drawn or edited THROUGH a detail view's enlargement, so a view that is a picture rather
+// than a live window is told to look again. Without this, drawing in the big circle of an ordinary detail view
+// changed the drawing and left the enlargement showing how it used to be - which is the one way a picture is not
+// allowed to be wrong: out of date about the very edit that was made through it.
+void Editor::refreshDetailDrawnThrough() {
+    if (!doc_ || detailThroughId_.isEmpty()) return;
+    for (Entity& e : doc_->entities()) {
+        if (e.id != detailThroughId_) continue;
+        if (e.meta.value(QStringLiteral("detailAnnotative")).toBool()) return;   // live: nothing to re-take
+        retakeDetailSnapshot(e);
+        doc_->setDirty(true);
+        return;
+    }
+}
+
 // A point inside an annotative detail view, in the coordinates of the thing the detail is a view OF.
 //
 // This is what makes such a view a WINDOW rather than a picture: everything downstream - the snaps, the
@@ -2321,7 +2357,11 @@ Vec2 Editor::throughDetailWindow(const Vec2& p) const {
     double bestR = 1e300;
     for (const Entity& e : doc_->entities()) {
         if (e.type != EntityType::DetailView || e.radius <= 1e-9) continue;
-        if (!e.meta.value(QStringLiteral("detailAnnotative")).toBool()) continue;
+        // EVERY enlargement can be drawn and edited in, not only an annotative one. A detail view is drawn
+        // BECAUSE the thing is too small to work on, so being able to work in the big circle is the point of
+        // having one - and refusing it on the ordinary sort left the commonest kind of detail view as something
+        // that could only be looked at. What annotative decides is whether the view is read live or is a picture,
+        // and a picture is simply told to look again once something has been drawn through it.
         const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
         const double big = e.radius * scale;
         const double d = distance(p, e.b);
@@ -3294,6 +3334,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     } else {
         const Vec2 mapped = throughDetailWindow(cursor_);
         detailThrough_ = std::abs(mapped.x - cursor_.x) > 1e-12 || std::abs(mapped.y - cursor_.y) > 1e-12;
+        detailThroughId_ = detailThrough_ ? detailWindowId(cursor_) : QString();
         cursor_ = mapped;
     }
 
@@ -3971,6 +4012,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
+    refreshDetailDrawnThrough();   // drawn through a picture: it looks again
     // The click that just settled: if it landed on something other than the label being fitted, the fitting
     // is over. Asked here rather than on the pick itself, because a pick clears the old selection before it
     // makes the new one - and a session ended on the clearing could never survive being clicked on.

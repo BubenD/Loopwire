@@ -1459,8 +1459,16 @@ private:
     // and the real object moves, and because the detail is drawn from the document every time, the change
     // shows in both circles at once.
     //
-    // Returns the point unchanged when it is not inside an annotative detail, which is the ordinary case.
+    // Returns the point unchanged when it is not inside any detail view's enlargement, which is the ordinary
+    // case. Every enlargement can be worked in - a detail view is drawn BECAUSE the thing is too small to work
+    // on - and what annotative decides is whether the view is read live or is a picture told to look again.
     Vec2 throughDetailWindow(const Vec2& p) const;
+    // Which detail view the cursor last reached through, if any. A view that is a PICTURE rather than a live
+    // window has to be told to look again once something has been drawn through it, or the drawing would change
+    // and the enlargement of it would not.
+    QString detailWindowId(const Vec2& p) const;
+    QString detailThroughId_;
+    void refreshDetailDrawnThrough();
     // The next free letter for a detail on this drawing. An office letters its details in the order they
     // were made and never renumbers them, so a letter is taken once and kept: the next one is the lowest
     // that is not in use, which after deleting B gives B back rather than jumping to D.

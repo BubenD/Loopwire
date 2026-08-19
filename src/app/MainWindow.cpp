@@ -4693,20 +4693,19 @@ void MainWindow::buildDetailRibbonTab() {
             g->addWidget(le, r, 1);
             *out = le;
         };
-        row(0, tr("On the small circle"),
-            tr("What is written beside the circle round the thing itself. Both circles say \"Detail A\" "
-               "unless something else is typed: a bare letter on a sheet is a thing to be worked out - it "
-               "could be a note, a zone, a revision - and the two circles reading the same is what ties "
-               "them together at a glance."),
-            &detailSmallText_);
-        row(1, tr("On the large circle"),
-            tr("The heading on the enlargement. Empty writes \"Detail\" and the letter, which is the "
-               "convention; anything typed here is used instead."),
-            &detailBigText_);
-        row(2, tr("Letter"),
-            tr("The letter that ties the two together - A, B, C. It is what both default texts are built "
-               "from, and what the next detail's letter runs on from."),
+        row(0, tr("Identifier"),
+            tr("The letter that ties the two circles together — A, B, C. Both labels are built from it, and "
+               "the next detail view on the sheet takes the next free letter."),
             &detailLetter_);
+        row(1, tr("Source label"),
+            tr("The label beside the boundary on the parent view. Both labels read \"Detail A\" unless "
+               "something else is typed: a bare letter on a sheet has to be worked out — it could be a note, "
+               "a zone, a revision — and the two reading the same ties them together at a glance."),
+            &detailSmallText_);
+        row(2, tr("View label"),
+            tr("The label on the detail view itself. Left empty it reads \"Detail\" and the identifier, "
+               "which is the convention."),
+            &detailBigText_);
         connect(detailSmallText_, &QLineEdit::textEdited, this, [write](const QString& t) {
             write(QStringLiteral("detailTagText"), t.trimmed());
         });
@@ -4747,7 +4746,7 @@ void MainWindow::buildDetailRibbonTab() {
                 write(QStringLiteral("detailFont"), f == QStringLiteral("Default") ? QString() : f);
             });
         }
-        addGroup(tr("What it says"), w);
+        addGroup(tr("Identification"), w);
     }
 
     // HOW MUCH, and HOW BIG.
@@ -4756,12 +4755,13 @@ void MainWindow::buildDetailRibbonTab() {
         auto* g = new QGridLayout(w);
         g->setContentsMargins(4, 2, 4, 2);
         g->setSpacing(3);
-        spin(w, g, 0, tr("Shows"), 0.1, 100000.0, 1.0,
-             tr("The radius of the circle round the thing - how much of the drawing this is a view of."),
+        spin(w, g, 0, tr("Boundary radius"), 0.1, 100000.0, 1.0,
+             tr("The radius of the detail boundary on the parent view — how much of the drawing this view "
+                "is of."),
              &detailShowsSpin_);
-        spin(w, g, 1, tr("Enlarged by"), 0.1, 200.0, 0.5,
-             tr("How many times bigger the enlargement is drawn. Two is the usual: enough to read, and "
-                "small enough to fit on the sheet beside what it came from."),
+        spin(w, g, 1, tr("Scale factor"), 0.1, 200.0, 0.5,
+             tr("How many times the detail view is enlarged. Two is the usual: enough to read, and small "
+                "enough to fit on the sheet beside the view it came from."),
              &detailScaleSpin_);
         connect(detailShowsSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
             if (detailSyncing_ || detailEditId_.isEmpty() || !doc_) return;
@@ -4778,7 +4778,7 @@ void MainWindow::buildDetailRibbonTab() {
         });
         connect(detailScaleSpin_, &QDoubleSpinBox::valueChanged, this,
                 [write](double v) { write(QStringLiteral("detailScale"), std::max(0.05, v)); });
-        addGroup(tr("Size"), w);
+        addGroup(tr("Scale"), w);
     }
 
     // WHERE THE WORDS SIT. A letter fixed at one o'clock lands on the geometry about half the time, and a
@@ -4789,18 +4789,18 @@ void MainWindow::buildDetailRibbonTab() {
         auto* g = new QGridLayout(w);
         g->setContentsMargins(4, 2, 4, 2);
         g->setSpacing(3);
-        spin(w, g, 0, tr("Letter at"), -360.0, 360.0, 15.0,
-             tr("Where the letter sits round the small circle, in degrees: 0 is to the right, 90 straight "
-                "up. Move it off whatever it landed on."),
+        spin(w, g, 0, tr("Source label angle"), -360.0, 360.0, 15.0,
+             tr("Where the source label sits round the boundary, in degrees: 0 is to the right, 90 straight "
+                "up. Move it clear of the geometry it landed on."),
              &detailTagAngleSpin_);
-        spin(w, g, 1, tr("Letter clear by"), 0.0, 1000.0, 0.5,
-             tr("How far the letter stands off the small circle."), &detailTagGapSpin_);
-        spin(w, g, 2, tr("Heading at"), -360.0, 360.0, 15.0,
-             tr("Where the heading sits round the enlargement, in degrees. Straight down (-90) is the "
+        spin(w, g, 1, tr("Source label offset"), 0.0, 1000.0, 0.5,
+             tr("How far the source label stands off the boundary."), &detailTagGapSpin_);
+        spin(w, g, 2, tr("View label angle"), -360.0, 360.0, 15.0,
+             tr("Where the view label sits round the detail view, in degrees. Directly below (-90) is the "
                 "convention."),
              &detailBigAngleSpin_);
-        spin(w, g, 3, tr("Heading clear by"), 0.0, 1000.0, 0.5,
-             tr("How far the heading stands off the enlargement."), &detailBigGapSpin_);
+        spin(w, g, 3, tr("View label offset"), 0.0, 1000.0, 0.5,
+             tr("How far the view label stands off the detail view."), &detailBigGapSpin_);
         connect(detailTagAngleSpin_, &QDoubleSpinBox::valueChanged, this,
                 [write](double v) { write(QStringLiteral("detailTagAngle"), v); });
         connect(detailTagGapSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -4809,7 +4809,7 @@ void MainWindow::buildDetailRibbonTab() {
                 [write](double v) { write(QStringLiteral("detailBigAngle"), v); });
         connect(detailBigGapSpin_, &QDoubleSpinBox::valueChanged, this,
                 [write](double v) { write(QStringLiteral("detailBigGap"), std::max(0.0, v)); });
-        addGroup(tr("Where the words go"), w);
+        addGroup(tr("Label placement"), w);
     }
 
     // THE THREE SWITCHES.
@@ -4826,22 +4826,22 @@ void MainWindow::buildDetailRibbonTab() {
             g->addWidget(c, row, 0);
             *out = c;
         };
-        box(0, tr("Ring round the enlargement"),
-            tr("The circle drawn round the enlarged view. It is the convention and it says where the view "
-               "stops - but a detail in a clear part of the sheet reads perfectly well without one, and on "
+        box(0, tr("Show view boundary"),
+            tr("The circle drawn round the detail view. It is the convention and it says where the view "
+               "stops — but a detail in a clear part of the sheet reads perfectly well without one, and on "
                "a busy sheet it is one more circle to be mistaken for a hole."),
             &detailBoundaryBox_);
-        box(1, tr("Annotative"),
-            tr("Makes the enlargement a live WINDOW on the drawing rather than a picture of it. The cursor "
-               "reaches through it: pick something in the big circle and it is the real object that is "
-               "picked, drag it and the real object moves, and it changes in both circles at once. Which is "
-               "the point - a detail is drawn BECAUSE the thing is too small to work on."),
+        box(1, tr("Associative"),
+            tr("Keeps the detail view tied to the parent geometry, so a change to either shows in both. "
+               "Cleared, the view is a static copy taken when it was placed — but it can still be drawn and "
+               "edited in either way, and a static view is brought up to date by whatever is drawn through "
+               "it. A detail view is made BECAUSE the geometry is too small to work on."),
             &detailAnnotativeBox_);
-        box(2, tr("Catch dimensions"),
-            tr("Whether the dimensions and text inside the circle come with it, enlarged. A detail is "
-               "usually drawn to show a SHAPE, and dimensions sized for the small version become the "
-               "biggest thing in the circle and cover what they were measuring - but a detail drawn "
-               "BECAUSE the dimensions would not fit at the small size needs them."),
+        box(2, tr("Include annotations"),
+            tr("Whether the dimensions and text inside the boundary are shown in the view, enlarged with "
+               "everything else. A detail view is usually made to show a SHAPE, and dimensions sized for "
+               "the parent view become the largest thing in it and cover what they were measuring — but a "
+               "view made BECAUSE the dimensions would not fit at parent scale needs them."),
             &detailDimsBox_);
         connect(detailBoundaryBox_, &QCheckBox::toggled, this,
                 [write](bool on) { write(QStringLiteral("detailBoundary"), on); });
@@ -4849,7 +4849,7 @@ void MainWindow::buildDetailRibbonTab() {
                 [write](bool on) { write(QStringLiteral("detailAnnotative"), on); });
         connect(detailDimsBox_, &QCheckBox::toggled, this,
                 [write](bool on) { write(QStringLiteral("detailShowDims"), on); });
-        addGroup(tr("The view"), w);
+        addGroup(tr("Display"), w);
     }
     lay->addStretch(1);
     // Out of sight until a detail view is selected. It is a child of the ribbon but not a tab of it, and a
@@ -8703,9 +8703,9 @@ void MainWindow::refreshProperties() {
         // where somebody goes to change one thing on one object; the tab is where somebody works through
         // several. Neither is a substitute for the other, so both.
         if (e->type == EntityType::DetailView) {
-            addNum(QStringLiteral("How much it shows"), nv([](const Entity& x) { return x.radius; }),
+            addNum(QStringLiteral("Boundary radius"), nv([](const Entity& x) { return x.radius; }),
                    [this](double v) { editor_->setGeometryValue("Radius", v); });
-            addNum(QStringLiteral("Enlarged by"), mv(QStringLiteral("detailScale")).toDouble(2.0),
+            addNum(QStringLiteral("Scale factor"), mv(QStringLiteral("detailScale")).toDouble(2.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailScale"),
                                                        std::max(0.01, v));
@@ -8716,17 +8716,17 @@ void MainWindow::refreshProperties() {
             // can be anything instead.
             const QString letter = mv(QStringLiteral("detailTag")).toString(QStringLiteral("A"));
             const QString both = QStringLiteral("Detail %1").arg(letter);
-            addText(QStringLiteral("On the small circle"),
+            addText(QStringLiteral("Identifier"), letter, [this](const QString& t) {
+                editor_->setSelectionMeta(QStringLiteral("detailTag"), t.trimmed().toUpper());
+            });
+            addText(QStringLiteral("Source label"),
                     mv(QStringLiteral("detailTagText")).toString(both), [this](const QString& t) {
                         editor_->setSelectionMeta(QStringLiteral("detailTagText"), t.trimmed());
                     });
-            addText(QStringLiteral("On the large circle"),
+            addText(QStringLiteral("View label"),
                     mv(QStringLiteral("detailBigText")).toString(both), [this](const QString& t) {
                         editor_->setSelectionMeta(QStringLiteral("detailBigText"), t.trimmed());
                     });
-            addText(QStringLiteral("Letter"), letter, [this](const QString& t) {
-                editor_->setSelectionMeta(QStringLiteral("detailTag"), t.trimmed().toUpper());
-            });
             addNum(QStringLiteral("Text height"), mv(QStringLiteral("detailTextSize")).toDouble(3.5),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTextSize"),
@@ -8743,20 +8743,20 @@ void MainWindow::refreshProperties() {
             // WHERE THE WORDS SIT ROUND EACH CIRCLE. A letter fixed at one o'clock lands on the geometry
             // about half the time, and a sheet with several details on it cannot be arranged at all if none
             // of the letters can be moved off what they are sitting on.
-            addNum(QStringLiteral("Letter around the circle"),
+            addNum(QStringLiteral("Source label angle"),
                    mv(QStringLiteral("detailTagAngle")).toDouble(45.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTagAngle"), v);
                    });
-            addNum(QStringLiteral("Letter clear of it"),
+            addNum(QStringLiteral("Source label offset"),
                    mv(QStringLiteral("detailTagGap")).toDouble(2.1), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailTagGap"),
                                                        std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Heading around the circle"),
+            addNum(QStringLiteral("View label angle"),
                    mv(QStringLiteral("detailBigAngle")).toDouble(-90.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailBigAngle"), v);
                    });
-            addNum(QStringLiteral("Heading clear of it"),
+            addNum(QStringLiteral("View label offset"),
                    mv(QStringLiteral("detailBigGap")).toDouble(3.85), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("detailBigGap"),
                                                        std::max(0.0, v));
@@ -8764,7 +8764,7 @@ void MainWindow::refreshProperties() {
             // The ring round the enlargement. It is the convention and it says where the view stops, but a
             // detail drawn into a clear part of the sheet reads perfectly well without one, and on a busy
             // sheet it is one more circle to be mistaken for a hole.
-            addCombo(QStringLiteral("Ring round the enlargement"), {"Yes", "No"},
+            addCombo(QStringLiteral("Show view boundary"), {"Yes", "No"},
                      yesNo(mv(QStringLiteral("detailBoundary")), true), false,
                      [this](const QString& v) {
                          editor_->setSelectionMetaBool(QStringLiteral("detailBoundary"),
@@ -8776,7 +8776,7 @@ void MainWindow::refreshProperties() {
             // once. Which is the point: a detail is drawn BECAUSE the thing is too small to work on, and a
             // view you can only look at sends you back to the small version to do the work at the size you
             // could not read.
-            addCombo(QStringLiteral("Annotative"), {"No", "Yes"},
+            addCombo(QStringLiteral("Associative"), {"No", "Yes"},
                      yesNo(mv(QStringLiteral("detailAnnotative")), false), false,
                      [this](const QString& v) {
                          editor_->setSelectionMetaBool(QStringLiteral("detailAnnotative"),
@@ -8786,7 +8786,7 @@ void MainWindow::refreshProperties() {
             // detail is usually drawn to show a SHAPE, and dimensions sized for the small version become the
             // biggest thing in the circle and cover what they were measuring. But a detail drawn BECAUSE the
             // dimensions would not fit at the small size needs them. Both are ordinary, so it is a switch.
-            addCombo(QStringLiteral("Catch dimensions"), {"No", "Yes"},
+            addCombo(QStringLiteral("Include annotations"), {"No", "Yes"},
                      yesNo(mv(QStringLiteral("detailShowDims")), false), false,
                      [this](const QString& v) {
                          editor_->setSelectionMetaBool(QStringLiteral("detailShowDims"),
