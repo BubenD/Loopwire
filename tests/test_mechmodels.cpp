@@ -1926,7 +1926,7 @@ int run_mechmodels_tests() {
             {MechModelKind::Boot, 3, "Straight"},
             {MechModelKind::RingInsulated, 2, "Insulated"},
             {MechModelKind::FerruleInsulated, 2, "Uninsulated"},
-            {MechModelKind::CircularConnector, 2, "Type 1"},
+            {MechModelKind::CircularConnector, 5, "Receptacle jam nut"},
             {MechModelKind::CircularBackshell, 3, "90 degrees"},
             {MechModelKind::DTypeConnector, 1, "Male"},
             {MechModelKind::YSplit, 2, "3 branches"},

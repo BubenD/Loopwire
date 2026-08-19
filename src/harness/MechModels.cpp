@@ -220,7 +220,13 @@ std::vector<QString> defaultSubModelNames(MechModelKind kind) {
         // DRAWINGS: an insulated crimp is drawn with the sleeve on it, and they are not the same picture.
         return {QStringLiteral("Insulated"), QStringLiteral("Uninsulated")};
     case MechModelKind::CircularConnector:
-        return {QStringLiteral("Type 1"), QStringLiteral("Type 2")};
+        // The forms a circular connector actually comes in, which is not a numbered list: a PLUG is the half that
+        // goes on the cable, a RECEPTACLE is the half that goes on the box and is held either by a jam nut through
+        // a single hole or by a flange bolted round it - and each half has a CAP on a lanyard for when it is
+        // unmated. Five different outlines, and a drawing office draws each one once.
+        return {QStringLiteral("Plug"), QStringLiteral("Receptacle jam nut"),
+                QStringLiteral("Receptacle flange"), QStringLiteral("Plug cap"),
+                QStringLiteral("Receptacle cap")};
     case MechModelKind::CircularBackshell:
         return {QStringLiteral("Straight"), QStringLiteral("45 degrees"), QStringLiteral("90 degrees")};
     case MechModelKind::DTypeConnector:
