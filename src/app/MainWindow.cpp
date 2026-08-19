@@ -4646,10 +4646,10 @@ void MainWindow::buildDetailRibbonTab() {
         for (Entity& e : editDoc()->entities()) {
             if (e.id != detailEditId_) continue;
             e.meta.insert(key, v);
-            // Switched off annotative, it becomes a picture again - of how the thing is NOW, not of how it was
-            // when the view was first placed, which by then may be several edits ago.
-            if (key == QStringLiteral("detailAnnotative") && !v.toBool()) editor_->retakeDetailSnapshot(e);
             editDoc()->setDirty(true);
+            // Made associative or not, or shown more or less: what a view that is NOT associative shows is a
+            // COPY made of real objects, so it is built, rebuilt or taken away to match.
+            editor_->syncDetailCopies();
             canvas_->invalidateScene();
             canvas_->update();
             refreshPanels();
@@ -4768,7 +4768,8 @@ void MainWindow::buildDetailRibbonTab() {
             for (Entity& e : editDoc()->entities())
                 if (e.id == detailEditId_) {
                     e.radius = std::max(1e-6, v);
-                    editor_->retakeDetailSnapshot(e);   // it shows more, or less
+                    editor_->clearDetailCopy(e.id);   // it shows more, or less: the copy is made again
+                    editor_->materialiseDetailCopy(e);
                     editDoc()->setDirty(true);
                     canvas_->invalidateScene();
                     canvas_->update();

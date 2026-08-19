@@ -147,23 +147,20 @@ int run_detailview_tests() {
         ed.setDocument(&d);
         noSnap(ed);
 
-        // EVERY enlargement can be worked in, associative or not. A detail view is made BECAUSE the geometry is
-        // too small to work on, so being able to work in the enlargement is the point of having one - and
-        // refusing it on the ordinary sort left the commonest kind of detail view as something that could only
-        // be looked at. What associative decides is whether the view is read live or is a static copy that is
-        // brought up to date by whatever is drawn through it.
+        // AN ASSOCIATIVE view is a WINDOW on the parent geometry, and the cursor reaches through it: that is
+        // what ties the two together, and it is the whole reason to make one - a detail view is drawn BECAUSE
+        // the geometry is too small to work on. The other kind is a COPY of real objects instead, edited
+        // directly - see the copy test - which is why reaching through that one would be wrong.
+        for (Entity& e : d.entities())
+            if (e.id == QStringLiteral("dv")) e.meta.insert(QStringLiteral("detailAnnotative"), true);
         ed.onPointerMove({104.0, 100.0});   // 4 right of the middle, at 4x = 1 in the drawing
         std::printf("  window: 4 right of the middle lands at %.2f,%.2f\n", ed.snappedCursor().x,
                     ed.snappedCursor().y);
         check(distance(ed.snappedCursor(), Vec2{11.0, 10.0}) < 1e-6,
               "window: it reaches through - 4 across the enlargement is 1 across the drawing");
-
-        // And so does an associative one, by the same mapping.
-        for (Entity& e : d.entities())
-            if (e.id == QStringLiteral("dv")) e.meta.insert(QStringLiteral("detailAnnotative"), true);
-        ed.onPointerMove({96.0, 100.0});    // 4 left of the middle, at 4x = 1 back down the drawing
+        ed.onPointerMove({96.0, 100.0});    // and 4 the other way is 1 back down the drawing
         check(distance(ed.snappedCursor(), Vec2{9.0, 10.0}) < 1e-6,
-              "window: associative or not, the mapping is the same");
+              "window: both ways, by the same mapping");
         ed.onPointerMove({104.0, 100.0});
 
         // Which means the REAL object is what gets picked in there, and so what gets moved.
@@ -271,16 +268,19 @@ int run_detailview_tests() {
     }
 
 
-    // ---- an ordinary detail is a PICTURE; only an annotative one passes changes both ways -----------
+    // ---- a view that is not associative is a COPY, and the copy is its own --------------------------
     {
-        // The switch decides where the view is READ FROM, which is the whole difference between the two.
-        // Annotative, it comes out of the document every time it is drawn, so the two circles are the same
-        // thing seen twice. Ordinary, it comes from the copy taken when it was placed - so drawing something
-        // new by the small circle leaves the enlargement alone, and the two stop passing anything to each
-        // other, which is what an ordinary detail view IS.
+        // The switch decides what the enlargement IS. Associative, it is a window on the parent geometry: the
+        // cursor reaches through it, and a change to either shows in both. Not associative, it is a COPY - made
+        // of real objects, sitting in the view - so it can be drawn on, trimmed, moved and deleted with the tools
+        // that already exist, and the parent does not move when it is.
+        //
+        // As a rendered picture it behaved like the associative kind in the hand: reaching through it edited the
+        // parent, which is exactly what associative means and what "not associative but behaves like associative"
+        // was.
         Document d;
         Entity l;
-        l.id = QStringLiteral("first");
+        l.id = QStringLiteral("thing");
         l.type = EntityType::Line;
         l.a = {8.0, 10.0};
         l.b = {12.0, 10.0};
@@ -291,58 +291,71 @@ int run_detailview_tests() {
         ed.setTool(ToolId::DetailView);
         ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.detailScale() = 6.0;   // big enough on screen that its middle is clear of the pick tolerance
         ed.onPointerPress({80.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* dv = nullptr;
         for (const Entity& e : d.entities())
             if (e.type == EntityType::DetailView) dv = &e;
-        check(dv != nullptr, "picture: placed");
+        check(dv != nullptr, "copy: placed");
         if (!dv) return failures;
-
-        // Neither switch is on to begin with: a detail is drawn to show a SHAPE, and dimensions sized for the
-        // small version become the biggest thing in the circle and cover what they were measuring. And a live
-        // window is the special case, not the ordinary one.
+        const QString viewId = dv->id;
         check(!dv->meta.value(QStringLiteral("detailAnnotative")).toBool(),
-              "picture: not annotative unless it is asked for");
-        check(!dv->meta.value(QStringLiteral("detailShowDims")).toBool(),
-              "picture: and it does not catch the dimensions unless it is asked to");
+              "copy: not associative unless it is asked for");
 
-        // It has something to be a picture OF, taken when it was placed.
-        const int snapWhenPlaced = dv->meta.value(QStringLiteral("detailSnap")).toArray().size();
-        std::printf("  picture: it is a picture of %d object(s)\n", snapWhenPlaced);
-        check(snapWhenPlaced == 1, "picture: the one line that was inside its circle");
-
-        // Something new drawn by the small circle does NOT get into that picture. This is the "not passed to
-        // each other" the switch is for: a picture is of how the thing WAS.
-        Entity later;
-        later.id = QStringLiteral("later");
-        later.type = EntityType::Line;
-        later.a = {8.0, 11.0};
-        later.b = {12.0, 11.0};
-        d.entities().push_back(later);
+        auto copies = [&]() {
+            std::vector<const Entity*> out;
+            for (const Entity& e : d.entities())
+                if (e.meta.value(QStringLiteral("detailCopyOf")).toString() == viewId) out.push_back(&e);
+            return out;
+        };
+        auto pieces = copies();
+        std::printf("  copy: %d real object(s) put in the view\n", int(pieces.size()));
+        check(!pieces.empty(), "copy: the enlargement is made of real objects, not painted");
+        // Enlarged, and put where the view is - not left on top of the parent.
+        if (!pieces.empty()) {
+            const Bounds cb = pieces.front()->bounds();
+            const double scale = dv->meta.value(QStringLiteral("detailScale")).toDouble(2.0);
+            std::printf("  copy: %.1f long where the parent was 4.0, centred near %.1f,%.1f\n", cb.width(),
+                        cb.center().x, cb.center().y);
+            check(std::abs(cb.width() - 4.0 * scale) < 0.5, "copy: enlarged by the scale factor");
+            check(distance(cb.center(), Vec2{80.0, 10.0}) < 1.0, "copy: and set down in the view");
+        }
+        // THE COPY IS ITS OWN. Moving it does not move the parent, which is the whole difference.
+        const Vec2 parentWas = l.a;
+        for (Entity& e : d.entities())
+            if (e.meta.value(QStringLiteral("detailCopyOf")).toString() == viewId) {
+                e.a = e.a + Vec2{0.0, 5.0};
+                e.b = e.b + Vec2{0.0, 5.0};
+            }
         for (const Entity& e : d.entities())
-            if (e.type == EntityType::DetailView) dv = &e;
-        check(dv->meta.value(QStringLiteral("detailSnap")).toArray().size() == snapWhenPlaced,
-              "picture: something drawn afterwards does not appear in it");
+            if (e.id == QStringLiteral("thing"))
+                check(distance(e.a, parentWas) < 1e-9,
+                      "copy: editing the copy leaves the parent exactly where it was");
 
-        // Pointing it somewhere else re-takes the picture, because a view that kept the old copy would show
-        // the bit of drawing it USED to be over, which is a detail view telling a lie.
-        // It is already selected and already in Select - placing it does both - so this only has to take hold
-        // of its centre handle. Cleared first, or the click on the ring would catch the radius handle that is
-        // sitting on it rather than picking the view.
+        // And the cursor does NOT reach through it - there is nothing to reach through, the content is right
+        // there. Reaching through is what made the two kinds behave alike.
         ed.clearSelection();
-        ed.onPointerPress({14.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // pick it by its ring
-        ed.onPointerRelease({14.0, 10.0}, Qt::LeftButton);
-        check(ed.selection().size() == 1, "picture: its ring picks it up");
-        ed.onPointerPress({10.0, 10.0}, Qt::LeftButton, Qt::NoModifier);   // its centre handle
-        ed.onPointerMove({10.0, 10.5});                                    // over both lines now
-        for (const Entity& e : d.entities())
-            if (e.type == EntityType::DetailView) dv = &e;
-        const int snapAfter = dv->meta.value(QStringLiteral("detailSnap")).toArray().size();
+        ed.onPointerMove({80.0, 10.0});
+        check(distance(ed.snappedCursor(), Vec2{80.0, 10.0}) < 1e-6,
+              "copy: the cursor stays in the view - the objects there are the ones it acts on");
 
-        std::printf("  picture: pointed at both lines, it is now a picture of %d\n", snapAfter);
-        check(snapAfter == 2, "picture: moved, it is a picture of what it is over NOW");
+        // Made associative, the copy goes: the view draws itself, and a copy would be the same thing twice.
+        for (Entity& e : d.entities())
+            if (e.id == viewId) e.meta.insert(QStringLiteral("detailAnnotative"), true);
+        ed.syncDetailCopies();
+        std::printf("  copy: made associative, %d copied object(s) left\n", int(copies().size()));
+        check(copies().empty(), "copy: made associative, the copy is taken away");
+        // ...and now the cursor DOES reach through, because that is what associative is.
+        ed.onPointerMove({92.0, 10.0});   // 12 right of the middle, at 6x = 2 in the drawing
+        check(distance(ed.snappedCursor(), Vec2{12.0, 10.0}) < 1e-6,
+              "copy: associative, it is a window again and the cursor reaches through it");
+
+        // Made ordinary again, the copy comes back - of how the parent is NOW.
+        for (Entity& e : d.entities())
+            if (e.id == viewId) e.meta.insert(QStringLiteral("detailAnnotative"), false);
+        ed.syncDetailCopies();
+        check(!copies().empty(), "copy: made ordinary again, it is a copy again");
     }
-
 
     // ---- what an ordinary detail view actually DRAWS in its big circle ------------------------------
     {
@@ -368,8 +381,7 @@ int run_detailview_tests() {
         Editor ed;
         ed.setDocument(&d);
         noSnap(ed);
-        for (Entity& e : d.entities())
-            if (e.id == QStringLiteral("dv")) ed.retakeDetailSnapshot(e);
+        ed.syncDetailCopies();
 
         // Paint the sheet, then count the ink strictly INSIDE the enlargement - clear of its own ring and clear
         // of the caption under it, so what is counted can only be the view of the thing.
@@ -401,88 +413,43 @@ int run_detailview_tests() {
         for (const Entity& e : d.entities())
             if (e.type == EntityType::DetailView) view = &e;
         check(view != nullptr, "draws: the view is there");
-        // The copy decodes back to the object it was taken of. Entity::fromJson is STATIC and RETURNS the
-        // entity, and calling it as though it were a setter left a blank object behind - which is what made an
-        // ordinary detail view draw an empty circle while an annotative one, reading the document directly, was
-        // fine. So this checks the decode as well as the picture.
-        if (view) {
-            const QJsonArray arr = view->meta.value(QStringLiteral("detailSnap")).toArray();
-            check(arr.size() == 1, "draws: the copy holds the one object that was in the circle");
-            for (const auto& v : arr) {
-                const Entity x = Entity::fromJson(v.toObject());
-                check(x.type == EntityType::Line && x.bounds().valid,
-                      "draws: and it decodes back to that object, geometry and all");
-            }
-        }
-        if (view) {
-            const int ordinary = inkInside(*view);
-            std::printf("  draws: not annotative, %d lit pixel(s) inside the enlargement\n", ordinary);
-            check(ordinary > 0,
-                  "draws: an ordinary detail view DRAWS the copy it took - an empty circle is not a detail");
-        }
-        // And annotative draws it too, from the document rather than the copy.
+        // An ASSOCIATIVE view draws its own enlargement, out of the document, every time it is drawn. This
+        // paints the sheet and counts the ink strictly inside it, because "it is tied to the parent" and "it
+        // shows the parent" are not the same claim - a view that draws nothing is an empty circle.
         for (Entity& e : d.entities())
             if (e.id == QStringLiteral("dv")) e.meta.insert(QStringLiteral("detailAnnotative"), true);
         for (const Entity& e : d.entities())
             if (e.type == EntityType::DetailView) view = &e;
         if (view) {
             const int live = inkInside(*view);
-            std::printf("  draws: annotative, %d lit pixel(s)\n", live);
-            check(live > 0, "draws: and so does an annotative one, out of the document");
+            std::printf("  draws: associative, %d lit pixel(s) inside the enlargement\n", live);
+            check(live > 0, "draws: an associative view draws the parent geometry inside it");
+        }
+        // The other kind draws nothing of its own there: what is in it is a copy made of real objects, drawn by
+        // the same pass that draws everything else. Which is exactly what makes it editable.
+        for (Entity& e : d.entities())
+            if (e.id == QStringLiteral("dv")) e.meta.insert(QStringLiteral("detailAnnotative"), false);
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) view = &e;
+        // Asked with the copy taken away, so what is counted can only be what the VIEW itself paints.
+        if (view) ed.clearDetailCopy(view->id);
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) view = &e;
+        if (view) {
+            const int painted = inkInside(*view);
+            std::printf("  draws: not associative, %d lit pixel(s) of its own\n", painted);
+            check(painted == 0, "draws: a view that is not associative paints nothing - its content is real");
+        }
+        ed.syncDetailCopies();
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::DetailView) view = &e;
+        if (view) {
+            const int withCopy = inkInside(*view);
+            std::printf("  draws: and with its copy made, %d lit pixel(s)\n", withCopy);
+            check(withCopy > 0, "draws: and with the copy in it, there is something to see");
         }
     }
 
-
-    // ---- drawn through, a static view is brought up to date -----------------------------------------
-    {
-        // A detail view is made BECAUSE the geometry is too small to work on, so the enlargement is where the
-        // work gets done - on the ordinary static kind as much as on the associative one. Which leaves one thing
-        // a static copy is not allowed to be out of date about: the very edit that was made through it.
-        Document d;
-        Entity l;
-        l.id = QStringLiteral("thing");
-        l.type = EntityType::Line;
-        l.a = {8.0, 10.0};
-        l.b = {12.0, 10.0};
-        d.entities().push_back(l);
-        Entity dv;
-        dv.id = QStringLiteral("dv");
-        dv.type = EntityType::DetailView;
-        dv.center = {10.0, 10.0};
-        dv.radius = 4.0;
-        dv.b = {100.0, 100.0};
-        dv.meta.insert(QStringLiteral("detailScale"), 4.0);
-        d.entities().push_back(dv);
-        Editor ed;
-        ed.setDocument(&d);
-        noSnap(ed);
-        for (Entity& e : d.entities())
-            if (e.id == QStringLiteral("dv")) ed.retakeDetailSnapshot(e);
-        auto snapCount = [&]() -> int {
-            for (const Entity& e : d.entities())
-                if (e.type == EntityType::DetailView)
-                    return static_cast<int>(e.meta.value(QStringLiteral("detailSnap")).toArray().size());
-            return 0;
-        };
-        check(snapCount() == 1, "through: it is a static copy of the one line");
-
-        // Draw a line IN the enlargement. The cursor reaches through, so the line is drawn on the real geometry
-        // at the source - and the copy is re-taken, because that edit was made through this very view.
-        ed.setTool(ToolId::Line);
-        ed.onPointerPress({96.0, 104.0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerRelease({96.0, 104.0}, Qt::LeftButton);
-        ed.onPointerMove({104.0, 104.0});
-        ed.onPointerPress({104.0, 104.0}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerRelease({104.0, 104.0}, Qt::LeftButton);
-        int lines = 0;
-        for (const Entity& e : d.entities())
-            if (e.type == EntityType::Line) ++lines;
-        std::printf("  through: %d line(s) on the drawing, the copy now holds %d\n", lines, snapCount());
-        check(lines == 2, "through: drawing in the enlargement draws on the real geometry");
-        // The new line was drawn at the source, a millimetre above the old one - so it is inside the boundary
-        // and belongs in the copy.
-        check(snapCount() == 2, "through: and the static copy is brought up to date by it");
-    }
 
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);

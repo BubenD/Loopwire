@@ -2044,9 +2044,15 @@ std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
         const double halfT = std::tan(turn / 2.0);
         const double reach = std::abs(d) * std::abs(halfT);
         const double room = std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
-        if (reach < room * 0.9 && std::cos(turn / 2.0) > 1e-6) {
+        // A MITRE LIMIT, the way every line stroker has one. On a turn sharper than about a right angle the
+        // mitre point runs away from the corner - at 135 degrees it is two and a half times the label's own
+        // depth out - and a spike that long off the edge of a label is not a corner, it is a thorn. Past the
+        // limit the corner is cut instead, which is what a drawing office would do by hand.
+        constexpr double kMiterLimit = 2.0;
+        const double stretch = std::cos(turn / 2.0) > 1e-6 ? 1.0 / std::cos(turn / 2.0) : 1e9;
+        if (reach < room * 0.9 && stretch <= kMiterLimit) {
             const Vec2 bis = (in.perp() + nextDir.perp()).normalized();
-            out.push_back(path[i] + bis * (d / std::cos(turn / 2.0)));
+            out.push_back(path[i] + bis * (d * stretch));
             continue;
         }
         // It does not fit. OUTSIDE of the turn, round the corner on an arc - which cannot overshoot however
@@ -2147,6 +2153,76 @@ std::vector<Vec2> pathPiece(const std::vector<Vec2>& path, double s0, double s1)
     return out;
 }
 
+// The piece or pieces of a segment that lie inside a circle. A detail view's copy is clipped to its boundary,
+// or a wire crossing the boundary would run out of the view and off across the sheet at twice its length.
+std::vector<std::pair<Vec2, Vec2>> clipSegmentToCircle(const Vec2& a, const Vec2& b, const Vec2& c,
+                                                       double r) {
+    std::vector<std::pair<Vec2, Vec2>> out;
+    const Vec2 dir = b - a;
+    const double A = dir.lengthSq();
+    if (A < 1e-24) {
+        if (distance(a, c) <= r) out.emplace_back(a, b);
+        return out;
+    }
+    const Vec2 f = a - c;
+    const double B = 2.0 * dot(f, dir);
+    const double C = f.lengthSq() - r * r;
+    const double disc = B * B - 4.0 * A * C;
+    if (disc < 0.0) return out;   // the line misses the circle entirely
+    const double sq = std::sqrt(disc);
+    double t0 = (-B - sq) / (2.0 * A), t1 = (-B + sq) / (2.0 * A);
+    if (t0 > t1) std::swap(t0, t1);
+    t0 = std::max(t0, 0.0);
+    t1 = std::min(t1, 1.0);
+    if (t1 - t0 <= 1e-9) return out;
+    out.emplace_back(Vec2{a.x + dir.x * t0, a.y + dir.y * t0}, Vec2{a.x + dir.x * t1, a.y + dir.y * t1});
+    return out;
+}
+
+// Cut a rail back to one side of a plane: keep the points with `dot(p - at, dir) >= 0`, putting a point exactly
+// on the plane wherever the rail crosses it.
+//
+// This is what lets a rail be built on MORE cable than the label covers and then trimmed to the label's own
+// ends. Which matters: whether a mitre fits at a corner depends on how long the cable's segments are either side
+// of it, and building the rail on only the piece the label covers made the segments look as short as the piece -
+// so a corner two millimetres inside the label's end had its mitre refused, and the fallback pinched the inner
+// edge of the label right on to the cable's centreline.
+std::vector<Vec2> clipRailToPlane(const std::vector<Vec2>& rail, const Vec2& at, const Vec2& dir) {
+    std::vector<Vec2> out;
+    if (rail.empty()) return out;
+    auto side = [&](const Vec2& p) { return dot(p - at, dir); };
+    for (size_t i = 0; i < rail.size(); ++i) {
+        const double s = side(rail[i]);
+        if (s >= -1e-12) out.push_back(rail[i]);
+        if (i + 1 >= rail.size()) break;
+        const double s2 = side(rail[i + 1]);
+        if ((s < 0.0) == (s2 < 0.0)) continue;
+        const double t = s / (s - s2);
+        out.push_back({rail[i].x + (rail[i + 1].x - rail[i].x) * t,
+                       rail[i].y + (rail[i + 1].y - rail[i].y) * t});
+    }
+    return out;
+}
+
+// ONE RAIL of the label: the cable offset by `d`, running from one end of the label to the other, mitred at the
+// cable's own corners. Built on a little MORE cable than the label covers and then cut back square at each end,
+// so a corner near an end is mitred by how long the cable's segments really are rather than by how much of them
+// the label happens to sit on.
+std::vector<Vec2> labelRail(const std::vector<Vec2>& path, double s0, double s1, double d) {
+    if (path.size() < 2 || s1 <= s0) return {};
+    const double pad = std::abs(d) * 4.0 + 1.0;
+    const std::vector<Vec2> wide = pathPiece(path, s0 - pad, s1 + pad);
+    if (wide.size() < 2) return {};
+    std::vector<Vec2> rail = offsetRailRound(wide, d);
+    if (rail.size() < 2) return {};
+    Vec2 a0, dir0, a1, dir1;
+    frameOnPath(path, s0, a0, dir0);
+    frameOnPath(path, s1, a1, dir1);
+    rail = clipRailToPlane(rail, a0, dir0);        // at or past the near end
+    rail = clipRailToPlane(rail, a1, dir1 * -1.0); // at or before the far end
+    return rail;
+}
+
 // Does the run bend anywhere under a label of this length, sat at this place along it? Asked by the fit when
 // the label is placed and by the slide when it is pushed along, so a label that slides INTO a bend lays itself
 // round the bend and one that slides out of it straightens - which is what being coupled to the run means.
@@ -2223,27 +2299,6 @@ static std::vector<Vec2> entityPathPoints(const Entity& e) {
     }
 }
 
-// A copy of what is inside a detail view's circle, kept on the view. This is what an ordinary - not
-// annotative - detail view shows: a picture of how the thing was when the view was placed, so the two circles
-// stop passing anything to each other. Draw something new by the small circle and the enlargement does not
-// change; draw something over the enlargement and it stays there and only there.
-//
-// Only what the circle can reach is kept, so the copy is a handful of objects and not the whole sheet.
-void Editor::retakeDetailSnapshot(Entity& e) const {
-    if (!doc_ || e.type != EntityType::DetailView || e.radius <= 1e-9) return;
-    QJsonArray arr;
-    for (const Entity& x : doc_->entities()) {
-        if (x.id == e.id || x.type == EntityType::DetailView) continue;
-        const Bounds xb = x.bounds();
-        if (!xb.valid) continue;
-        if (xb.max.x < e.center.x - e.radius || xb.min.x > e.center.x + e.radius ||
-            xb.max.y < e.center.y - e.radius || xb.min.y > e.center.y + e.radius)
-            continue;
-        arr.append(x.toJson());
-    }
-    e.meta.insert(QStringLiteral("detailSnap"), arr);
-}
-
 std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
     if (!doc_) return {};
     const Entity* host = nullptr;
@@ -2303,6 +2358,116 @@ std::vector<Vec2> Editor::runPathThrough(const QString& hostId) const {
     return path;
 }
 
+// THE COPY, AS REAL GEOMETRY. What a detail view that is NOT associative shows: the objects inside its boundary,
+// copied once, enlarged, clipped to the boundary and set down in the view - as ordinary objects on the drawing.
+//
+// It used to be a rendered picture, and that made the two kinds behave the same way in the hand: the cursor
+// reached through the enlargement to the parent geometry, so editing "in the view" edited the parent - which is
+// what ASSOCIATIVE means. Not associative has to mean the copy is its own: edit it and the parent does not move.
+// Ordinary objects are the whole answer, because then it can be drawn on, trimmed, moved and deleted with the
+// tools that already exist and nothing has to reach through anything.
+//
+// Stamped with the view's id, so the copy can be found again when the view is moved, resized or made associative.
+void Editor::materialiseDetailCopy(const Entity& view) {
+    if (!doc_ || view.type != EntityType::DetailView || view.radius <= 1e-9) return;
+    const QString viewId = view.id;
+    const double scale = std::max(0.01, view.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
+    const bool withDims = view.meta.value(QStringLiteral("detailShowDims")).toBool(false);
+    const Vec2 c = view.center, b = view.b;
+    const double r = view.radius;
+    clearDetailCopy(viewId);
+    auto put = [&](const Vec2& p) { return b + (p - c) * scale; };
+    std::vector<Entity> made;
+    for (const Entity& x : doc_->entities()) {
+        if (x.id == viewId || x.type == EntityType::DetailView) continue;
+        if (!x.meta.value(QStringLiteral("detailCopyOf")).toString().isEmpty()) continue;   // not another copy
+        if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
+                          x.type == EntityType::Text || x.type == EntityType::NetLabel))
+            continue;
+        const Bounds xb = x.bounds();
+        if (!xb.valid) continue;
+        if (xb.max.x < c.x - r || xb.min.x > c.x + r || xb.max.y < c.y - r || xb.min.y > c.y + r) continue;
+        std::vector<Vec2> pts = x.points;
+        if (pts.size() < 2 && (x.type == EntityType::Line || x.type == EntityType::DoubleLine))
+            pts = {x.a, x.b};
+        if (pts.size() >= 2) {
+            // A line or a run is CUT at the boundary, and comes out as however many pieces of it were inside.
+            for (size_t i = 1; i < pts.size(); ++i)
+                for (const auto& bit : clipSegmentToCircle(pts[i - 1], pts[i], c, r)) {
+                    Entity e;
+                    e.id = uid();
+                    e.type = EntityType::Line;
+                    e.layer = x.layer;
+                    e.color = x.color;
+                    e.weight = x.weight;
+                    e.a = put(bit.first);
+                    e.b = put(bit.second);
+                    made.push_back(std::move(e));
+                }
+            continue;
+        }
+        // Anything else is taken whole if its middle is inside: right for a symbol or a piece of text, and near
+        // enough for the rest.
+        if (distance(xb.center(), c) > r) continue;
+        Entity e = x;
+        e.id = uid();
+        e.a = put(x.a);
+        e.b = put(x.b);
+        e.center = put(x.center);
+        for (Vec2& q : e.points) q = put(q);
+        if (e.radius > 1e-9) e.radius *= scale;
+        for (const char* key : {"height", "size"}) {
+            const double v = e.meta.value(QLatin1String(key)).toDouble();
+            if (v > 1e-9) e.meta.insert(QLatin1String(key), v * scale);
+        }
+        made.push_back(std::move(e));
+    }
+    for (Entity& e : made) {
+        e.meta.insert(QStringLiteral("detailCopyOf"), viewId);
+        doc_->entities().push_back(std::move(e));
+    }
+    doc_->setDirty(true);
+}
+
+// The copy a view made, taken away again: when it is moved or resized - the copy is of somewhere else now - or
+// when it is made associative, where the view draws itself and a copy would be the same thing twice.
+void Editor::clearDetailCopy(const QString& viewId) {
+    if (!doc_) return;
+    auto& es = doc_->entities();
+    es.erase(std::remove_if(es.begin(), es.end(),
+                            [&](const Entity& e) {
+                                return e.meta.value(QStringLiteral("detailCopyOf")).toString() == viewId;
+                            }),
+             es.end());
+}
+
+// Every detail view has what it should have: a copy if it is not associative, and none if it is. Asked after
+// anything that could have changed the answer, and cheap enough to ask often - it does nothing at all unless a
+// view is in the wrong state.
+void Editor::syncDetailCopies() {
+    if (!doc_) return;
+    std::vector<QString> makeFor;
+    std::vector<QString> clearFor;
+    for (const Entity& e : doc_->entities()) {
+        if (e.type != EntityType::DetailView) continue;
+        bool hasCopy = false;
+        for (const Entity& x : doc_->entities())
+            if (x.meta.value(QStringLiteral("detailCopyOf")).toString() == e.id) { hasCopy = true; break; }
+        const bool live = e.meta.value(QStringLiteral("detailAnnotative")).toBool();
+        if (live && hasCopy) clearFor.push_back(e.id);
+        else if (!live && !hasCopy) makeFor.push_back(e.id);
+    }
+    for (const QString& id : clearFor) clearDetailCopy(id);
+    for (const QString& id : makeFor) {
+        // Copied out first: materialising appends to the very list being walked.
+        Entity view;
+        for (const Entity& e : doc_->entities())
+            if (e.id == id) { view = e; break; }
+        if (view.type == EntityType::DetailView) materialiseDetailCopy(view);
+    }
+    if (!clearFor.empty() || !makeFor.empty()) emit changed();
+}
+
 // Which detail view's enlargement a point falls inside, or empty. The same test the remap makes, asked for the
 // view rather than for the point.
 QString Editor::detailWindowId(const Vec2& p) const {
@@ -2320,21 +2485,6 @@ QString Editor::detailWindowId(const Vec2& p) const {
         if (big < bestR) { bestR = big; best = e.id; }
     }
     return best;
-}
-
-// Something has been drawn or edited THROUGH a detail view's enlargement, so a view that is a picture rather
-// than a live window is told to look again. Without this, drawing in the big circle of an ordinary detail view
-// changed the drawing and left the enlargement showing how it used to be - which is the one way a picture is not
-// allowed to be wrong: out of date about the very edit that was made through it.
-void Editor::refreshDetailDrawnThrough() {
-    if (!doc_ || detailThroughId_.isEmpty()) return;
-    for (Entity& e : doc_->entities()) {
-        if (e.id != detailThroughId_) continue;
-        if (e.meta.value(QStringLiteral("detailAnnotative")).toBool()) return;   // live: nothing to re-take
-        retakeDetailSnapshot(e);
-        doc_->setDirty(true);
-        return;
-    }
 }
 
 // A point inside an annotative detail view, in the coordinates of the thing the detail is a view OF.
@@ -2357,11 +2507,13 @@ Vec2 Editor::throughDetailWindow(const Vec2& p) const {
     double bestR = 1e300;
     for (const Entity& e : doc_->entities()) {
         if (e.type != EntityType::DetailView || e.radius <= 1e-9) continue;
-        // EVERY enlargement can be drawn and edited in, not only an annotative one. A detail view is drawn
-        // BECAUSE the thing is too small to work on, so being able to work in the big circle is the point of
-        // having one - and refusing it on the ordinary sort left the commonest kind of detail view as something
-        // that could only be looked at. What annotative decides is whether the view is read live or is a picture,
-        // and a picture is simply told to look again once something has been drawn through it.
+        // ONLY AN ASSOCIATIVE VIEW IS A WINDOW. On the other kind the enlargement is a COPY, made of real
+        // objects, and it is edited by editing THEM - so reaching through it would reach past the very thing that
+        // is there to be worked on and edit the parent instead. Which is what associative means, and is why the
+        // two kinds behaved the same way in the hand.
+        //
+        // Both can be worked in. One by reaching through it; the other by editing the copy sitting in it.
+        if (!e.meta.value(QStringLiteral("detailAnnotative")).toBool()) continue;
         const double scale = std::max(0.01, e.meta.value(QStringLiteral("detailScale")).toDouble(2.0));
         const double big = e.radius * scale;
         const double d = distance(p, e.b);
@@ -2662,14 +2814,14 @@ std::vector<Vec2> Editor::labelMaskQuad(const LabelFit& fit) {
     //
     // Offset by however far the label's middle sits off the run as well - the middle of the BUNDLE, not of the
     // one wire the run happens to be.
-    const std::vector<Vec2> piece = pathPiece(fit.path, fit.midS - half, fit.midS + half);
-    if (piece.size() < 2) {
+    std::vector<Vec2> out = labelRail(fit.path, fit.midS - half, fit.midS + half, fit.midOff - side);
+    const std::vector<Vec2> far =
+        labelRail(fit.path, fit.midS - half, fit.midS + half, fit.midOff + side);
+    if (out.size() < 2 || far.size() < 2) {
         const Vec2 a = fit.runDir * half;
         const Vec2 c = fit.acrossDir * side;
         return {fit.mid - a - c, fit.mid + a - c, fit.mid + a + c, fit.mid - a + c};
     }
-    std::vector<Vec2> out = offsetRailRound(piece, fit.midOff - side);
-    const std::vector<Vec2> far = offsetRailRound(piece, fit.midOff + side);
     for (auto it = far.rbegin(); it != far.rend(); ++it) out.push_back(*it);
     // A FOLDED BAND IS WORSE THAN A STRAIGHT ONE. If the two rails have crossed each other - which they can on a
     // corner too sharp for the depth of label being laid on it, however carefully the joins are made - the label
@@ -2723,9 +2875,7 @@ std::vector<Entity> Editor::labelEntities(const LabelFit& fit, std::vector<Vec2>
     // they were drawn as in between.
     auto railAlong = [&](double u0, double u1, double v) {
         const double lo = std::min(u0, u1), hi = std::max(u0, u1);
-        std::vector<Vec2> piece = pathPiece(fit.path, fit.midS + lo, fit.midS + hi);
-        if (piece.size() < 2) return std::vector<Vec2>{};
-        std::vector<Vec2> rail = offsetRailRound(piece, v + fit.midOff);
+        std::vector<Vec2> rail = labelRail(fit.path, fit.midS + lo, fit.midS + hi, v + fit.midOff);
         if (rail.size() < 2) return std::vector<Vec2>{};
         if (u1 < u0) std::reverse(rail.begin(), rail.end());
         return rail;
@@ -3623,9 +3773,9 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // time is a released sheet with an orange ring on it, and a drawing office chooses its own colours.
         d.meta.insert(QStringLiteral("detailScale"), std::max(0.01, detailScale_));
         d.meta.insert(QStringLiteral("detailTag"), nextDetailTag());
-        // What it is a picture OF, taken now. An ordinary detail view shows this rather than the live drawing,
-        // which is what stops the two circles passing anything to each other.
-        retakeDetailSnapshot(d);
+        // The copy, as real geometry, unless the view is associative - see materialiseDetailCopy. Made after it
+        // is on the drawing, because the copy is of what the boundary is over.
+        const bool makeCopy = !d.meta.value(QStringLiteral("detailAnnotative")).toBool();
         const QString tag = d.meta.value(QStringLiteral("detailTag")).toString();
         const QString placedId = d.id;
         doc_->entities().push_back(std::move(d));
@@ -3636,6 +3786,9 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // is right for a mark you put several of in a row; a detail view is a thing you place and then arrange -
         // move it, size it, letter it - and being still armed means the first click meant to take hold of it
         // starts another one instead.
+        if (makeCopy)
+            for (const Entity& e : doc_->entities())
+                if (e.id == placedId) { materialiseDetailCopy(e); break; }
         selected_ = {placedId};
         setTool(ToolId::Select);
         emit message(QStringLiteral("Detail %1 placed — set it up on the ribbon or drag it where it goes")
@@ -4012,7 +4165,18 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
-    refreshDetailDrawnThrough();   // drawn through a picture: it looks again
+    // A detail view that was moved or resized has a copy of somewhere else: made again now the drag has finished,
+    // rather than on every step of it.
+    if (!detailCopyStale_.isEmpty()) {
+        const QString id = detailCopyStale_;
+        detailCopyStale_.clear();
+        for (const Entity& e : doc_->entities())
+            if (e.id == id && !e.meta.value(QStringLiteral("detailAnnotative")).toBool()) {
+                materialiseDetailCopy(e);
+                emit changed();
+                break;
+            }
+    }
     // The click that just settled: if it landed on something other than the label being fitted, the fitting
     // is over. Asked here rather than on the pick itself, because a pick clears the old selection before it
     // makes the new one - and a session ended on the clearing could never survive being clicked on.
@@ -7412,10 +7576,9 @@ void Editor::applyEditDrag(const Vec2& target) {
             }
             case GripRole::Center:
                 e->center = target;      // which bit of the drawing it is a view of - that alone
-                // Pointed at something else, so the picture is of something else. An ordinary view that kept
-                // the old copy would show the bit of drawing it used to be over, which is a detail view
-                // telling a lie.
-                retakeDetailSnapshot(*e);
+                // Pointed at something else, so the copy is of something else. A view keeping the old copy
+                // would show the bit of drawing it USED to be over, which is a detail view telling a lie.
+                detailCopyStale_ = e->id;
                 return;
             case GripRole::LineB:
                 e->b = target;           // where the enlargement sits - that alone
@@ -7423,7 +7586,7 @@ void Editor::applyEditDrag(const Vec2& target) {
             case GripRole::Radius:
                 if (index == 0) {
                     e->radius = std::max(1e-6, distance(e->center, target));   // how much it shows
-                    retakeDetailSnapshot(*e);   // it shows more, or less, so the picture is re-taken
+                    detailCopyStale_ = e->id;   // it shows more, or less, so the copy is made again
                 } else if (e->radius > 1e-9) {
                     e->meta.insert(QStringLiteral("detailScale"),
                                    std::max(0.05, distance(e->b, target) / e->radius));
@@ -14221,6 +14384,10 @@ void Editor::setSelectionMetaBool(const QString& key, bool value) {
     pushUndo();
     for (Entity* e : sel) e->meta[key] = value;
     doc_->setDirty(true);
+    // Made associative or not: what a view that is NOT associative shows is a copy made of real objects, so it
+    // is built or taken away to match. Asked whatever the key was, because it costs nothing when nothing is out
+    // of step and because the panel writing this is one of the two places the switch is thrown.
+    syncDetailCopies();
     emit changed();
 }
 

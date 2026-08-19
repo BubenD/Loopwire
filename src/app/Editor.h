@@ -524,15 +524,13 @@ public:
     double& detailScale() { return detailScale_; }
     double detailScale() const { return detailScale_; }
     int detailStage() const { return detailStage_; }
-    // WHAT AN ORDINARY DETAIL VIEW SHOWS: a copy of what was inside its circle when it was placed.
-    //
-    // An annotative view is read out of the document every time it is drawn, so the two circles are the same
-    // thing seen twice. An ordinary one is a PICTURE of how the thing was, and the two stop passing anything
-    // to each other - which is what the switch is for, and needs something to be a picture OF.
-    //
-    // Re-taken whenever the view is moved, resized or switched back off annotative, because those are the
-    // moments the picture is meant to be of something else.
-    void retakeDetailSnapshot(Entity& e) const;
+    // THE COPY, AS REAL GEOMETRY: what a view that is NOT associative shows. The objects inside its boundary,
+    // copied once, enlarged, clipped to the boundary and set down in the view as ordinary objects - so editing
+    // them is ordinary editing and the parent does not move.
+    void materialiseDetailCopy(const Entity& view);
+    void clearDetailCopy(const QString& viewId);
+    // Every detail view has what it should have: a copy if it is not associative, none if it is.
+    void syncDetailCopies();
     Vec2 detailCenter() const { return detailCenter_; }
     double detailRadius() const { return detailRadius_; }
     static constexpr double kLabelWidthMm = 40.0;    // along the run, on a bundle drawn across the sheet
@@ -1468,7 +1466,9 @@ private:
     // and the enlargement of it would not.
     QString detailWindowId(const Vec2& p) const;
     QString detailThroughId_;
-    void refreshDetailDrawnThrough();
+    // A detail view whose copy is of somewhere else now, because it was moved or resized. Made again when the
+    // drag finishes rather than on every step of it.
+    QString detailCopyStale_;
     // The next free letter for a detail on this drawing. An office letters its details in the order they
     // were made and never renumbers them, so a letter is taken once and kept: the next one is the lowest
     // that is not in use, which after deleting B gives B back rather than jumping to D.

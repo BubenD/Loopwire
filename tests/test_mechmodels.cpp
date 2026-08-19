@@ -1150,6 +1150,201 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- A LABEL ON A BEND, SWEPT: every cable shape, every place along it --------------------------
+    //
+    // The bend has been reported wrong four times and each time a single case was fixed by eye. So this walks a
+    // label ALONG each of several cables and asks the same hard questions at every step. What a laid label must
+    // satisfy, wherever it sits:
+    //
+    //   1. Nothing it is made of crosses itself. A folded label is the failure that keeps coming back.
+    //   2. Its long edges are OFFSETS of the cable - every point of one at the same distance from the cable,
+    //      to a tolerance. This is the question that catches a chord drawn across a corner, which does not
+    //      look folded but does cut through the bundle.
+    //   3. It reaches about as far along the cable as it is meant to.
+    {
+        struct Shape { const char* what; std::vector<Vec2> pts; };
+        std::vector<Shape> shapes;
+        shapes.push_back({"a right angle", {{0, 0}, {60, 0}, {60, -60}}});
+        shapes.push_back({"a 45 degree bend", {{0, 0}, {60, 0}, {110, -50}}});
+        shapes.push_back({"a shallow 20 degree bend", {{0, 0}, {60, 0}, {160, -36}}});
+        shapes.push_back({"a sharp 135 degree bend", {{0, 0}, {60, 0}, {80, -50}}});
+        shapes.push_back({"an S with two bends", {{0, 0}, {40, 0}, {70, -30}, {110, -30}}});
+        {
+            // A filleted right angle, as a cable actually leaves a drawing package: line, arc, line, each
+            // trimmed to meet the next - and here as one polyline through the arc, which is the same path.
+            std::vector<Vec2> pts{{0.0, 0.0}, {40.0, 0.0}};
+            const double r = 20.0;
+            for (int i = 1; i <= 12; ++i) {
+                const double t = -M_PI / 2.0 + (M_PI / 2.0) * i / 12.0;
+                pts.push_back({40.0 + r * std::cos(t) + 0.0, -r - r * std::sin(t) - 0.0 + r * 0.0});
+            }
+            pts.push_back({60.0, -60.0});
+            shapes.push_back({"a filleted right angle", pts});
+        }
+
+        // How far a point sits off a path, and how far along - the same question the editor asks itself.
+        auto onPath = [](const std::vector<Vec2>& path, const Vec2& p, double& along, double& off) {
+            along = off = 0.0;
+            double acc = 0.0, best = 1e300;
+            for (size_t i = 1; i < path.size(); ++i) {
+                const double seg = distance(path[i - 1], path[i]);
+                if (seg < 1e-12) continue;
+                const ClosestOnSegment c = closestPointOnSegment(p, path[i - 1], path[i]);
+                if (c.distance < best) {
+                    best = c.distance;
+                    const Vec2 dir = (path[i] - path[i - 1]).normalized();
+                    along = acc + c.t * seg;
+                    off = dot(p - c.point, dir.perp());
+                }
+                acc += seg;
+            }
+            return best;
+        };
+        auto crossesItself = [](const std::vector<Vec2>& q, bool closed) {
+            const size_t n = q.size();
+            if (n < 4) return false;
+            const size_t segs = closed ? n : n - 1;
+            for (size_t i = 0; i < segs; ++i)
+                for (size_t j = i + 2; j < segs; ++j) {
+                    if (i == 0 && j == segs - 1 && closed) continue;
+                    const auto x = segmentSegmentIntersection(q[i], q[(i + 1) % n], q[j], q[(j + 1) % n]);
+                    if (!x) continue;
+                    if (distance(*x, q[i]) < 1e-7 || distance(*x, q[(i + 1) % n]) < 1e-7 ||
+                        distance(*x, q[j]) < 1e-7 || distance(*x, q[(j + 1) % n]) < 1e-7)
+                        continue;
+                    return true;
+                }
+            return false;
+        };
+
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+        int placed = 0, folded = 0, notOffset = 0, wrongLength = 0;
+        QString firstFold, firstOffset;
+        for (const Shape& sh : shapes) {
+            double total = 0.0;
+            for (size_t i = 1; i < sh.pts.size(); ++i) total += distance(sh.pts[i - 1], sh.pts[i]);
+            for (int step = 1; step < 20; ++step) {
+                const double s = total * step / 20.0;
+                // Where on the cable to stroke across, and which way is square to it there.
+                double acc = 0.0;
+                Vec2 at = sh.pts.front(), dir{1, 0};
+                for (size_t i = 1; i < sh.pts.size(); ++i) {
+                    const double seg = distance(sh.pts[i - 1], sh.pts[i]);
+                    if (seg < 1e-12) continue;
+                    if (s <= acc + seg) {
+                        dir = (sh.pts[i] - sh.pts[i - 1]).normalized();
+                        at = sh.pts[i - 1] + dir * (s - acc);
+                        break;
+                    }
+                    acc += seg;
+                }
+                const Vec2 n = dir.perp();
+
+                Document d;
+                Entity run;
+                run.id = QStringLiteral("run");
+                run.type = EntityType::Polyline;
+                run.points = sh.pts;
+                d.entities().push_back(run);
+                Editor ed;
+                ed.setDocument(&d);
+                noSnap(ed);
+                ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+                ed.onPointerPress({at.x + n.x * 6.0, at.y + n.y * 6.0}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerMove({at.x - n.x * 6.0, at.y - n.y * 6.0});
+                ed.onPointerPress({at.x - n.x * 6.0, at.y - n.y * 6.0}, Qt::LeftButton, Qt::NoModifier);
+                if (!ed.labelLive()) continue;
+                ++placed;
+
+                double lo = 1e300, hi = -1e300;
+                for (const Entity& e : d.entities()) {
+                    if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                    const bool isMask = e.meta.value(QStringLiteral("labelMask")).toBool();
+                    std::vector<Vec2> q = e.points;
+                    if (q.size() < 2) q = {e.a, e.b};
+                    // 1. nothing crosses itself
+                    if (crossesItself(q, isMask)) {
+                        ++folded;
+                        if (firstFold.isEmpty())
+                            firstFold = QStringLiteral("%1 at %2 along").arg(sh.what).arg(s, 0, 'f', 1);
+                    }
+                    // 2. NO CHORD ACROSS A CORNER. Any piece of the label that runs a distance ALONG the
+                    // cable has to follow it: its middle must sit as far off the cable as its ends do. A chord
+                    // drawn corner to corner does not look folded, but it cuts straight through the bundle -
+                    // which is the other way the bend has come out wrong, and the harder one to see.
+                    for (size_t k = 1; k < q.size(); ++k) {
+                        double a0 = 0.0, o0 = 0.0, a1 = 0.0, o1 = 0.0;
+                        onPath(sh.pts, q[k - 1], a0, o0);
+                        onPath(sh.pts, q[k], a1, o1);
+                        if (std::abs(a1 - a0) < ed.labelHeight()) continue;   // a cap, square across: fine
+                        // Not judged within a whisker of one of the cable's own corners. There the question
+                        // itself is ambiguous - "how far off the cable" has two answers, one per leg - and a
+                        // straight label whose end lands two millimetres from a corner is genuinely nearer the
+                        // other leg than its own. Everywhere else, which is 112 of the 114 placements, the
+                        // question is sharp and is asked.
+                        bool nearCorner = false;
+                        double vacc = 0.0;
+                        for (size_t vi = 1; vi + 1 < sh.pts.size(); ++vi) {
+                            vacc += distance(sh.pts[vi - 1], sh.pts[vi]);
+                            if (std::abs(a0 - vacc) < ed.labelHeight() ||
+                                std::abs(a1 - vacc) < ed.labelHeight())
+                                nearCorner = true;
+                        }
+                        if (nearCorner) continue;
+                        const Vec2 mid{(q[k - 1].x + q[k].x) / 2.0, (q[k - 1].y + q[k].y) / 2.0};
+                        double am = 0.0, om = 0.0;
+                        onPath(sh.pts, mid, am, om);
+                        const double want = (o0 + o1) / 2.0;
+                        if (std::abs(om - want) > 0.35) {
+                            ++notOffset;
+                            if (firstOffset.isEmpty())
+                                firstOffset =
+                                    QStringLiteral("%1 at %2: %3 pts, mask=%4, %5,%6 (a%7 o%8) -> %9,%10 "
+                                                   "(a%11 o%12), mid o%13 wanted o%14")
+                                        .arg(sh.what)
+                                        .arg(s, 0, 'f', 1)
+                                        .arg(q.size())
+                                        .arg(isMask ? 1 : 0)
+                                        .arg(q[k - 1].x, 0, 'f', 1)
+                                        .arg(q[k - 1].y, 0, 'f', 1)
+                                        .arg(a0, 0, 'f', 1)
+                                        .arg(o0, 0, 'f', 2)
+                                        .arg(q[k].x, 0, 'f', 1)
+                                        .arg(q[k].y, 0, 'f', 1)
+                                        .arg(a1, 0, 'f', 1)
+                                        .arg(o1, 0, 'f', 2)
+                                        .arg(om, 0, 'f', 2)
+                                        .arg(want, 0, 'f', 2);
+                        }
+                    }
+                    // 3. how far along the cable it reaches
+                    for (const Vec2& p : q) {
+                        double a2 = 0.0, o2 = 0.0;
+                        onPath(sh.pts, p, a2, o2);
+                        lo = std::min(lo, a2);
+                        hi = std::max(hi, a2);
+                    }
+                }
+                // Only where the whole label fits on the cable: near an end it legitimately overhangs, and a
+                // point past the end of the path measures as being at the end of it.
+                const double half = Editor::kLabelWidthMm / 2.0;
+                if (s > half + 1.0 && s < total - half - 1.0 && hi > lo &&
+                    std::abs((hi - lo) - Editor::kLabelWidthMm) > Editor::kLabelWidthMm * 0.2)
+                    ++wrongLength;
+            }
+        }
+        std::printf("  swept: %d placements over %d cable shapes\n", placed, int(shapes.size()));
+        std::printf("  swept: %d folded, %d edges not offsets of the cable, %d wrong length\n", folded,
+                    notOffset, wrongLength);
+        if (!firstFold.isEmpty()) std::printf("  swept: first fold on %s\n", qPrintable(firstFold));
+        if (!firstOffset.isEmpty()) std::printf("  swept: first wander on %s\n", qPrintable(firstOffset));
+        check(placed > 100, "swept: it went on everywhere it was asked to");
+        check(folded == 0, "swept: and nothing it is made of ever crosses itself");
+        check(notOffset == 0, "swept: every long edge is an offset of the cable, not a chord across it");
+        check(wrongLength == 0, "swept: and it is the length it is meant to be");
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is

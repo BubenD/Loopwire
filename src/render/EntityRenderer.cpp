@@ -2092,20 +2092,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             // anything to each other: draw something new by the small circle and the enlargement does not
             // change, draw something over the enlargement and it stays there and only there. Which is what an
             // ordinary detail view is - a picture of how the thing was - and is why the switch exists.
+            // AN ASSOCIATIVE VIEW DRAWS ITSELF, out of the document, every time: that is what keeps it tied to
+            // the parent geometry. The other kind does not draw here at all - its content is a COPY made of real
+            // objects sitting in the enlargement, drawn by the same pass that draws everything else, so that
+            // editing it is ordinary editing and the parent does not move.
             const bool live = e.meta.value("detailAnnotative").toBool(false);
-            std::vector<Entity> snap;
-            if (!live) {
-                const QJsonArray arr = e.meta.value("detailSnap").toArray();
-                // Entity::fromJson is STATIC and RETURNS the entity. Called as though it were a setter it
-                // built one, threw it away, and pushed a DEFAULT entity instead - so the copy an ordinary
-                // detail view had faithfully taken came back as a pile of blank objects with no geometry, and
-                // the enlargement drew nothing at all.
-                for (const auto& v : arr) snap.push_back(Entity::fromJson(v.toObject()));
-            }
-            // A view with no picture yet - one made before the picture was a thing, or one whose copy was
-            // lost - falls back to the drawing. An empty circle is not "not annotative", it is broken.
-            const std::vector<Entity>& shown = (live || snap.empty()) ? doc.entities() : snap;
-            for (const Entity& x : shown) {
+            for (const Entity& x : live ? doc.entities() : std::vector<Entity>{}) {
                 if (x.id == e.id) continue;                       // never itself
                 if (x.type == EntityType::DetailView) continue;   // nor any other detail's circles
                 if (!withDims && (x.type == EntityType::Dimension || x.type == EntityType::Leader ||
