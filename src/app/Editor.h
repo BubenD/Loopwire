@@ -179,8 +179,24 @@ public:
     // they are not draw tools — lets a digit pop the flying input field at the cursor.
     bool wantsValueInput() const {
         return tool_ == ToolId::Scale || tool_ == ToolId::Offset ||
-               tool_ == ToolId::Splice || tool_ == ToolId::NotConnected;
+               tool_ == ToolId::Splice || tool_ == ToolId::NotConnected || movingByDistance();
     }
+
+    // A MOVE UNDER WAY, waiting for a distance.
+    //
+    // This is how a drawing is actually moved: point the direction with the cursor and say how far. Every drawing
+    // package works this way and it is the one thing a mouse cannot do accurately - the direction is easy to aim
+    // and the distance is impossible to hit, so the direction is pointed and the number is typed.
+    //
+    // True while something is being dragged and there is a point to measure FROM: a grabbed grip or body, or the
+    // Move / Copy tool with its base point down.
+    bool movingByDistance() const;
+    // Where the move is measured from, and which way it is going: the base point and the cursor. Empty when
+    // nothing is being moved.
+    std::optional<std::pair<Vec2, Vec2>> moveVector() const;
+    // Move whatever is being dragged exactly `mm` along the direction now pointed, and finish - which is what
+    // typing a number during a move means.
+    bool applyMoveDistance(double mm);
 
     // Dynamic-input reference fields (AutoCAD-style). For the current draw step
     // these are the typed references — line/segment: Length + Angle; circle:
@@ -1538,7 +1554,12 @@ private:
     int editIndex_ = 0;       // vertex/corner index for the grip
     Vec2 editLast_;           // last drag position (for move deltas)
     Vec2 editAnchor_;         // fixed reference for ortho/polar while grip-dragging
-    bool editMoved_ = false;  // has the drag actually moved yet (for undo push)
+    bool editMoved_ = false;
+    // WHERE A DRAG STARTED, so a typed distance has something to measure from. editLast_ follows the cursor, so by
+    // the time a number is typed it is no longer where the drag began - and "move it 40" means 40 from where it
+    // was, not 40 from wherever it has got to.
+    Vec2 editDragFrom_;
+    bool editHasFrom_ = false;  // has the drag actually moved yet (for undo push)
     // All joints being dragged together: a grabbed point-joint moves every
     // coincident joint of the selected entities (shared joints stay shared).
     struct EditGrip { QString id; int role; int index; Vec2 offset{0, 0}; };

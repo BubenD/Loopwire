@@ -5226,6 +5226,8 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
             editIndex_ = 0;
             editLast_ = at;
             editAnchor_ = labelFit_.mid;
+            editDragFrom_ = at;      // so a typed distance is measured from where the drag began
+            editHasFrom_ = true;
             editMoved_ = false;
             editGrips_.clear();   // nothing is mutated joint-by-joint; the whole label slides
             editGhost_.clear();
@@ -5284,6 +5286,8 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
             // Anchor the drag from the joint's true position (not the raw click),
             // so the first move delta and the ortho/polar reference are exact.
             editLast_ = gr.pos;
+            editDragFrom_ = gr.pos;   // so a typed distance is measured from where the drag began
+            editHasFrom_ = true;
             editMoved_ = false;
             editAnchor_ = gr.pos;
 
@@ -9757,6 +9761,9 @@ bool Editor::applyDrawInput(const QString& text) {
 }
 
 std::vector<QString> Editor::drawInputFieldLabels() const {
+    // A MOVE UNDER WAY wants one number: how far. The direction is already pointed - that is what the cursor is
+    // for - so the field asks for the distance and nothing else, and the box says so rather than sitting blank.
+    if (movingByDistance()) return {QStringLiteral("Distance")};
     switch (tool_) {
     case ToolId::Line:
     case ToolId::DoubleLine:
@@ -10035,9 +10042,66 @@ bool Editor::commitDrawFields() {
     return true;
 }
 
+// A move under way needs a point to measure FROM. A grabbed grip has its anchor, a grabbed body has where it was
+// taken hold of, and the Move and Copy tools have their base point.
+bool Editor::movingByDistance() const { return moveVector().has_value(); }
+
+std::optional<std::pair<Vec2, Vec2>> Editor::moveVector() const {
+    // The Move tool, base point down and waiting for where it goes.
+    if (tool_ == ToolId::Move && modifyPts_.size() == 1) return std::make_pair(modifyPts_[0], cursor_);
+    // Something taken hold of on the sheet: a grip, or a body. editLast_ follows the drag, so where it STARTED is
+    // what a distance is measured from - kept in editDragFrom_ when the drag begins.
+    if (editing_ && (gripGrab_ || pressed_) && editHasFrom_) return std::make_pair(editDragFrom_, cursor_);
+    return std::nullopt;
+}
+
+// Typing a number during a move means "that far, the way I am pointing". The direction comes from the cursor,
+// which is the thing a mouse is good at; the distance comes from the keyboard, which is the thing it is not.
+bool Editor::applyMoveDistance(double mm) {
+    const auto mv = moveVector();
+    if (!mv) return false;
+    const Vec2 dir = mv->second - mv->first;
+    if (dir.lengthSq() < 1e-18) {
+        emit message(QStringLiteral("Point the way it is to go first, then say how far"));
+        return true;
+    }
+    const Vec2 to = mv->first + dir.normalized() * mm;
+    if (tool_ == ToolId::Move && modifyPts_.size() == 1) {
+        // The tool's second point, placed exactly - the same path the click takes.
+        onPointerPress(to, Qt::LeftButton, Qt::NoModifier);
+        emit message(QStringLiteral("Moved %1").arg(mm, 0, 'f', 3));
+        return true;
+    }
+    // A drag: take it to the exact place and put it down there - the same ending the placing click gives it.
+    cursor_ = to;
+    applyEditDrag(to);
+    editing_ = false;
+    gripGrab_ = false;
+    pressed_ = false;
+    editMoved_ = false;
+    editHasFrom_ = false;
+    editGhost_.clear();
+    emit message(QStringLiteral("Moved %1").arg(mm, 0, 'f', 3));
+    emit changed();
+    return true;
+}
+
 bool Editor::acceptCommandInput(const QString& text) {
     const QString t = text.trimmed();
     if (t.isEmpty()) return false;
+
+    // A MOVE UNDER WAY takes a plain number as the distance to go, along the direction the cursor is pointing.
+    // Asked first: while something is being moved, a number can only mean how far, and every other reading of it
+    // would be a command that happens to look like one.
+    if (movingByDistance() && !t.contains(QLatin1Char(','))) {
+        bool ok = false;
+        const double v = t.toDouble(&ok);
+        if (ok && std::abs(v) > 1e-12) return applyMoveDistance(v);
+        if (ok) {
+            emit message(QStringLiteral("A distance of nothing is not a move"));
+            return true;
+        }
+    }
 
     // "mi" / "mirror" flips the arc being drawn to the opposite sweep.
     if (tool_ == ToolId::Arc &&

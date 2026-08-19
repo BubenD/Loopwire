@@ -8182,6 +8182,94 @@ int run_editor_tests() {
               "table-edge: the outer boundary of an edge cell can be caught and moved");
     }
 
+
+    // ---- point the way, type how far ---------------------------------------------------------------
+    {
+        // This is how a drawing is actually moved, and it is the one thing a mouse cannot do: the direction is
+        // easy to aim and the distance is impossible to hit. So the direction is POINTED with the cursor and the
+        // distance is TYPED, and the object goes exactly that far that way.
+        //
+        // Both ways of moving something take it: the Move tool with its base point down, and anything taken hold
+        // of on the sheet by a grip.
+        {
+            Document d;
+            Entity l;
+            l.id = QStringLiteral("l");
+            l.type = EntityType::Line;
+            l.a = {0.0, 0.0};
+            l.b = {10.0, 0.0};
+            d.entities().push_back(l);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({5.0, 0.0}, Qt::LeftButton);
+            check(ed.selection().size() == 1, "far: the line is picked");
+            ed.setTool(ToolId::Move);
+            ed.onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // the base point
+            // Point up and to the right, at a distance that is nothing like the one that will be typed - the
+            // cursor gives the DIRECTION and only the direction.
+            ed.onPointerMove({8.0, 4.0});
+            check(ed.movingByDistance(), "far: with the base point down, it is waiting for a distance");
+            check(!ed.drawInputFieldLabels().empty() &&
+                      ed.drawInputFieldLabels().front() == QStringLiteral("Distance"),
+                  "far: and the field says so, rather than sitting blank");
+            check(ed.acceptCommandInput(QStringLiteral("50")), "far: a typed number is taken as the distance");
+            const Entity* moved = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("l")) moved = &e;
+            check(moved != nullptr, "far: the line is still there");
+            if (moved) {
+                // 3,4 is a 5 long direction, so 50 along it is exactly 30,40.
+                std::printf("  far: pointed 3,4 and typed 50 - moved %+.1f,%+.1f\n", moved->a.x - 0.0,
+                            moved->a.y - 0.0);
+                check(std::abs(moved->a.x - 30.0) < 1e-6 && std::abs(moved->a.y - 40.0) < 1e-6,
+                      "far: it went 50 along the direction pointed, not to where the cursor was");
+                check(std::abs(distance(moved->a, moved->b) - 10.0) < 1e-6,
+                      "far: and it is still the line it was - moved, not stretched");
+            }
+        }
+        {
+            // And a grip: the same thing, measured from where the grab began rather than from wherever the
+            // cursor has got to since.
+            Document d;
+            Entity l;
+            l.id = QStringLiteral("l");
+            l.type = EntityType::Line;
+            l.a = {0.0, 0.0};
+            l.b = {10.0, 0.0};
+            d.entities().push_back(l);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({5.0, 0.0}, Qt::LeftButton);
+            ed.onPointerPress({10.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // its right-hand end
+            ed.onPointerMove({10.0, 3.0});                                    // pointed straight up
+            check(ed.movingByDistance(), "far: a grabbed joint is waiting for a distance too");
+            check(ed.acceptCommandInput(QStringLiteral("25")), "far: and takes one");
+            const Entity* moved = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("l")) moved = &e;
+            if (moved) {
+                std::printf("  far: a joint pointed up and typed 25 - now at %.1f,%.1f\n", moved->b.x,
+                            moved->b.y);
+                check(std::abs(moved->b.x - 10.0) < 1e-6 && std::abs(moved->b.y - 25.0) < 1e-6,
+                      "far: 25 straight up from where the grab began, not from where the cursor was");
+            }
+            check(!ed.movingByDistance(), "far: and the move is finished - it is not still in hand");
+        }
+        {
+            // Nothing being moved: a number is not a distance, and must fall through to whatever else a typed
+            // number means rather than being swallowed.
+            Document d;
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            check(!ed.movingByDistance(), "far: with nothing in hand there is no distance to give");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
