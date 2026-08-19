@@ -11815,6 +11815,36 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
     model.name = name;   // a model that has nothing drawn yet is still captured under its own name
     if (const MechModel* existing = set.of(kind, name)) model = *existing;
 
+    // WHERE IT CONNECTS AND WHICH WAY IT RUNS, marked before anybody asks. A model is placed BY those marks -
+    // the drawing is turned so the marked direction runs along the run and set down so the marked point lands on
+    // it - so a model without them cannot be placed at all, and an office that does not know that draws a part,
+    // captures it, and finds the wizard puts it down by the corner of its own extent.
+    //
+    // So they start marked, at the reading almost every part wants: the connection at the left-hand end of the
+    // drawing running along +x, and the two ends at the two ends. Marked means VISIBLE, which is the point - they
+    // are there on the canvas to be dragged to where they really belong, rather than absent until somebody knows
+    // to go and look for the buttons.
+    if (!model.isEmpty()) {
+        Bounds ext;
+        for (const Entity& e : partDrawingEntities(model.drawing)) ext.expand(e.bounds());
+        if (ext.valid) {
+            const double midY = (ext.min.y + ext.max.y) / 2.0;
+            if (!model.hasConnect) {
+                model.hasConnect = true;
+                model.connectPoint = {ext.min.x, midY};
+                model.connectAngleRad = 0.0;
+            }
+            if (!model.hasNearPoint) {
+                model.hasNearPoint = true;
+                model.nearPoint = {ext.min.x, midY};
+            }
+            if (!model.hasFarPoint) {
+                model.hasFarPoint = true;
+                model.farPoint = {ext.max.x, midY};
+            }
+        }
+    }
+
     auto doc = std::make_unique<Document>(
         name.isEmpty() ? QStringLiteral("Model - %1").arg(mechModelName(kind))
                        : QStringLiteral("Model - %1 (%2)").arg(mechModelName(kind), name));

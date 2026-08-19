@@ -1,3 +1,5 @@
+#include <QFileInfo>
+#include <QDateTime>
 #include "harness/MechanicalHarness.h"
 
 #include "harness/CableSpec.h"
@@ -1191,12 +1193,25 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
 // the library; a KIND of thing - heatshrink, a boot, a ferrule, a length of wire - comes out of the
 // default models, drawn once by whoever decides how this office's drawings look. Nothing captured for a
 // kind means the generator draws its own, which is what it did before there were any.
+// THE MODELS AS THEY ARE NOW, not as they were when the program started.
+//
+// This was loaded once and kept for the life of the program, so a model drawn and captured during a session was
+// not used by anything generated afterwards: the drawing came out with the built-in shapes while the office's own
+// were sitting in the file. Which is the whole point of capturing one.
+//
+// Re-read when the file has changed, judged by when it was last written. Asked on every generation, which is a
+// stat of one file against a drawing that takes far longer to build.
 const MechModelSet& mechModels() {
-    static MechModelSet set = [] {
-        MechModelSet s;
-        s.load();
-        return s;
-    }();
+    static MechModelSet set;
+    static QDateTime loadedAt;
+    const QString path = MechModelSet::defaultPath();
+    const QFileInfo fi(path);
+    const QDateTime now = fi.exists() ? fi.lastModified() : QDateTime();
+    if (!loadedAt.isValid() || now != loadedAt) {
+        set = MechModelSet();
+        set.load(path);
+        loadedAt = now;
+    }
     return set;
 }
 
@@ -1534,9 +1549,17 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(makeText(opt, mid + v * (gap / 2.0 + opt.textHeight * 0.7), label,
                                    opt.textHeight, rad(textDir), QStringLiteral("dia")));
         }
-        if (opt.dimensions) {
+        // A RUN'S LENGTH, which is the figure a harness is actually built to. Drawn when the sheet asks for
+        // dimensions, and ALSO when this one run asks for one - a build drawing dimensions the steps that matter
+        // and leaves the rest alone, which is a decision per run rather than a setting for the whole sheet.
+        if (opt.dimensions || (seg && seg->dimension)) {
             const Vec2 off = v * -(gap / 2.0 + opt.textHeight * 3.0);
-            out.push_back(makeDimension(opt, ps.a, ps.b, mid + off, ps.id));
+            Entity dim = makeDimension(opt, ps.a, ps.b, mid + off, ps.id);
+            // WHAT IT IS TO READ, when the drawing says. Not a lie - it is how a drawing is dimensioned: the shop
+            // works to the nominal figure, and what the model happens to measure is not what belongs on the sheet.
+            if (seg && !seg->dimText.isEmpty())
+                dim.meta.insert(QStringLiteral("textOverride"), seg->dimText);
+            out.push_back(dim);
         }
 
         // What the run is MADE of, ballooned on the run itself: the cable, or the conductors by size.
@@ -1612,13 +1635,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
             // the drawing is the length in the table.
-            if (opt.dimensions && runMm > 0.0) {
+            if ((opt.dimensions || f.dimension) && runMm > 0.0) {
                 const Vec2 a = ps.a + u * along(startMm);
                 const Vec2 b = ps.a + u * along(startMm + runMm);
-                out.push_back(makeDimension(opt, a, b,
-                                            lerp(a, b, 0.5) + v * (across(odMm) / 2.0 +
-                                                                   opt.textHeight * 1.4),
-                                            ps.id));
+                Entity dim = makeDimension(opt, a, b,
+                                           lerp(a, b, 0.5) + v * (across(odMm) / 2.0 +
+                                                                  opt.textHeight * 1.4),
+                                           ps.id);
+                if (!f.dimText.isEmpty())
+                    dim.meta.insert(QStringLiteral("textOverride"), f.dimText);
+                out.push_back(dim);
             }
         }
     }

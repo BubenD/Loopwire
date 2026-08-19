@@ -153,6 +153,48 @@ void MechanicalBuilderDialog::buildUi() {
                                           QStringLiteral("Mfr P/N"), QStringLiteral("Qty"),
                                           QStringLiteral("Unit")});
     leftLay->addWidget(bomTable_, 1);
+
+    // THE STEPS, under the bill of materials: what is used, in the order it is built, and where each of it goes.
+    // The bill says what to buy; this says what to do with it.
+    auto* stepsLabel = new QLabel(QStringLiteral("Build steps — tick to dimension, type what it should read"),
+                                 leftBox);
+    stepsLabel->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+    leftLay->addWidget(stepsLabel);
+    stepsTable_ = new QTableWidget(leftBox);
+    stepsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    stepsTable_->verticalHeader()->setVisible(false);
+    stepsTable_->setShowGrid(false);
+    stepsTable_->setAlternatingRowColors(true);
+    stepsTable_->setMinimumHeight(140);
+    stepsTable_->setColumnCount(5);
+    stepsTable_->setHorizontalHeaderLabels({QStringLiteral("#"), QStringLiteral("Step"),
+                                            QStringLiteral("Where"), QStringLiteral("Dim"),
+                                            QStringLiteral("Reads")});
+    connect(stepsTable_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
+        if (!it || stepsSyncing_) return;
+        const int row = it->row();
+        if (row < 0 || row >= static_cast<int>(stepRows_.size())) return;
+        const StepRef ref = stepRows_[static_cast<size_t>(row)];
+        // Column 3 is the tick, column 4 is what it should read. Written back to the run or the fitting the row
+        // is about, then the preview is drawn again - so a tick shows up as a dimension without asking twice.
+        auto apply = [&](bool* dim, QString* text) {
+            if (it->column() == 3 && dim) *dim = it->checkState() == Qt::Checked;
+            if (it->column() == 4 && text) *text = it->text().trimmed();
+        };
+        for (MechSegment& sg : def_.segments) {
+            if (!ref.fittingId.isEmpty()) {
+                for (MechFitting& f : sg.coverings)
+                    if (f.id == ref.fittingId) apply(&f.dimension, &f.dimText);
+            } else if (sg.id == ref.segmentId) {
+                apply(&sg.dimension, &sg.dimText);
+            }
+        }
+        for (MechNode& n : def_.nodes)
+            for (MechFitting& f : n.fittings)
+                if (!ref.fittingId.isEmpty() && f.id == ref.fittingId) apply(&f.dimension, &f.dimText);
+        refreshPreview();
+    });
+    leftLay->addWidget(stepsTable_, 1);
     split->addWidget(leftBox);
 
     // ---- The right-hand side: what is selected, and what it will look like ----
@@ -1133,6 +1175,85 @@ void MechanicalBuilderDialog::refreshDetails() {
     syncing_ = false;
 }
 
+
+// THE STEPS: every mechanical part the harness uses, in the order it is built, and where each one goes.
+//
+// A bill of materials says what to buy and how many. This says what to do with it - the run, then the parts fitted
+// along that run in the order they are reached, then the fittings at the node it ends at. Which is how the thing is
+// actually assembled, and it is the half of a build drawing somebody follows with the part in their hand.
+//
+// Two of the columns are settings rather than facts: whether the step is dimensioned on the drawing, and what that
+// dimension is to read.
+void MechanicalBuilderDialog::refreshSteps() {
+    if (!stepsTable_) return;
+    stepsSyncing_ = true;
+    stepsTable_->setRowCount(0);
+    stepRows_.clear();
+    auto addRow = [&](const QString& what, const QString& where, bool dim, const QString& reads,
+                      const StepRef& ref) {
+        const int r = stepsTable_->rowCount();
+        stepsTable_->insertRow(r);
+        stepRows_.push_back(ref);
+        auto* num = new QTableWidgetItem(QString::number(r + 1));
+        num->setFlags(Qt::ItemIsEnabled);
+        stepsTable_->setItem(r, 0, num);
+        auto* it1 = new QTableWidgetItem(what);
+        it1->setFlags(Qt::ItemIsEnabled);
+        stepsTable_->setItem(r, 1, it1);
+        auto* it2 = new QTableWidgetItem(where);
+        it2->setFlags(Qt::ItemIsEnabled);
+        stepsTable_->setItem(r, 2, it2);
+        auto* tick = new QTableWidgetItem();
+        tick->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        tick->setCheckState(dim ? Qt::Checked : Qt::Unchecked);
+        stepsTable_->setItem(r, 3, tick);
+        auto* says = new QTableWidgetItem(reads);
+        says->setFlags(Qt::ItemIsEnabled | Qt::ItemIsEditable);
+        says->setToolTip(QStringLiteral("What the dimension is to read. Left empty it reads what it measures; "
+                                        "a figure typed here is what the shop works to."));
+        stepsTable_->setItem(r, 4, says);
+    };
+    // In build order: each run, the parts along it, and the parts at the node it ends at.
+    for (const MechSegment& sg : def_.segments) {
+        const MechNode* to = def_.node(sg.toNode);
+        addRow(sg.cableName.isEmpty() ? QStringLiteral("Run %1").arg(sg.id) : sg.cableName,
+               QStringLiteral("%1 mm").arg(sg.lengthMm, 0, 'f', 1), sg.dimension, sg.dimText,
+               {sg.id, QString()});
+        std::vector<const MechFitting*> along;
+        for (const MechFitting& f : sg.coverings) along.push_back(&f);
+        std::sort(along.begin(), along.end(),
+                  [](const MechFitting* a, const MechFitting* b) { return a->atMm < b->atMm; });
+        for (const MechFitting* f : along)
+            addRow(f->name.isEmpty() ? partKindName(f->kind) : f->name,
+                   QStringLiteral("%1, %2 mm along").arg(sg.id).arg(f->atMm, 0, 'f', 1), f->dimension,
+                   f->dimText, {sg.id, f->id});
+        if (to)
+            for (const MechFitting& f : to->fittings)
+                addRow(f.name.isEmpty() ? partKindName(f.kind) : f.name,
+                       QStringLiteral("at %1").arg(to->name.isEmpty() ? to->id : to->name), f.dimension,
+                       f.dimText, {sg.id, f.id});
+    }
+    stepsTable_->resizeColumnsToContents();
+    stepsSyncing_ = false;
+}
+
+// The same rows as text, so a test or a report can read them without going through a table.
+std::vector<QString> MechanicalBuilderDialog::stepLines() const {
+    std::vector<QString> out;
+    if (!stepsTable_) return out;
+    for (int r = 0; r < stepsTable_->rowCount(); ++r) {
+        const QString what = stepsTable_->item(r, 1) ? stepsTable_->item(r, 1)->text() : QString();
+        const QString where = stepsTable_->item(r, 2) ? stepsTable_->item(r, 2)->text() : QString();
+        const bool dim = stepsTable_->item(r, 3) &&
+                         stepsTable_->item(r, 3)->checkState() == Qt::Checked;
+        const QString says = stepsTable_->item(r, 4) ? stepsTable_->item(r, 4)->text() : QString();
+        out.push_back(QStringLiteral("%1 | %2 | %3%4")
+                          .arg(what, where, dim ? QStringLiteral("dim") : QStringLiteral("-"),
+                               says.isEmpty() ? QString() : QStringLiteral(" reads ") + says));
+    }
+    return out;
+}
+
 void MechanicalBuilderDialog::refreshPreview() {
     if (!preview_) return;
     preview_->setEntities(
@@ -1212,6 +1333,7 @@ void MechanicalBuilderDialog::refreshAll() {
     refreshDetails();
     refreshPreview();
     refreshBom();
+    refreshSteps();
     refreshIssues();
 }
 

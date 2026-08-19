@@ -50,6 +50,10 @@ public:
     // wires, heatshrink over that - as a tick rather than as a trip to the library. Ticking one adds a
     // fitting of that kind with nothing but its kind stated, so it is drawn to what it goes over;
     // choosing a real part for it afterwards is the same list of fittings either way.
+    // The build steps as text - what is used, where it goes, whether it is dimensioned and what that dimension
+    // reads. Public because it is the drawing's own build order said in words: a test reads it, and so would a
+    // report of the steps put beside the sheet.
+    std::vector<QString> stepLines() const;
     bool hasEndFitting(PartKind kind) const;
     void setEndFitting(PartKind kind, bool on);
 
@@ -135,6 +139,24 @@ private:
     QCheckBox* spliceChk_ = nullptr;
 
     QTableWidget* bomTable_ = nullptr;
+    // THE STEPS: the mechanical parts used, in the order the harness is built, with what each of them is fitted
+    // to and how far along. A bill of materials says WHAT is used and how many; this says WHERE each one goes,
+    // which is the other half of a build drawing and the half somebody follows with the part in their hand.
+    //
+    // Two columns of it are settings rather than facts: whether the step is DIMENSIONED on the drawing, and what
+    // that dimension is to READ. Which sizes appear is a decision per step - where a boot goes matters and gets a
+    // dimension, the twenty ties along a trunk do not and would bury the drawing - and what one reads is the
+    // nominal figure the shop works to rather than whatever the model measures.
+    QTableWidget* stepsTable_ = nullptr;
+    void refreshSteps();
+    // One row of the steps table: which thing it is about, so a tick or a typed size goes back to the right one.
+    struct StepRef {
+        QString segmentId;   // the run, when the step is a run
+        QString fittingId;   // the fitting, when it is a part fitted to one
+    };
+    std::vector<StepRef> stepRows_;
+    bool stepsSyncing_ = false;
+
     QCheckBox* notesChk_ = nullptr;
     QListWidget* issues_ = nullptr;
     QLabel* summary_ = nullptr;

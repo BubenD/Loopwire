@@ -1,5 +1,7 @@
 // The mechanical builder: sizes worked out from the conductors, a tree laid out from lengths and
 // angles, and a drawing generated from both. Every figure here can be checked by hand.
+#include "app/MechanicalBuilderDialog.h"
+#include <QStringList>
 #include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/MechModels.h"
@@ -1614,6 +1616,95 @@ int run_mechbuilder_tests() {
         }
         check(instances.size() == 2,
               "as a block: the builder puts each connector down as its own copy");
+    }
+
+
+    // ---- the build steps, the sizes on them, and the models they are drawn with ---------------------
+    {
+        // A bill of materials says WHAT is used and how many. A build drawing also has to say WHERE each of it
+        // goes, in the order it is fitted - that is the half somebody follows with the part in their hand - and
+        // which of those steps carries a size on the sheet is a decision per step: where a boot goes matters and
+        // gets a dimension, and the twenty ties along a trunk do not and would bury the drawing.
+        MechHarnessDef def;
+        def.name = QStringLiteral("steps");
+        MechNode root;
+        root.id = QStringLiteral("N1");
+        root.name = QStringLiteral("P1");
+        root.kind = MechNodeKind::Connector;
+        def.nodes.push_back(root);
+        MechNode tip;
+        tip.id = QStringLiteral("N2");
+        tip.name = QStringLiteral("P2");
+        tip.kind = MechNodeKind::Connector;
+        tip.parentSegment = QStringLiteral("S1");
+        def.nodes.push_back(tip);
+        MechSegment seg;
+        seg.id = QStringLiteral("S1");
+        seg.fromNode = QStringLiteral("N1");
+        seg.toNode = QStringLiteral("N2");
+        seg.lengthMm = 300.0;
+        // Two things fitted along it, at different places, so the order they come out in can be checked.
+        MechFitting far;
+        far.id = QStringLiteral("F2");
+        far.kind = PartKind::Heatshrink;
+        far.name = QStringLiteral("shrink");
+        far.atMm = 200.0;
+        far.lengthMm = 30.0;
+        far.odMm = 8.0;
+        MechFitting near;
+        near.id = QStringLiteral("F1");
+        near.kind = PartKind::Heatshrink;
+        near.name = QStringLiteral("sleeve");
+        near.atMm = 40.0;
+        near.lengthMm = 25.0;
+        near.odMm = 8.0;
+        seg.coverings.push_back(far);    // added out of order on purpose
+        seg.coverings.push_back(near);
+        def.segments.push_back(seg);
+
+        MechanicalBuilderDialog dlg(nullptr);
+        dlg.setDefinition(def);
+        const std::vector<QString> steps = dlg.stepLines();
+        for (const QString& line : steps) std::printf("  step: %s\n", qPrintable(line));
+        check(steps.size() >= 3, "step: the run and the two things fitted to it are all steps");
+        // IN BUILD ORDER: the run first, then what is fitted along it in the order it is reached, whatever order
+        // they happened to be added in.
+        if (steps.size() >= 3) {
+            check(steps[0].contains(QStringLiteral("300")), "step: the run comes first, with its length");
+            const int nearAt = static_cast<int>(steps[1].indexOf(QStringLiteral("sleeve")));
+            const int farAt = static_cast<int>(steps[2].indexOf(QStringLiteral("shrink")));
+            check(nearAt >= 0 && farAt >= 0,
+                  "step: then the parts along it, nearest first - not the order they were typed in");
+            check(steps[1].contains(QStringLiteral("40")) && steps[2].contains(QStringLiteral("200")),
+                  "step: each saying how far along it goes, which is what somebody building it needs");
+        }
+        // Nothing is dimensioned until it is asked for.
+        for (const QString& line : steps)
+            check(!line.contains(QStringLiteral("| dim")),
+                  "step: and none of them carries a size until one is asked for");
+
+        // ASKED FOR, on the run and on one part, with what each is to READ. The drawing then has those
+        // dimensions and they say what they were told to say rather than what they measure.
+        MechHarnessDef withDims = def;
+        withDims.segments[0].dimension = true;
+        withDims.segments[0].dimText = QStringLiteral("300 ±2");
+        withDims.segments[0].coverings[1].dimension = true;   // the near one, "sleeve"
+        withDims.segments[0].coverings[1].dimText = QStringLiteral("25 NOM");
+        withDims.draw.dimensions = false;   // the SHEET is not dimensioning: only these two steps are
+        const std::vector<Entity> drawn = buildMechanicalHarness(withDims, nullptr);
+        int dims = 0;
+        QStringList said;
+        for (const Entity& e : drawn) {
+            if (e.type != EntityType::Dimension) continue;
+            ++dims;
+            const QString over = e.meta.value(QStringLiteral("textOverride")).toString();
+            if (!over.isEmpty()) said << over;
+        }
+        std::printf("  step: %d dimension(s) drawn, reading %s\n", dims,
+                    qPrintable(said.join(QStringLiteral(" / "))));
+        check(dims >= 2, "step: the two steps that asked for a size got one, with the sheet not asking");
+        check(said.contains(QStringLiteral("300 ±2")) && said.contains(QStringLiteral("25 NOM")),
+              "step: and each reads what it was told to - the nominal figure, not what the model measures");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

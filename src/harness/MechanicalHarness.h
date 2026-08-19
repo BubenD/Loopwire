@@ -73,6 +73,17 @@ struct MechFitting {
     // WHICH SIDE of the run it goes on. A part is drawn one way round and used both ways: the same boot on
     // the other side of the harness is the same drawing the other way up. False is the way it was drawn.
     bool flipped = false;
+    // DIMENSION THIS STEP, and what the dimension is to READ.
+    //
+    // A build drawing is a list of steps and the sizes that go with them, and which sizes appear on it is a
+    // decision per step rather than a setting for the whole sheet: where a boot goes matters and gets a
+    // dimension, and the twenty ties along a trunk do not and would bury the drawing.
+    //
+    // `dimText` is the size it is to SAY, as against the size it measures. That is not a lie - it is how a
+    // drawing is dimensioned: the nominal figure is what the shop works to, and what the model happens to
+    // measure after the tolerances have been applied is not what belongs on the sheet.
+    bool dimension = false;
+    QString dimText;
 };
 
 struct MechNode {
@@ -115,6 +126,11 @@ struct MechSegment {
     // connector. Over that length the run is the bundle, with a cone between the two diameters.
     double stripFromMm = 0.0;
     double stripToMm = 0.0;
+    // DIMENSION THIS RUN, and what the dimension is to READ. A run's length is the figure a harness is
+    // actually built to, so this is the one most likely to be wanted - and `dimText` is what it is to SAY, which
+    // on a build drawing is the nominal figure rather than whatever the model measures.
+    bool dimension = false;
+    QString dimText;
 
     bool isCable() const { return jacketOdMm > 0.0; }
     // A run KNOWN to be a cable - every conductor in it a core of the same one - whose jacket
