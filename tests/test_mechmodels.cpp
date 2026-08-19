@@ -1502,6 +1502,122 @@ int run_mechmodels_tests() {
         check(notchy == 0, "swept: and it keeps its depth all the way along - no notch bitten out of it");
     }
 
+
+    // ---- part bent, part straight: the rail that jumped ---------------------------------------------
+    {
+        // "Something makes bend and something stays straight." A rail was built on MORE cable than the label
+        // covers and then cut back to the label's ends with two plane clips - and a mitre spike near an end
+        // crosses that end plane more than once. The clip joined the pieces of rail either side of the crossing
+        // into one line, so the rail JUMPED from one place to another: a diagonal across the label, a spike off
+        // one corner, and the rest of it sitting straight.
+        //
+        // The question that catches it is continuity: consecutive points of a rail can never be further apart
+        // than the label is long, because a rail is a walk along a piece of cable that long.
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{0.0, 0.0}, {40.0, 0.0}, {70.0, -30.0}};   // across, then away at 45
+        d.entities().push_back(run);
+        const MechModel m = builtInMechModel(MechModelKind::Label);
+
+        int jumps = 0, checked = 0;
+        double worst = 0.0;
+        // Walked in small steps THROUGH the corner, which is where the label's ends land near it.
+        for (int step = 0; step <= 60; ++step) {
+            const double s = 10.0 + step * 0.8;   // 10 .. 58, the corner at 40
+            double acc = 0.0;
+            Vec2 at = run.points.front(), dir{1, 0};
+            for (size_t i = 1; i < run.points.size(); ++i) {
+                const double seg = distance(run.points[i - 1], run.points[i]);
+                if (s <= acc + seg) {
+                    dir = (run.points[i] - run.points[i - 1]).normalized();
+                    at = run.points[i - 1] + dir * (s - acc);
+                    break;
+                }
+                acc += seg;
+            }
+            const Vec2 n = dir.perp();
+            Document doc;
+            doc.entities().push_back(run);
+            Editor ed;
+            ed.setDocument(&doc);
+            noSnap(ed);
+            ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+            ed.onPointerPress({at.x + n.x * 5.0, at.y + n.y * 5.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({at.x - n.x * 5.0, at.y - n.y * 5.0});
+            ed.onPointerPress({at.x - n.x * 5.0, at.y - n.y * 5.0}, Qt::LeftButton, Qt::NoModifier);
+            if (!ed.labelLive()) continue;
+            ++checked;
+            const double along = ed.labelAlongMm();
+            for (const Entity& e : doc.entities()) {
+                if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                for (size_t k = 1; k < e.points.size(); ++k) {
+                    const double hop = distance(e.points[k - 1], e.points[k]);
+                    worst = std::max(worst, hop);
+                    // Nothing in a label can hop further than the label is long: its longest edge is its own
+                    // length, and its ends are its own depth. A jump is a rail that went somewhere else.
+                    if (hop > along * 1.05) ++jumps;
+                }
+            }
+        }
+        std::printf("  jump: %d placements through the corner, longest hop %.1f where the label is %.1f\n",
+                    checked, worst, Editor::kLabelWidthMm);
+        // AND NO SPIKE, on a cable with a corner sharp enough to throw one. A mitre at a sharp corner sits its
+        // depth off both legs - so it passes every question about depth - while sitting a long way from the corner
+        // itself, and what you see is a thorn off one edge with the rest of the label lying flat. Whatever throws
+        // one, it is not a label, so the label is laid straight instead.
+        {
+            for (const double deviate : {100.0, 120.0, 150.0, 170.0}) {
+                Document doc;
+                Entity sharp;
+                sharp.id = QStringLiteral("sharp");
+                sharp.type = EntityType::Polyline;
+                const double t = deviate * M_PI / 180.0;
+                sharp.points = {{0.0, 0.0}, {40.0, 0.0}, {40.0 + 40.0 * std::cos(-t), 40.0 * std::sin(-t)}};
+                doc.entities().push_back(sharp);
+                Editor e3;
+                e3.setDocument(&doc);
+                noSnap(e3);
+                e3.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+                e3.onPointerPress({40.0, -6.0}, Qt::LeftButton, Qt::NoModifier);
+                e3.onPointerMove({40.0, 6.0});
+                e3.onPointerPress({40.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+                if (!e3.labelLive()) continue;
+                const double reach = std::abs(e3.labelMidOffMm()) + e3.labelAcrossMm() / 2.0 + 0.6;
+                double furthest = 0.0;
+                for (const Entity& e : doc.entities()) {
+                    if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                    std::vector<Vec2> pts = e.points;
+                    if (pts.empty()) pts = {e.a, e.b};
+                    for (const Vec2& q : pts) {
+                        double best = 1e300;
+                        for (size_t i = 1; i < sharp.points.size(); ++i)
+                            best = std::min(best,
+                                            closestPointOnSegment(q, sharp.points[i - 1], sharp.points[i])
+                                                .distance);
+                        furthest = std::max(furthest, best);
+                    }
+                }
+                int coverPts = 0;
+                for (const Entity& e : doc.entities())
+                    if (e.meta.value(QStringLiteral("labelMask")).toBool())
+                        coverPts = static_cast<int>(e.points.size());
+                const bool wentStraight = coverPts == 4;
+                std::printf("  jump: a %.0f degree corner - %s, furthest point %.2f off the cable, band "
+                            "reaches %.2f\n",
+                            deviate, wentStraight ? "laid straight" : "bent", furthest, reach);
+                // ONE OF TWO THINGS, and never a third. Either it bent, and then nothing it is made of sticks
+                // out past the band - no thorn. Or it decided the corner was too sharp to bend round and laid
+                // itself straight, which on a cable that doubles back leaves it off the cable by however far the
+                // cable doubled back. That is plain, and it is honest. What it must never be is a bent label
+                // with a point on one edge and the rest of it lying flat.
+                check(wentStraight || furthest <= reach + 0.35,
+                      "jump: it either bends properly or lies straight - never a thorn off one edge");
+            }
+        }
+    }
+
     // ---- Tab pins the preview, so the sizes can be set BEFORE the click ---------------------------
     {
         // Setting a label's size only after it is placed means placing it at the wrong size first, which is

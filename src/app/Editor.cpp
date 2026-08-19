@@ -2015,7 +2015,12 @@ void frameOnPath(const std::vector<Vec2>& path, double s, Vec2& at, Vec2& dir) {
 // ends of both segments: the two rails cross and the label comes out as a bowtie. So the mitre is used while it
 // stays within reach, and past that the outside is taken round on an arc (which cannot overshoot) and the inside
 // cut straight across (which is a corner slightly too full, and cannot fold).
-std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
+// `rooms` is how much cable there really is either side of each of the path's interior corners, in order. A
+// corner near the end of the piece the label covers still has the whole of the cable's segments behind it, and
+// judging the mitre by the piece instead made a corner two millimetres inside the label's end look like a corner
+// on a two-millimetre segment. Empty falls back to the piece's own segment lengths.
+std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d,
+                                  const std::vector<double>& rooms = {}) {
     std::vector<Vec2> out;
     if (path.size() < 2) return out;
     if (std::abs(d) < 1e-12) return path;
@@ -2027,12 +2032,14 @@ std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
     }
     if (dirs.empty()) return out;
     out.push_back(path.front() + dirs.front().perp() * d);
-    size_t k = 0;
+    size_t k = 0, corner = 0;
     for (size_t i = 1; i + 1 < path.size(); ++i) {
         if ((path[i] - path[i - 1]).lengthSq() < 1e-24) continue;
         if (k + 1 >= dirs.size()) break;
         const Vec2 in = dirs[k], nextDir = dirs[k + 1];
         ++k;
+        const double told = corner < rooms.size() ? rooms[corner] : -1.0;
+        ++corner;
         const double cr = cross(in, nextDir);
         if (std::abs(cr) < 1e-9) continue;   // straight through: nothing to join
         const Vec2 a = path[i] + in.perp() * d;
@@ -2043,12 +2050,21 @@ std::vector<Vec2> offsetRailRound(const std::vector<Vec2>& path, double d) {
         const double turn = std::acos(std::clamp(dot(in, nextDir), -1.0, 1.0));
         const double halfT = std::tan(turn / 2.0);
         const double reach = std::abs(d) * std::abs(halfT);
-        const double room = std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
-        // A MITRE LIMIT, the way every line stroker has one. On a turn sharper than about a right angle the
-        // mitre point runs away from the corner - at 135 degrees it is two and a half times the label's own
-        // depth out - and a spike that long off the edge of a label is not a corner, it is a thorn. Past the
-        // limit the corner is cut instead, which is what a drawing office would do by hand.
-        constexpr double kMiterLimit = 2.0;
+        const double room =
+            told > 0.0 ? told : std::min(distance(path[i - 1], path[i]), distance(path[i], path[i + 1]));
+        // A MITRE LIMIT, the way every line stroker has one - and a TIGHT one, because this is a label rather
+        // than a line.
+        //
+        // The mitre point runs away from the corner as the turn sharpens: the spike it leaves beyond the rail is
+        // the label's depth times the limit less one. At the usual limit of 2 that is a spike as long as the
+        // label is deep, and on a label as deep as a bundle that is the thorn in the picture - one edge with a
+        // point on it and the rest of the label lying flat. Measured on a 120 degree corner: twenty units of
+        // thorn on a band two deep.
+        //
+        // 1.5 keeps the mitre through a right angle, which is what a label wrapped round a bent cable looks like
+        // and what was asked for, and cuts the corner beyond about 96 degrees - where a mitre stops looking like
+        // a corner at all.
+        constexpr double kMiterLimit = 1.5;
         const double stretch = std::cos(turn / 2.0) > 1e-6 ? 1.0 / std::cos(turn / 2.0) : 1e9;
         if (reach < room * 0.9 && stretch <= kMiterLimit) {
             const Vec2 bis = (in.perp() + nextDir.perp()).normalized();
@@ -2268,48 +2284,33 @@ std::vector<std::pair<Vec2, Vec2>> clipSegmentToCircle(const Vec2& a, const Vec2
     return out;
 }
 
-// Cut a rail back to one side of a plane: keep the points with `dot(p - at, dir) >= 0`, putting a point exactly
-// on the plane wherever the rail crosses it.
+// ONE RAIL of the label: the cable offset by `d`, from one end of the label to the other, mitred at the cable's
+// own corners.
 //
-// This is what lets a rail be built on MORE cable than the label covers and then trimmed to the label's own
-// ends. Which matters: whether a mitre fits at a corner depends on how long the cable's segments are either side
-// of it, and building the rail on only the piece the label covers made the segments look as short as the piece -
-// so a corner two millimetres inside the label's end had its mitre refused, and the fallback pinched the inner
-// edge of the label right on to the cable's centreline.
-std::vector<Vec2> clipRailToPlane(const std::vector<Vec2>& rail, const Vec2& at, const Vec2& dir) {
-    std::vector<Vec2> out;
-    if (rail.empty()) return out;
-    auto side = [&](const Vec2& p) { return dot(p - at, dir); };
-    for (size_t i = 0; i < rail.size(); ++i) {
-        const double s = side(rail[i]);
-        if (s >= -1e-12) out.push_back(rail[i]);
-        if (i + 1 >= rail.size()) break;
-        const double s2 = side(rail[i + 1]);
-        if ((s < 0.0) == (s2 < 0.0)) continue;
-        const double t = s / (s - s2);
-        out.push_back({rail[i].x + (rail[i + 1].x - rail[i].x) * t,
-                       rail[i].y + (rail[i + 1].y - rail[i].y) * t});
-    }
-    return out;
-}
-
-// ONE RAIL of the label: the cable offset by `d`, running from one end of the label to the other, mitred at the
-// cable's own corners. Built on a little MORE cable than the label covers and then cut back square at each end,
-// so a corner near an end is mitred by how long the cable's segments really are rather than by how much of them
-// the label happens to sit on.
+// Built on EXACTLY the piece of cable the label covers, and told separately how much cable there really is either
+// side of each corner in it - so a corner near an end is mitred by the cable it belongs to.
+//
+// IT USED TO BE BUILT ON MORE CABLE AND THEN CUT BACK to the ends with two plane clips. That was the fold. A
+// mitre spike near an end crosses the end plane more than once, and the clip joined the pieces of rail either
+// side of that crossing into one line - so the rail jumped from one place to another, and the label came out with
+// a diagonal across it and a spike off one corner while the rest of it sat straight. Which is the picture.
 std::vector<Vec2> labelRail(const std::vector<Vec2>& path, double s0, double s1, double d) {
     if (path.size() < 2 || s1 <= s0) return {};
-    const double pad = std::abs(d) * 4.0 + 1.0;
-    const std::vector<Vec2> wide = pathPiece(path, s0 - pad, s1 + pad);
-    if (wide.size() < 2) return {};
-    std::vector<Vec2> rail = offsetRailRound(wide, d);
-    if (rail.size() < 2) return {};
-    Vec2 a0, dir0, a1, dir1;
-    frameOnPath(path, s0, a0, dir0);
-    frameOnPath(path, s1, a1, dir1);
-    rail = clipRailToPlane(rail, a0, dir0);        // at or past the near end
-    rail = clipRailToPlane(rail, a1, dir1 * -1.0); // at or before the far end
-    return rail;
+    const std::vector<Vec2> piece = pathPiece(path, s0, s1);
+    if (piece.size() < 2) return {};
+    // How much cable there is either side of each corner INSIDE the piece, in the order they come. The piece's
+    // interior points are exactly the path's own vertices between s0 and s1.
+    std::vector<double> rooms;
+    {
+        std::vector<double> at{0.0};
+        for (size_t i = 1; i < path.size(); ++i) at.push_back(at.back() + distance(path[i - 1], path[i]));
+        for (size_t i = 1; i + 1 < path.size(); ++i) {
+            if (at[i] <= s0 || at[i] >= s1) continue;
+            rooms.push_back(std::min(at[i] - at[i - 1], at[i + 1] - at[i]));
+        }
+    }
+    std::vector<Vec2> rail = offsetRailRound(piece, d, rooms);
+    return rail.size() >= 2 ? rail : std::vector<Vec2>{};
 }
 
 // Does the run bend anywhere under a label of this length, sat at this place along it? Asked by the fit when
