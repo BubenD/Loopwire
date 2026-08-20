@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QString>
 
+class QToolButton;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -158,6 +159,10 @@ private:
     DrawingPreview* mechPreview_ = nullptr;
     // The fanout: a third drawing of the part, and which side of the connector it was drawn from.
     DrawingPreview* fanoutPreview_ = nullptr;
+    // The eye over the three drawings: shows or hides the connection point - the line the harness attaches
+    // to, drawn orange - so a part can be looked at with nothing over it. See applyShowConnection().
+    QToolButton* showConnBtn_ = nullptr;
+    void applyShowConnection();
     QComboBox* fanoutSideBox_ = nullptr;
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;

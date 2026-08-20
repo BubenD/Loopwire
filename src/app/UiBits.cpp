@@ -18,6 +18,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
+#include <QSize>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QToolButton>
@@ -384,6 +385,60 @@ protected:
     }
 };
 } // namespace
+
+QIcon eyeIcon(bool shown, const QColor& ink, int size) {
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const double s = size / 20.0;
+    QPen pen(shown ? ink : QColor("#8a9099"));
+    pen.setWidthF(1.6 * s);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    // The lid, as two arcs meeting at the corners of the eye, and the pupil.
+    QPainterPath eye;
+    eye.moveTo(2.5 * s, 10 * s);
+    eye.quadTo(10 * s, 3 * s, 17.5 * s, 10 * s);
+    eye.quadTo(10 * s, 17 * s, 2.5 * s, 10 * s);
+    p.drawPath(eye);
+    p.setBrush(shown ? ink : QColor("#8a9099"));
+    p.drawEllipse(QPointF(10 * s, 10 * s), 2.6 * s, 2.6 * s);
+    if (!shown) {
+        // Struck through, corner to corner: the sign for "not being shown", and it reads at any size.
+        p.setBrush(Qt::NoBrush);
+        QPen slash(QColor("#e0a0a0"));
+        slash.setWidthF(1.8 * s);
+        p.setPen(slash);
+        p.drawLine(QPointF(3 * s, 17 * s), QPointF(17 * s, 3 * s));
+    }
+    return QIcon(pm);
+}
+
+QToolButton* makeEyeToggle(QWidget* parent, const QString& shownText, const QString& hiddenText,
+                           const QString& tip, const QString& settingsKey) {
+    auto* btn = new QToolButton(parent);
+    btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    btn->setCheckable(true);
+    btn->setToolTip(tip);
+    btn->setIconSize(QSize(18, 18));
+    const QString key = settingsKey.isEmpty() ? QStringLiteral("ui/showConnectionPoints") : settingsKey;
+    QSettings settings;
+    btn->setChecked(settings.value(key, true).toBool());
+    // The button's own face follows the button's own state, wherever the state came from - set here, clicked,
+    // or read back out of the settings - so there is one place that decides what it looks like.
+    auto dress = [btn, shownText, hiddenText] {
+        const bool on = btn->isChecked();
+        btn->setIcon(eyeIcon(on));
+        btn->setText(on ? shownText : hiddenText);
+    };
+    dress();
+    QObject::connect(btn, &QToolButton::toggled, btn, [btn, dress, key](bool on) {
+        dress();
+        QSettings().setValue(key, on);
+    });
+    return btn;
+}
 
 void installOpaqueMenus(QCoreApplication* app) {
     if (!app) return;

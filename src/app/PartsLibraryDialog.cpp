@@ -1,4 +1,5 @@
 #include "app/PartsLibraryDialog.h"
+#include <QToolButton>
 #include "harness/PartDataFromWeb.h"
 #include "app/PartWebDataDialog.h"
 #include "harness/MechanicalHarness.h"
@@ -773,6 +774,18 @@ void PartsLibraryDialog::buildUi() {
     // is a drawing nobody can check.
     const Side sides[] = {{"Schematic symbol", false}, {"Mechanical drawing", true},
                           {"Fanout", false}};
+    // THE EYE, over all three drawings at once. The connection point is drawn ORANGE over the part - the line
+    // the harness attaches to - and while the drawing itself is being checked that mark is in the way of seeing
+    // it: an orange line reads as part of the part. So it goes, and comes back. One button for the three panes
+    // because it is one question about one part, and the same button the model manager has, remembering the
+    // same answer.
+    showConnBtn_ = makeEyeToggle(
+        draw, QStringLiteral("Connection points shown"), QStringLiteral("Connection points hidden"),
+        QStringLiteral("Show or hide the connection point on these drawings - the line the harness attaches "
+                       "to, drawn orange. It is a mark ON the part, not part of it, and while the drawing is "
+                       "being checked it is in the way of seeing what the part actually looks like."));
+    connect(showConnBtn_, &QToolButton::toggled, this, [this] { applyShowConnection(); });
+    dg->addWidget(showConnBtn_, 3, 0, 1, 3, Qt::AlignLeft);
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
         auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), draw);
@@ -879,6 +892,9 @@ void PartsLibraryDialog::buildUi() {
         bl->addWidget(clr);
         dg->addWidget(btns, 1, i);
     }
+    // The remembered answer, given to the three panes now they exist: a preference that is read back but not
+    // applied until the button is next pressed is a preference that looks forgotten.
+    applyShowConnection();
     // ---- The pin contact this connector is used with ----
     //
     // ONE, and for both drawings: a connector is built with one kind of contact in it, and which one is a
@@ -2057,6 +2073,14 @@ void PartsLibraryDialog::editDrawing(bool mechanical) {
                                                "and on the sheet whenever the part is selected")
                               : QStringLiteral("No connection source: the part will be centred on the "
                                                "joint"));
+}
+
+// The eye's answer, given to all three drawings. In one place because the three panes are shown one part
+// three ways and there is no sense in which one of them could be showing its marks and another not.
+void PartsLibraryDialog::applyShowConnection() {
+    const bool on = !showConnBtn_ || showConnBtn_->isChecked();
+    for (DrawingPreview* prev : {schemPreview_, mechPreview_, fanoutPreview_})
+        if (prev) prev->setShowConnection(on);
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {

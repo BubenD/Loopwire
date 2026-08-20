@@ -197,7 +197,13 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
     doc.entities().clear();
     Bounds b;
     for (const Entity& e : ents_) {
-        doc.entities().push_back(e);
+        Entity shown = e;
+        // HIDDEN MEANS THE MARK IS NOT ON THE DRAWING. The renderer colours a connection line orange of its
+        // own accord - it is a note about the part and it is wanted wherever the part is drawn - and it
+        // overrules the grey asked for here. So the mark is taken off the COPY being drawn: the part keeps
+        // its line, in the same grey as the rest of it, and the part on the library's shelf is unchanged.
+        if (!showConn_) shown.meta.remove(QLatin1String(kConnectionLineKey));
+        doc.entities().push_back(shown);
         const Bounds eb = e.bounds();
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
     }
@@ -221,7 +227,7 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         // Everything in one quiet grey, so a preview reads as a drawing rather than as a colour chart -
         // EXCEPT the line the harness attaches to, which keeps the orange that says so. Overriding that
         // as well is what hid the mark in the library, where it is most wanted.
-        const bool conn = e.meta.value(QLatin1String(kConnectionLineKey)).toBool() ||
+        const bool conn = (showConn_ && e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) ||
                           (pickable_ && i == picked_);
         if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
@@ -234,6 +240,12 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         p.drawText(r.adjusted(6, 4, -6, 0), Qt::AlignRight | Qt::AlignTop,
                    QStringLiteral("×%1  (double-click to fit)").arg(zoom_, 0, 'f', 1));
     }
+}
+
+void DrawingPreview::setShowConnection(bool on) {
+    if (showConn_ == on) return;
+    showConn_ = on;
+    update();
 }
 
 } // namespace Edraw_Desktop

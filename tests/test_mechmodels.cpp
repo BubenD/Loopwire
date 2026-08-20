@@ -13,6 +13,7 @@
 #include "model/Block.h"
 
 #include <QApplication>
+#include <QToolButton>
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -2755,9 +2756,11 @@ int run_mechmodels_tests() {
 
         // THE MARKS, askable for here. This window is where a model is chosen and checked, and the marks are what
         // it is placed by - so "has this one been marked up, and where" should be answerable by looking.
-        QCheckBox* marks = nullptr;
-        for (QCheckBox* c : dlg.findChildren<QCheckBox*>())
-            if (c->text().contains(QStringLiteral("reference points"))) marks = c;
+        // As an eye that can be pressed in and out, the same control the editing canvas has in its ribbon -
+        // it was a tick box here and an eye there, which is the same thing done two ways in two windows.
+        QToolButton* marks = nullptr;
+        for (QToolButton* b : dlg.findChildren<QToolButton*>())
+            if (b->isCheckable() && b->text().contains(QStringLiteral("Connection points"))) marks = b;
         check(marks != nullptr, "manager: the marks can be shown over the preview");
 
         // NOTHING WRITTEN UNTIL SAVE. The file on disk is untouched by a change made here.
@@ -2799,6 +2802,83 @@ int run_mechmodels_tests() {
             if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
         } else {
             QFile::remove(modelsFile);
+        }
+    }
+
+
+    // ---- the manager's eye: the marks are shown and hidden, and the button says which ---------------
+    {
+        // The marks are chrome OVER the part - where it connects, which way it runs from there, its two ends,
+        // the faces the conductors leave by. While the part itself is being looked at they are in the way of
+        // seeing it, so they go, and come back. The manager had a tick box for it and the editing canvas had an
+        // eye in the ribbon: the same thing done two ways in two windows, which is one way too many.
+        // A ring terminal: PLACED rather than run to a length. The manager holds the marks back while a trial
+        // length is being tried - stretched, the part's ends are somewhere else and a mark drawn where it was
+        // captured would point at the wrong place - so a kind that stretches would show nothing here for a
+        // reason that has nothing to do with the eye.
+        const MechModelKind kind = MechModelKind::RingInsulated;
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        MechModelsDialog dlg(&ed);
+        dlg.show();
+        dlg.selectKind(kind);
+        QApplication::processEvents();
+        // WHICH model of that kind the window is showing, asked rather than assumed: a kind holds several -
+        // insulated and not, straight and right-angled - and the list has a row per model. A model put in under
+        // a name no row is showing is a model nobody looks at.
+        MechModelSet s = dlg.models();
+        MechModel m;
+        m.kind = kind;
+        m.name = dlg.currentName();
+        Entity e;
+        e.type = EntityType::Line;
+        e.a = {0.0, 0.0};
+        e.b = {40.0, 0.0};
+        m.drawing = partDrawingFromEntities({e});
+        // Marked up, so there is something for the eye to show or hide.
+        m.hasConnect = true;
+        m.connectPoint = {0.0, 0.0};
+        m.connectAngleRad = 0.0;
+        m.hasNearPoint = true;
+        m.nearPoint = {2.0, 0.0};
+        m.hasFarPoint = true;
+        m.farPoint = {38.0, 0.0};
+        s.set(m);
+        // Handed the models rather than left to read them off disk: the house-style file is the user's, and a
+        // test that writes over it to have something to look at is a test that can lose an afternoon's work.
+        dlg.setModels(s);
+        dlg.selectKind(kind);
+        QApplication::processEvents();
+        std::printf("  manager: showing the %s model, marked up\n", qPrintable(dlg.currentName()));
+
+        // The eye, found the way a user finds it: a button that can be pressed in and out, about the connection
+        // points. Not by name, so a renamed member cannot make this test pass by looking somewhere else.
+        QToolButton* eye = nullptr;
+        for (QToolButton* b : dlg.findChildren<QToolButton*>())
+            if (b->isCheckable() && b->text().contains(QStringLiteral("Connection points"))) eye = b;
+        check(eye != nullptr, "manager: there is a toggle for the connection points");
+        DrawingPreview* prev = dlg.findChild<DrawingPreview*>();
+        check(prev != nullptr, "manager: and a drawing window to show them in");
+        if (eye && prev) {
+            eye->setChecked(true);
+            QApplication::processEvents();
+            const int withMarks = static_cast<int>(prev->entities().size());
+            const QString shownText = eye->text();
+            eye->setChecked(false);
+            QApplication::processEvents();
+            const int without = static_cast<int>(prev->entities().size());
+            std::printf("  manager: %d object(s) with the marks, %d without\n", withMarks, without);
+            check(withMarks > without,
+                  "manager: pressing the eye out takes the marks off the drawing, not just the tick");
+            check(without >= 1, "manager: and leaves the part itself, which is what was wanted to be seen");
+            check(eye->text() != shownText,
+                  "manager: the button says which state it is in - a toggle that reads the same either way "
+                  "has to be pressed twice to find out what it did");
+            eye->setChecked(true);
+            QApplication::processEvents();
+            check(static_cast<int>(prev->entities().size()) == withMarks,
+                  "manager: and they come back");
         }
     }
 

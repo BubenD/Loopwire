@@ -8,6 +8,10 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include "model/Entity.h"
+#include <QImage>
+#include "app/DrawingPreview.h"
+#include "app/PartsLibraryDialog.h"
 #include "app/Editor.h"
 #include "model/Block.h"
 #include "render/CanvasWidget.h"
@@ -48,6 +52,24 @@ void check(bool ok, const char* what) {
         std::printf("  [FAIL] %s\n", what);
         ++panelFailures;
     }
+}
+
+// A part drawn as two lines, the second of them marked as the line the harness attaches to - the thing the
+// eye shows and hides. Written through the same call the application writes a captured drawing with, because
+// a hand-built JSON object with the wrong key names in it is a drawing of nothing at all.
+QJsonArray twoLinesOneMarked() {
+    Entity body;
+    body.id = QStringLiteral("b");
+    body.type = EntityType::Line;
+    body.a = {0.0, 0.0};
+    body.b = {20.0, 0.0};
+    Entity face;
+    face.id = QStringLiteral("f");
+    face.type = EntityType::Line;
+    face.a = {20.0, -6.0};
+    face.b = {20.0, 6.0};
+    face.meta.insert(QLatin1String(kConnectionLineKey), true);
+    return partDrawingFromEntities({body, face});
 }
 
 // A drawing of something: enough of an entity for the part to count as having one.
@@ -770,6 +792,95 @@ int run_partspanel_tests() {
     QFile::remove(houseFile);
     QFile::remove(jobFile);
     QFile::remove(drawnFile);
+
+    // ---- the library's eye: the connection point is shown and hidden on all three drawings ----------
+    {
+        // The connection point is drawn ORANGE over a part - the line the harness attaches to. While the
+        // drawing itself is being checked, an orange line reads as part of the part, so it is in the way of
+        // seeing what the part actually looks like. One eye over the three panes, because it is one question
+        // about one part shown three ways.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_eye_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-EYE");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Two-line connector");
+            part.mechanical = twoLinesOneMarked();
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-EYE"));
+        dlg.show();
+        QApplication::processEvents();
+
+        QToolButton* eye = nullptr;
+        for (QToolButton* b : dlg.findChildren<QToolButton*>())
+            if (b->isCheckable() && b->text().contains(QStringLiteral("Connection points"))) eye = b;
+        check(eye != nullptr, "library: there is a toggle for the connection points");
+        const QList<DrawingPreview*> panes = dlg.findChildren<DrawingPreview*>();
+        std::printf("  library: the eye covers %lld drawing pane(s)\n", static_cast<long long>(panes.size()));
+        check(panes.size() >= 3, "library: and it covers all three drawings of the part");
+        if (eye) {
+            eye->setChecked(false);
+            QApplication::processEvents();
+            bool allHidden = !panes.isEmpty();
+            for (DrawingPreview* pane : panes)
+                if (pane->showsConnection()) allHidden = false;
+            check(allHidden, "library: pressed out, no pane marks the connection point");
+            eye->setChecked(true);
+            QApplication::processEvents();
+            bool allShown = !panes.isEmpty();
+            for (DrawingPreview* pane : panes)
+                if (!pane->showsConnection()) allShown = false;
+            check(allShown, "library: pressed in, they all mark it again");
+        }
+
+        // AND IT IS ACTUALLY NOT DRAWN. A flag that no painter reads is a setting that does nothing, so the
+        // orange is counted on the pane itself: the part keeps its lines either way, and only the colour that
+        // says "this is where the harness attaches" comes and goes.
+        {
+            DrawingPreview pane(QStringLiteral("test"));
+            pane.resize(240, 180);
+            pane.setDrawing(twoLinesOneMarked());
+            auto orange = [](const QImage& img) {
+                int n = 0;
+                for (int y = 0; y < img.height(); ++y)
+                    for (int x = 0; x < img.width(); ++x) {
+                        const QRgb c = img.pixel(x, y);
+                        if (qRed(c) > 150 && qGreen(c) > 90 && qGreen(c) < 190 && qBlue(c) < 110) ++n;
+                    }
+                return n;
+            };
+            auto ink = [](const QImage& img) {
+                int n = 0;
+                for (int y = 0; y < img.height(); ++y)
+                    for (int x = 0; x < img.width(); ++x)
+                        if (qGray(img.pixel(x, y)) > 90) ++n;
+                return n;
+            };
+            pane.setShowConnection(true);
+            const QImage withMark = pane.grab().toImage();
+            pane.setShowConnection(false);
+            const QImage without = pane.grab().toImage();
+            std::printf("  library: %d orange pixel(s) shown, %d hidden; ink %d then %d\n", orange(withMark),
+                        orange(without), ink(withMark), ink(without));
+            check(orange(withMark) > 20, "library: shown, the connection line is drawn orange");
+            check(orange(without) == 0, "library: hidden, there is no orange on the drawing at all");
+            check(ink(without) >= ink(withMark) - ink(withMark) / 4,
+                  "library: and the line is still THERE, in the same grey as the rest - hidden means "
+                  "unmarked, not deleted");
+        }
+        QFile::remove(libFile);
+    }
+
     if (panelFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", panelFailures);
     return panelFailures;

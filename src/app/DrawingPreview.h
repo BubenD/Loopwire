@@ -44,6 +44,13 @@ public:
     // Which object is picked, by its place in the drawing (-1 for none), and setting it from outside.
     int pickedIndex() const { return picked_; }
     void setPickedIndex(int index);
+    // Whether the connection marking - the line the harness attaches to, drawn orange - is shown at all.
+    // Off, it is drawn in the same grey as everything else: the part on its own, with nothing over it. The
+    // object being PICKED is still marked, because that is the answer to a question being asked right now
+    // rather than chrome on a drawing being looked at.
+    void setShowConnection(bool on);
+    bool showsConnection() const { return showConn_; }
+
     // The objects, so a caller can write the pick back onto the part.
     const std::vector<Entity>& entities() const { return ents_; }
 
@@ -71,6 +78,7 @@ private:
 
     bool pickable_ = false;
     int picked_ = -1;
+    bool showConn_ = true;
     // The mapping the last paint used, so a click can be turned back into a point on the drawing
     // rather than the transform being worked out twice from two different places.
     ViewTransform lastVt_;

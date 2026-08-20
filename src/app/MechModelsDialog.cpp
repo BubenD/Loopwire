@@ -3,6 +3,8 @@
 #include <QFont>
 #include <algorithm>
 #include "app/MechModelsDialog.h"
+#include <QToolButton>
+#include "app/UiBits.h"
 
 #include "app/DrawingPreview.h"
 #include "app/MechModelCanvasDialog.h"
@@ -189,13 +191,19 @@ void MechModelsDialog::buildUi() {
     // THE MARKS, in the manager's own preview. This window is where a model is chosen and checked, and the marks
     // are what it is placed BY - so "has this one been marked up, and where" is a question to be answered by
     // looking at it here rather than by opening it for editing to find out.
-    showMarks_ = new QCheckBox(QStringLiteral("Show reference points"));
-    showMarks_->setToolTip(QStringLiteral(
-        "The points and faces this model is placed by: where it connects and which way it runs from there, its "
-        "two ends, the faces the conductors leave by, and what it is scaled by. Drawn over the preview in the "
-        "same colours the editing canvas uses."));
-    connect(showMarks_, &QCheckBox::toggled, this, [this] { refreshDetails(); });
-    right->addWidget(showMarks_);
+    //
+    // AS A TOGGLE WITH AN EYE ON IT, and the same eye the editing canvas has in its ribbon: the marks are shown
+    // and hidden in both places, and a control that does the same thing in two windows should not be a tick box
+    // in one of them and a button in the other. Struck through when they are hidden, so which state it is in is
+    // read off the button rather than found out by pressing it.
+    showMarks_ = makeEyeToggle(
+        this, QStringLiteral("Connection points shown"), QStringLiteral("Connection points hidden"),
+        QStringLiteral("Show or hide the points and faces this model is placed by: where it connects and which "
+                       "way it runs from there, its two ends, the faces the conductors leave by, and what it is "
+                       "scaled by. Drawn over the preview in the same colours the editing canvas uses - and in "
+                       "the way of seeing the part itself, which is why they can go."));
+    connect(showMarks_, &QToolButton::toggled, this, [this] { refreshDetails(); });
+    right->addWidget(showMarks_, 0, Qt::AlignLeft);
 
     // What the capture MEASURED, and what was marked on the drawing. The drawing knows how long and how
     // thick it is: asking for those in two fields with a magic zero in each ("0 = measure it", "0 = do not

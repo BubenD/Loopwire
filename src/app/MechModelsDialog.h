@@ -7,6 +7,7 @@
 #include <functional>
 
 class QCheckBox;
+class QToolButton;
 class QCloseEvent;
 class QComboBox;
 class QFormLayout;
@@ -123,7 +124,7 @@ private:
     QCheckBox* scaleAcross_ = nullptr;
     // The marks drawn over the preview: what the model is placed BY. Asked here so "has this one been marked up,
     // and where" can be answered by looking rather than by opening it for editing to find out.
-    QCheckBox* showMarks_ = nullptr;
+    QToolButton* showMarks_ = nullptr;
     // NOTHING IS WRITTEN UNTIL SAVE IS PRESSED. Every change used to go straight to the file - a digit typed into a
     // length wrote the whole set to disk - so there was no way to try something and think better of it. These are
     // the drawings every sheet the office releases is built from, and editing them should be as safe as editing

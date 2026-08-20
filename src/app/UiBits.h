@@ -34,6 +34,23 @@ QPushButton* makeAddButton(QWidget* parent, const QString& text = QString(),
 QPushButton* makeRemoveButton(QWidget* parent, const QString& text = QString(),
                               const QString& tip = QString(), bool cross = false);
 
+// ---- The eye ------------------------------------------------------------------------------------
+
+// AN EYE, for a button that shows or hides something drawn OVER a drawing - the connection point a part is
+// placed by, its ends, the faces the conductors leave by. Those marks are chrome: while the part itself is
+// being looked at they are in the way of seeing it, so they go, and come back.
+//
+// Struck through when what it shows is hidden, because a toggle that looks the same either way is a button
+// you have to press twice to find out what it did.
+QIcon eyeIcon(bool shown, const QColor& ink = QColor("#d6dae1"), int size = 20);
+
+// A checkable button carrying that eye, which keeps its own icon and words in step with its state. The
+// state is REMEMBERED between sessions, and shared by every one of these: "show me the connection points"
+// is one preference about how drawings are looked at, not one per window - having answered it in the
+// library, nobody wants to answer it again in the model manager.
+QToolButton* makeEyeToggle(QWidget* parent, const QString& shownText, const QString& hiddenText,
+                           const QString& tip, const QString& settingsKey = QString());
+
 // ---- Colours -------------------------------------------------------------------------------------
 
 // A colour as a filled circle, for a menu or a combo entry: a wire is round, and a circle reads as a
