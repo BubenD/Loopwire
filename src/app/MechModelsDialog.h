@@ -7,6 +7,7 @@
 #include <functional>
 
 class QCheckBox;
+class QCloseEvent;
 class QComboBox;
 class QFormLayout;
 class QDoubleSpinBox;
@@ -53,6 +54,11 @@ public:
     // one - and the list has a row per model rather than a row per kind.
     QString currentName() const;
     bool selectKind(MechModelKind kind);
+    // Driving it from a test: change a figure, ask whether there is anything unsaved, and save. The three things a
+    // test of "nothing is written until Save" has to be able to do.
+    void setHeadForTest(double mm);
+    bool hasUnsavedForTest() const { return changed_; }
+    bool saveForTest() { return saveNow(); }
     // Managing them: another model of this kind, this one gone, renamed, or made the one the kind uses.
     void addModel(const QString& name);
     void removeCurrentModel();
@@ -75,6 +81,11 @@ signals:
     // how to finish - the same as the parts library does when it captures a part's drawing.
     void captureArmed(const QString& modelName);
     void captureFinished();
+
+protected:
+    // Asked about on the way out when the file does not match what is on the screen. Losing an afternoon of house
+    // style to a stray click on Close is not a thing that should be possible.
+    void closeEvent(QCloseEvent* e) override;
 
 private:
     bool capturing_ = false;   // waiting for a selection on the sheet
@@ -110,6 +121,17 @@ private:
     // two ways of saying a thing the drawing already knows.
     QLabel* measured_ = nullptr;
     QCheckBox* scaleAcross_ = nullptr;
+    // The marks drawn over the preview: what the model is placed BY. Asked here so "has this one been marked up,
+    // and where" can be answered by looking rather than by opening it for editing to find out.
+    QCheckBox* showMarks_ = nullptr;
+    // NOTHING IS WRITTEN UNTIL SAVE IS PRESSED. Every change used to go straight to the file - a digit typed into a
+    // length wrote the whole set to disk - so there was no way to try something and think better of it. These are
+    // the drawings every sheet the office releases is built from, and editing them should be as safe as editing
+    // anything else.
+    QPushButton* saveBtn_ = nullptr;
+    bool changed_ = false;
+    void markChanged();
+    bool saveNow();
     // Where it connects and which way it runs: marked on the drawing, said here.
     QLabel* placement_ = nullptr;
     QGroupBox* figures_ = nullptr;

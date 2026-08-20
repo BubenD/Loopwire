@@ -13,6 +13,8 @@
 #include "model/Block.h"
 
 #include <QApplication>
+#include <QGroupBox>
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
@@ -2623,32 +2625,32 @@ int run_mechmodels_tests() {
         // drawn per conductor and it is not insulated-or-not.
         dlg.selectKind(MechModelKind::Cable);
         QApplication::processEvents();
-        check(rowShowing(QStringLiteral("The end at the left")) &&
+        check(rowShowing(QStringLiteral("Fixed at start")) &&
                   rowShowing(QStringLiteral("Gap left at each end")),
               "manager: a cable shows its ends and its gap");
-        check(!rowShowing(QStringLiteral("Conductors the drawing shows")) &&
+        check(!rowShowing(QStringLiteral("Conductors as drawn")) &&
                   !rowShowing(QStringLiteral("Insulation")),
               "manager: and not the rows it has nothing to do with");
-        check(rowShowing(QStringLiteral("At this length")),
+        check(rowShowing(QStringLiteral("Length")),
               "manager: it can be tried at a length, because that is what a run gives it");
-        check(!rowShowing(QStringLiteral("With this many conductors")),
+        check(!rowShowing(QStringLiteral("Conductors")),
               "manager: but not with a number of conductors");
 
         // A RING TERMINAL: it is placed, not run. No ends, no gap, no conductors - but insulated or not.
         dlg.selectKind(MechModelKind::RingInsulated);
         QApplication::processEvents();
-        check(!rowShowing(QStringLiteral("The end at the left")) &&
+        check(!rowShowing(QStringLiteral("Fixed at start")) &&
                   !rowShowing(QStringLiteral("Gap left at each end")),
               "manager: a ring terminal is placed, so it has no ends that stretch and no gap");
         check(rowShowing(QStringLiteral("Insulation")), "manager: it is insulated or not, and says so");
-        check(!rowShowing(QStringLiteral("At this length")),
+        check(!rowShowing(QStringLiteral("Length")),
               "manager: and there is no length to try it at");
 
         // THE OPEN WIRES: drawn for so many conductors, and the number comes from the harness.
         dlg.selectKind(MechModelKind::OpenWires);
         QApplication::processEvents();
-        check(rowShowing(QStringLiteral("Conductors the drawing shows")) &&
-                  rowShowing(QStringLiteral("With this many conductors")),
+        check(rowShowing(QStringLiteral("Conductors as drawn")) &&
+                  rowShowing(QStringLiteral("Conductors")),
               "manager: the open wires are drawn per conductor, and can be tried at another number");
 
         // The two figures the drawing itself knows are MEASURED and said, not asked for: what is left to
@@ -2694,6 +2696,103 @@ int run_mechmodels_tests() {
                   buttons.contains(QStringLiteral("Rename")) &&
                   buttons.contains(QStringLiteral("Make default")),
               "manager: and the four that manage the list are all there");
+
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
+
+    // ---- the manager: sections named for what they are, marks shown, nothing written until Save ------
+    {
+        // A window somebody sets a house style in has to be readable and it has to be safe. It was neither: the
+        // three sections were named after themselves rather than after what they were for, and every digit typed
+        // into a field wrote the whole set of models to disk - so there was no trying something and thinking
+        // better of it.
+        const QString modelsFile = MechModelSet::defaultPath();
+        const bool hadOne = QFile::exists(modelsFile);
+        QByteArray hadFile;
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) hadFile = f.readAll();
+        }
+        {
+            MechModelSet seed;
+            MechModel m = builtInMechModel(MechModelKind::Wire);
+            m.kind = MechModelKind::Wire;
+            m.drawing = builtInMechModel(MechModelKind::Label).drawing;   // any drawing will do
+            m.headMm = 4.0;
+            seed.set(m);
+            seed.save(modelsFile);
+        }
+
+        MechModelsDialog dlg(nullptr);
+        QStringList groups;
+        for (QGroupBox* g : dlg.findChildren<QGroupBox*>()) groups << g->title();
+        std::printf("  manager: sections - %s\n", qPrintable(groups.join(QStringLiteral(", "))));
+        // NAMED FOR WHAT THEY ARE. "Fixed zones" is the standard way a part drawn at one length is used at
+        // another; "Trial fit" is drawing it at a size it will really be asked for. "What must not stretch" and
+        // "Try it" said what they did in nobody's language.
+        check(groups.contains(QStringLiteral("Captured geometry")) &&
+                  groups.contains(QStringLiteral("Fixed zones")) &&
+                  groups.contains(QStringLiteral("Trial fit")),
+              "manager: the sections are named the way a drawing office names them");
+        check(!groups.contains(QStringLiteral("What must not stretch")) &&
+                  !groups.contains(QStringLiteral("Try it")),
+              "manager: and not the way they were");
+
+        // AND EACH SAYS WHAT IT IS FOR. A title names a section; it does not tell anybody which figure belongs in
+        // it, and these three all needed telling.
+        int explained = 0;
+        for (QGroupBox* g : dlg.findChildren<QGroupBox*>())
+            for (QLabel* l : g->findChildren<QLabel*>())
+                if (l->text().length() > 60 && l->wordWrap()) { ++explained; break; }
+        std::printf("  manager: %d of the sections explain themselves\n", explained);
+        check(explained >= 3, "manager: every section says in a line what it is for");
+
+        // THE MARKS, askable for here. This window is where a model is chosen and checked, and the marks are what
+        // it is placed by - so "has this one been marked up, and where" should be answerable by looking.
+        QCheckBox* marks = nullptr;
+        for (QCheckBox* c : dlg.findChildren<QCheckBox*>())
+            if (c->text().contains(QStringLiteral("reference points"))) marks = c;
+        check(marks != nullptr, "manager: the marks can be shown over the preview");
+
+        // NOTHING WRITTEN UNTIL SAVE. The file on disk is untouched by a change made here.
+        QPushButton* save = nullptr;
+        for (QPushButton* b : dlg.findChildren<QPushButton*>())
+            if (b->text().startsWith(QStringLiteral("Save"))) save = b;
+        check(save != nullptr, "manager: there is a Save");
+        if (save) {
+            check(!save->isEnabled(), "manager: and nothing to save until something is changed");
+            QByteArray before;
+            {
+                QFile f(modelsFile);
+                if (f.open(QIODevice::ReadOnly)) before = f.readAll();
+            }
+            dlg.selectKind(MechModelKind::Wire);
+            dlg.setHeadForTest(9.0);
+            check(save->isEnabled(), "manager: changed, there is something to save and the button says so");
+            QByteArray after;
+            {
+                QFile f(modelsFile);
+                if (f.open(QIODevice::ReadOnly)) after = f.readAll();
+            }
+            check(after == before,
+                  "manager: and the file is untouched - a digit typed does not write the house style to disk");
+            check(dlg.hasUnsavedForTest(), "manager: which is what it would warn about on the way out");
+            dlg.saveForTest();
+            {
+                QFile f(modelsFile);
+                if (f.open(QIODevice::ReadOnly)) after = f.readAll();
+            }
+            std::printf("  manager: file %s after Save\n", after == before ? "UNCHANGED" : "written");
+            check(after != before, "manager: Save writes it");
+            check(!dlg.hasUnsavedForTest() && !save->isEnabled(),
+                  "manager: and there is nothing left to save");
+        }
 
         if (hadOne) {
             QFile f(modelsFile);

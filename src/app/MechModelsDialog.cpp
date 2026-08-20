@@ -1,3 +1,5 @@
+#include <QMessageBox>
+#include <QCloseEvent>
 #include <QFont>
 #include <algorithm>
 #include "app/MechModelsDialog.h"
@@ -184,16 +186,34 @@ void MechModelsDialog::buildUi() {
     view_->setEmptyText(QStringLiteral("nothing drawn for this yet"));
     view_->setMinimumHeight(260);
     right->addWidget(view_, 1);
+    // THE MARKS, in the manager's own preview. This window is where a model is chosen and checked, and the marks
+    // are what it is placed BY - so "has this one been marked up, and where" is a question to be answered by
+    // looking at it here rather than by opening it for editing to find out.
+    showMarks_ = new QCheckBox(QStringLiteral("Show reference points"));
+    showMarks_->setToolTip(QStringLiteral(
+        "The points and faces this model is placed by: where it connects and which way it runs from there, its "
+        "two ends, the faces the conductors leave by, and what it is scaled by. Drawn over the preview in the "
+        "same colours the editing canvas uses."));
+    connect(showMarks_, &QCheckBox::toggled, this, [this] { refreshDetails(); });
+    right->addWidget(showMarks_);
 
     // What the capture MEASURED, and what was marked on the drawing. The drawing knows how long and how
     // thick it is: asking for those in two fields with a magic zero in each ("0 = measure it", "0 = do not
     // scale across") was asking for the drawing to be described to the program a second time.
-    auto* takenBox = new QGroupBox(QStringLiteral("Taken from the drawing"));
+    auto* takenBox = new QGroupBox(QStringLiteral("Captured geometry"));
     auto* takenLay = new QVBoxLayout(takenBox);
+    // What the section IS, in a line. Every one of these three had a title that named it and not one that said
+    // what it was for, so which figure belonged in which was a matter of working it out.
+    auto* takenWhat = new QLabel(QStringLiteral(
+        "What was captured off the sheet, measured rather than typed: the drawing knows how long and how thick "
+        "it is."));
+    takenWhat->setWordWrap(true);
+    takenWhat->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+    takenLay->addWidget(takenWhat);
     measured_ = new QLabel;
     measured_->setWordWrap(true);
     takenLay->addWidget(measured_);
-    scaleAcross_ = new QCheckBox(QStringLiteral("Scale it across to the bundle it goes over"));
+    scaleAcross_ = new QCheckBox(QStringLiteral("Scale across to the bundle diameter"));
     scaleAcross_->setToolTip(QStringLiteral(
         "Drawn at one diameter and used at another: with this on the model is scaled across as well as "
         "along. Off, it is drawn at the size it was captured at."));
@@ -206,14 +226,24 @@ void MechModelsDialog::buildUi() {
 
     // The figures that cannot be measured - and only the ones this kind has. A row that does not apply is
     // taken away rather than greyed, so what is on the screen is what this model is made of.
-    figures_ = new QGroupBox(QStringLiteral("What must not stretch"));
+    // FIXED ZONES: the standard way a part drawn at one length is used at another. A wire model drawn 60 long
+    // with 4 mm flush ends, asked for at 500, has to come out with the same two ends and 492 of wire between them -
+    // so the two ends are held at the size they were drawn and everything between them makes up the difference.
+    // That is the whole reason a model is not a block.
+    figures_ = new QGroupBox(QStringLiteral("Fixed zones"));
+    auto* figuresWhat = new QLabel(QStringLiteral(
+        "The part at each end that keeps the size it was drawn at, however long the model is asked for. "
+        "Everything between them stretches to make up the difference."));
+    figuresWhat->setWordWrap(true);
+    figuresWhat->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
     figuresForm_ = new QFormLayout(figures_);
+    figuresForm_->addRow(figuresWhat);
     head_ = mmSpin();
     connect(head_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    figuresForm_->addRow(QStringLiteral("The end at the left"), head_);
+    figuresForm_->addRow(QStringLiteral("Fixed at start"), head_);
     tail_ = mmSpin();
     connect(tail_, &QDoubleSpinBox::valueChanged, this, [this] { applyFigures(); });
-    figuresForm_->addRow(QStringLiteral("The end at the right"), tail_);
+    figuresForm_->addRow(QStringLiteral("Fixed at end"), tail_);
     // A cable and a wire are taken AS DRAWN and given a length when the drawing is generated, so the only
     // figure of their own that a run needs is the gap: the piece at each end they do not cover.
     gap_ = mmSpin();
@@ -238,7 +268,7 @@ void MechModelsDialog::buildUi() {
     wires_->setRange(0, 200);
     wires_->setKeyboardTracking(false);
     connect(wires_, &QSpinBox::valueChanged, this, [this] { applyFigures(); });
-    figuresForm_->addRow(QStringLiteral("Conductors the drawing shows"), wires_);
+    figuresForm_->addRow(QStringLiteral("Conductors as drawn"), wires_);
     insulation_ = new QComboBox;
     insulation_->addItems({QStringLiteral("Insulated"), QStringLiteral("Uninsulated")});
     connect(insulation_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -248,25 +278,33 @@ void MechModelsDialog::buildUi() {
             MechModel m = *had;
             m.insulated = pendingInsulated_;
             set_.set(m);
-            set_.save();
+            markChanged();
             refreshPreview();
         }
     });
     figuresForm_->addRow(QStringLiteral("Insulation"), insulation_);
     right->addWidget(figures_);
 
-    tryBox_ = new QGroupBox(QStringLiteral("Try it"));
+    // A TRIAL FIT: the model drawn at a length and a conductor count it will really be asked for, so the stretch
+    // can be seen to work before a drawing is generated with it in.
+    tryBox_ = new QGroupBox(QStringLiteral("Trial fit"));
     tryForm_ = new QFormLayout(tryBox_);
     tryLen_ = mmSpin(20000.0);
     tryLen_->setValue(250.0);
     connect(tryLen_, &QDoubleSpinBox::valueChanged, this, [this] { refreshPreview(); });
-    tryForm_->addRow(QStringLiteral("At this length"), tryLen_);
+    auto* tryWhat = new QLabel(QStringLiteral(
+        "Draws the model above at a size it will really be asked for, so the stretch can be seen to work. Nothing "
+        "here is saved with the model."));
+    tryWhat->setWordWrap(true);
+    tryWhat->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+    tryForm_->addRow(tryWhat);
+    tryForm_->addRow(QStringLiteral("Length"), tryLen_);
     tryWires_ = new QSpinBox;
     tryWires_->setRange(0, 200);
     tryWires_->setValue(6);
     tryWires_->setKeyboardTracking(false);
     connect(tryWires_, &QSpinBox::valueChanged, this, [this] { refreshPreview(); });
-    tryForm_->addRow(QStringLiteral("With this many conductors"), tryWires_);
+    tryForm_->addRow(QStringLiteral("Conductors"), tryWires_);
     right->addWidget(tryBox_);
 
     summary_ = new QLabel;
@@ -291,6 +329,19 @@ void MechModelsDialog::buildUi() {
     connect(edit, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
     buttons->addWidget(edit);
     buttons->addStretch(1);
+    // SAVE, and nothing written until it is pressed.
+    //
+    // Every change used to go straight to the file - a digit typed into a length wrote the whole set to disk, and
+    // there was no way to try something and think better of it. A drawing office's models are its house style;
+    // editing them should be as safe as editing anything else, which means the file is written when somebody says
+    // so and not before.
+    saveBtn_ = new QPushButton(QStringLiteral("Save"));
+    saveBtn_->setToolTip(QStringLiteral(
+        "Write the models to disk. Until this is pressed the changes are in this window only - nothing that "
+        "generates a drawing sees them."));
+    saveBtn_->setEnabled(false);
+    connect(saveBtn_, &QPushButton::clicked, this, [this] { saveNow(); });
+    buttons->addWidget(saveBtn_);
     auto* close = new QPushButton(QStringLiteral("Close"));
     connect(close, &QPushButton::clicked, this, &QDialog::close);
     buttons->addWidget(close);
@@ -298,6 +349,62 @@ void MechModelsDialog::buildUi() {
 
     outer->addLayout(right, 1);
     resize(1020, 780);
+}
+
+
+// ---- changed, saved, and asked about on the way out ----------------------------------------------------
+// Something was changed and the file no longer matches. Said on the button rather than only in a flag, because the
+// one thing somebody needs to know at a glance is whether there is anything to save.
+void MechModelsDialog::markChanged() {
+    changed_ = true;
+    if (saveBtn_) {
+        saveBtn_->setEnabled(true);
+        saveBtn_->setText(QStringLiteral("Save *"));
+    }
+}
+
+bool MechModelsDialog::saveNow() {
+    if (!set_.save()) {
+        QMessageBox::warning(this, QStringLiteral("Save models failed"),
+                             QStringLiteral("The default models could not be written."));
+        return false;
+    }
+    changed_ = false;
+    if (saveBtn_) {
+        saveBtn_->setEnabled(false);
+        saveBtn_->setText(QStringLiteral("Save"));
+    }
+    return true;
+}
+
+// ON THE WAY OUT, if the file does not match what is on the screen. Not a silent discard: these are the drawings
+// every sheet the office releases is built from, and losing an afternoon of them to a stray click on Close is not
+// a thing that should be possible.
+void MechModelsDialog::closeEvent(QCloseEvent* e) {
+    if (!changed_) {
+        QDialog::closeEvent(e);
+        return;
+    }
+    const auto answer = QMessageBox::warning(
+        this, QStringLiteral("Default models — not saved"),
+        QStringLiteral("The changes to the default models have not been saved.\n\n"
+                       "Nothing that generates a drawing will see them until they are."),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    if (answer == QMessageBox::Cancel) {
+        e->ignore();
+        return;
+    }
+    if (answer == QMessageBox::Save && !saveNow()) {
+        e->ignore();   // it could not be written: staying open is better than losing it
+        return;
+    }
+    if (answer == QMessageBox::Discard) {
+        // Thrown away means thrown away: the file is left as it was, and this window's copy goes with it.
+        set_ = MechModelSet();
+        set_.load();
+        changed_ = false;
+    }
+    QDialog::closeEvent(e);
 }
 
 void MechModelsDialog::refreshList() {
@@ -409,7 +516,7 @@ void MechModelsDialog::addModel(const QString& name) {
     // An empty drawing would not be kept by the file, so it is held in the set until something is captured
     // into it: the row is there to capture INTO, which is the whole point of adding one.
     set_.set(m);
-    set_.save();
+    markChanged();
     refreshList();
     for (size_t i = 0; i < rows_.size(); ++i)
         if (rows_[i].kind == kind && rows_[i].name == m.name && list_)
@@ -424,7 +531,7 @@ void MechModelsDialog::removeCurrentModel() {
     const MechModelKind kind = currentKind();
     const QString name = currentName();
     set_.remove(kind, name);
-    set_.save();
+    markChanged();
     refreshList();
     refreshDetails();
     if (summary_)
@@ -443,7 +550,7 @@ void MechModelsDialog::renameCurrentModel(const QString& to) {
                                   .arg(mechModelName(kind), to.trimmed()));
         return;
     }
-    set_.save();
+    markChanged();
     refreshList();
     refreshDetails();
 }
@@ -451,7 +558,7 @@ void MechModelsDialog::renameCurrentModel(const QString& to) {
 void MechModelsDialog::makeCurrentDefault() {
     const MechModelKind kind = currentKind();
     if (!set_.setDefault(kind, currentName())) return;
-    set_.save();
+    markChanged();
     refreshList();
     refreshDetails();
     if (summary_)
@@ -573,7 +680,54 @@ void MechModelsDialog::refreshPreview() {
     const double want = stretches && tryLen_ ? tryLen_->value() : mechModelDrawnLength(*m);
     const int wires = mechModelPerWire(kind) && tryWires_ ? tryWires_->value() : 0;
     if (view_) {
-        view_->setEntities(mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires));
+        std::vector<Entity> shown = mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires);
+        // THE MARKS, over the preview, in the colours the editing canvas uses - so a mark seen here is the same
+        // mark seen there. Drawn at the size the drawing is rather than at a fixed size: a ring three millimetres
+        // across on a part two metres long is a speck.
+        //
+        // Only ON the drawing as captured, which is why they are not shown while a trial length is being tried:
+        // stretched, the part's ends are somewhere else and a mark drawn where it was captured would be pointing at
+        // the wrong place. Saying nothing is better than pointing at the wrong thing.
+        const bool asDrawn = std::abs(want - mechModelDrawnLength(*m)) < 1e-6 && wires == 0;
+        if (showMarks_ && showMarks_->isChecked() && asDrawn) {
+            Bounds ext;
+            for (const Entity& e : shown) ext.expand(e.bounds());
+            const double r = ext.valid ? std::max(1.0, ext.height() * 0.08) : 2.0;
+            struct Mark { bool on; Vec2 at; const char* colour; };
+            const Mark marks[] = {{m->hasConnect, m->connectPoint, "#5aa0ff"},
+                                  {m->hasNearPoint, m->nearPoint, "#e6a23c"},
+                                  {m->hasFarPoint, m->farPoint, "#62c370"}};
+            int stacked = 0;
+            for (const Mark& mk : marks) {
+                if (!mk.on) continue;
+                Entity ring;
+                ring.type = EntityType::Circle;
+                ring.center = mk.at;
+                ring.radius = r * (1.0 + 0.45 * stacked++);
+                ring.color = QString::fromLatin1(mk.colour);
+                shown.push_back(ring);
+            }
+            // And which way it runs from the connection point, which is half of what that mark says.
+            if (m->hasConnect) {
+                Entity arrow;
+                arrow.type = EntityType::Line;
+                arrow.a = m->connectPoint;
+                arrow.b = m->connectPoint + Vec2{std::cos(m->connectAngleRad), std::sin(m->connectAngleRad)} *
+                                                (r * 3.0);
+                arrow.color = QStringLiteral("#5aa0ff");
+                shown.push_back(arrow);
+            }
+            // The faces the conductors leave by, in the order they were marked.
+            for (const MechModel::OutputLine& o : m->outputs) {
+                Entity bar;
+                bar.type = EntityType::Line;
+                bar.a = o.a;
+                bar.b = o.b;
+                bar.color = QStringLiteral("#c678dd");
+                shown.push_back(bar);
+            }
+        }
+        view_->setEntities(shown);
         view_->setCaption(stretches ? tr("At %1 mm").arg(want, 0, 'f', 0) : tr("As drawn"));
     }
     if (summary_) {
@@ -588,6 +742,12 @@ void MechModelsDialog::refreshPreview() {
             s += QStringLiteral(" — placed at that size, not stretched");
         summary_->setText(s);
     }
+}
+
+// One figure set from outside, going through the same path a typed one does.
+void MechModelsDialog::setHeadForTest(double mm) {
+    if (head_) head_->setValue(mm);
+    applyFigures();
 }
 
 void MechModelsDialog::applyFigures() {
@@ -605,7 +765,7 @@ void MechModelsDialog::applyFigures() {
     // where zero meant no, which is a number standing in for a decision.
     m.drawnAcrossMm = scaleAcross_ && scaleAcross_->isChecked() ? mechModelDrawnAcross(m) : 0.0;
     set_.set(m);
-    set_.save();
+    markChanged();
     refreshDetails();
 }
 
@@ -662,7 +822,7 @@ void MechModelsDialog::captureSelection() {
     if (m.drawnAcrossMm > 0.0 || (scaleAcross_ && scaleAcross_->isChecked()))
         m.drawnAcrossMm = mechModelDrawnAcross(m);
     set_.set(m);
-    set_.save();
+    markChanged();
     refreshList();
     refreshDetails();
     if (summary_)
@@ -699,7 +859,7 @@ void MechModelsDialog::editOnCanvas() {
     m.drawnLengthMm = dlg.drawnLengthMm();
     m.drawnAcrossMm = dlg.drawnAcrossMm();
     set_.set(m);
-    set_.save();
+    markChanged();
     refreshList();
     refreshDetails();
     if (summary_)
