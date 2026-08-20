@@ -1837,7 +1837,35 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
         }),
         doc.entities().end());
     const Bounds b = mechModelBounds(doc);
-    const double markerRadius = b.valid ? std::max(2.0, b.height() * 0.08) : 3.0;
+    // HOW BIG A MARKER IS, decided ONCE for the part and then left alone.
+    //
+    // It used to be a proportion of the drawing's extent as it stood at that moment, and the guides are rebuilt
+    // every time anything on the canvas changes - so moving a primitive changed the extent, which changed the
+    // marker size, and the marks swelled and shrank as the part was drawn. A mark is chrome: it says where
+    // something is, and a mark that changes size when you move a line reads as though the mark itself had been
+    // edited.
+    //
+    // So it is measured from the model AS CAPTURED where there is one - which does not move while the canvas is
+    // being worked on - and otherwise from the extent the first time it is asked, and kept.
+    // QUANTISED, to a 1-2-5 series. A mark still has to suit the size of the part - three millimetres of ring on a
+    // part two metres tall is not a mark, it is a speck - so it cannot simply be a constant. But it must not follow
+    // the drawing continuously either, and it was: the guides are rebuilt every time anything on the canvas
+    // changes, so moving one line changed the extent, which changed the size, and the marks swelled and shrank as
+    // the part was drawn.
+    //
+    // Snapped to 1, 2, 5, 10, 20, 50 ... a line moved about, or the part growing by a quarter, stays in its bucket
+    // and the marks do not move at all. A part drawn ten times bigger goes up two buckets, which is the one time
+    // the size ought to change.
+    const double markerRadius = [&] {
+        Bounds stable;
+        for (const Entity& e : partDrawingEntities(model.drawing)) stable.expand(e.bounds());
+        const Bounds& from = stable.valid ? stable : b;
+        const double want = from.valid ? std::max(2.0, from.height() * 0.08) : 3.0;
+        const double decade = std::pow(10.0, std::floor(std::log10(want)));
+        for (const double step : {1.0, 2.0, 5.0})
+            if (want <= step * decade * 1.0000001) return step * decade;
+        return 10.0 * decade;
+    }();
 
     // The three marks, in a fixed order, each with a name and a colour. A connection point sitting
     // exactly on the near point - which it usually does, since both mark where the part meets the
@@ -2173,20 +2201,8 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
                 .arg(model.outputs.size()),
             6000);
     });
-    connect(editor_, &Editor::modelConnectPicked, this, [this](Vec2 point, double angleRad) {
-        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
-        MechModel& model = mechModelSessionModels_[doc_];
-        model.hasConnect = true;
-        model.connectPoint = point;
-        model.connectAngleRad = angleRad;
-        addMechModelGuides(*doc_, model);
-        doc_->setDirty(true);
-        canvas_->invalidateScene();
-        statusBar()->showMessage(
-            tr("Connection point marked, running %1° from it — the wizard places the part by these")
-                .arg(angleRad * 180.0 / M_PI, 0, 'f', 1),
-            5000);
-    });
+    connect(editor_, &Editor::modelConnectPicked, this,
+            [this](Vec2 point, double angleRad) { markMechModelConnectAt(point, angleRad); });
     connect(editor_, &Editor::selectionChanged, this, [this] {
         refreshPanels();
         updateHatchContext(); // selecting a hatch opens the Hatch Creation tab to edit it
@@ -11955,6 +11971,101 @@ QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
 // WHICH OBJECT THE APP SCALES THE MODEL BY, marked on the object itself rather than kept beside the model
 // as an id or an index. A drawing is captured, moved, re-captured and re-ordered; a mark that travels IN the
 // object survives all of that, and a number kept next to the model does not.
+// ---- the marks: shown or put away, and taken off one at a time -----------------------------------------
+// The connection point, marked. One place, so the two clicks on the canvas and anything else with a reason to ask
+// put it in the same way.
+void MainWindow::markMechModelConnectAt(const Vec2& at, double angleRad) {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    MechModel& model = mechModelSessionModels_[doc_];
+    model.hasConnect = true;
+    model.connectPoint = at;
+    model.connectAngleRad = angleRad;
+    addMechModelGuides(*doc_, model);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    statusBar()->showMessage(
+        tr("Connection point marked, running %1° from it — the wizard places the part by these")
+            .arg(angleRad * 180.0 / M_PI, 0, 'f', 1),
+        5000);
+}
+
+bool MainWindow::mechModelMarksVisible() const {
+    if (!doc_) return true;
+    if (const Layer* l = editDoc()->findLayer(QLatin1String(kMechModelGuideLayer))) return l->visible;
+    return true;
+}
+
+// The marks are chrome over the part. While the part itself is being drawn they are in the way of seeing it, so
+// they go - and the button shows which state it is in, because a toggle that does not say is a button you press
+// twice to find out.
+void MainWindow::toggleMechModelMarks() {
+    if (!doc_) return;
+    const bool on = mechModelMarksVisible();
+    for (Layer& l : editDoc()->layers())
+        if (l.name == QLatin1String(kMechModelGuideLayer)) l.visible = !on;
+    if (showMechModelMarksBtn_) {
+        QSignalBlocker block(showMechModelMarksBtn_);
+        showMechModelMarksBtn_->setChecked(!on);
+    }
+    canvas_->invalidateScene();
+    canvas_->update();
+    statusBar()->showMessage(on ? tr("Marks hidden — the part on its own")
+                                : tr("Marks shown"),
+                            3000);
+}
+
+void MainWindow::clearMechModelConnect() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    MechModel& model = mechModelSessionModels_[doc_];
+    if (!model.hasConnect) {
+        statusBar()->showMessage(tr("No connection point marked on this model"), 3000);
+        return;
+    }
+    model.hasConnect = false;
+    addMechModelGuides(*doc_, model);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    canvas_->update();
+    statusBar()->showMessage(tr("Connection point taken off — mark it again where it belongs"), 4000);
+}
+
+void MainWindow::clearMechModelAnchor(bool near) {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    MechModel& model = mechModelSessionModels_[doc_];
+    bool& had = near ? model.hasNearPoint : model.hasFarPoint;
+    if (!had) {
+        statusBar()->showMessage(near ? tr("No near point marked on this model")
+                                     : tr("No far point marked on this model"),
+                                 3000);
+        return;
+    }
+    had = false;
+    addMechModelGuides(*doc_, model);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    canvas_->update();
+    statusBar()->showMessage(near ? tr("Near point taken off") : tr("Far point taken off"), 3000);
+}
+
+void MainWindow::clearMechModelScaleRef() {
+    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    int had = 0;
+    for (Entity& e : doc_->entities()) {
+        if (!e.meta.contains(QStringLiteral("modelScaleRef"))) continue;
+        e.meta.remove(QStringLiteral("modelScaleRef"));
+        ++had;
+    }
+    if (had == 0) {
+        statusBar()->showMessage(tr("Nothing is marked as what this model is scaled by"), 3000);
+        return;
+    }
+    addMechModelGuides(*doc_, mechModelSessionModels_[doc_]);
+    doc_->setDirty(true);
+    canvas_->invalidateScene();
+    canvas_->update();
+    statusBar()->showMessage(tr("Taken off — the model is scaled by the whole drawing again"), 4000);
+}
+
 void MainWindow::armMechModelScaleRef() {
     if (!doc_ || !mechModelEdits_.contains(doc_)) return;
     editor_->setTool(ToolId::ModelScaleRef);

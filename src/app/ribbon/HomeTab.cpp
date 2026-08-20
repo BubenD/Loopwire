@@ -1,6 +1,7 @@
 // The Home ribbon tab. Split out of MainWindow.cpp so each tab is one file: the ribbon was the
 // largest thing in that file and the place every new feature landed. Still MainWindow members, so
 // nothing about what they build or reach has changed.
+#include <functional>
 #include "app/MainWindow.h"
 
 #include "app/BlockDialog.h"
@@ -68,6 +69,26 @@ QIcon modelAnchorIcon(const QColor& color) {
     p.setPen(pen);
     p.drawLine(QPointF(14, 3), QPointF(14, 25));
     p.drawEllipse(QPointF(14, 14), 5, 5);
+    return QIcon(pm);
+}
+// AN EYE, for the button that shows or hides the marks. Drawn as an eye rather than lettered, because what it does
+// is "look at this" and there is no shorter way to say that.
+QIcon modelMarksEyeIcon() {
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#d6dae1"));
+    pen.setWidthF(1.8);
+    p.setPen(pen);
+    // The lid, as two arcs meeting at the corners of the eye, and the pupil.
+    QPainterPath eye;
+    eye.moveTo(4, 14);
+    eye.quadTo(14, 4, 24, 14);
+    eye.quadTo(14, 24, 4, 14);
+    p.drawPath(eye);
+    p.setBrush(QColor("#d6dae1"));
+    p.drawEllipse(QPointF(14, 14), 3.0, 3.0);
     return QIcon(pm);
 }
 } // namespace
@@ -262,14 +283,34 @@ void MainWindow::buildHomeTab() {
                          "direction it runs from there. The wizard places the part by those two: the "
                          "drawing is turned so that direction runs along the run, and set down so that "
                          "point lands on it."));
+        // AND TAKEN OFF AGAIN. A mark in the wrong place could only be moved, never removed - and a model is
+        // placed BY its marks, so one that should not be there is not a blemish, it is a part put down in the
+        // wrong place. Each button that puts a mark on now offers to take it off.
+        auto clearable = [this](QToolButton* b, const QString& put, const QString& take,
+                                std::function<void()> onPut, std::function<void()> onTake) {
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+            auto* m = new QMenu(b);
+            QAction* a = m->addAction(put);
+            connect(a, &QAction::triggered, this, [onPut] { onPut(); });
+            a = m->addAction(take);
+            connect(a, &QAction::triggered, this, [onTake] { onTake(); });
+            b->setMenu(m);
+        };
         connect(markConnectMechModelBtn_, &QToolButton::clicked, this,
                 [this] { armMechModelConnect(); });
+        clearable(markConnectMechModelBtn_, tr("Mark the connection point"),
+                  tr("Take the connection point off"), [this] { armMechModelConnect(); },
+                  [this] { clearMechModelConnect(); });
         sessionButton(markNearMechModelBtn_, tr("Near\npoint"), modelAnchorIcon(QColor("#e6a23c")),
                       tr("The near end of the model - marked in orange"));
         connect(markNearMechModelBtn_, &QToolButton::clicked, this, [this] { armMechModelAnchor(true); });
+        clearable(markNearMechModelBtn_, tr("Mark the near point"), tr("Take the near point off"),
+                  [this] { armMechModelAnchor(true); }, [this] { clearMechModelAnchor(true); });
         sessionButton(markFarMechModelBtn_, tr("Far\npoint"), modelAnchorIcon(QColor("#62c370")),
                       tr("The far end of the model - marked in green"));
         connect(markFarMechModelBtn_, &QToolButton::clicked, this, [this] { armMechModelAnchor(false); });
+        clearable(markFarMechModelBtn_, tr("Mark the far point"), tr("Take the far point off"),
+                  [this] { armMechModelAnchor(false); }, [this] { clearMechModelAnchor(false); });
         // The faces the wires leave by. A split has one per branch, so the button stays armed and the
         // fall-menu is where the list is started again.
         sessionButton(markOutputMechModelBtn_, tr("Output\nface"), modelAnchorIcon(QColor("#c678dd")),
@@ -300,13 +341,27 @@ void MainWindow::buildHomeTab() {
                          "marked means the whole drawing, which is right for a model that is one thing."));
         connect(markScaleRefMechModelBtn_, &QToolButton::clicked, this,
                 [this] { armMechModelScaleRef(); });
+        clearable(markScaleRefMechModelBtn_, tr("Mark what it is scaled by"),
+                  tr("Take that mark off — scale by the whole drawing"),
+                  [this] { armMechModelScaleRef(); }, [this] { clearMechModelScaleRef(); });
         sg->addWidget(captureMechModelBtn_, 0, 0);
         sg->addWidget(cancelMechModelBtn_, 0, 1);
         sg->addWidget(markConnectMechModelBtn_, 0, 2);
         sg->addWidget(markNearMechModelBtn_, 0, 3);
         sg->addWidget(markFarMechModelBtn_, 0, 4);
         sg->addWidget(markOutputMechModelBtn_, 0, 5);
+        // THE EYE. The marks are chrome over the part, and while the part itself is being drawn they are in the
+        // way of seeing it - so they go, and come back. Checkable, because a toggle that does not show its state
+        // is a button you press twice to find out what it did.
+        sessionButton(showMechModelMarksBtn_, tr("Show\nmarks"), modelMarksEyeIcon(),
+                      tr("Show or hide the marks - the connection point, the ends, the output faces and what "
+                         "the model is scaled by. They are drawn over the part, and while the part itself is "
+                         "being drawn they are in the way of seeing it."));
+        showMechModelMarksBtn_->setCheckable(true);
+        showMechModelMarksBtn_->setChecked(true);
+        connect(showMechModelMarksBtn_, &QToolButton::clicked, this, [this] { toggleMechModelMarks(); });
         sg->addWidget(markScaleRefMechModelBtn_, 0, 6);
+        sg->addWidget(showMechModelMarksBtn_, 0, 7);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);

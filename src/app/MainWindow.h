@@ -161,6 +161,13 @@ public:
     // likewise: the two ways a session ends are the two things a test of one has to be able to do.
     void saveMechModelBeingEdited();
     void cancelMechModelEdit();
+    // The model session's own marks, asked for and let go of directly. Public for the same reason the two ways of
+    // ending a session are: what the ribbon's buttons do is worth being able to ask for, and a test of a mark has
+    // to be able to put one on, hide it, and take it off.
+    void markMechModelConnectAt(const Vec2& at, double angleRad);
+    bool mechModelMarksVisibleForTest() const { return mechModelMarksVisible(); }
+    void toggleMechModelMarksForTest() { toggleMechModelMarks(); }
+    void clearMechModelConnectForTest() { clearMechModelConnect(); }
     void savePanelLayout();
     void restorePanelLayout();
 
@@ -536,6 +543,17 @@ private:
     // WHICH OBJECT THE APP SCALES THE MODEL BY, marked on the drawing itself. See armMechModelScaleRef.
     QToolButton* markScaleRefMechModelBtn_ = nullptr;
     void armMechModelScaleRef();
+    // THE EYE: the marks shown or put away. They are chrome over the part, and while the part itself is being
+    // drawn they are in the way of seeing it - so they go, and come back, and the button shows which.
+    QToolButton* showMechModelMarksBtn_ = nullptr;
+    void toggleMechModelMarks();
+    bool mechModelMarksVisible() const;
+    // Each mark can be TAKEN OFF as well as put on. A mark in the wrong place could only be moved, never removed,
+    // so a part that turned out not to need one had to keep it - and a model is placed by its marks, so one that
+    // should not be there is not a blemish, it is a part put down in the wrong place.
+    void clearMechModelConnect();
+    void clearMechModelAnchor(bool near);
+    void clearMechModelScaleRef();
     bool saveMechModelDocument(Document* doc);
 
     // Blocks.
