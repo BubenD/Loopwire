@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include "model/Document.h"
 #include "render/EntityRenderer.h"
 
@@ -225,6 +226,13 @@ public:
     // the drawing LOOKS like - a layer switched off, a layer recoloured - has to say so: a plain
     // update() repaints the cache as it stands and shows no change at all.
     void invalidateScene();
+    // A repaint at the rate a screen can show one. A mouse reports where it is far more often than a monitor can
+    // draw, and every report was asking for a full repaint - most of them thrown away unseen, and on a heavy
+    // drawing the extra ones are what makes the cursor lag behind the hand.
+    void requestRepaint();
+    // The frame clock and whether one is already on its way. See requestRepaint.
+    QElapsedTimer frameClock_;
+    bool repaintPending_ = false;
 
     // Begin an interactive rubber-band capture of a rectangular world region (used by
     // "Export PDF (window)"). The next left-drag defines the window; on release `onDone`

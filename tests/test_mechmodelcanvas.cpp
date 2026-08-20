@@ -14,6 +14,7 @@
 #include "tools/ToolId.h"
 
 #include <QApplication>
+#include <QMouseEvent>
 #include <QLineEdit>
 #include <QTabBar>
 #include <QToolButton>
@@ -273,6 +274,75 @@ int run_mechmodelcanvas_tests() {
         check(markRadius() == 0.0, "mark: taken off, it is gone rather than merely moved");
         win.cancelMechModelEdit();
         QApplication::processEvents();
+    }
+
+
+    // ---- panning drags the paper, and does nothing else ---------------------------------------------
+    {
+        // A middle-drag is dragging the paper. Nothing is being pointed at, nothing is being picked, and no object
+        // snap, grip search or overlay preview means anything until the paper stops moving - and every one of them
+        // was being done on every tick of the pan, over the whole drawing, on the one gesture where the drawing is
+        // guaranteed not to have changed. Which is why panning a big sheet felt heavy while moving the cursor over
+        // that same sheet did not.
+        MainWindow win;
+        win.resize(1000, 700);
+        win.show();
+        QApplication::processEvents();
+        auto* canvas = win.findChild<CanvasWidget*>();
+        auto* ed = win.findChild<Editor*>();
+        check(canvas != nullptr && ed != nullptr, "pan: there is a canvas and an editor");
+        if (!canvas || !ed) return canvasFailures;
+        Document* d = ed->document();
+        check(d != nullptr, "pan: and a drawing");
+        if (!d) return canvasFailures;
+
+        // Something to snap to, right where the pan will pass over it.
+        Entity l;
+        l.id = QStringLiteral("l");
+        l.type = EntityType::Line;
+        l.a = {0.0, 0.0};
+        l.b = {100.0, 0.0};
+        d->entities().push_back(l);
+        auto& snaps = ed->snapSettings();
+        snaps.objectSnap = true;   // on, so a cursor move over that line WOULD snap to it
+
+        // Where the cursor thinks it is before the pan.
+        const Vec2 before = ed->snappedCursor();
+        const double vx = d->view().x, vy = d->view().y;
+
+        // Middle-drag: press, move, release.
+        const QPointF from(400, 350), to(460, 320);
+        QMouseEvent down(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::MiddleButton,
+                         Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &down);
+        QMouseEvent move(QEvent::MouseMove, to, canvas->mapToGlobal(to), Qt::NoButton, Qt::MiddleButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(canvas, &move);
+
+        // THE PAPER MOVED, by exactly what the mouse did.
+        std::printf("  pan: dragged %+.0f,%+.0f - the view moved %+.0f,%+.0f\n", to.x() - from.x(),
+                    to.y() - from.y(), d->view().x - vx, d->view().y - vy);
+        check(std::abs((d->view().x - vx) - (to.x() - from.x())) < 1e-6 &&
+                  std::abs((d->view().y - vy) - (to.y() - from.y())) < 1e-6,
+              "pan: the paper follows the mouse exactly");
+
+        // AND NOTHING WAS SNAPPED. The editor's idea of where the cursor is has not moved, because during a pan
+        // it is not being asked - which is the work that was being thrown away.
+        std::printf("  pan: the cursor was left at %.2f,%.2f, where it was\n", ed->snappedCursor().x,
+                    ed->snappedCursor().y);
+        check(distance(ed->snappedCursor(), before) < 1e-9,
+              "pan: and the snap was not run - a pan points at nothing, so there is nothing to snap to");
+
+        QMouseEvent up(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::MiddleButton,
+                       Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &up);
+
+        // Let go of, an ordinary move snaps again: the pan turned it off for the pan and not for good.
+        QMouseEvent after(QEvent::MouseMove, to, canvas->mapToGlobal(to), Qt::NoButton, Qt::NoButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(canvas, &after);
+        check(distance(ed->snappedCursor(), before) > 1e-9,
+              "pan: and once the button is let go the cursor is being followed again");
     }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");

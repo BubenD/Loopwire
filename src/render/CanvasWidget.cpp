@@ -1,3 +1,4 @@
+#include <QTimer>
 #include "render/CanvasWidget.h"
 
 #include "app/Editor.h"
@@ -1161,6 +1162,15 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         // the leading edge).
         invalidateScene();
         emit viewChanged();
+        // AND NOTHING ELSE. A middle-drag is dragging the paper: nothing is being pointed at, nothing is being
+        // picked, and no object snap, grip search or overlay preview means anything until the paper stops moving.
+        // Every one of those was being done on every tick of the pan - the whole snap pass over the drawing, on
+        // the one gesture where the drawing is guaranteed not to have changed - which is why panning a big sheet
+        // felt heavy while moving the cursor over the same sheet did not.
+        emit cursorWorldMoved(inputTransform().toWorld(e->position()));
+        requestRepaint();
+        e->accept();
+        return;
     }
     const Vec2 world = inputTransform().toWorld(e->position());
     if (editor_) editor_->onPointerMove(world);
@@ -1178,7 +1188,35 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     // so it follows the snapped crosshair).
     if (dynInput_ && dynInput_->isVisible()) positionDynInput();
     emit cursorWorldMoved(world);
-    update(); // repaint so the drawn crosshair follows the cursor
+    requestRepaint();   // the crosshair follows the cursor, at the rate a screen can show it
+}
+
+// A REPAINT, AT THE RATE A SCREEN CAN SHOW ONE.
+//
+// A mouse reports where it is far more often than a monitor can draw - a thousand times a second on some of them
+// against sixty on the screen - and every report was asking for a full repaint. Most of those were thrown away
+// unseen, and on a drawing heavy enough for a repaint to take a few milliseconds the extra ones are what makes the
+// cursor lag behind the hand: the queue fills with work whose result nobody will ever look at.
+//
+// So repaints are held to one per frame. The trailing one always happens, which is the part that matters: the
+// LAST position the mouse reported is the one the cursor has to be drawn at, or it stops just short of where the
+// hand is and stays there.
+void CanvasWidget::requestRepaint() {
+    constexpr int kFrameMs = 8;   // about twice a 60 Hz screen: fast enough not to be seen, slow enough to help
+    if (!frameClock_.isValid()) frameClock_.start();
+    if (frameClock_.elapsed() >= kFrameMs) {
+        frameClock_.restart();
+        repaintPending_ = false;
+        update();
+        return;
+    }
+    if (repaintPending_) return;   // one already on its way: this position will be drawn by it
+    repaintPending_ = true;
+    QTimer::singleShot(kFrameMs - static_cast<int>(frameClock_.elapsed()), this, [this] {
+        repaintPending_ = false;
+        frameClock_.restart();
+        update();
+    });
 }
 
 void CanvasWidget::enterEvent(QEnterEvent* e) {
