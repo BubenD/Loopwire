@@ -10854,6 +10854,16 @@ double Editor::selectionRefLength(const std::vector<Entity*>& sel) const {
     return b.valid ? std::max(1e-6, distance(b.min, b.max)) : 1.0;
 }
 
+// What the Scale tool does once its two clicks are in, asked for directly.
+void Editor::scaleSelectionForTest(const Vec2& base, double factor) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    scaleSelection(sel, base, factor);
+    doc_->setDirty(true);
+    emit changed();
+}
+
 void Editor::scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, double sf) {
     if (!doc_) return;
     // 1) Record every wire endpoint that sits on a SELECTED connector's pin end BEFORE

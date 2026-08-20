@@ -146,15 +146,45 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
         for (int i = 0; i < arr.size(); ++i) arr[i] = arr[i].toDouble() * s;
         e.meta.insert(QLatin1String(k), arr);
     }
+    // AND THE WRITING SCALES WITH IT. A text height is a length like any other, and it was being left behind: a
+    // table scaled up kept its cells' words at the size they were, so the words no longer fitted the boxes they
+    // were in and spilled over the lines into the row below. The same was true of a piece of text, a dimension,
+    // a balloon, a marking on a wire - everything on a drawing that has words on it.
+    //
+    // Scaling something is asking for the same drawing at another size. Words that stay put are not the same
+    // drawing; they are a drawing with the wrong writing on it.
+    for (const char* k : {"height", "size", "textHeight", "textSize", "arrowSize", "extOffset",
+                          "detailTextSize", "detailTagGap", "detailBigGap", "colorSize", "gaugeSize",
+                          "labelSize", "dimTextHeight"})
+        if (e.meta.contains(QLatin1String(k)))
+            e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
+    // A TABLE keeps a height per cell where a cell has been given one of its own, and the table's own height is
+    // the fallback for the rest. Both have to go, or the cells that were left alone scale and the ones somebody
+    // had set by hand do not.
+    if (e.meta.contains(QStringLiteral("cellTextSize"))) {
+        QJsonArray arr = e.meta.value(QStringLiteral("cellTextSize")).toArray();
+        for (int i = 0; i < arr.size(); ++i)
+            if (arr[i].toDouble() > 0.0) arr[i] = arr[i].toDouble() * s;
+        e.meta.insert(QStringLiteral("cellTextSize"), arr);
+    }
+    // A row that has been given a fixed height is a length too: left alone, a scaled table's rows would keep
+    // their old height while its outline grew, and the writing would no longer sit in them.
+    if (e.meta.contains(QStringLiteral("rowFixed"))) {
+        QJsonArray arr = e.meta.value(QStringLiteral("rowFixed")).toArray();
+        for (int i = 0; i < arr.size(); ++i)
+            if (arr[i].toDouble() > 0.0) arr[i] = arr[i].toDouble() * s;
+        e.meta.insert(QStringLiteral("rowFixed"), arr);
+    }
     // A connector is parametric (anchor + size fields in meta): scale its dimensions so
     // the whole body / pins / text resize UNIFORMLY, keeping its structure. mapPoints
     // already moved the anchor about the base, so it scales about the scale base point.
     if (e.type == EntityType::Connector) {
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta); // pre-scale sizes
         const ConnectorGeometry g = connectorGeometry(e.a, spec); // current body W/H
-        for (const char* k : {"pitch", "pinLength", "textSize", "pinSize", "desSize", "pnSize",
-                              "pinTextDX", "pinTextDY", "desTextDX", "desTextDY", "pnTextDX",
-                              "pnTextDY"})
+        // textSize is NOT here: it is in the general list above, which every entity goes through. Scaling it in
+        // both places doubled it, so a connector's words came out the square of the factor.
+        for (const char* k : {"pitch", "pinLength", "pinSize", "desSize", "pnSize", "pinTextDX",
+                              "pinTextDY", "desTextDX", "desTextDY", "pnTextDX", "pnTextDY"})
             if (e.meta.contains(QLatin1String(k)))
                 e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
         // Scaling the connector scales the pin "cup" glyph too (unlike a pitch change,

@@ -8270,6 +8270,85 @@ int run_editor_tests() {
         }
     }
 
+
+    // ---- scaled, the writing goes with it ----------------------------------------------------------
+    {
+        // Scaling something is asking for the SAME DRAWING at another size. A text height is a length like any
+        // other, and it was being left behind: a table scaled up kept its cells' words at the size they were, so
+        // the words no longer fitted the boxes they were in and spilled over the lines into the row below. Which
+        // is not the same drawing bigger, it is a drawing with the wrong writing on it.
+        Document d;
+        // A table with its own text height, one cell given a height of its own, and a row given a fixed height.
+        Entity t;
+        t.id = QStringLiteral("t");
+        t.type = EntityType::Rect;
+        t.points = {{0.0, 0.0}, {100.0, 0.0}, {100.0, 40.0}, {0.0, 40.0}};
+        t.meta.insert(QStringLiteral("table"), true);
+        t.meta.insert(QStringLiteral("textSize"), 4.0);
+        QJsonArray cellSizes;
+        cellSizes.append(0.0);
+        cellSizes.append(6.0);   // this one was set by hand
+        t.meta.insert(QStringLiteral("cellTextSize"), cellSizes);
+        QJsonArray rowFixed;
+        rowFixed.append(10.0);
+        t.meta.insert(QStringLiteral("rowFixed"), rowFixed);
+        d.entities().push_back(t);
+        // And a plain piece of text, a dimension and a balloon, which had the same fault.
+        Entity words;
+        words.id = QStringLiteral("w");
+        words.type = EntityType::Text;
+        words.a = {0.0, 0.0};
+        words.meta.insert(QStringLiteral("text"), QStringLiteral("LABEL TABLE"));
+        words.meta.insert(QStringLiteral("size"), 5.0);
+        d.entities().push_back(words);
+        Entity dim;
+        dim.id = QStringLiteral("dm");
+        dim.type = EntityType::Dimension;
+        dim.a = {0.0, 0.0};
+        dim.b = {50.0, 0.0};
+        dim.meta.insert(QStringLiteral("textHeight"), 3.5);
+        dim.meta.insert(QStringLiteral("arrowSize"), 2.0);
+        d.entities().push_back(dim);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.scaleSelectionForTest(Vec2{0.0, 0.0}, 3.0);
+
+        auto meta = [&](const QString& id, const QString& key) {
+            for (const Entity& e : d.entities())
+                if (e.id == id) return e.meta.value(key).toDouble();
+            return 0.0;
+        };
+        auto arr0 = [&](const QString& id, const QString& key, int i) {
+            for (const Entity& e : d.entities())
+                if (e.id == id) return e.meta.value(key).toArray()[i].toDouble();
+            return 0.0;
+        };
+        std::printf("  scaled: table text %.1f, hand-set cell %.1f, fixed row %.1f\n",
+                    meta(QStringLiteral("t"), QStringLiteral("textSize")),
+                    arr0(QStringLiteral("t"), QStringLiteral("cellTextSize"), 1),
+                    arr0(QStringLiteral("t"), QStringLiteral("rowFixed"), 0));
+        check(std::abs(meta(QStringLiteral("t"), QStringLiteral("textSize")) - 12.0) < 1e-6,
+              "scaled: the table's words are three times the size, as the table is");
+        check(std::abs(arr0(QStringLiteral("t"), QStringLiteral("cellTextSize"), 1) - 18.0) < 1e-6,
+              "scaled: including a cell somebody had set by hand - or that one alone would stay behind");
+        check(std::abs(arr0(QStringLiteral("t"), QStringLiteral("cellTextSize"), 0)) < 1e-9,
+              "scaled: and a cell with no height of its own still has none - zero means 'the table's'");
+        check(std::abs(arr0(QStringLiteral("t"), QStringLiteral("rowFixed"), 0) - 30.0) < 1e-6,
+              "scaled: a row held at a height is held at three times it, or the words would not fit it");
+        std::printf("  scaled: text %.1f, dimension text %.1f, arrow %.1f\n",
+                    meta(QStringLiteral("w"), QStringLiteral("size")),
+                    meta(QStringLiteral("dm"), QStringLiteral("textHeight")),
+                    meta(QStringLiteral("dm"), QStringLiteral("arrowSize")));
+        check(std::abs(meta(QStringLiteral("w"), QStringLiteral("size")) - 15.0) < 1e-6,
+              "scaled: a piece of text is three times the size too - it had the same fault");
+        check(std::abs(meta(QStringLiteral("dm"), QStringLiteral("textHeight")) - 10.5) < 1e-6 &&
+                  std::abs(meta(QStringLiteral("dm"), QStringLiteral("arrowSize")) - 6.0) < 1e-6,
+              "scaled: and a dimension's words and arrows with it");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

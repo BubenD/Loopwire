@@ -220,6 +220,9 @@ public:
 
     // Edit actions.
     void selectAll();
+    // Scale what is selected about a point. What the Scale tool does when its two clicks are in, asked for
+    // directly - a test of "the writing scales with it" has to be able to scale something.
+    void scaleSelectionForTest(const Vec2& base, double factor);
     void selectById(const QString& id, bool additive = false);
     // Table (#2): the spec for the NEXT table placed (AutoCAD Insert Table), and cell
     // text editing. A table has an optional Title row (merged) + Header row + data rows.
