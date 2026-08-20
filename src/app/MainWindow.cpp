@@ -11857,10 +11857,22 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
     // Where it was left, if it has been open before; otherwise fitted to the part - which is what it now fits,
     // the part having no sheet round it to fit instead.
     const QString viewKey = mechModelViewKey(kind, name);
-    if (mechModelViews_.contains(viewKey))
+    if (mechModelViews_.contains(viewKey)) {
         raw->view() = mechModelViews_.value(viewKey);
-    else
+    } else {
+        // FITTED TO THE DRAWING, and fitted AGAIN once the window has settled. Fit measures against the canvas's
+        // size, and at this moment the canvas has whatever size it had before this document arrived - the panels
+        // and the tab bar have not been laid out for it yet - so fitting only here fits to a size that is about to
+        // change, and the part comes up at the wrong zoom. The second one lands after the layout, on the size the
+        // canvas really has.
         canvas_->fitView();
+        QTimer::singleShot(0, this, [this, raw] {
+            if (doc_ != raw || !canvas_) return;   // moved on since: leave whatever is showing alone
+            canvas_->fitView();
+            canvas_->invalidateScene();
+            canvas_->update();
+        });
+    }
     canvas_->invalidateScene();
     if (modelsDlg_) modelsDlg_->hide();
     statusBar()->showMessage(

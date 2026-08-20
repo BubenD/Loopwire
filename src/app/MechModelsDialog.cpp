@@ -284,7 +284,7 @@ void MechModelsDialog::buildUi() {
         "millimetres. This window steps aside so they can be picked; Enter takes them, Esc drops it."));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
-    auto* edit = new QPushButton(QStringLiteral("Edit on the canvas"));
+    auto* edit = new QPushButton(QStringLiteral("Edit model"));
     edit->setToolTip(QStringLiteral(
         "Open it in the main canvas with every Place and Modify tool - and with Connection point, which is "
         "where the point it connects at and the direction it runs from there are marked"));

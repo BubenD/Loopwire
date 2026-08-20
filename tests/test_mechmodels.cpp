@@ -2685,6 +2685,11 @@ int run_mechmodels_tests() {
         check(!buttons.contains(QStringLiteral("Put on the sheet")) &&
                   !buttons.contains(QStringLiteral("Clear")),
               "manager: no Put on the sheet (Edit does that) and no Clear (Remove does that)");
+        // "Edit model" rather than "Edit on the canvas": what it does is edit the model, and where that happens
+        // is the program's business rather than something to be told about on a button.
+        check(buttons.contains(QStringLiteral("Edit model")) &&
+                  !buttons.contains(QStringLiteral("Edit on the canvas")),
+              "manager: the button says what it does - Edit model");
         check(buttons.contains(QStringLiteral("Add")) && buttons.contains(QStringLiteral("Remove")) &&
                   buttons.contains(QStringLiteral("Rename")) &&
                   buttons.contains(QStringLiteral("Make default")),
