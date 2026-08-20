@@ -24,6 +24,7 @@
 #include <QWheelEvent>
 #include <algorithm>
 #include <QPolygonF>
+#include <QVector>
 #include <cmath>
 
 namespace Edraw_Desktop {
@@ -701,6 +702,96 @@ void CanvasWidget::drawLayoutScene(QPainter& painter, const ViewTransform& paper
     painter.restore();
 }
 
+void CanvasWidget::drawSceneContent(QPainter& sp, const ViewTransform& vt, const QRectF& area) {
+    if (!doc_) return;
+    drawGrid(sp, vt);
+    drawOriginMarker(sp, vt);
+    // Only what `area` can show. When the whole widget is being drawn that is the whole widget; when a
+    // pan has brought a strip into view it is that strip, and the culling below then throws away
+    // everything the strip cannot contain - which is what makes a pan cost the strip and not the sheet.
+    const Vec2 c0 = vt.toWorld(area.topLeft());
+    const Vec2 c1 = vt.toWorld(area.bottomRight());
+    double vMinX = std::min(c0.x, c1.x), vMaxX = std::max(c0.x, c1.x);
+    double vMinY = std::min(c0.y, c1.y), vMaxY = std::max(c0.y, c1.y);
+    const double mx = (vMaxX - vMinX) * 0.05 + 2.0;
+    const double my = (vMaxY - vMinY) * 0.05 + 2.0;
+    vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
+    QSet<QString> selected;
+    if (editor_)
+        for (const auto& id : editor_->selection()) selected.insert(id);
+    for (const auto& e : doc_->entities()) {
+        if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
+        if (selected.contains(e.id)) continue;
+        const Bounds b = drawnBounds(e);
+        if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY || b.min.y > vMaxY))
+            continue;
+        EntityRenderer::draw(sp, e, *doc_, vt);
+    }
+}
+
+// A PAN, DONE THE WAY A WINDOW IS SCROLLED.
+//
+// Dragging the paper does not change one line of the drawing: every pixel of it is still valid, just
+// somewhere else on the screen. So it is not drawn again - it is COPIED to where it now belongs, and only
+// the strip along the leading edge, which was off-screen and has never been drawn, is drawn. That costs
+// the strip. Re-rendering the sheet costs the sheet, sixty times a second, and on a drawing where one
+// render takes longer than a frame the paper cannot help but fall behind the hand.
+bool CanvasWidget::scrollScene(const QPoint& delta) {
+    // A window's contents are the model's, drawn through it, and shifting the paper does not shift those.
+    if (!doc_ || layoutMode_ || sceneDirty_) return false;
+    const qreal dpr = devicePixelRatioF();
+    if (sceneCache_.isNull() || sceneCache_.size() != size() * dpr) return false;
+    // A jump bigger than the window leaves nothing to keep.
+    if (std::abs(delta.x()) >= width() || std::abs(delta.y()) >= height()) return false;
+
+    // Shift by a WHOLE number of screen pixels, so the copy is a copy and not a resample - on a display
+    // at 125% a shift of seven of the widget's pixels is eight and three quarters of the screen's. What
+    // is left over is carried to the next frame, where it is spent, so it cannot build up into a drawing
+    // that has quietly slid a pixel or two away from where the cursor says it is.
+    const QPointF want = QPointF(delta) + scrollResidual_;
+    const QPoint dev(qRound(want.x() * dpr), qRound(want.y() * dpr));
+    const QPointF shift(dev.x() / dpr, dev.y() / dpr);
+    scrollResidual_ = want - shift;
+    if (dev.isNull()) return true;   // less than a screen pixel: nothing to do but remember it
+
+    if (scrollScratch_.size() != sceneCache_.size()) {
+        scrollScratch_ = QPixmap(sceneCache_.size());
+        scrollScratch_.setDevicePixelRatio(dpr);
+    }
+    const ViewTransform vt = transform();
+    {
+        QPainter sp(&scrollScratch_);
+        sp.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        sp.drawPixmap(shift, sceneCache_);   // the paper, moved with the hand
+
+        // The strip - or two, on a diagonal drag - that came into view. Each is taken on its own rather
+        // than as one L-shaped region, because the box round an L is the whole window and culling
+        // against that would draw the entire drawing again, which is the thing being avoided.
+        //
+        // Grown a couple of pixels so no line is left drawn hard against a clip edge: the extra is
+        // painted over content that was already right, from the background up, to the same result.
+        constexpr double kGrow = 2.0;
+        const double w = width(), h = height();
+        QVector<QRectF> strips;
+        if (shift.x() > 0.0) strips.append(QRectF(0.0, 0.0, shift.x() + kGrow, h));
+        else if (shift.x() < 0.0) strips.append(QRectF(w + shift.x() - kGrow, 0.0, -shift.x() + kGrow, h));
+        if (shift.y() > 0.0) strips.append(QRectF(0.0, 0.0, w, shift.y() + kGrow));
+        else if (shift.y() < 0.0) strips.append(QRectF(0.0, h + shift.y() - kGrow, w, -shift.y() + kGrow));
+        for (const QRectF& strip : strips) {
+            sp.save();
+            sp.setClipRect(strip);
+            sp.fillRect(strip, bgColor_);
+            sp.setRenderHint(QPainter::Antialiasing, true);
+            drawSceneContent(sp, vt, strip);
+            sp.restore();
+        }
+    }
+    // The scratch is now the drawing and the old cache is the scratch: swapped, not copied, so a pan
+    // allocates nothing per frame.
+    std::swap(sceneCache_, scrollScratch_);
+    return true;
+}
+
 void CanvasWidget::paintEvent(QPaintEvent*) {
     const ViewTransform vt = transform();
     const qreal dpr = devicePixelRatioF();
@@ -715,6 +806,14 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
 
     // Rebuild the static scene (grid + entities) only when it actually changed;
     // cursor-move previews reuse this cache so the overlay tracks without lag.
+    // A PAN MOVES THE PAPER, IT DOES NOT REDRAW IT. The pixels the hand has moved since the last frame
+    // are applied to the cache by shifting it and drawing only the edge that came into view; re-rendering
+    // the whole sheet on every tick of a middle-drag is what made the paper trail behind the cursor.
+    if (!pendingScroll_.isNull()) {
+        if (!scrollScene(pendingScroll_)) sceneDirty_ = true;
+        pendingScroll_ = QPoint();
+    }
+
     if (sceneDirty_ || sceneCache_.size() != devSize) {
         sceneCache_ = QPixmap(devSize);
         sceneCache_.setDevicePixelRatio(dpr);
@@ -724,31 +823,12 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         if (doc_ && layoutMode_) {
             drawLayoutScene(sp, vt);
         } else if (doc_) {
-            drawGrid(sp, vt);
-            drawOriginMarker(sp, vt);
-            const Vec2 c0 = vt.toWorld(QPointF(0, 0));
-            const Vec2 c1 = vt.toWorld(QPointF(width(), height()));
-            double vMinX = std::min(c0.x, c1.x), vMaxX = std::max(c0.x, c1.x);
-            double vMinY = std::min(c0.y, c1.y), vMaxY = std::max(c0.y, c1.y);
-            const double mx = (vMaxX - vMinX) * 0.05 + 2.0;
-            const double my = (vMaxY - vMinY) * 0.05 + 2.0;
-            vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
-            QSet<QString> selected;
-            if (editor_)
-                for (const auto& id : editor_->selection()) selected.insert(id);
-            for (const auto& e : doc_->entities()) {
-                if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible)
-                    continue;
-                if (selected.contains(e.id)) continue;
-                const Bounds b = drawnBounds(e);
-                if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX ||
-                                b.max.y < vMinY || b.min.y > vMaxY))
-                    continue;
-                EntityRenderer::draw(sp, e, *doc_, vt);
-            }
+            drawSceneContent(sp, vt, QRectF(rect()));
         }
+        ++sceneRebuilds_;
         sceneDirty_ = false;
-        sceneOffset_ = QPointF(0, 0); // cache now matches the current view
+        sceneOffset_ = QPointF(0, 0);   // cache now matches the current view
+        scrollResidual_ = QPointF(0, 0);
     }
 
     QPainter p(this);
@@ -1157,10 +1237,12 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
         lastPanPos_ = e->pos();
         doc_->view().x += delta.x();
         doc_->view().y += delta.y();
-        // Re-render the scene at the new view each tick so the grid + entities fill the
-        // WHOLE viewport while panning (a shifted blit would leave a grid-less strip on
-        // the leading edge).
-        invalidateScene();
+        // The paper has moved and nothing on it has changed, so the drawing is NOT rendered again: the
+        // pixels the hand moved are handed to the next paint, which shifts what is already drawn and draws
+        // only the strip that came into view. See scrollScene(). Held until the paint rather than applied
+        // here because a mouse reports its position far more often than a screen can show one, and this way
+        // a pan costs one shift per frame however talkative the mouse is.
+        pendingScroll_ += delta;
         emit viewChanged();
         // AND NOTHING ELSE. A middle-drag is dragging the paper: nothing is being pointed at, nothing is being
         // picked, and no object snap, grip search or overlay preview means anything until the paper stops moving.

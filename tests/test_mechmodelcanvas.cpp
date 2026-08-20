@@ -14,6 +14,7 @@
 #include "tools/ToolId.h"
 
 #include <QApplication>
+#include <QImage>
 #include <QMouseEvent>
 #include <QLineEdit>
 #include <QTabBar>
@@ -343,6 +344,97 @@ int run_mechmodelcanvas_tests() {
         QApplication::sendEvent(canvas, &after);
         check(distance(ed->snappedCursor(), before) > 1e-9,
               "pan: and once the button is let go the cursor is being followed again");
+    }
+
+
+    // ---- panning shifts the paper it has already drawn, instead of drawing it again -----------------
+    {
+        // Dragging the paper does not change one line of the drawing: every pixel of it is still valid, just
+        // somewhere else on the screen. Re-rendering the whole sheet on every tick of the drag - which is what
+        // was happening - costs the sheet sixty times a second, and on a drawing where one render takes longer
+        // than a frame the paper cannot help but fall behind the hand. So it is COPIED to where it now belongs
+        // and only the strip along the leading edge, which has never been drawn, is drawn.
+        //
+        // Two things have to be true of that, and neither is obvious: the drag must not re-render (or nothing
+        // has been saved), and what it leaves on the screen must be EXACTLY what a re-render would have left
+        // (or the saving is bought with a wrong picture).
+        MainWindow win;
+        win.resize(900, 640);
+        win.show();
+        QApplication::processEvents();
+        auto* canvas = win.findChild<CanvasWidget*>();
+        auto* ed = win.findChild<Editor*>();
+        if (!canvas || !ed || !ed->document()) {
+            check(false, "scroll: there is a canvas, an editor and a drawing");
+            return canvasFailures;
+        }
+        Document* d = ed->document();
+        d->entities().clear();
+        // Enough on the sheet, and spread widely enough, that the strip coming into view has real content in
+        // it - a pan that reveals nothing would pass whatever the code did.
+        for (int i = 0; i < 60; ++i) {
+            Entity e;
+            e.id = QStringLiteral("e%1").arg(i);
+            e.type = (i % 3 == 0) ? EntityType::Circle : EntityType::Line;
+            const double x = -300.0 + i * 11.0, y = -200.0 + (i % 17) * 25.0;
+            e.a = {x, y};
+            e.b = {x + 40.0, y + 18.0};
+            e.radius = 6.0;
+            d->entities().push_back(e);
+        }
+        canvas->invalidateScene();
+        canvas->grab();   // drawn once, in full
+        const int rebuiltBefore = canvas->sceneRebuildsForTest();
+
+        // Drag the paper across in several ticks, the way a hand does, painting between them.
+        const QPointF start(500, 400);
+        QMouseEvent down(QEvent::MouseButtonPress, start, canvas->mapToGlobal(start), Qt::MiddleButton,
+                         Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &down);
+        QPointF at = start;
+        for (int i = 0; i < 6; ++i) {
+            at += QPointF(9, -7);
+            QMouseEvent mv(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::MiddleButton,
+                           Qt::NoModifier);
+            QApplication::sendEvent(canvas, &mv);
+            canvas->grab();   // force the paint the frame limiter would have made
+        }
+
+        std::printf("  scroll: six ticks of a drag re-rendered the drawing %d time(s)\n",
+                    canvas->sceneRebuildsForTest() - rebuiltBefore);
+        check(canvas->sceneRebuildsForTest() == rebuiltBefore,
+              "scroll: the drag did not re-render the drawing once - it moved what was already drawn");
+
+        // What is on the screen NOW, arrived at by shifting six times.
+        const QImage shifted = canvas->sceneImageForTest();
+        // And what the same view looks like drawn from nothing.
+        canvas->invalidateScene();
+        canvas->grab();
+        const QImage rendered = canvas->sceneImageForTest();
+        check(canvas->sceneRebuildsForTest() > rebuiltBefore, "scroll: and the reference WAS re-rendered");
+
+        long long differing = 0;
+        const long long total = static_cast<long long>(shifted.width()) * shifted.height();
+        check(shifted.size() == rendered.size() && total > 0, "scroll: two pictures of the same size");
+        if (shifted.size() == rendered.size()) {
+            for (int y = 0; y < shifted.height(); ++y)
+                for (int x = 0; x < shifted.width(); ++x) {
+                    const QRgb a = shifted.pixel(x, y), b = rendered.pixel(x, y);
+                    // A line drawn up against the edge of a strip can be a shade off where it was blended
+                    // over what was already there; a MISSING line is not a shade off.
+                    if (std::abs(qRed(a) - qRed(b)) > 24 || std::abs(qGreen(a) - qGreen(b)) > 24 ||
+                        std::abs(qBlue(a) - qBlue(b)) > 24)
+                        ++differing;
+                }
+        }
+        std::printf("  scroll: %lld of %lld pixels differ from a full re-render (%.3f%%)\n", differing, total,
+                    100.0 * static_cast<double>(differing) / static_cast<double>(total ? total : 1));
+        check(total > 0 && differing * 1000 < total,
+              "scroll: the shifted paper is the same picture a re-render would have drawn");
+
+        QMouseEvent up(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::MiddleButton,
+                       Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &up);
     }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");

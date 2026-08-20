@@ -5,6 +5,7 @@
 #include "render/EntityRenderer.h"
 
 #include <QColor>
+#include <QImage>
 #include <QPixmap>
 #include <QPoint>
 #include <QStringList>
@@ -233,6 +234,11 @@ public:
     // The frame clock and whether one is already on its way. See requestRepaint.
     QElapsedTimer frameClock_;
     bool repaintPending_ = false;
+    // How many times the whole drawing has been re-rendered. For a test that panning does not.
+    int sceneRebuildsForTest() const { return sceneRebuilds_; }
+    // What the drawing currently looks like, without the overlay. For a test that a pan leaves the
+    // same picture as re-rendering would have.
+    QImage sceneImageForTest() const { return sceneCache_.toImage(); }
 
     // Begin an interactive rubber-band capture of a rectangular world region (used by
     // "Export PDF (window)"). The next left-drag defines the window; on release `onDone`
@@ -254,6 +260,13 @@ private:
     int viewportGrabAt(const QPointF& point, const DrawingLayout& layout, int* corner) const;
     void drawLayoutScene(QPainter& painter, const ViewTransform& paper);
     void drawGrid(QPainter& p, const ViewTransform& vt) const;
+    // The static drawing - grid, origin, entities - into `sp` for the part of the widget `area` covers.
+    // Both the full re-render and a pan's edge strip go through here, so a strip is drawn by exactly the
+    // code that would have drawn it as part of the whole.
+    void drawSceneContent(QPainter& sp, const ViewTransform& vt, const QRectF& area);
+    // A pan: shift what is already drawn by the pixels the hand moved and draw only the strip that came
+    // into view. False if there is nothing worth keeping and the whole thing has to be drawn again.
+    bool scrollScene(const QPoint& delta);
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
     void drawCrosshair(QPainter& p) const; // AutoCAD-style full crosshair + pickbox
     // Pop the field near the cursor. `placeholder` (when non-empty) labels it for
@@ -310,6 +323,15 @@ private:
     // While panning we blit the cached scene shifted by this offset instead of
     // rebuilding it every mouse tick; reset to 0 whenever the cache is rebuilt.
     QPointF sceneOffset_;
+    // A pan shifts the cached drawing instead of re-rendering it. The scratch is the other half of the
+    // shift (swapped with the cache, so no pixmap is allocated per frame); the pixels the hand has moved
+    // and the cache has not yet been told about are held here until the next paint, so a mouse reporting
+    // a thousand times a second still costs one shift per frame; and the residual is what was left over
+    // after rounding the shift to whole SCREEN pixels - carried on so it cannot build up into a drift.
+    QPixmap scrollScratch_;
+    QPoint pendingScroll_;
+    QPointF scrollResidual_;
+    int sceneRebuilds_ = 0;
 
     bool panning_ = false;
     QPoint lastPanPos_;
