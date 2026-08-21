@@ -1,5 +1,6 @@
 // Minimal assertion-based test runner for Ewire core logic.
 // Each test function returns the number of failures; main aggregates them.
+#include "harness/MechModels.h"
 #include <QApplication>
 
 #include <cstdio>
@@ -39,6 +40,12 @@ int main(int argc, char** argv) {
     // set here rather than left to whoever starts the tests.
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+    // THE HOUSE MODELS ARE SHIPPED INSIDE THE BINARY, and the tests must not stand on them. Half of what
+    // is checked here is what the program does when NOTHING is drawn for a kind yet - a wizard asked for a
+    // boot it has no model of, a manager showing a kind with an empty drawing - and with a set of models
+    // built into the executable there is no such thing as nothing unless it is asked for. So it is asked
+    // for: the application starts from the house style, a test starts from an empty sheet.
+    Edraw_Desktop::MechModelSet::setShippedDefaultsEnabled(false);
     // Unbuffered, so a crash mid-suite still shows how far it got.
     setvbuf(stdout, nullptr, _IONBF, 0);
     int failures = 0;

@@ -13,6 +13,7 @@
 #include "model/Block.h"
 
 #include <QApplication>
+#include <QImage>
 #include <QToolButton>
 #include <QGroupBox>
 #include <QCheckBox>
@@ -2844,6 +2845,11 @@ int run_mechmodels_tests() {
         m.nearPoint = {2.0, 0.0};
         m.hasFarPoint = true;
         m.farPoint = {38.0, 0.0};
+        // And a face the conductors leave by, so the purple has something to draw.
+        MechModel::OutputLine face;
+        face.a = {40.0, -6.0};
+        face.b = {40.0, 6.0};
+        m.outputs.push_back(face);
         s.set(m);
         // Handed the models rather than left to read them off disk: the house-style file is the user's, and a
         // test that writes over it to have something to look at is a test that can lose an afternoon's work.
@@ -2879,7 +2885,89 @@ int run_mechmodels_tests() {
             QApplication::processEvents();
             check(static_cast<int>(prev->entities().size()) == withMarks,
                   "manager: and they come back");
+
+            // ---- AND EVERY MARK IS THE COLOUR IT IS ON THE CANVAS -----------------------------------
+            //
+            // The colour IS the name of a mark: blue is where it connects, orange and green are the two ends
+            // that must not stretch, purple is a face the conductors leave by. The preview paints a drawing
+            // in one quiet grey so that it reads as a drawing rather than as a colour chart - and it was
+            // painting the marks with it, so four different marks came out as the same grey rings and nobody
+            // could tell which was which.
+            QStringList colours;
+            int barbs = 0, numbered = 0;
+            for (const Entity& e : prev->entities()) {
+                if (!e.meta.value(QLatin1String(kPreviewMarkKey)).toBool()) continue;
+                if (!colours.contains(e.color)) colours << e.color;
+                if (e.id.startsWith(QStringLiteral("model-connect-barb"))) ++barbs;
+                if (e.type == EntityType::Text) ++numbered;
+            }
+            colours.sort();
+            std::printf("  manager: mark colours %s; %d barb(s) on the arrow\n",
+                        qPrintable(colours.join(QStringLiteral(", "))), barbs);
+            check(colours.contains(QStringLiteral("#5aa0ff")),
+                  "manager: the connection point is blue, as it is on the canvas");
+            check(colours.contains(QStringLiteral("#e6a23c")) &&
+                      colours.contains(QStringLiteral("#62c370")),
+                  "manager: the two ends are orange and green");
+            check(colours.contains(QStringLiteral("#c678dd")),
+                  "manager: and the face the conductors leave by is purple");
+            check(barbs == 2,
+                  "manager: the direction is an ARROW with a head on it - a bare line says which line and "
+                  "not which way");
+            check(numbered >= 1,
+                  "manager: and the output faces are numbered, because the order they were marked is the "
+                  "order the branches come out in");
+
+            // Not just carried in the entity: DRAWN. A colour on an object the preview then paints grey is
+            // the bug this had, so the blue is counted on the pane itself.
+            const QImage shot = prev->grab().toImage();
+            int blue = 0;
+            for (int y = 0; y < shot.height(); ++y)
+                for (int x = 0; x < shot.width(); ++x) {
+                    const QRgb c = shot.pixel(x, y);
+                    if (qBlue(c) > 170 && qBlue(c) - qRed(c) > 50) ++blue;
+                }
+            std::printf("  manager: %d blue pixel(s) on the preview\n", blue);
+            check(blue > 20, "manager: the blue is on the screen, not only in the object");
         }
+    }
+
+
+    // ---- the house models ship WITH the application -------------------------------------------------
+    {
+        // They were only ever in the machine's own app-data folder, so a fresh install - a new machine, another
+        // draughtsman, a rebuilt PC - came up with nothing drawn for any kind, and every drawing made on it was
+        // made without the house style until somebody drew all of them again. A set of default models is not
+        // personal data: it is part of what the program IS, so it is built into it.
+        MechModelSet shipped;
+        const bool got = shipped.load(MechModelSet::shippedPath());
+        int drawn = 0, marked = 0;
+        for (MechModelKind k : allMechModelKinds())
+            for (const MechModel* m : shipped.all(k)) {
+                if (!m) continue;
+                if (!m->drawing.isEmpty()) ++drawn;
+                if (!m->outputs.empty() || m->hasConnect) ++marked;
+            }
+        std::printf("  shipped: %d model(s) drawn, %d of them marked up\n", drawn, marked);
+        check(got, "shipped: the models are inside the executable, not beside it");
+        check(drawn >= 8, "shipped: and there is a real set of them, not an empty file");
+        check(marked >= 1, "shipped: marked up as they were captured - the marks travel with the model");
+    }
+
+
+    // ---- the house library ships with the application too --------------------------------------------
+    {
+        // The same argument as the models: a shelf built up over months - the parts, their numbers, their
+        // captured drawings - only ever existed in the machine's own app-data folder, so a fresh install
+        // started from the bare seed and every drawing made on it was made without the house parts.
+        PartsLibrary shipped;
+        const bool got = shipped.load(QStringLiteral(":/defaults/edrawlib.plb"));
+        int drawn = 0;
+        for (const LibraryPart& p : shipped.parts)
+            if (p.hasMechanical() || !p.schematic.isEmpty()) ++drawn;
+        std::printf("  shipped: the library has %lld part(s), %d of them drawn\n",
+                    static_cast<long long>(shipped.parts.size()), drawn);
+        check(got && !shipped.parts.empty(), "shipped: the house library is inside the executable");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

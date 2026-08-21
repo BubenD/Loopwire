@@ -445,9 +445,39 @@ QString MechModelSet::defaultPath() {
     return QDir(AppPaths::root()).filePath(QStringLiteral("mech-models.json"));
 }
 
+// THE HOUSE MODELS SHIP WITH THE APPLICATION. They were only ever in the machine's own app-data folder,
+// which means a fresh install - a new machine, another draughtsman, a rebuilt PC - came up with nothing
+// drawn for any kind, and every drawing made on it was made without the house style until somebody drew all
+// of them again. A set of default models is not personal data; it is part of what the program IS.
+//
+// Inside the executable rather than beside it, so there is no file to lose, no install step to forget, and
+// no folder that a copied Edraw.exe leaves behind.
+QString MechModelSet::shippedPath() {
+    return QStringLiteral(":/defaults/mech-models.json");
+}
+
+namespace {
+bool g_useShipped = true;
+}
+void MechModelSet::setShippedDefaultsEnabled(bool on) { g_useShipped = on; }
+bool MechModelSet::shippedDefaultsEnabled() { return g_useShipped; }
+
 bool MechModelSet::load(const QString& path) {
     const QString use = path.isEmpty() ? defaultPath() : path;
     QFile f(use);
+    // NOTHING OF ITS OWN YET: the models the application was built with. The machine's own file wins
+    // wherever there is one - what somebody has drawn and captured is theirs and is never overwritten by
+    // what was shipped - so this is a fallback and not a default that fights with them.
+    if (g_useShipped && !f.exists() && (path.isEmpty() || path == defaultPath())) {
+        QFile shipped(shippedPath());
+        if (shipped.open(QIODevice::ReadOnly)) {
+            const QJsonDocument doc = QJsonDocument::fromJson(shipped.readAll());
+            if (doc.isObject()) {
+                fromJson(doc.object());
+                return true;
+            }
+        }
+    }
     if (!f.open(QIODevice::ReadOnly)) return false;
     const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!doc.isObject()) return false;
@@ -496,6 +526,120 @@ Bounds drawingBounds(const QJsonArray& drawing) {
 }
 
 } // namespace
+
+// ---- the marks, in one place ---------------------------------------------------------------------
+//
+// Moved here out of the canvas, which had them, and away from the manager's preview, which had a rougher
+// version of its own: three plain rings in colours the preview then painted grey, no arrow head, no bars
+// across the output faces and no numbers on them. The same marks in two windows drawn by two pieces of code
+// is two answers to one question.
+std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerRadius, double armMm) {
+    std::vector<Entity> out;
+    const double r = std::max(1e-6, markerRadius);
+    // Everything here is chrome, and a preview paints a drawing in one quiet grey so that it reads as a
+    // drawing rather than as a colour chart. These have to keep their colours - the colour IS the name of
+    // the mark - so they say so, and the preview lets them through.
+    auto mark = [](Entity& e, const QString& color) {
+        e.layer = QLatin1String(kMechModelGuideLayer);
+        e.color = color;
+        e.meta.insert(QLatin1String(kPreviewMarkKey), true);
+    };
+
+    // THE THREE POINTS, in a fixed order, each with a name and a colour. A connection point sitting exactly on
+    // the near point - which it usually does, since both mark where the part meets the run - drew as ONE
+    // circle: whichever was added second painted over the first and there was no way to tell the near point
+    // had ever been set. So every earlier mark this one lands on grows it a little, and one circle becomes two
+    // concentric rings with each colour still its own.
+    struct Mark { QString id, tag, color; Vec2 point; };
+    std::vector<Mark> marks;
+    if (model.hasConnect)
+        marks.push_back({QStringLiteral("model-connect-point"), QStringLiteral("connect"),
+                         QStringLiteral("#5aa0ff"), model.connectPoint});
+    if (model.hasNearPoint)
+        marks.push_back({QStringLiteral("model-near-point"), QStringLiteral("near"),
+                         QStringLiteral("#e6a23c"), model.nearPoint});
+    if (model.hasFarPoint)
+        marks.push_back({QStringLiteral("model-far-point"), QStringLiteral("far"),
+                         QStringLiteral("#62c370"), model.farPoint});
+    for (size_t i = 0; i < marks.size(); ++i) {
+        int stacked = 0;
+        for (size_t j = 0; j < i; ++j)
+            if (distance(marks[i].point, marks[j].point) < r * 0.5) ++stacked;
+        Entity marker;
+        marker.id = marks[i].id;
+        marker.type = EntityType::Circle;
+        marker.center = marks[i].point;
+        marker.radius = r * (1.0 + 0.45 * stacked);
+        mark(marker, marks[i].color);
+        marker.meta.insert(QStringLiteral("modelAnchor"), marks[i].tag);
+        out.push_back(marker);
+    }
+
+    // THE FACES THE WIRES COME OUT OF, each a bar across the part with a stop at either end and its number
+    // beside it. The order they were marked is the order the generator hands the branches out in, so which one
+    // is which has to be visible or a three-branch split cannot be checked.
+    for (size_t i = 0; i < model.outputs.size(); ++i) {
+        const MechModel::OutputLine& o = model.outputs[i];
+        Entity bar;
+        bar.id = QStringLiteral("model-output-%1").arg(i);
+        bar.type = EntityType::Line;
+        bar.a = o.a;
+        bar.b = o.b;
+        mark(bar, QStringLiteral("#c678dd"));
+        bar.meta.insert(QStringLiteral("modelOutput"), static_cast<int>(i));
+        out.push_back(bar);
+        // A stop at each end, across the face, so it reads as a face WITH LIMITS rather than as a line
+        // somebody drew: the wires may not run off either end of it.
+        const Vec2 along = (o.b - o.a).normalized();
+        const Vec2 across = along.perp() * std::max(1.0, r * 0.9);
+        for (int end = 0; end < 2; ++end) {
+            const Vec2 at = end == 0 ? o.a : o.b;
+            Entity stop;
+            stop.id = QStringLiteral("model-output-%1-end%2").arg(i).arg(end);
+            stop.type = EntityType::Line;
+            stop.a = at + across;
+            stop.b = at - across;
+            mark(stop, QStringLiteral("#c678dd"));
+            out.push_back(stop);
+        }
+        Entity num;
+        num.id = QStringLiteral("model-output-%1-no").arg(i);
+        num.type = EntityType::Text;
+        num.a = lerp(o.a, o.b, 0.5) + across * 1.6;
+        mark(num, QStringLiteral("#c678dd"));
+        num.meta.insert(QStringLiteral("text"), QString::number(i + 1));
+        num.meta.insert(QStringLiteral("size"), std::max(1.5, r * 1.2));
+        out.push_back(num);
+    }
+
+    // AND WHICH WAY IT RUNS FROM THE CONNECTION POINT - an arrow, with a head on it, because the whole reason
+    // for marking any of this on a model is to be able to SEE what the wizard will do with it, and a bare line
+    // says which line and not which way.
+    if (model.hasConnect) {
+        const double arm = armMm > 0.0 ? armMm : 6.0 * r;
+        const double c = std::cos(model.connectAngleRad), s = std::sin(model.connectAngleRad);
+        const Vec2 tip{model.connectPoint.x + arm * c, model.connectPoint.y + arm * s};
+        Entity shaft;
+        shaft.id = QStringLiteral("model-connect-dir");
+        shaft.type = EntityType::Line;
+        shaft.a = model.connectPoint;
+        shaft.b = tip;
+        mark(shaft, QStringLiteral("#5aa0ff"));
+        out.push_back(shaft);
+        const double headLen = arm * 0.22, spread = 0.35;
+        for (const double side : {1.0, -1.0}) {
+            Entity barb;
+            barb.id = QStringLiteral("model-connect-barb%1").arg(side > 0 ? 1 : 2);
+            barb.type = EntityType::Line;
+            barb.a = tip;
+            const double a2 = model.connectAngleRad + 3.14159265358979323846 + side * spread;
+            barb.b = {tip.x + headLen * std::cos(a2), tip.y + headLen * std::sin(a2)};
+            mark(barb, QStringLiteral("#5aa0ff"));
+            out.push_back(barb);
+        }
+    }
+    return out;
+}
 
 double mechModelDrawnLength(const MechModel& model) {
     if (model.drawnLengthMm > 0.0) return model.drawnLengthMm;

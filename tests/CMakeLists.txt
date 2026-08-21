@@ -27,6 +27,12 @@ add_executable(edraw_tests
     test_drawingspace.cpp
     test_stepsbuilder.cpp
     test_main.cpp
+    # THE APPLICATION'S OWN RESOURCES, in the test binary as well. The default mechanical models - the house
+    # style - are built into the executable, and a test of "a fresh install comes up with the house models"
+    # cannot check that from a binary the resource was never compiled into. Listed on the target rather than
+    # on the core library for the same reason the application lists it: a .qrc compiled into a plain static
+    # library is not reliably registered.
+    ../resources/edraw.qrc
 )
 # Widgets, because the step builder is a window and is tested as one.
 target_link_libraries(edraw_tests PRIVATE edraw_core Qt6::Core Qt6::Gui Qt6::Widgets)

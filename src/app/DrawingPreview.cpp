@@ -229,7 +229,13 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         // as well is what hid the mark in the library, where it is most wanted.
         const bool conn = (showConn_ && e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) ||
                           (pickable_ && i == picked_);
-        if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
+        // A MARK KEEPS ITS OWN COLOUR. The grey is so that a preview reads as a drawing rather than as a
+        // colour chart, and it was being applied to the marks as well - so the manager's blue connection
+        // point, its orange and green ends and its purple output faces all came out the same grey as the
+        // part, which is three or four marks nobody can tell apart.
+        if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool())
+            EntityRenderer::draw(p, e, doc, vt, QColor());
+        else if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
     }
     p.restore();

@@ -115,6 +115,10 @@ struct Entity {
 // joint, rather than by the middle of whatever happens to have been drawn. Named here because the
 // editor writes it, the renderer colours it and the harness builder reads it.
 inline constexpr char kConnectionLineKey[] = "connectionLine";
+// A mark drawn OVER a drawing rather than part of it - where a model connects, which way it runs, the faces
+// its conductors leave by. A preview paints a drawing in one quiet grey so it reads as a drawing rather than
+// as a colour chart; these keep their own colour, because with a mark the colour IS its name.
+inline constexpr char kPreviewMarkKey[] = "previewMark";
 
 // Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
 // horizontal and it stands off in y. The object remembers it ("dimAcross"), because working it out from

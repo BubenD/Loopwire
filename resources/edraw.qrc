@@ -2,6 +2,8 @@
 <RCC version="1.0">
   <qresource prefix="/">
     <file>edraw.qss</file>
+    <file>defaults/mech-models.json</file>
+    <file>defaults/edrawlib.plb</file>
     <file>edraw.ico</file>
     <file>caret-down.svg</file>
     <file>caret-up.svg</file>

@@ -1815,8 +1815,6 @@ public:
 
 QVector<DockTitleBar*> DockTitleBar::allBars_;
 
-constexpr auto kMechModelGuideLayer = "«guide»";
-
 Bounds mechModelBounds(const Document& doc) {
     Bounds out;
     for (const Entity& e : doc.entities()) {
@@ -1867,104 +1865,14 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
         return 10.0 * decade;
     }();
 
-    // The three marks, in a fixed order, each with a name and a colour. A connection point sitting
-    // exactly on the near point - which it usually does, since both mark where the part meets the
-    // run - used to draw as ONE circle: whichever was added second painted straight over the first,
-    // and there was no way to tell the near point had ever been set at all.
-    struct Mark { QString id, tag, color; Vec2 point; };
-    std::vector<Mark> marks;
-    if (model.hasConnect)
-        marks.push_back({QStringLiteral("model-connect-point"), QStringLiteral("connect"),
-                         QStringLiteral("#5aa0ff"), model.connectPoint});
-    if (model.hasNearPoint)
-        marks.push_back({QStringLiteral("model-near-point"), QStringLiteral("near"),
-                         QStringLiteral("#e6a23c"), model.nearPoint});
-    if (model.hasFarPoint)
-        marks.push_back({QStringLiteral("model-far-point"), QStringLiteral("far"),
-                         QStringLiteral("#62c370"), model.farPoint});
-    for (size_t i = 0; i < marks.size(); ++i) {
-        // Every EARLIER mark this one lands on top of grows it a little: one circle becomes two (or
-        // three) concentric rings, each colour still its own ring rather than one solid disc.
-        int stacked = 0;
-        for (size_t j = 0; j < i; ++j)
-            if (distance(marks[i].point, marks[j].point) < markerRadius * 0.5) ++stacked;
-        Entity marker;
-        marker.id = marks[i].id;
-        marker.type = EntityType::Circle;
-        marker.layer = QLatin1String(kMechModelGuideLayer);
-        marker.center = marks[i].point;
-        marker.radius = markerRadius * (1.0 + 0.45 * stacked);
-        marker.color = marks[i].color;
-        marker.meta.insert(QStringLiteral("modelAnchor"), marks[i].tag);
-        doc.entities().push_back(marker);
-    }
-    // The faces the wires come out of, each as a bar across the part with a tick at each end, and its
-    // number beside it - the order they were marked is the order the generator hands the branches out in,
-    // so which one is which has to be visible or a three-branch split cannot be checked.
-    for (size_t i = 0; i < model.outputs.size(); ++i) {
-        const MechModel::OutputLine& o = model.outputs[i];
-        Entity bar;
-        bar.id = QStringLiteral("model-output-%1").arg(i);
-        bar.type = EntityType::Line;
-        bar.layer = QLatin1String(kMechModelGuideLayer);
-        bar.a = o.a;
-        bar.b = o.b;
-        bar.color = QStringLiteral("#c678dd");
-        bar.meta.insert(QStringLiteral("modelOutput"), static_cast<int>(i));
-        doc.entities().push_back(bar);
-        // A stop at each end, across the face, so it reads as a face with limits rather than as a line
-        // somebody drew: the wires may not run off either end of it.
-        const Vec2 along = (o.b - o.a).normalized();
-        const Vec2 across = along.perp() * std::max(1.0, markerRadius * 0.9);
-        for (int end = 0; end < 2; ++end) {
-            const Vec2 at = end == 0 ? o.a : o.b;
-            Entity stop;
-            stop.id = QStringLiteral("model-output-%1-end%2").arg(i).arg(end);
-            stop.type = EntityType::Line;
-            stop.layer = QLatin1String(kMechModelGuideLayer);
-            stop.a = at + across;
-            stop.b = at - across;
-            stop.color = QStringLiteral("#c678dd");
-            doc.entities().push_back(stop);
-        }
-        Entity num;
-        num.id = QStringLiteral("model-output-%1-no").arg(i);
-        num.type = EntityType::Text;
-        num.layer = QLatin1String(kMechModelGuideLayer);
-        num.a = lerp(o.a, o.b, 0.5) + across * 1.6;
-        num.color = QStringLiteral("#c678dd");
-        num.meta.insert(QStringLiteral("text"), QString::number(i + 1));
-        num.meta.insert(QStringLiteral("size"), std::max(1.5, markerRadius * 1.2));
-        doc.entities().push_back(num);
-    }
-    // An arrow along the direction the part runs from the connection point - drawn, because the whole
-    // reason for marking any of these on the model is to be able to SEE what the wizard will do with it.
-    if (model.hasConnect) {
-        const double arm = std::max(6.0 * markerRadius, b.valid ? b.width() * 0.35 : 10.0);
-        const double c = std::cos(model.connectAngleRad), s = std::sin(model.connectAngleRad);
-        const Vec2 tip{model.connectPoint.x + arm * c, model.connectPoint.y + arm * s};
-        Entity shaft;
-        shaft.id = QStringLiteral("model-connect-dir");
-        shaft.type = EntityType::Line;
-        shaft.layer = QLatin1String(kMechModelGuideLayer);
-        shaft.a = model.connectPoint;
-        shaft.b = tip;
-        shaft.color = QStringLiteral("#5aa0ff");
-        doc.entities().push_back(shaft);
-        // A head on it, so the arrow says which way rather than only which line.
-        const double headLen = arm * 0.22, spread = 0.35;
-        for (const double side : {1.0, -1.0}) {
-            Entity barb;
-            barb.id = QStringLiteral("model-connect-barb%1").arg(side > 0 ? 1 : 2);
-            barb.type = EntityType::Line;
-            barb.layer = QLatin1String(kMechModelGuideLayer);
-            barb.a = tip;
-            const double a2 = model.connectAngleRad + M_PI + side * spread;
-            barb.b = {tip.x + headLen * std::cos(a2), tip.y + headLen * std::sin(a2)};
-            barb.color = QStringLiteral("#5aa0ff");
-            doc.entities().push_back(barb);
-        }
-    }
+    // THE MARKS, from the one place that decides what a marked-up model looks like - so what is seen here
+    // while it is being marked up is what the manager's preview shows when it is being chosen. The arrow
+    // reaches across a third of the part, which on a part the size of a real one is long enough to read the
+    // direction off and short enough not to leave the drawing.
+    for (Entity& mark :
+         mechModelMarkEntities(model, markerRadius, std::max(6.0 * markerRadius,
+                                                            b.valid ? b.width() * 0.35 : 10.0)))
+        doc.entities().push_back(std::move(mark));
     // The object the app scales by, boxed in cyan so it can be SEEN which one it is. A mark that cannot be
     // seen is a mark nobody trusts: the whole point of picking the label inside a sleeve is knowing you
     // picked the label and not the sleeve, and the two are drawn one inside the other.

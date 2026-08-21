@@ -213,6 +213,17 @@ public:
     void fromJson(const QJsonObject& o);
     // <app data>/mech-models.json
     static QString defaultPath();
+    // The set the application was BUILT with - the house style, inside the executable. Used when the
+    // machine has no set of its own, so a fresh install draws in the house style from the first drawing
+    // rather than from whenever somebody gets round to drawing all the models again.
+    static QString shippedPath();
+    // Whether the shipped set is used when a machine has no file of its own. On, always, in the
+    // application - that is the point of shipping it. OFF for a test that starts from "nothing is drawn
+    // for this kind yet" and checks what the program does about it: such a test has to start from
+    // nothing, and with the house style shipped inside the binary there is no such thing as nothing
+    // unless it can be asked for.
+    static void setShippedDefaultsEnabled(bool on);
+    static bool shippedDefaultsEnabled();
     bool load(const QString& path = QString());
     bool save(const QString& path = QString()) const;
 
@@ -230,6 +241,24 @@ private:
 std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, double dirRad,
                                       double lengthMm, double acrossMm = 0.0, int wireCount = 0,
                                       bool flip = false);
+
+// THE LAYER THE MARKS ARE DRAWN ON. They are chrome over the part, not part of it: a layer of their own is
+// what keeps them out of the part's extent, out of a capture, and out of the way of a selection.
+inline constexpr char kMechModelGuideLayer[] = "«guide»";
+
+// THE MARKS A MODEL IS PLACED BY, DRAWN. Where it connects and which way it runs from there (blue, with an
+// arrow, because the direction is half of what that mark says), the two ends that must not stretch (orange
+// and green), and the faces the conductors leave by (purple, barred at each end and numbered in the order
+// they were marked, which is the order the generator hands the branches out in).
+//
+// ONE place decides what a marked-up model looks like, because it is shown in two: on the canvas while it is
+// being marked up, and in the manager's preview where a model is chosen and checked. Those two disagreeing
+// is worse than either being wrong - a mark seen in one window has to be the same mark in the other, or
+// neither can be trusted.
+//
+// `markerRadius` is how big a mark is on this part (a ring three millimetres across on a part two metres
+// long is a speck, so it cannot be a constant); `armMm` is how long the direction arrow reaches.
+std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerRadius, double armMm);
 
 // How long the model was drawn: what it says, or the extent of its own drawing.
 double mechModelDrawnLength(const MechModel& model);

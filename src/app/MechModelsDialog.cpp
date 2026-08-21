@@ -698,42 +698,17 @@ void MechModelsDialog::refreshPreview() {
         // the wrong place. Saying nothing is better than pointing at the wrong thing.
         const bool asDrawn = std::abs(want - mechModelDrawnLength(*m)) < 1e-6 && wires == 0;
         if (showMarks_ && showMarks_->isChecked() && asDrawn) {
+            // THE SAME MARKS THE CANVAS DRAWS, from the same code: blue where it connects with an arrow saying
+            // which way it runs from there, orange and green on the two ends that must not stretch, purple
+            // across each face the conductors leave by, barred at both ends and numbered in the order they
+            // were marked. This window had a rougher set of its own - three plain rings, no arrow head, no
+            // bars, no numbers - and a mark that looks different in the window where a model is CHOSEN from
+            // the window where it was marked up is a mark nobody can check.
             Bounds ext;
             for (const Entity& e : shown) ext.expand(e.bounds());
             const double r = ext.valid ? std::max(1.0, ext.height() * 0.08) : 2.0;
-            struct Mark { bool on; Vec2 at; const char* colour; };
-            const Mark marks[] = {{m->hasConnect, m->connectPoint, "#5aa0ff"},
-                                  {m->hasNearPoint, m->nearPoint, "#e6a23c"},
-                                  {m->hasFarPoint, m->farPoint, "#62c370"}};
-            int stacked = 0;
-            for (const Mark& mk : marks) {
-                if (!mk.on) continue;
-                Entity ring;
-                ring.type = EntityType::Circle;
-                ring.center = mk.at;
-                ring.radius = r * (1.0 + 0.45 * stacked++);
-                ring.color = QString::fromLatin1(mk.colour);
-                shown.push_back(ring);
-            }
-            // And which way it runs from the connection point, which is half of what that mark says.
-            if (m->hasConnect) {
-                Entity arrow;
-                arrow.type = EntityType::Line;
-                arrow.a = m->connectPoint;
-                arrow.b = m->connectPoint + Vec2{std::cos(m->connectAngleRad), std::sin(m->connectAngleRad)} *
-                                                (r * 3.0);
-                arrow.color = QStringLiteral("#5aa0ff");
-                shown.push_back(arrow);
-            }
-            // The faces the conductors leave by, in the order they were marked.
-            for (const MechModel::OutputLine& o : m->outputs) {
-                Entity bar;
-                bar.type = EntityType::Line;
-                bar.a = o.a;
-                bar.b = o.b;
-                bar.color = QStringLiteral("#c678dd");
-                shown.push_back(bar);
-            }
+            const double arm = std::max(6.0 * r, ext.valid ? ext.width() * 0.35 : 10.0);
+            for (Entity& mark : mechModelMarkEntities(*m, r, arm)) shown.push_back(std::move(mark));
         }
         view_->setEntities(shown);
         view_->setCaption(stretches ? tr("At %1 mm").arg(want, 0, 'f', 0) : tr("As drawn"));

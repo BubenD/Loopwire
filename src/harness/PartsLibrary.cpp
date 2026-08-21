@@ -1202,9 +1202,20 @@ void PartsCatalog::openRemembered() {
             }
         }
         if (p == def && lib.parts.empty()) {
-            // Nothing on the shelf: fill it with the parts a harness actually starts from, and keep
-            // the file so it can be edited afterwards. This also repairs a library left empty by an
-            // earlier version.
+            // THE HOUSE LIBRARY SHIPS WITH THE APPLICATION, inside the executable. A shelf built up over
+            // months - the parts, their numbers, their captured drawings - only ever existed in the machine's
+            // own app-data folder, so a fresh install started from the bare seed and every drawing made on it
+            // was made without the house parts until somebody entered them all again.
+            PartsLibrary shipped;
+            if (shipped.load(QStringLiteral(":/defaults/edrawlib.plb")) && !shipped.parts.empty()) {
+                lib = shipped;
+                lib.save(p);
+            }
+        }
+        if (p == def && lib.parts.empty()) {
+            // Nothing on the shelf and nothing shipped: fill it with the parts a harness actually starts
+            // from, and keep the file so it can be edited afterwards. This also repairs a library left empty
+            // by an earlier version.
             lib = seedLibrary();
             lib.save(p);
         }
