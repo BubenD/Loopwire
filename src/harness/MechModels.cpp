@@ -205,6 +205,11 @@ bool mechModelPerWire(MechModelKind kind) {
     return kind == MechModelKind::OpenWires || kind == MechModelKind::ConnectorToCableWires;
 }
 
+bool mechModelHasSchematicSlot(MechModelKind kind) {
+    kind = canonicalKind(kind);
+    return kind == MechModelKind::RingInsulated || kind == MechModelKind::FerruleInsulated;
+}
+
 std::vector<QString> defaultSubModelNames(MechModelKind kind) {
     switch (kind) {
     case MechModelKind::Label:
@@ -275,6 +280,7 @@ QJsonObject MechModel::toJson() const {
     if (hasFarPoint)
         o.insert(QStringLiteral("farPoint"), QJsonObject{{"x", farPoint.x}, {"y", farPoint.y}});
     o.insert(QStringLiteral("drawing"), drawing);
+    if (!schematicDrawing.isEmpty()) o.insert(QStringLiteral("schematicDrawing"), schematicDrawing);
     if (drawnLengthMm > 0.0) o.insert(QStringLiteral("drawnLength"), drawnLengthMm);
     if (headMm > 0.0) o.insert(QStringLiteral("head"), headMm);
     if (tailMm > 0.0) o.insert(QStringLiteral("tail"), tailMm);
@@ -316,6 +322,7 @@ void MechModel::fromJson(const QJsonObject& o) {
     if (hasFarPoint) farPoint = {far.value(QStringLiteral("x")).toDouble(),
                                  far.value(QStringLiteral("y")).toDouble()};
     drawing = o.value(QStringLiteral("drawing")).toArray();
+    schematicDrawing = o.value(QStringLiteral("schematicDrawing")).toArray();
     drawnLengthMm = o.value(QStringLiteral("drawnLength")).toDouble(0.0);
     headMm = o.value(QStringLiteral("head")).toDouble(0.0);
     tailMm = o.value(QStringLiteral("tail")).toDouble(0.0);

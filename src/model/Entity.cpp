@@ -12,7 +12,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 27> kTypeNames = {{
+const std::array<TypeName, 28> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -40,6 +40,7 @@ const std::array<TypeName, 27> kTypeNames = {{
     {EntityType::NotConnected, "notconnected"},
     {EntityType::Twist, "twist"},
     {EntityType::Screen, "screen"},
+    {EntityType::ConnectionPin, "connectionpin"},
 }};
 } // namespace
 
@@ -353,6 +354,7 @@ Bounds Entity::bounds() const {
     }
     case EntityType::NetLabel:
     case EntityType::NotConnected:
+    case EntityType::ConnectionPin:
         bnds.expand(a);
         break;
     case EntityType::Connector: {
@@ -484,7 +486,8 @@ namespace {
 bool usesPosition(EntityType t) {
     return t == EntityType::Text || t == EntityType::Splice ||
            t == EntityType::NotConnected || t == EntityType::NetLabel ||
-           t == EntityType::Connector || t == EntityType::LengthBreak;
+           t == EntityType::Connector || t == EntityType::LengthBreak ||
+           t == EntityType::ConnectionPin;
 }
 } // namespace
 
@@ -571,6 +574,7 @@ QJsonObject Entity::toJson() const {
     case EntityType::NotConnected:
     case EntityType::NetLabel:
     case EntityType::Connector:
+    case EntityType::ConnectionPin:
         obj["position"] = pointToJson(a);
         break;
     default: { // polyline / spline / wire / rect / polygon / hatch / wipeout

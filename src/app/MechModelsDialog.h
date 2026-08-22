@@ -14,7 +14,8 @@ class QFormLayout;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
-class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QPushButton;
 class QSpinBox;
 
@@ -42,10 +43,11 @@ class Editor;
 class MechModelsDialog : public QDialog {
     Q_OBJECT
 public:
-    // onEdit is handed the kind AND which model of it is showing: a kind holds several, and editing the
-    // right-angled backshell has to open that one rather than whichever the kind happens to default to.
+    // onEdit is handed the kind AND which model of it is showing (a kind holds several, and editing the
+    // right-angled backshell has to open that one rather than whichever the kind happens to default to)
+    // and whether it is the SCHEMATIC drawing rather than the mechanical one - see mechModelHasSchematicSlot().
     explicit MechModelsDialog(Editor* editor, QWidget* parent = nullptr,
-                              std::function<void(MechModelKind, QString)> onEdit = {});
+                              std::function<void(MechModelKind, QString, bool)> onEdit = {});
 
     // The models as they stand, and which one is showing.
     const MechModelSet& models() const { return set_; }
@@ -55,6 +57,14 @@ public:
     // one - and the list has a row per model rather than a row per kind.
     QString currentName() const;
     bool selectKind(MechModelKind kind);
+    // False when the kind showing has named sub-models (a Boot, a Ring, ...) but nothing named
+    // is actually selected - the heading row over them, landed on by a stale current-row index
+    // rather than a click, since the row itself cannot be clicked (see currentName()). A capture
+    // or an edit must refuse rather than silently write the kind's own blank/common model.
+    bool currentSelectionIsUsable() const;
+    // Which drawing is showing/being worked on for a kind that has both (see
+    // mechModelHasSchematicSlot()) - always false for a kind that does not.
+    bool editingSchematic() const;
     // Driving it from a test: change a figure, ask whether there is anything unsaved, and save. The three things a
     // test of "nothing is written until Save" has to be able to do.
     void setHeadForTest(double mm);
@@ -98,15 +108,19 @@ private:
     MechModel* current();
 
     Editor* editor_ = nullptr;
-    std::function<void(MechModelKind, QString)> onEdit_;
+    std::function<void(MechModelKind, QString, bool)> onEdit_;
     MechModelSet set_;
     std::vector<MechModelKind> kinds_;
-    // One entry per ROW of the list: which kind, and which model of it ("" = the kind's first).
+    // One entry per ROW of the tree: which kind, and which model of it ("" = the kind's first).
     struct Row { MechModelKind kind; QString name; };
     std::vector<Row> rows_;
+    // The item showing each rows_ entry, same indices - so a kind/name can be found and made
+    // current again (selectKind(), addModel()'s "select what was just added") without a linear
+    // search through the tree.
+    std::vector<QTreeWidgetItem*> rowItems_;
     bool syncing_ = false;
 
-    QListWidget* list_ = nullptr;
+    QTreeWidget* list_ = nullptr;
     QLabel* heading_ = nullptr;
     QLabel* hint_ = nullptr;
     QLabel* summary_ = nullptr;
@@ -114,6 +128,9 @@ private:
     // them side by side halved the size of both and showed the same drawing twice for every model that is
     // not stretched at all - which is most of them.
     DrawingPreview* view_ = nullptr;
+    // Mechanical / Schematic - only shown for a kind that has both (a ring, a ferrule). Decides
+    // which drawing view_ shows and which one Capture/Edit on canvas write to.
+    QComboBox* drawingModeBox_ = nullptr;
 
     QComboBox* insulation_ = nullptr;
     bool pendingInsulated_ = true;

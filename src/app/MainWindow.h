@@ -155,7 +155,9 @@ public:
     // Public because the models window is not the only thing that has a reason to ask - a picture of the
     // session, or a test of it, has one too.
     void openMechModelEditor(MechModelKind kind);
-    void openMechModelEditor(MechModelKind kind, const QString& name);
+    // schematic: the model's SCHEMATIC drawing rather than its mechanical one (see
+    // mechModelHasSchematicSlot()) - a separate session from the mechanical one for the same model.
+    void openMechModelEditor(MechModelKind kind, const QString& name, bool schematic = false);
     // Capture: take what is drawn on that canvas as the model and close the session. Public for the same
     // reason - what the ribbon's own Capture button does is worth being able to ask for directly. Cancel
     // likewise: the two ways a session ends are the two things a test of one has to be able to do.
@@ -305,7 +307,7 @@ private:
     // fitting the whole part every time means finding that place again every time. Keyed by kind and name, so each
     // sub-drawing keeps its own.
     QHash<QString, ViewState> mechModelViews_;
-    static QString mechModelViewKey(MechModelKind kind, const QString& name);
+    static QString mechModelViewKey(MechModelKind kind, const QString& name, bool schematic = false);
     void rememberMechModelView(Document* doc);
     // The contextual "Capture" tab: shown while the library window has stepped aside so objects can be
     // selected for a part's drawing. Enter finishes it; Esc drops it.
@@ -504,6 +506,10 @@ private:
     bool blockDlgWasOpen_ = false;
     QHash<Document*, MechModelKind> mechModelEdits_;
     QHash<Document*, MechModel> mechModelSessionModels_;
+    // Which drawing this session is editing - absent (false) means the ordinary mechanical one.
+    // Kept apart from mechModelEdits_ so the ~20 places that only ask "is this a mech-model
+    // session at all" need no change; only the few that must tell the two drawings apart read it.
+    QHash<Document*, bool> mechModelEditSchematic_;
     QWidget* mechModelSessionGroup_ = nullptr;
     QToolButton* captureMechModelBtn_ = nullptr;
     QToolButton* markNearMechModelBtn_ = nullptr;

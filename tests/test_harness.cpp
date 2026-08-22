@@ -7041,6 +7041,107 @@ int run_harness_tests() {
               "layout: the pin pitch is what the connector is drawn at");
     }
 
+    // ---- Connection table: rows straight from the definition, shields as nested SPANS
+    //      (an overall one and, inside it, a named subset), twist as a merged run.
+    {
+        HarnessDef d;
+        HarnessConnector p1;
+        p1.id = "p1"; p1.side = HarnessSide::Left; p1.designator = "P1"; p1.pinCount = 4;
+        p1.shieldLeft = true; // wants an OVERALL shield: everything touching p1
+        HarnessConnector p2;
+        p2.id = "p2"; p2.side = HarnessSide::Right; p2.designator = "P2"; p2.pinCount = 4;
+        d.connectors = {p1, p2};
+        for (int i = 1; i <= 4; ++i) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.fromConn = "p1"; w.fromPin = i;
+            w.toConn = "p2"; w.toPin = i;
+            w.color = QStringLiteral("RED");
+            w.gauge = QStringLiteral("20AWG");
+            d.wires.push_back(w);
+        }
+        // w1/w2 share an INTERNAL shield group, nested inside p1's overall one.
+        d.wires[0].shieldGroup = d.wires[1].shieldGroup = QStringLiteral("G1");
+        // w3/w4 are twisted together.
+        d.wires[2].twistGroup = d.wires[3].twistGroup = QStringLiteral("T1");
+
+        const ConnectionTable ct = harnessConnectionTable(d);
+        check(ct.rows.size() == 4, "conn-table: one row per wire");
+        // Grouped by shield/twist so each group's rows are adjacent: w1,w2 (shieldGroup) then
+        // w3,w4 (twistGroup) - the wiring itself (pin 1-1, 2-2, ...) is untouched by this.
+        if (ct.rows.size() == 4) {
+            check(ct.rows[0].wireId == "w1" && ct.rows[1].wireId == "w2" &&
+                      ct.rows[2].wireId == "w3" && ct.rows[3].wireId == "w4",
+                  "conn-table: rows are grouped so a shield/twist group is contiguous");
+            check(ct.rows[0].from == QLatin1String("P1-1") && ct.rows[0].to == QLatin1String("P2-1"),
+                  "conn-table: from/to read the designator and the harness's own pin label");
+            check(ct.rows[0].color == QLatin1String("RED") && ct.rows[0].gauge == QLatin1String("20AWG"),
+                  "conn-table: colour and gauge come straight off the wire");
+        }
+        const ConnectionTableSpan *overall = nullptr, *internal = nullptr;
+        for (const auto& sp : ct.shieldSpans) (sp.level == 0 ? overall : internal) = &sp;
+        check(overall != nullptr && internal != nullptr,
+              "conn-table: both an overall and a nested internal shield span are found");
+        if (overall)
+            check(overall->firstRow == 0 && overall->lastRow == 3 &&
+                      overall->label == QLatin1String("SHIELD"),
+                  "conn-table: the overall shield covers every wire touching p1 - all four rows");
+        if (internal)
+            check(internal->firstRow == 0 && internal->lastRow == 1 &&
+                      internal->label == QLatin1String("G1"),
+                  "conn-table: the internal shield covers just its own named subset, nested inside");
+        check(ct.twistSpans.size() == 1, "conn-table: one twist span");
+        if (ct.twistSpans.size() == 1) {
+            check(ct.twistSpans[0].firstRow == 2 && ct.twistSpans[0].lastRow == 3,
+                  "conn-table: the twist span covers exactly its two wires");
+            check(ct.twistSpans[0].memberCount == 2, "conn-table: and knows there are 2 of them");
+        }
+
+        // A wire with an open end - nothing to print for that side - is left out.
+        HarnessWire open;
+        open.id = "wo"; open.fromConn = "p1"; open.fromPin = 1;
+        open.toConn = harnessOpenEndpointKey(); open.toPin = 0;
+        HarnessDef d2 = d;
+        d2.wires.push_back(open);
+        check(harnessConnectionTable(d2).rows.size() == 4,
+              "conn-table: a wire with an open end is not listed");
+
+        const std::vector<Entity> ents = harnessConnectionTableEntities(d);
+        const Entity* table = nullptr;
+        int lines = 0, texts = 0;
+        for (const auto& e : ents) {
+            if (e.meta.value("connectionTable").toBool()) table = &e;
+            if (e.meta.value("connectionTableBracket").toBool()) {
+                if (e.type == EntityType::Line) ++lines;
+                if (e.type == EntityType::Text) ++texts;
+            }
+        }
+        check(table != nullptr, "conn-table entities: a table entity is built");
+        check(lines == 6 && texts == 2,
+              "conn-table entities: 3 lines + 1 label per bracket, 2 brackets (overall + internal)");
+        if (table) {
+            check(table->meta.value("rows").toInt() == 5 && table->meta.value("cols").toInt() == 6,
+                  "conn-table entities: header + 4 rows, and Shield is not a column any more");
+            const std::vector<TableMerge> merges = tableMerges(*table);
+            check(merges.size() == 1 && merges[0].row == 3 && merges[0].col == 5 &&
+                      merges[0].rowSpan == 2,
+                  "conn-table entities: the twist group's two rows are merged into one cell");
+            const QJsonArray cells = table->meta.value("cells").toArray();
+            const QJsonArray kinds = table->meta.value("cellIconKind").toArray();
+            const int cols = table->meta.value("cols").toInt();
+            check(cells[3 * cols + 5].toString() == QLatin1String("2") &&
+                      kinds[3 * cols + 5].toString() == QLatin1String("twist"),
+                  "conn-table entities: the merge's anchor cell shows the count and the icon");
+            check(cells[4 * cols + 5].toString().isEmpty() && kinds[4 * cols + 5].toString().isEmpty(),
+                  "conn-table entities: the cell it merges into carries nothing of its own");
+        }
+        std::vector<double> labelXs;
+        for (const auto& e : ents)
+            if (e.type == EntityType::Text) labelXs.push_back(e.a.x);
+        check(labelXs.size() == 2 && !near(labelXs[0], labelXs[1]),
+              "conn-table entities: the overall and internal brackets sit in two different lanes");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

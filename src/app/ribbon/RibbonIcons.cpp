@@ -131,6 +131,9 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
     case ToolId::Connector: p.drawRect(6, 5, 8, 14); p.drawLine(14, 9, 20, 9); p.drawLine(14, 15, 20, 15); break;
     case ToolId::Splice: p.setBrush(ink); p.drawEllipse(QPointF(12, 12), 4, 4); break;
     case ToolId::NotConnected: p.drawLine(7, 7, 17, 17); p.drawLine(17, 7, 7, 17); break;
+    // A ring, not a filled dot (Splice) - a connection pin is a place things attach TO, not a
+    // joint made between them.
+    case ToolId::ConnectionPin: p.drawEllipse(QPointF(12, 12), 5, 5); break;
     case ToolId::LengthBreak:
         // A run with the break mark across it: the run, then the pair of strokes.
         p.drawLine(3, 12, 21, 12);
@@ -175,6 +178,18 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
                 pa.lineTo(QPointF(x, 12.0 + 5.0 * std::cos(2.0 * M_PI * i / 12.0 + ph)));
             }
             pa.lineTo(QPointF(26, y0));
+            p.drawPath(pa);
+        }
+        break;
+    }
+    case ToolId::TwistedHarnessRoute: {
+        // The bundle (three strands stand for it, same as the fan below), routed round a knee
+        // instead of straight - Twisted route's corner, laid up three wide.
+        for (double s : {-1.0, 0.0, 1.0}) {
+            QPainterPath pa(QPointF(2, 15 - 2.4 * s));
+            pa.cubicTo(QPointF(7, 15 - 2.4 * s), QPointF(8, 15 + 2.4 * s), QPointF(13, 15 + 2.4 * s));
+            pa.lineTo(QPointF(16 + 2.4 * s, 15 + 2.4 * s));   // the corner
+            pa.lineTo(QPointF(16 + 2.4 * s, 3));
             p.drawPath(pa);
         }
         break;

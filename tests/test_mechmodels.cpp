@@ -2970,6 +2970,89 @@ int run_mechmodels_tests() {
         check(got && !shipped.parts.empty(), "shipped: the house library is inside the executable");
     }
 
+    // ---- the schematic drawing slot: a ring and a ferrule keep one alongside the mechanical one ------
+    {
+        check(mechModelHasSchematicSlot(MechModelKind::RingInsulated) &&
+                  mechModelHasSchematicSlot(MechModelKind::FerruleInsulated),
+              "schematic slot: a ring and a ferrule have one");
+        check(!mechModelHasSchematicSlot(MechModelKind::Boot) &&
+                  !mechModelHasSchematicSlot(MechModelKind::Wire),
+              "schematic slot: most kinds do not");
+        // The legacy uninsulated keys normalise onto the same kind (canonicalKind()), so they get
+        // one too - there is no separate "Ring Uninsulated" kind a user can actually pick.
+        check(mechModelHasSchematicSlot(MechModelKind::RingUninsulated),
+              "schematic slot: the legacy ring-uninsulated key normalises onto Ring");
+
+        MechModel m;
+        m.kind = MechModelKind::RingInsulated;
+        check(!m.hasSchematic(), "schematic slot: empty until something is captured into it");
+        Entity glyph;
+        glyph.type = EntityType::Circle;
+        glyph.center = {0.0, 0.0};
+        glyph.radius = 2.0;
+        m.schematicDrawing = partDrawingFromEntities({glyph});
+        check(m.hasSchematic(), "schematic slot: has one once it is drawn");
+
+        MechModel back;
+        back.fromJson(m.toJson());
+        check(back.hasSchematic() && back.schematicDrawing.size() == 1,
+              "schematic slot: kept in the file with the model, apart from the mechanical drawing");
+        check(back.drawing.isEmpty(), "schematic slot: and does not leak into the mechanical drawing");
+    }
+
+    // ---- the common-model guard: a stale/heading selection must not write the kind's blank model -----
+    {
+        // Put back exactly as found, the same as every other test here that drives capture through
+        // the dialog - a test run must never change somebody's real house style.
+        const QString modelsFile = MechModelSet::defaultPath();
+        QByteArray hadFile;
+        bool hadOne = false;
+        {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::ReadOnly)) { hadFile = f.readAll(); hadOne = true; }
+        }
+
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        Entity line;
+        line.type = EntityType::Line;
+        line.id = QStringLiteral("l");
+        line.a = {0.0, 0.0};
+        line.b = {10.0, 0.0};
+        doc.entities().push_back(line);
+        ed.selectById(QStringLiteral("l"));
+
+        MechModelsDialog dlg(&ed);
+        // Nothing chosen yet: the freshly built tree's current item is Ring's own HEADING (Ring is
+        // the first kind in the list that has named sub-models), which is exactly the stale/landed-
+        // on-a-heading case the guard exists for - reproduced here with no special setup at all.
+        check(dlg.currentKind() == MechModelKind::RingInsulated && dlg.currentName().isEmpty(),
+              "guard: a fresh dialog starts on Ring's heading, with no named sub-model chosen");
+        check(!dlg.currentSelectionIsUsable(),
+              "guard: that is not a usable selection - Ring has named sub-models");
+        const bool hadRingBlank = dlg.models().of(MechModelKind::RingInsulated, QString()) != nullptr;
+        dlg.captureSelection();
+        check((dlg.models().of(MechModelKind::RingInsulated, QString()) != nullptr) == hadRingBlank,
+              "guard: capturing while on the heading writes nothing - Ring's blank model is untouched");
+
+        // Picking a real sub-model makes the same selection usable, and capture now writes to it.
+        dlg.selectKind(MechModelKind::RingInsulated);
+        check(dlg.currentSelectionIsUsable(),
+              "guard: a named sub-model (picked by selectKind) is a usable selection");
+        dlg.captureSelection();
+        check(dlg.models().of(MechModelKind::RingInsulated, dlg.currentName()) != nullptr,
+              "guard: and capturing there writes the named sub-model, same as always");
+
+        // Put the file back as it was found.
+        if (hadOne) {
+            QFile f(modelsFile);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
+        } else {
+            QFile::remove(modelsFile);
+        }
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;

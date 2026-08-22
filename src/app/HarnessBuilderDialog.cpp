@@ -989,6 +989,12 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     footer->addWidget(twistBtn);
     footer->addWidget(summaryLabel_, 1);
 
+    genModeBox_ = new QComboBox(this);
+    genModeBox_->addItem(QStringLiteral("Schematic drawing"));
+    genModeBox_->addItem(QStringLiteral("Connection table"));
+    genModeBox_->setToolTip(QStringLiteral(
+        "What Generate draws: the schematic itself, or a wiring list built from this "
+        "definition (shield and twisted-pair groups shown as brackets and merged cells)."));
     auto* generateBtn = new QPushButton(QStringLiteral("Generate"), this);
     generateBtn->setDefault(true);
     generateBtn->setToolTip(QStringLiteral("Draw the harness on the sheet (one undo step)"));
@@ -1037,6 +1043,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
     // Clear sits in the bottom row with the rest, between Generate and Save. (It used to be built
     // and wired but never put in a layout, which left it stranded at the corner of the window.)
+    footer->addWidget(genModeBox_);
     footer->addWidget(generateBtn);
     footer->addWidget(clearBtn);
     footer->addWidget(saveBtn);
@@ -3534,6 +3541,19 @@ void HarnessBuilderDialog::generate() {
         doc->harnessPresets() = presets;
         doc->setDirty(true);
         lastPresetName_ = name;
+    }
+    // Connection table: a wiring list built straight from the definition, not the schematic
+    // itself - same "hand it to the cursor" placement, just a different thing to place.
+    if (genModeBox_ && genModeBox_->currentIndex() == 1) {
+        const std::vector<Entity> ents = harnessConnectionTableEntities(def_);
+        if (ents.empty()) {
+            summaryLabel_->setText(QStringLiteral("Nothing to generate"));
+            return;
+        }
+        editor_->placeEntities(ents);
+        summaryLabel_->setText(QStringLiteral("Click on the drawing to place the connection table"));
+        hide();
+        return;
     }
     // Hand the harness to the cursor rather than dropping it at its designed coordinates: the window
     // steps out of the way, the whole harness ghosts under the crosshair, and a click places it.

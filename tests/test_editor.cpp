@@ -5709,6 +5709,38 @@ int run_editor_tests() {
         }
     }
 
+    // --- A twisted HARNESS ROUTED through knees: both generalisations together.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.twistWires() = 5;
+        ed.setTool(ToolId::TwistedHarnessRoute);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100, 0});
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);   // a knee
+        ed.onPointerMove({100, 80});
+        ed.onPointerPress({100, 80}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);                      // Enter finishes the run
+
+        const Entity* bundle = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::TwistedPair) bundle = &e;
+        check(bundle != nullptr, "twisted harness route: the clicks draw one bundle");
+        if (bundle) {
+            check(bundle->points.size() == 3,
+                  "twisted harness route: it keeps its knees, the same as a routed pair");
+            check(bundle->meta.value("twistWires").toInt() == 5,
+                  "twisted harness route: and carries the wire count, the same as a straight harness");
+            const auto lines = twistedPairStrands(*bundle);
+            check(lines.size() == 10, "twisted harness route: five wires, two edges each");
+            bool endsUpTheLeg = true;
+            for (const auto& line : lines)
+                if (!near(line.back().y, 80.0)) endsUpTheLeg = false;
+            check(endsUpTheLeg, "twisted harness route: every wire finishes at the end of the last leg");
+        }
+    }
+
     // --- The stock electronic parts: drawn at size, dropped by a click.
     {
         // Every one of them draws something, is built about the point it is dropped at, and says which
@@ -8347,6 +8379,42 @@ int run_editor_tests() {
         check(std::abs(meta(QStringLiteral("dm"), QStringLiteral("textHeight")) - 10.5) < 1e-6 &&
                   std::abs(meta(QStringLiteral("dm"), QStringLiteral("arrowSize")) - 6.0) < 1e-6,
               "scaled: and a dimension's words and arrows with it");
+    }
+
+    // --- Connection pin: numbered lowest-free-first, and it stays armed for the next one.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::ConnectionPin);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.tool() == ToolId::ConnectionPin,
+              "pin: stays armed for the next one, like the X terminator does");
+        auto pinNumbers = [&] {
+            std::vector<int> nums;
+            for (const auto& e : d.entities())
+                if (e.type == EntityType::ConnectionPin) nums.push_back(e.meta.value("pinNumber").toInt());
+            std::sort(nums.begin(), nums.end());
+            return nums;
+        };
+        std::vector<int> nums = pinNumbers();
+        check(nums.size() == 3 && nums[0] == 1 && nums[1] == 2 && nums[2] == 3,
+              "pin: three placed in a row get 1, 2, 3");
+
+        // Delete pin 2, then place another - it should get 2 back, not a new highest number.
+        QString midId;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::ConnectionPin && e.meta.value("pinNumber").toInt() == 2)
+                midId = e.id;
+        check(!midId.isEmpty(), "pin: found the one to delete");
+        ed.selectById(midId);
+        ed.deleteSelected();
+        ed.setTool(ToolId::ConnectionPin);
+        ed.onPointerPress({30, 0}, Qt::LeftButton, Qt::NoModifier);
+        nums = pinNumbers();
+        check(nums.size() == 3 && nums[0] == 1 && nums[1] == 2 && nums[2] == 3,
+              "pin: deleting 2 and placing another gives 2 back rather than jumping to 4");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

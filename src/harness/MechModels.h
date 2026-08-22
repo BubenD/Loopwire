@@ -86,6 +86,9 @@ bool mechModelStretches(MechModelKind kind);
 // Whether it is drawn for so many conductors at once (the open wires, and the wires between a
 // connector and its cable), in which case the count comes from the harness too.
 bool mechModelPerWire(MechModelKind kind);
+// Whether this kind keeps a SCHEMATIC drawing alongside its mechanical one - today, a ring
+// terminal and a ferrule, the two crimps a schematic actually shows a symbol for.
+bool mechModelHasSchematicSlot(MechModelKind kind);
 
 // One model: the drawing, and what must not stretch in it.
 struct MechModel {
@@ -104,6 +107,12 @@ struct MechModel {
     // As drawn, in millimetres, running along +x from the origin. Captured off the sheet like a part's
     // drawing, so it is drawn with the same tools as everything else.
     QJsonArray drawing;
+    // A SECOND drawing, for the kinds that need one: how this model reads on a schematic rather than
+    // on the mechanical harness (see mechModelHasSchematicSlot()). Neither the stretch fields below
+    // nor the near/far/connect points apply to it - a schematic symbol is a fixed little glyph, not a
+    // run to be placed and scaled along.
+    QJsonArray schematicDrawing;
+    bool hasSchematic() const { return !schematicDrawing.isEmpty(); }
     // The stretch: the length it was drawn at, and the piece at each end that keeps its own size
     // however long the thing has to be. Zero at both ends stretches the whole of it evenly, which is
     // right for plain heatshrink and wrong for anything with an end on it.

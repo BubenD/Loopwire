@@ -1513,6 +1513,7 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         break;
     case EntityType::NetLabel:
     case EntityType::NotConnected:
+    case EntityType::ConnectionPin:
         best = distance(e.a, p);
         break;
     case EntityType::LengthBreak:
@@ -2637,6 +2638,19 @@ QString Editor::nextDetailTag() const {
         if (!taken.contains(tag)) return tag;
     }
     return QStringLiteral("A");
+}
+
+// The next free connection-pin number - the same lowest-not-in-use rule as a detail's letter
+// (nextDetailTag(), just above), so deleting pin 2 and placing another gives 2 back rather than
+// leaving a hole and jumping to a new highest number.
+int Editor::nextConnectionPinNumber() const {
+    if (!doc_) return 1;
+    QSet<int> taken;
+    for (const Entity& e : doc_->entities())
+        if (e.type == EntityType::ConnectionPin)
+            taken.insert(e.meta.value(QStringLiteral("pinNumber")).toInt());
+    for (int n = 1;; ++n)
+        if (!taken.contains(n)) return n;
 }
 
 // WHAT THE LABEL IS MEASURED BY: the object marked as the model's scale reference, or the whole drawing when
@@ -5974,6 +5988,7 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* ca
         case EntityType::Splice:
         case EntityType::NotConnected:
         case EntityType::NetLabel:
+        case EntityType::ConnectionPin:
             targets.push_back(e.a);
             break;
         default:
@@ -6643,6 +6658,7 @@ Vec2 Editor::applyWireClearance(const Vec2& prev, const Vec2& p) const {
             case EntityType::Splice:
             case EntityType::NotConnected:
             case EntityType::NetLabel:
+            case EntityType::ConnectionPin:
                 if (distance(p, e.a) <= snapTol) return p;
                 break;
             default:
@@ -6944,6 +6960,7 @@ bool Editor::isConnectablePoint(const Vec2& q) const {
         case EntityType::Splice:
         case EntityType::NotConnected:
         case EntityType::NetLabel:
+        case EntityType::ConnectionPin:
             if (distance(q, e.a) <= tol) return true;
             break;
         default:
@@ -8587,6 +8604,15 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral(
             "Twisted route: click the next knee — Enter finishes the run, Esc exits"));
         break;
+    case ToolId::TwistedHarnessRoute:
+        // The whole bundle (twistWires_ of them), routed like TwistedRoute rather than laid
+        // straight between two points like TwistedHarness - a loom rarely goes straight from
+        // one end to the other either.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(QStringLiteral(
+            "Twisted harness route: click the next knee — Enter finishes the run, Esc exits"));
+        break;
     case ToolId::TwistedHarness:
     case ToolId::TwistedPair:
         // Pinned (Tab), the click means "place it" rather than "put the far end here": the end stays
@@ -9313,6 +9339,20 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
         break;
+    case ToolId::TwistedHarnessRoute:
+        // The two generalisations together: the bundle's wire count (TwistedHarness) AND the knees
+        // kept as its points (TwistedRoute) - a loom is rarely two wires straight between two ends,
+        // and rarely just a pair either.
+        if (draftPts_.size() < 2) { cancelDraw(); return; }
+        e.type = EntityType::TwistedPair;
+        e.points = draftPts_;
+        e.a = draftPts_.front();
+        e.b = draftPts_.back();
+        e.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+        e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
+        e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+        e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        break;
     case ToolId::TwistedPair:
         // Drawn like a line, between the two points the pair runs between. What shapes it - how far
         // apart the wires are, how long a crossing is, how much straight end to leave - is carried on
@@ -9837,6 +9877,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::TwistedPair:
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
+    case ToolId::TwistedHarnessRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -9896,6 +9937,10 @@ QString Editor::drawCommandHint() const {
     case ToolId::TwistedHarness:
         return QStringLiteral("TWISTED HARNESS: click the two ends  ·  %1 wires, all laid up  ·  "
                               "Tab pins it to set it up on the ribbon")
+            .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
+    case ToolId::TwistedHarnessRoute:
+        return QStringLiteral(
+                   "TWISTED HARNESS ROUTE: click each knee  ·  Enter finishes  ·  %1 wires, all laid up")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
@@ -10024,6 +10069,7 @@ bool Editor::commitDrawFields() {
     case ToolId::TwistedPair:
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
+    case ToolId::TwistedHarnessRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -13703,6 +13749,11 @@ void Editor::handlePlacementPress(const Vec2& p) {
             if (Entity* w = entityById(wid)) w->meta.insert(QStringLiteral("wireLabel"), text);
         break;
     }
+    case ToolId::ConnectionPin:
+        e.type = EntityType::ConnectionPin;
+        e.a = p;
+        e.meta.insert("pinNumber", nextConnectionPinNumber());
+        break;
     case ToolId::Table: {
         // Insert Table at the picked insertion point (top-left). Built from the spec
         // (Insert Table dialog): a Title row (merged), a Header row, then data rows.
@@ -13741,6 +13792,7 @@ void Editor::handlePlacementPress(const Vec2& p) {
     // straight away rather than left reading "Text" until somebody notices and double-clicks it. Kept
     // until the end, because the editor opens on an object that has to exist first.
     const QString sayItNow = tool_ == ToolId::TextLeader ? e.id : QString();
+    const int placedPinNumber = e.meta.value("pinNumber").toInt(); // read before e is moved from
     if (tool_ == ToolId::Connector && !connectorSpec_.associative) {
         auto parts = explodeEntity(e);
         for (Entity& part : parts) addEntity(std::move(part));
@@ -13756,6 +13808,9 @@ void Editor::handlePlacementPress(const Vec2& p) {
     // than pressing Esc at the end. Every other placement tool returns to Select.
     if (tool_ == ToolId::NotConnected)
         emit message(QStringLiteral("X placed — click to terminate more pins; Esc to finish"));
+    else if (tool_ == ToolId::ConnectionPin)
+        emit message(QStringLiteral("Pin %1 placed — click to add another; Esc to finish")
+                         .arg(placedPinNumber));
     else
         setTool(ToolId::Select); // return to Select after placing (Space repeats)
     if (!sayItNow.isEmpty()) {
@@ -16298,6 +16353,20 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.type = EntityType::TwistedPair;
             tp.a = pts[0];
             tp.b = twistedFrozen_ ? twistedFrozenAt_ : pts[1];
+            tp.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
+            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if (tool_ == ToolId::TwistedHarnessRoute && pts.size() >= 2) {
+            // Both generalisations previewed together: the knees so far (route) as the object's
+            // points, and the bundle's wire count (harness) on it.
+            Entity tp;
+            tp.type = EntityType::TwistedPair;
+            tp.points = pts;
+            if (twistedFrozen_) tp.points.back() = twistedFrozenAt_;
+            tp.a = tp.points.front();
+            tp.b = tp.points.back();
             tp.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
             tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);

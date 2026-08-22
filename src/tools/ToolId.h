@@ -36,10 +36,14 @@ enum class ToolId {
     Splice,
     NotConnected,
     NetLabel,
+    // Where a schematic symbol meets the world: a small ring, numbered lowest-free-first (see
+    // Editor::nextConnectionPinNumber()) rather than always counting up.
+    ConnectionPin,
     LengthBreak,
     TwistedPair,   // two wires laid up round each other, drawn between two points
     TwistedRoute,  // ... and the same pair routed through as many knees as it needs
     TwistedHarness,// ... and a whole bundle of them laid up together, however many wires it fans out to
+    TwistedHarnessRoute, // ... and that bundle routed through as many knees as IT needs
     // Modify (reference-point driven)
     Move,
     Rotate,
@@ -108,6 +112,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedPair: // two clicks: the two ends the pair runs between
     case ToolId::TwistedRoute: // as many points as the route needs, like a polyline
     case ToolId::TwistedHarness: // two clicks, and however many wires the ribbon says
+    case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
         return true;
     default:
         return false;
@@ -118,7 +123,8 @@ inline bool isDrawTool(ToolId t) {
 // out by a line drawn across the runs it interrupts, the way a twist or a screen is.
 inline bool isPlacementTool(ToolId t) {
     return t == ToolId::Connector || t == ToolId::Splice ||
-           t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Table;
+           t == ToolId::NotConnected || t == ToolId::NetLabel || t == ToolId::Table ||
+           t == ToolId::ConnectionPin;
 }
 
 inline QString toolLabel(ToolId t) {
@@ -150,10 +156,12 @@ inline QString toolLabel(ToolId t) {
     // it places is a joint between conductors, and that is what it is called.
     case ToolId::Splice: return QStringLiteral("Joint");
     case ToolId::NotConnected: return QStringLiteral("Not connected");
+    case ToolId::ConnectionPin: return QStringLiteral("Connection pin");
     case ToolId::LengthBreak: return QStringLiteral("Length break");
     case ToolId::TwistedPair: return QStringLiteral("Twisted pair");
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
     case ToolId::TwistedHarness: return QStringLiteral("Twisted harness");
+    case ToolId::TwistedHarnessRoute: return QStringLiteral("Twisted harness route");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.
     case ToolId::NetLabel: return QStringLiteral("Wire label");

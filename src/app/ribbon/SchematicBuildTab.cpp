@@ -149,7 +149,8 @@ void MainWindow::buildSchematicBuildTab() {
     placeLay->setContentsMargins(0, 0, 0, 0);
     placeLay->setSpacing(4);
     placeLay->addWidget(toolRow({ToolId::Connector, ToolId::Wire, ToolId::Splice,
-                                 ToolId::NetLabel, ToolId::NotConnected}));
+                                 ToolId::NetLabel, ToolId::NotConnected,
+                                 ToolId::ConnectionPin}));
     // Shield + Twist share one 2-row icon column (same small-icon style as the tool row),
     // with Twist directly UNDER Shield.
     auto* stW = new QWidget(page);

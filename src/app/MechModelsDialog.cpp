@@ -21,7 +21,7 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLabel>
-#include <QListWidget>
+#include <QTreeWidget>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -108,7 +108,7 @@ QDoubleSpinBox* mmSpin(double max = 2000.0) {
 } // namespace
 
 MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
-                                   std::function<void(MechModelKind, QString)> onEdit)
+                                   std::function<void(MechModelKind, QString, bool)> onEdit)
     : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
     setWindowTitle(QStringLiteral("Default mechanical models"));
     setModal(false);
@@ -116,7 +116,7 @@ MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
     set_.load();
     buildUi();
     refreshList();
-    if (list_ && list_->count() > 0) list_->setCurrentRow(0);
+    if (list_ && !rowItems_.empty()) list_->setCurrentItem(rowItems_.front());
 }
 
 void MechModelsDialog::buildUi() {
@@ -128,10 +128,13 @@ void MechModelsDialog::buildUi() {
     // right-angled one are both backshells - so adding, removing, renaming and choosing which one a drawing
     // uses are the commands that belong beside it and nowhere else.
     auto* left = new QVBoxLayout;
-    list_ = new QListWidget;
+    list_ = new QTreeWidget;
+    list_->setHeaderHidden(true);
+    list_->setColumnCount(1);
     list_->setMinimumWidth(260);
     list_->setMaximumWidth(320);
-    connect(list_, &QListWidget::currentRowChanged, this, [this](int) { refreshDetails(); });
+    connect(list_, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem*, QTreeWidgetItem*) { refreshDetails(); });
     left->addWidget(list_, 1);
 
     auto* manage = new QGridLayout;
@@ -181,6 +184,15 @@ void MechModelsDialog::buildUi() {
     hint_->setWordWrap(true);
     right->addWidget(hint_);
 
+    // A ring or a ferrule keeps a SECOND drawing - how it reads on a schematic - alongside its
+    // mechanical one. Hidden for every other kind, which has only the one.
+    drawingModeBox_ = new QComboBox;
+    drawingModeBox_->addItem(QStringLiteral("Mechanical drawing"));
+    drawingModeBox_->addItem(QStringLiteral("Schematic drawing"));
+    drawingModeBox_->setToolTip(QStringLiteral(
+        "Which drawing is showing, and which one Capture / Edit on canvas work on."));
+    connect(drawingModeBox_, &QComboBox::currentIndexChanged, this, [this] { refreshDetails(); });
+    right->addWidget(drawingModeBox_, 0, Qt::AlignLeft);
     // ONE drawing window, the width of the panel, and it shows this model and nothing else. Two of them
     // side by side halved the size of both, and for every kind that is not stretched - a ring, a ferrule, a
     // Y-split - the second one showed the same drawing as the first.
@@ -419,9 +431,18 @@ void MechModelsDialog::refreshList() {
     if (!list_) return;
     const bool was = syncing_;
     syncing_ = true;
-    const int row = list_->currentRow();
+    // Which rows_ entry was current, not which tree row - the tree is torn down and rebuilt
+    // below, so only the (kind, name) an index stood for is worth carrying across that.
+    const int prevRow =
+        list_->currentItem() ? list_->currentItem()->data(0, Qt::UserRole).toInt() : -1;
     list_->clear();
     rows_.clear();
+    rowItems_.clear();
+    auto addRow = [&](QTreeWidgetItem* item, MechModelKind k, const QString& name) {
+        item->setData(0, Qt::UserRole, static_cast<int>(rows_.size()));
+        rows_.push_back({k, name});
+        rowItems_.push_back(item);
+    };
     for (MechModelKind k : kinds_) {
         std::vector<const MechModel*> models = set_.all(k);
         // THE SUB-DRAWINGS THIS KIND COMES IN, whether or not any of them has been drawn yet. A boot leaves
@@ -429,18 +450,19 @@ void MechModelsDialog::refreshList() {
         // eight spread. Each is a drawing of its own, and a kind listed as one bare line told you none of that -
         // "draw the eight variants this needs" is not something anybody should have to know.
         //
-        // So the standard names are always listed, and one an office has actually drawn simply lands on its own
-        // row instead of the placeholder. Anything the office added itself is listed after them.
+        // So the standard names are always listed under the kind's own name, collapsible so an office with
+        // forty kinds is not scrolling past every sub-drawing of every one of them to find the next kind. One
+        // an office has actually drawn simply lands on its own row instead of the placeholder; anything the
+        // office added itself is listed after them.
         const std::vector<QString> standard = defaultSubModelNames(k);
         if (!standard.empty()) {
-            auto* head = new QListWidgetItem(mechModelName(k));
-            head->setToolTip(hintFor(k));
-            QFont hf = head->font();
+            auto* head = new QTreeWidgetItem(list_, QStringList{mechModelName(k)});
+            head->setToolTip(0, hintFor(k));
+            QFont hf = head->font(0);
             hf.setBold(true);
-            head->setFont(hf);
+            head->setFont(0, hf);
             head->setFlags(Qt::ItemIsEnabled);   // a heading, not a thing to select
-            list_->addItem(head);
-            rows_.push_back({k, QStringLiteral("«heading»")});
+            addRow(head, k, QStringLiteral("«heading»"));
             std::vector<QString> shown = standard;
             for (const MechModel* m : models)
                 if (!m->name.isEmpty() &&
@@ -448,21 +470,20 @@ void MechModelsDialog::refreshList() {
                     shown.push_back(m->name);
             for (const QString& name : shown) {
                 const MechModel* m = set_.of(k, name);
-                QString label = QStringLiteral("    ") + name;
+                QString label = name;
                 label += (m && !m->isEmpty()) ? QStringLiteral("   ✓") : QStringLiteral("   —");
                 if (m && m->isDefault) label += QStringLiteral("   (default)");
-                auto* item = new QListWidgetItem(label);
-                item->setToolTip(hintFor(k));
-                list_->addItem(item);
-                rows_.push_back({k, name});
+                auto* item = new QTreeWidgetItem(head, QStringList{label});
+                item->setToolTip(0, hintFor(k));
+                addRow(item, k, name);
             }
             continue;
         }
         if (models.empty()) {
-            auto* item = new QListWidgetItem(mechModelName(k) + QStringLiteral("   —"));
-            item->setToolTip(hintFor(k));
-            list_->addItem(item);
-            rows_.push_back({k, QString()});
+            auto* item =
+                new QTreeWidgetItem(list_, QStringList{mechModelName(k) + QStringLiteral("   —")});
+            item->setToolTip(0, hintFor(k));
+            addRow(item, k, QString());
             continue;
         }
         for (const MechModel* m : models) {
@@ -471,24 +492,27 @@ void MechModelsDialog::refreshList() {
             label += m->isEmpty() ? QStringLiteral("   —") : QStringLiteral("   ✓");
             // The one the kind uses when nothing else is said, said plainly rather than by a shade of grey.
             if (m->isDefault && models.size() > 1) label += QStringLiteral("   (default)");
-            auto* item = new QListWidgetItem(label);
-            item->setToolTip(hintFor(k));
-            list_->addItem(item);
-            rows_.push_back({k, m->name});
+            auto* item = new QTreeWidgetItem(list_, QStringList{label});
+            item->setToolTip(0, hintFor(k));
+            addRow(item, k, m->name);
         }
     }
-    if (row >= 0 && row < list_->count()) list_->setCurrentRow(row);
+    list_->expandAll(); // a rebuilt tree remembers nothing - open, so the sub-models are in view
+    if (prevRow >= 0 && prevRow < static_cast<int>(rowItems_.size()))
+        list_->setCurrentItem(rowItems_[static_cast<size_t>(prevRow)]);
     syncing_ = was;
 }
 
 MechModelKind MechModelsDialog::currentKind() const {
-    const int row = list_ ? list_->currentRow() : -1;
+    QTreeWidgetItem* item = list_ ? list_->currentItem() : nullptr;
+    const int row = item ? item->data(0, Qt::UserRole).toInt() : -1;
     if (row < 0 || row >= static_cast<int>(rows_.size())) return MechModelKind::Wire;
     return rows_[static_cast<size_t>(row)].kind;
 }
 
 QString MechModelsDialog::currentName() const {
-    const int row = list_ ? list_->currentRow() : -1;
+    QTreeWidgetItem* item = list_ ? list_->currentItem() : nullptr;
+    const int row = item ? item->data(0, Qt::UserRole).toInt() : -1;
     if (row < 0 || row >= static_cast<int>(rows_.size())) return QString();
     // A heading is the kind's own name over its sub-drawings, not a model. It cannot be selected - the item is
     // not selectable - but a stale current row could still land on one, and a heading answering as a model name
@@ -500,7 +524,7 @@ QString MechModelsDialog::currentName() const {
 bool MechModelsDialog::selectKind(MechModelKind kind) {
     for (size_t i = 0; i < rows_.size(); ++i)
         if (rows_[i].kind == kind && rows_[i].name != QStringLiteral("«heading»")) {
-            if (list_) list_->setCurrentRow(static_cast<int>(i));
+            if (list_ && i < rowItems_.size()) list_->setCurrentItem(rowItems_[i]);
             return true;
         }
     return false;
@@ -527,8 +551,8 @@ void MechModelsDialog::addModel(const QString& name) {
     markChanged();
     refreshList();
     for (size_t i = 0; i < rows_.size(); ++i)
-        if (rows_[i].kind == kind && rows_[i].name == m.name && list_)
-            list_->setCurrentRow(static_cast<int>(i));
+        if (rows_[i].kind == kind && rows_[i].name == m.name && list_ && i < rowItems_.size())
+            list_->setCurrentItem(rowItems_[i]);
     refreshDetails();
     if (summary_)
         summary_->setText(QStringLiteral("Added %1 \"%2\" — draw it, then Capture")
@@ -597,6 +621,30 @@ void MechModelsDialog::refreshDetails() {
                               ? mechModelName(kind)
                               : QStringLiteral("%1 - %2").arg(mechModelName(kind), currentName()));
     if (hint_) hint_->setText(hintFor(kind));
+    if (drawingModeBox_) drawingModeBox_->setVisible(mechModelHasSchematicSlot(kind));
+
+    // The heading over a kind's named sub-models is not a model - nothing is drawn ON IT, and a
+    // stale/heading selection (currentSelectionIsUsable() - the same case Capture/Edit on canvas
+    // already refuse) must not show whatever happens to be sitting in the kind's own blank entry
+    // either. Blank the whole right-hand side rather than let old data belonging to it show through.
+    if (!currentSelectionIsUsable()) {
+        if (figures_) figures_->setVisible(false);
+        if (tryBox_) tryBox_->setVisible(false);
+        if (removeBtn_) removeBtn_->setEnabled(false);
+        if (renameBtn_) renameBtn_->setEnabled(false);
+        if (defaultBtn_) defaultBtn_->setEnabled(false);
+        if (measured_) measured_->setText(QString());
+        if (placement_) placement_->setText(QString());
+        if (scaleAcross_) scaleAcross_->setChecked(false);
+        if (view_) {
+            view_->setEntities({});
+            view_->setCaption(QStringLiteral("As drawn"));
+        }
+        if (summary_)
+            summary_->setText(QStringLiteral("Pick one of the named sub-models on the left"));
+        syncing_ = false;
+        return;
+    }
 
     // Which rows this kind even has. A model of a thing that is only placed has no ends that must not
     // stretch; one that is not drawn per conductor has no conductor count; only a ring or a ferrule is
@@ -679,6 +727,21 @@ void MechModelsDialog::refreshPreview() {
         if (summary_)
             summary_->setText(QStringLiteral("Nothing drawn for this yet — draw it on the sheet, "
                                              "then select them and press Capture"));
+        return;
+    }
+    // The schematic view is a fixed little glyph, not a run to be stretched and marked up like the
+    // mechanical one - shown as captured, nothing more.
+    if (editingSchematic()) {
+        if (view_) {
+            view_->setEntities(partDrawingEntities(m->schematicDrawing));
+            view_->setCaption(QStringLiteral("As drawn"));
+        }
+        if (summary_)
+            summary_->setText(m->hasSchematic()
+                                  ? QStringLiteral("%1 object(s) in the schematic drawing")
+                                        .arg(m->schematicDrawing.size())
+                                  : QStringLiteral("Nothing drawn for the schematic yet — draw it on "
+                                                   "the sheet, then select them and press Capture"));
         return;
     }
     // The one window shows the model AS IT WILL BE DRAWN: at the length being tried when the kind is run to
@@ -781,8 +844,22 @@ void MechModelsDialog::cancelCaptureFromSheet() {
     emit captureFinished();
 }
 
+bool MechModelsDialog::currentSelectionIsUsable() const {
+    return defaultSubModelNames(currentKind()).empty() || !currentName().isEmpty();
+}
+
+bool MechModelsDialog::editingSchematic() const {
+    return mechModelHasSchematicSlot(currentKind()) && drawingModeBox_ &&
+           drawingModeBox_->currentIndex() == 1;
+}
+
 void MechModelsDialog::captureSelection() {
     if (!editor_ || !editor_->document()) return;
+    if (!currentSelectionIsUsable()) {
+        if (summary_)
+            summary_->setText(QStringLiteral("Pick one of the named sub-models first"));
+        return;
+    }
     std::vector<Entity> drawn;
     for (const Entity& e : editor_->copyOfSelection())
         if (e.layer != QLatin1String("«guide»")) drawn.push_back(e);
@@ -797,27 +874,39 @@ void MechModelsDialog::captureSelection() {
     m.insulated = pendingInsulated_;
     if (const MechModel* had = set_.of(m.kind, currentName())) m = *had;
     m.name = currentName();   // into the model showing, not over the kind's first one
-    m.drawing = partDrawingFromEntities(drawn);
-    // TAKEN FROM THE CAPTURE: how long it is, and how thick. The drawing knows both, so neither is asked
-    // for - and the length in particular was a field with a magic zero in it that nobody could check
-    // against the drawing.
-    m.drawnLengthMm = 0.0;                       // 0 = measured off the drawing, which is what it is
-    if (m.drawnAcrossMm > 0.0 || (scaleAcross_ && scaleAcross_->isChecked()))
-        m.drawnAcrossMm = mechModelDrawnAcross(m);
+    if (editingSchematic()) {
+        // A schematic symbol is a fixed little glyph - nothing here to measure, no ends to keep,
+        // just the drawing itself.
+        m.schematicDrawing = partDrawingFromEntities(drawn);
+    } else {
+        m.drawing = partDrawingFromEntities(drawn);
+        // TAKEN FROM THE CAPTURE: how long it is, and how thick. The drawing knows both, so neither is
+        // asked for - and the length in particular was a field with a magic zero in it that nobody
+        // could check against the drawing.
+        m.drawnLengthMm = 0.0;                   // 0 = measured off the drawing, which is what it is
+        if (m.drawnAcrossMm > 0.0 || (scaleAcross_ && scaleAcross_->isChecked()))
+            m.drawnAcrossMm = mechModelDrawnAcross(m);
+    }
     set_.set(m);
     markChanged();
     refreshList();
     refreshDetails();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured %1 selected object(s) as %2")
+        summary_->setText(QStringLiteral("Captured %1 selected object(s) as %2%3")
                               .arg(drawn.size())
-                              .arg(mechModelName(m.kind)));
+                              .arg(mechModelName(m.kind))
+                              .arg(editingSchematic() ? QStringLiteral(" (schematic)") : QString()));
 }
 
 void MechModelsDialog::editOnCanvas() {
+    if (!currentSelectionIsUsable()) {
+        if (summary_)
+            summary_->setText(QStringLiteral("Pick one of the named sub-models first"));
+        return;
+    }
     const MechModelKind kind = currentKind();
     if (onEdit_) {
-        onEdit_(kind, currentName());   // the model showing, not the kind's default
+        onEdit_(kind, currentName(), editingSchematic());   // the model showing, not the kind's default
         hide();
         return;
     }

@@ -216,6 +216,38 @@ std::vector<int> harnessPinSequence(const HarnessConnector& c);
 // The label shown for a pin number, following the connector's numbers/letters setting.
 QString harnessPinLabel(const HarnessConnector& c, int pinNumber);
 
+// ---- Connection table -------------------------------------------------------
+// A wiring list built straight from the description: one row per wire with both ends on a
+// real pin (an open end or a drain wire has no "from"/"to" pin to print, so it is left out),
+// and the shield/twist membership as SPANS over those rows rather than a per-row column - a
+// shield can nest (an overall screen around everything at a connector, and inside it a named
+// subset with a screen - and a twist - of its own), which a single column cannot say.
+struct ConnectionTableRow {
+    QString wireId, from, to, color, gauge;
+};
+// One bracket (a shield) or one merged run (a twist) over a CONTIGUOUS range of rows.
+struct ConnectionTableSpan {
+    int firstRow = 0, lastRow = 0;  // inclusive, 0-based into ConnectionTable::rows
+    int level = 0;                  // shield spans only: 0 = overall, 1 = internal (nested inside it)
+    QString label;                  // "SHIELD" for an overall span; the group's own name otherwise
+    int memberCount = 0;            // twist spans only: how many wires share this run
+};
+struct ConnectionTable {
+    std::vector<ConnectionTableRow> rows;
+    std::vector<ConnectionTableSpan> shieldSpans;
+    std::vector<ConnectionTableSpan> twistSpans;
+};
+// Rows ordered so a shield/twist group's members land next to each other (a connector pair's
+// wires are kept together, then grouped by shieldGroup, then by twistGroup), and the spans
+// that grouping finds - one per MAXIMAL RUN of rows sharing a membership, so a connector that
+// talks to more than one other connector correctly gets more than one overall-shield bracket
+// rather than one bracket wrongly spanning rows that are not really its own.
+ConnectionTable harnessConnectionTable(const HarnessDef& def);
+// The table entity (columns: #, From, To, Color, Gauge, Twist - shield is drawn as brackets
+// beside the table, not a column) plus a Line+Text pair per shieldSpans bracket, all built in
+// one local frame so placing the result keeps the brackets together with the table.
+std::vector<Entity> harnessConnectionTableEntities(const HarnessDef& def);
+
 // ---- Validation ------------------------------------------------------------
 // One problem found in a definition. `key` is stable so the UI can track/ignore it.
 struct HarnessIssue {

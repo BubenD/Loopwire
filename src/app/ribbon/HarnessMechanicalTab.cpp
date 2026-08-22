@@ -352,6 +352,26 @@ void MainWindow::buildHarnessMechanicalTab() {
             }
             lgAdd(thW);
         }
+        // And that bundle ROUTED: the same wire count as Twisted harness, but through as many knees
+        // as the loom needs rather than straight between two points - the same relationship Twisted
+        // route bears to Twisted pair. Shares twistOptionsGroup_ (the Wires field), which shows for
+        // either bundle tool (see syncBreakOptions()).
+        {
+            auto* thrBtn = new QToolButton(lenW);
+            QAction* act =
+                makeToolAction(toolLabel(ToolId::TwistedHarnessRoute), ToolId::TwistedHarnessRoute);
+            thrBtn->setDefaultAction(act);
+            thrBtn->setText(QStringLiteral("Twisted\nharness route"));
+            thrBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            thrBtn->setIconSize(QSize(26, 26));
+            thrBtn->setAutoRaise(true);
+            thrBtn->setFocusPolicy(Qt::NoFocus);
+            thrBtn->setToolTip(QStringLiteral(
+                "Route a twisted harness through as many knees as it needs: click each knee, Enter "
+                "finishes. The whole bundle is laid up together, fanning out to straight ends. Tab "
+                "pins it so the number of wires can be set with it on screen."));
+            lgAdd(thrBtn);
+        }
         // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
         // the bundle actually takes up on the board. They belong here for the same reason the break
         // mark does - they are the furniture of this kind of drawing.

@@ -91,9 +91,10 @@ public:
     // real thing without the cursor moving it. The next click, or Enter, places it.
     void freezeTwistedPreview();
     bool twistedFrozen() const { return twistedFrozen_; }
-    // Is a twisted pair / route / harness being drawn?
+    // Is a twisted pair / route / harness / harness route being drawn?
     static bool isTwistedTool(ToolId t) {
-        return t == ToolId::TwistedPair || t == ToolId::TwistedRoute || t == ToolId::TwistedHarness;
+        return t == ToolId::TwistedPair || t == ToolId::TwistedRoute ||
+               t == ToolId::TwistedHarness || t == ToolId::TwistedHarnessRoute;
     }
 
     // Ask the user for a rectangle: two clicks, with everything a click normally gets - every running
@@ -1521,6 +1522,9 @@ private:
     // were made and never renumbers them, so a letter is taken once and kept: the next one is the lowest
     // that is not in use, which after deleting B gives B back rather than jumping to D.
     QString nextDetailTag() const;
+    // The next free connection-pin number: the lowest one not already on the drawing, so
+    // deleting pin 2 and placing another gives 2 back rather than jumping to a new highest one.
+    int nextConnectionPinNumber() const;
     // The first of the two runs a centre line goes between, while waiting for the second.
     QString centerLineFirst_;
     Vec2 connectFirst_;

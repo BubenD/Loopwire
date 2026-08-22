@@ -1561,7 +1561,33 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 const QFont normal = p.font();
                 const QJsonArray cellAlign = e.meta.value("cellAlign").toArray();
                 const QJsonArray cellText = e.meta.value("cellTextSize").toArray();
+                // Which cells draw a small graphic beside their text: "twist" is the only kind
+                // there is (a shield is bracketed outside the table instead of marked per cell -
+                // it can cover an overall group AND a named subset nested inside it, which a
+                // single cell cannot say). Absent on every table that predates this (BOM, pinout,
+                // template) - those render exactly as before.
+                const QJsonArray cellIconKind = e.meta.value("cellIconKind").toArray();
                 const double pad = th * 0.35;
+                // A tiny version of the Twist ribbon button's own hand-drawn zig-zag, sized to
+                // sit inside one row (or a merged run of them, for a whole twisted group).
+                auto drawCellIcon = [&](const QString& kind, double x0, double x1, double yTop,
+                                        double yBot) {
+                    const double iconSize = 0.6 * std::min(x1 - x0, yTop - yBot);
+                    const Vec2 center{x0 + iconSize * 0.5 + pad * 0.3, (yTop + yBot) / 2.0};
+                    if (kind == QLatin1String("twist")) {
+                        const double half = iconSize * 0.5;
+                        const double topY = center.y + half, botY = center.y - half;
+                        constexpr int kSteps = 4;
+                        QPolygonF a, b;
+                        for (int k = 0; k < kSteps; ++k) {
+                            const double x = center.x - half + iconSize * k / (kSteps - 1);
+                            a << vt.toScreen({x, (k % 2 == 0) ? topY : botY});
+                            b << vt.toScreen({x, (k % 2 == 0) ? botY : topY});
+                        }
+                        p.drawPolyline(a);
+                        p.drawPolyline(b);
+                    }
+                };
                 // Place `s` in the cell [x0..x1]x[yTop..yBot] per a 2-char align code
                 // (T/M/B + L/C/R); default depends on the row type.
                 auto placeCell = [&](double x0, double x1, double yTop, double yBot,
@@ -1625,7 +1651,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                             x1 = xb[std::min(cols, m.col + m.colSpan)];
                             yBot = yb[std::min(rows, m.row + m.rowSpan)];
                         }
-                        placeCell(xb[c], x1, yb[r], yBot, s, code,
+                        double x0 = xb[c];
+                        const QString iconKind = idx < cellIconKind.size()
+                                                     ? cellIconKind[idx].toString() : QString();
+                        if (!isTitle && !isHeader && !iconKind.isEmpty()) {
+                            drawCellIcon(iconKind, x0, x1, yb[r], yBot);
+                            // The text (a group number, when there is more than one group to
+                            // tell apart) starts after the icon rather than at the cell edge.
+                            x0 += 0.6 * std::min(x1 - x0, yb[r] - yBot) + pad * 0.6;
+                        }
+                        placeCell(x0, x1, yb[r], yBot, s, code,
                                   own > 0.0 ? own : th, isHeader);
                     }
                 }
@@ -2374,6 +2409,18 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double s = std::max(3.0, halfWorld * vt.scale());
         p.drawLine(c + QPointF(-s, -s), c + QPointF(s, s));
         p.drawLine(c + QPointF(s, -s), c + QPointF(-s, s));
+        break;
+    }
+
+    case EntityType::ConnectionPin: {
+        // A small ring with its number in the middle - world-sized like the not-connected X
+        // beside it, so it scales with the drawing rather than staying a fixed screen size.
+        const QPointF c = vt.toScreen(e.a);
+        const double worldRadius = 2.0;
+        const double r = std::max(3.0, worldRadius * vt.scale());
+        p.drawEllipse(c, r, r);
+        drawWorldText(p, c, QString::number(e.meta.value("pinNumber").toInt()), worldRadius * 1.3,
+                      vt.scale(), color, Qt::AlignHCenter | Qt::AlignVCenter);
         break;
     }
 

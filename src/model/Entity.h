@@ -63,6 +63,10 @@ enum class EntityType {
     // the magnification. A drawing office numbers its details in the order they were made and never
     // renumbers them, so the letter is fixed when the view is placed and kept.
     DetailView,
+    // A CONNECTION PIN: where a schematic symbol meets the world, marked with the number it is placed
+    // by. `a` is its position; meta "pinNumber" is the number, handed out lowest-free-first so
+    // deleting one and adding another reuses it rather than counting up forever.
+    ConnectionPin,
 };
 
 EntityType entityTypeFromString(const QString& s);

@@ -1916,7 +1916,7 @@ void addMechModelGuides(Document& doc, const MechModel& model) {
     }
 }
 
-void loadMechModelDocument(Document& doc, const MechModel& model) {
+void loadMechModelDocument(Document& doc, const MechModel& model, bool schematic = false) {
     doc.entities().clear();
     // A PART IS NOT A SHEET. Fit looks at the drawing's stated sheet first, which is right for a drawing - what a
     // sheet is FOR is being the thing you look at - and wrong here: this window holds one part a few millimetres
@@ -1927,7 +1927,7 @@ void loadMechModelDocument(Document& doc, const MechModel& model) {
     // thing the session is about could not be picked up and moved as the part it is: every line of it had
     // to be swept up first. Grouped, a click anywhere takes the whole model - and a double-click opens it
     // up again when it is the lines themselves that need changing.
-    for (const Entity& e : partDrawingEntities(model.drawing)) {
+    for (const Entity& e : partDrawingEntities(schematic ? model.schematicDrawing : model.drawing)) {
         doc.entities().push_back(e);
         Entity& put = doc.entities().back();
         // partDrawingEntities clears the id on the way out - a stored drawing has no business naming
@@ -1940,7 +1940,9 @@ void loadMechModelDocument(Document& doc, const MechModel& model) {
     if (!doc.findLayer(QLatin1String(kMechModelGuideLayer)))
         doc.layers().push_back({QLatin1String(kMechModelGuideLayer), "#e6b45a", true, true, 0.25});
     doc.setActiveLayer(QStringLiteral("0"));
-    addMechModelGuides(doc, model);
+    // A schematic symbol has no head/tail/stretch to guide - those guides are a mechanical-drawing
+    // concept (see addMechModelGuides), and drawing them over a schematic glyph would just be wrong.
+    if (!schematic) addMechModelGuides(doc, model);
 }
 
 } // namespace
@@ -3937,20 +3939,25 @@ void MainWindow::buildRibbon() {
 void MainWindow::updateModelRibbonTabs() {
     if (!ribbon_) return;
     const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
+    const bool schematicModel = doc_ && mechModelEditSchematic_.value(doc_, false);
     int home = -1;
     for (int i = 0; i < ribbon_->count(); ++i) {
         if (ribbon_->tabText(i) == QStringLiteral("Home")) home = i;
     }
     // What a model session puts away, and what it must not.
     //
-    // Only the two HARNESS tabs go: a default model is one part drawn on its own, so the tools that build a
-    // schematic or lay out a harness have nothing to act on. Everything else stays. View went too, and that
-    // was wrong - zooming, panning and the layers are exactly what somebody drawing a part needs, and a
-    // session that takes them away is a session you cannot draw in. Import stays for the same reason: a
-    // part is often traced from a supplier's DXF, and that is the one thing you most want to bring in here.
-    auto putAway = [](const QString& title) {
-        return title == QStringLiteral("Schematic build") ||
-               title == QStringLiteral("Harness mechanical");
+    // A default model is one part drawn on its own, so laying out a whole harness has nothing to act
+    // on - Harness mechanical goes away for EITHER kind of model session. Schematic build is the
+    // opposite: it is where a schematic symbol is actually drawn (its Connector/Wire/Splice tools and
+    // the Connection pin tool), so it stays for a SCHEMATIC session and only goes for a mechanical
+    // one. Everything else stays. View went too, and that was wrong - zooming, panning and the layers
+    // are exactly what somebody drawing a part needs, and a session that takes them away is a session
+    // you cannot draw in. Import stays for the same reason: a part is often traced from a supplier's
+    // DXF, and that is the one thing you most want to bring in here.
+    auto putAway = [schematicModel](const QString& title) {
+        if (title == QStringLiteral("Harness mechanical")) return true;
+        if (title == QStringLiteral("Schematic build")) return !schematicModel;
+        return false;
     };
     if (modelEdit && home >= 0 && putAway(ribbon_->tabText(ribbon_->currentIndex())))
         ribbon_->setCurrentIndex(home);
@@ -3981,7 +3988,11 @@ void MainWindow::updateMechanicalRibbonGroups() {
     if (modelEdit) {
         for (QWidget* g : mechModelHiddenGroups_)
             if (g) g->setVisible(false);
-        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(true);
+        // Mark near/far/connect/output/scale-reference: placing a part BY a direction along a run,
+        // which is a mechanical-drawing idea a schematic symbol has no use for (see
+        // openMechModelEditor's schematic branch, which never marks any of these to begin with).
+        const bool schematicModel = doc_ && mechModelEditSchematic_.value(doc_, false);
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(!schematicModel);
         return;
     }
     const bool armed =
@@ -4028,7 +4039,8 @@ void MainWindow::syncBreakOptions() {
     if (!editor_) return;
     // Each function on this tab shows its own settings and only while it is armed.
     if (twistOptionsGroup_) {
-        const bool twisting = editor_->tool() == ToolId::TwistedHarness;
+        const bool twisting = editor_->tool() == ToolId::TwistedHarness ||
+                              editor_->tool() == ToolId::TwistedHarnessRoute;
         twistOptionsGroup_->setVisible(twisting);
         if (twisting && twistWiresSpin_) {
             QSignalBlocker b(twistWiresSpin_);
@@ -11693,9 +11705,10 @@ void MainWindow::showMechanicalBuilder() {
 
 void MainWindow::showMechModels() {
     if (!modelsDlg_) {
-        modelsDlg_ = new MechModelsDialog(editor_, this, [this](MechModelKind kind, QString name) {
-            openMechModelEditor(kind, name);
-        });
+        modelsDlg_ = new MechModelsDialog(
+            editor_, this, [this](MechModelKind kind, QString name, bool schematic) {
+                openMechModelEditor(kind, name, schematic);
+            });
         // The same stepping-aside as the parts library: the window goes, the ribbon says what to do, and
         // Enter takes the selection.
         connect(modelsDlg_, &MechModelsDialog::captureArmed, this, [this](const QString& name) {
@@ -11719,14 +11732,15 @@ void MainWindow::openMechModelEditor(MechModelKind kind) {
     openMechModelEditor(kind, def ? def->name : QString());
 }
 
-void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
-    // Already open? The same MODEL, not merely the same kind. Matching on the kind alone handed back the
-    // session for the straight backshell when the right-angled one was asked for, so the wrong drawing
-    // was edited and then captured over the wrong model.
+void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name, bool schematic) {
+    // Already open? The same MODEL AND the same drawing of it, not merely the same kind - the
+    // mechanical and schematic sessions for one model are two different tabs, each with its own
+    // drawing to edit, so matching on the model alone would hand back the wrong one.
     for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
         Document* d = docs_[i].get();
         if (!mechModelEdits_.contains(d) || mechModelEdits_.value(d) != kind) continue;
         if (mechModelSessionModels_.value(d).name != name) continue;
+        if (mechModelEditSchematic_.value(d, false) != schematic) continue;
         docTabs_->setCurrentIndex(i);
         activateIndex(i);
         return;
@@ -11748,7 +11762,11 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
     // drawing running along +x, and the two ends at the two ends. Marked means VISIBLE, which is the point - they
     // are there on the canvas to be dragged to where they really belong, rather than absent until somebody knows
     // to go and look for the buttons.
-    if (!model.isEmpty()) {
+    //
+    // None of this applies to a SCHEMATIC symbol: it is not placed by running a direction along a run, it
+    // has no two ends to keep, and it is checked against model.drawing, which a schematic session never
+    // touches.
+    if (!schematic && !model.isEmpty()) {
         Bounds ext;
         for (const Entity& e : partDrawingEntities(model.drawing)) ext.expand(e.bounds());
         if (ext.valid) {
@@ -11769,18 +11787,21 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name) {
         }
     }
 
+    const QString suffix = schematic ? QStringLiteral(" — schematic") : QString();
     auto doc = std::make_unique<Document>(
-        name.isEmpty() ? QStringLiteral("Model - %1").arg(mechModelName(kind))
-                       : QStringLiteral("Model - %1 (%2)").arg(mechModelName(kind), name));
-    loadMechModelDocument(*doc, model);
+        (name.isEmpty() ? QStringLiteral("Model - %1").arg(mechModelName(kind))
+                        : QStringLiteral("Model - %1 (%2)").arg(mechModelName(kind), name)) +
+        suffix);
+    loadMechModelDocument(*doc, model, schematic);
     doc->setDirty(false);
     Document* raw = doc.get();
     mechModelEdits_.insert(raw, kind);
     mechModelSessionModels_.insert(raw, model);
+    mechModelEditSchematic_.insert(raw, schematic);
     addDocument(std::move(doc), QString());
     // Where it was left, if it has been open before; otherwise fitted to the part - which is what it now fits,
     // the part having no sheet round it to fit instead.
-    const QString viewKey = mechModelViewKey(kind, name);
+    const QString viewKey = mechModelViewKey(kind, name, schematic);
     if (mechModelViews_.contains(viewKey)) {
         raw->view() = mechModelViews_.value(viewKey);
     } else {
@@ -12036,34 +12057,45 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     set.load();
     MechModel model = mechModelSessionModels_.value(doc);
     model.kind = kind;
-    // A model is kept running along +x from the origin and centred across it, so the drawing is moved
-    // there. Everything MARKED on it has to travel with it: a connection point left behind in the
-    // coordinates the drawing used to be at places the part by a point that is no longer anywhere near
-    // it - the near and far points were being carried and it was not.
-    const Vec2 shift{-bounds.min.x, -(bounds.min.y + bounds.max.y) / 2.0};
-    for (Entity& e : drawing) translateEntity(e, shift);
-    if (model.hasNearPoint) model.nearPoint += shift;
-    if (model.hasFarPoint) model.farPoint += shift;
-    if (model.hasConnect) model.connectPoint += shift;
-    // The output faces travel with the drawing too. Left behind, a part would be told to put its wires out
-    // through a line that is no longer anywhere near it - the same mistake the connection point made.
-    for (MechModel::OutputLine& o : model.outputs) {
-        o.a += shift;
-        o.b += shift;
+    const bool schematic = mechModelEditSchematic_.value(doc, false);
+    if (schematic) {
+        // A schematic symbol is not placed by running a direction along it - it is a fixed little
+        // glyph - so there is nothing here to shift a connection/near/far point for, and nothing
+        // to measure a length or a diameter from. Centre it and leave the rest of the model alone.
+        const Vec2 shift{-(bounds.min.x + bounds.max.x) / 2.0, -(bounds.min.y + bounds.max.y) / 2.0};
+        for (Entity& e : drawing) translateEntity(e, shift);
+        model.schematicDrawing = partDrawingFromEntities(drawing);
+    } else {
+        // A model is kept running along +x from the origin and centred across it, so the drawing is
+        // moved there. Everything MARKED on it has to travel with it: a connection point left behind
+        // in the coordinates the drawing used to be at places the part by a point that is no longer
+        // anywhere near it - the near and far points were being carried and it was not.
+        const Vec2 shift{-bounds.min.x, -(bounds.min.y + bounds.max.y) / 2.0};
+        for (Entity& e : drawing) translateEntity(e, shift);
+        if (model.hasNearPoint) model.nearPoint += shift;
+        if (model.hasFarPoint) model.farPoint += shift;
+        if (model.hasConnect) model.connectPoint += shift;
+        // The output faces travel with the drawing too. Left behind, a part would be told to put its
+        // wires out through a line that is no longer anywhere near it - the same mistake the
+        // connection point made.
+        for (MechModel::OutputLine& o : model.outputs) {
+            o.a += shift;
+            o.b += shift;
+        }
+        model.drawing = partDrawingFromEntities(drawing);
+        model.drawnLengthMm = bounds.width();
+        // Scaling across is a yes-or-no the manager holds, where zero means leave it alone. Measuring
+        // it here unconditionally switched it ON for every model that was ever edited on the canvas,
+        // so it is re-measured only for the models that were already being scaled.
+        if (model.drawnAcrossMm > 0.0) model.drawnAcrossMm = bounds.height();
     }
-    model.drawing = partDrawingFromEntities(drawing);
-    model.drawnLengthMm = bounds.width();
-    // Scaling across is a yes-or-no the manager holds, where zero means leave it alone. Measuring it
-    // here unconditionally switched it ON for every model that was ever edited on the canvas, so it is
-    // re-measured only for the models that were already being scaled.
-    if (model.drawnAcrossMm > 0.0) model.drawnAcrossMm = bounds.height();
     // And the model actually goes back INTO the set. Without this the whole capture was built up and
     // then dropped on the floor: save() writes out what load() read, so a model drawn on the canvas was
     // reported saved, the session closed, and the file was left exactly as it was found.
     set.set(model);
     if (!set.save()) {
         QMessageBox::warning(this, QStringLiteral("Save model failed"),
-                             QStringLiteral("The mechanical model could not be saved."));
+                             QStringLiteral("The model could not be saved."));
         return false;
     }
     doc->setDirty(false);
@@ -12071,9 +12103,10 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     // Measured, not whatever the scale-across setting happens to hold: the message says how big the
     // thing that was just saved is, which is the one number worth reading back.
     statusBar()->showMessage(
-        QStringLiteral("Saved %1 — %2 object(s), %3 mm long, %4 mm across")
+        QStringLiteral("Saved %1%2 — %3 object(s), %4 mm long, %5 mm across")
             .arg(model.name.isEmpty() ? mechModelName(kind)
                                       : QStringLiteral("%1 (%2)").arg(mechModelName(kind), model.name))
+            .arg(schematic ? QStringLiteral(" (schematic)") : QString())
             .arg(drawing.size())
             .arg(bounds.width(), 0, 'f', 1)
             .arg(bounds.height(), 0, 'f', 1),
@@ -12081,9 +12114,11 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     return true;
 }
 
-// One key per sub-drawing, so a boot at 45 and a boot at 90 keep their own view.
-QString MainWindow::mechModelViewKey(MechModelKind kind, const QString& name) {
-    return mechModelKey(kind) + QLatin1Char('/') + name;
+// One key per sub-drawing, so a boot at 45 and a boot at 90 keep their own view - and the
+// mechanical and schematic drawings of the same model keep theirs apart too.
+QString MainWindow::mechModelViewKey(MechModelKind kind, const QString& name, bool schematic) {
+    return mechModelKey(kind) + QLatin1Char('/') + name +
+           (schematic ? QStringLiteral("/schematic") : QString());
 }
 
 // How this model is being looked at, written down before the window closes. Drawing a part is not one sitting: it
@@ -12092,7 +12127,9 @@ QString MainWindow::mechModelViewKey(MechModelKind kind, const QString& name) {
 void MainWindow::rememberMechModelView(Document* doc) {
     if (!doc || !mechModelEdits_.contains(doc)) return;
     const MechModel& m = mechModelSessionModels_[doc];
-    mechModelViews_.insert(mechModelViewKey(mechModelEdits_.value(doc), m.name), doc->view());
+    mechModelViews_.insert(
+        mechModelViewKey(mechModelEdits_.value(doc), m.name, mechModelEditSchematic_.value(doc, false)),
+        doc->view());
 }
 
 void MainWindow::saveMechModelBeingEdited() {
@@ -12255,14 +12292,16 @@ void MainWindow::activateIndex(int index) {
     updateModelRibbonTabs();
     if (editingTemplate) syncTemplateRibbon();
     if (saveBlockBtn_) {
+        saveBlockBtn_->setVisible(editingBlock);
         saveBlockBtn_->setEnabled(editingBlock);
         saveBlockBtn_->setToolTip(
-            editingBlock
-                ? QStringLiteral("Save the block %1, rebuild every copy of it, and close it")
-                      .arg(blockEdits_.value(doc_))
-                : QStringLiteral("Only while a block is open for editing"));
+            QStringLiteral("Save the block %1, rebuild every copy of it, and close it")
+                .arg(blockEdits_.value(doc_)));
     }
-    if (cancelBlockBtn_) cancelBlockBtn_->setEnabled(editingBlock);
+    if (cancelBlockBtn_) {
+        cancelBlockBtn_->setVisible(editingBlock);
+        cancelBlockBtn_->setEnabled(editingBlock);
+    }
     normaliseRibbonPages();   // never two pages at once, whatever came and went above
     refreshPanels();
     updateWindowTitleForActive();
@@ -12857,6 +12896,7 @@ void MainWindow::closeDocument(int index) {
         rememberMechModelView(docs_[index].get());
         mechModelEdits_.remove(docs_[index].get());
         mechModelSessionModels_.remove(docs_[index].get());
+        mechModelEditSchematic_.remove(docs_[index].get());
         // And its paper spaces, for the same reason: the next document allocated at that address must
         // not inherit the sheets of this one.
         forgetPaperSpaces(docs_[index].get());

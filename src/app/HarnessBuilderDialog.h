@@ -204,6 +204,9 @@ private:
     QCheckBox* shieldPreviewBox_ = nullptr;
     QTextBrowser* issueView_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
+    // What Generate produces: the schematic drawing (as it always has), or a wiring list built
+    // straight from this definition instead.
+    QComboBox* genModeBox_ = nullptr;
 
     QDoubleSpinBox* leftXSpin_ = nullptr;
     QDoubleSpinBox* leftYSpin_ = nullptr;

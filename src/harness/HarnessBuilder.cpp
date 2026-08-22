@@ -332,6 +332,233 @@ QString harnessPinLabel(const HarnessConnector& c, int pinNumber) {
     return connectorPinLabel(pinNumber - 1, s);
 }
 
+namespace {
+// An end lands on a real pin when it names an actual connector - not the open marker, not a
+// shield's drain - at a pin that has been landed (0 = "not landed yet" while a row is filled
+// in). Only such an end has a "from"/"to" cell to print.
+bool connectionTableEndIsReal(const HarnessDef& def, const QString& conn, int pin) {
+    return pin >= 1 && !harnessIsOpenEndpoint(conn) && !harnessIsShieldEndpoint(conn) &&
+           harnessConnById(def, conn) != nullptr;
+}
+// An order-independent key for the pair of connectors a wire runs between, so every wire
+// touching either one sorts next to the rest - which is what keeps an overall shield's own
+// wires (everything touching ONE connector) contiguous whenever that connector only ever
+// talks to one other one, the ordinary case.
+QString connectionTablePairKey(const QString& a, const QString& b) {
+    return a <= b ? a + QLatin1Char('|') + b : b + QLatin1Char('|') + a;
+}
+} // namespace
+
+ConnectionTable harnessConnectionTable(const HarnessDef& def) {
+    ConnectionTable out;
+    struct SortRow {
+        ConnectionTableRow row;
+        QString pairKey, shieldGroup, twistGroup;
+        int origIndex = 0;
+    };
+    std::vector<SortRow> rows;
+    int origIndex = 0;
+    for (const auto& w : def.wires) {
+        ++origIndex;
+        if (!connectionTableEndIsReal(def, w.fromConn, w.fromPin) ||
+            !connectionTableEndIsReal(def, w.toConn, w.toPin))
+            continue;
+        const HarnessConnector* fc = harnessConnById(def, w.fromConn);
+        const HarnessConnector* tc = harnessConnById(def, w.toConn);
+        SortRow sr;
+        sr.row.wireId = w.id;
+        sr.row.from = QStringLiteral("%1-%2").arg(
+            fc->designator.isEmpty() ? fc->id : fc->designator, harnessPinLabel(*fc, w.fromPin));
+        sr.row.to = QStringLiteral("%1-%2").arg(
+            tc->designator.isEmpty() ? tc->id : tc->designator, harnessPinLabel(*tc, w.toPin));
+        sr.row.color = w.color;
+        sr.row.gauge = w.gauge;
+        sr.pairKey = connectionTablePairKey(w.fromConn, w.toConn);
+        sr.shieldGroup = w.shieldGroup;
+        sr.twistGroup = w.twistGroup;
+        sr.origIndex = origIndex;
+        rows.push_back(std::move(sr));
+    }
+    // Grouped so a shield/twist group's rows land next to each other: by which two connectors
+    // the wire runs between, then by its internal shield group, then by its twist group, non-
+    // empty first at each step (a wire with no group sorts after the ones that have one).
+    std::stable_sort(rows.begin(), rows.end(), [](const SortRow& a, const SortRow& b) {
+        if (a.pairKey != b.pairKey) return a.pairKey < b.pairKey;
+        const bool ase = a.shieldGroup.isEmpty(), bse = b.shieldGroup.isEmpty();
+        if (ase != bse) return bse;
+        if (a.shieldGroup != b.shieldGroup) return a.shieldGroup < b.shieldGroup;
+        const bool ate = a.twistGroup.isEmpty(), bte = b.twistGroup.isEmpty();
+        if (ate != bte) return bte;
+        if (a.twistGroup != b.twistGroup) return a.twistGroup < b.twistGroup;
+        return a.origIndex < b.origIndex;
+    });
+    out.rows.reserve(rows.size());
+    for (const SortRow& r : rows) out.rows.push_back(r.row);
+
+    // One span per MAXIMAL RUN of rows where `member` holds - never assumed to be a single
+    // span, so a group that the sort above could not keep together (a connector talking to
+    // more than one other connector, say) still comes out as separate, correct brackets rather
+    // than one that is wrong.
+    auto spansFor = [&](auto member) {
+        std::vector<std::pair<int, int>> runs;
+        int start = -1;
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+            if (member(i)) {
+                if (start < 0) start = i;
+            } else if (start >= 0) {
+                runs.push_back({start, i - 1});
+                start = -1;
+            }
+        }
+        if (start >= 0) runs.push_back({start, static_cast<int>(rows.size()) - 1});
+        return runs;
+    };
+
+    // Overall shields: the union of every wire touching a connector whose OWN side asks for
+    // one - one shared bracket set, since two connectors that both ask for an overall shield
+    // over the very same wires would otherwise draw two identical, redundant brackets.
+    QSet<QString> overallWireIds;
+    for (const auto& c : def.connectors) {
+        const bool wants = (c.side == HarnessSide::Left) ? c.shieldLeft : c.shieldRight;
+        if (!wants) continue;
+        for (const auto& w : def.wires)
+            if (w.fromConn == c.id || w.toConn == c.id) overallWireIds.insert(w.id);
+    }
+    if (!overallWireIds.isEmpty())
+        for (const auto& run : spansFor([&](int i) { return overallWireIds.contains(rows[i].row.wireId); }))
+            out.shieldSpans.push_back({run.first, run.second, 0, QStringLiteral("SHIELD"), 0});
+
+    // Internal shield groups, one bracket set per distinct name, nested inside the overall one.
+    QStringList shieldGroups;
+    for (const SortRow& r : rows)
+        if (!r.shieldGroup.isEmpty() && !shieldGroups.contains(r.shieldGroup))
+            shieldGroups << r.shieldGroup;
+    for (const QString& g : shieldGroups)
+        for (const auto& run : spansFor([&](int i) { return rows[i].shieldGroup == g; }))
+            out.shieldSpans.push_back({run.first, run.second, 1, g, 0});
+
+    // Twist groups: a merged run in the Twist column, one per distinct name.
+    QStringList twistGroups;
+    for (const SortRow& r : rows)
+        if (!r.twistGroup.isEmpty() && !twistGroups.contains(r.twistGroup))
+            twistGroups << r.twistGroup;
+    for (const QString& g : twistGroups)
+        for (const auto& run : spansFor([&](int i) { return rows[i].twistGroup == g; }))
+            out.twistSpans.push_back(
+                {run.first, run.second, 0, g, run.second - run.first + 1});
+
+    return out;
+}
+
+std::vector<Entity> harnessConnectionTableEntities(const HarnessDef& def) {
+    const ConnectionTable ct = harnessConnectionTable(def);
+    std::vector<Entity> out;
+    if (ct.rows.empty()) return out;
+
+    static const QStringList kHeaders = {QStringLiteral("#"),     QStringLiteral("From"),
+                                         QStringLiteral("To"),    QStringLiteral("Color"),
+                                         QStringLiteral("Gauge"), QStringLiteral("Twist")};
+    const int cols = kHeaders.size();
+    const int twistCol = cols - 1;
+    const int nRows = static_cast<int>(ct.rows.size()) + 1;
+    const double rowH = 8.0, textH = rowH * 0.5;
+
+    // Only a twist span's ANCHOR row (its first) carries the cell's words/icon - the rows it
+    // covers are merged into that one cell and print nothing of their own.
+    QHash<int, const ConnectionTableSpan*> twistAnchorAtRow;
+    for (const auto& sp : ct.twistSpans) twistAnchorAtRow.insert(sp.firstRow, &sp);
+    const bool numberTwists = ct.twistSpans.size() > 1;
+
+    QJsonArray cells, cellIconKind;
+    for (const QString& h : kHeaders) { cells.append(h); cellIconKind.append(QString()); }
+    for (int i = 0; i < static_cast<int>(ct.rows.size()); ++i) {
+        const ConnectionTableRow& r = ct.rows[i];
+        for (const QString& s : {QString::number(i + 1), r.from, r.to, r.color, r.gauge}) {
+            cells.append(s);
+            cellIconKind.append(QString());
+        }
+        QString twistText, twistIcon;
+        const auto found = twistAnchorAtRow.constFind(i);
+        if (found != twistAnchorAtRow.constEnd()) {
+            const ConnectionTableSpan& sp = *found.value();
+            twistText = numberTwists ? QStringLiteral("%1 (%2)").arg(sp.label).arg(sp.memberCount)
+                                     : QString::number(sp.memberCount);
+            twistIcon = QStringLiteral("twist");
+        }
+        cells.append(twistText);
+        cellIconKind.append(twistIcon);
+    }
+    // Each column is as wide as the widest thing in it, down to a floor - the same estimate the
+    // BOM table uses.
+    const double pad = textH * 1.6, minW = 14.0;
+    std::vector<double> colW(static_cast<size_t>(cols), minW);
+    for (int i = 0; i < cells.size(); ++i) {
+        const int c = i % cols;
+        const double need = pad + 0.62 * textH * cells[i].toString().size();
+        colW[static_cast<size_t>(c)] = std::max(colW[static_cast<size_t>(c)], need);
+    }
+    double W = 0.0;
+    for (int c = 0; c < cols; ++c) W += colW[static_cast<size_t>(c)];
+    const double H = nRows * rowH;
+
+    Entity t;
+    t.type = EntityType::Rect;
+    t.points = {{0, -H}, {W, -H}, {W, 0}, {0, 0}};
+    t.a = {0, 0};
+    QJsonArray colFrac, rowFrac;
+    for (int c = 0; c < cols; ++c) colFrac.append(colW[static_cast<size_t>(c)] / W);
+    for (int i = 0; i < nRows; ++i) rowFrac.append(1.0 / nRows);
+    QJsonArray cellAlign;
+    for (int i = 0; i < cells.size(); ++i) cellAlign.append(QStringLiteral("MC"));
+    t.meta.insert(QStringLiteral("table"), true);
+    t.meta.insert(QStringLiteral("rows"), nRows);
+    t.meta.insert(QStringLiteral("cols"), cols);
+    t.meta.insert(QStringLiteral("colFrac"), colFrac);
+    t.meta.insert(QStringLiteral("rowFrac"), rowFrac);
+    t.meta.insert(QStringLiteral("cells"), cells);
+    t.meta.insert(QStringLiteral("cellAlign"), cellAlign);
+    t.meta.insert(QStringLiteral("headerRow"), true);
+    t.meta.insert(QStringLiteral("textSize"), textH);
+    t.meta.insert(QStringLiteral("cellIconKind"), cellIconKind);
+    t.meta.insert(QStringLiteral("connectionTable"), true); // so it can be found later
+    std::vector<TableMerge> merges;
+    for (const auto& sp : ct.twistSpans)
+        if (sp.lastRow > sp.firstRow) // one row alone is not a merge - nothing to join it to
+            merges.push_back({sp.firstRow + 1, twistCol, sp.lastRow - sp.firstRow + 1, 1});
+    if (!merges.empty()) setTableMerges(t, merges);
+    out.push_back(t);
+
+    // Shield brackets, left of the table: level 0 (overall) in the outer lane, level 1
+    // (internal) in the inner one, so a nested shield reads as nested rather than as a second
+    // unrelated one.
+    const double laneGap = 10.0, tickLen = 3.0, labelPad = 2.0;
+    for (const auto& sp : ct.shieldSpans) {
+        const double top = -(sp.firstRow + 1) * rowH;
+        const double bottom = -(sp.lastRow + 2) * rowH;
+        const double xLine = -(2 - sp.level) * laneGap;
+        auto braLine = [&](const Vec2& a, const Vec2& b) {
+            Entity l;
+            l.type = EntityType::Line;
+            l.a = a;
+            l.b = b;
+            l.meta.insert(QStringLiteral("connectionTableBracket"), true);
+            return l;
+        };
+        out.push_back(braLine({xLine, top}, {xLine, bottom}));              // spine
+        out.push_back(braLine({xLine, top}, {xLine + tickLen, top}));       // top tick
+        out.push_back(braLine({xLine, bottom}, {xLine + tickLen, bottom})); // bottom tick
+        Entity label;
+        label.type = EntityType::Text;
+        label.a = {xLine - labelPad, (top + bottom) / 2.0};
+        label.meta.insert(QStringLiteral("text"), sp.label);
+        label.meta.insert(QStringLiteral("size"), textH);
+        label.meta.insert(QStringLiteral("justify"), QStringLiteral("MR"));
+        label.meta.insert(QStringLiteral("connectionTableBracket"), true);
+        out.push_back(label);
+    }
+    return out;
+}
+
 std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
     std::vector<HarnessIssue> out;
     auto add = [&out](const QString& key, const QString& msg, const QString& conn = QString(),
