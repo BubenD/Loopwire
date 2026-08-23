@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QTabWidget>
 #include <QMouseEvent>
 #include <QLineEdit>
 #include <QTabBar>
@@ -579,6 +580,73 @@ int run_mechmodelcanvas_tests() {
                       "mirror: the corrected opposite side persisted on its own");
             }
         }
+    }
+
+
+    // ---- drawing a default model's SYMBOL: three tabs, and a way to finish ---------------------------
+    {
+        // A symbol is a small glyph - a dozen lines and a few pins. Every other tab is about a SHEET:
+        // dimensioning and calling out a drawing, importing a supplier's DXF, laying a harness out, setting a
+        // title block. None of it applies to a glyph, and the house rule is that while a function is being
+        // used the ribbon shows that function rather than the whole program.
+        MainWindow win;
+        win.resize(1280, 820);
+        win.show();
+        QApplication::processEvents();
+        win.openMechModelEditor(MechModelKind::RingInsulated, QStringLiteral("Insulated"), true);
+        QApplication::processEvents();
+
+        auto* ribbon = win.findChild<QTabWidget*>();
+        check(ribbon != nullptr, "symbol session: there is a ribbon");
+        QStringList shown;
+        if (ribbon)
+            for (int i = 0; i < ribbon->count(); ++i)
+                if (ribbon->tabBar()->isTabVisible(i)) shown << ribbon->tabText(i);
+        std::printf("  symbol session: tabs %s\n", qPrintable(shown.join(QStringLiteral(", "))));
+        check(shown.contains(QStringLiteral("Home")) && shown.contains(QStringLiteral("Modify")) &&
+                  shown.contains(QStringLiteral("Schematic build")),
+              "symbol session: Home to draw with, Modify to change it, Schematic build for the "
+              "schematic's own pieces");
+        check(!shown.contains(QStringLiteral("Harness mechanical")) &&
+                  !shown.contains(QStringLiteral("Annotation")) &&
+                  !shown.contains(QStringLiteral("View")) && !shown.contains(QStringLiteral("Import")),
+              "symbol session: and nothing that is about a sheet rather than a glyph");
+
+        // A WAY TO FINISH. The whole session group used to go for a schematic session, which took the two
+        // buttons that END the session away with the five that mark up a mechanical drawing: a symbol could be
+        // drawn and then not put anywhere.
+        QToolButton* capture = nullptr;
+        QToolButton* cancel = nullptr;
+        QToolButton* connect = nullptr;
+        // Found by what each one SAYS IT DOES rather than by its word: "Cancel" is written on buttons all
+        // over the program, and matching the word picked up a hidden one belonging to something else and then
+        // reported the session's own button as missing.
+        for (QToolButton* b : win.findChildren<QToolButton*>()) {
+            const QString tip = b->toolTip();
+            if (tip.startsWith(QStringLiteral("Take what is drawn here"))) capture = b;
+            else if (tip == QStringLiteral("Leave the model as it was")) cancel = b;
+            else if (tip.startsWith(QStringLiteral("Click where the part connects"))) connect = b;
+        }
+        check(capture != nullptr && cancel != nullptr,
+              "symbol session: Capture and Cancel are there, with their icons");
+        if (capture) check(!capture->icon().isNull(), "symbol session: Capture is drawn, not lettered");
+        if (cancel) check(!cancel->icon().isNull(), "symbol session: and so is Cancel");
+        if (capture) check(capture->isVisible(), "symbol session: Capture can be reached");
+        if (cancel) check(cancel->isVisible(), "symbol session: and so can Cancel");
+        // The marks DO go, and should: they describe placing a part by a direction along a run, and a symbol
+        // is a fixed glyph with nothing for any of them to point at.
+        if (connect)
+            check(!connect->isVisible(),
+                  "symbol session: the marks go - a glyph is not placed by a direction along a run");
+
+        // And the design-rule check goes with them: it reads a whole schematic - what is joined to what, what
+        // is left floating - and a symbol on its own is nothing but floating ends.
+        QToolButton* validate = nullptr;
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Validate")) validate = b;
+        if (validate)
+            check(!validate->isVisible(),
+                  "symbol session: no design-rule check - it would report a fault per pin, every one wrong");
     }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");

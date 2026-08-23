@@ -4054,15 +4054,38 @@ void MainWindow::updateModelRibbonTabs() {
     // are exactly what somebody drawing a part needs, and a session that takes them away is a session
     // you cannot draw in. Import stays for the same reason: a part is often traced from a supplier's
     // DXF, and that is the one thing you most want to bring in here.
-    auto putAway = [schematicModel](const QString& title) {
+    // A DEFAULT MODEL'S SCHEMATIC SYMBOL IS DRAWN WITH THREE TABS AND NOTHING ELSE: Home to draw with,
+    // Modify to change what is drawn, Schematic build to put the schematic's own pieces down. A symbol is a
+    // small glyph - a dozen lines and a few pins - and every other tab is about a SHEET: dimensioning and
+    // calling out a drawing, importing a supplier's DXF, laying a harness out, setting a title block. None of
+    // it applies to a glyph, and the house rule for this application is that while a function is being used
+    // the ribbon shows that function and not the whole program.
+    //
+    // Contextual tabs are left alone. They are not there unless their own function is armed, and while
+    // drawing a symbol you may well hatch a shape or array a row of pins - taking away the tab that has just
+    // appeared to serve the thing you are doing is not tidiness, it is a trap.
+    const bool schematicDefaultModel =
+        doc_ && mechModelEditSchematic_.value(doc_, false) && !libraryPartEdit;
+    auto contextual = [this](QWidget* page) {
+        for (QWidget* p : {templateTab_, hatchTab_, tableCellTab_, arrayTab_, connectorTab_, wireTab_,
+                           captureTab_, detailTab_})
+            if (p && p == page) return true;
+        return false;
+    };
+    auto putAway = [&](int i) {
+        const QString title = ribbon_->tabText(i);
+        if (schematicDefaultModel) {
+            if (contextual(ribbon_->widget(i))) return false;
+            return !(title == QStringLiteral("Home") || title == QStringLiteral("Modify") ||
+                     title == QStringLiteral("Schematic build"));
+        }
         if (title == QStringLiteral("Harness mechanical")) return true;
         if (title == QStringLiteral("Schematic build")) return !schematicModel;
         return false;
     };
-    if (modelEdit && home >= 0 && putAway(ribbon_->tabText(ribbon_->currentIndex())))
-        ribbon_->setCurrentIndex(home);
+    if (modelEdit && home >= 0 && putAway(ribbon_->currentIndex())) ribbon_->setCurrentIndex(home);
     for (int i = 0; i < ribbon_->count(); ++i)
-        ribbon_->tabBar()->setTabVisible(i, !modelEdit || !putAway(ribbon_->tabText(i)));
+        ribbon_->tabBar()->setTabVisible(i, !modelEdit || !putAway(i));
     normaliseRibbonPages();
 }
 
@@ -4095,7 +4118,19 @@ void MainWindow::updateMechanicalRibbonGroups() {
         // library part's session keeps the group up regardless of which drawing it is - it is the only
         // place Save/Cancel for that session live, and every kind of library-part drawing needs them.
         const bool schematicDefaultModel = doc_ && mechModelEditSchematic_.value(doc_, false) && !libraryPartEdit;
-        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(libraryPartEdit || !schematicDefaultModel);
+        // BUT CAPTURE AND CANCEL STAY. The whole group used to go for a schematic session, which took the two
+        // buttons that END the session away with the five that mark up a mechanical drawing - so a symbol
+        // could be drawn and then not put anywhere: the only ways out were the window's close box and the
+        // keyboard. Taking a part of the drawing away is not the same as taking away the way to finish.
+        //
+        // The marks themselves do go, and should: a connection point, two ends and the faces the conductors
+        // leave by describe placing a part BY a direction along a run, and a schematic symbol is not placed
+        // that way. It is a fixed glyph, and there is nothing on it for any of them to point at.
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(true);
+        for (QToolButton* b : {markConnectMechModelBtn_, markNearMechModelBtn_, markFarMechModelBtn_,
+                               markOutputMechModelBtn_, markScaleRefMechModelBtn_,
+                               showMechModelMarksBtn_})
+            if (b) b->setVisible(!schematicDefaultModel);
         return;
     }
     const bool armed =
@@ -4174,6 +4209,12 @@ void MainWindow::syncBreakOptions() {
 
 void MainWindow::updateSchematicRibbonGroups() {
     if (!editor_) return;
+    // Drawing a default model's SYMBOL: this tab is where its pieces come from, and of its groups only Place
+    // and Modify are about the glyph. The design-rule check reads a whole schematic - what is joined to what,
+    // what is left floating - and a symbol on its own is nothing but floating ends: it would report a fault
+    // per pin, every one of them wrong.
+    const bool schematicDefaultModel = doc_ && mechModelEditSchematic_.value(doc_, false) &&
+                                       !libraryPartEdits_.contains(doc_);
     const bool twistArmed = !editor_->twistArmType().isEmpty();
     const ToolId t = editor_->tool();
     const bool markerArmed = (t == ToolId::Splice || t == ToolId::NotConnected);
@@ -4186,8 +4227,8 @@ void MainWindow::updateSchematicRibbonGroups() {
     const bool showModDrc = !twistArmed && !markerArmed;
     if (schemModifyGroup_) schemModifyGroup_->setVisible(showModDrc);
     if (schemModifyRule_) schemModifyRule_->setVisible(showModDrc);
-    if (schemDrcGroup_) schemDrcGroup_->setVisible(showModDrc);
-    if (schemDrcRule_) schemDrcRule_->setVisible(showModDrc);
+    if (schemDrcGroup_) schemDrcGroup_->setVisible(showModDrc && !schematicDefaultModel);
+    if (schemDrcRule_) schemDrcRule_->setVisible(showModDrc && !schematicDefaultModel);
 }
 
 // The contextual "Hatch Creation" ribbon tab (AutoCAD-style): Boundaries | Pattern
