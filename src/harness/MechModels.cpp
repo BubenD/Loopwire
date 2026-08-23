@@ -638,11 +638,14 @@ std::vector<Entity> placementMarkEntities(bool hasConnect, const Vec2& connectPo
     return out;
 }
 
-std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerRadius, double armMm) {
-    std::vector<Entity> out =
-        placementMarkEntities(model.hasConnect, model.connectPoint, model.connectAngleRad,
-                              model.hasNearPoint, model.nearPoint, model.hasFarPoint, model.farPoint,
-                              markerRadius, armMm);
+std::vector<Entity> outputFaceMarkEntities(const std::vector<MechOutputFace>& faces,
+                                           double markerRadius) {
+    std::vector<Entity> out;
+    const MechModel model = [&faces] {
+        MechModel m;
+        m.outputs = faces;
+        return m;
+    }();
     const double r = std::max(1e-6, markerRadius);
     // Everything here is chrome, and a preview paints a drawing in one quiet grey so that it reads as a
     // drawing rather than as a colour chart. These have to keep their colours - the colour IS the name of
@@ -689,6 +692,16 @@ std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerR
         num.meta.insert(QStringLiteral("size"), std::max(1.5, r * 1.2));
         out.push_back(num);
     }
+    return out;
+}
+
+std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerRadius, double armMm) {
+    std::vector<Entity> out =
+        placementMarkEntities(model.hasConnect, model.connectPoint, model.connectAngleRad,
+                              model.hasNearPoint, model.nearPoint, model.hasFarPoint, model.farPoint,
+                              markerRadius, armMm);
+    for (Entity& e : outputFaceMarkEntities(model.outputs, markerRadius))
+        out.push_back(std::move(e));
     return out;
 }
 

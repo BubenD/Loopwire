@@ -868,17 +868,24 @@ int run_partspanel_tests() {
                         if (qGray(img.pixel(x, y)) > 90) ++n;
                 return n;
             };
+            // AN ORANGE LINE IS NOT A MARK, and there is no longer any such thing. Saying where a harness
+            // attaches by colouring one of the part's OWN lines orange reads as a feature of the part - an
+            // orange line across a connector face looks like something the connector has - says nothing
+            // about which way the part runs from there, and cannot say where the wires leave at all. The
+            // part's marks say all of it, drawn as marks (see the faces test below).
+            //
+            // So the flag colours nothing now, either way, and the line it was on is still drawn in the
+            // same grey as the rest of the part: the mark is gone, not the geometry.
             pane.setShowConnection(true);
             const QImage withMark = pane.grab().toImage();
             pane.setShowConnection(false);
             const QImage without = pane.grab().toImage();
             std::printf("  library: %d orange pixel(s) shown, %d hidden; ink %d then %d\n", orange(withMark),
                         orange(without), ink(withMark), ink(without));
-            check(orange(withMark) > 20, "library: shown, the connection line is drawn orange");
-            check(orange(without) == 0, "library: hidden, there is no orange on the drawing at all");
-            check(ink(without) >= ink(withMark) - ink(withMark) / 4,
-                  "library: and the line is still THERE, in the same grey as the rest - hidden means "
-                  "unmarked, not deleted");
+            check(orange(withMark) == 0 && orange(without) == 0,
+                  "library: a flagged line is not painted orange any more - a mark is drawn as a mark");
+            check(ink(without) > 20 && ink(without) == ink(withMark),
+                  "library: and the line itself is still there, in the same grey as the rest of the part");
         }
         QFile::remove(libFile);
     }
@@ -914,16 +921,17 @@ int run_partspanel_tests() {
         QApplication::processEvents();
 
         // FOUR PANES OF A SPLITTER, equal to begin with and any one of them draggable wider.
+        // THREE panes now, not four: the fanout says which side of the connector it was drawn from, and a
+        // second window for "the other one" asked for the same drawing twice.
         QSplitter* paneSplit = nullptr;
         for (QSplitter* sp : dlg.findChildren<QSplitter*>())
-            if (sp->count() == 4 && sp->findChildren<DrawingPreview*>().size() == 4) paneSplit = sp;
-        check(paneSplit != nullptr, "panes: the four drawings are the four panes of a splitter");
+            if (sp->count() == 3 && sp->findChildren<DrawingPreview*>().size() == 3) paneSplit = sp;
+        check(paneSplit != nullptr, "panes: the three drawings are the three panes of a splitter");
         if (paneSplit) {
             QList<int> sizes = paneSplit->sizes();
             int widest = 0, narrowest = 1 << 30;
             for (int s : sizes) { widest = std::max(widest, s); narrowest = std::min(narrowest, s); }
-            std::printf("  panes: widths %d/%d/%d/%d\n", sizes.value(0), sizes.value(1), sizes.value(2),
-                        sizes.value(3));
+            std::printf("  panes: widths %d/%d/%d\n", sizes.value(0), sizes.value(1), sizes.value(2));
             check(widest - narrowest <= 2, "panes: all four the same width, whatever is written on the buttons");
             check(!paneSplit->childrenCollapsible(), "panes: and none of them can be dragged shut by accident");
             // Draggable: a splitter that refuses to move is not a resizable pane.
@@ -994,6 +1002,109 @@ int run_partspanel_tests() {
         check(!dlg.takeDrawingFromDefaultModel(blank, MechModelKind::Boot, QStringLiteral("Straight"),
                                                false, true),
               "from default: a model with nothing drawn is refused rather than emptying the part");
+        QFile::remove(libFile);
+    }
+
+
+    // ---- a part carries the faces its wires leave by, and its marks are drawn as marks --------------
+    {
+        // ANYTHING WIRES GO INTO has one or more faces they come out of - a connector, a ferrule, a ring -
+        // and the generator hands the branches out in the order they were marked. A default model has been
+        // able to say so all along; a library part, which is the same part with a part number on it, could
+        // only be told where it connects.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_faces_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-FACE");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("A connector with faces");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{0.0, -5.0}, {10.0, -5.0}, {10.0, 5.0}, {0.0, 5.0}};
+            part.mechanical = partDrawingFromEntities({body});
+            part.hasConnect = true;
+            part.connectPoint = {0.0, 0.0};
+            part.connectAngleRad = 0.0;
+            part.outputs.push_back({{10.0, -4.0}, {10.0, 4.0}});
+            lib.parts.push_back(part);
+            check(lib.save(libFile), "faces: a part with a face on it is written");
+        }
+        // KEPT IN THE FILE. A mark that does not survive being saved is a mark somebody has to put on again
+        // every time the library is opened.
+        {
+            PartsLibrary back;
+            check(back.load(libFile), "faces: and read again");
+            const LibraryPart* p = back.byId(QStringLiteral("P-FACE"));
+            check(p != nullptr, "faces: the part came back");
+            if (p) {
+                std::printf("  faces: %lld face(s) kept, first from %.1f,%.1f to %.1f,%.1f\n",
+                            static_cast<long long>(p->outputs.size()),
+                            p->outputs.empty() ? 0.0 : p->outputs.front().a.x,
+                            p->outputs.empty() ? 0.0 : p->outputs.front().a.y,
+                            p->outputs.empty() ? 0.0 : p->outputs.front().b.x,
+                            p->outputs.empty() ? 0.0 : p->outputs.front().b.y);
+                check(p->outputs.size() == 1, "faces: the face is in the file");
+                if (p->outputs.size() == 1)
+                    check(std::abs(p->outputs.front().a.y + 4.0) < 1e-9 &&
+                              std::abs(p->outputs.front().b.y - 4.0) < 1e-9,
+                          "faces: with the two ends it was marked between, the right way round");
+            }
+        }
+
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-FACE"));
+        dlg.resize(1600, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        // THREE PANES, not four. The fanout already says which side of the connector it was drawn from, and
+        // that is the whole of the difference between the two sides: a second window for "the other one"
+        // asks for the same drawing twice and for the two to be kept in step by hand.
+        const QList<DrawingPreview*> panes = dlg.findChildren<DrawingPreview*>();
+        std::printf("  faces: %lld drawing pane(s)\n", static_cast<long long>(panes.size()));
+        check(panes.size() == 3, "panes: three drawings - the fanout says its own side, so there is no fourth");
+
+        // AND THE MARKS ARE DRAWN. Blue where it connects, with an arrow along the run, and a purple bar
+        // across the face the wires leave by - the same marks the editing canvas draws, in the same colours.
+        DrawingPreview* mech = nullptr;
+        for (DrawingPreview* p : panes)
+            for (const Entity& e : p->entities())
+                if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool()) mech = p;
+        check(mech != nullptr, "marks: the mechanical pane draws the part's marks over the drawing");
+        if (mech) {
+            QStringList colours;
+            int arrows = 0, bars = 0;
+            for (const Entity& e : mech->entities()) {
+                if (!e.meta.value(QLatin1String(kPreviewMarkKey)).toBool()) continue;
+                if (!colours.contains(e.color)) colours << e.color;
+                if (e.id.startsWith(QStringLiteral("model-connect-barb"))) ++arrows;
+                if (e.meta.contains(QStringLiteral("modelOutput"))) ++bars;
+            }
+            colours.sort();
+            std::printf("  marks: %s; %d barb(s), %d face bar(s)\n",
+                        qPrintable(colours.join(QStringLiteral(", "))), arrows, bars);
+            check(colours.contains(QStringLiteral("#5aa0ff")) && arrows == 2,
+                  "marks: blue where it connects, with an arrow saying which way it runs");
+            check(colours.contains(QStringLiteral("#c678dd")) && bars == 1,
+                  "marks: and a purple bar across the face the wires leave by");
+            // AND NO ORANGE LINE. The old way was to colour one of the part's OWN lines orange, which reads
+            // as a feature of the part, says nothing about direction and cannot say where the wires leave.
+            const QImage shot = mech->grab().toImage();
+            int oldOrange = 0;
+            for (int y = 0; y < shot.height(); ++y)
+                for (int x = 0; x < shot.width(); ++x) {
+                    const QRgb c = shot.pixel(x, y);
+                    if (qRed(c) > 200 && qGreen(c) > 130 && qGreen(c) < 190 && qBlue(c) < 110) ++oldOrange;
+                }
+            std::printf("  marks: %d pixel(s) of the old orange connection line\n", oldOrange);
+            check(oldOrange == 0, "marks: the orange line is gone - a mark is drawn as a mark");
+        }
         QFile::remove(libFile);
     }
 

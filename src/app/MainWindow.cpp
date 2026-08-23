@@ -1969,6 +1969,10 @@ void addLibraryPartGuides(Document& doc, const LibraryPart& part) {
                                markerRadius,
                                std::max(6.0 * markerRadius, b.valid ? b.width() * 0.35 : 10.0)))
         doc.entities().push_back(std::move(mark));
+    // AND THE FACES THE WIRES LEAVE BY, the same bars and numbers a default model shows. A connector out of
+    // a catalogue has faces exactly as the house model of one does.
+    for (Entity& mark : outputFaceMarkEntities(part.outputs, markerRadius))
+        doc.entities().push_back(std::move(mark));
 }
 
 void loadLibraryPartDocument(Document& doc, const LibraryPart& part, LibraryPartDrawing kind) {
@@ -2187,6 +2191,25 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             6000);
     });
     connect(editor_, &Editor::modelOutputPicked, this, [this](Vec2 a, Vec2 b) {
+        // A LIBRARY PART HAS FACES TOO. Anything wires go into - a connector, a ferrule, a ring - has one or
+        // more faces they come out of, and the generator hands the branches out in the order they were
+        // marked. A default model has been able to say so all along; a part out of the catalogue, which is
+        // the same part with a part number on it, could only be told where it connects.
+        const bool libraryMechSession = doc_ && libraryPartEdits_.contains(doc_) &&
+                                        libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+        if (libraryMechSession) {
+            LibraryPart& part = libraryPartSessionModels_[doc_];
+            part.outputs.push_back({a, b});
+            addLibraryPartGuides(*doc_, part);
+            doc_->setDirty(true);
+            canvas_->invalidateScene();
+            statusBar()->showMessage(
+                tr("Output face %1 marked — the wires spread along it and stay inside it. Click another "
+                   "for the next branch, or Esc to finish")
+                    .arg(part.outputs.size()),
+                6000);
+            return;
+        }
         if (!doc_ || !mechModelEdits_.contains(doc_)) return;
         MechModel& model = mechModelSessionModels_[doc_];
         model.outputs.push_back({a, b});
@@ -12279,7 +12302,9 @@ void MainWindow::armMechModelScaleRef() {
 }
 
 void MainWindow::armMechModelOutput() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    const bool libraryMechSession = doc_ && libraryPartEdits_.contains(doc_) &&
+                                    libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!doc_ || !(mechModelEdits_.contains(doc_) || libraryMechSession)) return;
     editor_->setTool(ToolId::ModelOutputLine);
     canvas_->setFocus();
     statusBar()->showMessage(
@@ -12287,7 +12312,22 @@ void MainWindow::armMechModelOutput() {
 }
 
 void MainWindow::clearMechModelOutputs() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    const bool libraryMechSession = doc_ && libraryPartEdits_.contains(doc_) &&
+                                    libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!doc_ || !(mechModelEdits_.contains(doc_) || libraryMechSession)) return;
+    if (libraryMechSession) {
+        LibraryPart& part = libraryPartSessionModels_[doc_];
+        if (part.outputs.empty()) {
+            statusBar()->showMessage(tr("No output faces are marked on this part"), 3000);
+            return;
+        }
+        part.outputs.clear();
+        addLibraryPartGuides(*doc_, part);
+        doc_->setDirty(true);
+        canvas_->invalidateScene();
+        statusBar()->showMessage(tr("Output faces cleared — mark them again from the first branch"), 4000);
+        return;
+    }
     MechModel& model = mechModelSessionModels_[doc_];
     if (model.outputs.empty()) {
         statusBar()->showMessage(tr("No output faces are marked on this model"), 3000);

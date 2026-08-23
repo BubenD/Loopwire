@@ -188,6 +188,10 @@ private:
     // to, drawn orange - so a part can be looked at with nothing over it. See applyShowConnection().
     QToolButton* showConnBtn_ = nullptr;
     void applyShowConnection();
+    // The part's mechanical drawing with its marks drawn over it - where it connects and which way it runs
+    // from there, its two ends, the faces the conductors leave by. In the colours the editing canvas uses,
+    // and only when the eye says to show them.
+    std::vector<Entity> markedMechanicalDrawing(const LibraryPart& part);
     // Take this drawing from a default mechanical model - the house style for the pieces a harness is made
     // of. Opens the model list with each model's drawings beside it; `mechanical` says which of the PART's
     // drawings the taken one lands in, which is the button that was pressed to get here.

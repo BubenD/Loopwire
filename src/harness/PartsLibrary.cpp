@@ -855,6 +855,14 @@ QJsonObject PartsLibrary::toJson() const {
             o[QStringLiteral("nearPoint")] = QJsonObject{{"x", p.nearPoint.x}, {"y", p.nearPoint.y}};
         if (p.hasFarPoint)
             o[QStringLiteral("farPoint")] = QJsonObject{{"x", p.farPoint.x}, {"y", p.farPoint.y}};
+        if (!p.outputs.empty()) {
+            // In the ORDER THEY WERE MARKED, which is the order the generator hands the branches out in -
+            // so an array and not an object, and never sorted.
+            QJsonArray faces;
+            for (const MechOutputFace& f : p.outputs)
+                faces.append(QJsonObject{{"x1", f.a.x}, {"y1", f.a.y}, {"x2", f.b.x}, {"y2", f.b.y}});
+            o[QStringLiteral("outputs")] = faces;
+        }
         arr.append(o);
     }
     root[QStringLiteral("parts")] = arr;
@@ -908,6 +916,13 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
         if (p.hasFarPoint)
             p.farPoint = {far.value(QStringLiteral("x")).toDouble(),
                           far.value(QStringLiteral("y")).toDouble()};
+        for (const auto& fv : o.value(QStringLiteral("outputs")).toArray()) {
+            const QJsonObject f = fv.toObject();
+            p.outputs.push_back({{f.value(QStringLiteral("x1")).toDouble(),
+                                  f.value(QStringLiteral("y1")).toDouble()},
+                                 {f.value(QStringLiteral("x2")).toDouble(),
+                                  f.value(QStringLiteral("y2")).toDouble()}});
+        }
         if (p.id.isEmpty()) p.id = QStringLiteral("p%1").arg(parts.size() + 1);
         parts.push_back(p);
     }

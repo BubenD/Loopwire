@@ -45,6 +45,8 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScreen>
+#include <QGuiApplication>
 #include <QSplitter>
 #include <QTimer>
 #include <QTreeWidget>
@@ -87,12 +89,27 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
                                        std::function<void(QString, LibraryPartDrawing)> onEdit)
     : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
     setWindowTitle(QStringLiteral("Harness parts library"));
+    // WIDE ENOUGH THAT EVERY BUTTON CAN BE READ. Three drawings side by side, each with its own row of
+    // buttons under it, and a window opened at a width somebody picked once means captions cut in half -
+    // "r from opposite fa" was a real button. So the width is asked of the window itself once it is built
+    // (see the end of buildUi), and it never exceeds the screen it is opening on.
     resize(1180, 760);
     // Everything connected last time (and, on a first run, the default library seeded with real
     // parts). The one being worked on is the first of them until the chooser says otherwise.
     catalog_.openRemembered();
     path_ = catalog_.activePath();
     buildUi();
+    // The size the window actually needs, now that everything in it exists: what the layouts ask for,
+    // never more than the screen can show. Asked for here rather than guessed at in resize() above,
+    // because the thing that decides it is the widest row of buttons under a drawing - and that changes
+    // whenever a button is added.
+    {
+        const QSize want = sizeHint();
+        QSize room(1600, 900);
+        if (QScreen* screen = QGuiApplication::primaryScreen())
+            room = screen->availableGeometry().size() - QSize(80, 120);
+        resize(std::min(want.width(), room.width()), std::min(std::max(want.height(), 760), room.height()));
+    }
     // The chooser and the library list are FILLED here, not by buildUi - which only makes the widgets.
     // Without this the window opened with both of them empty while the status line said which library
     // was being worked in: everything was connected, nothing was listed. It went unnoticed because a
@@ -783,9 +800,9 @@ void PartsLibraryDialog::buildUi() {
     drawSplit->setHandleWidth(6);
     dgOuter->addWidget(drawSplit, 1);
     // One pane per drawing: the drawing itself, then its buttons, then any setting of its own.
-    QWidget* paneHost[4] = {nullptr, nullptr, nullptr, nullptr};
-    QVBoxLayout* paneLay[4] = {nullptr, nullptr, nullptr, nullptr};
-    for (int i = 0; i < 4; ++i) {
+    QWidget* paneHost[3] = {nullptr, nullptr, nullptr};
+    QVBoxLayout* paneLay[3] = {nullptr, nullptr, nullptr};
+    for (int i = 0; i < 3; ++i) {
         paneHost[i] = new QWidget(drawSplit);
         paneLay[i] = new QVBoxLayout(paneHost[i]);
         paneLay[i]->setContentsMargins(0, 0, 0, 0);
@@ -800,8 +817,12 @@ void PartsLibraryDialog::buildUi() {
     auto reflowButtons = [](QWidget* host) {
         const QList<QPushButton*> bs =
             host->findChildren<QPushButton*>(QString(), Qt::FindDirectChildrenOnly);
+        // PREFERRED, not ignored: the window opens at a width where every caption is READ, because a button
+        // whose words are cut in half ("r from opposite fa") is a button nobody can be sure of. The small
+        // minimum is what still lets a pane be dragged narrow afterwards - then, and only then, the words
+        // give way and the tooltip answers for them.
         for (QPushButton* b : bs) {
-            b->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
             b->setMinimumWidth(28);
         }
         if (bs.size() < 3) return;
@@ -909,12 +930,6 @@ void PartsLibraryDialog::buildUi() {
                 "fanout\"), otherwise this one mirrored about the X axis as a guess at it."));
             connect(mir, &QPushButton::clicked, this, [this] { insertFanout(true); });
             bl->addWidget(mir);
-            auto* mfo = new QPushButton(QStringLiteral("Mirror from opposite fanout"), btns);
-            mfo->setToolTip(QStringLiteral(
-                "Seed THIS drawing from a one-off mirror of the opposite fanout - a starting point to "
-                "hand-correct and capture, not a transform kept up automatically."));
-            connect(mfo, &QPushButton::clicked, this, [this] { mirrorFanoutFromOpposite(false); });
-            bl->addWidget(mfo);
             auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
             connect(clr, &QPushButton::clicked, this, [this] {
                 if (LibraryPart* p = current()) {
@@ -983,55 +998,24 @@ void PartsLibraryDialog::buildUi() {
         reflowButtons(btns);
         paneLay[i]->addWidget(btns);
     }
-    // A FOURTH pane, for the fanout's other side - its own drawing now (see LibraryPart::fanoutOpposite),
-    // not a live mirror of the one above computed only at placement time.
-    {
-        auto* prev = new DrawingPreview(QStringLiteral("Fanout (opposite)"), paneHost[3]);
-        prev->setMinimumSize(150, 150);
-        prev->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        fanoutOppositePreview_ = prev;
-        paneLay[3]->addWidget(prev, 1);
-        auto* btns = new QWidget(paneHost[3]);
-        auto* bl = new QHBoxLayout(btns);
-        bl->setContentsMargins(0, 0, 0, 0);
-        auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
-        cap->setToolTip(QStringLiteral("Take what is selected on the sheet as the opposite fanout"));
-        connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(true); });
-        bl->addWidget(cap);
-        auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
-        edt->setToolTip(QStringLiteral("Open it in its own canvas session to add or move lines"));
-        connect(edt, &QPushButton::clicked, this,
-                [this] { editDrawing(LibraryPartDrawing::FanoutOpposite); });
-        bl->addWidget(edt);
-        auto* mfo = new QPushButton(QStringLiteral("Mirror from fanout"), btns);
-        mfo->setToolTip(QStringLiteral(
-            "Seed THIS drawing from a one-off mirror of the fanout above - a starting point to "
-            "hand-correct and capture, not a transform kept up automatically."));
-        connect(mfo, &QPushButton::clicked, this, [this] { mirrorFanoutFromOpposite(true); });
-        bl->addWidget(mfo);
-        auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
-        connect(clr, &QPushButton::clicked, this, [this] {
-            if (LibraryPart* p = current()) {
-                p->fanoutOpposite = QJsonArray();
-                if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(p->fanoutOpposite);
-                touched();
-                reloadTree();
-            }
-        });
-        bl->addWidget(clr);
-        reflowButtons(btns);
-        paneLay[3]->addWidget(btns);
-        // EQUAL TO BEGIN WITH, and said once the row has a width to divide. A splitter left to itself gives
-        // each pane whatever its contents ask for, and asking for equal shares before the window has been
-        // laid out only gets them clamped to their minimums with the leftover handed to whichever pane asked
-        // loudest. So it is done on the first turn of the event loop, when there is a real width - and once
-        // only, so a pane the user drags afterwards stays where they put it.
-        QTimer::singleShot(0, drawSplit, [drawSplit] {
-            const int n = drawSplit->count();
-            if (n <= 0 || drawSplit->width() <= 0) return;
-            drawSplit->setSizes(QList<int>(n, std::max(1, drawSplit->width() / n)));
-        });
-    }
+    // NO FOURTH PANE. The fanout already says which side of the connector it was drawn from - front,
+    // looking at the face, or back, looking at the wires - and that is the whole of the difference between
+    // the two sides. A second drawing window for "the other one" asks the user to draw twice what the
+    // combo box already says once, and then to keep the two in step by hand.
+    //
+    // A part that already HAS an opposite drawing keeps it (LibraryPart::fanoutOpposite is still read when
+    // one is placed); there is simply no longer a window inviting anybody to make another.
+    fanoutOppositePreview_ = nullptr;
+    // EQUAL TO BEGIN WITH, and said once the row has a width to divide. A splitter left to itself gives
+    // each pane whatever its contents ask for, and asking for equal shares before the window has been laid
+    // out only gets them clamped to their minimums with the leftover handed to whichever pane asked
+    // loudest. So it is done on the first turn of the event loop, when there is a real width - and once
+    // only, so a pane the user drags afterwards stays where they put it.
+    QTimer::singleShot(0, drawSplit, [drawSplit] {
+        const int n = drawSplit->count();
+        if (n <= 0 || drawSplit->width() <= 0) return;
+        drawSplit->setSizes(QList<int>(n, std::max(1, drawSplit->width() / n)));
+    });
     // The remembered answer, given to the panes now they exist: a preference that is read back but not
     // applied until the button is next pressed is a preference that looks forgotten.
     applyShowConnection();
@@ -1244,7 +1228,10 @@ void PartsLibraryDialog::showPart(const QString& id) {
         fanoutSideBox_->setCurrentIndex(at >= 0 ? at : 0);
     }
     refreshDatasheetRow();
-    if (mechPreview_) mechPreview_->setDrawing(have ? p->mechanical : QJsonArray());
+    if (mechPreview_) {
+        if (have && p) mechPreview_->setEntities(markedMechanicalDrawing(*p));
+        else mechPreview_->setDrawing(QJsonArray());
+    }
     syncing_ = false;
     rebuildParamForm();
 }
@@ -2196,10 +2183,40 @@ void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
 
 // The eye's answer, given to all three drawings. In one place because the three panes are shown one part
 // three ways and there is no sense in which one of them could be showing its marks and another not.
+// THE PART'S OWN MARKS, over its mechanical drawing: where it connects and which way it runs from there,
+// the two ends, and the faces the conductors leave by - the same marks, in the same colours, that the
+// editing canvas draws while they are being put on. They belong in this window because this is where a part
+// is chosen and checked: "has this one been marked up, and where" should be answerable by looking.
+//
+// The mechanical drawing only. A schematic symbol is a glyph on a circuit and a fanout is a picture of how
+// the wires break out; neither is placed by running a direction along a run.
+std::vector<Entity> PartsLibraryDialog::markedMechanicalDrawing(const LibraryPart& part) {
+    std::vector<Entity> shown = partDrawingEntities(part.mechanical);
+    if (!showConnBtn_ || !showConnBtn_->isChecked()) return shown;
+    Bounds ext;
+    for (const Entity& e : shown) ext.expand(e.bounds());
+    // Sized to the part, because a mark is read against the thing it is on: three millimetres of ring on a
+    // part two metres long is not a mark, it is a speck.
+    const double r = ext.valid ? std::max(0.4, std::max(ext.width(), ext.height()) * 0.06) : 2.0;
+    const double arm = std::max(6.0 * r, ext.valid ? ext.width() * 0.35 : 10.0);
+    for (Entity& m : placementMarkEntities(part.hasConnect, part.connectPoint, part.connectAngleRad,
+                                           part.hasNearPoint, part.nearPoint, part.hasFarPoint,
+                                           part.farPoint, r, arm))
+        shown.push_back(std::move(m));
+    for (Entity& m : outputFaceMarkEntities(part.outputs, r)) shown.push_back(std::move(m));
+    return shown;
+}
+
 void PartsLibraryDialog::applyShowConnection() {
     const bool on = !showConnBtn_ || showConnBtn_->isChecked();
     for (DrawingPreview* prev : {schemPreview_, mechPreview_, fanoutPreview_, fanoutOppositePreview_})
         if (prev) prev->setShowConnection(on);
+    // The marks are DRAWN INTO the mechanical pane rather than switched off in the renderer, so that pane
+    // has to be filled again - with them or without them.
+    if (mechPreview_) {
+        if (const LibraryPart* p = current()) mechPreview_->setEntities(markedMechanicalDrawing(*p));
+        else mechPreview_->setDrawing(QJsonArray());
+    }
 }
 
 // THE TAKING ITSELF, apart from the window that chooses what to take. The window's business is picking a

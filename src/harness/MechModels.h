@@ -92,6 +92,13 @@ bool mechModelPerWire(MechModelKind kind);
 // the list is harness fabric a schematic does not draw at all.
 bool mechModelHasSchematicSlot(MechModelKind kind);
 
+// A face the conductors leave by: a line across the part, the wires spreading along it. Used by a default
+// model and by a library part alike - a connector out of a catalogue has faces exactly as the house model of
+// one does, and drawing them twice would be drawing the same thing twice.
+struct MechOutputFace {
+    Vec2 a, b;
+};
+
 // One model: the drawing, and what must not stretch in it.
 struct MechModel {
     MechModelKind kind = MechModelKind::Wire;
@@ -149,9 +156,11 @@ struct MechModel {
     // So a model marks its output lines: two points each, in the model's own coordinates. A part with one
     // face has one; a Y-split has one per branch, in the order they were marked, which is the order the
     // generator hands the branches out in.
-    struct OutputLine {
-        Vec2 a, b;
-    };
+    // A FACE THE CONDUCTORS LEAVE BY is the same idea on a default model and on a library part - a line
+    // across the part, with the wires spreading along it - so it is one type (MechOutputFace, above) and
+    // one thing that draws it. A connector bought from a catalogue has faces exactly as the house model of
+    // one does.
+    using OutputLine = MechOutputFace;
     std::vector<OutputLine> outputs;
 
     // The GAP a cable or a wire leaves at each end: the piece of the run it does not cover, where the
@@ -276,6 +285,12 @@ std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerR
 // be marked up with exactly the same marks, in the same colours, without being a MechModel itself.
 // mechModelMarkEntities() is built on this plus its own output-line marks, which a model has and a
 // library part does not (a connector's own pins are its output lines).
+// THE FACES THE CONDUCTORS LEAVE BY, drawn: a bar across the part with a stop at either end and its number
+// beside it. Apart from the marks a part is PLACED by, because a library part has faces without necessarily
+// having the rest - and the order they were marked is the order the branches come out in, so the numbers are
+// part of the drawing rather than decoration.
+std::vector<Entity> outputFaceMarkEntities(const std::vector<MechOutputFace>& faces, double markerRadius);
+
 std::vector<Entity> placementMarkEntities(bool hasConnect, const Vec2& connectPoint,
                                           double connectAngleRad, bool hasNear, const Vec2& nearPoint,
                                           bool hasFar, const Vec2& farPoint, double markerRadius,

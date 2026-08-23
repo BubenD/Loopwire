@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/MechModels.h"
 #include "model/Entity.h"
 
 #include <QJsonArray>
@@ -192,6 +193,11 @@ struct LibraryPart {
     Vec2 nearPoint;
     bool hasFarPoint = false;
     Vec2 farPoint;
+    // THE FACES THE CONDUCTORS LEAVE BY. A connector, a ferrule, a ring - anything wires go into - has one
+    // or more faces the wires come out of, and the generator hands the branches out in the order they were
+    // marked. A default model has had these all along; a library part is the same part with a part number on
+    // it, and it could only be told where it connects, never where the wires leave.
+    std::vector<MechOutputFace> outputs;
 
     // The contacts this connector takes: library part ids, in the order they were tied on. A connector is
     // ordered with its contacts and cannot be built without them, and there is often more than one to

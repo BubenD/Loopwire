@@ -198,11 +198,16 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
     Bounds b;
     for (const Entity& e : ents_) {
         Entity shown = e;
-        // HIDDEN MEANS THE MARK IS NOT ON THE DRAWING. The renderer colours a connection line orange of its
-        // own accord - it is a note about the part and it is wanted wherever the part is drawn - and it
-        // overrules the grey asked for here. So the mark is taken off the COPY being drawn: the part keeps
-        // its line, in the same grey as the rest of it, and the part on the library's shelf is unchanged.
-        if (!showConn_) shown.meta.remove(QLatin1String(kConnectionLineKey));
+        // AN ORANGE LINE IS NOT A MARK. The old way of saying where a harness attaches was to colour one of
+        // the part's OWN lines orange - which reads as part of the part (an orange line on a connector face
+        // looks like a feature of the connector), says nothing about which way the part runs from there, and
+        // cannot say where the wires leave at all. The marks say all of it, in the colours the editing canvas
+        // uses: blue where it connects with an arrow along the run, orange and green ends, purple faces.
+        //
+        // So the flag is taken off the copy being drawn, always. The part on the shelf still carries it -
+        // the generator reads it when it places a part that has one - it simply is not what the eye is
+        // pointed at any more.
+        shown.meta.remove(QLatin1String(kConnectionLineKey));
         doc.entities().push_back(shown);
         const Bounds eb = e.bounds();
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
@@ -227,8 +232,7 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         // Everything in one quiet grey, so a preview reads as a drawing rather than as a colour chart -
         // EXCEPT the line the harness attaches to, which keeps the orange that says so. Overriding that
         // as well is what hid the mark in the library, where it is most wanted.
-        const bool conn = (showConn_ && e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) ||
-                          (pickable_ && i == picked_);
+        const bool conn = pickable_ && i == picked_;
         // A MARK KEEPS ITS OWN COLOUR. The grey is so that a preview reads as a drawing rather than as a
         // colour chart, and it was being applied to the marks as well - so the manager's blue connection
         // point, its orange and green ends and its purple output faces all came out the same grey as the
