@@ -8,12 +8,15 @@
 #include "app/MainWindow.h"
 #include "model/Document.h"
 #include "app/MechModelCanvasDialog.h"
+#include "app/PartsLibraryDialog.h"
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 #include "render/CanvasWidget.h"
 #include "tools/ToolId.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QMouseEvent>
 #include <QLineEdit>
@@ -435,6 +438,147 @@ int run_mechmodelcanvas_tests() {
         QMouseEvent up(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::MiddleButton,
                        Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(canvas, &up);
+    }
+
+    // ---- a library part's mechanical drawing gets a real session too: grey canvas, seeded marks, and
+    // a save that writes straight back into the library dialog's own catalog ------------------------
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_libpart_session.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-SESSION");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Session test connector");
+            Entity body;
+            body.id = QStringLiteral("body");
+            body.type = EntityType::Line;
+            body.a = {0.0, -5.0};
+            body.b = {30.0, 5.0};
+            part.mechanical = partDrawingFromEntities({body});
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        auto* canvas = win.findChild<CanvasWidget*>();
+        auto* ed = win.findChild<Editor*>();
+        check(canvas != nullptr && ed != nullptr, "library session: there is a canvas and an editor");
+        if (canvas && ed) {
+            PartsLibraryDialog* dlg = win.partsLibraryDialogForTest();
+            check(dlg != nullptr, "library session: the library dialog is reachable");
+            if (dlg) {
+                dlg->setLibraryPath(libFile);
+                const QColor normal = canvas->backgroundColor();
+
+                win.openLibraryPartEditor(QStringLiteral("P-SESSION"), LibraryPartDrawing::Mechanical);
+                QApplication::processEvents();
+
+                check(canvas->backgroundColor() != normal,
+                      "library session: the canvas goes grey, the same as any other session");
+
+                Document* d = ed->document();
+                check(d != nullptr, "library session: the drawing opened in a document of its own");
+                if (d) {
+                    int marks = 0;
+                    for (const Entity& e : d->entities())
+                        if (!e.meta.value(QStringLiteral("modelAnchor")).toString().isEmpty()) ++marks;
+                    std::printf("  library session: %d mark(s) seeded on opening\n", marks);
+                    check(marks == 3, "library session: connect, near and far are seeded the same way "
+                                       "a default model's are");
+
+                    // A drag on the canvas would move the mark and let Editor::changed read it back;
+                    // driven directly here, the same way the default-model marks are tested above.
+                    win.markMechModelConnectAt(Vec2{2.0, -5.0}, 0.0);
+                    QApplication::processEvents();
+
+                    win.saveMechModelBeingEdited(); // Save/Cancel are generalised to route by session kind
+                    QApplication::processEvents();
+                }
+
+                LibraryPart* saved = dlg->partForSession(QStringLiteral("P-SESSION"));
+                check(saved != nullptr, "library session: the part is still in the library");
+                if (saved) {
+                    check(!saved->mechanical.isEmpty(),
+                          "library session: the mechanical drawing was saved back");
+                    check(saved->hasConnect && saved->hasNearPoint && saved->hasFarPoint,
+                          "library session: its marks round-tripped through the save too");
+                }
+            }
+        }
+    }
+
+
+    // ---- "Mirror from opposite fanout" seeds a starting drawing - not a transform reapplied forever --
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_libpart_mirror.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-MIRROR");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Mirror test connector");
+            Entity wire;
+            wire.id = QStringLiteral("wire");
+            wire.type = EntityType::Line;
+            wire.a = {0.0, 2.0};
+            wire.b = {20.0, 8.0};
+            part.fanout = partDrawingFromEntities({wire});
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-MIRROR"));
+
+        LibraryPart* before = dlg.partForSession(QStringLiteral("P-MIRROR"));
+        check(before != nullptr && before->fanoutOpposite.isEmpty(),
+              "mirror: nothing on the opposite side yet");
+
+        dlg.mirrorFanoutFromOpposite(true); // seed fanoutOpposite from fanout
+
+        LibraryPart* after = dlg.partForSession(QStringLiteral("P-MIRROR"));
+        check(after != nullptr && !after->fanoutOpposite.isEmpty(),
+              "mirror: the opposite side now has a starting drawing");
+        if (after) {
+            const std::vector<Entity> mirrored = partDrawingEntities(after->fanoutOpposite);
+            check(mirrored.size() == 1, "mirror: the same one object, mirrored");
+            if (!mirrored.empty()) {
+                std::printf("  mirror: mirrored endpoints y %.1f/%.1f (from 2.0/8.0)\n",
+                            mirrored.front().a.y, mirrored.front().b.y);
+                check(near(mirrored.front().a.x, 0.0) && near(mirrored.front().b.x, 20.0) &&
+                          near(mirrored.front().a.y, -2.0) && near(mirrored.front().b.y, -8.0),
+                      "mirror: flipped about the run it leaves from - the far side sees it upside down");
+            }
+
+            // Independent from here on: hand-correcting it must not touch the original fanout.
+            LibraryPart* p = dlg.partForSession(QStringLiteral("P-MIRROR"));
+            std::vector<Entity> es = partDrawingEntities(p->fanoutOpposite);
+            for (Entity& e : es) e.a.x += 5.0;
+            p->fanoutOpposite = partDrawingFromEntities(es);
+            check(dlg.saveLibrary(), "mirror: the hand-corrected drawing saves");
+
+            PartsLibrary reread;
+            check(reread.load(libFile), "mirror: the library file re-opens");
+            const LibraryPart* onDisk = reread.byId(QStringLiteral("P-MIRROR"));
+            check(onDisk != nullptr, "mirror: the part is still there");
+            if (onDisk) {
+                const std::vector<Entity> origFanout = partDrawingEntities(onDisk->fanout);
+                check(!origFanout.empty() && near(origFanout.front().a.x, 0.0),
+                      "mirror: the original fanout is untouched by hand-correcting the opposite one");
+                check(!onDisk->fanoutOpposite.isEmpty(),
+                      "mirror: the corrected opposite side persisted on its own");
+            }
+        }
     }
 
     if (canvasFailures == 0) std::printf("  -> ok\n");

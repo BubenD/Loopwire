@@ -269,6 +269,16 @@ inline constexpr char kMechModelGuideLayer[] = "«guide»";
 // long is a speck, so it cannot be a constant); `armMm` is how long the direction arrow reaches.
 std::vector<Entity> mechModelMarkEntities(const MechModel& model, double markerRadius, double armMm);
 
+// The connect/near/far points ALONE, built from the raw fields rather than a MechModel - so
+// anything else that carries the same three points (a library part's mechanical drawing, say) can
+// be marked up with exactly the same marks, in the same colours, without being a MechModel itself.
+// mechModelMarkEntities() is built on this plus its own output-line marks, which a model has and a
+// library part does not (a connector's own pins are its output lines).
+std::vector<Entity> placementMarkEntities(bool hasConnect, const Vec2& connectPoint,
+                                          double connectAngleRad, bool hasNear, const Vec2& nearPoint,
+                                          bool hasFar, const Vec2& farPoint, double markerRadius,
+                                          double armMm);
+
 // How long the model was drawn: what it says, or the extent of its own drawing.
 double mechModelDrawnLength(const MechModel& model);
 double mechModelDrawnAcross(const MechModel& model);

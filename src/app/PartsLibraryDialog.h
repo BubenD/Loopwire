@@ -6,6 +6,8 @@
 #include <QHash>
 #include <QString>
 
+#include <functional>
+
 class QToolButton;
 class QComboBox;
 class QLabel;
@@ -35,7 +37,11 @@ class DrawingPreview;
 class PartsLibraryDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit PartsLibraryDialog(Editor* editor, QWidget* parent = nullptr);
+    // onEdit is handed the part id and which of its drawings to open - the main canvas session
+    // (grey canvas, and connection points for the mechanical one) that replaces the old
+    // connection-line popup. Optional so a dialog built without a host still works (tests).
+    explicit PartsLibraryDialog(Editor* editor, QWidget* parent = nullptr,
+                                std::function<void(QString, LibraryPartDrawing)> onEdit = {});
 
     // Where the library is read from / written to (the default path unless told otherwise).
     void setLibraryPath(const QString& path);
@@ -43,6 +49,10 @@ public:
     const PartsCatalog& catalog() const { return catalog_; }
     // Every part of every connected library, to read from.
     PartsLibrary library() const { return catalog_.merged(); }
+    // The part, mutably, in whichever connected library actually holds it - not a copy, and not
+    // necessarily the part currently shown. What a canvas editing session reads its starting
+    // drawing from and writes the finished one back into.
+    LibraryPart* partForSession(const QString& id);
 
     // Testing / driving: the part currently shown, and the actions the buttons run.
     QString currentPartId() const { return currentId_; }
@@ -69,16 +79,21 @@ public:
     // Place it with a contact fitted (empty for none): what the fall menu on Insert chooses.
     // Place the fanout - as drawn, or mirrored about the X axis for the other side of the connector.
     void insertFanout(bool mirrored);
-    // Take what is selected on the sheet as this part's fanout.
-    void beginCaptureFanout();
+    // Take what is selected on the sheet as this part's fanout - the opposite side's when
+    // `opposite` is set.
+    void beginCaptureFanout(bool opposite = false);
     // Which pin contact this connector is used with: one, for both drawings.
     void refreshContactChoice();    // this drawing goes onto the sheet
-    // Onto the sheet AND selected, to be worked on: lines added or moved, and the one the harness
-    // attaches to marked as such (Harness ▸ connection line, or the `connline` command). Pressing
-    // Capture selection afterwards puts the edited drawing back on this part.
-    void editDrawing(bool mechanical);
+    // Opens that drawing in its own canvas session (grey canvas; the mechanical one also gets real
+    // connect/near/far points) via onEdit_ - the host (MainWindow) owns the session itself, the way
+    // MechModelsDialog's onEdit_ works for a default model.
+    void editDrawing(LibraryPartDrawing kind);
     void clearDrawing(bool mechanical);
     bool saveLibrary();
+    // Seed one fanout side from a one-off mirror of the other - a starting point to hand-correct
+    // and capture, not a transform applied every time the fanout is placed. `intoOpposite`: true
+    // seeds fanoutOpposite from fanout, false seeds fanout from fanoutOpposite.
+    void mirrorFanoutFromOpposite(bool intoOpposite);
     // Write the current part's description from its technical parameters.
     void describeFromData();
     // The datasheet: attached into the datasheet folder, opened, or taken off. Taking it off deletes
@@ -118,6 +133,7 @@ private:
     void touched(); // a field changed: keep the list and the file in step
 
     Editor* editor_ = nullptr;
+    std::function<void(QString, LibraryPartDrawing)> onEdit_;
     // Every connected library, and which one is being worked on. A part is edited in the library it
     // came from; a new one is added to the library chosen in the chooser.
     PartsCatalog catalog_;
@@ -159,6 +175,9 @@ private:
     DrawingPreview* mechPreview_ = nullptr;
     // The fanout: a third drawing of the part, and which side of the connector it was drawn from.
     DrawingPreview* fanoutPreview_ = nullptr;
+    // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see
+    // fanoutOpposite / mirrorFanoutFromOpposite()).
+    DrawingPreview* fanoutOppositePreview_ = nullptr;
     // The eye over the three drawings: shows or hides the connection point - the line the harness attaches
     // to, drawn orange - so a part can be looked at with nothing over it. See applyShowConnection().
     QToolButton* showConnBtn_ = nullptr;

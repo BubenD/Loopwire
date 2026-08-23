@@ -831,6 +831,7 @@ QJsonObject PartsLibrary::toJson() const {
         o[QStringLiteral("internalPn")] = p.internalPn;
         o[QStringLiteral("link")] = p.link;
         if (!p.fanout.isEmpty()) o[QStringLiteral("fanout")] = p.fanout;
+        if (!p.fanoutOpposite.isEmpty()) o[QStringLiteral("fanoutOpposite")] = p.fanoutOpposite;
         o[QStringLiteral("unit")] = p.unit;
         QJsonObject params;
         for (auto it = p.params.constBegin(); it != p.params.constEnd(); ++it)
@@ -846,6 +847,14 @@ QJsonObject PartsLibrary::toJson() const {
             o[QStringLiteral("datasheet")] = p.datasheets.front();
         }
         if (!p.mechanical.isEmpty()) o[QStringLiteral("mechanical")] = p.mechanical;
+        if (p.hasConnect) {
+            o[QStringLiteral("connect")] = QJsonObject{{"x", p.connectPoint.x}, {"y", p.connectPoint.y}};
+            o[QStringLiteral("connectAngle")] = p.connectAngleRad;
+        }
+        if (p.hasNearPoint)
+            o[QStringLiteral("nearPoint")] = QJsonObject{{"x", p.nearPoint.x}, {"y", p.nearPoint.y}};
+        if (p.hasFarPoint)
+            o[QStringLiteral("farPoint")] = QJsonObject{{"x", p.farPoint.x}, {"y", p.farPoint.y}};
         arr.append(o);
     }
     root[QStringLiteral("parts")] = arr;
@@ -866,6 +875,7 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
         p.internalPn = o.value(QStringLiteral("internalPn")).toString();
         p.link = o.value(QStringLiteral("link")).toString();
         p.fanout = o.value(QStringLiteral("fanout")).toArray();
+        p.fanoutOpposite = o.value(QStringLiteral("fanoutOpposite")).toArray();
         p.unit = o.value(QStringLiteral("unit")).toString(defaultUnitForKind(p.kind));
         const QJsonObject params = o.value(QStringLiteral("params")).toObject();
         for (auto it = params.constBegin(); it != params.constEnd(); ++it)
@@ -882,6 +892,22 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
             if (!one.isEmpty()) p.datasheets << one;
         }
         p.mechanical = o.value(QStringLiteral("mechanical")).toArray();
+        const QJsonObject connect = o.value(QStringLiteral("connect")).toObject();
+        p.hasConnect = !connect.isEmpty();
+        if (p.hasConnect)
+            p.connectPoint = {connect.value(QStringLiteral("x")).toDouble(),
+                              connect.value(QStringLiteral("y")).toDouble()};
+        p.connectAngleRad = o.value(QStringLiteral("connectAngle")).toDouble();
+        const QJsonObject near = o.value(QStringLiteral("nearPoint")).toObject();
+        p.hasNearPoint = !near.isEmpty();
+        if (p.hasNearPoint)
+            p.nearPoint = {near.value(QStringLiteral("x")).toDouble(),
+                           near.value(QStringLiteral("y")).toDouble()};
+        const QJsonObject far = o.value(QStringLiteral("farPoint")).toObject();
+        p.hasFarPoint = !far.isEmpty();
+        if (p.hasFarPoint)
+            p.farPoint = {far.value(QStringLiteral("x")).toDouble(),
+                          far.value(QStringLiteral("y")).toDouble()};
         if (p.id.isEmpty()) p.id = QStringLiteral("p%1").arg(parts.size() + 1);
         parts.push_back(p);
     }

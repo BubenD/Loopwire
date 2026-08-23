@@ -1945,6 +1945,55 @@ void loadMechModelDocument(Document& doc, const MechModel& model, bool schematic
     if (!schematic) addMechModelGuides(doc, model);
 }
 
+// The same three marks, for a library part's mechanical drawing - see placementMarkEntities().
+// Deliberately not the scale-reference box or the stretch guides addMechModelGuides also draws:
+// neither concept applies to a library part (it is not scaled by an object marked inside it, and
+// it does not stretch to a length the harness decides - it is placed at the size it was drawn).
+void addLibraryPartGuides(Document& doc, const LibraryPart& part) {
+    doc.entities().erase(
+        std::remove_if(doc.entities().begin(), doc.entities().end(), [](const Entity& e) {
+            return e.layer == QLatin1String(kMechModelGuideLayer);
+        }),
+        doc.entities().end());
+    const Bounds b = mechModelBounds(doc);
+    const double markerRadius = [&] {
+        const double want = b.valid ? std::max(2.0, b.height() * 0.08) : 3.0;
+        const double decade = std::pow(10.0, std::floor(std::log10(want)));
+        for (const double step : {1.0, 2.0, 5.0})
+            if (want <= step * decade * 1.0000001) return step * decade;
+        return 10.0 * decade;
+    }();
+    for (Entity& mark :
+         placementMarkEntities(part.hasConnect, part.connectPoint, part.connectAngleRad,
+                               part.hasNearPoint, part.nearPoint, part.hasFarPoint, part.farPoint,
+                               markerRadius,
+                               std::max(6.0 * markerRadius, b.valid ? b.width() * 0.35 : 10.0)))
+        doc.entities().push_back(std::move(mark));
+}
+
+void loadLibraryPartDocument(Document& doc, const LibraryPart& part, LibraryPartDrawing kind) {
+    doc.entities().clear();
+    doc.sheet() = Bounds();
+    const QJsonArray& drawing = kind == LibraryPartDrawing::Mechanical  ? part.mechanical
+                                : kind == LibraryPartDrawing::Schematic ? part.schematic
+                                : kind == LibraryPartDrawing::Fanout    ? part.fanout
+                                                                        : part.fanoutOpposite;
+    for (const Entity& e : partDrawingEntities(drawing)) {
+        doc.entities().push_back(e);
+        Entity& put = doc.entities().back();
+        if (put.id.isEmpty()) put.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+        stampEntityGroup(put, QLatin1String(kMechModelGroup));
+    }
+    doc.setActiveLayer(QStringLiteral("0"));
+    // Only the mechanical drawing carries connect/near/far points - a schematic symbol and a fanout
+    // are not placed by running a direction along a run.
+    if (kind == LibraryPartDrawing::Mechanical) {
+        if (!doc.findLayer(QLatin1String(kMechModelGuideLayer)))
+            doc.layers().push_back({QLatin1String(kMechModelGuideLayer), "#e6b45a", true, true, 0.25});
+        addLibraryPartGuides(doc, part);
+    }
+}
+
 } // namespace
 
 QStringList MainWindow::startupModules() {
@@ -2056,19 +2105,58 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             // Redrawn rather than left as they are: a marker dropped onto another one has to restagger
             // to the two-ring size right away, and a deleted marker's ring has to actually disappear.
             addMechModelGuides(*doc_, model);
+        } else if (doc_ && libraryPartEdits_.contains(doc_) &&
+                   libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical) {
+            LibraryPart& part = libraryPartSessionModels_[doc_];
+            bool sawNear = false, sawFar = false, sawConnect = false;
+            for (const Entity& e : doc_->entities()) {
+                const QString tag = e.meta.value(QStringLiteral("modelAnchor")).toString();
+                if (tag == QLatin1String("near")) {
+                    sawNear = true;
+                    part.hasNearPoint = true;
+                    part.nearPoint = e.center;
+                } else if (tag == QLatin1String("far")) {
+                    sawFar = true;
+                    part.hasFarPoint = true;
+                    part.farPoint = e.center;
+                } else if (tag == QLatin1String("connect")) {
+                    sawConnect = true;
+                    part.hasConnect = true;
+                    part.connectPoint = e.center;
+                }
+            }
+            if (!sawNear) part.hasNearPoint = false;
+            if (!sawFar) part.hasFarPoint = false;
+            if (!sawConnect) part.hasConnect = false;
+            addLibraryPartGuides(*doc_, part);
         }
     });
     connect(editor_, &Editor::modelAnchorPicked, this, [this](Vec2 point, bool near) {
-        if (!doc_ || !mechModelEdits_.contains(doc_)) return;
-        MechModel& model = mechModelSessionModels_[doc_];
-        if (near) {
-            model.hasNearPoint = true;
-            model.nearPoint = point;
+        if (!doc_) return;
+        if (mechModelEdits_.contains(doc_)) {
+            MechModel& model = mechModelSessionModels_[doc_];
+            if (near) {
+                model.hasNearPoint = true;
+                model.nearPoint = point;
+            } else {
+                model.hasFarPoint = true;
+                model.farPoint = point;
+            }
+            addMechModelGuides(*doc_, model);
+        } else if (libraryPartEdits_.contains(doc_) &&
+                   libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical) {
+            LibraryPart& part = libraryPartSessionModels_[doc_];
+            if (near) {
+                part.hasNearPoint = true;
+                part.nearPoint = point;
+            } else {
+                part.hasFarPoint = true;
+                part.farPoint = point;
+            }
+            addLibraryPartGuides(*doc_, part);
         } else {
-            model.hasFarPoint = true;
-            model.farPoint = point;
+            return;
         }
-        addMechModelGuides(*doc_, model);
         doc_->setDirty(true);
         canvas_->invalidateScene();
         statusBar()->showMessage(near ? QStringLiteral("Near point marked in orange")
@@ -2851,8 +2939,16 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
             5000);
         return;
     }
+    // Mirrored, and the opposite side has its own captured drawing: place THAT rather than a live
+    // mirror transform of the front - see PartsLibraryDialog::mirrorFanoutFromOpposite(). A part
+    // that has never used the button still gets the old runtime mirror, unchanged.
+    bool useMirrorTransform = mirrored;
+    if (mirrored && !generated && part->hasFanoutOpposite()) {
+        drawing = part->fanoutOpposite;
+        useMirrorTransform = false;
+    }
     std::vector<Entity> block = partDrawingBlockInstance(*part, drawing, QStringLiteral("fanout"),
-                                                         Vec2{0.0, 0.0}, mirrored);
+                                                         Vec2{0.0, 0.0}, useMirrorTransform);
     const QString contactId = part->contactId();
     if (!contactId.isEmpty())
         for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
@@ -3126,9 +3222,11 @@ void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
         const bool editingBlock = doc_ && blockEdits_.contains(doc_);
         const bool editingTemplate = doc_ && templateEdits_.contains(doc_);
         const bool editingMechModel = doc_ && mechModelEdits_.contains(doc_);
+        const bool editingLibraryPart = doc_ && libraryPartEdits_.contains(doc_);
         canvas_->setBackgroundColor(editingBlock       ? QColor("#6d7278")
                                     : editingTemplate  ? QColor("#7c8189")
                                     : editingMechModel  ? QColor("#3a3d42")
+                                    : editingLibraryPart ? QColor("#42464c")
                                                         : normalCanvasColor_);
     }
     // The annotation scale of the space being entered: model space has its own (the scale the drawing will be
@@ -3938,8 +4036,10 @@ void MainWindow::buildRibbon() {
 // do. Leaving the tab as it was made the mark's own fields one small thing among many.
 void MainWindow::updateModelRibbonTabs() {
     if (!ribbon_) return;
-    const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
-    const bool schematicModel = doc_ && mechModelEditSchematic_.value(doc_, false);
+    const bool libraryPartEdit = doc_ && libraryPartEdits_.contains(doc_);
+    const bool modelEdit = (doc_ && mechModelEdits_.contains(doc_)) || libraryPartEdit;
+    const bool schematicModel = (doc_ && mechModelEditSchematic_.value(doc_, false)) ||
+                                 (libraryPartEdit && libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Schematic);
     int home = -1;
     for (int i = 0; i < ribbon_->count(); ++i) {
         if (ribbon_->tabText(i) == QStringLiteral("Home")) home = i;
@@ -3971,7 +4071,8 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // The rule for this application: while a function is being used, the ribbon shows THAT FUNCTION'S
     // settings and nothing else. The tools that cannot be used during it are noise, and hunting for the
     // two fields that matter among forty buttons is what makes a drawing slow to make.
-    const bool modelEdit = doc_ && mechModelEdits_.contains(doc_);
+    const bool libraryPartEdit = doc_ && libraryPartEdits_.contains(doc_);
+    const bool modelEdit = (doc_ && mechModelEdits_.contains(doc_)) || libraryPartEdit;
     // A label being STROKED ON takes the tab outright: its own two fields, and nothing else, because
     // nothing else on the tab applies while one is going down. It gives the tab back with the click that
     // places it - the fields are for before the click, which is what pinning with Tab is for, and a group
@@ -3990,9 +4091,11 @@ void MainWindow::updateMechanicalRibbonGroups() {
             if (g) g->setVisible(false);
         // Mark near/far/connect/output/scale-reference: placing a part BY a direction along a run,
         // which is a mechanical-drawing idea a schematic symbol has no use for (see
-        // openMechModelEditor's schematic branch, which never marks any of these to begin with).
-        const bool schematicModel = doc_ && mechModelEditSchematic_.value(doc_, false);
-        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(!schematicModel);
+        // openMechModelEditor's schematic branch, which never marks any of these to begin with). A
+        // library part's session keeps the group up regardless of which drawing it is - it is the only
+        // place Save/Cancel for that session live, and every kind of library-part drawing needs them.
+        const bool schematicDefaultModel = doc_ && mechModelEditSchematic_.value(doc_, false) && !libraryPartEdit;
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(libraryPartEdit || !schematicDefaultModel);
         return;
     }
     const bool armed =
@@ -10610,7 +10713,10 @@ void MainWindow::showPartsLibrary() {
     // Modeless and kept alive: a part is described while the sheet stays usable, which is what
     // lets a symbol be drawn, captured, and dropped back without closing anything.
     if (!libraryDlg_) {
-        libraryDlg_ = new PartsLibraryDialog(editor_, this);
+        libraryDlg_ = new PartsLibraryDialog(
+            editor_, this, [this](QString partId, LibraryPartDrawing kind) {
+                openLibraryPartEditor(partId, kind);
+            });
         // Capturing a drawing for a part: the library window steps aside, and the ribbon takes over
         // saying what to do - so the sheet is clear to work on and it is still obvious what is going
         // on and how to finish.
@@ -10628,6 +10734,12 @@ void MainWindow::showPartsLibrary() {
     libraryDlg_->show();
     libraryDlg_->raise();
     libraryDlg_->activateWindow();
+}
+
+PartsLibraryDialog* MainWindow::partsLibraryDialogForTest() {
+    showPartsLibrary();
+    if (libraryDlg_) libraryDlg_->hide();
+    return libraryDlg_;
 }
 
 // Arming a capture: the window that asked steps aside, the ribbon says what to do and how to finish, and
@@ -11826,11 +11938,84 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name, bo
         6000);
 }
 
+void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing kind) {
+    // Reached into the library dialog's OWN catalog, not a fresh independent one - that dialog stays
+    // open (hidden, not closed) for the life of the session, the same as the models manager does for
+    // a default-model session, so its in-memory copy is never allowed to go stale against a session
+    // writing straight into the same catalog behind its back.
+    if (!libraryDlg_) return;
+    LibraryPart* stored = libraryDlg_->partForSession(partId);
+    if (!stored) return;
+
+    // Already open? The same part AND the same drawing of it.
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        Document* d = docs_[i].get();
+        if (libraryPartEdits_.value(d) != partId) continue;
+        if (libraryPartEditKind_.value(d) != kind) continue;
+        docTabs_->setCurrentIndex(i);
+        activateIndex(i);
+        return;
+    }
+
+    LibraryPart part = *stored;
+    const QString drawingKindName = kind == LibraryPartDrawing::Mechanical  ? QStringLiteral("mechanical")
+                                    : kind == LibraryPartDrawing::Schematic ? QStringLiteral("schematic")
+                                    : kind == LibraryPartDrawing::Fanout    ? QStringLiteral("fanout")
+                                                                            : QStringLiteral("fanout (opposite)");
+    // WHERE IT CONNECTS AND WHICH WAY IT RUNS, marked before anybody asks - the same reasoning
+    // openMechModelEditor uses for a default model. Only the mechanical drawing has anywhere to mark:
+    // a schematic symbol and a fanout are not placed by running a direction along a run.
+    if (kind == LibraryPartDrawing::Mechanical && !part.mechanical.isEmpty()) {
+        Bounds ext;
+        for (const Entity& e : partDrawingEntities(part.mechanical)) ext.expand(e.bounds());
+        if (ext.valid) {
+            const double midY = (ext.min.y + ext.max.y) / 2.0;
+            if (!part.hasConnect) {
+                part.hasConnect = true;
+                part.connectPoint = {ext.min.x, midY};
+                part.connectAngleRad = 0.0;
+            }
+            if (!part.hasNearPoint) {
+                part.hasNearPoint = true;
+                part.nearPoint = {ext.min.x, midY};
+            }
+            if (!part.hasFarPoint) {
+                part.hasFarPoint = true;
+                part.farPoint = {ext.max.x, midY};
+            }
+        }
+    }
+
+    auto doc = std::make_unique<Document>(
+        QStringLiteral("Part - %1 (%2)").arg(part.title(), drawingKindName));
+    loadLibraryPartDocument(*doc, part, kind);
+    doc->setDirty(false);
+    Document* raw = doc.get();
+    libraryPartEdits_.insert(raw, partId);
+    libraryPartEditKind_.insert(raw, kind);
+    libraryPartSessionModels_.insert(raw, part);
+    addDocument(std::move(doc), QString());
+    canvas_->fitView();
+    QTimer::singleShot(0, this, [this, raw] {
+        if (doc_ != raw || !canvas_) return;
+        canvas_->fitView();
+        canvas_->invalidateScene();
+        canvas_->update();
+    });
+    canvas_->invalidateScene();
+    statusBar()->showMessage(
+        QStringLiteral("Editing %1's %2 drawing — use Place and Modify, then Capture to save it back")
+            .arg(part.title(), drawingKindName),
+        6000);
+}
+
 // The connection point and the direction the part runs from it: two clicks on the model itself, which is
 // where they can be seen. The wizard places a part by them - the drawing is turned so that direction runs
 // along the run, and set down so that point lands on it.
 void MainWindow::armMechModelConnect() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    const bool libraryMechSession = doc_ && libraryPartEdits_.contains(doc_) &&
+                                     libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!doc_ || !(mechModelEdits_.contains(doc_) || libraryMechSession)) return;
     editor_->setTool(ToolId::ModelConnectPoint);
     canvas_->setFocus();
     statusBar()->showMessage(
@@ -11904,12 +12089,23 @@ QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
 // The connection point, marked. One place, so the two clicks on the canvas and anything else with a reason to ask
 // put it in the same way.
 void MainWindow::markMechModelConnectAt(const Vec2& at, double angleRad) {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
-    MechModel& model = mechModelSessionModels_[doc_];
-    model.hasConnect = true;
-    model.connectPoint = at;
-    model.connectAngleRad = angleRad;
-    addMechModelGuides(*doc_, model);
+    if (!doc_) return;
+    if (mechModelEdits_.contains(doc_)) {
+        MechModel& model = mechModelSessionModels_[doc_];
+        model.hasConnect = true;
+        model.connectPoint = at;
+        model.connectAngleRad = angleRad;
+        addMechModelGuides(*doc_, model);
+    } else if (libraryPartEdits_.contains(doc_) &&
+               libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical) {
+        LibraryPart& part = libraryPartSessionModels_[doc_];
+        part.hasConnect = true;
+        part.connectPoint = at;
+        part.connectAngleRad = angleRad;
+        addLibraryPartGuides(*doc_, part);
+    } else {
+        return;
+    }
     doc_->setDirty(true);
     canvas_->invalidateScene();
     statusBar()->showMessage(
@@ -11944,14 +12140,27 @@ void MainWindow::toggleMechModelMarks() {
 }
 
 void MainWindow::clearMechModelConnect() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
-    MechModel& model = mechModelSessionModels_[doc_];
-    if (!model.hasConnect) {
-        statusBar()->showMessage(tr("No connection point marked on this model"), 3000);
-        return;
+    if (!doc_) return;
+    const bool libraryMechSession = libraryPartEdits_.contains(doc_) &&
+                                     libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!mechModelEdits_.contains(doc_) && !libraryMechSession) return;
+    if (libraryMechSession) {
+        LibraryPart& part = libraryPartSessionModels_[doc_];
+        if (!part.hasConnect) {
+            statusBar()->showMessage(tr("No connection point marked on this model"), 3000);
+            return;
+        }
+        part.hasConnect = false;
+        addLibraryPartGuides(*doc_, part);
+    } else {
+        MechModel& model = mechModelSessionModels_[doc_];
+        if (!model.hasConnect) {
+            statusBar()->showMessage(tr("No connection point marked on this model"), 3000);
+            return;
+        }
+        model.hasConnect = false;
+        addMechModelGuides(*doc_, model);
     }
-    model.hasConnect = false;
-    addMechModelGuides(*doc_, model);
     doc_->setDirty(true);
     canvas_->invalidateScene();
     canvas_->update();
@@ -11959,17 +12168,33 @@ void MainWindow::clearMechModelConnect() {
 }
 
 void MainWindow::clearMechModelAnchor(bool near) {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
-    MechModel& model = mechModelSessionModels_[doc_];
-    bool& had = near ? model.hasNearPoint : model.hasFarPoint;
-    if (!had) {
-        statusBar()->showMessage(near ? tr("No near point marked on this model")
-                                     : tr("No far point marked on this model"),
-                                 3000);
-        return;
+    if (!doc_) return;
+    const bool libraryMechSession = libraryPartEdits_.contains(doc_) &&
+                                     libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!mechModelEdits_.contains(doc_) && !libraryMechSession) return;
+    if (libraryMechSession) {
+        LibraryPart& part = libraryPartSessionModels_[doc_];
+        bool& had = near ? part.hasNearPoint : part.hasFarPoint;
+        if (!had) {
+            statusBar()->showMessage(near ? tr("No near point marked on this model")
+                                         : tr("No far point marked on this model"),
+                                     3000);
+            return;
+        }
+        had = false;
+        addLibraryPartGuides(*doc_, part);
+    } else {
+        MechModel& model = mechModelSessionModels_[doc_];
+        bool& had = near ? model.hasNearPoint : model.hasFarPoint;
+        if (!had) {
+            statusBar()->showMessage(near ? tr("No near point marked on this model")
+                                         : tr("No far point marked on this model"),
+                                     3000);
+            return;
+        }
+        had = false;
+        addMechModelGuides(*doc_, model);
     }
-    had = false;
-    addMechModelGuides(*doc_, model);
     doc_->setDirty(true);
     canvas_->invalidateScene();
     canvas_->update();
@@ -12026,7 +12251,9 @@ void MainWindow::clearMechModelOutputs() {
 }
 
 void MainWindow::armMechModelAnchor(bool near) {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    const bool libraryMechSession = doc_ && libraryPartEdits_.contains(doc_) &&
+                                     libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!doc_ || !(mechModelEdits_.contains(doc_) || libraryMechSession)) return;
     editor_->setTool(near ? ToolId::ModelNearPoint : ToolId::ModelFarPoint);
     canvas_->setFocus();
     statusBar()->showMessage(near ? QStringLiteral("Click the near point — it will be orange")
@@ -12114,6 +12341,83 @@ bool MainWindow::saveMechModelDocument(Document* doc) {
     return true;
 }
 
+bool MainWindow::saveLibraryPartDocument(Document* doc) {
+    if (!doc || !libraryPartEdits_.contains(doc) || !libraryDlg_) return false;
+    const QString partId = libraryPartEdits_.value(doc);
+    const LibraryPartDrawing kind = libraryPartEditKind_.value(doc);
+    LibraryPart* stored = libraryDlg_->partForSession(partId);
+    if (!stored) return false;
+
+    std::vector<Entity> drawing;
+    drawing.reserve(doc->entities().size());
+    for (const Entity& e : doc->entities())
+        if (e.layer != QLatin1String(kMechModelGuideLayer)) {
+            drawing.push_back(e);
+            clearEntityBlockStamp(drawing.back());
+        }
+    const Bounds bounds = mechModelBounds(*doc);
+    if (drawing.empty() || !bounds.valid) {
+        statusBar()->showMessage(QStringLiteral("The drawing is empty — nothing was saved"), 4000);
+        return false;
+    }
+
+    LibraryPart part = libraryPartSessionModels_.value(doc);
+    if (kind == LibraryPartDrawing::Mechanical) {
+        // A connector's mechanical drawing is placed by its connect point the same way a default
+        // model is - centred across, run from the left-hand end - so the same marks travel with it
+        // the same way (see saveMechModelDocument's own comment on this).
+        const Vec2 shift{-bounds.min.x, -(bounds.min.y + bounds.max.y) / 2.0};
+        for (Entity& e : drawing) translateEntity(e, shift);
+        if (part.hasNearPoint) part.nearPoint += shift;
+        if (part.hasFarPoint) part.farPoint += shift;
+        if (part.hasConnect) part.connectPoint += shift;
+        part.mechanical = partDrawingFromEntities(drawing);
+    } else {
+        // A schematic symbol or a fanout is a fixed little glyph, not a run to be placed along a
+        // direction - centre it and leave it at that.
+        const Vec2 shift{-(bounds.min.x + bounds.max.x) / 2.0, -(bounds.min.y + bounds.max.y) / 2.0};
+        for (Entity& e : drawing) translateEntity(e, shift);
+        const QJsonArray built = partDrawingFromEntities(drawing);
+        if (kind == LibraryPartDrawing::Schematic) part.schematic = built;
+        else if (kind == LibraryPartDrawing::Fanout) part.fanout = built;
+        else part.fanoutOpposite = built;
+    }
+
+    // Written straight into the SAME catalog the library dialog is showing - not a fresh one loaded
+    // and saved independently - so a field edited in the dialog while this session was open (the
+    // description, a parameter) is never clobbered by writing back an older snapshot of the rest of
+    // the part. Only the one drawing this session owns, plus its marks, are copied across - the other
+    // three drawings are left exactly as `stored` already has them, not overwritten with this
+    // session's own snapshot of them from when it was opened.
+    if (kind == LibraryPartDrawing::Mechanical) stored->mechanical = part.mechanical;
+    else if (kind == LibraryPartDrawing::Schematic) stored->schematic = part.schematic;
+    else if (kind == LibraryPartDrawing::Fanout) stored->fanout = part.fanout;
+    else stored->fanoutOpposite = part.fanoutOpposite;
+    if (kind == LibraryPartDrawing::Mechanical) {
+        stored->hasConnect = part.hasConnect;
+        stored->connectPoint = part.connectPoint;
+        stored->connectAngleRad = part.connectAngleRad;
+        stored->hasNearPoint = part.hasNearPoint;
+        stored->nearPoint = part.nearPoint;
+        stored->hasFarPoint = part.hasFarPoint;
+        stored->farPoint = part.farPoint;
+    }
+    if (!libraryDlg_->saveLibrary()) {
+        QMessageBox::warning(this, QStringLiteral("Save part failed"),
+                             QStringLiteral("The library part could not be saved."));
+        return false;
+    }
+    doc->setDirty(false);
+    statusBar()->showMessage(
+        QStringLiteral("Saved %1 — %2 object(s), %3 mm long, %4 mm across")
+            .arg(stored->title())
+            .arg(drawing.size())
+            .arg(bounds.width(), 0, 'f', 1)
+            .arg(bounds.height(), 0, 'f', 1),
+        5000);
+    return true;
+}
+
 // One key per sub-drawing, so a boot at 45 and a boot at 90 keep their own view - and the
 // mechanical and schematic drawings of the same model keep theirs apart too.
 QString MainWindow::mechModelViewKey(MechModelKind kind, const QString& name, bool schematic) {
@@ -12133,7 +12437,16 @@ void MainWindow::rememberMechModelView(Document* doc) {
 }
 
 void MainWindow::saveMechModelBeingEdited() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    if (!doc_) return;
+    if (libraryPartEdits_.contains(doc_)) {
+        const QString partId = libraryPartEdits_.value(doc_);
+        if (saveLibraryPartDocument(doc_)) {
+            closeDocument(activeIndex());
+            showPartsLibraryAt(partId);
+        }
+        return;
+    }
+    if (!mechModelEdits_.contains(doc_)) return;
     rememberMechModelView(doc_);
     if (saveMechModelDocument(doc_)) {
         closeDocument(activeIndex());
@@ -12142,7 +12455,15 @@ void MainWindow::saveMechModelBeingEdited() {
 }
 
 void MainWindow::cancelMechModelEdit() {
-    if (!doc_ || !mechModelEdits_.contains(doc_)) return;
+    if (!doc_) return;
+    if (libraryPartEdits_.contains(doc_)) {
+        const QString partId = libraryPartEdits_.value(doc_);
+        doc_->setDirty(false);
+        closeDocument(activeIndex());
+        showPartsLibraryAt(partId);
+        return;
+    }
+    if (!mechModelEdits_.contains(doc_)) return;
     // The view is kept even when the drawing is not: how you were looking at it is not part of what was changed,
     // and leaving a session to go and check something should not cost the place you were looking at.
     rememberMechModelView(doc_);
@@ -12250,6 +12571,13 @@ void MainWindow::activateIndex(int index) {
     const bool editingBlock = blockEdits_.contains(doc_);
     const bool editingTemplate = templateEdits_.contains(doc_);
     const bool editingMechModel = mechModelEdits_.contains(doc_);
+    const bool editingLibraryPart = libraryPartEdits_.contains(doc_);
+    // A library part's MECHANICAL drawing gets the same near/far/connect marks a default model does;
+    // its schematic and fanout drawings get the grey canvas, and Save/Cancel, but none of these marks.
+    const bool editingLibraryPartMechanical =
+        editingLibraryPart && libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    const bool anyModelEdit = editingMechModel || editingLibraryPart;
+    const bool anchorableModelEdit = editingMechModel || editingLibraryPartMechanical;
     // Each kind of edit gets its own colour, so which one is open is never in doubt: grey for a
     // block, a blue slate for a template, the ordinary dark for a drawing.
     // Both editors get a grey canvas - a lighter one for a template, so it reads as a sheet being
@@ -12271,17 +12599,19 @@ void MainWindow::activateIndex(int index) {
     // The Template group is only on the ribbon while a template is open - buttons that mean nothing
     // to a drawing are not shown to it at all, rather than shown greyed out.
     if (tplHomeGroup_) tplHomeGroup_->setVisible(editingTemplate);
-    if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(editingMechModel);
+    if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(anyModelEdit);
     const bool anchorableMechModel =
-        editingMechModel && !mechModelStretches(mechModelEdits_.value(doc_));
-    if (captureMechModelBtn_) captureMechModelBtn_->setEnabled(editingMechModel);
+        anchorableModelEdit && !(editingMechModel && mechModelStretches(mechModelEdits_.value(doc_)));
+    if (captureMechModelBtn_) captureMechModelBtn_->setEnabled(anyModelEdit);
+    if (markConnectMechModelBtn_) markConnectMechModelBtn_->setEnabled(anchorableModelEdit);
     if (markNearMechModelBtn_) markNearMechModelBtn_->setEnabled(anchorableMechModel);
     if (markFarMechModelBtn_) markFarMechModelBtn_->setEnabled(anchorableMechModel);
-    // Marking a face the wires leave by is worth doing on ANY model, stretched or not: a connector, a
-    // backshell and a split all have one, and the run-to-a-length kinds have them at each end.
+    // Marking a face the wires leave by, and what the model is scaled by, are default-model-only ideas -
+    // a library part's connector already has its own pins for that, so these stay off for it.
     if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(editingMechModel);
     if (markScaleRefMechModelBtn_) markScaleRefMechModelBtn_->setEnabled(editingMechModel);
-    if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(editingMechModel);
+    if (showMechModelMarksBtn_) showMechModelMarksBtn_->setEnabled(anchorableModelEdit);
+    if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(anyModelEdit);
     for (QToolButton* b : tplSessionBtns_)
         if (b) b->setEnabled(editingTemplate);
     // The template ribbon comes and goes with the session, the way the hatch and table-cell tabs do,
@@ -12844,19 +13174,27 @@ bool MainWindow::maybeSaveDoc(int index) {
     Document* doc = docs_[index].get();
     if (!doc->dirty()) return true;
     const bool modelEdit = mechModelEdits_.contains(doc);
-    const QString name = modelEdit
-                            ? mechModelName(mechModelEdits_.value(doc))
-                            : (docPaths_[index].isEmpty() ? doc->name()
-                                                          : QFileInfo(docPaths_[index]).fileName());
+    const bool libraryPartEdit = libraryPartEdits_.contains(doc);
+    const QString name = modelEdit ? mechModelName(mechModelEdits_.value(doc))
+                          : libraryPartEdit
+                              ? (libraryDlg_ ? [&] {
+                                    LibraryPart* p = libraryDlg_->partForSession(libraryPartEdits_.value(doc));
+                                    return p ? p->title() : libraryPartEdits_.value(doc);
+                                }()
+                                              : libraryPartEdits_.value(doc))
+                              : (docPaths_[index].isEmpty() ? doc->name()
+                                                            : QFileInfo(docPaths_[index]).fileName());
     const auto choice = QMessageBox::warning(
-        this, modelEdit ? QStringLiteral("Save model changes?") : QStringLiteral("Save changes?"),
-        modelEdit
+        this, (modelEdit || libraryPartEdit) ? QStringLiteral("Save model changes?") : QStringLiteral("Save changes?"),
+        (modelEdit || libraryPartEdit)
             ? QStringLiteral("The %1 model has unsaved changes. Save before closing?").arg(name)
             : QStringLiteral("\"%1\" has unsaved changes. Save before closing?").arg(name),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
     if (choice == QMessageBox::Cancel) return false;
     if (choice == QMessageBox::Discard) return true;
-    return modelEdit ? saveMechModelDocument(doc) : saveDocument(index);
+    if (modelEdit) return saveMechModelDocument(doc);
+    if (libraryPartEdit) return saveLibraryPartDocument(doc);
+    return saveDocument(index);
 }
 
 bool MainWindow::saveDocument(int index, bool forceDialog) {
@@ -12897,6 +13235,9 @@ void MainWindow::closeDocument(int index) {
         mechModelEdits_.remove(docs_[index].get());
         mechModelSessionModels_.remove(docs_[index].get());
         mechModelEditSchematic_.remove(docs_[index].get());
+        libraryPartEdits_.remove(docs_[index].get());
+        libraryPartEditKind_.remove(docs_[index].get());
+        libraryPartSessionModels_.remove(docs_[index].get());
         // And its paper spaces, for the same reason: the next document allocated at that address must
         // not inherit the sheets of this one.
         forgetPaperSpaces(docs_[index].get());

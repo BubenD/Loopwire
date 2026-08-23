@@ -13,6 +13,7 @@
 #include "app/Editor.h"
 #include "model/Block.h"
 #include "model/Document.h"
+#include "tools/EntityTransforms.h"
 
 #include <QDialog>
 #include <QCheckBox>
@@ -79,8 +80,9 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
 
 } // namespace
 
-PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent)
-    : QDialog(parent), editor_(editor) {
+PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
+                                       std::function<void(QString, LibraryPartDrawing)> onEdit)
+    : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
     setWindowTitle(QStringLiteral("Harness parts library"));
     resize(1180, 760);
     // Everything connected last time (and, on a first run, the default library seeded with real
@@ -785,7 +787,7 @@ void PartsLibraryDialog::buildUi() {
                        "to, drawn orange. It is a mark ON the part, not part of it, and while the drawing is "
                        "being checked it is in the way of seeing what the part actually looks like."));
     connect(showConnBtn_, &QToolButton::toggled, this, [this] { applyShowConnection(); });
-    dg->addWidget(showConnBtn_, 3, 0, 1, 3, Qt::AlignLeft);
+    dg->addWidget(showConnBtn_, 3, 0, 1, 4, Qt::AlignLeft);
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
         auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), draw);
@@ -825,22 +827,32 @@ void PartsLibraryDialog::buildUi() {
         bl->setContentsMargins(0, 0, 0, 0);
         const bool mech = sides[i].mechanical;
         if (isFanout) {
-            // Its own four: take it off the sheet, put it down as drawn, put it down mirrored for the other
-            // side of the connector, and throw it away.
+            // Take it off the sheet, edit it in its own session, put it down as drawn or mirrored for
+            // the other side, seed that other side from a mirror of this one, or throw it away.
             auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
             cap->setToolTip(QStringLiteral("Take what is selected on the sheet as this part's fanout"));
-            connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(); });
+            connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(false); });
             bl->addWidget(cap);
+            auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
+            edt->setToolTip(QStringLiteral("Open it in its own canvas session to add or move lines"));
+            connect(edt, &QPushButton::clicked, this, [this] { editDrawing(LibraryPartDrawing::Fanout); });
+            bl->addWidget(edt);
             auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
             ins->setToolTip(QStringLiteral("Put the fanout on the sheet, as it was drawn"));
             connect(ins, &QPushButton::clicked, this, [this] { insertFanout(false); });
             bl->addWidget(ins);
             auto* mir = new QPushButton(QStringLiteral("Insert mirrored"), btns);
             mir->setToolTip(QStringLiteral(
-                "Put it on the sheet mirrored about the X axis — the same fanout seen from the other side of "
-                "the connector, front for back and back for front."));
+                "Put down the opposite side's own drawing if it has one (see \"Mirror from opposite "
+                "fanout\"), otherwise this one mirrored about the X axis as a guess at it."));
             connect(mir, &QPushButton::clicked, this, [this] { insertFanout(true); });
             bl->addWidget(mir);
+            auto* mfo = new QPushButton(QStringLiteral("Mirror from opposite fanout"), btns);
+            mfo->setToolTip(QStringLiteral(
+                "Seed THIS drawing from a one-off mirror of the opposite fanout - a starting point to "
+                "hand-correct and capture, not a transform kept up automatically."));
+            connect(mfo, &QPushButton::clicked, this, [this] { mirrorFanoutFromOpposite(false); });
+            bl->addWidget(mfo);
             auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
             connect(clr, &QPushButton::clicked, this, [this] {
                 if (LibraryPart* p = current()) {
@@ -868,11 +880,14 @@ void PartsLibraryDialog::buildUi() {
         connect(ins, &QPushButton::clicked, this, [this, mech] { insertIntoDrawing(mech); });
         bl->addWidget(ins);
         auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
-        edt->setToolTip(QStringLiteral(
-            "Put this drawing on the sheet and select it, to be worked on — add or move lines, and "
-            "mark the line the harness attaches to (Harness ▸ connection line). Capture selection "
-            "puts it back on the part."));
-        connect(edt, &QPushButton::clicked, this, [this, mech] { editDrawing(mech); });
+        edt->setToolTip(mech ? QStringLiteral(
+                                  "Open it in its own canvas session (a grey one, like a default "
+                                  "model's) to add or move lines and mark where it connects, which "
+                                  "way it runs from there, and its two ends.")
+                             : QStringLiteral("Open it in its own canvas session to add or move lines"));
+        connect(edt, &QPushButton::clicked, this, [this, mech] {
+            editDrawing(mech ? LibraryPartDrawing::Mechanical : LibraryPartDrawing::Schematic);
+        });
         bl->addWidget(edt);
         if (!mech) {
             // Only on the schematic side, and only for a connector: this is the one drawing that can be
@@ -892,7 +907,44 @@ void PartsLibraryDialog::buildUi() {
         bl->addWidget(clr);
         dg->addWidget(btns, 1, i);
     }
-    // The remembered answer, given to the three panes now they exist: a preference that is read back but not
+    // A FOURTH pane, for the fanout's other side - its own drawing now (see LibraryPart::fanoutOpposite),
+    // not a live mirror of the one above computed only at placement time.
+    {
+        auto* prev = new DrawingPreview(QStringLiteral("Fanout (opposite)"), draw);
+        prev->setMinimumSize(210, 170);
+        fanoutOppositePreview_ = prev;
+        dg->addWidget(prev, 0, 3);
+        auto* btns = new QWidget(draw);
+        auto* bl = new QHBoxLayout(btns);
+        bl->setContentsMargins(0, 0, 0, 0);
+        auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
+        cap->setToolTip(QStringLiteral("Take what is selected on the sheet as the opposite fanout"));
+        connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(true); });
+        bl->addWidget(cap);
+        auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
+        edt->setToolTip(QStringLiteral("Open it in its own canvas session to add or move lines"));
+        connect(edt, &QPushButton::clicked, this,
+                [this] { editDrawing(LibraryPartDrawing::FanoutOpposite); });
+        bl->addWidget(edt);
+        auto* mfo = new QPushButton(QStringLiteral("Mirror from fanout"), btns);
+        mfo->setToolTip(QStringLiteral(
+            "Seed THIS drawing from a one-off mirror of the fanout above - a starting point to "
+            "hand-correct and capture, not a transform kept up automatically."));
+        connect(mfo, &QPushButton::clicked, this, [this] { mirrorFanoutFromOpposite(true); });
+        bl->addWidget(mfo);
+        auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
+        connect(clr, &QPushButton::clicked, this, [this] {
+            if (LibraryPart* p = current()) {
+                p->fanoutOpposite = QJsonArray();
+                if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(p->fanoutOpposite);
+                touched();
+                reloadTree();
+            }
+        });
+        bl->addWidget(clr);
+        dg->addWidget(btns, 1, 3);
+    }
+    // The remembered answer, given to the panes now they exist: a preference that is read back but not
     // applied until the button is next pressed is a preference that looks forgotten.
     applyShowConnection();
     // ---- The pin contact this connector is used with ----
@@ -1097,6 +1149,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
     // replaces it.
     if (schemPreview_) schemPreview_->setDrawing(have ? partSchematicDrawing(*p) : QJsonArray());
     if (fanoutPreview_) fanoutPreview_->setDrawing(p ? p->fanout : QJsonArray());
+    if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(p ? p->fanoutOpposite : QJsonArray());
     if (fanoutSideBox_ && p) {
         const QSignalBlocker block(fanoutSideBox_);
         const int at = fanoutSideBox_->findData(p->fanoutSide());
@@ -1897,7 +1950,7 @@ void PartsLibraryDialog::generateConnectorSymbol() {
                               .arg(p->wayCount() == 1 ? QString() : QStringLiteral("s")));
 }
 
-void PartsLibraryDialog::beginCaptureFanout() {
+void PartsLibraryDialog::beginCaptureFanout(bool opposite) {
     LibraryPart* p = current();
     if (!p || !editor_) return;
     const std::vector<Entity> sel = editor_->copyOfSelection();
@@ -1907,14 +1960,20 @@ void PartsLibraryDialog::beginCaptureFanout() {
                 "Select the fanout on the sheet first — the wires as they leave the connector"));
         return;
     }
-    p->fanout = partDrawingFromEntities(sel);
-    if (fanoutPreview_) fanoutPreview_->setDrawing(p->fanout);
+    const QJsonArray captured = partDrawingFromEntities(sel);
+    if (opposite) {
+        p->fanoutOpposite = captured;
+        if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(captured);
+    } else {
+        p->fanout = captured;
+        if (fanoutPreview_) fanoutPreview_->setDrawing(captured);
+    }
     touched();
     reloadTree();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured %1 object(s) as the fanout, drawn from the %2")
+        summary_->setText(QStringLiteral("Captured %1 object(s) as the %2fanout")
                               .arg(sel.size())
-                              .arg(p->fanoutSide()));
+                              .arg(opposite ? QStringLiteral("opposite ") : QString()));
 }
 
 void PartsLibraryDialog::insertFanout(bool mirrored) {
@@ -1926,8 +1985,17 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
                                              "and press Capture selection under Fanout"));
         return;
     }
-    std::vector<Entity> block = partDrawingBlockInstance(*p, p->fanout, QStringLiteral("fanout"),
-                                                         Vec2{0.0, 0.0}, mirrored);
+    // Mirrored, and the opposite side has its own captured drawing: place THAT, as it was actually
+    // drawn - not a live mirror transform of the front, which is only ever a guess once a connector's
+    // two faces are not identical (keying, an asymmetric rib, a polarising tab). A part that has
+    // never used "Mirror from opposite fanout" still gets the old runtime mirror, unchanged.
+    std::vector<Entity> block;
+    if (mirrored && p->hasFanoutOpposite())
+        block = partDrawingBlockInstance(*p, p->fanoutOpposite, QStringLiteral("fanout"),
+                                         Vec2{0.0, 0.0}, false);
+    else
+        block = partDrawingBlockInstance(*p, p->fanout, QStringLiteral("fanout"), Vec2{0.0, 0.0},
+                                         mirrored);
     const QString contactId = p->contactId();
     if (!contactId.isEmpty())
         for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
@@ -1992,94 +2060,57 @@ void PartsLibraryDialog::refreshContactRow() {
     refreshContactChoice();
 }
 
-void PartsLibraryDialog::editDrawing(bool mechanical) {
+void PartsLibraryDialog::editDrawing(LibraryPartDrawing kind) {
+    // The host (MainWindow) owns the actual session, the way MechModelsDialog's onEdit_ works for a
+    // default model - this window just steps aside for it, the same as it does for a capture.
+    if (!onEdit_ || currentId_.isEmpty()) return;
+    onEdit_(currentId_, kind);
+    hide();
+}
+
+LibraryPart* PartsLibraryDialog::partForSession(const QString& id) {
+    if (id.isEmpty()) return nullptr;
+    if (PartsLibrary* own = catalog_.byPath(catalog_.pathOf(id))) return own->byId(id);
+    return catalog_.active().byId(id);
+}
+
+void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
     LibraryPart* p = current();
-    if (!p || !editor_) return;
-    const QJsonArray drawing = mechanical ? p->mechanical : partSchematicDrawing(*p);
-    if (drawing.isEmpty()) {
+    if (!p) return;
+    const QJsonArray& from = intoOpposite ? p->fanout : p->fanoutOpposite;
+    if (from.isEmpty()) {
         if (summary_)
-            summary_->setText(QStringLiteral("Nothing captured for that side yet — draw it on the "
-                                             "sheet and press Capture selection"));
+            summary_->setText(QStringLiteral(
+                "Nothing on that side yet to mirror — capture or draw it first"));
         return;
     }
-
-    // Its own canvas, not the sheet: this is not "insert a copy to use", it is "look at the part and
-    // say where the harness attaches to it". One line, picked by clicking it, marked orange - and
-    // clicking another moves the mark rather than adding a second, because a part has one place the
-    // harness meets it.
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("%1 — connection source").arg(p->title()));
-    dlg.setModal(true);
-    auto* v = new QVBoxLayout(&dlg);
-    auto* what = new QLabel(QStringLiteral(
-        "Click the line the harness attaches to — the face of a connector, the barrel of a terminal. "
-        "It is marked orange, and a part placed by the builder is set down by it: that line across the "
-        "wires, its centre on the joint, the body facing away from the harness."), &dlg);
-    what->setWordWrap(true);
-    v->addWidget(what);
-
-    auto* canvas = new DrawingPreview(
-        mechanical ? QStringLiteral("Mechanical drawing — connection source")
-                   : QStringLiteral("Schematic symbol — connection source"), &dlg);
-    canvas->setMinimumSize(560, 380);
-    canvas->setDrawing(drawing);
-    canvas->setPickable(true);
-    canvas->setPickedIndex(partDrawingConnectionLine(drawing));
-    v->addWidget(canvas, 1);
-
-    auto* said = new QLabel(&dlg);
-    said->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
-    v->addWidget(said);
-    auto sayPicked = [said, canvas] {
-        said->setText(canvas->pickedIndex() >= 0
-                          ? QStringLiteral("Object %1 is the connection source")
-                                .arg(canvas->pickedIndex() + 1)
-                          : QStringLiteral("Nothing marked — the part will be centred on the joint"));
-    };
-    connect(canvas, &DrawingPreview::pickedChanged, &dlg, sayPicked);
-    sayPicked();
-
-    auto* row = new QHBoxLayout;
-    auto* none = new QPushButton(QStringLiteral("Nothing marked"), &dlg);
-    connect(none, &QPushButton::clicked, canvas, [canvas] { canvas->setPickedIndex(-1); });
-    row->addWidget(none);
-    row->addStretch(1);
-    auto* ok = new QPushButton(QStringLiteral("Keep"), &dlg);
-    ok->setDefault(true);
-    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
-    row->addWidget(ok);
-    auto* cancel = new QPushButton(QStringLiteral("Cancel"), &dlg);
-    connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
-    row->addWidget(cancel);
-    v->addLayout(row);
-
-    if (dlg.exec() != QDialog::Accepted) {
-        if (summary_) summary_->setText(QStringLiteral("Left as it was"));
-        return;
-    }
-    const QJsonArray marked = partDrawingWithConnectionLine(drawing, canvas->pickedIndex());
-    if (mechanical) {
-        p->mechanical = marked;
-        if (mechPreview_) mechPreview_->setDrawing(marked);
+    // The exact mirror math placement already uses (partDrawingBlockInstance's mirrored branch,
+    // mirrorEntity about a horizontal line through the origin) - run once, into a real drawing this
+    // side can then be hand-corrected and captured over, not a transform re-applied every place.
+    std::vector<Entity> ents = partDrawingEntities(from);
+    for (Entity& e : ents) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
+    const QJsonArray mirrored = partDrawingFromEntities(ents);
+    if (intoOpposite) {
+        p->fanoutOpposite = mirrored;
+        if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(mirrored);
     } else {
-        p->schematic = marked;
-        if (schemPreview_) schemPreview_->setDrawing(marked);
+        p->fanout = mirrored;
+        if (fanoutPreview_) fanoutPreview_->setDrawing(mirrored);
     }
     touched();
     saveLibrary();
+    reloadTree();
     if (summary_)
-        summary_->setText(canvas->pickedIndex() >= 0
-                              ? QStringLiteral("The connection source is marked — shown orange here, "
-                                               "and on the sheet whenever the part is selected")
-                              : QStringLiteral("No connection source: the part will be centred on the "
-                                               "joint"));
+        summary_->setText(QStringLiteral(
+            "Mirrored as a starting point — edit it on the canvas if the two sides are not identical, "
+            "then Capture selection to keep the correction"));
 }
 
 // The eye's answer, given to all three drawings. In one place because the three panes are shown one part
 // three ways and there is no sense in which one of them could be showing its marks and another not.
 void PartsLibraryDialog::applyShowConnection() {
     const bool on = !showConnBtn_ || showConnBtn_->isChecked();
-    for (DrawingPreview* prev : {schemPreview_, mechPreview_, fanoutPreview_})
+    for (DrawingPreview* prev : {schemPreview_, mechPreview_, fanoutPreview_, fanoutOppositePreview_})
         if (prev) prev->setShowConnection(on);
 }
 

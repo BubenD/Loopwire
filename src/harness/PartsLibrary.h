@@ -117,6 +117,12 @@ void rememberChoice(const QString& key, const QString& value, const QStringList&
 // The built-in list plus what has been added, which is what a chooser should offer.
 QStringList choicesFor(PartKind kind, const QString& key);
 
+// Which of a part's drawings is meant: its mechanical body, its schematic symbol, or one of its two
+// fanout views. Kept as one enum rather than three separate "which drawing" parameters everywhere a
+// part's drawing is opened for editing, so a session only has to remember one thing to know which
+// QJsonArray it reads and writes.
+enum class LibraryPartDrawing { Mechanical, Schematic, Fanout, FanoutOpposite };
+
 // A part in the library.
 struct LibraryPart {
     QString id;   // stable, unique within the library
@@ -153,6 +159,14 @@ struct LibraryPart {
     // is its circuit, and the fanout is what the harness does at it. Drawn for one side, front or back, and
     // placed mirrored for the other.
     QJsonArray fanout;
+    // The OTHER side's fanout, captured/drawn independently rather than computed as a mirror of
+    // `fanout` every time one is placed - a real connector's two faces are not always perfect
+    // mirror images of each other (keying, an asymmetric rib, a polarising tab), so a live mirror
+    // transform is a starting point at best. "Mirror from opposite fanout" seeds this field from a
+    // one-off mirror of `fanout` (or vice versa); after that it is its own drawing, hand-correctable
+    // like any other. Empty until the button has been used, in which case placement falls back to
+    // the old runtime mirror so a part nobody has touched since keeps working exactly as it did.
+    QJsonArray fanoutOpposite;
 
     // Which side the fanout was drawn from: "front" (looking at the face) or "back" (looking at the wires).
     QString fanoutSide() const {
@@ -164,6 +178,20 @@ struct LibraryPart {
                       side == QStringLiteral("back") ? side : QStringLiteral("front"));
     }
     bool hasFanout() const { return !fanout.isEmpty(); }
+    bool hasFanoutOpposite() const { return !fanoutOpposite.isEmpty(); }
+
+    // The three marks a default mechanical model is placed by (see MechModel), on the MECHANICAL
+    // drawing only: where it connects and which way it runs from there, and its two ends. A
+    // connector's mechanical drawing used to only carry a single "connection line" flagged on one
+    // of its own entities (see partDrawingConnectionLine()); these replace that for parts marked up
+    // from here on, kept alongside it rather than migrated, so an older part's line still shows.
+    bool hasConnect = false;
+    Vec2 connectPoint;
+    double connectAngleRad = 0.0;
+    bool hasNearPoint = false;
+    Vec2 nearPoint;
+    bool hasFarPoint = false;
+    Vec2 farPoint;
 
     // The contacts this connector takes: library part ids, in the order they were tied on. A connector is
     // ordered with its contacts and cannot be built without them, and there is often more than one to

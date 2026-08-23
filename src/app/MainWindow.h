@@ -158,6 +158,12 @@ public:
     // schematic: the model's SCHEMATIC drawing rather than its mechanical one (see
     // mechModelHasSchematicSlot()) - a separate session from the mechanical one for the same model.
     void openMechModelEditor(MechModelKind kind, const QString& name, bool schematic = false);
+    // The same, for one of a LIBRARY PART's drawings - a real canvas session (grey), the mechanical
+    // one additionally carrying real connect/near/far points, replacing the old connection-line
+    // popup. Parallel to the mech-model session above rather than merged into it: a different
+    // struct, with its own lifecycle (the part lives in a PartsLibraryDialog's own catalog_, not a
+    // single well-known file).
+    void openLibraryPartEditor(const QString& partId, LibraryPartDrawing kind);
     // Capture: take what is drawn on that canvas as the model and close the session. Public for the same
     // reason - what the ribbon's own Capture button does is worth being able to ask for directly. Cancel
     // likewise: the two ways a session ends are the two things a test of one has to be able to do.
@@ -170,6 +176,10 @@ public:
     bool mechModelMarksVisibleForTest() const { return mechModelMarksVisible(); }
     void toggleMechModelMarksForTest() { toggleMechModelMarks(); }
     void clearMechModelConnectForTest() { clearMechModelConnect(); }
+    // A library part is edited through the library dialog's own catalog_ (see openLibraryPartEditor),
+    // so a test that wants to open a session first needs one built and pointed at a library of its
+    // own - the same thing the ribbon's "Parts library" button does, made reachable without it.
+    PartsLibraryDialog* partsLibraryDialogForTest();
     void savePanelLayout();
     void restorePanelLayout();
 
@@ -515,6 +525,12 @@ private:
     QToolButton* markNearMechModelBtn_ = nullptr;
     QToolButton* markFarMechModelBtn_ = nullptr;
     QToolButton* cancelMechModelBtn_ = nullptr;
+    // A library part's own editing session - parallel to the mechModel* hashes above rather than
+    // unified with them (see openLibraryPartEditor()). Value = part id, so the session can be
+    // written back into whichever connected library actually holds it.
+    QHash<Document*, QString> libraryPartEdits_;
+    QHash<Document*, LibraryPartDrawing> libraryPartEditKind_;
+    QHash<Document*, LibraryPart> libraryPartSessionModels_;
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
@@ -561,6 +577,7 @@ private:
     void clearMechModelAnchor(bool near);
     void clearMechModelScaleRef();
     bool saveMechModelDocument(Document* doc);
+    bool saveLibraryPartDocument(Document* doc);
 
     // Blocks.
     enum class BlockAction { Create, Insert, Manage, SaveEdit, CancelEdit };
