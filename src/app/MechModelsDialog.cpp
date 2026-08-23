@@ -776,7 +776,27 @@ void MechModelsDialog::refreshPreview() {
     const double want = stretches && tryLen_ ? tryLen_->value() : mechModelDrawnLength(*m);
     const int wires = mechModelPerWire(kind) && tryWires_ ? tryWires_->value() : 0;
     if (view_) {
-        std::vector<Entity> shown = mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires);
+        // AS DRAWN MEANS IN THE COORDINATES IT WAS DRAWN IN.
+        //
+        // mechModelEntities() answers a different question: "how does this model look PLACED on a run
+        // heading this way" - so it turns the drawing by (the run's direction minus the model's own) and
+        // slides it until the connection point lands where the part is being fitted. Asked for a run along
+        // +x, a model whose own direction is -180 degrees comes back turned right round.
+        //
+        // Which is correct for the generator and wrong for this window twice over. It is captioned "As
+        // drawn", and it draws the marks - and the marks are in the model's OWN coordinates, the same ones
+        // the panel quotes ("connects at 27.4, 0.0"). So the drawing came out mirrored end for end while its
+        // connection point, its ends and its output faces stayed where they were captured: every mark
+        // pointing at the wrong part of the part.
+        //
+        // At the length it was drawn at, then, the drawing is shown exactly as captured. The placing
+        // machinery is still used for a TRIAL length or another conductor count, which is the one time this
+        // window is asking that other question - and the marks are already held back then, because
+        // stretched, a mark drawn where it was captured would be pointing at the wrong place anyway.
+        const bool showsAsDrawn = std::abs(want - mechModelDrawnLength(*m)) < 1e-6 && wires == 0;
+        std::vector<Entity> shown = showsAsDrawn
+                                        ? partDrawingEntities(m->drawing)
+                                        : mechModelEntities(*m, Vec2{0.0, 0.0}, 0.0, want, 0.0, wires);
         // THE MARKS, over the preview, in the colours the editing canvas uses - so a mark seen here is the same
         // mark seen there. Drawn at the size the drawing is rather than at a fixed size: a ring three millimetres
         // across on a part two metres long is a speck.
@@ -784,7 +804,7 @@ void MechModelsDialog::refreshPreview() {
         // Only ON the drawing as captured, which is why they are not shown while a trial length is being tried:
         // stretched, the part's ends are somewhere else and a mark drawn where it was captured would be pointing at
         // the wrong place. Saying nothing is better than pointing at the wrong thing.
-        const bool asDrawn = std::abs(want - mechModelDrawnLength(*m)) < 1e-6 && wires == 0;
+        const bool asDrawn = showsAsDrawn;
         if (showMarks_ && showMarks_->isChecked() && asDrawn) {
             // THE SAME MARKS THE CANVAS DRAWS, from the same code: blue where it connects with an arrow saying
             // which way it runs from there, orange and green on the two ends that must not stretch, purple

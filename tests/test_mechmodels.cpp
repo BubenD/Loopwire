@@ -3148,6 +3148,87 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- "As drawn" is in the coordinates it was drawn in --------------------------------------------
+    {
+        // The preview asked the PLACING machinery for its picture, and that answers a different question:
+        // "how does this model look placed on a run heading this way". So it turned the drawing by the run's
+        // direction minus the model's own and slid it until the connection point landed where the part was
+        // being fitted. A model whose own direction is -180 degrees - a connector drawn facing left, which is
+        // half of them - came back turned right round, while its marks stayed in the coordinates they were
+        // captured in: every mark pointing at the wrong part of the part.
+        const MechModelKind kind = MechModelKind::CircularConnector;
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        MechModelsDialog dlg(&ed);
+        dlg.show();
+        dlg.selectKind(kind);
+        QApplication::processEvents();
+
+        MechModelSet s = dlg.models();
+        MechModel m;
+        m.kind = kind;
+        m.name = dlg.currentName();
+        // Asymmetric on purpose, and drawn to the LEFT of its connection point: a body from x 0 to 20 with a
+        // spigot on its right-hand end, connecting at x=20 and running -180 degrees from there.
+        Entity body;
+        body.type = EntityType::Rect;
+        body.points = {{0.0, -5.0}, {20.0, -5.0}, {20.0, 5.0}, {0.0, 5.0}};
+        Entity spigot;
+        spigot.type = EntityType::Line;
+        spigot.a = {20.0, 0.0};
+        spigot.b = {24.0, 0.0};
+        m.drawing = partDrawingFromEntities({body, spigot});
+        m.hasConnect = true;
+        m.connectPoint = {20.0, 0.0};
+        m.connectAngleRad = 3.14159265358979323846;   // -180 degrees: it runs off to the left
+        MechModel::OutputLine face;
+        face.a = {0.0, -4.0};
+        face.b = {0.0, 4.0};
+        m.outputs.push_back(face);
+        s.set(m);
+        dlg.setModels(s);
+        dlg.selectKind(kind);
+        QApplication::processEvents();
+
+        DrawingPreview* prev = dlg.findChild<DrawingPreview*>();
+        check(prev != nullptr, "as drawn: there is a drawing window");
+        if (prev) {
+            // THE DRAWING, in the coordinates it was captured in - not turned, not slid.
+            Bounds part, marks;
+            for (const Entity& e : prev->entities()) {
+                if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool()) marks.expand(e.bounds());
+                else part.expand(e.bounds());
+            }
+            check(part.valid, "as drawn: the part is in the window");
+            if (part.valid) {
+                std::printf("  as drawn: part x %.1f..%.1f (drawn 0..24)\n", part.min.x, part.max.x);
+                check(std::abs(part.min.x) < 1e-6 && std::abs(part.max.x - 24.0) < 1e-6,
+                      "as drawn: exactly where it was drawn - a model facing left is not turned to face right");
+            }
+            // AND THE MARKS ON IT. The connection point is at x=20 and the face at x=0, so with the drawing
+            // where it belongs the marks land ON it rather than off one end.
+            check(marks.valid, "as drawn: and its marks");
+            if (marks.valid && part.valid) {
+                std::printf("  as drawn: marks x %.1f..%.1f\n", marks.min.x, marks.max.x);
+                // The arrow reaches out along the run (which is off to the left, past the part), so the marks
+                // may reach further than the part - what matters is that they OVERLAP it rather than sitting
+                // beyond its far end, which is what a turned drawing did.
+                check(marks.min.x < part.max.x - 1e-6 && marks.max.x > part.min.x + 1e-6,
+                      "as drawn: the marks are on the part, not off the end of it");
+                bool faceOnPart = false;
+                for (const Entity& e : prev->entities())
+                    if (e.meta.contains(QStringLiteral("modelOutput"))) {
+                        const Bounds fb = e.bounds();
+                        faceOnPart = fb.valid && std::abs(fb.min.x) < 1e-6 && std::abs(fb.max.x) < 1e-6;
+                    }
+                check(faceOnPart,
+                      "as drawn: the face the conductors leave by is still on the end it was marked on");
+            }
+        }
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;
