@@ -8417,6 +8417,77 @@ int run_editor_tests() {
               "pin: deleting 2 and placing another gives 2 back rather than jumping to 4");
     }
 
+
+
+
+    // ---- a BLOCK of a connector symbol scales as one thing ------------------------------------------
+    {
+        // A connector placed from the library is a BLOCK: the symbol, the box round it and the part number
+        // on it, stamped as one copy so a click picks the whole thing. Scaling it has to take all of them
+        // together - the reported fault is that it does not, and the way to find out is to scale one and
+        // measure every piece of it rather than to look at a picture of it.
+        Document d;
+        auto stamp = [](Entity& e) {
+            e.meta.insert(QStringLiteral("block"), QStringLiteral("X (schematic)"));
+            e.meta.insert(QStringLiteral("blockInst"), QStringLiteral("inst-1"));
+            e.meta.insert(QStringLiteral("blockOriginX"), 0.0);
+            e.meta.insert(QStringLiteral("blockOriginY"), 0.0);
+        };
+        Entity box;
+        box.id = QStringLiteral("box");
+        box.type = EntityType::Rect;
+        box.points = {{0.0, 0.0}, {60.0, 0.0}, {60.0, 40.0}, {0.0, 40.0}};
+        stamp(box);
+        d.entities().push_back(box);
+        Entity pn;
+        pn.id = QStringLiteral("pn");
+        pn.type = EntityType::Text;
+        pn.a = {0.0, 44.0};
+        pn.meta.insert(QStringLiteral("text"), QStringLiteral("0436450300"));
+        pn.meta.insert(QStringLiteral("size"), 5.0);
+        stamp(pn);
+        d.entities().push_back(pn);
+        Entity conn;
+        conn.id = QStringLiteral("conn");
+        conn.type = EntityType::Connector;
+        conn.a = {10.0, 30.0};
+        conn.meta.insert(QStringLiteral("pinCount"), 3);
+        conn.meta.insert(QStringLiteral("pitch"), 8.0);
+        conn.meta.insert(QStringLiteral("pinLength"), 12.0);
+        conn.meta.insert(QStringLiteral("textSize"), 4.0);
+        stamp(conn);
+        d.entities().push_back(conn);
+
+        auto extent = [&d](const QString& id) {
+            for (const Entity& e : d.entities())
+                if (e.id == id) return e.bounds();
+            return Bounds();
+        };
+        const Bounds boxBefore = extent(QStringLiteral("box"));
+        const Bounds pnBefore = extent(QStringLiteral("pn"));
+        const Bounds connBefore = extent(QStringLiteral("conn"));
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.scaleSelectionForTest(Vec2{0.0, 0.0}, 2.0);
+
+        auto grew = [](const Bounds& before, const Bounds& after, const char* what) {
+            if (!before.valid || !after.valid) return -1.0;
+            const double w0 = std::max(1e-9, before.width()), w1 = after.width();
+            std::printf("  block scale: %s %.1f wide -> %.1f (x%.2f)\n", what, w0, w1, w1 / w0);
+            return w1 / w0;
+        };
+        const double boxF = grew(boxBefore, extent(QStringLiteral("box")), "box");
+        const double pnF = grew(pnBefore, extent(QStringLiteral("pn")), "part number");
+        const double connF = grew(connBefore, extent(QStringLiteral("conn")), "connector");
+        check(std::abs(boxF - 2.0) < 0.02, "block scale: the box is twice the size");
+        check(std::abs(pnF - 2.0) < 0.05, "block scale: and the part number written on it");
+        check(connF > 0.0 && std::abs(connF - 2.0) < 0.05,
+              "block scale: and the connector symbol inside it, by the same factor as the rest");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

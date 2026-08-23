@@ -108,6 +108,10 @@ public:
     // which of the two drawings; the search dialog is for a library too long to walk through by hand.
     void addLibraryToCanvasMenu(QMenu& menu);
     void placeLibraryPart(const QString& partId, bool mechanical);
+    // Whether a schematic connector is placed with its fanout beside it (the parts panel's own switch,
+    // remembered between sessions). Public so a test can read what the switch says without reaching into
+    // the panel to find the box.
+    bool placesFanoutWithSchematic() const;
     // The fanout - the third drawing of a part - put down for the side it was drawn from, or mirrored for
     // the other one. `mirrored` turns a fanout drawn from the front into the back of the connector.
     void placeLibraryFanout(const QString& partId, bool mirrored);
@@ -226,6 +230,7 @@ private:
     // of materials, and the bill-of-materials window shows the same two switches).
     QCheckBox* bomOnPlaceBox_ = nullptr;
     QCheckBox* bomUnifyBox_ = nullptr;
+    QCheckBox* fanoutWithSchematicBox_ = nullptr;
     void syncBomRuleBoxes();                       // the boxes say what the drawing is set to
     void setBomRule(bool onPlace, bool value);     // and setting one is setting the drawing's own rule
     void refreshBlocksPanel();

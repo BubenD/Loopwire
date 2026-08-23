@@ -2916,6 +2916,13 @@ void MainWindow::addLibraryToCanvasMenu(QMenu& menu) {
     menu.addSeparator();
 }
 
+// What the parts panel's switch says. Read from the box when there is one and from the setting when there
+// is not - a part can be placed from the canvas menu before the panel has ever been opened.
+bool MainWindow::placesFanoutWithSchematic() const {
+    if (fanoutWithSchematicBox_) return fanoutWithSchematicBox_->isChecked();
+    return QSettings().value(QStringLiteral("ui/placeFanoutWithSchematic"), false).toBool();
+}
+
 void MainWindow::placeLibraryPart(const QString& partId, bool mechanical) {
     if (!editor_) return;
     PartsCatalog catalog;
@@ -2929,6 +2936,28 @@ void MainWindow::placeLibraryPart(const QString& partId, bool mechanical) {
                                                                     : tr("schematic")),
                                  4000);
         return;
+    }
+    // THE FANOUT WITH IT, when that is the habit and the part has one. Beside the symbol - in front of it,
+    // where the wires come in, next to its designator - and handed down as ONE placement, so the two land
+    // together and stay together instead of being lined up by hand every time.
+    if (!mechanical && placesFanoutWithSchematic() && !part->fanout.isEmpty()) {
+        std::vector<Entity> fan = partDrawingBlockInstance(*part, part->fanout,
+                                                           QStringLiteral("fanout"), Vec2{0.0, 0.0});
+        if (!fan.empty()) {
+            Bounds sym, fanB;
+            for (const Entity& e : block) sym.expand(e.bounds());
+            for (const Entity& e : fan) fanB.expand(e.bounds());
+            if (sym.valid && fanB.valid) {
+                // Its right-hand edge a small gap in front of the symbol's left-hand edge, and the two
+                // centred on one another across the run. The gap is taken from the symbol, so it looks the
+                // same on a symbol drawn at any size.
+                const double gap = std::max(2.0, sym.width() * 0.12);
+                const Vec2 shift{sym.min.x - gap - fanB.max.x,
+                                 (sym.min.y + sym.max.y) / 2.0 - (fanB.min.y + fanB.max.y) / 2.0};
+                for (Entity& e : fan) translateEntity(e, shift);
+                for (Entity& e : fan) block.push_back(std::move(e));
+            }
+        }
     }
     // The contact the connector is used with goes down with it, as it does from the library window: it is a
     // property of the part, so it does not matter which way the part was reached.
@@ -12704,9 +12733,15 @@ void MainWindow::activateIndex(int index) {
     if (markConnectMechModelBtn_) markConnectMechModelBtn_->setEnabled(anchorableModelEdit);
     if (markNearMechModelBtn_) markNearMechModelBtn_->setEnabled(anchorableMechModel);
     if (markFarMechModelBtn_) markFarMechModelBtn_->setEnabled(anchorableMechModel);
-    // Marking a face the wires leave by, and what the model is scaled by, are default-model-only ideas -
-    // a library part's connector already has its own pins for that, so these stay off for it.
-    if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(editingMechModel);
+    // WHERE THE WIRES LEAVE is not a default-model-only idea. It was reasoned that a library part's
+    // connector has its own pins for that - true of a connector that was built from its data, and no help
+    // at all for a connector traced off a supplier's drawing, which is most of them: a body and an outline
+    // with nothing in it that says which edge the conductors come out of. A part IS placed by that face
+    // (see placedPartDrawing), so it has to be possible to mark one, and the button was greyed.
+    //
+    // WHAT IT IS SCALED BY stays default-model-only, and that reasoning does hold: a model is stretched and
+    // scaled to fit the bundle it is put on, and a part out of a catalogue is the size it is.
+    if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(anchorableModelEdit);
     if (markScaleRefMechModelBtn_) markScaleRefMechModelBtn_->setEnabled(editingMechModel);
     if (showMechModelMarksBtn_) showMechModelMarksBtn_->setEnabled(anchorableModelEdit);
     if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(anyModelEdit);
@@ -12867,6 +12902,27 @@ QDockWidget* MainWindow::makePartsPanel() {
         "drawing - the bill-of-materials window shows the same switch."));
     connect(bomUnifyBox_, &QCheckBox::toggled, this, [this](bool on) { setBomRule(false, on); });
     v->addWidget(bomUnifyBox_);
+    // A SCHEMATIC CONNECTOR AND ITS FANOUT, PLACED TOGETHER. The fanout is the picture of how the wires
+    // break out of that connector, and on a schematic sheet it belongs beside the symbol it belongs to -
+    // put down separately it has to be lined up by hand every time, and a fanout lined up by eye against
+    // the wrong connector is a drawing that lies.
+    //
+    // A toggle, because it is not always wanted: a sheet of forty connectors would be a sheet of forty
+    // fanouts. Remembered between sessions - it is a habit, not a decision to be made per part.
+    fanoutWithSchematicBox_ = new QCheckBox(tr("A schematic connector is placed with its fanout"), body);
+    fanoutWithSchematicBox_->setToolTip(tr(
+        "The part's fanout - how the wires break out of it - goes down beside the schematic symbol, in "
+        "front of it and next to its designator, as one placement: the two land together and stay "
+        "together.\nOnly for a part that HAS a fanout drawn; anything else is placed as before."));
+    {
+        QSettings s;
+        fanoutWithSchematicBox_->setChecked(
+            s.value(QStringLiteral("ui/placeFanoutWithSchematic"), false).toBool());
+    }
+    connect(fanoutWithSchematicBox_, &QCheckBox::toggled, this, [](bool on) {
+        QSettings().setValue(QStringLiteral("ui/placeFanoutWithSchematic"), on);
+    });
+    v->addWidget(fanoutWithSchematicBox_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the parts library"), body);
         connect(open, &QPushButton::clicked, this, [this] { showPartsLibrary(); });

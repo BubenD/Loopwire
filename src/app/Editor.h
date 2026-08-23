@@ -604,6 +604,9 @@ public:
     // How many objects are on the clipboard. The clipboard is the EDITOR'S, not the drawing's, so it
     // survives switching tabs - which is what lets a selection copied inside a block be pasted outside it.
     int clipboardCount() const { return static_cast<int>(clipboard_.size()); }
+    // What is being placed, to look at. A caller that wants to know WHERE the set hanging off the cursor
+    // is - a test of "the fanout goes down in front of the symbol" - cannot answer that from a count.
+    const std::vector<Entity>& clipboardContents() const { return clipboard_; }
     // A stock symbol just put down: where its two leads land on a net, the net is cut between them, so the
     // part is IN the circuit rather than lying across it. Returns how many nets were cut.
     int cutNetsUnderSymbols(const std::vector<QString>& placedIds);

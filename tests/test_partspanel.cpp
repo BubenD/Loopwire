@@ -1108,6 +1108,108 @@ int run_partspanel_tests() {
         QFile::remove(libFile);
     }
 
+
+    // ---- a schematic connector placed with its fanout, and a part told where its wires leave --------
+    {
+        // THE FANOUT BELONGS BESIDE THE SYMBOL IT BELONGS TO. Put down separately it has to be lined up by
+        // hand every time, and a fanout lined up by eye against the wrong connector is a drawing that lies.
+        // A toggle, because a sheet of forty connectors would otherwise be a sheet of forty fanouts.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_fanout_place.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-FAN");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Three-way with a fanout");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{0.0, 0.0}, {20.0, 0.0}, {20.0, 30.0}, {0.0, 30.0}};
+            part.schematic = partDrawingFromEntities({body});
+            Entity brk;
+            brk.type = EntityType::Line;
+            brk.a = {0.0, 0.0};
+            brk.b = {10.0, 10.0};
+            part.fanout = partDrawingFromEntities({brk});
+            part.mechanical = partDrawingFromEntities({body});   // something to mark a face on
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1280, 820);
+        win.show();
+        QApplication::processEvents();
+
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "fanout place: there is a drawing to place on");
+        QCheckBox* toggle = nullptr;
+        for (QCheckBox* b : win.findChildren<QCheckBox*>())
+            if (b->text().contains(QStringLiteral("placed with its fanout"))) toggle = b;
+        check(toggle != nullptr, "fanout place: there is a switch for it in the parts panel");
+        if (ed && ed->document() && toggle) {
+            // OFF: the symbol alone, as before.
+            toggle->setChecked(false);
+            check(!win.placesFanoutWithSchematic(), "fanout place: off means off");
+            win.placeLibraryPart(QStringLiteral("P-FAN"), /*mechanical=*/false);
+            const int alone = static_cast<int>(ed->clipboardCount());
+            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+            // ON: the fanout comes with it, in front of the symbol, as ONE placement.
+            toggle->setChecked(true);
+            check(win.placesFanoutWithSchematic(), "fanout place: and the switch is remembered as on");
+            win.placeLibraryPart(QStringLiteral("P-FAN"), /*mechanical=*/false);
+            const int together = static_cast<int>(ed->clipboardCount());
+            std::printf("  fanout place: %d object(s) alone, %d with the fanout\n", alone, together);
+            check(together > alone,
+                  "fanout place: the fanout goes down with the symbol, in the same placement");
+            // IN FRONT OF IT: the fanout sits to the left of the symbol, not on top of it.
+            Bounds all, sym;
+            for (const Entity& e : ed->clipboardContents()) {
+                all.expand(e.bounds());
+                if (e.type == EntityType::Rect) sym.expand(e.bounds());
+            }
+            if (all.valid && sym.valid) {
+                std::printf("  fanout place: symbol x %.1f..%.1f inside all x %.1f..%.1f\n", sym.min.x,
+                            sym.max.x, all.min.x, all.max.x);
+                check(all.min.x < sym.min.x - 1e-6,
+                      "fanout place: and it is in FRONT of the symbol, not over it");
+            }
+            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+        }
+
+        // AND THE OUTPUT FACE BUTTON WORKS ON A LIBRARY PART. It was greyed for a part session on the
+        // reasoning that a connector has its own pins to say where the wires go - true of one built from
+        // its data, no help at all for one traced off a supplier's drawing, which is most of them. A part
+        // is SET DOWN by that face, so it has to be possible to mark one.
+        // The session is opened THROUGH the library window, which owns the part being worked on - without
+        // it there is no session at all, and a greyed button would be proof of nothing.
+        win.partsLibraryDialogForTest();
+        win.openLibraryPartEditor(QStringLiteral("P-FAN"), LibraryPartDrawing::Mechanical);
+        QApplication::processEvents();
+        QToolButton* face = nullptr;
+        QToolButton* scaleBy = nullptr;
+        for (QToolButton* b : win.findChildren<QToolButton*>()) {
+            if (b->toolTip().startsWith(QStringLiteral("Click across the face"))) face = b;
+            if (b->toolTip().startsWith(QStringLiteral("Click the object the app scales"))) scaleBy = b;
+        }
+        check(face != nullptr, "output face: the button is there in a library part session");
+        if (face) check(face->isEnabled(), "output face: and it can be pressed - it was greyed");
+        if (scaleBy)
+            check(!scaleBy->isEnabled(),
+                  "output face: what it is scaled BY stays off - a catalogue part is the size it is");
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
+        }
+        QFile::remove(libFile);
+    }
+
     if (panelFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", panelFailures);
     return panelFailures;
