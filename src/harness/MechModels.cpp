@@ -27,32 +27,47 @@ struct KindName {
 };
 
 // The order the window lists them in: the ends first, then the lengths, then the pieces at a junction.
+// IN THE ORDER A HARNESS IS BUILT UP, which is the order a drawing office thinks in: the connectors at each
+// end, what is crimped into them, what goes on the back of them, then the cable that runs between, then what
+// is shrunk over it, then what is written on it. The list grew instead in the order the kinds were added to
+// the program, so a ring terminal came first because it was written first and the connectors - the things
+// every harness starts from - were most of the way down.
+//
+// This order is what the manager lists. Nothing else depends on it: a model is stored under its kind's KEY,
+// so the order can be changed whenever the reading of it is wrong without touching a saved file.
+//
+// Several kinds are ONE KIND with several sub-drawings, held as named models of that kind: a backshell is a
+// backshell whether it leaves straight, at 45 or at 90 degrees, and a split is a split whether it makes three
+// branches, four, or a T. A kind per angle would put the same part in three places and give the generator
+// three things to keep in step.
 const std::array<KindName, 18> kKinds = {{
-    {MechModelKind::RingInsulated, "ring", "Ring terminal"},
+    // The connectors, first - a harness is two ends and what runs between them.
+    {MechModelKind::CircularConnector, "circular-connector", "Circular connector (MIL-DTL)"},
+    {MechModelKind::DTypeConnector, "d-type-connector", "D-type connector"},
+    // What is crimped on.
     {MechModelKind::FerruleInsulated, "ferrule", "Ferrule"},
-    {MechModelKind::TransitionHeatshrink, "transition-heatshrink", "Transition heatshrink"},
+    {MechModelKind::RingInsulated, "ring", "Ring terminal"},
+    // What goes on the back of a connector.
+    {MechModelKind::CircularBackshell, "circular-backshell",
+     "Circular backshell (straight / 45 / 90)"},
+    {MechModelKind::Boot, "boot", "Boot"},
+    // What runs between them.
     {MechModelKind::Cable, "cable", "Cable"},
+    {MechModelKind::CableBody, "cable-body", "Cable body"},
     {MechModelKind::Wire, "wire", "Wire"},
     {MechModelKind::OpenWires, "open-wires", "Open wires"},
     {MechModelKind::ConnectorToCableWires, "connector-to-cable-wires",
      "Wires between a connector and its cable"},
     {MechModelKind::YSplit, "y-split", "Y-split"},
+    {MechModelKind::TSplit, "t-split", "T-split"},
+    // What is shrunk over it.
     {MechModelKind::Heatshrink, "heatshrink", "Heatshrink"},
-    {MechModelKind::Boot, "boot", "Boot"},
-    {MechModelKind::CableBody, "cable-body", "Cable body"},
-    // The pieces a real harness drawing is made of. Several are ONE KIND with several sub-drawings, held
-    // as named models of that kind: a backshell is a backshell whether it leaves straight, at 45 or at 90
-    // degrees, and a split is a split whether it makes three branches, four, or a T. A kind per angle
-    // would put the same part in three places and give the generator three things to keep in step.
-    {MechModelKind::CircularConnector, "circular-connector", "Circular connector (MIL-DTL)"},
-    {MechModelKind::CircularBackshell, "circular-backshell",
-     "Circular backshell (straight / 45 / 90)"},
+    {MechModelKind::TransitionHeatshrink, "transition-heatshrink", "Transition heatshrink"},
     {MechModelKind::BranchSplitHeatshrink, "branch-split-heatshrink", "Branch split heatshrink"},
+    // And what is written on it.
     {MechModelKind::Label, "label", "Label"},
     {MechModelKind::LabelUnderHeatshrink, "label-under-heatshrink",
      "Label under clear heatshrink"},
-    {MechModelKind::TSplit, "t-split", "T-split"},
-    {MechModelKind::DTypeConnector, "d-type-connector", "D-type connector"},
 }};
 
 // A label on a run, as one is drawn: the run through it, a flag standing on the run, and a line inside the
@@ -207,7 +222,16 @@ bool mechModelPerWire(MechModelKind kind) {
 
 bool mechModelHasSchematicSlot(MechModelKind kind) {
     kind = canonicalKind(kind);
-    return kind == MechModelKind::RingInsulated || kind == MechModelKind::FerruleInsulated;
+    // THE THINGS A SCHEMATIC DRAWS A SYMBOL FOR. A crimp - a ring terminal, a ferrule - and a connector.
+    // Everything else on this list is harness fabric: a length of cable, a heatshrink sleeve, a boot, a
+    // label. A schematic does not draw those at all, so a second drawing for them would be a window nobody
+    // could put anything in.
+    //
+    // A connector is the clearest case of the two: it is the one part that appears on BOTH drawings and
+    // appears differently - a body with a face and a backshell thread in the metal, a numbered stack of pins
+    // on the circuit - and until now the manager could only be told the first of them.
+    return kind == MechModelKind::RingInsulated || kind == MechModelKind::FerruleInsulated ||
+           kind == MechModelKind::CircularConnector || kind == MechModelKind::DTypeConnector;
 }
 
 std::vector<QString> defaultSubModelNames(MechModelKind kind) {

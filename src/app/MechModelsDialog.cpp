@@ -115,8 +115,7 @@ MechModelsDialog::MechModelsDialog(Editor* editor, QWidget* parent,
     kinds_ = allMechModelKinds();
     set_.load();
     buildUi();
-    refreshList();
-    if (list_ && !rowItems_.empty()) list_->setCurrentItem(rowItems_.front());
+    refreshList();   // which lands on the first MODEL - never on a kind's heading. See refreshList().
 }
 
 void MechModelsDialog::buildUi() {
@@ -498,8 +497,24 @@ void MechModelsDialog::refreshList() {
         }
     }
     list_->expandAll(); // a rebuilt tree remembers nothing - open, so the sub-models are in view
-    if (prevRow >= 0 && prevRow < static_cast<int>(rowItems_.size()))
-        list_->setCurrentItem(rowItems_[static_cast<size_t>(prevRow)]);
+    // AND IT NEVER LANDS ON A HEADING. A kind with sub-models has no drawing of its own - a backshell is a
+    // straight one, a 45 or a 90, and "backshell" on its own is the word for the three of them - so its row is
+    // a heading and not a model. It is not selectable, but the window still OPENED on one, because the first
+    // row of the tree is a heading and something has to be current: what you saw on opening the manager was a
+    // kind's name over an empty page, which reads as a model whose drawing has gone missing.
+    //
+    // So a row that is a heading steps on to the first model under it - which is a real page, drawn or not.
+    auto firstModelFrom = [this](int row) {
+        for (size_t i = row < 0 ? 0 : static_cast<size_t>(row); i < rows_.size(); ++i)
+            if (rows_[i].name != QStringLiteral("«heading»")) return static_cast<int>(i);
+        return -1;
+    };
+    int want = prevRow >= 0 && prevRow < static_cast<int>(rowItems_.size()) ? prevRow : 0;
+    if (want < static_cast<int>(rows_.size()) &&
+        rows_[static_cast<size_t>(want)].name == QStringLiteral("«heading»"))
+        want = firstModelFrom(want);
+    if (want >= 0 && want < static_cast<int>(rowItems_.size()))
+        list_->setCurrentItem(rowItems_[static_cast<size_t>(want)]);
     syncing_ = was;
 }
 
@@ -629,6 +644,11 @@ void MechModelsDialog::refreshDetails() {
     // the same stale/heading selection currentSelectionIsUsable() already keeps Capture/Edit on
     // canvas from silently writing to.
     if (!currentSelectionIsUsable()) {
+        // Including the choice of WHICH drawing. A heading has neither a mechanical drawing nor a schematic
+        // one, so a control asking which of them to show is a control with nothing to switch between - and on
+        // a ring or a ferrule, the kinds that have both, it was the one thing left standing on an otherwise
+        // empty page, which made the page look like a model whose drawing had gone missing.
+        if (drawingModeBox_) drawingModeBox_->setVisible(false);
         if (view_) view_->setVisible(false);
         if (showMarks_) showMarks_->setVisible(false);
         if (takenBox_) takenBox_->setVisible(false);
@@ -645,6 +665,7 @@ void MechModelsDialog::refreshDetails() {
     }
     // Coming back from a heading: everything that branch hid is offered again (figures_/tryBox_ get
     // their own, more specific visibility below - this only undoes the heading's blanket hide).
+    if (drawingModeBox_) drawingModeBox_->setVisible(mechModelHasSchematicSlot(kind));
     if (view_) view_->setVisible(true);
     if (showMarks_) showMarks_->setVisible(true);
     if (takenBox_) takenBox_->setVisible(true);

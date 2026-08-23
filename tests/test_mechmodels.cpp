@@ -13,6 +13,8 @@
 #include "model/Block.h"
 
 #include <QApplication>
+#include <QComboBox>
+#include <QTreeWidget>
 #include <QImage>
 #include <QToolButton>
 #include <QGroupBox>
@@ -2975,9 +2977,13 @@ int run_mechmodels_tests() {
         check(mechModelHasSchematicSlot(MechModelKind::RingInsulated) &&
                   mechModelHasSchematicSlot(MechModelKind::FerruleInsulated),
               "schematic slot: a ring and a ferrule have one");
+        check(mechModelHasSchematicSlot(MechModelKind::CircularConnector) &&
+                  mechModelHasSchematicSlot(MechModelKind::DTypeConnector),
+              "schematic slot: and a connector - the one part that appears on both drawings, differently");
         check(!mechModelHasSchematicSlot(MechModelKind::Boot) &&
-                  !mechModelHasSchematicSlot(MechModelKind::Wire),
-              "schematic slot: most kinds do not");
+                  !mechModelHasSchematicSlot(MechModelKind::Wire) &&
+                  !mechModelHasSchematicSlot(MechModelKind::Heatshrink),
+              "schematic slot: harness fabric does not - a schematic draws none of it");
         // The legacy uninsulated keys normalise onto the same kind (canonicalKind()), so they get
         // one too - there is no separate "Ring Uninsulated" kind a user can actually pick.
         check(mechModelHasSchematicSlot(MechModelKind::RingUninsulated),
@@ -3024,11 +3030,22 @@ int run_mechmodels_tests() {
         ed.selectById(QStringLiteral("l"));
 
         MechModelsDialog dlg(&ed);
-        // Nothing chosen yet: the freshly built tree's current item is Ring's own HEADING (Ring is
-        // the first kind in the list that has named sub-models), which is exactly the stale/landed-
-        // on-a-heading case the guard exists for - reproduced here with no special setup at all.
+        // A FRESH DIALOG NO LONGER LANDS ON A HEADING - it steps on to the first model under it, because a
+        // kind's name over an empty page reads as a model whose drawing has gone missing. So the heading is
+        // reached deliberately here: setting the tree's current item to a top-level row is what a stale
+        // selection, or a rebuilt tree, could still do, and the guard has to hold when it happens.
+        check(dlg.currentSelectionIsUsable(),
+              "guard: a fresh dialog opens on a model rather than on a kind's heading");
+        auto* tree = dlg.findChild<QTreeWidget*>();
+        check(tree != nullptr, "guard: there is a list to pick in");
+        QTreeWidgetItem* ringHead = nullptr;
+        for (int i = 0; tree && i < tree->topLevelItemCount(); ++i)
+            if (tree->topLevelItem(i)->text(0) == mechModelName(MechModelKind::RingInsulated))
+                ringHead = tree->topLevelItem(i);
+        check(ringHead != nullptr, "guard: Ring is listed as a heading over its sub-models");
+        if (tree && ringHead) tree->setCurrentItem(ringHead);
         check(dlg.currentKind() == MechModelKind::RingInsulated && dlg.currentName().isEmpty(),
-              "guard: a fresh dialog starts on Ring's heading, with no named sub-model chosen");
+              "guard: put on Ring's heading, no named sub-model is chosen");
         check(!dlg.currentSelectionIsUsable(),
               "guard: that is not a usable selection - Ring has named sub-models");
         const bool hadRingBlank = dlg.models().of(MechModelKind::RingInsulated, QString()) != nullptr;
@@ -3050,6 +3067,84 @@ int run_mechmodels_tests() {
             if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(hadFile);
         } else {
             QFile::remove(modelsFile);
+        }
+    }
+
+
+    // ---- the manager lists the kinds in the order a harness is built up -----------------------------
+    {
+        // The list grew in the order the kinds were added to the program, so a ring terminal came first
+        // because it was written first, and the connectors - the things every harness starts from - were most
+        // of the way down. An office reads this list looking for a part, and the order it reads in is the
+        // order it works in: the connectors at each end, what is crimped into them, what goes on the back of
+        // them, the cable that runs between, what is shrunk over it, what is written on it.
+        const std::vector<MechModelKind> order = allMechModelKinds();
+        auto at = [&order](MechModelKind k) {
+            for (size_t i = 0; i < order.size(); ++i)
+                if (order[i] == k) return static_cast<int>(i);
+            return -1;
+        };
+        std::printf("  order: connector %d, ferrule %d, ring %d, backshell %d, cable %d, heatshrink %d\n",
+                    at(MechModelKind::CircularConnector), at(MechModelKind::FerruleInsulated),
+                    at(MechModelKind::RingInsulated), at(MechModelKind::CircularBackshell),
+                    at(MechModelKind::Cable), at(MechModelKind::Heatshrink));
+        check(at(MechModelKind::CircularConnector) < at(MechModelKind::DTypeConnector) &&
+                  at(MechModelKind::DTypeConnector) < at(MechModelKind::FerruleInsulated),
+              "order: the connectors come first, both of them");
+        check(at(MechModelKind::FerruleInsulated) < at(MechModelKind::RingInsulated) &&
+                  at(MechModelKind::RingInsulated) < at(MechModelKind::CircularBackshell),
+              "order: then the crimps, then what goes on the back of a connector");
+        check(at(MechModelKind::CircularBackshell) < at(MechModelKind::Cable) &&
+                  at(MechModelKind::Cable) < at(MechModelKind::Heatshrink),
+              "order: then the cable that runs between, then what is shrunk over it");
+        check(at(MechModelKind::Heatshrink) < at(MechModelKind::Label) &&
+                  at(MechModelKind::LabelUnderHeatshrink) == static_cast<int>(order.size()) - 1,
+              "order: and what is written on it, last");
+        check(order.size() == 18, "order: and every kind is still in the list");
+    }
+
+    // ---- a kind with sub-models has no page of its own ----------------------------------------------
+    {
+        // A backshell is a straight one, a 45 or a 90; "backshell" on its own is the word for the three of
+        // them and not a fourth thing that can be drawn. Its row is a heading, and a heading has no drawing,
+        // nothing to capture into and nothing to measure - so it is not selectable. But the window still
+        // OPENED on one, because the first row of the tree is a heading and something has to be current: what
+        // you saw was a kind's name over an empty page, which reads as a model whose drawing has gone missing.
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        MechModelsDialog dlg(&ed);
+        dlg.show();
+        QApplication::processEvents();
+        std::printf("  heading: the manager opened on %s / '%s'\n",
+                    qPrintable(mechModelName(dlg.currentKind())), qPrintable(dlg.currentName()));
+        check(dlg.currentSelectionIsUsable(),
+              "heading: the manager opens on a model, not on the name of a group of them");
+        check(!defaultSubModelNames(dlg.currentKind()).empty() ? !dlg.currentName().isEmpty() : true,
+              "heading: and if that kind has sub-models it is one of THEM that is showing");
+
+        // THE SCHEMATIC WINDOW. A crimp and a connector are what a schematic draws a symbol for, and a
+        // connector is the clearest case: it appears on both drawings and appears differently. Everything else
+        // on the list is harness fabric a schematic does not draw at all, so there is nothing to switch to.
+        QComboBox* mode = nullptr;
+        for (QComboBox* c : dlg.findChildren<QComboBox*>())
+            if (c->count() == 2 && c->itemText(0).contains(QStringLiteral("Mechanical drawing")))
+                mode = c;
+        check(mode != nullptr, "schematic window: there is a chooser for which drawing is showing");
+        if (mode) {
+            dlg.selectKind(MechModelKind::CircularConnector);
+            QApplication::processEvents();
+            check(mode->isVisible(), "schematic window: a circular connector has one");
+            dlg.selectKind(MechModelKind::DTypeConnector);
+            QApplication::processEvents();
+            check(mode->isVisible(), "schematic window: so has a D-type");
+            dlg.selectKind(MechModelKind::RingInsulated);
+            QApplication::processEvents();
+            check(mode->isVisible(), "schematic window: and a ring terminal, as before");
+            dlg.selectKind(MechModelKind::Cable);
+            QApplication::processEvents();
+            check(!mode->isVisible(),
+                  "schematic window: a length of cable has not - a schematic does not draw one");
         }
     }
 

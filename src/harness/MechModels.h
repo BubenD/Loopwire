@@ -86,8 +86,10 @@ bool mechModelStretches(MechModelKind kind);
 // Whether it is drawn for so many conductors at once (the open wires, and the wires between a
 // connector and its cable), in which case the count comes from the harness too.
 bool mechModelPerWire(MechModelKind kind);
-// Whether this kind keeps a SCHEMATIC drawing alongside its mechanical one - today, a ring
-// terminal and a ferrule, the two crimps a schematic actually shows a symbol for.
+// Whether this kind keeps a SCHEMATIC drawing alongside its mechanical one: the crimps a schematic shows a
+// symbol for (a ring terminal, a ferrule) and the connectors, which appear on both drawings and appear
+// differently - a body with a face in the metal, a numbered stack of pins on the circuit. Everything else on
+// the list is harness fabric a schematic does not draw at all.
 bool mechModelHasSchematicSlot(MechModelKind kind);
 
 // One model: the drawing, and what must not stretch in it.
