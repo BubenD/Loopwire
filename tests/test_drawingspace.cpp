@@ -1220,6 +1220,50 @@ int run_drawingspace_tests() {
         settings.setValue(QStringLiteral("ui/darkChrome"), true);
     }
 
+
+    // ---- the Special group: two equal rows of icons, and no dead columns ----------------------------
+    {
+        // The pieces of furniture a mechanical drawing needs - the break mark, the twisted runs, the
+        // heatshrinks, the part symbol, the label. Seven icons, put down as they were made: the seventh
+        // landed in a column of its own with a hole under it, and each column reserved 78 pixels because the
+        // buttons used to carry a two-line caption. The captions have long since become tooltips, so all that
+        // width was doing was pushing seven 40-pixel icons across four 78-pixel columns - a comb rather than
+        // a block, and no two rows of it the same length.
+        MainWindow win;
+        win.resize(1400, 860);
+        win.show();
+        QApplication::processEvents();
+        QWidget* group = nullptr;
+        for (QLabel* l : win.findChildren<QLabel*>())
+            if (l->text() == QStringLiteral("Special") && l->parentWidget()) group = l->parentWidget();
+        check(group != nullptr, "special: the group is on the harness-mechanical tab");
+        QGridLayout* grid = group ? group->findChild<QGridLayout*>() : nullptr;
+        check(grid != nullptr, "special: laid out as a grid");
+        if (grid) {
+            int perRow[2] = {0, 0};
+            int widest = 0;
+            for (int i = 0; i < grid->count(); ++i) {
+                int r = 0, c = 0, rs = 0, cs = 0;
+                grid->getItemPosition(i, &r, &c, &rs, &cs);
+                if (r >= 0 && r < 2) ++perRow[r];
+                if (QWidget* w = grid->itemAt(i)->widget()) widest = std::max(widest, w->sizeHint().width());
+            }
+            std::printf("  special: %d row(s), %d on top and %d under, %d column(s), widest icon %d px\n",
+                        grid->rowCount(), perRow[0], perRow[1], grid->columnCount(), widest);
+            check(grid->rowCount() == 2, "special: two rows, no more and no fewer");
+            check(std::abs(perRow[0] - perRow[1]) <= 1,
+                  "special: the two rows are the same length - as equal as an odd number allows");
+            check(perRow[0] >= perRow[1], "special: and the odd one out is on top, where the eye starts");
+            check(grid->columnCount() == (perRow[0] + perRow[1] + 1) / 2,
+                  "special: exactly as many columns as it takes to halve them - no column of one");
+            // No dead space: a column reserves the width of the icon in it and not the width of a caption
+            // that is no longer there.
+            for (int col = 0; col < grid->columnCount(); ++col)
+                check(grid->columnMinimumWidth(col) <= widest + 8,
+                      "special: no column reserves room for a caption that has become a tooltip");
+        }
+    }
+
     if (spaceFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", spaceFailures);
     return spaceFailures;

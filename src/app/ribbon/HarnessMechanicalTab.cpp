@@ -3,6 +3,8 @@
 // nothing about what they build or reach has changed.
 #include "app/MainWindow.h"
 
+#include <vector>
+
 #include "app/BlockDialog.h"
 #include "app/ribbon/RibbonIcons.h"
 #include "app/Editor.h"
@@ -126,9 +128,14 @@ void MainWindow::buildHarnessMechanicalTab() {
             for (QToolButton* b : w->findChildren<QToolButton*>()) oneButton(b);
             if (auto* b = qobject_cast<QToolButton*>(w)) oneButton(b);
         };
+        // COLLECTED FIRST, PLACED AFTERWARDS. Which cell a button belongs in cannot be worked out while
+        // they are being made, because it depends on how many there are in the end: put down as they come,
+        // the last one lands in a column of its own with a hole under it, and what should be a block of
+        // icons reads as a ragged tail. See the placement below.
+        std::vector<QWidget*> specialCells;
         auto lgAdd = [&](QWidget* w) {
             sizeCell(w);
-            lg->addWidget(w, specialAt % 2, specialAt / 2);
+            specialCells.push_back(w);
             ++specialAt;
         };
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
@@ -426,11 +433,23 @@ void MainWindow::buildHarnessMechanicalTab() {
             });
             lgAdd(labelBtn);
         }
-        // Room for the WORDS. Two rows of buttons sized to their icons cut the labels off - "Twisted
-        // route" and "Label under..." are wider than a 26-pixel icon - and a label that cannot be read is
-        // worse than no label. Each column is given enough for a two-line caption, so the group is as wide
-        // as it needs to be and no wider.
-        for (int col = 0; col <= (specialAt - 1) / 2; ++col) lg->setColumnMinimumWidth(col, 78);
+        // TWO EQUAL ROWS. As many columns as it takes to halve them, filled along the top row and then
+        // along the bottom - the way a row of pictures is read - so the two rows are the same length and the
+        // group is a block rather than a comb. An odd one out goes on the TOP row: the eye starts there.
+        //
+        // And no column wider than the icon in it. Each column used to reserve 78 pixels, which was room for
+        // a two-line caption under the button - and the captions have since gone (the name is on hover, like
+        // every other icon-only group on the ribbon), so all that width was doing was pushing the icons
+        // apart. Seven 40-pixel icons spread over four 78-pixel columns is what made these rows look ragged
+        // whatever order they went in.
+        {
+            const int n = static_cast<int>(specialCells.size());
+            const int cols = (n + 1) / 2;   // 7 buttons -> 4 columns: four on top, three under them
+            for (int i = 0; i < n; ++i)
+                lg->addWidget(specialCells[static_cast<size_t>(i)], i / cols, i % cols);
+            for (int col = 0; col < cols; ++col)
+                lg->setColumnMinimumWidth(col, kSpecialCell.width());
+        }
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }
