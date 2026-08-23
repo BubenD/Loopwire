@@ -61,6 +61,12 @@ QJsonArray partDrawingWithConnectionLine(const QJsonArray& drawing, int index);
 // Which object of the drawing is marked, or -1.
 int partDrawingConnectionLine(const QJsonArray& drawing);
 
+// WHETHER WIRES GO INTO THIS KIND OF PART, and so whether "the face they leave by" means anything for it. A
+// connector, a contact, a ferrule, a crimped terminal, a splice, a backshell, a gland, a grommet: wires enter
+// and leave, and where they leave is a property of the part. A length of tape, a cable tie, a marker sleeve
+// has no such thing - offering it a face to mark would be offering it a setting with no meaning.
+bool partKindTakesWires(PartKind kind);
+
 // Every kind, in the order the library lists them.
 std::vector<PartKind> allPartKinds();
 // "Heatshrink boot", "Y-split heatshrink", ... - what the UI shows.

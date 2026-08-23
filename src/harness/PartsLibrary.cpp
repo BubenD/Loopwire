@@ -211,6 +211,26 @@ QJsonArray partDrawingWithConnectionLine(const QJsonArray& drawing, int index) {
     return out;
 }
 
+bool partKindTakesWires(PartKind kind) {
+    switch (kind) {
+    case PartKind::Connector:
+    case PartKind::ContactPin:
+    case PartKind::Ferrule:
+    case PartKind::Crimp:
+    case PartKind::Splice:
+    case PartKind::Backshell:
+    case PartKind::HeatshrinkBoot:
+    case PartKind::YSplit:
+    case PartKind::Terminal:
+    case PartKind::Grommet:
+    case PartKind::CableGland:
+    case PartKind::Overmould:
+        return true;
+    default:
+        return false;
+    }
+}
+
 int partDrawingConnectionLine(const QJsonArray& drawing) {
     for (int i = 0; i < drawing.size(); ++i)
         if (drawing[i].toObject().value(QLatin1String(kConnectionLineKey)).toBool()) return i;

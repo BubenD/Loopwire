@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 #include "harness/HarnessBuilder.h"
 #include "harness/Bom.h"
+#include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
 #include "geometry/Geometry.h"
 #include "model/Document.h"
@@ -7140,6 +7141,65 @@ int run_harness_tests() {
             if (e.type == EntityType::Text) labelXs.push_back(e.a.x);
         check(labelXs.size() == 2 && !near(labelXs[0], labelXs[1]),
               "conn-table entities: the overall and internal brackets sit in two different lanes");
+    }
+
+
+    // ---- a marked face is what the part is SET DOWN BY ----------------------------------------------
+    {
+        // A face the conductors leave by IS where the harness meets the part - that is what the mark means.
+        // Marking one used to describe the part and change nothing about where it landed: the part was still
+        // centred on the joint, which on a connector whose body is long on one side of its face and short on
+        // the other puts half of it through the bundle.
+        //
+        // Driven through the generator, not through the placing code's arithmetic copied into a test: what is
+        // being checked is where the part ENDS UP.
+        auto placedAt = [](const LibraryPart& part, double dirRad) {
+            MechDrawOptions opt;
+            return placedPartDrawingForTest(part, Vec2{100.0, 50.0}, dirRad, opt);
+        };
+        // A connector: a body 20 long, and the face the wires leave by across its left-hand end.
+        LibraryPart faced;
+        faced.id = QStringLiteral("P-F");
+        faced.kind = PartKind::Connector;
+        Entity body;
+        body.type = EntityType::Rect;
+        body.points = {{0.0, -6.0}, {20.0, -6.0}, {20.0, 6.0}, {0.0, 6.0}};
+        faced.mechanical = partDrawingFromEntities({body});
+        faced.outputs.push_back({{0.0, -5.0}, {0.0, 5.0}});
+
+        const std::vector<Entity> down = placedAt(faced, 0.0);
+        check(!down.empty(), "face placement: the part is drawn");
+        if (!down.empty()) {
+            Bounds b;
+            for (const Entity& e : down) b.expand(e.bounds());
+            std::printf("  face placement: body x %.1f..%.1f, y %.1f..%.1f (joint at 100,50)\n", b.min.x,
+                        b.max.x, b.min.y, b.max.y);
+            // The face's centre lands ON the joint, and the body reaches away along the run - not straddling
+            // it, which is what centring did.
+            check(std::abs(b.min.x - 100.0) < 1e-6 && std::abs(b.max.x - 120.0) < 1e-6,
+                  "face placement: the face is on the joint and the body reaches away from it");
+            check(std::abs((b.min.y + b.max.y) / 2.0 - 50.0) < 1e-6,
+                  "face placement: and it sits across the run, centred on it");
+        }
+        // Told nothing, it is centred on the joint as before - a guess, but the same guess it always was.
+        LibraryPart bare = faced;
+        bare.outputs.clear();
+        const std::vector<Entity> centred = placedAt(bare, 0.0);
+        if (!centred.empty()) {
+            Bounds b;
+            for (const Entity& e : centred) b.expand(e.bounds());
+            std::printf("  face placement: unmarked, body x %.1f..%.1f\n", b.min.x, b.max.x);
+            check(std::abs((b.min.x + b.max.x) / 2.0 - 100.0) < 1e-6,
+                  "face placement: a part told nothing is still centred on the joint");
+        }
+        // And the kinds it is offered for: wires go into a connector and a ferrule; a length of tape has no
+        // face to mark and no business being asked about one.
+        check(partKindTakesWires(PartKind::Connector) && partKindTakesWires(PartKind::Ferrule) &&
+                  partKindTakesWires(PartKind::Crimp) && partKindTakesWires(PartKind::Backshell),
+              "face placement: the kinds wires go into can be told where they leave");
+        check(!partKindTakesWires(PartKind::Tape) && !partKindTakesWires(PartKind::CableTie) &&
+                  !partKindTakesWires(PartKind::Wire),
+              "face placement: and the kinds they do not are not asked");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

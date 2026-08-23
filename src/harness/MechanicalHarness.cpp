@@ -1145,9 +1145,30 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
     const Entity* conn = nullptr;
     for (const Entity& e : out)
         if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) conn = &e;
-    if (conn) {
-        Vec2 ca = conn->a, cb = conn->b;
-        if (conn->points.size() >= 2) {
+
+    // WHAT THE PART IS SET DOWN BY, in order of what it has been told.
+    //
+    // A face the conductors leave by IS where the harness meets the part - that is what the mark means - so a
+    // part with one is set down by it exactly as by a marked connection line: the face across the wires, its
+    // centre on the joint, the body on the far side from the harness. Marking the faces used to describe the
+    // part and change nothing about where it landed, which is a mark that does not mean anything.
+    //
+    // The legacy flagged line still comes FIRST, so no part that was already placed the way somebody wanted
+    // moves. Then the faces. Then the connection point and its direction, which is how a default model is
+    // placed and is better than the last resort. Only a part told none of it is centred on the joint and
+    // turned along the run - which is a guess, and looks like one on any part whose body is longer on one
+    // side of its face than the other.
+    Vec2 faceA{0.0, 0.0}, faceB{0.0, 0.0};
+    bool haveFace = false;
+    if (!conn && !part.outputs.empty()) {
+        faceA = part.outputs.front().a;
+        faceB = part.outputs.front().b;
+        haveFace = (faceB - faceA).length() > 1e-9;
+    }
+    if (conn || haveFace) {
+        Vec2 ca = haveFace ? faceA : conn->a;
+        Vec2 cb = haveFace ? faceB : conn->b;
+        if (!haveFace && conn->points.size() >= 2) {
             ca = conn->points.front();
             cb = conn->points.back();
         }
@@ -1169,6 +1190,20 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
         for (Entity& e : out) {
             if (std::abs(turn) > 1e-9) rotateEntity(e, centre, turn);
             translateEntity(e, at - centre);
+            e.layer = opt.layer;
+            e.meta.insert(QStringLiteral("mechRole"), role);
+        }
+        stampAsBlockCopy(out, part, at);
+        return out;
+    }
+
+    // MARKED WITH A CONNECTION POINT AND A DIRECTION - the same pair a default model is placed by: the
+    // drawing is turned so that direction runs along the run, and set down so that point lands on the joint.
+    if (part.hasConnect) {
+        const double turn = dirRad - part.connectAngleRad;
+        for (Entity& e : out) {
+            if (std::abs(turn) > 1e-9) rotateEntity(e, part.connectPoint, turn);
+            translateEntity(e, at - part.connectPoint);
             e.layer = opt.layer;
             e.meta.insert(QStringLiteral("mechRole"), role);
         }
@@ -2278,6 +2313,11 @@ MechHarnessDef mechFromDrawing(const Document& doc, const PartsCatalog* catalog)
         def.segments.push_back(s);
     }
     return def;
+}
+
+std::vector<Entity> placedPartDrawingForTest(const LibraryPart& part, const Vec2& at, double dirRad,
+                                             const MechDrawOptions& opt) {
+    return placedPartDrawing(part, at, dirRad, opt, QStringLiteral("fitting"));
 }
 
 } // namespace Edraw_Desktop

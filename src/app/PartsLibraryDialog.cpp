@@ -985,6 +985,24 @@ void PartsLibraryDialog::buildUi() {
         // the pieces every harness is made of - and a library part is very often one of exactly those with a
         // part number on it. Drawing it a second time, by hand, to say the same thing is work nobody should
         // do: this takes the house drawing as the part's own, and it can be edited from there like any other.
+        if (mech) {
+            // THE FACES THE WIRES LEAVE BY, applied from here. They are marked on the drawing itself - two
+            // clicks across the face - so this opens the part's mechanical drawing with that tool in hand,
+            // which is the one thing that cannot be done by typing in this window. Only for the kinds wires
+            // actually go into: a length of tape has no face to mark, and offering it one would be offering
+            // a setting with no meaning.
+            outputFacesBtn_ = new QPushButton(QStringLiteral("Output faces"), btns);
+            outputFacesBtn_->setToolTip(QStringLiteral(
+                "Mark the faces the conductors leave by - click across each one, in the order the branches "
+                "come out. A part with a face marked is SET DOWN by it: the face across the wires, its "
+                "centre on the joint, the body away from the harness."));
+            connect(outputFacesBtn_, &QPushButton::clicked, this, [this] {
+                if (currentId_.isEmpty()) return;
+                emit markOutputFacesRequested(currentId_);
+                hide();
+            });
+            bl->addWidget(outputFacesBtn_);
+        }
         auto* fromModel = new QPushButton(QStringLiteral("From default"), btns);
         fromModel->setToolTip(QStringLiteral(
             "Take this drawing from a default mechanical model - the house style for a ferrule, a ring, a "
@@ -1231,6 +1249,22 @@ void PartsLibraryDialog::showPart(const QString& id) {
     if (mechPreview_) {
         if (have && p) mechPreview_->setEntities(markedMechanicalDrawing(*p));
         else mechPreview_->setDrawing(QJsonArray());
+        // HOW MANY FACES ARE MARKED, said on the pane itself. "Has this one been told where its wires
+        // leave" is a question about the part, and it should be answerable by looking at the part rather
+        // than by opening it for editing to find out.
+        QString caption = QStringLiteral("Mechanical drawing");
+        if (p && !p->outputs.empty())
+            caption += QStringLiteral(" — %1 output face(s)").arg(p->outputs.size());
+        else if (p && partKindTakesWires(p->kind))
+            caption += QStringLiteral(" — no output face marked");
+        mechPreview_->setCaption(caption);
+    }
+    if (outputFacesBtn_) {
+        const bool wires = p && partKindTakesWires(p->kind);
+        outputFacesBtn_->setVisible(wires);
+        // Nothing drawn is nothing to mark ON: a face is two clicks across the part, and there has to be a
+        // part there to click across.
+        outputFacesBtn_->setEnabled(wires && p && p->hasMechanical());
     }
     syncing_ = false;
     rebuildParamForm();

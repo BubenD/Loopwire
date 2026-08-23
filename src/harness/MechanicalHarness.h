@@ -423,4 +423,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
 // takes the jacket diameter off the library part, so a Ø5 cable arrives as a Ø5 run.
 MechHarnessDef mechFromDrawing(const Document& doc, const PartsCatalog* catalog = nullptr);
 
+// Where a library part lands when the generator puts one down - by its marked face, by its connection
+// point, by a flagged connection line, or centred on the joint if it has been told none of it. Exposed
+// because "a marked face is what the part is set down by" is a claim about the generator, and checking it
+// by copying the arithmetic into a test would only prove the copy right.
+std::vector<Entity> placedPartDrawingForTest(const LibraryPart& part, const Vec2& at, double dirRad,
+                                             const MechDrawOptions& opt);
+
 } // namespace Edraw_Desktop

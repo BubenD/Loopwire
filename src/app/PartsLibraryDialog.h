@@ -117,6 +117,10 @@ public:
     void editCableStructure();
 
 signals:
+    // "Tell this part where its wires leave": the faces are marked on the drawing with two clicks each, so
+    // the host opens the part's mechanical drawing with that tool in hand. Emitted rather than done here
+    // because this window does not own the session - the same reasoning as onEdit_.
+    void markOutputFacesRequested(const QString& partId);
     // The window has stepped aside so objects can be selected on the sheet. The host puts up the
     // ribbon and the hint that say how to finish, and calls finishCaptureFromSheet() when told to.
     void captureArmed(bool mechanical, const QString& partTitle);
@@ -181,6 +185,7 @@ private:
     DrawingPreview* mechPreview_ = nullptr;
     // The fanout: a third drawing of the part, and which side of the connector it was drawn from.
     DrawingPreview* fanoutPreview_ = nullptr;
+    QPushButton* outputFacesBtn_ = nullptr;
     // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see
     // fanoutOpposite / mirrorFanoutFromOpposite()).
     DrawingPreview* fanoutOppositePreview_ = nullptr;

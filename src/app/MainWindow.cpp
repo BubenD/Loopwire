@@ -10803,6 +10803,14 @@ void MainWindow::showPartsLibrary() {
                                [this] { if (libraryDlg_) libraryDlg_->cancelCaptureFromSheet(); });
                 });
         connect(libraryDlg_, &PartsLibraryDialog::captureFinished, this, [this] { disarmCapture(); });
+        // "Tell this part where its wires leave": the part's mechanical drawing, opened with the
+        // output-face tool already in hand. Arming it here rather than making the user find the button is
+        // the whole point of asking for it from the library - they have already said what they want to do.
+        connect(libraryDlg_, &PartsLibraryDialog::markOutputFacesRequested, this,
+                [this](const QString& partId) {
+                    openLibraryPartEditor(partId, LibraryPartDrawing::Mechanical);
+                    armMechModelOutput();
+                });
     }
     libraryDlg_->show();
     libraryDlg_->raise();
