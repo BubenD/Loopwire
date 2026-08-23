@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include "harness/MechModels.h"
+#include <QSplitter>
 #include "model/Entity.h"
 #include <QImage>
 #include "app/DrawingPreview.h"
@@ -878,6 +880,120 @@ int run_partspanel_tests() {
                   "library: and the line is still THERE, in the same grey as the rest - hidden means "
                   "unmarked, not deleted");
         }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- the library's drawing panes: four of a size, draggable, and fillable from the house style ---
+    {
+        // They were four columns of a grid, and a grid column is as wide as the widest thing in it - which was
+        // not the drawing but the row of BUTTONS under it. The fanout has five and the schematic four, so the
+        // fanout's drawing was given half again the width of the schematic's for a reason that has nothing to
+        // do with either drawing.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_panes_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-PANES");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("A connector to draw");
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-PANES"));
+        // Wide enough that there IS slack to drag: four panes with a floor of 150 px each fill a 600-pixel
+        // row exactly, and a row with nothing spare cannot be re-divided however good the splitter is.
+        dlg.resize(1600, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        // FOUR PANES OF A SPLITTER, equal to begin with and any one of them draggable wider.
+        QSplitter* paneSplit = nullptr;
+        for (QSplitter* sp : dlg.findChildren<QSplitter*>())
+            if (sp->count() == 4 && sp->findChildren<DrawingPreview*>().size() == 4) paneSplit = sp;
+        check(paneSplit != nullptr, "panes: the four drawings are the four panes of a splitter");
+        if (paneSplit) {
+            QList<int> sizes = paneSplit->sizes();
+            int widest = 0, narrowest = 1 << 30;
+            for (int s : sizes) { widest = std::max(widest, s); narrowest = std::min(narrowest, s); }
+            std::printf("  panes: widths %d/%d/%d/%d\n", sizes.value(0), sizes.value(1), sizes.value(2),
+                        sizes.value(3));
+            check(widest - narrowest <= 2, "panes: all four the same width, whatever is written on the buttons");
+            check(!paneSplit->childrenCollapsible(), "panes: and none of them can be dragged shut by accident");
+            // Draggable: a splitter that refuses to move is not a resizable pane.
+            QList<int> pulled = sizes;
+            pulled[0] = sizes[0] + 80;
+            pulled[1] = sizes[1] - 80;
+            paneSplit->setSizes(pulled);
+            QApplication::processEvents();
+            check(paneSplit->sizes().value(0) > sizes.value(0),
+                  "panes: a pane can be pulled wider, to look at a drawing closely");
+        }
+        // Every pane the same minimum, so none of them is the reason the window cannot be made smaller.
+        QSet<QString> mins;
+        for (DrawingPreview* p : dlg.findChildren<DrawingPreview*>())
+            mins.insert(QStringLiteral("%1x%2").arg(p->minimumWidth()).arg(p->minimumHeight()));
+        check(mins.size() == 1, "panes: and one minimum size between them");
+
+        // FROM THE HOUSE STYLE. A library part is very often one of the pieces the default models already
+        // hold, with a part number on it; drawing it a second time by hand to say the same thing is work
+        // nobody should do.
+        MechModelSet models;
+        MechModel m;
+        m.kind = MechModelKind::FerruleInsulated;
+        m.name = QStringLiteral("Insulated");
+        Entity body;
+        body.type = EntityType::Line;
+        body.a = {0.0, 0.0};
+        body.b = {12.0, 0.0};
+        Entity crimp;
+        crimp.type = EntityType::Line;
+        crimp.a = {2.0, -1.0};
+        crimp.b = {2.0, 1.0};
+        m.drawing = partDrawingFromEntities({body, crimp});
+        Entity glyph;
+        glyph.type = EntityType::Circle;
+        glyph.center = {0.0, 0.0};
+        glyph.radius = 1.5;
+        m.schematicDrawing = partDrawingFromEntities({glyph});
+        models.set(m);
+
+        check(dlg.takeDrawingFromDefaultModel(models, MechModelKind::FerruleInsulated,
+                                              QStringLiteral("Insulated"), false, true),
+              "from default: the model's mechanical drawing becomes the part's mechanical drawing");
+        check(dlg.takeDrawingFromDefaultModel(models, MechModelKind::FerruleInsulated,
+                                              QStringLiteral("Insulated"), true, false),
+              "from default: and its schematic becomes the part's schematic");
+        const LibraryPart* got = nullptr;
+        const PartsLibrary after = dlg.library();
+        for (const LibraryPart& p : after.parts)
+            if (p.id == QStringLiteral("P-PANES")) got = &p;
+        check(got != nullptr, "from default: the part is still there");
+        if (got) {
+            std::printf("  from default: %lld object(s) mechanical, %lld schematic\n",
+                        static_cast<long long>(got->mechanical.size()),
+                        static_cast<long long>(got->schematic.size()));
+            check(got->mechanical.size() == 2,
+                  "from default: two objects, which is what the model's mechanical drawing has");
+            check(got->schematic.size() == 1,
+                  "from default: one, which is what its schematic has - the two sides do not cross over");
+        }
+        // Nothing drawn is nothing to take - and taking it would CLEAR the part's own drawing, which is a
+        // destructive answer to "give me the house one".
+        MechModel empty;
+        empty.kind = MechModelKind::Boot;
+        empty.name = QStringLiteral("Straight");
+        MechModelSet blank;
+        blank.set(empty);
+        check(!dlg.takeDrawingFromDefaultModel(blank, MechModelKind::Boot, QStringLiteral("Straight"),
+                                               false, true),
+              "from default: a model with nothing drawn is refused rather than emptying the part");
         QFile::remove(libFile);
     }
 

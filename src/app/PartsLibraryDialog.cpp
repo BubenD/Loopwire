@@ -1,6 +1,8 @@
 #include "app/PartsLibraryDialog.h"
 #include <QToolButton>
 #include "harness/PartDataFromWeb.h"
+#include <QTreeWidgetItem>
+#include "harness/MechModels.h"
 #include "app/PartWebDataDialog.h"
 #include "harness/MechanicalHarness.h"
 
@@ -44,6 +46,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSplitter>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -761,12 +764,55 @@ void PartsLibraryDialog::buildUi() {
     paramLay_->setSpacing(4);
     scroll->setWidget(paramHost_);
     pbLay->addWidget(scroll);
-    rv->addWidget(paramBox, 1);
+    rv->addWidget(paramBox, 1);   // and the drawings below get twice this, growing with the window
 
-    // The two drawings.
+    // The drawings of a part: what it is on a circuit, what it is in the metal, and what the harness does at
+    // each side of it.
+    //
+    // FOUR PANES OF EQUAL SIZE, AND DRAGGABLE. They were four columns of a grid, and a grid column is as wide
+    // as the widest thing in it - which was not the drawing but the row of BUTTONS under it. The fanout has
+    // five ("Insert mirrored", "Mirror from opposite fanout") and the schematic has four, so the fanout's
+    // drawing was given half again the width of the schematic's for a reason that has nothing to do with
+    // either drawing. Four panes of a splitter start equal and stay equal, and any one of them can be pulled
+    // wider to look at a drawing closely - which is the whole reason for having the drawing on screen.
     auto* draw = new QGroupBox(QStringLiteral("Drawings"), right);
-    auto* dg = new QGridLayout(draw);
-    dg->setContentsMargins(8, 8, 8, 8);
+    auto* dgOuter = new QVBoxLayout(draw);
+    dgOuter->setContentsMargins(8, 8, 8, 8);
+    auto* drawSplit = new QSplitter(Qt::Horizontal, draw);
+    drawSplit->setChildrenCollapsible(false);
+    drawSplit->setHandleWidth(6);
+    dgOuter->addWidget(drawSplit, 1);
+    // One pane per drawing: the drawing itself, then its buttons, then any setting of its own.
+    QWidget* paneHost[4] = {nullptr, nullptr, nullptr, nullptr};
+    QVBoxLayout* paneLay[4] = {nullptr, nullptr, nullptr, nullptr};
+    for (int i = 0; i < 4; ++i) {
+        paneHost[i] = new QWidget(drawSplit);
+        paneLay[i] = new QVBoxLayout(paneHost[i]);
+        paneLay[i]->setContentsMargins(0, 0, 0, 0);
+        paneLay[i]->setSpacing(4);
+        drawSplit->addWidget(paneHost[i]);
+        drawSplit->setStretchFactor(i, 1);
+    }
+    // A ROW OF BUTTONS THAT CAN GET OUT OF THE WAY. Two rows rather than one, so a pane needs half the width
+    // to show them, and each button allowed to shrink below its caption - a pane pulled narrow elides the
+    // words (the tooltip still says what it does) instead of refusing to be narrow and holding the whole
+    // splitter open. The same two-equal-rows shape the ribbon's icon groups use.
+    auto reflowButtons = [](QWidget* host) {
+        const QList<QPushButton*> bs =
+            host->findChildren<QPushButton*>(QString(), Qt::FindDirectChildrenOnly);
+        for (QPushButton* b : bs) {
+            b->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            b->setMinimumWidth(28);
+        }
+        if (bs.size() < 3) return;
+        delete host->layout();
+        auto* g = new QGridLayout(host);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(2);
+        const int cols = (bs.size() + 1) / 2;
+        for (int i = 0; i < bs.size(); ++i)
+            g->addWidget(bs[i], i / cols, i % cols);
+    };
     struct Side {
         const char* caption;
         bool mechanical;
@@ -787,26 +833,34 @@ void PartsLibraryDialog::buildUi() {
                        "to, drawn orange. It is a mark ON the part, not part of it, and while the drawing is "
                        "being checked it is in the way of seeing what the part actually looks like."));
     connect(showConnBtn_, &QToolButton::toggled, this, [this] { applyShowConnection(); });
-    dg->addWidget(showConnBtn_, 3, 0, 1, 4, Qt::AlignLeft);
+    dgOuter->addWidget(showConnBtn_, 0, Qt::AlignLeft);
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
-        auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), draw);
-        // Room enough to see what the drawing IS, and no more: three of these side by side, and the window
-        // has the part's data to show as well.
-        prev->setMinimumSize(210, 170);
+        QWidget* fanoutSideRowPending = nullptr;
+        auto* prev = new DrawingPreview(QString::fromLatin1(sides[i].caption), paneHost[i]);
+        // Every pane the same, and every pane free to grow: what a drawing needs is room, and the four of
+        // them have no reason to differ. Small enough that four fit a modest window, big enough to read.
+        prev->setMinimumSize(150, 150);
+        prev->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         if (isFanout) fanoutPreview_ = prev;
         else if (sides[i].mechanical) mechPreview_ = prev;
         else schemPreview_ = prev;
-        dg->addWidget(prev, 0, i);
+        paneLay[i]->addWidget(prev, 1);
         if (isFanout) {
             // Which side of the connector it was drawn from. A fanout is only meaningful with that said:
             // the same drawing is the front view or the back view depending on it, and the other side is
             // the same drawing mirrored.
-            auto* sideRow = new QWidget(draw);
+            auto* sideRow = new QWidget(paneHost[i]);
             fanoutSideRow_ = sideRow;
             auto* sl = new QHBoxLayout(sideRow);
             sl->setContentsMargins(0, 0, 0, 0);
-            sl->addWidget(new QLabel(QStringLiteral("Drawn from the"), sideRow));
+            // The words in front of it may be narrow too. This row sits under one of four drawings that
+            // are meant to be the same size, and a splitter hands each pane what its contents ASK for -
+            // so anything in a pane that asks for more than the drawing does makes that pane the odd one
+            // out. Nothing here needs to hold the row open.
+            auto* sideWords = new QLabel(QStringLiteral("Drawn from the"), sideRow);
+            sideWords->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            sl->addWidget(sideWords);
             fanoutSideBox_ = new QComboBox(sideRow);
             fanoutSideBox_->addItem(QStringLiteral("front — looking at the face"),
                                     QStringLiteral("front"));
@@ -819,10 +873,18 @@ void PartsLibraryDialog::buildUi() {
                     touched();
                 }
             });
+            // AND IT MAY BE NARROW. "front - looking at the face" is a long thing to write in a box, and a
+            // splitter gives each pane what its contents ask for: this one asked for half the row and got it,
+            // which is why the fanout's drawing was three times the size of the others. The words are still
+            // there when there is room for them.
+            fanoutSideBox_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            fanoutSideBox_->setMinimumContentsLength(6);
+            fanoutSideBox_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             sl->addWidget(fanoutSideBox_, 1);
-            dg->addWidget(sideRow, 2, i);
+            sideRow->setMinimumWidth(0);
+            fanoutSideRowPending = sideRow;
         }
-        auto* btns = new QWidget(draw);
+        auto* btns = new QWidget(paneHost[i]);
         auto* bl = new QHBoxLayout(btns);
         bl->setContentsMargins(0, 0, 0, 0);
         const bool mech = sides[i].mechanical;
@@ -863,7 +925,9 @@ void PartsLibraryDialog::buildUi() {
                 }
             });
             bl->addWidget(clr);
-            dg->addWidget(btns, 1, i);
+            reflowButtons(btns);
+            paneLay[i]->addWidget(btns);
+            if (fanoutSideRowPending) paneLay[i]->addWidget(fanoutSideRowPending);
             continue;
         }
         auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
@@ -902,19 +966,32 @@ void PartsLibraryDialog::buildUi() {
             genSymbolBtn_ = gen;
             bl->addWidget(gen);
         }
+        // FROM A DEFAULT MODEL. The house style already holds a drawn ferrule, ring, backshell, connector -
+        // the pieces every harness is made of - and a library part is very often one of exactly those with a
+        // part number on it. Drawing it a second time, by hand, to say the same thing is work nobody should
+        // do: this takes the house drawing as the part's own, and it can be edited from there like any other.
+        auto* fromModel = new QPushButton(QStringLiteral("From default"), btns);
+        fromModel->setToolTip(QStringLiteral(
+            "Take this drawing from a default mechanical model - the house style for a ferrule, a ring, a "
+            "backshell, a connector. The list opens with each model's drawings beside it, so what is being "
+            "taken is seen before it is taken."));
+        connect(fromModel, &QPushButton::clicked, this, [this, mech] { importFromDefaultModel(mech); });
+        bl->addWidget(fromModel);
         auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
         connect(clr, &QPushButton::clicked, this, [this, mech] { clearDrawing(mech); });
         bl->addWidget(clr);
-        dg->addWidget(btns, 1, i);
+        reflowButtons(btns);
+        paneLay[i]->addWidget(btns);
     }
     // A FOURTH pane, for the fanout's other side - its own drawing now (see LibraryPart::fanoutOpposite),
     // not a live mirror of the one above computed only at placement time.
     {
-        auto* prev = new DrawingPreview(QStringLiteral("Fanout (opposite)"), draw);
-        prev->setMinimumSize(210, 170);
+        auto* prev = new DrawingPreview(QStringLiteral("Fanout (opposite)"), paneHost[3]);
+        prev->setMinimumSize(150, 150);
+        prev->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         fanoutOppositePreview_ = prev;
-        dg->addWidget(prev, 0, 3);
-        auto* btns = new QWidget(draw);
+        paneLay[3]->addWidget(prev, 1);
+        auto* btns = new QWidget(paneHost[3]);
         auto* bl = new QHBoxLayout(btns);
         bl->setContentsMargins(0, 0, 0, 0);
         auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
@@ -942,7 +1019,18 @@ void PartsLibraryDialog::buildUi() {
             }
         });
         bl->addWidget(clr);
-        dg->addWidget(btns, 1, 3);
+        reflowButtons(btns);
+        paneLay[3]->addWidget(btns);
+        // EQUAL TO BEGIN WITH, and said once the row has a width to divide. A splitter left to itself gives
+        // each pane whatever its contents ask for, and asking for equal shares before the window has been
+        // laid out only gets them clamped to their minimums with the leftover handed to whichever pane asked
+        // loudest. So it is done on the first turn of the event loop, when there is a real width - and once
+        // only, so a pane the user drags afterwards stays where they put it.
+        QTimer::singleShot(0, drawSplit, [drawSplit] {
+            const int n = drawSplit->count();
+            if (n <= 0 || drawSplit->width() <= 0) return;
+            drawSplit->setSizes(QList<int>(n, std::max(1, drawSplit->width() / n)));
+        });
     }
     // The remembered answer, given to the panes now they exist: a preference that is read back but not
     // applied until the button is next pressed is a preference that looks forgotten.
@@ -983,7 +1071,7 @@ void PartsLibraryDialog::buildUi() {
         rv->addWidget(group);
     }
 
-    rv->addWidget(draw);
+    rv->addWidget(draw, 2);
     split->addWidget(right);
     split->setStretchFactor(0, 1);
     split->setStretchFactor(1, 2);
@@ -2112,6 +2200,187 @@ void PartsLibraryDialog::applyShowConnection() {
     const bool on = !showConnBtn_ || showConnBtn_->isChecked();
     for (DrawingPreview* prev : {schemPreview_, mechPreview_, fanoutPreview_, fanoutOppositePreview_})
         if (prev) prev->setShowConnection(on);
+}
+
+// THE TAKING ITSELF, apart from the window that chooses what to take. The window's business is picking a
+// model and a side of it; this copies the drawing over, writes the library and shows the result. Apart,
+// because "a part can be drawn from the house style" is a thing to be able to check without opening a modal
+// window and clicking in it - and because the four arguments are then said out loud rather than implied by
+// which button was pressed.
+//
+// `fromSchematic` is which of the MODEL's two drawings is being taken; `intoMechanical` is which of the
+// PART's it lands in. They are separate on purpose: a part's schematic symbol can be worth taking from a
+// model's mechanical view and the other way about, and the pane the button sits on has already settled the
+// second of them.
+bool PartsLibraryDialog::takeDrawingFromDefaultModel(const MechModelSet& models, MechModelKind kind,
+                                                     const QString& modelName, bool fromSchematic,
+                                                     bool intoMechanical) {
+    LibraryPart* part = current();
+    const MechModel* m = models.of(kind, modelName);
+    if (!part || !m) return false;
+    const QJsonArray d = fromSchematic ? m->schematicDrawing : m->drawing;
+    // Nothing drawn is nothing to take, and taking it would CLEAR the part's own drawing - which is a
+    // destructive answer to "give me the house one".
+    if (d.isEmpty()) {
+        if (summary_)
+            summary_->setText(QStringLiteral("That model has no %1 drawing — nothing to take")
+                                  .arg(fromSchematic ? QStringLiteral("schematic")
+                                                     : QStringLiteral("mechanical")));
+        return false;
+    }
+    if (intoMechanical) part->mechanical = d;
+    else part->schematic = d;
+    touched();
+    saveLibrary();
+    if (intoMechanical && mechPreview_) mechPreview_->setDrawing(part->mechanical);
+    if (!intoMechanical && schemPreview_) schemPreview_->setDrawing(part->schematic);
+    reloadTree();
+    if (summary_)
+        summary_->setText(
+            QStringLiteral("Taken from the %1 model's %2 drawing — edit it from here like any other")
+                .arg(mechModelName(kind), fromSchematic ? QStringLiteral("schematic")
+                                                        : QStringLiteral("mechanical")));
+    return true;
+}
+
+// IMPORT A DRAWING FROM THE HOUSE STYLE.
+//
+// The default models already hold a drawn ferrule, ring, backshell, connector - the pieces every harness is
+// made of - and a library part is very often one of exactly those with a part number on it. Drawing it again
+// by hand to say the same thing is work nobody should do.
+//
+// The window shows the models on the left and, on the right, the drawings the chosen one HAS: its mechanical
+// drawing and, for the kinds that keep one, its schematic. Both are shown because a model can hold both and
+// which of them is wanted is the user's business - a part's schematic symbol may well be worth taking from a
+// model's schematic rather than from its mechanical view. Each is taken with its own button, under the drawing
+// it takes, so what is being taken is the thing being looked at.
+void PartsLibraryDialog::importFromDefaultModel(bool mechanical) {
+    LibraryPart* p = current();
+    if (!p) {
+        if (summary_) summary_->setText(QStringLiteral("Pick a part first"));
+        return;
+    }
+    MechModelSet models;
+    models.load();
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("%1 — take the %2 drawing from a default model")
+                           .arg(p->title(),
+                                mechanical ? QStringLiteral("mechanical") : QStringLiteral("schematic")));
+    dlg.setModal(true);
+    dlg.resize(940, 560);
+    auto* outer = new QVBoxLayout(&dlg);
+    auto* what = new QLabel(
+        QStringLiteral("The house style for the pieces a harness is made of. Pick one on the left; what it "
+                       "holds is drawn on the right. Take either drawing - a part's %1 drawing can be worth "
+                       "taking from either side of a model.")
+            .arg(mechanical ? QStringLiteral("mechanical") : QStringLiteral("schematic")),
+        &dlg);
+    what->setWordWrap(true);
+    outer->addWidget(what);
+
+    auto* split = new QSplitter(Qt::Horizontal, &dlg);
+    auto* list = new QTreeWidget(split);
+    list->setHeaderHidden(true);
+    list->setMinimumWidth(240);
+    split->addWidget(list);
+
+    auto* panes = new QWidget(split);
+    auto* pl = new QHBoxLayout(panes);
+    pl->setContentsMargins(0, 0, 0, 0);
+    struct Side {
+        DrawingPreview* view = nullptr;
+        QPushButton* take = nullptr;
+        bool schematic = false;
+    };
+    Side sides[2];
+    for (int i = 0; i < 2; ++i) {
+        auto* host = new QWidget(panes);
+        auto* hl = new QVBoxLayout(host);
+        hl->setContentsMargins(0, 0, 0, 0);
+        sides[i].schematic = i == 1;
+        sides[i].view = new DrawingPreview(sides[i].schematic ? QStringLiteral("Its schematic drawing")
+                                                             : QStringLiteral("Its mechanical drawing"),
+                                          host);
+        sides[i].view->setEmptyText(QStringLiteral("this model has none"));
+        sides[i].view->setMinimumSize(200, 220);
+        hl->addWidget(sides[i].view, 1);
+        sides[i].take = new QPushButton(QStringLiteral("Take this one"), host);
+        hl->addWidget(sides[i].take);
+        pl->addWidget(host, 1);
+    }
+    split->addWidget(panes);
+    split->setStretchFactor(0, 0);
+    split->setStretchFactor(1, 1);
+    outer->addWidget(split, 1);
+
+    auto* said = new QLabel(&dlg);
+    said->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+    said->setWordWrap(true);
+    outer->addWidget(said);
+    auto* row = new QHBoxLayout;
+    row->addStretch(1);
+    auto* close = new QPushButton(QStringLiteral("Cancel"), &dlg);
+    connect(close, &QPushButton::clicked, &dlg, &QDialog::reject);
+    row->addWidget(close);
+    outer->addLayout(row);
+
+    // The models, by kind, with the named sub-models under their kind - the same shape the manager lists
+    // them in, because it is the same list and learning it twice is learning it wrong. Only what has been
+    // DRAWN is offered: a model with nothing in it is nothing to import.
+    for (MechModelKind kind : allMechModelKinds()) {
+        std::vector<const MechModel*> of = models.all(kind);
+        std::vector<const MechModel*> drawn;
+        for (const MechModel* m : of)
+            if (m && (!m->drawing.isEmpty() || !m->schematicDrawing.isEmpty())) drawn.push_back(m);
+        if (drawn.empty()) continue;
+        auto* head = new QTreeWidgetItem(list, QStringList{mechModelName(kind)});
+        QFont hf = head->font(0);
+        hf.setBold(true);
+        head->setFont(0, hf);
+        head->setFlags(Qt::ItemIsEnabled);   // a heading, not a thing to pick
+        for (const MechModel* m : drawn) {
+            const QString label = m->name.isEmpty() ? mechModelName(kind) : m->name;
+            auto* item = new QTreeWidgetItem(head, QStringList{label});
+            item->setData(0, Qt::UserRole, static_cast<int>(kind));
+            item->setData(0, Qt::UserRole + 1, m->name);
+        }
+    }
+    list->expandAll();
+
+    // What is showing, and whether either half of it can be taken.
+    auto chosen = [&list, &models]() -> const MechModel* {
+        QTreeWidgetItem* item = list->currentItem();
+        if (!item || item->data(0, Qt::UserRole).isNull()) return nullptr;
+        const auto kind = static_cast<MechModelKind>(item->data(0, Qt::UserRole).toInt());
+        return models.of(kind, item->data(0, Qt::UserRole + 1).toString());
+    };
+    auto show = [&] {
+        const MechModel* m = chosen();
+        for (int i = 0; i < 2; ++i) {
+            const QJsonArray d = !m ? QJsonArray()
+                                    : (sides[i].schematic ? m->schematicDrawing : m->drawing);
+            sides[i].view->setDrawing(d);
+            sides[i].take->setEnabled(!d.isEmpty());
+        }
+        said->setText(m ? QStringLiteral("%1 — %2 object(s) in the mechanical drawing, %3 in the schematic")
+                              .arg(mechModelName(m->kind))
+                              .arg(m->drawing.size())
+                              .arg(m->schematicDrawing.size())
+                        : QStringLiteral("Pick a model on the left"));
+    };
+    connect(list, &QTreeWidget::currentItemChanged, &dlg, [&show] { show(); });
+    show();
+
+    for (int i = 0; i < 2; ++i) {
+        connect(sides[i].take, &QPushButton::clicked, &dlg, [&, i] {
+            const MechModel* m = chosen();
+            if (!m) return;
+            if (takeDrawingFromDefaultModel(models, m->kind, m->name, sides[i].schematic, mechanical))
+                dlg.accept();
+        });
+    }
+    dlg.exec();
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {

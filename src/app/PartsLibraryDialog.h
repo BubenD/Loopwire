@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 
 #include <QDialog>
@@ -68,6 +69,11 @@ public:
     void cancelCaptureFromSheet();
     bool capturing() const { return !capturingPart_.isEmpty(); }
     void insertIntoDrawing(bool mechanical);
+    // Take one of a default model's drawings as one of this part's. `fromSchematic` is which of the MODEL's
+    // drawings is taken, `intoMechanical` which of the PART's it lands in - they are separate because either
+    // pairing can be the right one. False when there is nothing to take, which leaves the part alone.
+    bool takeDrawingFromDefaultModel(const MechModelSet& models, MechModelKind kind,
+                                     const QString& modelName, bool fromSchematic, bool intoMechanical);
     // The contacts tied to the connector showing: which ones, and the row that edits them.
     void refreshContactRow();
     // Build the connector's schematic symbol from its own data (the way count above all).
@@ -182,6 +188,10 @@ private:
     // to, drawn orange - so a part can be looked at with nothing over it. See applyShowConnection().
     QToolButton* showConnBtn_ = nullptr;
     void applyShowConnection();
+    // Take this drawing from a default mechanical model - the house style for the pieces a harness is made
+    // of. Opens the model list with each model's drawings beside it; `mechanical` says which of the PART's
+    // drawings the taken one lands in, which is the button that was pressed to get here.
+    void importFromDefaultModel(bool mechanical);
     QComboBox* fanoutSideBox_ = nullptr;
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;

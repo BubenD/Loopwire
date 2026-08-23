@@ -4117,7 +4117,16 @@ void MainWindow::updateMechanicalRibbonGroups() {
         // openMechModelEditor's schematic branch, which never marks any of these to begin with). A
         // library part's session keeps the group up regardless of which drawing it is - it is the only
         // place Save/Cancel for that session live, and every kind of library-part drawing needs them.
+        // A SCHEMATIC DRAWING HAS NO CONNECTION POINT, whether it belongs to a default model or to a library
+        // part. The marks - where it connects and which way it runs from there, the two ends that must not
+        // stretch, the faces the conductors leave by - all describe placing a part BY a direction along a run.
+        // A symbol is a fixed glyph on a circuit: there is nothing on it for any of them to point at, and a
+        // library part's session was offering all five of them anyway.
+        const bool schematicDrawing =
+            (doc_ && mechModelEditSchematic_.value(doc_, false)) ||
+            (libraryPartEdit && libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Schematic);
         const bool schematicDefaultModel = doc_ && mechModelEditSchematic_.value(doc_, false) && !libraryPartEdit;
+        (void)schematicDefaultModel;
         // BUT CAPTURE AND CANCEL STAY. The whole group used to go for a schematic session, which took the two
         // buttons that END the session away with the five that mark up a mechanical drawing - so a symbol
         // could be drawn and then not put anywhere: the only ways out were the window's close box and the
@@ -4130,7 +4139,7 @@ void MainWindow::updateMechanicalRibbonGroups() {
         for (QToolButton* b : {markConnectMechModelBtn_, markNearMechModelBtn_, markFarMechModelBtn_,
                                markOutputMechModelBtn_, markScaleRefMechModelBtn_,
                                showMechModelMarksBtn_})
-            if (b) b->setVisible(!schematicDefaultModel);
+            if (b) b->setVisible(!schematicDrawing);
         return;
     }
     const bool armed =
