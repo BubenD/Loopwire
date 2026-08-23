@@ -152,6 +152,10 @@ private:
     bool saveNow();
     // Where it connects and which way it runs: marked on the drawing, said here.
     QLabel* placement_ = nullptr;
+    // "Captured geometry": what the capture measured (measured_/scaleAcross_/placement_ live in it).
+    // Hidden along with the drawing window for a heading with no usable selection - see
+    // currentSelectionIsUsable() - since there is nothing captured to say anything about.
+    QGroupBox* takenBox_ = nullptr;
     QGroupBox* figures_ = nullptr;
     QGroupBox* tryBox_ = nullptr;
     QFormLayout* figuresForm_ = nullptr;
@@ -165,6 +169,7 @@ private:
     QDoubleSpinBox* tryLen_ = nullptr;
     QSpinBox* tryWires_ = nullptr;
     QPushButton* captureBtn_ = nullptr;
+    QPushButton* editBtn_ = nullptr;
     QPushButton* removeBtn_ = nullptr;
     QPushButton* renameBtn_ = nullptr;
     QPushButton* defaultBtn_ = nullptr;

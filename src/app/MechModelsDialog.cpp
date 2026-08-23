@@ -220,8 +220,8 @@ void MechModelsDialog::buildUi() {
     // What the capture MEASURED, and what was marked on the drawing. The drawing knows how long and how
     // thick it is: asking for those in two fields with a magic zero in each ("0 = measure it", "0 = do not
     // scale across") was asking for the drawing to be described to the program a second time.
-    auto* takenBox = new QGroupBox(QStringLiteral("Captured geometry"));
-    auto* takenLay = new QVBoxLayout(takenBox);
+    takenBox_ = new QGroupBox(QStringLiteral("Captured geometry"));
+    auto* takenLay = new QVBoxLayout(takenBox_);
     // What the section IS, in a line. Every one of these three had a title that named it and not one that said
     // what it was for, so which figure belonged in which was a matter of working it out.
     auto* takenWhat = new QLabel(QStringLiteral(
@@ -242,7 +242,7 @@ void MechModelsDialog::buildUi() {
     placement_ = new QLabel;
     placement_->setWordWrap(true);
     takenLay->addWidget(placement_);
-    right->addWidget(takenBox);
+    right->addWidget(takenBox_);
 
     // The figures that cannot be measured - and only the ones this kind has. A row that does not apply is
     // taken away rather than greyed, so what is on the screen is what this model is made of.
@@ -342,12 +342,12 @@ void MechModelsDialog::buildUi() {
         "millimetres. This window steps aside so they can be picked; Enter takes them, Esc drops it."));
     connect(captureBtn_, &QPushButton::clicked, this, &MechModelsDialog::captureFromSheet);
     buttons->addWidget(captureBtn_);
-    auto* edit = new QPushButton(QStringLiteral("Edit model"));
-    edit->setToolTip(QStringLiteral(
+    editBtn_ = new QPushButton(QStringLiteral("Edit model"));
+    editBtn_->setToolTip(QStringLiteral(
         "Open it in the main canvas with every Place and Modify tool - and with Connection point, which is "
         "where the point it connects at and the direction it runs from there are marked"));
-    connect(edit, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
-    buttons->addWidget(edit);
+    connect(editBtn_, &QPushButton::clicked, this, &MechModelsDialog::editOnCanvas);
+    buttons->addWidget(editBtn_);
     buttons->addStretch(1);
     // SAVE, and nothing written until it is pressed.
     //
@@ -623,28 +623,32 @@ void MechModelsDialog::refreshDetails() {
     if (hint_) hint_->setText(hintFor(kind));
     if (drawingModeBox_) drawingModeBox_->setVisible(mechModelHasSchematicSlot(kind));
 
-    // The heading over a kind's named sub-models is not a model - nothing is drawn ON IT, and a
-    // stale/heading selection (currentSelectionIsUsable() - the same case Capture/Edit on canvas
-    // already refuse) must not show whatever happens to be sitting in the kind's own blank entry
-    // either. Blank the whole right-hand side rather than let old data belonging to it show through.
+    // The heading over a kind's named sub-models is not a model - there is nothing to capture INTO
+    // and nothing drawn to show, so none of that is offered at all rather than offered and refused:
+    // the drawing window and every section about what was captured go away, and Capture is disabled,
+    // the same stale/heading selection currentSelectionIsUsable() already keeps Capture/Edit on
+    // canvas from silently writing to.
     if (!currentSelectionIsUsable()) {
+        if (view_) view_->setVisible(false);
+        if (showMarks_) showMarks_->setVisible(false);
+        if (takenBox_) takenBox_->setVisible(false);
         if (figures_) figures_->setVisible(false);
         if (tryBox_) tryBox_->setVisible(false);
+        if (captureBtn_) captureBtn_->setEnabled(false);
         if (removeBtn_) removeBtn_->setEnabled(false);
         if (renameBtn_) renameBtn_->setEnabled(false);
         if (defaultBtn_) defaultBtn_->setEnabled(false);
-        if (measured_) measured_->setText(QString());
-        if (placement_) placement_->setText(QString());
-        if (scaleAcross_) scaleAcross_->setChecked(false);
-        if (view_) {
-            view_->setEntities({});
-            view_->setCaption(QStringLiteral("As drawn"));
-        }
         if (summary_)
             summary_->setText(QStringLiteral("Pick one of the named sub-models on the left"));
         syncing_ = false;
         return;
     }
+    // Coming back from a heading: everything that branch hid is offered again (figures_/tryBox_ get
+    // their own, more specific visibility below - this only undoes the heading's blanket hide).
+    if (view_) view_->setVisible(true);
+    if (showMarks_) showMarks_->setVisible(true);
+    if (takenBox_) takenBox_->setVisible(true);
+    if (captureBtn_) captureBtn_->setEnabled(true);
 
     // Which rows this kind even has. A model of a thing that is only placed has no ends that must not
     // stretch; one that is not drawn per conductor has no conductor count; only a ring or a ferrule is

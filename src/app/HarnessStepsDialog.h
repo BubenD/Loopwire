@@ -89,6 +89,10 @@ public:
 
     // Generate and hand to the editor to be placed by a click.
     void place();
+    // Driving it from a test: the harness the preview/summary actually show right now - trimmed to
+    // what has been said so far (see previewDefinition()) - as opposed to definition(), which is the
+    // whole thing including every step's eagerly-created default.
+    MechHarnessDef previewDefinitionForTest() { return previewDefinition(); }
 
 private:
     void buildUi();
@@ -106,6 +110,12 @@ private:
     void showStep();          // the page for the current step, filled from the definition
     void refreshPreview();
     void refreshSummary();
+    // The harness as far as it has actually been SAID: every node/segment steps_[0..current_] touches,
+    // plus - for a run reached but not yet finished at its far end - the node that far end needs to
+    // exist at all. Nothing beyond that, however eagerly setBranchCount() built the rest of the
+    // definition for the pages ahead to edit into: a branch not yet reached is not drawn, and neither
+    // is "2 branch(es)" said about a harness that has only said what its first end is.
+    MechHarnessDef previewDefinition();
     void apply();             // the controls of the current page written back into the definition
 
     // ---- the definition, by step ----------------------------------------------------------------

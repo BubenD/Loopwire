@@ -1138,6 +1138,32 @@ void HarnessStepsDialog::apply() {
 
 // ---------------------------------------------------------------------------------------------------
 
+MechHarnessDef HarnessStepsDialog::previewDefinition() {
+    MechHarnessDef out;
+    out.name = def_.name;
+    out.wires = def_.wires;
+    out.draw = def_.draw;
+    QSet<QString> nodeIds, segIds;
+    for (int i = 0; i <= current_ && i < static_cast<int>(steps_.size()); ++i) {
+        const StepRef ref = steps_[static_cast<size_t>(i)];
+        if (const MechNode* n = nodeForStep(ref)) nodeIds.insert(n->id);
+        if (const MechSegment* s = runForStep(ref)) segIds.insert(s->id);
+    }
+    // A run reached but not yet finished at its far end still needs SOME node there to be drawn at
+    // all - the tip's own properties (step 11) are answered later, but its existence is implied the
+    // moment the run to it is (step 7).
+    for (const MechSegment& s : def_.segments) {
+        if (!segIds.contains(s.id)) continue;
+        nodeIds.insert(s.fromNode);
+        nodeIds.insert(s.toNode);
+    }
+    for (const MechNode& n : def_.nodes)
+        if (nodeIds.contains(n.id)) out.nodes.push_back(n);
+    for (const MechSegment& s : def_.segments)
+        if (segIds.contains(s.id)) out.segments.push_back(s);
+    return out;
+}
+
 void HarnessStepsDialog::refreshPreview() {
     if (!preview_) return;
     if (!started_) {
@@ -1145,24 +1171,27 @@ void HarnessStepsDialog::refreshPreview() {
         preview_->setEmptyText(QStringLiteral("nothing yet — answer the step beside this"));
         return;
     }
-    preview_->setEntities(buildMechanicalHarness(def_, &catalog_));
+    preview_->setEntities(buildMechanicalHarness(previewDefinition(), &catalog_));
 }
 
 void HarnessStepsDialog::refreshSummary() {
     if (!summary_) return;
-    double total = 0.0;
-    for (const MechSegment& s : def_.segments) total = std::max(total, s.lengthMm);
+    // Said so far, the same definition the preview itself is drawn from - so the numbers and the
+    // picture never disagree about how much of the harness there is to talk about yet.
+    const MechHarnessDef said = started_ ? previewDefinition() : MechHarnessDef();
+    int branches = 0;
+    for (const MechSegment& s : said.segments)
+        if (s.fromNode == QLatin1String("split")) ++branches;
     double longest = 0.0;
-    if (const MechSegment* main = segmentIn(def_, QStringLiteral("main"))) {
-        for (int b = 0; b < branchCount(); ++b) {
-            const MechSegment* run = const_cast<HarnessStepsDialog*>(this)->branchRun(b);
-            if (run) longest = std::max(longest, main->lengthMm + run->lengthMm);
-        }
+    if (const MechSegment* main = said.segment(QStringLiteral("main"))) {
+        for (int b = 0; b < branches; ++b)
+            if (const MechSegment* run = said.segment(QStringLiteral("br%1").arg(b + 1)))
+                longest = std::max(longest, main->lengthMm + run->lengthMm);
     }
     summary_->setText(QStringLiteral("%1 conductor(s), %2 branch(es), longest way through %3 mm — "
                                      "drawn to scale, %4 — step %5 of %6")
-                          .arg(def_.wires.size())
-                          .arg(branchCount())
+                          .arg(said.wires.size())
+                          .arg(branches)
                           .arg(longest, 0, 'f', 0)
                           .arg(std::abs(def_.draw.diameterExaggeration - 1.0) < 1e-9
                                    ? QStringLiteral("widths and lengths alike")

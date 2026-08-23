@@ -122,6 +122,23 @@ int run_stepsbuilder_tests() {
     check(def.nodes.front().name == QLatin1String("X1") && def.nodes.front().pinCount == 9,
           "1: the end takes the name and the way count it is given");
 
+    // The PREVIEW must not show the whole harness on step 1's account: definition() already holds a
+    // split and two branches (setBranchCount() built them eagerly, for the pages ahead to edit into),
+    // but nothing has been said about them yet - so the preview/summary must show only the one end
+    // that has actually been answered.
+    {
+        check(def.nodes.size() > 1, "preview: definition() itself already has the split/branches built");
+        const MechHarnessDef shown = dlg.previewDefinitionForTest();
+        check(shown.nodes.size() == 1 && shown.nodes.front().name == QLatin1String("X1"),
+              "preview: on step 1, only the end just answered is drawn");
+        check(shown.segments.empty(), "preview: and nothing runs from it yet");
+        int shownBranches = 0;
+        for (const MechSegment& s : shown.segments)
+            if (s.fromNode == QLatin1String("split")) ++shownBranches;
+        check(shownBranches == 0,
+              "preview: it does not say \"2 branch(es)\" before the split has even been reached");
+    }
+
     // #2 what dresses it, and how far the conductors run bare
     check(goTo(dlg, Step::StartDress), "step 2 opens");
     field<QCheckBox>(dlg, "backshellOn")->setChecked(true);
