@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include <QComboBox>
+#include <QLineEdit>
 #include <QPushButton>
 #include "tools/ToolId.h"
 #include <QKeyEvent>
@@ -1571,6 +1573,69 @@ int run_partspanel_tests() {
             put.openRemembered();
             put.disconnectLibrary(libFile);
             put.remember();
+        }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- the tick puts the contact menu away --------------------------------------------------------
+    {
+        // With the pins fitted there is no contact to order, so the menu is not a question with an answer:
+        // it goes, rather than sitting there greyed, and the rows that describe the pins take its place.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_pins_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-WITHPINS");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Header with its pins");
+            part.params[QStringLiteral("ways")] = QStringLiteral("4");
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-WITHPINS"));
+        dlg.resize(1500, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        QCheckBox* tick = nullptr;
+        for (QCheckBox* b : dlg.findChildren<QCheckBox*>())
+            if (b->text().contains(QStringLiteral("its pins fitted"))) tick = b;
+        check(tick != nullptr, "with pins: a connector can say it comes with its pins");
+        QComboBox* contact = nullptr;
+        for (QComboBox* c : dlg.findChildren<QComboBox*>())
+            if (c->toolTip().startsWith(QStringLiteral("The contact ordered"))) contact = c;
+        check(contact != nullptr, "with pins: and there is a contact menu to put away");
+        if (tick && contact) {
+            check(contact->isVisible(), "with pins: unticked, the contact menu is there as before");
+            tick->setChecked(true);
+            QApplication::processEvents();
+            std::printf("  with pins: ticked - contact menu %s\n",
+                        contact->isVisible() ? "still showing" : "gone");
+            check(!contact->isVisible(), "with pins: ticked, it goes - there is nothing to tie");
+            // And a row appears to describe the pins, with a way to add a second type.
+            int fields = 0;
+            for (QLineEdit* le : dlg.findChildren<QLineEdit*>())
+                if (le->isVisible() && (le->placeholderText() == QStringLiteral("size") ||
+                                        le->placeholderText() == QStringLiteral("conductor")))
+                    ++fields;
+            QPushButton* another = nullptr;
+            for (QPushButton* b : dlg.findChildren<QPushButton*>())
+                if (b->text().contains(QStringLiteral("Another type of pin"))) another = b;
+            std::printf("  with pins: %d field(s) for the pins, add-another %s\n", fields,
+                        another && another->isVisible() ? "offered" : "missing");
+            check(fields >= 2, "with pins: a row to say what the pins are");
+            check(another != nullptr && another->isVisible(),
+                  "with pins: and a way to add a second size in the same housing");
+            tick->setChecked(false);
+            QApplication::processEvents();
+            check(contact->isVisible(), "with pins: unticked again, the contact menu comes back");
         }
         QFile::remove(libFile);
     }

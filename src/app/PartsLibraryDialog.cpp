@@ -1083,8 +1083,34 @@ void PartsLibraryDialog::buildUi() {
         auto* group = new QGroupBox(QStringLiteral("Use with pin contact"), right);
         contactGroupBox_ = group;
         contactGroup_ = group;
-        auto* cl = new QHBoxLayout(group);
-        contactBox_ = new QComboBox(group);
+        auto* cl = new QVBoxLayout(group);
+        // COMES WITH ITS PINS. Most connectors are ordered as a housing and its contacts separately, and
+        // the contact is a part of its own tied to the housing. Some come with the pins ALREADY IN THEM -
+        // a moulded header, an overmoulded lead, a power connector with its terminals fitted - and for
+        // those there is no contact to order, so nothing to tie: the menu below is not a question that has
+        // an answer, and it goes. What matters instead is what those pins ARE.
+        includePinsBox_ = new QCheckBox(QStringLiteral("Comes with its pins fitted"), group);
+        includePinsBox_->setToolTip(QStringLiteral(
+            "Ticked, this connector is bought with its pins in it: there is no contact to order, so the "
+            "contact menu goes and the pins are described here instead. A connector can carry more than "
+            "one size of pin - two heavy ways and six signal ways in one housing - so there is a row per "
+            "type."));
+        connect(includePinsBox_, &QCheckBox::toggled, this, [this](bool on) {
+            if (syncing_) return;
+            if (LibraryPart* p = current()) {
+                setPartIncludesPins(*p, on);
+                if (on) p->setContactIds(QStringList());   // nothing to order, so nothing tied
+                touched();
+                refreshContactChoice();
+                rebuildPinTypes();
+            }
+        });
+        cl->addWidget(includePinsBox_);
+        auto* contactRow = new QWidget(group);
+        contactRowHost_ = contactRow;
+        auto* crl = new QHBoxLayout(contactRow);
+        crl->setContentsMargins(0, 0, 0, 0);
+        contactBox_ = new QComboBox(contactRow);
         contactBox_->setToolTip(QStringLiteral(
             "The contact ordered and crimped into this connector. It goes on the bill of materials under "
             "the connector, one per way, wherever the connector is placed."));
@@ -1105,7 +1131,36 @@ void PartsLibraryDialog::buildUi() {
             touched();
             reloadTree();
         });
-        cl->addWidget(contactBox_, 1);
+        crl->addWidget(contactBox_, 1);
+        cl->addWidget(contactRow);
+        // THE PIN TYPES: a size, the conductor it takes and in which unit, its rating, and WHICH PINS are
+        // that type. The last of those is what lets a schematic label each pin with its own size instead of
+        // one figure for the whole connector - which on a connector with two sizes in it is a figure
+        // somebody wires the wrong way from.
+        pinTypesHost_ = new QWidget(group);
+        pinTypesLay_ = new QVBoxLayout(pinTypesHost_);
+        pinTypesLay_->setContentsMargins(0, 2, 0, 0);
+        pinTypesLay_->setSpacing(2);
+        cl->addWidget(pinTypesHost_);
+        auto* addPinType = makeAddButton(group, QStringLiteral("Another type of pin"),
+                                         QStringLiteral("A second size of pin in the same housing"));
+        addPinTypeBtn_ = addPinType;
+        connect(addPinType, &QPushButton::clicked, this, [this] {
+            LibraryPart* p = current();
+            if (!p) return;
+            std::vector<PartPinType> types = partPinTypes(*p);
+            PartPinType fresh;
+            fresh.unit = QStringLiteral("AWG");
+            types.push_back(fresh);
+            // Written straight away with a placeholder size, so the row has something to be keyed by and
+            // survives the rebuild below.
+            if (types.back().size.isEmpty())
+                types.back().size = QStringLiteral("size %1").arg(types.size());
+            setPartPinTypes(*p, types);
+            touched();
+            rebuildPinTypes();
+        });
+        cl->addWidget(addPinType, 0, Qt::AlignLeft);
         rv->addWidget(group);
     }
 
@@ -2197,6 +2252,18 @@ void PartsLibraryDialog::refreshContactChoice() {
         contactGroupBox_->setTitle(isContact ? QStringLiteral("Use with connector")
                                              : QStringLiteral("Use with pin contact"));
     contactGroup_->setVisible(isConnector || isContact);
+    // WITH THE PINS FITTED THERE IS NOTHING TO TIE. The menu is not a question with an answer for a
+    // connector that comes with its pins in it, so it goes rather than sitting there greyed - and the tick
+    // itself is only offered to a connector, since nothing else is bought either way.
+    const bool withPins = isConnector && partIncludesPins(*p);
+    if (includePinsBox_) {
+        const QSignalBlocker hush(includePinsBox_);
+        includePinsBox_->setVisible(isConnector);
+        includePinsBox_->setChecked(withPins);
+    }
+    if (contactRowHost_) contactRowHost_->setVisible(!withPins);
+    if (contactGroupBox_ && withPins)
+        contactGroupBox_->setTitle(QStringLiteral("Its own pins"));
     const QSignalBlocker block(contactBox_);
     contactBox_->clear();
     if (!isConnector && !isContact) return;
@@ -2234,6 +2301,9 @@ void PartsLibraryDialog::refreshContactRow() {
         genSymbolBtn_->setEnabled(part && part->kind == PartKind::Connector);
     }
     refreshContactChoice();
+    // And the pins it comes with, if it does: rebuilt from the part, because a form that remembers the last
+    // part's rows is a form that quietly writes them onto this one.
+    rebuildPinTypes();
 }
 
 void PartsLibraryDialog::editDrawing(LibraryPartDrawing kind) {
@@ -2509,6 +2579,135 @@ void PartsLibraryDialog::importFromDefaultModel(bool mechanical) {
 //
 // Side by side in the order the menu lists them, each a gap clear of the last, and handed over as ONE set: so
 // they land together, keep their spacing, and are moved together afterwards.
+// THE PIN TYPES OF A CONNECTOR THAT COMES WITH ITS PINS: one row each, and a row is a size, the conductor
+// it takes and in which unit, a rating if the datasheet gives one, and which pins are that type.
+//
+// Rebuilt from the part rather than kept in the widgets: a part is switched to in one click, and a form that
+// remembers the last part's rows is a form that quietly writes them onto this one.
+void PartsLibraryDialog::rebuildPinTypes() {
+    if (!pinTypesLay_) return;
+    while (QLayoutItem* item = pinTypesLay_->takeAt(0)) {
+        if (QWidget* w = item->widget()) w->deleteLater();
+        delete item;
+    }
+    LibraryPart* p = current();
+    const bool on = p && p->kind == PartKind::Connector && partIncludesPins(*p);
+    if (pinTypesHost_) pinTypesHost_->setVisible(on);
+    if (addPinTypeBtn_) addPinTypeBtn_->setVisible(on);
+    if (!on || !p) return;
+    std::vector<PartPinType> types = partPinTypes(*p);
+    if (types.empty()) {
+        PartPinType first;
+        first.unit = QStringLiteral("AWG");
+        first.size = QStringLiteral("size 1");
+        types.push_back(first);
+        setPartPinTypes(*p, types);
+    }
+    const int ways = p->wayCount();
+    for (size_t row = 0; row < types.size(); ++row) {
+        auto* host = new QWidget(pinTypesHost_);
+        auto* hl = new QHBoxLayout(host);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        const size_t at = row;
+        // Everything on ONE ROW, in the order it is read off a datasheet: what the pin is called, what it
+        // takes, in what, what it carries, and which of the ways are it.
+        auto write = [this, at](const std::function<void(PartPinType&)>& change) {
+            LibraryPart* cp = current();
+            if (!cp) return;
+            std::vector<PartPinType> now = partPinTypes(*cp);
+            if (at >= now.size()) return;
+            change(now[at]);
+            setPartPinTypes(*cp, now);
+            touched();
+            // The schematic is drawn from these when it is built from data, so what is showing is stale.
+            if (schemPreview_ && !cp->hasSchematic())
+                schemPreview_->setDrawing(partSchematicDrawing(*cp));
+        };
+        auto* size = new QLineEdit(types[row].size, host);
+        size->setPlaceholderText(QStringLiteral("size"));
+        size->setMaximumWidth(70);
+        size->setToolTip(QStringLiteral("What the maker calls this pin - \"16\", \"20\", \"6.3 mm blade\""));
+        connect(size, &QLineEdit::textEdited, this,
+                [write](const QString& t) { write([t](PartPinType& x) { x.size = t; }); });
+        hl->addWidget(size);
+        auto* gauge = new QLineEdit(types[row].gauge, host);
+        gauge->setPlaceholderText(QStringLiteral("conductor"));
+        gauge->setMaximumWidth(80);
+        gauge->setToolTip(QStringLiteral("The conductor this pin takes, in the unit beside it"));
+        connect(gauge, &QLineEdit::textEdited, this,
+                [write](const QString& t) { write([t](PartPinType& x) { x.gauge = t; }); });
+        hl->addWidget(gauge);
+        auto* unit = new QComboBox(host);
+        unit->addItem(QStringLiteral("AWG"));
+        unit->addItem(QStringLiteral("mm2"));
+        unit->setCurrentText(types[row].unit.isEmpty() ? QStringLiteral("AWG") : types[row].unit);
+        unit->setToolTip(QStringLiteral("Which of the two the conductor is stated in"));
+        connect(unit, &QComboBox::currentTextChanged, this,
+                [write](const QString& t) { write([t](PartPinType& x) { x.unit = t; }); });
+        hl->addWidget(unit);
+        auto* amps = new QLineEdit(types[row].amps, host);
+        amps->setPlaceholderText(QStringLiteral("A"));
+        amps->setMaximumWidth(55);
+        amps->setToolTip(QStringLiteral("What it is rated to carry, if the datasheet says"));
+        connect(amps, &QLineEdit::textEdited, this,
+                [write](const QString& t) { write([t](PartPinType& x) { x.amps = t; }); });
+        hl->addWidget(amps);
+        auto* pins = new QLineEdit(types[row].pins, host);
+        pins->setPlaceholderText(ways > 0 ? QStringLiteral("pins (1-%1)").arg(ways)
+                                         : QStringLiteral("pins"));
+        pins->setToolTip(QStringLiteral(
+            "Which pins are this type - \"1-3\", \"1,2,5\". Left empty it means all of them, which is right "
+            "for a connector with one size in it and wrong for one with two."));
+        connect(pins, &QLineEdit::textEdited, this,
+                [write](const QString& t) { write([t](PartPinType& x) { x.pins = t; }); });
+        hl->addWidget(pins, 1);
+        auto* drop = makeRemoveButton(host, QString(), QStringLiteral("Take this type of pin off"), true);
+        connect(drop, &QPushButton::clicked, this, [this, at] {
+            LibraryPart* cp = current();
+            if (!cp) return;
+            std::vector<PartPinType> now = partPinTypes(*cp);
+            if (at < now.size()) now.erase(now.begin() + static_cast<long>(at));
+            setPartPinTypes(*cp, now);
+            touched();
+            rebuildPinTypes();
+        });
+        hl->addWidget(drop);
+        pinTypesLay_->addWidget(host);
+    }
+    // WHICH PINS ARE WHICH, once there is more than one size in the housing. With one type the pins field
+    // may be left empty and mean "all of them"; with two, an empty one is a question nobody has answered,
+    // and the schematic would label those pins with nothing.
+    if (types.size() > 1) {
+        QStringList unsaid;
+        for (const PartPinType& t : types)
+            if (t.pins.trimmed().isEmpty()) unsaid << (t.size.isEmpty() ? QStringLiteral("(unnamed)")
+                                                                        : t.size);
+        auto* note = new QLabel(pinTypesHost_);
+        note->setWordWrap(true);
+        if (unsaid.isEmpty()) {
+            const QStringList gauges = partPinGauges(*p);
+            int blank = 0;
+            for (const QString& g : gauges)
+                if (g.isEmpty()) ++blank;
+            note->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+            note->setText(blank == 0
+                              ? QStringLiteral("Every pin is accounted for - the schematic labels each one "
+                                               "with its own size.")
+                              : QStringLiteral("%1 pin(s) belong to no type yet - the schematic leaves "
+                                               "those blank.")
+                                    .arg(blank));
+        } else {
+            note->setStyleSheet(QStringLiteral("color:#e0a0a0;"));
+            note->setText(QStringLiteral(
+                                "More than one size of pin, so say which pins are which: %1 has none said, "
+                                "and \"all of them\" cannot be true of two types at once.")
+                              .arg(unsaid.join(QStringLiteral(", "))));
+        }
+        pinTypesLay_->addWidget(note);
+    }
+}
+
 void PartsLibraryDialog::placeTicked() {
     LibraryPart* p = current();
     if (!p) {

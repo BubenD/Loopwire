@@ -7202,6 +7202,94 @@ int run_harness_tests() {
               "face placement: and the kinds they do not are not asked");
     }
 
+
+    // ---- a connector that comes with its pins fitted -------------------------------------------------
+    {
+        // Most connectors are ordered as a housing and its contacts separately, and the contact is a part of
+        // its own tied to the housing. Some come with the pins ALREADY IN THEM - a moulded header, an
+        // overmoulded lead, a power connector with its terminals fitted - and for those there is no contact
+        // to order, so the tie is not a question with an answer. What matters instead is what those pins ARE,
+        // and a housing can carry two sizes at once: two heavy ways and six signal ways, which is the whole
+        // reason for buying one.
+        LibraryPart p;
+        p.id = QStringLiteral("P-PINS");
+        p.kind = PartKind::Connector;
+        p.params[QStringLiteral("ways")] = QStringLiteral("8");
+        check(!partIncludesPins(p), "pins: a connector is ordered with separate contacts unless it says so");
+        setPartIncludesPins(p, true);
+        check(partIncludesPins(p), "pins: and says so when it comes with them");
+
+        std::vector<PartPinType> types;
+        PartPinType heavy;
+        heavy.size = QStringLiteral("16");
+        heavy.unit = QStringLiteral("AWG");
+        heavy.gauge = QStringLiteral("14");
+        heavy.amps = QStringLiteral("13");
+        heavy.pins = QStringLiteral("1-2");
+        types.push_back(heavy);
+        PartPinType signal;
+        signal.size = QStringLiteral("20");
+        signal.unit = QStringLiteral("AWG");
+        signal.gauge = QStringLiteral("22");
+        signal.amps = QStringLiteral("5");
+        signal.pins = QStringLiteral("3-8");
+        types.push_back(signal);
+        setPartPinTypes(p, types);
+
+        // KEPT, and read back as written: the order they were entered in is the order they are read, because
+        // a datasheet lists the heavy ways first and a form that re-sorts them is a form that argues.
+        const std::vector<PartPinType> back = partPinTypes(p);
+        std::printf("  pins: %lld type(s) kept, first %s %s %s for pins %s\n",
+                    static_cast<long long>(back.size()),
+                    back.empty() ? "" : qPrintable(back.front().size),
+                    back.empty() ? "" : qPrintable(back.front().gauge),
+                    back.empty() ? "" : qPrintable(back.front().unit),
+                    back.empty() ? "" : qPrintable(back.front().pins));
+        check(back.size() == 2, "pins: both types are kept");
+        if (back.size() == 2) {
+            check(back[0].size == QStringLiteral("16") && back[0].gauge == QStringLiteral("14") &&
+                      back[0].unit == QStringLiteral("AWG") && back[0].amps == QStringLiteral("13"),
+                  "pins: a row is a size, the conductor it takes, in which unit, and what it carries");
+            check(back[1].pins == QStringLiteral("3-8"), "pins: and which pins are that type");
+        }
+
+        // WHICH PINS ARE WHICH, worked out for the whole connector.
+        const QStringList gauges = partPinGauges(p);
+        std::printf("  pins: pin 1 takes %s, pin 8 takes %s\n",
+                    gauges.value(0).isEmpty() ? "(nothing said)" : qPrintable(gauges.value(0)),
+                    gauges.value(7).isEmpty() ? "(nothing said)" : qPrintable(gauges.value(7)));
+        check(gauges.size() == 8, "pins: one answer per way");
+        check(gauges.value(0) == QStringLiteral("14 AWG") &&
+                  gauges.value(1) == QStringLiteral("14 AWG"),
+              "pins: the two heavy ways take the heavy conductor");
+        check(gauges.value(2) == QStringLiteral("22 AWG") &&
+                  gauges.value(7) == QStringLiteral("22 AWG"),
+              "pins: and the six signal ways the small one");
+
+        // A pin no type claims is left blank rather than guessed at.
+        std::vector<PartPinType> partial;
+        partial.push_back(heavy);   // pins 1-2 only
+        LibraryPart q = p;
+        setPartPinTypes(q, partial);
+        const QStringList some = partPinGauges(q);
+        check(some.value(0) == QStringLiteral("14 AWG") && some.value(4).isEmpty(),
+              "pins: a pin no type claims is left blank, not filled in with a guess");
+
+        // AND THE SCHEMATIC LABELS EACH PIN WITH ITS OWN SIZE. A symbol that says one gauge for a housing
+        // with two in it is a symbol somebody wires the wrong way from.
+        const QJsonArray sym = connectorSymbolFromData(p);
+        check(!sym.isEmpty(), "pins: the symbol is still built from the part's data");
+        QStringList onSymbol;
+        for (const Entity& e : partDrawingEntities(sym))
+            if (e.type == EntityType::Connector)
+                for (const auto& v : e.meta.value(QStringLiteral("pinGauge")).toArray())
+                    onSymbol << v.toString();
+        std::printf("  pins: the symbol says %s\n", qPrintable(onSymbol.join(QStringLiteral(" / "))));
+        check(onSymbol.size() == 8 && onSymbol.value(0) == QStringLiteral("14 AWG") &&
+                  onSymbol.value(7) == QStringLiteral("22 AWG"),
+              "pins: each pin on the symbol carries the conductor its own size takes");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

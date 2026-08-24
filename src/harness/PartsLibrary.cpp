@@ -211,6 +211,101 @@ QJsonArray partDrawingWithConnectionLine(const QJsonArray& drawing, int index) {
     return out;
 }
 
+// ---- A connector that comes with its pins fitted ------------------------------------------------
+
+bool partIncludesPins(const LibraryPart& part) {
+    const QString v = part.value(QStringLiteral("includePins"));
+    return v == QStringLiteral("1") || v.compare(QStringLiteral("yes"), Qt::CaseInsensitive) == 0 ||
+           v.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+}
+
+void setPartIncludesPins(LibraryPart& part, bool on) {
+    if (on) part.params.insert(QStringLiteral("includePins"), QStringLiteral("1"));
+    else part.params.remove(QStringLiteral("includePins"));
+}
+
+std::vector<PartPinType> partPinTypes(const LibraryPart& part) {
+    std::vector<PartPinType> out;
+    const QString raw = part.value(QStringLiteral("pinTypes"));
+    if (raw.isEmpty()) return out;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8());
+    if (!doc.isArray()) return out;
+    for (const auto& v : doc.array()) {
+        const QJsonObject o = v.toObject();
+        PartPinType t;
+        t.size = o.value(QStringLiteral("size")).toString();
+        t.unit = o.value(QStringLiteral("unit")).toString(QStringLiteral("AWG"));
+        t.gauge = o.value(QStringLiteral("gauge")).toString();
+        t.amps = o.value(QStringLiteral("amps")).toString();
+        t.pins = o.value(QStringLiteral("pins")).toString();
+        out.push_back(t);
+    }
+    return out;
+}
+
+void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types) {
+    QJsonArray arr;
+    for (const PartPinType& t : types) {
+        // A row with nothing in it is not a pin type, it is a row somebody started and left.
+        if (t.size.trimmed().isEmpty() && t.gauge.trimmed().isEmpty() && t.amps.trimmed().isEmpty())
+            continue;
+        QJsonObject o;
+        o.insert(QStringLiteral("size"), t.size.trimmed());
+        o.insert(QStringLiteral("unit"), t.unit.isEmpty() ? QStringLiteral("AWG") : t.unit);
+        o.insert(QStringLiteral("gauge"), t.gauge.trimmed());
+        if (!t.amps.trimmed().isEmpty()) o.insert(QStringLiteral("amps"), t.amps.trimmed());
+        if (!t.pins.trimmed().isEmpty()) o.insert(QStringLiteral("pins"), t.pins.trimmed());
+        arr.append(o);
+    }
+    if (arr.isEmpty()) part.params.remove(QStringLiteral("pinTypes"));
+    else
+        part.params.insert(QStringLiteral("pinTypes"),
+                           QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+std::vector<int> pinsNamedBy(const QString& list, int ways) {
+    std::vector<int> out;
+    const QString t = list.trimmed();
+    if (t.isEmpty()) {
+        for (int i = 1; i <= ways; ++i) out.push_back(i);
+        return out;
+    }
+    for (const QString& piece : t.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString one = piece.trimmed();
+        const int dash = one.indexOf(QLatin1Char('-'));
+        if (dash > 0) {
+            bool okA = false, okB = false;
+            const int from = one.left(dash).trimmed().toInt(&okA);
+            const int to = one.mid(dash + 1).trimmed().toInt(&okB);
+            if (okA && okB)
+                for (int i = std::min(from, to); i <= std::max(from, to); ++i)
+                    if (i >= 1 && (ways <= 0 || i <= ways)) out.push_back(i);
+            continue;
+        }
+        bool ok = false;
+        const int one1 = one.toInt(&ok);
+        if (ok && one1 >= 1 && (ways <= 0 || one1 <= ways)) out.push_back(one1);
+    }
+    return out;
+}
+
+QStringList partPinGauges(const LibraryPart& part) {
+    const int ways = part.wayCount();
+    if (ways <= 0) return {};
+    QStringList out;
+    for (int i = 0; i < ways; ++i) out << QString();
+    for (const PartPinType& t : partPinTypes(part)) {
+        // What goes on a pin is the conductor it takes, in the unit the maker states it in - "16 AWG",
+        // "2.5 mm2". The size of the pin itself is a different figure and is not what a wire is chosen by.
+        QString says = t.gauge.trimmed();
+        if (says.isEmpty()) continue;
+        if (!t.unit.isEmpty()) says += QLatin1Char(' ') + t.unit;
+        for (int pin : pinsNamedBy(t.pins, ways))
+            if (pin >= 1 && pin <= ways) out[pin - 1] = says;
+    }
+    return out;
+}
+
 bool partKindTakesWires(PartKind kind) {
     switch (kind) {
     case PartKind::Connector:
@@ -603,6 +698,17 @@ QJsonArray connectorSymbolFromData(const LibraryPart& part) {
     if (part.value(QStringLiteral("annotation")).startsWith(QStringLiteral("letter"),
                                                            Qt::CaseInsensitive))
         spec.annotation = QStringLiteral("letters");
+    // AND WHAT EACH PIN TAKES, when the connector comes with its pins and they are not all the same. A
+    // power connector is two heavy ways and six signal ways in one housing - that is the whole reason for
+    // buying one - and a symbol that says one gauge for the lot is a symbol somebody wires the wrong way
+    // from. A pin no type claims is left blank rather than guessed at.
+    const QStringList gauges = partPinGauges(part);
+    if (!gauges.isEmpty()) {
+        bool anySaid = false;
+        for (const QString& g : gauges)
+            if (!g.isEmpty()) anySaid = true;
+        if (anySaid) spec.pinGauge = gauges;
+    }
     Entity e;
     e.type = EntityType::Connector;
     e.layer = QStringLiteral("0");

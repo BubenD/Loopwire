@@ -18,6 +18,7 @@ class QLineEdit;
 class QGroupBox;
 class QListWidget;
 class QAction;
+class QCheckBox;
 class QPushButton;
 class QSplitter;
 class QTreeWidget;
@@ -191,6 +192,14 @@ private:
     QPushButton* outputFacesBtn_ = nullptr;
     // One Place button, and a tick against each drawing of the part it puts down. See placeTicked().
     QToolButton* placeBtn_ = nullptr;
+    // A connector that comes with its pins fitted: the tick, the contact menu it puts away, and the rows
+    // that describe the pins instead. See rebuildPinTypes().
+    QCheckBox* includePinsBox_ = nullptr;
+    QWidget* contactRowHost_ = nullptr;
+    QWidget* pinTypesHost_ = nullptr;
+    QVBoxLayout* pinTypesLay_ = nullptr;
+    QPushButton* addPinTypeBtn_ = nullptr;
+    void rebuildPinTypes();
     std::vector<QAction*> placeWhat_;
     void placeTicked();
     // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see

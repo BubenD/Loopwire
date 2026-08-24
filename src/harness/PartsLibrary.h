@@ -67,6 +67,8 @@ int partDrawingConnectionLine(const QJsonArray& drawing);
 // has no such thing - offering it a face to mark would be offering it a setting with no meaning.
 bool partKindTakesWires(PartKind kind);
 
+
+
 // Every kind, in the order the library lists them.
 std::vector<PartKind> allPartKinds();
 // "Heatshrink boot", "Y-split heatshrink", ... - what the UI shows.
@@ -386,6 +388,39 @@ bool canHaveFanout(const LibraryPart& part);
 // counted on the bill of materials like any other connector. Empty for a part that is not a connector or
 // says nothing about its ways.
 QJsonArray connectorSymbolFromData(const LibraryPart& part);
+
+// ---- A connector that comes with its pins fitted ------------------------------------------------
+//
+// Most connectors are ordered as a housing and its contacts separately, and the contact is a part of its
+// own tied to the housing ("Use with pin contact"). Some come with the pins ALREADY IN THEM - a moulded
+// header, an overmoulded lead, a power connector with its terminals fitted - and for those there is no
+// contact to order, so nothing to tie: what matters instead is what those pins ARE. A connector can carry
+// more than one size of pin, which is the whole point of a power connector: two heavy ways and six signal
+// ways in one housing.
+//
+// So a pin type is a size, a gauge, and WHICH PINS are that size - the last of these is what lets a
+// schematic symbol label its pins with their own sizes rather than one figure for the whole connector.
+struct PartPinType {
+    QString size;    // what the maker calls it: "16", "20", "6.3 mm blade"
+    QString unit;    // "AWG" or "mm2" - which of the two the gauge below is in
+    QString gauge;   // the conductor it takes, in that unit
+    QString amps;    // its current rating, if the datasheet gives one
+    QString pins;    // which pins are this type: "1-3", "1,2,5", empty = all of them
+};
+
+// Whether this connector comes with its pins fitted. With them fitted there is no contact to order, so the
+// tie to a contact part is neither offered nor kept.
+bool partIncludesPins(const LibraryPart& part);
+void setPartIncludesPins(LibraryPart& part, bool on);
+// The pin types it has, in the order they were entered.
+std::vector<PartPinType> partPinTypes(const LibraryPart& part);
+void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types);
+// The gauge of every pin, 1..wayCount, worked out from the types' pin lists - what a schematic symbol
+// labels its pins with. A pin no type claims is left empty rather than guessed at.
+QStringList partPinGauges(const LibraryPart& part);
+// The pins a "1-3, 5" style list names, as numbers. Out-of-order or overlapping lists are taken as
+// written: it is a note about a real connector, not a puzzle to be normalised.
+std::vector<int> pinsNamedBy(const QString& list, int ways);
 // The symbol a part actually shows: the one captured for it, or failing that the built-in one for
 // its kind. What the library previews and what Insert puts on the sheet.
 QJsonArray partSchematicDrawing(const LibraryPart& part);
