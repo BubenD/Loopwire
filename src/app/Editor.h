@@ -150,6 +150,10 @@ public:
     void commitText(const QString& text, const TextStyle& s);
     // Update an existing text entity's content/style (used by double-click edit).
     void applyTextEdit(const QString& id, const QString& text, const TextStyle& s);
+    // WHERE A LEADER'S WORDS ARE, as a box: what the renderer draws them in and what a click on them has to
+    // land in. Asked for by name so the two can be checked against each other - a mark you can see and
+    // cannot click is worse than one that is not drawn at all.
+    Bounds leaderWordsBox(const Entity& e) const;
     // Ask the host to open the rich text editor for entity `id` (Properties "Edit...").
     void emitEditText(const QString& id) { emit editTextRequested(id); }
     // The pending text insertion box (from the click / MText box drag) in world

@@ -1307,9 +1307,14 @@ inline LeaderWords leaderWords(const Entity& e) {
     for (const QString& line : says.split(QLatin1Char('\n')))
         widest = std::max(widest, static_cast<int>(line.size()));
     const double w = std::max(h, widest * h * 0.6);
-    const double x0 = dir > 0 ? out.landingTo.x : out.landingTo.x - w;
-    out.boxMin = {x0, out.landingTo.y - h * 0.25};
-    out.boxMax = {x0 + w, out.landingTo.y + h * 1.05};
+    // A quarter of the height clear of the line's end, and centred on it - the same as the renderer draws
+    // them, because a mark you can see and cannot click is worse than one that is not drawn.
+    const double gap = h * 0.25;
+    const double x0 = dir > 0 ? out.landingTo.x + gap : out.landingTo.x - gap - w;
+    const int lines = std::max(1, static_cast<int>(says.count(QLatin1Char('\n')) + 1));
+    const double tall = h * lines;
+    out.boxMin = {x0, out.landingTo.y - tall * 0.5};
+    out.boxMax = {x0 + w, out.landingTo.y + tall * 0.5};
     out.hasWords = true;
     return out;
 }
@@ -10696,6 +10701,15 @@ void Editor::commitText(const QString& text, const TextStyle& s) {
     draftPts_.clear();
     emit changed();
     setTool(ToolId::Select); // return to Select after placing text
+}
+
+Bounds Editor::leaderWordsBox(const Entity& e) const {
+    Bounds b;
+    const LeaderWords lw = leaderWords(e);
+    if (!lw.hasWords) return b;
+    b.expand(lw.boxMin);
+    b.expand(lw.boxMax);
+    return b;
 }
 
 void Editor::applyTextEdit(const QString& id, const QString& text, const TextStyle& s) {

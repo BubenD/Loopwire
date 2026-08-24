@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include <QKeyEvent>
+#include <QPlainTextEdit>
 #include <QTabWidget>
 #include <QDialog>
 #include "harness/MechModels.h"
@@ -1386,6 +1388,61 @@ int run_partspanel_tests() {
             put.remember();
         }
         QFile::remove(libFile);
+    }
+
+
+    // ---- Shift+Enter is a new row in the on-canvas text editor ---------------------------------------
+    {
+        // A leader's words are a single-value edit, so plain Enter finishes them - and Shift+Enter finished
+        // them too, because nothing looked at the Shift. Which left no way at all to type a callout of two
+        // lines: the one key everybody reaches for did the opposite of what it does everywhere else.
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "shift-enter: there is a drawing");
+        if (ed && ed->document()) {
+            Entity ld;
+            ld.id = QStringLiteral("ld");
+            ld.type = EntityType::Leader;
+            ld.points = {{0.0, 0.0}, {30.0, 20.0}};
+            ld.meta.insert(QStringLiteral("text"), QStringLiteral("ONE"));
+            ld.meta.insert(QStringLiteral("size"), 10.0);
+            ld.meta.insert(QStringLiteral("landing"), 6.0);
+            ed->document()->entities().push_back(ld);
+            // Open its editor the way a double-click does - on the words themselves, found rather than
+            // guessed at, because a click into the gap between the shelf and the words proves nothing.
+            const Bounds words = ed->leaderWordsBox(ed->document()->entities().back());
+            check(words.valid, "shift-enter: the leader has words to double-click");
+            ed->onDoubleClick({(words.min.x + words.max.x) / 2.0, (words.min.y + words.max.y) / 2.0});
+            QApplication::processEvents();
+            QPlainTextEdit* box = nullptr;
+            for (QPlainTextEdit* t : win.findChildren<QPlainTextEdit*>())
+                if (t->isVisible()) box = t;
+            check(box != nullptr, "shift-enter: the on-canvas editor is open on it");
+            if (box) {
+                box->setFocus();
+                QKeyEvent shiftReturn(QEvent::KeyPress, Qt::Key_Return, Qt::ShiftModifier,
+                                      QStringLiteral("\r"));
+                QApplication::sendEvent(box, &shiftReturn);
+                QApplication::processEvents();
+                std::printf("  shift-enter: the editor is %s and holds %d line(s)\n",
+                            box->isVisible() ? "still open" : "shut",
+                            static_cast<int>(box->toPlainText().count(QLatin1Char('\n')) + 1));
+                check(box->isVisible(), "shift-enter: it does not finish the edit");
+                // Qt puts a break in as a line SEPARATOR inside the paragraph rather than as a second
+                // paragraph - either way it is a second row of words, which is what was asked for.
+                check(box->toPlainText().contains(QLatin1Char('\n')),
+                      "shift-enter: it puts a second row in");
+                // And plain Enter still finishes it, which is the other half of the bargain.
+                QKeyEvent plainReturn(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier,
+                                      QStringLiteral("\r"));
+                QApplication::sendEvent(box, &plainReturn);
+                QApplication::processEvents();
+                check(!box->isVisible(), "shift-enter: plain Enter still finishes it");
+            }
+        }
     }
 
     if (panelFailures == 0) std::printf("  -> ok\n");

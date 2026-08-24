@@ -8601,6 +8601,51 @@ int run_editor_tests() {
         check(leaders == 1, "leader save: emptied of words it is still there - a bare arrow is a drawing");
     }
 
+
+    // ---- with no landing, the line runs INTO the words -----------------------------------------------
+    {
+        // The last thing a leader with no shelf has is its end point, and that point is where the words
+        // start - or finish, coming the other way. They used to be drawn four SCREEN pixels off it and two
+        // up, which is not a distance at all: it grows and shrinks with the zoom, so the arrow floated clear
+        // of its own words close up and lay across them far out.
+        Document d;
+        Entity ld;
+        ld.id = QStringLiteral("ld");
+        ld.type = EntityType::Leader;
+        ld.points = {{0.0, 0.0}, {30.0, 20.0}};   // coming up from the left: the words read to the right
+        ld.meta.insert(QStringLiteral("text"), QStringLiteral("ABCD"));
+        ld.meta.insert(QStringLiteral("size"), 10.0);
+        ld.meta.insert(QStringLiteral("landing"), 0.0);
+        d.entities().push_back(ld);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+
+        const Bounds words = ed.leaderWordsBox(d.entities().front());
+        check(words.valid, "no landing: the words have a place");
+        if (words.valid) {
+            const Vec2 end{30.0, 20.0};
+            std::printf("  no landing: end at %.1f,%.1f; words x %.1f..%.1f, y %.1f..%.1f\n", end.x, end.y,
+                        words.min.x, words.max.x, words.min.y, words.max.y);
+            // Alongside the end, on the side the leader is reading towards - a quarter of the text height
+            // clear of it and no more.
+            check(words.min.x > end.x && words.min.x - end.x < 10.0 * 0.3,
+                  "no landing: the words start just past the end of the line, on the reading side");
+            // AND CENTRED ON IT: the line meets the middle of the first letter, not its foot.
+            check(std::abs((words.min.y + words.max.y) / 2.0 - end.y) < 1e-9,
+                  "no landing: and centred on the line, so it runs into them");
+        }
+        // Coming the other way, the words read to the left and finish at the end point.
+        Entity& back = d.entities().front();
+        back.points = {{60.0, 0.0}, {30.0, 20.0}};
+        const Bounds left = ed.leaderWordsBox(back);
+        if (left.valid) {
+            std::printf("  no landing: coming from the right, words x %.1f..%.1f\n", left.min.x, left.max.x);
+            check(left.max.x < 30.0,
+                  "no landing: from the other side they sit before the end, right-aligned on it");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

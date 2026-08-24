@@ -7057,6 +7057,13 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     if (obj == inlineEdit_ && e->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(e);
         if (ke->key() == Qt::Key_Escape) { commitInlineText(false); return true; }
+        // SHIFT+ENTER IS A NEW ROW, everywhere and always. It is the convention in every box that takes
+        // more than one line of words, and without it a callout that wants two lines could not be typed at
+        // all: a leader's words are a single-value edit, so plain Enter finishes them - and Shift+Enter
+        // finished them too, because nothing looked at the Shift.
+        if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
+            (ke->modifiers() & Qt::ShiftModifier) && !(ke->modifiers() & Qt::ControlModifier))
+            return false;   // the editor puts the line break in
         if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
             ((ke->modifiers() & Qt::ControlModifier) || inlineSingleLine_)) {
             // Ctrl+Enter always commits; plain Enter commits a single-value edit

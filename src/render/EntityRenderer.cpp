@@ -2202,13 +2202,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                   EntityRenderer::annotationScale();
             drawArrowHead(p, tip, dir, color, std::clamp(arrowW * vt.scale(), 5.0, 40.0));
         }
-        // The words sit at the far end - where the leader lands - reading away from what it points at.
+        // The words sit at the far end - where the leader lands - reading away from what it points at, and
+        // the line RUNS INTO THEM: with no landing shelf the last thing the leader has is its end point, and
+        // that point is where the words start (or finish, coming the other way). It used to be four screen
+        // pixels off it and two up, which is not a distance at all - it is a gap that grows and shrinks as
+        // the drawing is zoomed, so the arrow floated clear of its own words close up and lay across them
+        // far out. A quarter of the text height, in the drawing's own units, and the words centred on the
+        // line, so it meets them at the middle of the first letter whatever the zoom.
         const QString says = e.meta.value("text").toString();
         if (!says.isEmpty()) {
             const double h = e.meta.value("size").toDouble(2.5) * EntityRenderer::annotationScale();
             const bool toTheLeft = wordsAt.x < e.points[e.points.size() - 2].x;
-            drawWorldText(p, vt.toScreen(wordsAt) + QPointF(toTheLeft ? -4 : 4, -2), says, h,
-                          vt.scale(), color, toTheLeft ? Qt::AlignRight : Qt::AlignLeft);
+            const double gap = h * 0.25;
+            const Vec2 at{wordsAt.x + (toTheLeft ? -gap : gap), wordsAt.y};
+            drawWorldText(p, vt.toScreen(at), says, h, vt.scale(), color,
+                          (toTheLeft ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter);
         }
         break;
     }
