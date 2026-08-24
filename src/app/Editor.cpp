@@ -3634,6 +3634,30 @@ void Editor::onPointerMove(const Vec2& raw) {
         snap.ortho = false;
     }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
+    // A JOINT VERY CLOSE BY BEATS THE TRACKED ANGLE. While a connection point or an output face is being
+    // marked, the second click is tracked along an angle from the first - which is what makes a face square
+    // to the part - and that tracking was winning even when the cursor was all but on a corner of the
+    // drawing. So a face meant to run between two corners of a connector body landed a fraction off them,
+    // and the marks did not line up with the part they describe.
+    //
+    // Within half the snap distance, the real point on the drawing wins. Further out the angle keeps it,
+    // because that is the whole reason for tracking one.
+    if ((haveOutputFirst_ || haveConnectFirst_) &&
+        (snapResult_.kind == SnapKind::Polar || snapResult_.kind == SnapKind::Ortho ||
+         !snapResult_.snapped)) {
+        SnapSettings onlyObjects = snap;
+        onlyObjects.polar = false;
+        onlyObjects.ortho = false;
+        const SnapResult onPart = resolveSnap(*doc_, raw, std::nullopt, worldTolerance(), onlyObjects,
+                                              ignore);
+        const bool aJoint = onPart.kind == SnapKind::Endpoint || onPart.kind == SnapKind::Node ||
+                            onPart.kind == SnapKind::Midpoint || onPart.kind == SnapKind::Center ||
+                            onPart.kind == SnapKind::Intersection ||
+                            onPart.kind == SnapKind::Quadrant;
+        if (onPart.snapped && aJoint &&
+            distance(onPart.point, raw) <= worldTolerance() * 0.5)
+            snapResult_ = onPart;
+    }
     // The sheet's own edge and the frames of the windows on it, which are not entities and so are not in
     // the search above. Taken only when nothing else was caught, or when one of them is CLOSER than what
     // was - the drawing itself still wins a tie, since that is what is usually being lined up with.

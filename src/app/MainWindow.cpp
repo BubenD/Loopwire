@@ -12622,6 +12622,14 @@ bool MainWindow::saveLibraryPartDocument(Document* doc) {
         if (part.hasNearPoint) part.nearPoint += shift;
         if (part.hasFarPoint) part.farPoint += shift;
         if (part.hasConnect) part.connectPoint += shift;
+        // AND THE FACES THE CONDUCTORS LEAVE BY travel with the drawing like every other mark. They were
+        // left behind twice over: not shifted with it, and then not copied into the part at all - so a face
+        // marked on the canvas was gone the moment the session closed, and the library still said "no output
+        // face marked". A mark that is taken and then dropped is worse than one that cannot be made.
+        for (MechOutputFace& f : part.outputs) {
+            f.a += shift;
+            f.b += shift;
+        }
         part.mechanical = partDrawingFromEntities(drawing);
     } else {
         // A schematic symbol or a fanout is a fixed little glyph, not a run to be placed along a
@@ -12652,6 +12660,7 @@ bool MainWindow::saveLibraryPartDocument(Document* doc) {
         stored->nearPoint = part.nearPoint;
         stored->hasFarPoint = part.hasFarPoint;
         stored->farPoint = part.farPoint;
+        stored->outputs = part.outputs;
     }
     if (!libraryDlg_->saveLibrary()) {
         QMessageBox::warning(this, QStringLiteral("Save part failed"),

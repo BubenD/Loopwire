@@ -3229,6 +3229,45 @@ int run_mechmodels_tests() {
         }
     }
 
+
+    // ---- marking a face: a joint very close by beats the tracked angle -------------------------------
+    {
+        // The second click of a face is tracked along an angle from the first - which is what makes a face
+        // square to the part - and that tracking was winning even with the cursor all but on a corner of the
+        // drawing. So a face meant to run between two corners of a connector body landed a fraction off
+        // them, and the marks did not line up with the part they describe.
+        Document d;
+        Entity body;
+        body.id = QStringLiteral("b");
+        body.type = EntityType::Rect;
+        body.points = {{0.0, 0.0}, {20.0, 0.0}, {20.0, 12.0}, {0.0, 12.0}};
+        d.entities().push_back(body);
+        Editor ed;
+        ed.setDocument(&d);
+        auto& s = ed.snapSettings();
+        s.objectSnap = true;
+        s.snapEndpoint = true;
+        s.gridSnap = false;
+        s.polar = true;
+        s.polarStepDeg = 45.0;
+        s.ortho = false;
+
+        ed.setTool(ToolId::ModelOutputLine);
+        ed.onPointerPress({20.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // the first end, on a corner
+        // A hair off the far corner, and off the tracked angle: the corner wins.
+        ed.onPointerMove({19.7, 11.8});
+        const Vec2 got = ed.snappedCursor();
+        std::printf("  face snap: (19.7,11.8) went to (%.2f,%.2f)\n", got.x, got.y);
+        check(std::abs(got.x - 20.0) < 1e-6 && std::abs(got.y - 12.0) < 1e-6,
+              "face snap: all but on a corner, it takes the corner rather than the tracked angle");
+        // Well away from any corner the angle still holds - that is the whole reason for tracking one.
+        ed.onPointerMove({30.0, 6.2});
+        const Vec2 free = ed.snappedCursor();
+        std::printf("  face snap: (30.0,6.2) went to (%.2f,%.2f)\n", free.x, free.y);
+        check(std::abs(free.x - 20.0) > 1e-6 || std::abs(free.y - 12.0) > 1e-6,
+              "face snap: and out in the open it is not dragged onto a corner");
+    }
+
     if (failures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", failures);
     return failures;

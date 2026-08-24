@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
 
@@ -15,6 +17,7 @@ class QLabel;
 class QLineEdit;
 class QGroupBox;
 class QListWidget;
+class QAction;
 class QPushButton;
 class QSplitter;
 class QTreeWidget;
@@ -186,6 +189,10 @@ private:
     // The fanout: a third drawing of the part, and which side of the connector it was drawn from.
     DrawingPreview* fanoutPreview_ = nullptr;
     QPushButton* outputFacesBtn_ = nullptr;
+    // One Place button, and a tick against each drawing of the part it puts down. See placeTicked().
+    QToolButton* placeBtn_ = nullptr;
+    std::vector<QAction*> placeWhat_;
+    void placeTicked();
     // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see
     // fanoutOpposite / mirrorFanoutFromOpposite()).
     DrawingPreview* fanoutOppositePreview_ = nullptr;

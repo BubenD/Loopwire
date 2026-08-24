@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include <QPushButton>
+#include "tools/ToolId.h"
 #include <QKeyEvent>
 #include <QPlainTextEdit>
 #include <QTabWidget>
@@ -1443,6 +1445,134 @@ int run_partspanel_tests() {
                 check(!box->isVisible(), "shift-enter: plain Enter still finishes it");
             }
         }
+    }
+
+
+    // ---- a marked output face survives the session, and one Place puts down what is ticked ----------
+    {
+        // A FACE MARKED AND THEN DROPPED is worse than one that cannot be marked at all. The faces were
+        // left behind twice over on the way out of a session: not shifted with the drawing as it was
+        // squared up, and then not copied into the part - so the library still said "no output face
+        // marked" over a part that had just been given one.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_facesave_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-SAVE");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Connector to mark up");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{100.0, 50.0}, {120.0, 50.0}, {120.0, 62.0}, {100.0, 62.0}};
+            part.mechanical = partDrawingFromEntities({body});
+            part.schematic = partDrawingFromEntities({body});
+            Entity brk;
+            brk.type = EntityType::Line;
+            brk.a = {0.0, 0.0};
+            brk.b = {8.0, 4.0};
+            part.fanout = partDrawingFromEntities({brk});
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1400, 860);
+        win.show();
+        QApplication::processEvents();
+        auto* dlg = win.partsLibraryDialogForTest();
+        check(dlg != nullptr, "face save: the library window is there");
+        win.openLibraryPartEditor(QStringLiteral("P-SAVE"), LibraryPartDrawing::Mechanical);
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "face save: the session opened");
+        if (ed && ed->document() && dlg) {
+            // Mark a face across the right-hand end of the body, the way the tool does it: two clicks.
+            ed->setTool(ToolId::ModelOutputLine);
+            ed->onPointerPress({120.0, 51.0}, Qt::LeftButton, Qt::NoModifier);
+            ed->onPointerPress({120.0, 61.0}, Qt::LeftButton, Qt::NoModifier);
+            QApplication::processEvents();
+            win.saveMechModelBeingEdited();   // Capture: the same button the ribbon corner has
+            QApplication::processEvents();
+            const PartsLibrary after = dlg->library();
+            const LibraryPart* got = nullptr;
+            for (const LibraryPart& p : after.parts)
+                if (p.id == QStringLiteral("P-SAVE")) got = &p;
+            check(got != nullptr, "face save: the part is still in the library");
+            if (got) {
+                std::printf("  face save: %lld face(s) kept\n", static_cast<long long>(got->outputs.size()));
+                check(got->outputs.size() == 1, "face save: the face marked in the session is in the part");
+                if (got->outputs.size() == 1) {
+                    // The drawing is squared up on the way out - moved to the origin, centred across the
+                    // run - and the face is moved with it. Left behind, it would point into space.
+                    Bounds b;
+                    for (const Entity& e : partDrawingEntities(got->mechanical)) b.expand(e.bounds());
+                    const MechOutputFace& f = got->outputs.front();
+                    std::printf("  face save: drawing x %.1f..%.1f, face at x %.1f\n", b.min.x, b.max.x,
+                                f.a.x);
+                    check(b.valid && f.a.x >= b.min.x - 1e-6 && f.a.x <= b.max.x + 1e-6,
+                          "face save: and it moved with the drawing rather than being left behind");
+                }
+            }
+        }
+
+        // ONE PLACE BUTTON, and a tick against each drawing it puts down.
+        dlg->show();
+        dlg->selectPart(QStringLiteral("P-SAVE"));
+        QApplication::processEvents();
+        QToolButton* place = nullptr;
+        for (QToolButton* b : dlg->findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Place")) place = b;
+        check(place != nullptr, "place: there is one Place button");
+        int places = 0;
+        for (QPushButton* b : dlg->findChildren<QPushButton*>())
+            if (b->text().startsWith(QStringLiteral("Place"))) ++places;
+        std::printf("  place: %d old Place button(s) left on the panes\n", places);
+        check(places == 0, "place: and not one on every pane as well - five buttons for one verb");
+        if (place && place->menu() && ed && ed->document()) {
+            QStringList said;
+            int ticked = 0;
+            for (QAction* a : place->menu()->actions()) {
+                if (a->isSeparator()) continue;
+                said << a->text();
+                if (a->isCheckable() && a->isChecked()) ++ticked;
+            }
+            std::printf("  place: menu - %s (%d ticked)\n", qPrintable(said.join(QStringLiteral(" | "))),
+                        ticked);
+            check(said.size() >= 4, "place: the menu lists the drawings a part can have");
+            // Tick the mechanical AND the fanout, and press it: both go down, in one placement.
+            for (QAction* a : place->menu()->actions()) {
+                if (!a->isCheckable()) continue;
+                a->setChecked(a->text().startsWith(QStringLiteral("Mechanical")) ||
+                              a->text() == QStringLiteral("Fanout"));
+            }
+            place->click();
+            QApplication::processEvents();
+            std::printf("  place: %d object(s) hanging off the cursor\n", ed->clipboardCount());
+            check(ed->clipboardCount() >= 2,
+                  "place: two drawings ticked go down together, as one set to be moved together");
+            // And side by side rather than on top of one another.
+            Bounds one, two;
+            for (const Entity& e : ed->clipboardContents()) {
+                if (e.type == EntityType::Rect) one.expand(e.bounds());
+                else two.expand(e.bounds());
+            }
+            if (one.valid && two.valid)
+                check(two.min.x >= one.max.x - 1e-6 || one.min.x >= two.max.x - 1e-6,
+                      "place: side by side, not one over the other");
+            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+        }
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
+        }
+        QFile::remove(libFile);
     }
 
     if (panelFailures == 0) std::printf("  -> ok\n");

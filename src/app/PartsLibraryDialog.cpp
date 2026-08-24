@@ -1,4 +1,5 @@
 #include "app/PartsLibraryDialog.h"
+#include <QAction>
 #include <QToolButton>
 #include "harness/PartDataFromWeb.h"
 #include <QTreeWidgetItem>
@@ -841,7 +842,10 @@ void PartsLibraryDialog::buildUi() {
     // Three drawings of a part, side by side: what it is on a circuit, what it is in the metal, and what
     // the harness does at it. Each pane is given room enough to read - a drawing squeezed into a thumbnail
     // is a drawing nobody can check.
-    const Side sides[] = {{"Schematic symbol", false}, {"Mechanical drawing", true},
+    // THE MECHANICAL DRAWING FIRST. This is a harness library: what a part looks like in the metal is what
+    // is drawn, checked and placed all day, and the schematic symbol is the occasional one. The first pane is
+    // the one the eye lands on.
+    const Side sides[] = {{"Mechanical drawing", true}, {"Schematic symbol", false},
                           {"Fanout", false}};
     // THE EYE, over all three drawings at once. The connection point is drawn ORANGE over the part - the line
     // the harness attaches to - and while the drawing itself is being checked that mark is in the way of seeing
@@ -854,7 +858,53 @@ void PartsLibraryDialog::buildUi() {
                        "to, drawn orange. It is a mark ON the part, not part of it, and while the drawing is "
                        "being checked it is in the way of seeing what the part actually looks like."));
     connect(showConnBtn_, &QToolButton::toggled, this, [this] { applyShowConnection(); });
-    dgOuter->addWidget(showConnBtn_, 0, Qt::AlignLeft);
+    // ONE PLACE BUTTON, and a tick against each drawing it puts down.
+    //
+    // There was a Place on every pane - four of them, and a fifth for the fanout mirrored - which is five
+    // buttons for one verb, and no way at all to put down two drawings of the same part together. A part
+    // usually goes on a sheet as more than one of its drawings: the connector and the fanout that belongs to
+    // it, the symbol and the fanout beside it.
+    //
+    // So: one button, and the menu says WHICH. Ticks rather than a list of one-shot commands, because
+    // "which drawings of this part" is a standing answer - tick the two you always place together and press
+    // Place from then on.
+    {
+        auto* row = new QWidget(draw);
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(6);
+        rl->addWidget(showConnBtn_);
+        placeBtn_ = new QToolButton(row);
+        placeBtn_->setText(QStringLiteral("Place"));
+        placeBtn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        placeBtn_->setPopupMode(QToolButton::MenuButtonPopup);
+        placeBtn_->setToolTip(QStringLiteral(
+            "Put this part on the sheet - then click where it goes. The arrow beside it says WHICH of its "
+            "drawings: tick more than one and they go down together, in the order they are listed."));
+        auto* pm = new QMenu(placeBtn_);
+        struct Which { const char* text; LibraryPartDrawing kind; };
+        const Which whichOnes[] = {{"Mechanical drawing", LibraryPartDrawing::Mechanical},
+                                   {"Schematic symbol", LibraryPartDrawing::Schematic},
+                                   {"Fanout", LibraryPartDrawing::Fanout},
+                                   {"Fanout, mirrored", LibraryPartDrawing::FanoutOpposite}};
+        for (const Which& w : whichOnes) {
+            auto* act = pm->addAction(QString::fromLatin1(w.text));
+            act->setCheckable(true);
+            act->setData(static_cast<int>(w.kind));
+            act->setChecked(w.kind == LibraryPartDrawing::Mechanical);
+            placeWhat_.push_back(act);
+        }
+        pm->addSeparator();
+        pm->addAction(QStringLiteral("All of them it has"), this, [this] {
+            for (QAction* a : placeWhat_) a->setChecked(true);
+            placeTicked();
+        });
+        placeBtn_->setMenu(pm);
+        connect(placeBtn_, &QToolButton::clicked, this, [this] { placeTicked(); });
+        rl->addWidget(placeBtn_);
+        rl->addStretch(1);
+        dgOuter->addWidget(row);
+    }
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
         QWidget* fanoutSideRowPending = nullptr;
@@ -920,16 +970,6 @@ void PartsLibraryDialog::buildUi() {
             edt->setToolTip(QStringLiteral("Open it in its own canvas session to add or move lines"));
             connect(edt, &QPushButton::clicked, this, [this] { editDrawing(LibraryPartDrawing::Fanout); });
             bl->addWidget(edt);
-            auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
-            ins->setToolTip(QStringLiteral("Put the fanout on the sheet, as it was drawn"));
-            connect(ins, &QPushButton::clicked, this, [this] { insertFanout(false); });
-            bl->addWidget(ins);
-            auto* mir = new QPushButton(QStringLiteral("Insert mirrored"), btns);
-            mir->setToolTip(QStringLiteral(
-                "Put down the opposite side's own drawing if it has one (see \"Mirror from opposite "
-                "fanout\"), otherwise this one mirrored about the X axis as a guess at it."));
-            connect(mir, &QPushButton::clicked, this, [this] { insertFanout(true); });
-            bl->addWidget(mir);
             auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
             connect(clr, &QPushButton::clicked, this, [this] {
                 if (LibraryPart* p = current()) {
@@ -954,10 +994,6 @@ void PartsLibraryDialog::buildUi() {
                                        "objects can be picked; Enter then takes them."));
         connect(cap, &QPushButton::clicked, this, [this, mech] { beginCaptureFromSheet(mech); });
         bl->addWidget(cap);
-        auto* ins = new QPushButton(QStringLiteral("Insert"), btns);
-        ins->setToolTip(QStringLiteral("Put this drawing on the sheet — then click where it goes"));
-        connect(ins, &QPushButton::clicked, this, [this, mech] { insertIntoDrawing(mech); });
-        bl->addWidget(ins);
         auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
         edt->setToolTip(mech ? QStringLiteral(
                                   "Open it in its own canvas session (a grey one, like a default "
@@ -2169,8 +2205,11 @@ void PartsLibraryDialog::refreshContactChoice() {
                          QString());
     const PartsLibrary merged = catalog_.merged();
     for (const LibraryPart& part : merged.parts) {
-        const bool offer = isContact ? part.kind == PartKind::Connector
-                                     : (part.kind == PartKind::ContactPin || part.kind == PartKind::Crimp);
+        // A CONTACT PIN, and nothing else. A crimp terminal is crimped on a wire like a contact is, but it
+        // goes on a stud or a post - it does not go INSIDE a connector, and offering it here as something a
+        // connector is "used with" invites a bill of materials that orders ring terminals by the way count.
+        const bool offer =
+            isContact ? part.kind == PartKind::Connector : part.kind == PartKind::ContactPin;
         if (offer) contactBox_->addItem(part.title(), part.id);
     }
     // What it is tied to, worked out from BOTH ends: a tie written on the other part only still shows here.
@@ -2460,6 +2499,85 @@ void PartsLibraryDialog::importFromDefaultModel(bool mechanical) {
         });
     }
     dlg.exec();
+}
+
+// PUT DOWN WHAT IS TICKED, as one placement.
+//
+// A part usually goes on a sheet as more than one of its drawings - the connector and the fanout that belongs
+// to it, the symbol with the fanout beside it - and there was no way to do that at all: five separate Place
+// buttons, each one its own trip to the sheet and its own lining-up by hand.
+//
+// Side by side in the order the menu lists them, each a gap clear of the last, and handed over as ONE set: so
+// they land together, keep their spacing, and are moved together afterwards.
+void PartsLibraryDialog::placeTicked() {
+    LibraryPart* p = current();
+    if (!p) {
+        if (summary_) summary_->setText(QStringLiteral("Pick a part first"));
+        return;
+    }
+    std::vector<Entity> all;
+    QStringList placed, missing;
+    double at = 0.0;   // where the next drawing starts, along the sheet
+    for (QAction* act : placeWhat_) {
+        if (!act || !act->isChecked()) continue;
+        const auto kind = static_cast<LibraryPartDrawing>(act->data().toInt());
+        std::vector<Entity> one;
+        switch (kind) {
+        case LibraryPartDrawing::Mechanical:
+            one = partBlockInstance(*p, /*mechanical=*/true, Vec2{0.0, 0.0});
+            break;
+        case LibraryPartDrawing::Schematic:
+            one = partBlockInstance(*p, /*mechanical=*/false, Vec2{0.0, 0.0});
+            break;
+        case LibraryPartDrawing::Fanout:
+            if (!p->fanout.isEmpty())
+                one = partDrawingBlockInstance(*p, p->fanout, QStringLiteral("fanout"), Vec2{0.0, 0.0});
+            break;
+        case LibraryPartDrawing::FanoutOpposite: {
+            // Its own drawing if it has one, otherwise this one mirrored as a guess at the other side.
+            const QJsonArray other = p->fanoutOpposite.isEmpty() ? p->fanout : p->fanoutOpposite;
+            if (!other.isEmpty())
+                one = partDrawingBlockInstance(*p, other, QStringLiteral("fanout (opposite)"),
+                                               Vec2{0.0, 0.0}, p->fanoutOpposite.isEmpty());
+            break;
+        }
+        }
+        if (one.empty()) {
+            missing << act->text();
+            continue;
+        }
+        Bounds b;
+        for (const Entity& e : one) b.expand(e.bounds());
+        if (b.valid) {
+            // Along from the last one, a gap of a tenth of its width (and at least 2 mm) between them.
+            const Vec2 shift{at - b.min.x, -(b.min.y + b.max.y) / 2.0};
+            for (Entity& e : one) translateEntity(e, shift);
+            at += b.width() + std::max(2.0, b.width() * 0.1);
+        }
+        for (Entity& e : one) all.push_back(std::move(e));
+        placed << act->text();
+    }
+    if (all.empty()) {
+        if (summary_)
+            summary_->setText(missing.isEmpty()
+                                  ? QStringLiteral("Tick which drawing to place first")
+                                  : QStringLiteral("Nothing drawn yet for: %1")
+                                        .arg(missing.join(QStringLiteral(", "))));
+        return;
+    }
+    // The contact it is used with travels with it, as it does however the part is placed.
+    const QString contactId = p->contactId();
+    if (!contactId.isEmpty())
+        for (Entity& e : all) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    if (editor_) editor_->placeEntities(all);
+    if (summary_)
+        summary_->setText(
+            QStringLiteral("Click the sheet to place %1%2")
+                .arg(placed.join(QStringLiteral(" + ")))
+                .arg(missing.isEmpty() ? QString()
+                                       : QStringLiteral("  (nothing drawn for %1)")
+                                             .arg(missing.join(QStringLiteral(", ")))));
+    hide();   // the sheet is wanted now
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {
