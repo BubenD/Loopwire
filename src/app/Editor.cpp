@@ -10351,6 +10351,51 @@ bool Editor::acceptCommandInput(const QString& text) {
         return true;
     }
 
+    // ROTATE: TYPE THE ANGLE instead of picking it, and the angle is CLOCKWISE - 30 turns the object a
+    // twelfth of a turn the way the hands of a clock go, -30 the other way. That is how an angle is said
+    // when somebody is turning a part on a drawing ("bring it round thirty"), and it is the opposite of the
+    // way angles are measured in the arithmetic underneath, where anticlockwise is positive. The conversion
+    // belongs here, once, at the place a person types a number - not spread through the geometry.
+    //
+    // The pivot is the one already picked; with none picked yet it is the middle of what is selected, so
+    // "rotate, 90" works on a selection without asking for a point that has an obvious answer.
+    if (tool_ == ToolId::Rotate && !t.contains(QLatin1Char(','))) {
+        bool ok = false;
+        const double deg = t.toDouble(&ok);
+        if (ok) {
+            auto sel = selectedEntities();
+            if (sel.empty()) {
+                emit message(QStringLiteral("Select what is to be turned first"));
+                return true;
+            }
+            Vec2 piv;
+            if (!modifyPts_.empty()) {
+                piv = modifyPts_[0];
+            } else {
+                Bounds b;
+                for (const Entity* e : sel) {
+                    const Bounds eb = e->bounds();
+                    if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+                }
+                piv = b.valid ? b.center() : Vec2{0, 0};
+            }
+            pushUndo();
+            const double rad = -deg * M_PI / 180.0;   // clockwise, as typed
+            for (Entity* e : sel) rotateEntity(*e, piv, rad);
+            modifyPts_.clear();
+            doc_->setDirty(true);
+            emit changed();
+            emit message(QStringLiteral("Turned %1° %2")
+                             .arg(std::abs(deg), 0, 'f', 1)
+                             .arg(deg >= 0 ? QStringLiteral("clockwise")
+                                           : QStringLiteral("anticlockwise")));
+            setTool(ToolId::Select);
+        } else {
+            emit message(QStringLiteral("Enter an angle in degrees - 30 clockwise, -30 the other way"));
+        }
+        return true;
+    }
+
     // Scale: type a scale factor instead of picking a size. 2 = double, 0.5 = half.
     // The base point is the one already picked, else the selection's bounding centre.
     if (tool_ == ToolId::Scale && !t.contains(',')) {
@@ -15409,6 +15454,40 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         if (cancel) cancel();
         return true;
     }
+    // SPACE TURNS WHAT IS BEING MOVED: a quarter turn clockwise, or anticlockwise with Shift held. A part
+    // is nearly always picked up to be put down THE OTHER WAY ROUND - a connector facing the other end of
+    // the loom, a label reading up the sheet instead of across it - and doing that as two commands means
+    // dropping it, turning it, and then moving it again to where it should have gone.
+    //
+    // It turns about the point it is being HELD BY, so the thing stays under the cursor while it spins:
+    // turning about its own middle would swing it out from under the hand.
+    if (key == Qt::Key_Space && movingByDistance()) {
+        if (const auto mv = moveVector()) {
+            auto sel = selectedEntities();
+            if (!sel.empty()) {
+                pushUndo();
+                // Anticlockwise is positive in the arithmetic; a quarter turn clockwise is -pi/2.
+                const double rad = (mods & Qt::ShiftModifier) ? M_PI / 2.0 : -M_PI / 2.0;
+                // ABOUT THE POINT IT WAS PICKED UP BY. The objects themselves have not moved yet - a move
+                // is a preview until it is put down - so turning them about the CURSOR would swing them
+                // round a pivot half a sheet away and fling them off it. Turned about the point they are
+                // held by, they spin where they stand, and the move that follows carries them to the
+                // cursor with the same offset as before: on the screen the thing under the hand turns.
+                for (Entity* e : sel) rotateEntity(*e, mv->first, rad);
+                doc_->setDirty(true);
+                // The ghost IS at the cursor - it is the preview, already carried there - so it turns
+                // about the cursor to show the same result.
+                for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
+                emit message((mods & Qt::ShiftModifier)
+                                 ? QStringLiteral("Turned a quarter anticlockwise — Space to keep turning")
+                                 : QStringLiteral("Turned a quarter clockwise — Shift+Space the other way"));
+                emit overlayChanged();
+                emit changed();
+            }
+        }
+        return true;
+    }
+
     // Ctrl while drawing an arc flips it to the opposite (mirrored) sweep, AutoCAD-
     // style. A bare Ctrl press arrives as Key_Control.
     if (key == Qt::Key_Control && tool_ == ToolId::Arc && drafting_) {

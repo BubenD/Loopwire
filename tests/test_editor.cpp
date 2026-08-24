@@ -8646,6 +8646,90 @@ int run_editor_tests() {
         }
     }
 
+
+    // ---- a typed angle is clockwise, and Space turns what is being moved ----------------------------
+    {
+        // "BRING IT ROUND THIRTY" means clockwise. That is how an angle is said when somebody is turning a
+        // part on a drawing, and it is the opposite of the way angles are measured in the arithmetic
+        // underneath, where anticlockwise is positive - so the conversion belongs at the one place a person
+        // types a number.
+        Document d;
+        Entity line;
+        line.id = QStringLiteral("l");
+        line.type = EntityType::Line;
+        line.a = {0.0, 0.0};
+        line.b = {10.0, 0.0};   // pointing along +x
+        d.entities().push_back(line);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.setTool(ToolId::Rotate);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // the pivot
+        check(ed.acceptCommandInput(QStringLiteral("90")), "turn: a typed angle is taken as the angle");
+        auto lineNow = [&d] {
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("l")) return e;
+            return Entity();
+        };
+        Entity after = lineNow();
+        std::printf("  turn: 90 typed took (10,0) to (%.1f,%.1f)\n", after.b.x, after.b.y);
+        check(std::abs(after.b.x) < 1e-6 && std::abs(after.b.y + 10.0) < 1e-6,
+              "turn: 90 goes clockwise - what pointed along +x now points DOWN the sheet");
+
+        // And a negative one the other way.
+        ed.selectAll();
+        ed.setTool(ToolId::Rotate);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.acceptCommandInput(QStringLiteral("-90"));
+        after = lineNow();
+        std::printf("  turn: then -90 took it to (%.1f,%.1f)\n", after.b.x, after.b.y);
+        check(std::abs(after.b.x - 10.0) < 1e-6 && std::abs(after.b.y) < 1e-6,
+              "turn: -90 goes the other way, and puts it back");
+    }
+
+    // ---- Space, mid-move, turns the thing being carried ---------------------------------------------
+    {
+        // A part is nearly always picked up to be put down THE OTHER WAY ROUND - a connector facing the
+        // other end of the loom, a label reading up the sheet instead of across it. Doing that as two
+        // commands means dropping it, turning it, and moving it again to where it should have gone.
+        Document d;
+        Entity line;
+        line.id = QStringLiteral("l");
+        line.type = EntityType::Line;
+        line.a = {0.0, 0.0};
+        line.b = {10.0, 0.0};
+        d.entities().push_back(line);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // held by its left-hand end
+        ed.onPointerMove({50.0, 50.0});                                  // carried out to here
+        check(ed.movingByDistance(), "space turn: a move is under way");
+        check(ed.onKey(Qt::Key_Space, Qt::NoModifier), "space turn: Space is taken while it is");
+        auto lineNow = [&d] {
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("l")) return e;
+            return Entity();
+        };
+        Entity after = lineNow();
+        std::printf("  space turn: picked up at 0,0 and carried to 50,50, the far end went to (%.1f,%.1f)\n", after.b.x, after.b.y);
+        // A quarter turn CLOCKWISE about the point it is held by: the end that was 10 to the +x side of
+        // the cursor is now 10 BELOW it.
+        check(std::abs(after.a.x) < 1e-6 && std::abs(after.a.y) < 1e-6,
+              "space turn: the point it was picked up by does not move - it spins where it stands");
+        check(std::abs(after.b.x) < 1e-6 && std::abs(after.b.y + 10.0) < 1e-6,
+              "space turn: a quarter turn clockwise");
+        // Shift+Space the other way, which puts it back.
+        ed.onKey(Qt::Key_Space, Qt::ShiftModifier);
+        after = lineNow();
+        std::printf("  space turn: Shift+Space took it back to (%.1f,%.1f)\n", after.b.x, after.b.y);
+        check(std::abs(after.b.x - 10.0) < 1e-6 && std::abs(after.b.y) < 1e-6,
+              "space turn: and Shift+Space turns it back anticlockwise");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
