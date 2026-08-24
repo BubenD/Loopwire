@@ -8550,6 +8550,57 @@ int run_editor_tests() {
         check(std::abs(fresh.size - 10.0) < 1e-9, "text height: ten, out of the box");
     }
 
+
+    // ---- a leader's edited words are KEPT ------------------------------------------------------------
+    {
+        // The editor opened, the words were typed, the commit ran - and the write dropped them on the floor,
+        // because it knew about a Text object and about three kinds of annotation that carry a text value,
+        // and a leader was not one of them. Nothing said so, which is the worst of it: the new words stayed
+        // on the screen until the drawing was next redrawn from the entity, and then they were the old ones
+        // again. The same silence whether the edit was finished with Enter or by clicking the canvas, since
+        // both end in the same write.
+        Document d;
+        Entity ld;
+        ld.id = QStringLiteral("ld");
+        ld.type = EntityType::Leader;
+        ld.points = {{0.0, 0.0}, {30.0, 20.0}};
+        ld.meta.insert(QStringLiteral("text"), QStringLiteral("Text"));
+        ld.meta.insert(QStringLiteral("size"), 10.0);
+        ld.meta.insert(QStringLiteral("landing"), 6.0);
+        d.entities().push_back(ld);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        Editor::TextStyle style;
+        style.size = 12.0;
+        style.font = QStringLiteral("Arial");
+        ed.applyTextEdit(QStringLiteral("ld"), QStringLiteral("CRIMP TO SPEC"), style);
+
+        auto meta = [&d](const QString& key) {
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("ld")) return e.meta.value(key);
+            return QJsonValue();
+        };
+        std::printf("  leader save: says '%s' at %.1f in %s\n",
+                    qPrintable(meta(QStringLiteral("text")).toString()),
+                    meta(QStringLiteral("size")).toDouble(),
+                    qPrintable(meta(QStringLiteral("font")).toString()));
+        check(meta(QStringLiteral("text")).toString() == QStringLiteral("CRIMP TO SPEC"),
+              "leader save: the words that were typed are the words it has");
+        check(std::abs(meta(QStringLiteral("size")).toDouble() - 12.0) < 1e-9,
+              "leader save: and the height set in the editor, not the one it had");
+        check(meta(QStringLiteral("font")).toString() == QStringLiteral("Arial"),
+              "leader save: and the font");
+        // Cleared, a leader stays a leader - a bare arrow pointing at something is a real thing to draw,
+        // unlike a piece of text with nothing written on it.
+        ed.applyTextEdit(QStringLiteral("ld"), QString(), style);
+        int leaders = 0;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Leader) ++leaders;
+        check(leaders == 1, "leader save: emptied of words it is still there - a bare arrow is a drawing");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

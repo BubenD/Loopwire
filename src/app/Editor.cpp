@@ -10701,13 +10701,24 @@ void Editor::commitText(const QString& text, const TextStyle& s) {
 void Editor::applyTextEdit(const QString& id, const QString& text, const TextStyle& s) {
     Entity* e = entityById(id);
     if (!e) return;
-    // Annotations that merely carry a text value (balloon number, note / revision
-    // body) just store it — they aren't real Text objects.
+    // Annotations that merely carry a text value (balloon number, note / revision body, a leader's words)
+    // just store it - they aren't real Text objects.
+    //
+    // A LEADER WAS NOT ON THIS LIST, so editing a callout's words did nothing at all: the editor opened, the
+    // words were typed, the commit ran - and this dropped them on the floor because the object was neither a
+    // Text nor one of the three kinds named. Nothing said so, which is the worst of it: the words were on
+    // the screen until the drawing was next redrawn from the entity, and then they were the old ones again.
     if (e->type != EntityType::Text) {
-        if (e->meta.value("balloon").toBool() || e->meta.value("note").toBool() ||
-            e->meta.value("revision").toBool()) {
+        if (e->type == EntityType::Leader || e->meta.value("balloon").toBool() ||
+            e->meta.value("note").toBool() || e->meta.value("revision").toBool()) {
             pushUndo();
             e->meta.insert("text", text);
+            // A leader's words have a height and a font of their own, and the editor is where they are set:
+            // a height typed there and then ignored is the same silence over again.
+            if (e->type == EntityType::Leader) {
+                if (s.size > 0.0) e->meta.insert("size", s.size);
+                if (!s.font.isEmpty()) e->meta.insert("font", s.font);
+            }
             doc_->setDirty(true);
             emit changed();
         }
