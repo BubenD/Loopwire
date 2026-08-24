@@ -123,6 +123,10 @@ QStringList partFieldChoices(PartKind kind, const QString& key);
 // typed into.
 QStringList addedChoices(const QString& key);
 void rememberChoice(const QString& key, const QString& value, const QStringList& builtIn);
+// AND TAKEN OFF AGAIN. A list that can only be added to fills up with a misspelling somebody typed once, and
+// from then on every part offers it. Only what was ADDED can be forgotten - the built-in materials are the
+// program's, not the office's, and a list that can be emptied is a list somebody empties by accident.
+void forgetChoice(const QString& key, const QString& value);
 // The built-in list plus what has been added, which is what a chooser should offer.
 QStringList choicesFor(PartKind kind, const QString& key);
 
@@ -418,6 +422,8 @@ void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types);
 // The gauge of every pin, 1..wayCount, worked out from the types' pin lists - what a schematic symbol
 // labels its pins with. A pin no type claims is left empty rather than guessed at.
 QStringList partPinGauges(const LibraryPart& part);
+// And what each pin is rated to carry, the same way - what the pin table's own column shows.
+QStringList partPinAmps(const LibraryPart& part);
 // The pins a "1-3, 5" style list names, as numbers. Out-of-order or overlapping lists are taken as
 // written: it is a note about a real connector, not a puzzle to be normalised.
 std::vector<int> pinsNamedBy(const QString& list, int ways);

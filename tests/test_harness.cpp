@@ -4,6 +4,7 @@
 #include "harness/HarnessBuilder.h"
 #include "harness/Bom.h"
 #include "harness/MechanicalHarness.h"
+#include <QSettings>
 #include "harness/PartsLibrary.h"
 #include "geometry/Geometry.h"
 #include "model/Document.h"
@@ -5969,9 +5970,14 @@ int run_harness_tests() {
         check(has(PartKind::Wire, "gauge") && has(PartKind::Wire, "material") &&
                   has(PartKind::Wire, "insulation"),
               "library: a wire carries its own technical parameters");
-        check(has(PartKind::Connector, "shellSize") && has(PartKind::Connector, "material") &&
-                  has(PartKind::Connector, "withPins") && isRange(PartKind::Connector, "pinGauge"),
-              "library: a connector says shell size, material, and whether pins come with it");
+        // WHAT ITS PINS ARE is asked once, in "Its own pins" - a row per size, with the conductor it takes
+        // and which pins are that size. It was asked here as well, in three fields that could only say less:
+        // one tick, one unit and one gauge range for a whole housing that may carry two sizes at once.
+        check(has(PartKind::Connector, "shellSize") && has(PartKind::Connector, "material"),
+              "library: a connector says its shell size and what it is made of");
+        check(!has(PartKind::Connector, "withPins") && !has(PartKind::Connector, "pinGauge") &&
+                  !has(PartKind::Connector, "pinGaugeMode"),
+              "library: and not the three fields that duplicated its own pin rows");
         check(isRange(PartKind::ContactPin, "gauge") && has(PartKind::ContactPin, "material"),
               "library: a contact pin is a gauge range and a material");
         check(has(PartKind::Ferrule, "size") && isRange(PartKind::Ferrule, "stud"),
@@ -7288,6 +7294,103 @@ int run_harness_tests() {
         check(onSymbol.size() == 8 && onSymbol.value(0) == QStringLiteral("14 AWG") &&
                   onSymbol.value(7) == QStringLiteral("22 AWG"),
               "pins: each pin on the symbol carries the conductor its own size takes");
+    }
+
+
+    // ---- the pins the connector comes with reach its description, its table and its symbol ----------
+    {
+        // ONE PLACE SAYS WHAT THE PINS ARE. The technical parameters used to ask as well - a tick, one unit
+        // for the whole connector and one gauge range for the whole connector - which could only ever say
+        // less than the rows can, on a housing whose whole point may be that it carries two sizes at once.
+        // Two places to say one thing is two places to disagree.
+        LibraryPart p;
+        p.id = QStringLiteral("P-DESC");
+        p.kind = PartKind::Connector;
+        p.mfrPn = QStringLiteral("X-8W");
+        p.params[QStringLiteral("ways")] = QStringLiteral("8");
+        p.params[QStringLiteral("pitch")] = QStringLiteral("3");
+        QStringList asked;
+        for (const PartField& f : partFields(PartKind::Connector)) asked << f.label;
+        std::printf("  own pins: a connector is asked for %s\n", qPrintable(asked.join(QStringLiteral(", "))));
+        check(!asked.contains(QStringLiteral("Includes pins")) &&
+                  !asked.contains(QStringLiteral("Pin gauge in")) &&
+                  !asked.contains(QStringLiteral("Pin gauge range")),
+              "own pins: the three fields that duplicated the rows are gone");
+        check(asked.contains(QStringLiteral("Material")) && !asked.contains(QStringLiteral("Plating")),
+              "own pins: and plating is called material, which is what it is");
+
+        // A RANGE IS A REAL ANSWER, and it is kept in one form however it was typed: a size 20 contact takes
+        // anything from 24 to 20 AWG and a datasheet states it that way.
+        setPartIncludesPins(p, true);
+        std::vector<PartPinType> types;
+        PartPinType heavy;
+        heavy.size = QStringLiteral("16");
+        heavy.unit = QStringLiteral("AWG");
+        heavy.gauge = QStringLiteral("20 - 16");   // typed loosely
+        heavy.amps = QStringLiteral("13");
+        heavy.pins = QStringLiteral("1-2");
+        types.push_back(heavy);
+        PartPinType signal;
+        signal.size = QStringLiteral("20");
+        signal.unit = QStringLiteral("AWG");
+        signal.gauge = QStringLiteral("24 to 20");   // and the other way
+        signal.amps = QStringLiteral("5");
+        signal.pins = QStringLiteral("3-8");
+        types.push_back(signal);
+        setPartPinTypes(p, types);
+        const std::vector<PartPinType> back = partPinTypes(p);
+        std::printf("  own pins: ranges kept as %s and %s\n",
+                    back.empty() ? "" : qPrintable(back[0].gauge),
+                    back.size() < 2 ? "" : qPrintable(back[1].gauge));
+        check(back.size() == 2 && back[0].gauge == QStringLiteral("20-16") &&
+                  back[1].gauge == QStringLiteral("24-20"),
+              "own pins: a range is kept, and the same range typed two ways reads one way");
+
+        // THE DESCRIPTION SAYS WHAT THEY ARE. A connector bought with its pins in it is not described by its
+        // way count alone - what those pins take is half of what somebody orders it for.
+        const QString said = describePart(p);
+        std::printf("  own pins: description - %s\n", qPrintable(said));
+        check(said.contains(QStringLiteral("pins fitted")), "own pins: the description says they are fitted");
+        check(said.contains(QStringLiteral("2 x 20-16 AWG")) &&
+                  said.contains(QStringLiteral("6 x 24-20 AWG")),
+              "own pins: and how many of each, and what each takes");
+        check(said.contains(QStringLiteral("13 A")), "own pins: with the rating where there is one");
+
+        // AND THE PIN TABLE OF THE SYMBOL FOLLOWS THE SAME ROWS - gauge and rating both, so a table filled
+        // in by hand from a datasheet the library already holds is work nobody does twice.
+        QStringList gauges, amps;
+        for (const Entity& e : partDrawingEntities(connectorSymbolFromData(p)))
+            if (e.type == EntityType::Connector) {
+                for (const auto& v : e.meta.value(QStringLiteral("pinGauge")).toArray())
+                    gauges << v.toString();
+                for (const auto& v : e.meta.value(QStringLiteral("pinAmp")).toArray())
+                    amps << v.toString();
+            }
+        std::printf("  own pins: pin 1 - %s / %s A; pin 8 - %s / %s A\n", qPrintable(gauges.value(0)),
+                    qPrintable(amps.value(0)), qPrintable(gauges.value(7)), qPrintable(amps.value(7)));
+        check(gauges.value(0) == QStringLiteral("20-16 AWG") &&
+                  gauges.value(7) == QStringLiteral("24-20 AWG"),
+              "own pins: the table's gauge column comes from the rows");
+        check(amps.value(0) == QStringLiteral("13") && amps.value(7) == QStringLiteral("5"),
+              "own pins: and so does its rating column");
+
+        // A LIST THAT CAN BE ADDED TO CAN BE TAKEN FROM. Otherwise a misspelling typed once is offered for
+        // ever - and only what was added can be forgotten: the built-in materials are the program's.
+        const QStringList builtIn = partFieldChoices(PartKind::Connector, QStringLiteral("plating"));
+        // Started from nothing, so a leftover from an earlier run cannot make this pass or fail for reasons
+        // of its own: the list is kept between sessions, which is the whole point of it.
+        forgetChoice(QStringLiteral("plating"), QStringLiteral("Tim"));
+        rememberChoice(QStringLiteral("plating"), QStringLiteral("Tim"), builtIn);   // a slip for "Tin"
+        check(addedChoices(QStringLiteral("plating")).contains(QStringLiteral("Tim")),
+              "own pins: a typed material is remembered and offered again");
+        forgetChoice(QStringLiteral("plating"), QStringLiteral("Tim"));
+        check(!addedChoices(QStringLiteral("plating")).contains(QStringLiteral("Tim")),
+              "own pins: and can be taken off the list again");
+        if (!builtIn.isEmpty()) {
+            forgetChoice(QStringLiteral("plating"), builtIn.front());
+            check(partFieldChoices(PartKind::Connector, QStringLiteral("plating")).contains(builtIn.front()),
+                  "own pins: a built-in one stays - it is the program's, not the office's");
+        }
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

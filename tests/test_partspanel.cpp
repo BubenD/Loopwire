@@ -1623,7 +1623,7 @@ int run_partspanel_tests() {
             int fields = 0;
             for (QLineEdit* le : dlg.findChildren<QLineEdit*>())
                 if (le->isVisible() && (le->placeholderText() == QStringLiteral("size") ||
-                                        le->placeholderText() == QStringLiteral("conductor")))
+                                        le->placeholderText().contains(QStringLiteral("20-16"))))
                     ++fields;
             QPushButton* another = nullptr;
             for (QPushButton* b : dlg.findChildren<QPushButton*>())

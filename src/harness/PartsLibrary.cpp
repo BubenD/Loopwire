@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -187,6 +188,17 @@ void rememberChoice(const QString& key, const QString& value, const QStringList&
     st.setValue(QStringLiteral("edraw/library/choices/") + key, have);
 }
 
+void forgetChoice(const QString& key, const QString& value) {
+    const QString v = value.trimmed();
+    if (v.isEmpty()) return;
+    QStringList have = addedChoices(key);
+    const int before = have.size();
+    have.removeIf([&v](const QString& x) { return x.compare(v, Qt::CaseInsensitive) == 0; });
+    if (have.size() == before) return;   // not one of ours: a built-in stays
+    QSettings st;
+    st.setValue(QStringLiteral("edraw/library/choices/") + key, have);
+}
+
 QStringList choicesFor(PartKind kind, const QString& key) {
     QStringList out = partFieldChoices(kind, key);
     for (const QString& mine : addedChoices(key))
@@ -252,7 +264,12 @@ void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types) {
         QJsonObject o;
         o.insert(QStringLiteral("size"), t.size.trimmed());
         o.insert(QStringLiteral("unit"), t.unit.isEmpty() ? QStringLiteral("AWG") : t.unit);
-        o.insert(QStringLiteral("gauge"), t.gauge.trimmed());
+        // "20 - 16", "20-16", "20 to 16" all mean the same range: kept as one form, so the same connector
+        // entered by two people reads the same on the drawing.
+        QString gauge = t.gauge.trimmed();
+        gauge.replace(QRegularExpression(QStringLiteral("\\s*(?:-|to|\\.\\.)\\s*")),
+                      QStringLiteral("-"));
+        o.insert(QStringLiteral("gauge"), gauge);
         if (!t.amps.trimmed().isEmpty()) o.insert(QStringLiteral("amps"), t.amps.trimmed());
         if (!t.pins.trimmed().isEmpty()) o.insert(QStringLiteral("pins"), t.pins.trimmed());
         arr.append(o);
@@ -261,6 +278,20 @@ void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types) {
     else
         part.params.insert(QStringLiteral("pinTypes"),
                            QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+QStringList partPinAmps(const LibraryPart& part) {
+    const int ways = part.wayCount();
+    if (ways <= 0) return {};
+    QStringList out;
+    for (int i = 0; i < ways; ++i) out << QString();
+    for (const PartPinType& t : partPinTypes(part)) {
+        const QString says = t.amps.trimmed();
+        if (says.isEmpty()) continue;
+        for (int pin : pinsNamedBy(t.pins, ways))
+            if (pin >= 1 && pin <= ways) out[pin - 1] = says;
+    }
+    return out;
 }
 
 std::vector<int> pinsNamedBy(const QString& list, int ways) {
@@ -400,17 +431,18 @@ std::vector<PartField> partFields(PartKind kind) {
                     text("temp", "Temperature range", "C"),
                     text("spec", "Specification")};
         case PartKind::Connector:
-            // The connector's own build, plus whether the pins come with it.
+            // The connector's own build. WHETHER THE PINS COME WITH IT, and what they are, is asked once -
+            // in "Its own pins", where there is a row per size of pin with the conductor it takes and which
+            // pins are that size. It was asked here as well, in three fields that could only ever say less:
+            // one tick, one unit for the whole connector and one gauge range for the whole connector, on a
+            // housing whose whole point may be that it carries two sizes at once. Two places to say one
+            // thing is two places to disagree.
             return {num("pins", "Pins"),
                     num("pitch", "Pitch", "mm"),
                     text("shellSize", "Shell size"),
                     text("gender", "Gender"),
                     choice("material", "Shell material", kMetals + kPolymers),
-                    choice("plating", "Plating", kMetals),
-                    yesNo("withPins", "Includes pins"),
-                    choice("pinGaugeMode", "Pin gauge in",
-                           {QStringLiteral("AWG"), QStringLiteral("mm2")}),
-                    range("pinGauge", "Pin gauge range"),
+                    choice("plating", "Material", kMetals),
                     text("temp", "Temperature range", "C"),
                     text("spec", "Specification")};
         case PartKind::ContactPin:
@@ -708,6 +740,16 @@ QJsonArray connectorSymbolFromData(const LibraryPart& part) {
         for (const QString& g : gauges)
             if (!g.isEmpty()) anySaid = true;
         if (anySaid) spec.pinGauge = gauges;
+    }
+    // AND WHAT EACH PIN CARRIES, from the same rows. The pin table on a placed connector has a column for
+    // it, and a table filled in by hand from a datasheet the library already holds is work done twice - and
+    // done differently the second time.
+    const QStringList amps = partPinAmps(part);
+    if (!amps.isEmpty()) {
+        bool anySaid = false;
+        for (const QString& a : amps)
+            if (!a.isEmpty()) anySaid = true;
+        if (anySaid) spec.pinAmp = amps;
     }
     Entity e;
     e.type = EntityType::Connector;
@@ -1150,7 +1192,7 @@ QString describePart(const LibraryPart& part) {
         if (!jacket.isEmpty()) bits << jacket;
         const QString od = part.value(QStringLiteral("od")).trimmed();
         if (!od.isEmpty() && od.toDouble() > 0.0) bits << QStringLiteral("%1 mm OD").arg(od);
-        return bits.join(QStringLiteral(", "));
+    return bits.join(QStringLiteral(", "));
     }
 
     QString lead;
@@ -1164,8 +1206,7 @@ QString describePart(const LibraryPart& part) {
         case PartKind::Connector:
             lead = QStringLiteral("Connector");
             order = {{"pins", "way"}, {"pitch", "mm pitch"}, {"shellSize", "", false, false, "shell"},
-                     {"gender", ""}, {"material", ""}, {"plating", ""},
-                     {"withPins", "", false, true, "with contacts"}};
+                     {"gender", ""}, {"material", ""}, {"plating", ""}};
             break;
         case PartKind::ContactPin:
             lead = QStringLiteral("Contact");
@@ -1270,6 +1311,26 @@ QString describePart(const LibraryPart& part) {
         if (*piece.label) bit = QStringLiteral("%1 %2").arg(QString::fromLatin1(piece.label), value);
         if (*piece.suffix) bit += QStringLiteral(" ") + QString::fromLatin1(piece.suffix);
         bits << bit;
+    }
+    // AND WHAT ITS OWN PINS ARE, when it comes with them. A connector bought with its pins in it is not
+    // described by its way count alone - what those pins take is half of what somebody orders it for, and on
+    // a housing with two sizes in it that is the whole story: "8 way, 2 x 20 AWG, 6 x 22 AWG" is a line a
+    // buyer can act on. Written from the rows in "Its own pins", so it says exactly what was entered there.
+    if (part.kind == PartKind::Connector && partIncludesPins(part)) {
+        const int ways = part.wayCount();
+        QStringList saidPins;
+        for (const PartPinType& t : partPinTypes(part)) {
+            const QString takes = t.gauge.trimmed();
+            if (takes.isEmpty()) continue;
+            const int howMany = static_cast<int>(pinsNamedBy(t.pins, ways).size());
+            QString one = howMany > 0 && ways > 0 ? QStringLiteral("%1 x %2").arg(howMany).arg(takes)
+                                                  : takes;
+            if (!t.unit.isEmpty()) one += QLatin1Char(' ') + t.unit;
+            if (!t.amps.trimmed().isEmpty()) one += QStringLiteral(" (%1 A)").arg(t.amps.trimmed());
+            saidPins << one;
+        }
+        if (saidPins.isEmpty()) bits << QStringLiteral("pins fitted");
+        else bits << QStringLiteral("pins fitted: %1").arg(saidPins.join(QStringLiteral(" + ")));
     }
     if (bits.isEmpty()) return lead;
     return lead + QStringLiteral(", ") + bits.join(QStringLiteral(", "));

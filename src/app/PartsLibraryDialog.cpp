@@ -1499,6 +1499,43 @@ void PartsLibraryDialog::rebuildParamForm() {
                             if (!t.isEmpty() && box->findText(t) < 0) box->addItem(t);
                         });
                 paramWidgets_.insert(f.key, box);
+                // AND A WAY TO TAKE ONE OFF THE LIST. What is typed into one of these is remembered and
+                // offered to every part from then on - which is right, and it means a misspelling typed
+                // once is offered for ever. Right-click the box and the entry showing can be forgotten,
+                // if it was ours to forget: the built-in materials are the program's and stay.
+                {
+                    const QString key = f.key;
+                    const QStringList builtIn = f.choices;
+                    box->setContextMenuPolicy(Qt::CustomContextMenu);
+                    connect(box, &QComboBox::customContextMenuRequested, this,
+                            [this, box, key, builtIn](const QPoint& at) {
+                                const QString showing = box->currentText().trimmed();
+                                QMenu menu(box);
+                                const bool ours = !showing.isEmpty() &&
+                                                  !builtIn.contains(showing, Qt::CaseInsensitive);
+                                QAction* forget = menu.addAction(
+                                    ours ? QStringLiteral("Take \"%1\" off the list").arg(showing)
+                                         : QStringLiteral("Nothing here to take off the list"));
+                                forget->setEnabled(ours);
+                                if (menu.exec(box->mapToGlobal(at)) != forget || !ours) return;
+                                forgetChoice(key, showing);
+                                const int at2 = box->findText(showing);
+                                if (at2 >= 0) box->removeItem(at2);
+                                box->setCurrentIndex(-1);
+                                box->setCurrentText(QString());
+                                if (LibraryPart* cp = current()) {
+                                    if (cp->value(key).compare(showing, Qt::CaseInsensitive) == 0) {
+                                        cp->params.remove(key);
+                                        touched();
+                                    }
+                                }
+                                if (summary_)
+                                    summary_->setText(
+                                        QStringLiteral("\"%1\" is off the list - it is no longer offered "
+                                                       "to other parts")
+                                            .arg(showing));
+                            });
+                }
                 // AND A WAY TO UNSAY IT. A parameter picked from a list could be changed but never taken
                 // back off: the list has no blank entry, and clearing the text by hand left a part
                 // remembering an empty string as though somebody had answered "". A part whose material
@@ -2632,9 +2669,14 @@ void PartsLibraryDialog::rebuildPinTypes() {
                 [write](const QString& t) { write([t](PartPinType& x) { x.size = t; }); });
         hl->addWidget(size);
         auto* gauge = new QLineEdit(types[row].gauge, host);
-        gauge->setPlaceholderText(QStringLiteral("conductor"));
-        gauge->setMaximumWidth(80);
-        gauge->setToolTip(QStringLiteral("The conductor this pin takes, in the unit beside it"));
+        // A RANGE IS A REAL ANSWER. A pin takes a range of conductors, not one: a size 20 contact is
+        // crimped onto anything from 24 to 20 AWG, and a datasheet states it that way. Written as "20-16"
+        // it stays that way on the form, in the description and on the schematic's pin labels.
+        gauge->setPlaceholderText(QStringLiteral("22 or 20-16"));
+        gauge->setMaximumWidth(90);
+        gauge->setToolTip(QStringLiteral(
+            "The conductor this pin takes, in the unit beside it - one size (\"22\") or a range "
+            "(\"20-16\"), as the datasheet states it."));
         connect(gauge, &QLineEdit::textEdited, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.gauge = t; }); });
         hl->addWidget(gauge);

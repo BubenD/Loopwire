@@ -39,6 +39,13 @@ int main(int argc, char** argv) {
     // window. Offscreen, so this runs the same on a machine with no display as on one with a screen -
     // set here rather than left to whoever starts the tests.
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // A NAME, SO SETTINGS HAVE SOMEWHERE TO LIVE. Without an organisation and an application name QSettings
+    // has no file at all - it answers AccessError and every write is dropped - so anything the program
+    // REMEMBERS between sessions was untestable, and a test of it passed or failed for reasons that had
+    // nothing to do with the code. Its own name, not the application's, so a test run cannot tread on what
+    // somebody's real Edraw remembers.
+    QApplication::setOrganizationName(QStringLiteral("Whatson"));
+    QApplication::setApplicationName(QStringLiteral("Edraw tests"));
     QApplication app(argc, argv);
     // THE HOUSE MODELS ARE SHIPPED INSIDE THE BINARY, and the tests must not stand on them. Half of what
     // is checked here is what the program does when NOTHING is drawn for a kind yet - a wizard asked for a
