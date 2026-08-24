@@ -8,6 +8,8 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include <QTabWidget>
+#include <QDialog>
 #include "harness/MechModels.h"
 #include <QSplitter>
 #include "model/Entity.h"
@@ -1201,6 +1203,91 @@ int run_partspanel_tests() {
         if (scaleBy)
             check(!scaleBy->isEnabled(),
                   "output face: what it is scaled BY stays off - a catalogue part is the size it is");
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
+        }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- a double-click on a placed part does not fetch the library --------------------------------
+    {
+        // A part placed from the library is a block copy, and double-clicking a block copy opens the block
+        // for editing - which for a library drawing meant OPENING THE PARTS LIBRARY: a whole window arriving
+        // over the drawing because of one stray double-click while selecting or moving something. A
+        // double-click on a placed part is nearly always a mis-click, and the answer to a mis-click is
+        // nothing at all. Getting to the library is still wanted, and it is on the part's own right-click
+        // menu - asked for rather than sprung.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_dblclick_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-DBL");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("A placed connector");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{0.0, 0.0}, {20.0, 0.0}, {20.0, 12.0}, {0.0, 12.0}};
+            part.mechanical = partDrawingFromEntities({body});
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "dbl: there is a drawing");
+        if (ed && ed->document()) {
+            // The part, on the sheet, as a block copy - placed the way the canvas menu places one.
+            win.placeLibraryPart(QStringLiteral("P-DBL"), /*mechanical=*/true);
+            ed->onPointerMove({50.0, 50.0});
+            ed->onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+            QApplication::processEvents();
+            int placed = 0;
+            Vec2 on{0.0, 0.0};
+            for (const Entity& e : ed->document()->entities())
+                if (!entityBlockName(e).isEmpty()) {
+                    ++placed;
+                    const Bounds b = e.bounds();
+                    if (b.valid) on = {(b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0};
+                }
+            std::printf("  dbl: %d placed object(s) carrying a block name\n", placed);
+            check(placed > 0, "dbl: the part is on the sheet as a copy of its block");
+
+            // DOUBLE-CLICKED: no library window, and no new document opened for it either.
+            ed->onDoubleClick(on);
+            QApplication::processEvents();
+            bool libraryUp = false;
+            for (QDialog* d : win.findChildren<QDialog*>())
+                if (d->windowTitle().contains(QStringLiteral("parts library")) && d->isVisible())
+                    libraryUp = true;
+            check(!libraryUp, "dbl: the parts library does not arrive over the drawing");
+
+            // AND THE RIGHT-CLICK STILL OFFERS IT, in words that read as a door.
+            ed->clearSelection();
+            for (const Entity& e : ed->document()->entities())
+                if (!entityBlockName(e).isEmpty()) { ed->selectById(e.id); break; }
+            QMenu menu;
+            win.buildCanvasMenu(menu, on);
+            QStringList said;
+            for (QAction* a : menu.actions())
+                if (!a->text().isEmpty()) said << a->text();
+            std::printf("  dbl: menu - %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+            bool opens = false;
+            for (const QString& t : said)
+                if (t.contains(QStringLiteral("in the parts library"))) opens = true;
+            check(opens, "dbl: right-clicking it offers to open it in the parts library");
+        }
         {
             PartsCatalog put;
             put.openRemembered();

@@ -201,6 +201,9 @@ public:
     Vec2 worldFromGlobal(const QPoint& globalPos) const {
         return inputTransform().toWorld(QPointF(mapFromGlobal(globalPos)));
     }
+    // And back again: a world point in this widget's own pixels. The other half of the pair, for a caller
+    // that was given a point on the drawing and needs to know where on the canvas that is.
+    QPointF screenFromWorld(const Vec2& world) const { return inputTransform().toScreen(world); }
 
 protected:
     void resizeEvent(QResizeEvent* e) override;  // keep the crosshair overlay sized

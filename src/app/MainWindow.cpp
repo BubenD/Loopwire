@@ -4046,7 +4046,66 @@ void MainWindow::buildRibbon() {
     // open, and out of the way of the tools. They used to be a group of their own at the front of
     // Home and of Schematic build - two large buttons taking the best place on the tab, and absent
     // from every other tab.
-    ribbon_->setCornerWidget(undoRedoRow(ribbon_, /*compact=*/true), Qt::TopRightCorner);
+    //
+    // AND THE WAY OUT OF A MODEL SESSION GOES THERE TOO, for the same reason. Capture and Cancel were on the
+    // Home tab, in the session's own group - and a symbol is drawn with Modify and Schematic build as much as
+    // with Home, so the moment you crossed to another tab to draw the two buttons that FINISH what you are
+    // doing went out of sight. A session you can leave only by going back to the tab you started on is a
+    // session with a way in and no way out.
+    //
+    // Beside the tab bar, where they are visible from every tab and cannot be scrolled away from.
+    {
+        auto* corner = new QWidget(ribbon_);
+        auto* cl = new QHBoxLayout(corner);
+        cl->setContentsMargins(0, 0, 0, 0);
+        cl->setSpacing(2);
+        modelSessionCorner_ = new QWidget(corner);
+        auto* sl = new QHBoxLayout(modelSessionCorner_);
+        sl->setContentsMargins(0, 0, 6, 0);
+        sl->setSpacing(2);
+        // A tick and a cross, drawn: on a strip this size there is room for a picture and a word, and the
+        // picture is what the eye finds. Drawn rather than lettered so they are the same at any font.
+        auto mark = [](bool take) {
+            QPixmap pm(18, 18);
+            pm.fill(Qt::transparent);
+            QPainter p(&pm);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(take ? QColor("#8fd6a2") : QColor("#e0a0a0"));
+            pen.setWidthF(2.2);
+            p.setPen(pen);
+            if (take) {
+                p.drawLine(QPointF(3.5, 10.0), QPointF(7.0, 13.5));
+                p.drawLine(QPointF(7.0, 13.5), QPointF(14.5, 4.5));
+            } else {
+                p.drawLine(QPointF(4.5, 4.5), QPointF(13.5, 13.5));
+                p.drawLine(QPointF(13.5, 4.5), QPointF(4.5, 13.5));
+            }
+            return QIcon(pm);
+        };
+        auto sessionBtn = [&](const QString& text, const QIcon& icon, const QString& tip) {
+            auto* b = new QToolButton(modelSessionCorner_);
+            b->setText(text);
+            b->setIcon(icon);
+            b->setToolTip(tip);
+            b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            b->setIconSize(QSize(16, 16));
+            b->setAutoRaise(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            sl->addWidget(b);
+            return b;
+        };
+        cornerCaptureBtn_ =
+            sessionBtn(tr("Capture"), mark(true),
+                       tr("Take what is drawn here as this model and close the session"));
+        connect(cornerCaptureBtn_, &QToolButton::clicked, this,
+                [this] { saveMechModelBeingEdited(); });
+        cornerCancelBtn_ = sessionBtn(tr("Cancel"), mark(false), tr("Leave the model as it was"));
+        connect(cornerCancelBtn_, &QToolButton::clicked, this, [this] { cancelMechModelEdit(); });
+        modelSessionCorner_->hide();   // only while a model or a library part is being drawn
+        cl->addWidget(modelSessionCorner_);
+        cl->addWidget(undoRedoRow(corner, /*compact=*/true));
+        ribbon_->setCornerWidget(corner, Qt::TopRightCorner);
+    }
 
     buildHomeTab();
     buildModifyTab();
@@ -4187,11 +4246,17 @@ void MainWindow::updateMechanicalRibbonGroups() {
         // The marks themselves do go, and should: a connection point, two ends and the faces the conductors
         // leave by describe placing a part BY a direction along a run, and a schematic symbol is not placed
         // that way. It is a fixed glyph, and there is nothing on it for any of them to point at.
-        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(true);
+        // THE WAY OUT IS IN THE CORNER NOW, visible from every tab, so the group's own pair stands down:
+        // two Captures on the screen at once is two answers to "which one finishes this".
+        if (captureMechModelBtn_) captureMechModelBtn_->setVisible(false);
+        if (cancelMechModelBtn_) cancelMechModelBtn_->setVisible(false);
         for (QToolButton* b : {markConnectMechModelBtn_, markNearMechModelBtn_, markFarMechModelBtn_,
                                markOutputMechModelBtn_, markScaleRefMechModelBtn_,
                                showMechModelMarksBtn_})
             if (b) b->setVisible(!schematicDrawing);
+        // Which leaves the group with the MARKS in it - and a schematic drawing has none, so on a schematic
+        // session there is nothing left for the group to hold and it goes.
+        if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(!schematicDrawing);
         return;
     }
     const bool armed =
@@ -6986,10 +7051,20 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
 
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     if (!editor_) return;
+    QMenu menu(this);
+    buildCanvasMenu(menu, canvas_->worldFromGlobal(globalPos));
+    menu.exec(globalPos);
+}
+
+// WHAT IS ON THE MENU, apart from putting it on the screen. Split so that "right-clicking a placed part
+// offers to open it in the library" can be checked by reading the menu rather than by popping a modal one up
+// in front of a test and waiting for somebody to click it.
+void MainWindow::buildCanvasMenu(QMenu& menu, const Vec2& menuWorld) {
+    if (!editor_) return;
 
     // A balloon under the cursor — or a selected balloon — enables the leader commands
     // alongside the general ones (right-click on the canvas shows general + leader).
-    const Vec2 world = canvas_->worldFromGlobal(globalPos);
+    const Vec2 world = menuWorld;
     QString balloonId = editor_->balloonAt(world);
     if (!balloonId.isEmpty()) {
         editor_->selectById(balloonId); // clicking a balloon selects it/its batch
@@ -7001,7 +7076,6 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         }
     }
 
-    QMenu menu(this);
     // The library first. Putting a part on the sheet is the commonest thing done from this menu by a long
     // way, and it used to mean crossing the screen to the library window and coming back. The parts of the
     // library being worked in are here, by kind, with a search for a library too long to walk through.
@@ -7017,7 +7091,10 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
         const int inside = canvas_->activeLayoutViewport();
         // The window UNDER THE CURSOR, whether or not it has been picked out first: right-clicking a window
         // and being offered nothing about it is the sort of thing that makes a person hunt for a menu.
-        const int under = canvas_->layoutViewportAt(canvas_->mapFromGlobal(globalPos));
+        // Where the menu was asked for, in the canvas's own pixels - worked back from the world point the
+        // menu was built about, because the builder is given that rather than a position on the screen (it
+        // has to be answerable without a screen at all).
+        const int under = canvas_->layoutViewportAt(canvas_->screenFromWorld(menuWorld).toPoint());
         if (under >= 0) {
             menu.addAction(tr("Delete this window"), this,
                            [this, under] { canvas_->removeLayoutViewport(under); });
@@ -7086,7 +7163,9 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
                 menu.addAction(QStringLiteral("See what it is"), this, [this, copyOfPart] {
                     PartViewDialog::showPart(copyOfPart, PartViewDialog::Show::Data, this);
                 });
-                menu.addAction(QStringLiteral("See the %1 in the library").arg(noun), this,
+                // OPEN, not "see": this is the way to the library now that a double-click on a placed part
+                // does nothing, so it has to read as the door it is.
+                menu.addAction(QStringLiteral("Open the %1 in the parts library").arg(noun), this,
                                [this, libPart] { showPartsLibraryAt(libPart); });
                 menu.addSeparator();
             }
@@ -7209,7 +7288,6 @@ void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     connect(menu.addAction(QStringLiteral("Drawing center (zoom to fit)")), &QAction::triggered,
             this, [this] { canvas_->fitView(); canvas_->setFocus(); });
 
-    menu.exec(globalPos);
 }
 
 void MainWindow::findText() {
@@ -11606,12 +11684,18 @@ void MainWindow::openBlockEditor(const QString& name) {
         return;
     }
     if (found.fromLibrary()) {
-        // The drawing belongs to the part. Editing it here would be lost the next time the library
-        // was read, so the library is opened instead - where the change will stick.
+        // The drawing belongs to the part, so editing it here would be lost the next time the library was
+        // read - and it used to OPEN THE LIBRARY at that point, which is a whole window arriving over the
+        // drawing because of one stray double-click. A double-click on a placed part is nearly always a
+        // mis-click while selecting or moving it, and the answer to a mis-click is nothing at all.
+        //
+        // Opening it in the library is still a thing to want, and it is on the part's own right-click menu -
+        // asked for, rather than sprung. Said here so the way to get there is known and the double-click
+        // does not merely look broken.
         statusBar()->showMessage(
-            QStringLiteral("%1 is a parts-library drawing — edit it in the parts library").arg(name),
+            QStringLiteral("%1 is a parts-library drawing — right-click it to open it in the parts library")
+                .arg(name),
             6000);
-        showPartsLibrary();
         return;
     }
 
@@ -12727,6 +12811,10 @@ void MainWindow::activateIndex(int index) {
     // to a drawing are not shown to it at all, rather than shown greyed out.
     if (tplHomeGroup_) tplHomeGroup_->setVisible(editingTemplate);
     if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(anyModelEdit);
+    // The way out, beside the tab bar: up for as long as there is a session to leave, whichever tab is open.
+    if (modelSessionCorner_) modelSessionCorner_->setVisible(anyModelEdit);
+    if (cornerCaptureBtn_) cornerCaptureBtn_->setEnabled(anyModelEdit);
+    if (cornerCancelBtn_) cornerCancelBtn_->setEnabled(anyModelEdit);
     const bool anchorableMechModel =
         anchorableModelEdit && !(editingMechModel && mechModelStretches(mechModelEdits_.value(doc_)));
     if (captureMechModelBtn_) captureMechModelBtn_->setEnabled(anyModelEdit);
@@ -12752,6 +12840,7 @@ void MainWindow::activateIndex(int index) {
     showHarnessRibbonTabs(!editingTemplate);
     showTemplateRibbon(editingTemplate);
     updateMechanicalRibbonGroups();
+    updateSchematicRibbonGroups();   // the design-rule check goes while a symbol is being drawn
     updateModelRibbonTabs();
     if (editingTemplate) syncTemplateRibbon();
     if (saveBlockBtn_) {

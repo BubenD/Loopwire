@@ -107,6 +107,9 @@ public:
     // The library, at the top of the canvas menu: pick a part and put its drawing down. `mechanical` says
     // which of the two drawings; the search dialog is for a library too long to walk through by hand.
     void addLibraryToCanvasMenu(QMenu& menu);
+    // The canvas menu's CONTENTS, apart from showing it: what a right-click offers on the object under it.
+    // Public so it can be read rather than popped up - a modal menu in front of a test is a test that hangs.
+    void buildCanvasMenu(QMenu& menu, const Vec2& menuWorld);
     void placeLibraryPart(const QString& partId, bool mechanical);
     // Whether a schematic connector is placed with its fanout beside it (the parts panel's own switch,
     // remembered between sessions). Public so a test can read what the switch says without reaching into
@@ -526,6 +529,11 @@ private:
     // session at all" need no change; only the few that must tell the two drawings apart read it.
     QHash<Document*, bool> mechModelEditSchematic_;
     QWidget* mechModelSessionGroup_ = nullptr;
+    // Capture and Cancel beside the tab bar: the way out of a model session, visible from every tab. They
+    // used to be on Home alone, and a symbol is drawn on Modify and Schematic build as much as on Home.
+    QWidget* modelSessionCorner_ = nullptr;
+    QToolButton* cornerCaptureBtn_ = nullptr;
+    QToolButton* cornerCancelBtn_ = nullptr;
     QToolButton* captureMechModelBtn_ = nullptr;
     QToolButton* markNearMechModelBtn_ = nullptr;
     QToolButton* markFarMechModelBtn_ = nullptr;

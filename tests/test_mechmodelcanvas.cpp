@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QPair>
 #include <QTabWidget>
 #include <QMouseEvent>
 #include <QLineEdit>
@@ -612,27 +613,49 @@ int run_mechmodelcanvas_tests() {
                   !shown.contains(QStringLiteral("View")) && !shown.contains(QStringLiteral("Import")),
               "symbol session: and nothing that is about a sheet rather than a glyph");
 
-        // A WAY TO FINISH. The whole session group used to go for a schematic session, which took the two
-        // buttons that END the session away with the five that mark up a mechanical drawing: a symbol could be
-        // drawn and then not put anywhere.
+        // A WAY TO FINISH, FROM WHATEVER TAB IS OPEN. A symbol is drawn with Modify and Schematic build as
+        // much as with Home, and the two buttons that finish the session were on Home alone: crossing to
+        // another tab to draw took them out of sight, which is a session with a way in and no way out.
+        //
+        // Found by what each one SAYS IT DOES rather than by its word: "Cancel" is written on buttons all
+        // over the program, and matching the word picked up a hidden one belonging to something else.
+        auto visibleWayOut = [&win] {
+            int capture = 0, cancel = 0;
+            for (QToolButton* b : win.findChildren<QToolButton*>()) {
+                if (!b->isVisible()) continue;
+                const QString tip = b->toolTip();
+                if (tip.startsWith(QStringLiteral("Take what is drawn here"))) ++capture;
+                else if (tip == QStringLiteral("Leave the model as it was")) ++cancel;
+            }
+            return QPair<int, int>(capture, cancel);
+        };
         QToolButton* capture = nullptr;
         QToolButton* cancel = nullptr;
         QToolButton* connect = nullptr;
-        // Found by what each one SAYS IT DOES rather than by its word: "Cancel" is written on buttons all
-        // over the program, and matching the word picked up a hidden one belonging to something else and then
-        // reported the session's own button as missing.
         for (QToolButton* b : win.findChildren<QToolButton*>()) {
             const QString tip = b->toolTip();
-            if (tip.startsWith(QStringLiteral("Take what is drawn here"))) capture = b;
-            else if (tip == QStringLiteral("Leave the model as it was")) cancel = b;
+            if (tip.startsWith(QStringLiteral("Take what is drawn here")) && b->isVisible()) capture = b;
+            else if (tip == QStringLiteral("Leave the model as it was") && b->isVisible()) cancel = b;
             else if (tip.startsWith(QStringLiteral("Click where the part connects"))) connect = b;
         }
         check(capture != nullptr && cancel != nullptr,
               "symbol session: Capture and Cancel are there, with their icons");
         if (capture) check(!capture->icon().isNull(), "symbol session: Capture is drawn, not lettered");
         if (cancel) check(!cancel->icon().isNull(), "symbol session: and so is Cancel");
-        if (capture) check(capture->isVisible(), "symbol session: Capture can be reached");
-        if (cancel) check(cancel->isVisible(), "symbol session: and so can Cancel");
+        // ONE of each, and on every tab. Two Captures on the screen at once is two answers to "which one
+        // finishes this".
+        if (ribbon)
+            for (int i = 0; i < ribbon->count(); ++i) {
+                if (!ribbon->tabBar()->isTabVisible(i)) continue;
+                ribbon->setCurrentIndex(i);
+                QApplication::processEvents();
+                const QPair<int, int> out = visibleWayOut();
+                if (out.first != 1 || out.second != 1)
+                    std::printf("  symbol session: on %s - %d Capture, %d Cancel\n",
+                                qPrintable(ribbon->tabText(i)), out.first, out.second);
+                check(out.first == 1 && out.second == 1,
+                      "symbol session: one Capture and one Cancel, reachable from every tab");
+            }
         // The marks DO go, and should: they describe placing a part by a direction along a run, and a symbol
         // is a fixed glyph with nothing for any of them to point at.
         if (connect)
