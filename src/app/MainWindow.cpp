@@ -1978,15 +1978,42 @@ void addLibraryPartGuides(Document& doc, const LibraryPart& part) {
 void loadLibraryPartDocument(Document& doc, const LibraryPart& part, LibraryPartDrawing kind) {
     doc.entities().clear();
     doc.sheet() = Bounds();
+    // A CONNECTOR MADE FROM DATA IS STILL A DRAWING TO EDIT. A part whose schematic has never been
+    // captured has one all the same - built from its own data, its way count at its pitch, numbered - and
+    // that is what the library shows in its window and what it puts on a sheet. Asked to edit it, the
+    // session opened EMPTY, because it looked only at what had been captured: the drawing on the screen and
+    // the drawing being edited were two different things, and the way to get the shown one into the editor
+    // was to place it on a sheet and capture it back.
+    //
+    // partSchematicDrawing() is the same answer the window and the sheet get, so all three agree.
+    QJsonArray generated;
+    if (kind == LibraryPartDrawing::Schematic) {
+        generated = part.schematic;
+        // A CONNECTOR'S SYMBOL COMES FROM ITS OWN DATA when nothing has been captured: its way count at its
+        // pitch, numbered - which is what the library window shows and what goes on a sheet. It is built the
+        // same way the library's own "From data" button builds it, so the three agree.
+        if (generated.isEmpty() && part.kind == PartKind::Connector)
+            generated = connectorSymbolFromData(part);
+        // And for the kinds that have a standard symbol of their own - a resistor, a capacitor - that.
+        if (generated.isEmpty()) generated = partSchematicDrawing(part);
+    }
     const QJsonArray& drawing = kind == LibraryPartDrawing::Mechanical  ? part.mechanical
-                                : kind == LibraryPartDrawing::Schematic ? part.schematic
+                                : kind == LibraryPartDrawing::Schematic ? generated
                                 : kind == LibraryPartDrawing::Fanout    ? part.fanout
                                                                         : part.fanoutOpposite;
     for (const Entity& e : partDrawingEntities(drawing)) {
         doc.entities().push_back(e);
         Entity& put = doc.entities().back();
         if (put.id.isEmpty()) put.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
-        stampEntityGroup(put, QLatin1String(kMechModelGroup));
+        // AS PRIMITIVES, NOT AS ONE OBJECT. On a sheet a part is one thing - a click picks the whole
+        // connector, and that is right, because there it is a part being used. Here it is being DRAWN, and
+        // every line of it has to be movable on its own: a session where the first click selects all
+        // seventy-nine lines of a connector body is a session in which nothing can be corrected. The
+        // grouping is put back when the drawing is captured, because that is where it belongs.
+        //
+        // Nothing is lost: the drawing is stored as its lines either way, and the part's own copies on any
+        // sheet are rebuilt from it as one object as before.
+        (void)0;
     }
     doc.setActiveLayer(QStringLiteral("0"));
     // Only the mechanical drawing carries connect/near/far points - a schematic symbol and a fanout
@@ -4197,6 +4224,12 @@ void MainWindow::updateModelRibbonTabs() {
     if (modelEdit && home >= 0 && putAway(ribbon_->currentIndex())) ribbon_->setCurrentIndex(home);
     for (int i = 0; i < ribbon_->count(); ++i)
         ribbon_->tabBar()->setTabVisible(i, !modelEdit || !putAway(i));
+    // AND THE STRIP IS LAID OUT AGAIN. A tab put away gives its space back - the tab bar works that out for
+    // itself - but the strip on the screen is whatever was last painted, and a session opening left the
+    // holes where the hidden tabs had been until something else happened to force a repaint. Asked for
+    // here, so the tabs that are showing are drawn next to one another straight away.
+    ribbon_->tabBar()->updateGeometry();
+    ribbon_->tabBar()->update();
     normaliseRibbonPages();
 }
 

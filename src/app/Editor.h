@@ -130,7 +130,10 @@ public:
     void provideText(const QString& text);
     // Style passed to/from the text editor (font, size, paragraph formatting).
     struct TextStyle {
-        double size = 5.0;
+        // TEN, the house figure. It was 5 - the figure a small drawing wants and half of what an A3 sheet
+        // wants - and a size somebody has to change on every piece of text they write is not a default, it
+        // is a nuisance.
+        double size = 10.0;
         QString font;
         bool bold = false;
         bool italic = false;

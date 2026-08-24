@@ -1273,6 +1273,47 @@ std::vector<std::pair<Vec2, Vec2>> dimensionSegments(const Entity& e) {
     return segs;
 }
 
+// WHERE A LEADER'S SHELF AND ITS WORDS ARE.
+//
+// A leader is drawn as a line to what it points at, a flat landing at the far end, and the words sitting on
+// that landing (see EntityRenderer's Leader case). Only the LINE was pickable: clicking the words - the
+// obvious thing to click, and the only part of a leader with any size to it - selected nothing, and
+// double-clicking them to change them did nothing either, because the double-click asks what was hit first.
+//
+// Worked out here, in one place, so what the editor picks is what the renderer draws. An estimate of the
+// words' width from the character count and the height, which is the same estimate the rest of the drawing
+// uses for a proportional font - it does not need a font to be loaded and it cannot come out differently at
+// two zooms.
+struct LeaderWords {
+    Vec2 landingFrom;   // the last knee: where the shelf starts
+    Vec2 landingTo;     // where the shelf ends and the words begin
+    Vec2 boxMin, boxMax;  // the words, as a box
+    bool hasWords = false;
+};
+inline LeaderWords leaderWords(const Entity& e) {
+    LeaderWords out;
+    if (e.points.size() < 2) return out;
+    const double landing = std::max(0.0, e.meta.value(QStringLiteral("landing")).toDouble(0.0));
+    const Vec2 from = e.points[e.points.size() - 2];
+    const Vec2 end = e.points.back();
+    const double dir = (end.x >= from.x) ? 1.0 : -1.0;
+    out.landingFrom = end;
+    out.landingTo = landing > 1e-9 ? Vec2{end.x + dir * landing, end.y} : end;
+    const QString says = e.meta.value(QStringLiteral("text")).toString();
+    if (says.isEmpty()) return out;
+    const double h = std::max(0.1, e.meta.value(QStringLiteral("size")).toDouble(2.5));
+    // Longest line of it, at about six tenths of the height per character.
+    int widest = 0;
+    for (const QString& line : says.split(QLatin1Char('\n')))
+        widest = std::max(widest, static_cast<int>(line.size()));
+    const double w = std::max(h, widest * h * 0.6);
+    const double x0 = dir > 0 ? out.landingTo.x : out.landingTo.x - w;
+    out.boxMin = {x0, out.landingTo.y - h * 0.25};
+    out.boxMax = {x0 + w, out.landingTo.y + h * 1.05};
+    out.hasWords = true;
+    return out;
+}
+
 double distanceToEntity(const Entity& e, const Vec2& p) {
     auto segDist = [&](const Vec2& a, const Vec2& b) {
         return closestPointOnSegment(p, a, b).distance;
@@ -1321,13 +1362,29 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         best = std::min(best, std::abs(distance(p, e.b) - e.radius * scale));
         break;
     }
-    case EntityType::Leader:
-        // The line it turns along - the arrowhead sits on the first segment, so anything that catches
-        // the line catches the arrow too.
+    case EntityType::Leader: {
+        // The line it turns along - the arrowhead sits on the first segment, so anything that catches the
+        // line catches the arrow too - AND the shelf at the end of it, AND the words sitting on the shelf.
+        // The words are the part of a leader with any size to it and the obvious thing to click at; picking
+        // only the line meant that clicking a callout's own label selected nothing at all, and that
+        // double-clicking it to change the label did nothing either - the double-click asks what was hit.
         for (size_t i = 1; i < e.points.size(); ++i)
             best = std::min(best, segDist(e.points[i - 1], e.points[i]));
         if (e.points.size() == 1) best = std::min(best, distance(p, e.points[0]));
+        const LeaderWords lw = leaderWords(e);
+        if (e.points.size() >= 2) best = std::min(best, segDist(lw.landingFrom, lw.landingTo));
+        if (lw.hasWords) {
+            // Anywhere ON the words, not merely along their edge: a click in the middle of a word is a
+            // click on the word.
+            if (p.x >= lw.boxMin.x && p.x <= lw.boxMax.x && p.y >= lw.boxMin.y && p.y <= lw.boxMax.y)
+                best = 0.0;
+            best = std::min(best, segDist(lw.boxMin, Vec2{lw.boxMax.x, lw.boxMin.y}));
+            best = std::min(best, segDist(Vec2{lw.boxMax.x, lw.boxMin.y}, lw.boxMax));
+            best = std::min(best, segDist(lw.boxMax, Vec2{lw.boxMin.x, lw.boxMax.y}));
+            best = std::min(best, segDist(Vec2{lw.boxMin.x, lw.boxMax.y}, lw.boxMin));
+        }
         break;
+    }
     case EntityType::DoubleLine: {
         // Only the two VISIBLE parallel lines select the double line — NOT the centerline / gap between
         // them (clicking the empty middle won't pick it). Visible includes what a CAP adds: a line
@@ -4529,10 +4586,16 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
                {e.b.x, e.b.y - big},                {e.b.x, e.b.y + big}};
         break;
     }
-    case EntityType::Leader:
+    case EntityType::Leader: {
         pts = e.points;
         if (pts.empty()) pts = {e.a};
+        const LeaderWords lw = leaderWords(e);
+        if (lw.hasWords) {
+            pts.push_back(lw.boxMin);
+            pts.push_back(lw.boxMax);
+        }
         break;
+    }
     case EntityType::DoubleLine: {
         // Region selection tests the two VISIBLE parallel lines' ends only — NOT
         // the centerline or its middle joint. So a crossing box that merely passes
@@ -4699,10 +4762,20 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         }
         break;
     }
-    case EntityType::Leader:
+    case EntityType::Leader: {
         for (size_t i = 1; i < e.points.size(); ++i)
             segs.emplace_back(e.points[i - 1], e.points[i]);
+        // The shelf and the words are part of the leader, so a zone touching either has touched it.
+        const LeaderWords lw = leaderWords(e);
+        if (e.points.size() >= 2) segs.emplace_back(lw.landingFrom, lw.landingTo);
+        if (lw.hasWords) {
+            segs.emplace_back(lw.boxMin, Vec2{lw.boxMax.x, lw.boxMin.y});
+            segs.emplace_back(Vec2{lw.boxMax.x, lw.boxMin.y}, lw.boxMax);
+            segs.emplace_back(lw.boxMax, Vec2{lw.boxMin.x, lw.boxMax.y});
+            segs.emplace_back(Vec2{lw.boxMin.x, lw.boxMax.y}, lw.boxMin);
+        }
         break;
+    }
     case EntityType::DoubleLine: {
         // Crossing-region edges are the two VISIBLE lines (not the centerline),
         // so only touching a real line — not the gap between them — selects it.
@@ -9482,7 +9555,7 @@ void Editor::finishDraw() {
             e.type = EntityType::Leader;
             e.points = {tip, c};
             e.meta.insert("text", QStringLiteral("Text"));
-            e.meta.insert("size", 2.5);
+            e.meta.insert("size", 10.0);   // the same house figure as any other text
             e.meta.insert("arrowSize", 3.3);
             // The short flat run the words sit on, the way a leader is drawn on a real sheet: the line
             // arrives at an angle and then levels out under the text. Its length is a property, so it can

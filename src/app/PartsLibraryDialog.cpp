@@ -1408,7 +1408,35 @@ void PartsLibraryDialog::rebuildParamForm() {
                             if (!t.isEmpty() && box->findText(t) < 0) box->addItem(t);
                         });
                 paramWidgets_.insert(f.key, box);
-                field = box;
+                // AND A WAY TO UNSAY IT. A parameter picked from a list could be changed but never taken
+                // back off: the list has no blank entry, and clearing the text by hand left a part
+                // remembering an empty string as though somebody had answered "". A part whose material
+                // has not been decided yet is a real state and it needs a way to be said.
+                {
+                    auto* host = new QWidget(paramHost_);
+                    auto* hl = new QHBoxLayout(host);
+                    hl->setContentsMargins(0, 0, 0, 0);
+                    hl->setSpacing(2);
+                    hl->addWidget(box, 1);
+                    auto* clear = new QToolButton(host);
+                    clear->setIcon(crossIcon(QColor("#e0a0a0"), 12));
+                    clear->setIconSize(QSize(12, 12));
+                    clear->setAutoRaise(true);
+                    clear->setFocusPolicy(Qt::NoFocus);
+                    clear->setFixedSize(18, 18);
+                    clear->setToolTip(QStringLiteral("Clear %1 - leave it unsaid").arg(f.label.toLower()));
+                    const QString clearKey = f.key;
+                    connect(clear, &QToolButton::clicked, this, [this, box, clearKey] {
+                        box->setCurrentIndex(-1);
+                        box->setCurrentText(QString());
+                        if (LibraryPart* cp = current()) {
+                            cp->params.remove(clearKey);
+                            touched();
+                        }
+                    });
+                    hl->addWidget(clear);
+                    field = host;
+                }
                 break;
             }
             case PartField::Type::Range: {

@@ -612,6 +612,24 @@ int run_mechmodelcanvas_tests() {
                   !shown.contains(QStringLiteral("Annotation")) &&
                   !shown.contains(QStringLiteral("View")) && !shown.contains(QStringLiteral("Import")),
               "symbol session: and nothing that is about a sheet rather than a glyph");
+        // AND NO HOLE WHERE THE HIDDEN ONES WERE. A tab put away has to give its space back: a strip
+        // reading "Home Modify ....... View" tells the eye that something is broken, and it is the first
+        // thing seen on entering a session.
+        if (ribbon) {
+            int gaps = 0;
+            QRect prev;
+            for (int i = 0; i < ribbon->count(); ++i) {
+                if (!ribbon->tabBar()->isTabVisible(i)) continue;
+                const QRect r = ribbon->tabBar()->tabRect(i);
+                if (prev.isValid() && r.left() - prev.right() > 8) {
+                    ++gaps;
+                    std::printf("  symbol session: a %d px hole before %s\n", r.left() - prev.right(),
+                                qPrintable(ribbon->tabText(i)));
+                }
+                prev = r;
+            }
+            check(gaps == 0, "symbol session: the tabs that are showing sit next to one another");
+        }
 
         // A WAY TO FINISH, FROM WHATEVER TAB IS OPEN. A symbol is drawn with Modify and Schematic build as
         // much as with Home, and the two buttons that finish the session were on Home alone: crossing to

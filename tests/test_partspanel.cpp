@@ -1297,6 +1297,97 @@ int run_partspanel_tests() {
         QFile::remove(libFile);
     }
 
+
+    // ---- editing in the library: primitives, and a connector made from data --------------------------
+    {
+        // ON A SHEET a part is one thing: a click picks the whole connector, which is right, because there
+        // it is a part being USED. In the library it is being DRAWN, and every line of it has to be movable
+        // on its own - a session where the first click selects all seventy-nine lines of a connector body is
+        // a session in which nothing can be corrected.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_editprim_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart drawn;
+            drawn.id = QStringLiteral("P-PRIM");
+            drawn.kind = PartKind::Connector;
+            drawn.description = QStringLiteral("Captured connector");
+            drawn.params[QStringLiteral("ways")] = QStringLiteral("3");
+            Entity a;
+            a.type = EntityType::Line;
+            a.a = {0.0, 0.0};
+            a.b = {10.0, 0.0};
+            Entity b;
+            b.type = EntityType::Line;
+            b.a = {0.0, 5.0};
+            b.b = {10.0, 5.0};
+            drawn.mechanical = partDrawingFromEntities({a, b});
+            lib.parts.push_back(drawn);
+            // And one with NOTHING captured for its schematic: it has one all the same, made from its own
+            // data, and that is what the library shows and what it puts on a sheet.
+            LibraryPart fromData;
+            fromData.id = QStringLiteral("P-DATA");
+            fromData.kind = PartKind::Connector;
+            fromData.description = QStringLiteral("Connector with no captured symbol");
+            fromData.params[QStringLiteral("ways")] = QStringLiteral("4");
+            lib.parts.push_back(fromData);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1280, 820);
+        win.show();
+        QApplication::processEvents();
+        win.partsLibraryDialogForTest();   // the session is opened through the library window
+        win.openLibraryPartEditor(QStringLiteral("P-PRIM"), LibraryPartDrawing::Mechanical);
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "edit prim: the session opened");
+        if (ed && ed->document()) {
+            int grouped = 0, lines = 0;
+            for (const Entity& e : ed->document()->entities()) {
+                if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
+                ++lines;
+                if (!entityBlockInstance(e).isEmpty()) ++grouped;
+            }
+            std::printf("  edit prim: %d line(s), %d of them grouped\n", lines, grouped);
+            check(lines >= 2, "edit prim: the part's lines are on the canvas");
+            check(grouped == 0, "edit prim: and not one of them is stamped as part of a block");
+            // Which shows in the one way that matters: a click takes ONE line, not all of them.
+            ed->clearSelection();
+            ed->onPointerPress({5.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed->onPointerRelease({5.0, 0.0}, Qt::LeftButton);
+            std::printf("  edit prim: clicking one line selected %d\n",
+                        static_cast<int>(ed->selection().size()));
+            check(ed->selection().size() == 1, "edit prim: a click takes the line it is on, and no more");
+        }
+
+        // A CONNECTOR MADE FROM DATA opens with the drawing that is actually being shown, not empty.
+        win.openLibraryPartEditor(QStringLiteral("P-DATA"), LibraryPartDrawing::Schematic);
+        QApplication::processEvents();
+        auto* ed2 = win.findChild<Editor*>();
+        if (ed2 && ed2->document()) {
+            int on = 0;
+            for (const Entity& e : ed2->document()->entities())
+                if (e.layer != QLatin1String(kMechModelGuideLayer)) ++on;
+            std::printf("  edit prim: a from-data schematic opened with %d object(s)\n", on);
+            check(on > 0,
+                  "edit prim: a connector whose symbol comes from its data is there to edit, not an empty "
+                  "canvas");
+        }
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
+        }
+        QFile::remove(libFile);
+    }
+
     if (panelFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", panelFailures);
     return panelFailures;

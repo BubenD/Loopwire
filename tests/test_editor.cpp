@@ -8488,6 +8488,68 @@ int run_editor_tests() {
               "block scale: and the connector symbol inside it, by the same factor as the rest");
     }
 
+
+    // ---- a leader is its words as much as its line ---------------------------------------------------
+    {
+        // A leader is drawn as a line to what it points at, a flat shelf at the far end, and the words
+        // sitting on that shelf. Only the LINE could be picked: clicking the words - the obvious thing to
+        // click, and the only part of a leader with any size to it - selected nothing, and double-clicking
+        // them to change them did nothing either, because the double-click asks what was hit first.
+        Document d;
+        Entity ld;
+        ld.id = QStringLiteral("ld");
+        ld.type = EntityType::Leader;
+        ld.points = {{0.0, 0.0}, {40.0, 30.0}};   // tip at the origin, knee up and to the right
+        ld.meta.insert(QStringLiteral("text"), QStringLiteral("TERMINATE HERE"));
+        ld.meta.insert(QStringLiteral("size"), 10.0);
+        ld.meta.insert(QStringLiteral("landing"), 6.0);
+        d.entities().push_back(ld);
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        QString edited;
+        QObject::connect(&ed, &Editor::editTextRequested, &ed, [&edited](const QString& id) { edited = id; });
+
+        // ON THE SHELF: from the knee at 40,30 running 6 further right.
+        ed.clearSelection();
+        ed.onPointerPress({43.0, 30.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({43.0, 30.0}, Qt::LeftButton);
+        std::printf("  leader: clicking the shelf selected %d object(s)\n",
+                    static_cast<int>(ed.selection().size()));
+        check(ed.selection().size() == 1, "leader: clicking the shelf it lands on selects it");
+
+        // ON THE WORDS: they start where the shelf ends and run right, about six tenths of the height per
+        // character - so a point a couple of characters in is on them.
+        ed.clearSelection();
+        ed.onPointerPress({58.0, 33.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({58.0, 33.0}, Qt::LeftButton);
+        std::printf("  leader: clicking the words selected %d object(s)\n",
+                    static_cast<int>(ed.selection().size()));
+        check(ed.selection().size() == 1, "leader: and clicking its words selects it too");
+
+        // AND DOUBLE-CLICKING THE WORDS OPENS THEM. The same gesture that edits any other text.
+        ed.onDoubleClick({58.0, 33.0});
+        std::printf("  leader: double-clicking the words asked to edit '%s'\n", qPrintable(edited));
+        check(edited == QStringLiteral("ld"),
+              "leader: double-clicking its words opens the text editor on it");
+
+        // A point well clear of all of it still selects nothing.
+        ed.clearSelection();
+        ed.onPointerPress({200.0, 200.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({200.0, 200.0}, Qt::LeftButton);
+        check(ed.selection().empty(), "leader: and empty space still selects nothing");
+    }
+
+    // ---- the house text height ----------------------------------------------------------------------
+    {
+        // Five is the figure a small drawing wants and half of what an A3 sheet wants. A size somebody has
+        // to change on every piece of text they write is not a default, it is a nuisance.
+        const Editor::TextStyle fresh;
+        std::printf("  text height: %.1f\n", fresh.size);
+        check(std::abs(fresh.size - 10.0) < 1e-9, "text height: ten, out of the box");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
