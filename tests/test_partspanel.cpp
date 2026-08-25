@@ -1811,6 +1811,86 @@ int run_partspanel_tests() {
         check(widths.size() == 1, "align: and every field is the same width");
     }
 
+
+    // ---- the pin rows say what their fields are, and the pin table is seeded from them --------------
+    {
+        // FIVE BOXES IN A ROW WITH NOTHING OVER THEM is a row somebody works out by typing in it and seeing
+        // what happens - and the two in the middle ("20", "AWG") read as one figure until you know the first
+        // is the pin's own size and the second the conductor it takes.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_pintbl_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-TBL");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Two-way with its pins");
+            part.params[QStringLiteral("ways")] = QStringLiteral("2");
+            setPartIncludesPins(part, true);
+            std::vector<PartPinType> types;
+            PartPinType t;
+            t.size = QStringLiteral("16");
+            t.unit = QStringLiteral("AWG");
+            t.gauge = QStringLiteral("20");
+            t.amps = QStringLiteral("7");
+            types.push_back(t);
+            setPartPinTypes(part, types);
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-TBL"));
+        dlg.resize(1500, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        // Inside the pin rows' own box, and DISTINCT: the parameter form has a "Conductor" of its own, and a
+        // widget waiting to be deleted after a rebuild is still a child for a moment - counting either would
+        // report a heading twice and call it a fault.
+        QSet<QString> heads;
+        QWidget* pinBox = dlg.findChild<QWidget*>(QStringLiteral("pinTypes"));
+        check(pinBox != nullptr, "pin heads: the pin rows have a box of their own");
+        if (pinBox)
+            for (QLabel* l : pinBox->findChildren<QLabel*>())
+                if (l->isVisible() && !l->text().isEmpty()) heads.insert(l->text());
+        QStringList said(heads.begin(), heads.end());
+        said.sort();
+        std::printf("  pin heads: %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+        check(heads.contains(QStringLiteral("Pin size")) &&
+                  heads.contains(QStringLiteral("Conductor")) &&
+                  heads.contains(QStringLiteral("Current (A)")) &&
+                  heads.contains(QStringLiteral("Which pins")),
+              "pin heads: every field of a pin row is named over it");
+
+        // AND THE PIN TABLE IS SEEDED FROM THEM. A symbol BUILT from the data is labelled with the pin sizes;
+        // a symbol CAPTURED off the sheet is not, and neither is one built before those rows were filled in -
+        // so the table opened blank over a part whose datasheet the library was holding all along.
+        const LibraryPart* p = nullptr;
+        const PartsLibrary lib = dlg.library();
+        for (const LibraryPart& one : lib.parts)
+            if (one.id == QStringLiteral("P-TBL")) p = &one;
+        check(p != nullptr, "pin table: the part is in the library");
+        if (p) {
+            const QStringList gauges = partPinGauges(*p);
+            const QStringList amps = partPinAmps(*p);
+            std::printf("  pin table: the library says %s / %s A for pin 1\n",
+                        qPrintable(gauges.value(0)), qPrintable(amps.value(0)));
+            check(gauges.value(0) == QStringLiteral("20 AWG") && gauges.value(1) == QStringLiteral("20 AWG"),
+                  "pin table: both pins take the conductor the row names");
+            check(amps.value(0) == QStringLiteral("7") && amps.value(1) == QStringLiteral("7"),
+                  "pin table: and carry what it says they carry");
+            // Which is the form the dialog's own gauge list uses ("20 AWG"), so the value lands ON a list
+            // entry rather than as something typed that looks like one.
+            check(gauges.value(0).endsWith(QStringLiteral(" AWG")),
+                  "pin table: in the same words the table's own menu offers, so it matches an entry");
+        }
+        QFile::remove(libFile);
+    }
+
     if (panelFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", panelFailures);
     return panelFailures;

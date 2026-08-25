@@ -1149,6 +1149,8 @@ void PartsLibraryDialog::buildUi() {
         // one figure for the whole connector - which on a connector with two sizes in it is a figure
         // somebody wires the wrong way from.
         pinTypesHost_ = new QWidget(group);
+        // Named, so its rows can be told from the parameter form's - both have a "Conductor".
+        pinTypesHost_->setObjectName(QStringLiteral("pinTypes"));
         pinTypesLay_ = new QVBoxLayout(pinTypesHost_);
         pinTypesLay_->setContentsMargins(0, 2, 0, 0);
         pinTypesLay_->setSpacing(2);
@@ -2652,6 +2654,32 @@ void PartsLibraryDialog::rebuildPinTypes() {
         setPartPinTypes(*p, types);
     }
     const int ways = p->wayCount();
+    // WHAT EACH FIELD IS. Five boxes in a row with nothing over them is a row somebody has to work out by
+    // typing in it and seeing what happens - and the two in the middle ("20", "AWG") read as one figure
+    // until you know that the first is the pin's own size and the second the conductor it takes.
+    {
+        auto* head = new QWidget(pinTypesHost_);
+        auto* hl = new QHBoxLayout(head);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        struct Col { const char* text; int width; int stretch; };
+        const Col cols[] = {{"Pin size", 70, 0},
+                            {"Conductor", 90, 0},
+                            {"in", 62, 0},
+                            {"Current (A)", 55, 0},
+                            {"Which pins", 0, 1}};
+        for (const Col& c : cols) {
+            auto* cap = new QLabel(QString::fromLatin1(c.text), head);
+            cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+            if (c.width > 0) cap->setFixedWidth(c.width);
+            hl->addWidget(cap, c.stretch);
+        }
+        // The column of crosses at the end has no name: a cross says what it does.
+        auto* pad = new QLabel(QString(), head);
+        pad->setFixedWidth(18);
+        hl->addWidget(pad);
+        pinTypesLay_->addWidget(head);
+    }
     for (size_t row = 0; row < types.size(); ++row) {
         auto* host = new QWidget(pinTypesHost_);
         auto* hl = new QHBoxLayout(host);
@@ -2674,7 +2702,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
         };
         auto* size = new QLineEdit(types[row].size, host);
         size->setPlaceholderText(QStringLiteral("size"));
-        size->setMaximumWidth(70);
+        size->setFixedWidth(70);
         size->setToolTip(QStringLiteral("What the maker calls this pin - \"16\", \"20\", \"6.3 mm blade\""));
         connect(size, &QLineEdit::textEdited, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.size = t; }); });
@@ -2684,7 +2712,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
         // crimped onto anything from 24 to 20 AWG, and a datasheet states it that way. Written as "20-16"
         // it stays that way on the form, in the description and on the schematic's pin labels.
         gauge->setPlaceholderText(QStringLiteral("22 or 20-16"));
-        gauge->setMaximumWidth(90);
+        gauge->setFixedWidth(90);
         gauge->setToolTip(QStringLiteral(
             "The conductor this pin takes, in the unit beside it - one size (\"22\") or a range "
             "(\"20-16\"), as the datasheet states it."));
@@ -2696,12 +2724,13 @@ void PartsLibraryDialog::rebuildPinTypes() {
         unit->addItem(QStringLiteral("mm2"));
         unit->setCurrentText(types[row].unit.isEmpty() ? QStringLiteral("AWG") : types[row].unit);
         unit->setToolTip(QStringLiteral("Which of the two the conductor is stated in"));
+        unit->setFixedWidth(62);
         connect(unit, &QComboBox::currentTextChanged, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.unit = t; }); });
         hl->addWidget(unit);
         auto* amps = new QLineEdit(types[row].amps, host);
         amps->setPlaceholderText(QStringLiteral("A"));
-        amps->setMaximumWidth(55);
+        amps->setFixedWidth(55);
         amps->setToolTip(QStringLiteral("What it is rated to carry, if the datasheet says"));
         connect(amps, &QLineEdit::textEdited, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.amps = t; }); });

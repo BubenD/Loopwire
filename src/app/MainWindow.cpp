@@ -11331,9 +11331,11 @@ void MainWindow::showPinTable(const QString& connectorId) {
     if (connectorId.isEmpty() || !doc_) return;
     ConnectorSpec s;
     bool found = false;
+    QString libId;   // which catalogue part this connector is a copy of, if any
     for (const auto& en : doc_->entities())
         if (en.id == connectorId && en.type == EntityType::Connector) {
             s = connectorSpecFromMeta(en.meta);
+            libId = en.meta.value(QStringLiteral("libPart")).toString();
             found = true;
             break;
         }
@@ -11350,7 +11352,9 @@ void MainWindow::showPinTable(const QString& connectorId) {
     const QString gaugeHdr = crossSectionAwg_ ? QStringLiteral("AWG") : QString::fromUtf8("mm\xC2\xB2");
     table->setColumnCount(4);
     table->setHorizontalHeaderLabels(
-        {QStringLiteral("Pin"), QStringLiteral("Label"), gaugeHdr, QStringLiteral("Ampere (A)")});
+        // "Ampere (A)" names a unit twice and the QUANTITY not at all: what goes in the column is what the
+        // pin is rated to carry, which is a rate, and the (A) says in what.
+        {QStringLiteral("Pin"), QStringLiteral("Label"), gaugeHdr, QStringLiteral("Current rate (A)")});
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     table->setColumnWidth(2, 120);
     table->verticalHeader()->setVisible(false);
@@ -11372,6 +11376,26 @@ void MainWindow::showPinTable(const QString& connectorId) {
         gaugeItems << QStringLiteral("0.25-0.5") << QStringLiteral("0.5-1.0")
                    << QStringLiteral("0.75-1.5") << QStringLiteral("1.0-2.5");
     }
+    // WHAT THE LIBRARY ALREADY KNOWS, in the cells that are empty.
+    //
+    // A connector that comes with its pins has them described in the library - a row per size, with the
+    // conductor it takes and what it carries - and a symbol BUILT from that data is labelled with them. A
+    // symbol CAPTURED off the sheet is not, and neither is one built before those rows were filled in: the
+    // pin table opened blank over a part whose datasheet the library was holding all along, and the figures
+    // were typed in again by hand, differently.
+    //
+    // Only the empty cells. What somebody typed on the drawing is about THIS connector on THIS sheet and
+    // outranks the catalogue - a pin fitted with a heavier contact than the housing usually takes is a real
+    // thing, and overwriting it would be the program arguing with the person.
+    QStringList fromLibGauge, fromLibAmp;
+    if (!libId.isEmpty()) {
+        PartsCatalog catalog;
+        catalog.openRemembered();
+        if (const LibraryPart* part = catalog.byId(libId); part && partIncludesPins(*part)) {
+            fromLibGauge = partPinGauges(*part);
+            fromLibAmp = partPinAmps(*part);
+        }
+    }
     std::vector<QComboBox*> gaugeCombos(s.pinCount, nullptr);
     for (int i = 0; i < s.pinCount; ++i) {
         auto* pn = new QTableWidgetItem(QString::number(i + 1));
@@ -11382,12 +11406,15 @@ void MainWindow::showPinTable(const QString& connectorId) {
         gc->setEditable(true); // single value from the list, or a typed min–max range
         gc->setToolTip(QStringLiteral("Pick a gauge, or type a range like 20-24"));
         gc->addItems(gaugeItems);
-        const QString cur = i < s.pinGauge.size() ? s.pinGauge[i] : QString();
+        QString cur = i < s.pinGauge.size() ? s.pinGauge[i] : QString();
+        if (cur.trimmed().isEmpty() && i < fromLibGauge.size()) cur = fromLibGauge[i];
         if (gc->findText(cur) < 0) gc->addItem(cur);
         gc->setCurrentText(cur);
         table->setCellWidget(i, 2, gc);
         gaugeCombos[i] = gc;
-        table->setItem(i, 3, new QTableWidgetItem(i < s.pinAmp.size() ? s.pinAmp[i] : QString()));
+        QString amp = i < s.pinAmp.size() ? s.pinAmp[i] : QString();
+        if (amp.trimmed().isEmpty() && i < fromLibAmp.size()) amp = fromLibAmp[i];
+        table->setItem(i, 3, new QTableWidgetItem(amp));
     }
     lay->addWidget(table);
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
