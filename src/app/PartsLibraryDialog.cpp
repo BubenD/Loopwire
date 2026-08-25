@@ -72,10 +72,19 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
     cap->setFixedWidth(150);
     cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
     lay->addWidget(cap);
-    // The field takes a fixed share, so the unit after it stays on screen and the rows line up
-    // however long a label is - unless it holds a sentence, in which case it takes what there is.
-    if (!wide) field->setMaximumWidth(260);
-    lay->addWidget(field, 1);
+    // EVERY FIELD THE SAME WIDTH, and the space left over after it. A maximum with a stretch shared with
+    // the gap behind it is not a width at all: each field ended up somewhere between its own idea of how
+    // wide it wanted to be and that maximum, so a combo box sat at one width, the box under it at another,
+    // and the column of fields came out ragged down the form. A form is read down its columns - a figure
+    // against a field - and a ragged column makes the eye do the aligning.
+    //
+    // A sentence-length field still takes what there is: there is nothing to line it up with.
+    constexpr int kFieldWidth = 260;
+    if (!wide) {
+        field->setMinimumWidth(kFieldWidth);
+        field->setMaximumWidth(kFieldWidth);
+    }
+    lay->addWidget(field, wide ? 1 : 0);
     auto* u = new QLabel(unit, host);
     u->setFixedWidth(42);
     u->setStyleSheet(QStringLiteral("color:#7f8896;"));
@@ -777,6 +786,8 @@ void PartsLibraryDialog::buildUi() {
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     paramHost_ = new QWidget(scroll);
+    // Named, so a test can tell a field ON THE FORM from the filter box or a pin row.
+    paramHost_->setObjectName(QStringLiteral("paramHost"));
     paramLay_ = new QVBoxLayout(paramHost_);
     paramLay_->setContentsMargins(0, 0, 0, 0);
     paramLay_->setSpacing(4);

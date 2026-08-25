@@ -7,6 +7,7 @@
 //
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
+#include <QLayout>
 #include "app/MainWindow.h"
 #include <functional>
 #include <QComboBox>
@@ -1754,6 +1755,60 @@ int run_partspanel_tests() {
             put.remember();
         }
         QFile::remove(libFile);
+    }
+
+
+    // ---- the technical parameters line up ------------------------------------------------------------
+    {
+        // A form is read down its columns - a figure against a field - and the fields were ragged: each had a
+        // MAXIMUM width and a stretch shared with the gap behind it, which is not a width at all, so a combo
+        // box sat at one size and the box under it at another and the eye did the aligning.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_align_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart wire;
+            wire.id = QStringLiteral("W-1");
+            wire.kind = PartKind::Wire;
+            wire.description = QStringLiteral("A wire with every kind of field");
+            lib.parts.push_back(wire);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("W-1"));
+        dlg.resize(1500, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        // THE FIELD OF EACH ROW, which is the thing that has to line up: a row is [label][field][unit], and
+        // what the eye follows down the form is the left-hand edge of the middle one. Measured on the row
+        // rather than on every box, because a field can BE two boxes - a range is a from and a to, a material
+        // is a menu with a cross beside it - and those halves have every reason to differ inside their row.
+        QSet<int> widths;
+        int fields = 0;
+        QWidget* form = dlg.findChild<QWidget*>(QStringLiteral("paramHost"));
+        check(form != nullptr, "align: the parameter form is there");
+        if (form && form->layout()) {
+            for (int i = 0; i < form->layout()->count(); ++i) {
+                QWidget* row = form->layout()->itemAt(i)->widget();
+                if (!row || !row->layout() || row->layout()->count() < 3) continue;
+                QWidget* field = row->layout()->itemAt(1)->widget();
+                if (!field || !field->isVisible()) continue;
+                ++fields;
+                widths.insert(field->width());
+            }
+        }
+        QStringList said;
+        for (int w : widths) said << QString::number(w);
+        said.sort();
+        std::printf("  align: %d row(s) on the form, field width(s) %s\n", fields,
+                    qPrintable(said.join(QStringLiteral(", "))));
+        check(fields >= 3, "align: the form has rows on it");
+        check(widths.size() == 1, "align: and every field is the same width");
     }
 
     if (panelFailures == 0) std::printf("  -> ok\n");
