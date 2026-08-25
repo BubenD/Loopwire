@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 #include "harness/HarnessBuilder.h"
 #include "harness/Bom.h"
+#include "model/Block.h"
 #include "harness/MechanicalHarness.h"
 #include <QSettings>
 #include "harness/PartsLibrary.h"
@@ -7316,8 +7317,9 @@ int run_harness_tests() {
                   !asked.contains(QStringLiteral("Pin gauge in")) &&
                   !asked.contains(QStringLiteral("Pin gauge range")),
               "own pins: the three fields that duplicated the rows are gone");
-        check(asked.contains(QStringLiteral("Material")) && !asked.contains(QStringLiteral("Plating")),
-              "own pins: and plating is called material, which is what it is");
+        check(asked.contains(QStringLiteral("Contact material")) &&
+                  !asked.contains(QStringLiteral("Plating")),
+              "own pins: and plating is called what it is - the contact's material");
 
         // A RANGE IS A REAL ANSWER, and it is kept in one form however it was typed: a size 20 contact takes
         // anything from 24 to 20 AWG and a datasheet states it that way.
@@ -7391,6 +7393,78 @@ int run_harness_tests() {
             check(partFieldChoices(PartKind::Connector, QStringLiteral("plating")).contains(builtIn.front()),
                   "own pins: a built-in one stays - it is the program's, not the office's");
         }
+    }
+
+
+    // ---- the schematic carries the count -------------------------------------------------------------
+    {
+        // A bill of materials is what is BUILT, and what is built is what the circuit says: four connectors
+        // on the schematic are four connectors, whether the assembly sheet happens to show two of them or
+        // six. It used to count whichever view had the most copies - a rule that gives a different answer
+        // depending on which sheet somebody was working on last, and that orders two of a connector shown
+        // twice mechanically (a front view and a section).
+        PartsLibrary lib;
+        LibraryPart part;
+        part.id = QStringLiteral("P-CNT");
+        part.kind = PartKind::Connector;
+        part.description = QStringLiteral("Counted connector");
+        part.mfrPn = QStringLiteral("CNT-1");
+        part.params[QStringLiteral("ways")] = QStringLiteral("2");
+        lib.parts.push_back(part);
+
+        Document d;
+        auto place = [&d](const QString& view, const QString& inst) {
+            Entity e;
+            e.id = QStringLiteral("e%1").arg(inst);
+            e.type = EntityType::Rect;
+            e.points = {{0.0, 0.0}, {5.0, 0.0}, {5.0, 5.0}, {0.0, 5.0}};
+            e.meta.insert(QStringLiteral("libPart"), QStringLiteral("P-CNT"));
+            e.meta.insert(QStringLiteral("blockInst"), inst);
+            e.meta.insert(QLatin1String(kLibPartViewKey), view);
+            d.entities().push_back(e);
+        };
+        // Shown twice in the metal - a front view and a section - and ONCE on the circuit. One is built.
+        place(QStringLiteral("mechanical"), QStringLiteral("m1"));
+        place(QStringLiteral("mechanical"), QStringLiteral("m2"));
+        place(QStringLiteral("schematic"), QStringLiteral("s1"));
+        std::vector<BomRow> rows = bomUnify(bomFromDrawing(d, lib));
+        double qty = 0.0;
+        for (const BomRow& r : rows)
+            if (r.mfrPn == QStringLiteral("CNT-1")) qty += r.qty;
+        std::printf("  bom count: 2 mechanical + 1 schematic = %.0f on the bill\n", qty);
+        check(std::abs(qty - 1.0) < 1e-9,
+              "bom count: the schematic says one, so one is ordered - not the two the metal shows");
+
+        // A SECOND SCHEMATIC COPY IS A SECOND CONNECTOR. That is the whole point of counting from the
+        // circuit: two symbols is two of them to build.
+        place(QStringLiteral("schematic"), QStringLiteral("s2"));
+        rows = bomUnify(bomFromDrawing(d, lib));
+        qty = 0.0;
+        for (const BomRow& r : rows)
+            if (r.mfrPn == QStringLiteral("CNT-1")) qty += r.qty;
+        std::printf("  bom count: a second symbol makes it %.0f\n", qty);
+        check(std::abs(qty - 2.0) < 1e-9, "bom count: the same part again on the schematic counts again");
+
+        // And with NO schematic copy at all, the view there is carries it - a mechanical-only drawing is
+        // still a drawing, and counting nothing would be worse than counting what it has.
+        Document mechOnly;
+        {
+            Document& d2 = mechOnly;
+            Entity e;
+            e.id = QStringLiteral("only");
+            e.type = EntityType::Rect;
+            e.points = {{0.0, 0.0}, {5.0, 0.0}, {5.0, 5.0}, {0.0, 5.0}};
+            e.meta.insert(QStringLiteral("libPart"), QStringLiteral("P-CNT"));
+            e.meta.insert(QStringLiteral("blockInst"), QStringLiteral("only1"));
+            e.meta.insert(QLatin1String(kLibPartViewKey), QStringLiteral("mechanical"));
+            d2.entities().push_back(e);
+        }
+        double onlyQty = 0.0;
+        for (const BomRow& r : bomUnify(bomFromDrawing(mechOnly, lib)))
+            if (r.mfrPn == QStringLiteral("CNT-1")) onlyQty += r.qty;
+        std::printf("  bom count: mechanical only counts %.0f\n", onlyQty);
+        check(std::abs(onlyQty - 1.0) < 1e-9,
+              "bom count: with nothing on a circuit sheet, what is drawn is what is counted");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

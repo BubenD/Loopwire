@@ -8,6 +8,7 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include "app/MainWindow.h"
+#include <functional>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QPushButton>
@@ -143,14 +144,17 @@ QTreeWidget* partsList(MainWindow& win) {
     return nullptr;
 }
 
-// Every row of the shelf, headings and parts alike - the tree is one level deep, a heading per library.
+// Every row of the shelf, headings and parts alike, however deep it goes. It used to be one level - a
+// heading per library - and is now two, because the parts are grouped by KIND under it: a library of a
+// hundred and twenty rows of which two are connectors is a shelf nobody can use flat.
+void collectRows(QTreeWidgetItem* it, QList<QTreeWidgetItem*>& out) {
+    out << it;
+    for (int i = 0; i < it->childCount(); ++i) collectRows(it->child(i), out);
+}
+
 QList<QTreeWidgetItem*> everyRow(QTreeWidget* tree) {
     QList<QTreeWidgetItem*> out;
-    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
-        QTreeWidgetItem* top = tree->topLevelItem(i);
-        out << top;
-        for (int k = 0; k < top->childCount(); ++k) out << top->child(k);
-    }
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) collectRows(tree->topLevelItem(i), out);
     return out;
 }
 
@@ -1636,6 +1640,118 @@ int run_partspanel_tests() {
             tick->setChecked(false);
             QApplication::processEvents();
             check(contact->isVisible(), "with pins: unticked again, the contact menu comes back");
+        }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- the shelf, by kind, and what a double-click puts down ---------------------------------------
+    {
+        // A real library is mostly heat-shrink sizes and marker sleeves - a hundred rows of which two are
+        // the connectors somebody wants - so the shelf is grouped by what a part IS, and one kind can be
+        // asked for on its own. And what a double-click on a part's NAME puts down is said once, under the
+        // shelf, rather than guessed at: "the mechanical drawing if it has one" is right on an assembly
+        // sheet and wrong all day on a schematic.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_shelf_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            for (int i = 0; i < 3; ++i) {
+                LibraryPart hs;
+                hs.id = QStringLiteral("HS-%1").arg(i);
+                hs.kind = PartKind::Heatshrink;
+                hs.description = QStringLiteral("Sleeve %1").arg(i);
+                lib.parts.push_back(hs);
+            }
+            LibraryPart conn;
+            conn.id = QStringLiteral("CN-1");
+            conn.kind = PartKind::Connector;
+            conn.description = QStringLiteral("The connector");
+            conn.params[QStringLiteral("ways")] = QStringLiteral("2");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{0.0, 0.0}, {10.0, 0.0}, {10.0, 6.0}, {0.0, 6.0}};
+            conn.mechanical = partDrawingFromEntities({body});
+            conn.schematic = partDrawingFromEntities({body});
+            lib.parts.push_back(conn);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1280, 860);
+        win.show();
+        QApplication::processEvents();
+        auto* tree = win.findChild<QTreeWidget*>();
+        auto* ed = win.findChild<Editor*>();
+        check(tree != nullptr && ed != nullptr, "shelf: there is a parts panel");
+        QComboBox* kinds = nullptr;
+        for (QComboBox* c : win.findChildren<QComboBox*>())
+            if (c->count() > 0 && c->itemText(0) == QStringLiteral("All kinds")) kinds = c;
+        check(kinds != nullptr, "shelf: and a way to ask for one kind of part");
+        if (tree && kinds) {
+            QStringList heads;
+            // The kind headings sit UNDER the library headings when more than one shelf is in view, so
+            // they are looked for wherever they are rather than only at the top.
+            for (QTreeWidgetItem* it : everyRow(tree))
+                if (it->data(0, Qt::UserRole).toString().isEmpty()) heads << it->text(0);
+            std::printf("  shelf: headings - %s\n", qPrintable(heads.join(QStringLiteral(" | "))));
+            bool grouped = false;
+            for (const QString& h : heads)
+                if (h.startsWith(QStringLiteral("Heatshrink")) || h.contains(QStringLiteral("(3)")))
+                    grouped = true;
+            check(grouped, "shelf: the parts are grouped under a heading per kind, with a count on it");
+            std::printf("  shelf: %d kind(s) offered in the menu\n", kinds->count());
+            check(kinds->count() >= 3, "shelf: every kind the library holds is offered, and All kinds");
+            // Narrowed to connectors, the sleeves are not in view.
+            const int at = kinds->findText(partKindName(PartKind::Connector));
+            check(at > 0, "shelf: Connector is one of them");
+            if (at > 0) {
+                kinds->setCurrentIndex(at);
+                QApplication::processEvents();
+                // Counted by KIND rather than by row: the office's own library is connected too and holds
+                // connectors of its own, so what matters is that the SLEEVES are not in the way.
+                int connectors = 0, sleeves = 0;
+                for (QTreeWidgetItem* it : everyRow(tree)) {
+                    if (it->data(0, Qt::UserRole).toString().isEmpty()) continue;
+                    if (it->text(0).startsWith(partKindName(PartKind::Connector))) ++connectors;
+                    if (it->text(0).startsWith(partKindName(PartKind::Heatshrink))) ++sleeves;
+                }
+                std::printf("  shelf: asked for connectors - %d connector(s), %d sleeve(s)\n",
+                            connectors, sleeves);
+                check(connectors >= 1 && sleeves == 0,
+                      "shelf: asked for one kind, the rest are not in the way");
+            }
+        }
+
+        // WHAT A DOUBLE-CLICK PLACES: the ticks say, and they can say more than one.
+        std::vector<QCheckBox*> ticks;
+        for (QCheckBox* b : win.findChildren<QCheckBox*>())
+            if (b->text() == QStringLiteral("mechanical") || b->text() == QStringLiteral("schematic") ||
+                b->text() == QStringLiteral("fanout") || b->text() == QStringLiteral("fanout mirrored"))
+                ticks.push_back(b);
+        std::printf("  shelf: %lld tick(s) for what a double-click places\n",
+                    static_cast<long long>(ticks.size()));
+        check(ticks.size() == 4, "shelf: one tick per drawing a part can have");
+        if (ed && ticks.size() == 4) {
+            for (QCheckBox* b : ticks) b->setChecked(b->text() == QStringLiteral("mechanical") ||
+                                                     b->text() == QStringLiteral("schematic"));
+            QApplication::processEvents();
+            win.placeFromPartsPanel(QStringLiteral("CN-1"), true);
+            std::printf("  shelf: mechanical + schematic ticked put %d object(s) on the cursor\n",
+                        ed->clipboardCount());
+            check(ed->clipboardCount() >= 2,
+                  "shelf: both ticked drawings go down together, in one placement");
+            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+        }
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
         }
         QFile::remove(libFile);
     }

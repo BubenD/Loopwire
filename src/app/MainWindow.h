@@ -111,6 +111,10 @@ public:
     // Public so it can be read rather than popped up - a modal menu in front of a test is a test that hangs.
     void buildCanvasMenu(QMenu& menu, const Vec2& menuWorld);
     void placeLibraryPart(const QString& partId, bool mechanical);
+    // What a double-click on a part's NAME in the shelf puts down: whatever the ticks under it say - one
+    // drawing, two, or all of them, side by side as one placement. Public because it IS the gesture, and a
+    // test of "the ticks decide" has to be able to make it.
+    void placeFromPartsPanel(const QString& partId, bool hasMech);
     // Whether a schematic connector is placed with its fanout beside it (the parts panel's own switch,
     // remembered between sessions). Public so a test can read what the switch says without reaching into
     // the panel to find the box.
@@ -807,6 +811,11 @@ private:
     // names, and because the three drawings want columns of their own to be read down.
     QTreeWidget* partsPanelTree_ = nullptr;
     QLineEdit* partsPanelFilter_ = nullptr;
+    // Which kind of part the shelf shows ("all" first), and what a double-click on a part's NAME puts down -
+    // one tick per drawing, remembered between sessions. See refreshPartsPanel() and placeFromPartsPanel().
+    QComboBox* partsPanelKindBox_ = nullptr;
+    bool partsPanelSyncing_ = false;
+    std::vector<QCheckBox*> partsPanelPlaceBoxes_;
     QListWidget* blocksPanelList_ = nullptr;
 
     QTableWidget* propsTable_ = nullptr;

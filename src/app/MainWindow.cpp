@@ -12935,6 +12935,20 @@ QDockWidget* MainWindow::makePartsPanel() {
     partsPanelFilter_->setPlaceholderText(QStringLiteral("filter by P/N, description or manufacturer"));
     connect(partsPanelFilter_, &QLineEdit::textChanged, this, [this] { refreshPartsPanel(); });
     hh->addWidget(partsPanelFilter_, 1);
+    // BY TYPE. A real library is mostly heat-shrink sizes and marker sleeves - a hundred and twenty rows of
+    // which two are the connectors somebody is looking for - so the shelf is grouped by what a part IS, and
+    // one kind can be asked for on its own. The kinds with nothing in them are not offered: a menu of
+    // twenty-six kinds where a library holds six is a menu you read rather than use.
+    partsPanelKindBox_ = new QComboBox(head);
+    partsPanelKindBox_->setToolTip(QStringLiteral(
+        "Which kind of part the shelf shows. Grouped by kind either way - this narrows it to one."));
+    partsPanelKindBox_->setMinimumContentsLength(10);
+    partsPanelKindBox_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    connect(partsPanelKindBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (partsPanelSyncing_) return;
+        refreshPartsPanel();
+    });
+    hh->addWidget(partsPanelKindBox_);
     auto* libsBtn = new QToolButton(head);
     libsBtn->setText(QStringLiteral("Libraries"));
     libsBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -12954,7 +12968,7 @@ QDockWidget* MainWindow::makePartsPanel() {
     partsPanelTree_->headerItem()->setToolTip(1, tr("Mechanical drawing"));
     partsPanelTree_->headerItem()->setToolTip(2, tr("Schematic symbol"));
     partsPanelTree_->headerItem()->setToolTip(3, tr("Fanout drawing"));
-    partsPanelTree_->setRootIsDecorated(false);
+    partsPanelTree_->setRootIsDecorated(true);   // a heading per kind, which opens and closes
     partsPanelTree_->setUniformRowHeights(true);
     partsPanelTree_->setAllColumnsShowFocus(true);
     // The part takes what is left, and the three tick columns stay narrow. Left to itself a header stretches
@@ -12969,6 +12983,13 @@ QDockWidget* MainWindow::makePartsPanel() {
         "Every part of every library in view, and which drawings it has: M mechanical, S schematic, "
         "F fanout. Double-click to put one on the sheet; a part with no drawing at all opens in the "
         "library, where one can be made for it."));
+    // WHAT A DOUBLE-CLICK PUTS DOWN is said once, here, rather than guessed at per part. On the NAME it
+    // used to place "the mechanical drawing if it has one", which is right for an assembly sheet and wrong
+    // all day on a schematic - and a part with three drawings and one gesture had no way of being asked.
+    // The columns still say which drawing (double-click the tick under S and the symbol comes down); this is
+    // for the double-click on the part itself, and it can name more than one.
+    //
+    // Remembered between sessions: it is a habit that follows the kind of sheet somebody works on.
     // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
     connect(partsPanelTree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, int column) {
@@ -13009,8 +13030,8 @@ QDockWidget* MainWindow::makePartsPanel() {
                     showPartsLibraryAt(id);
                     return;
                 }
-                // On the name: whichever drawing the part is most likely wanted by - its body if it has one.
-                placeLibraryPart(id, hasMech);
+                // On the name: whatever the ticks under the shelf say - one drawing, two, or all of them.
+                placeFromPartsPanel(id, hasMech);
             });
     // Right-click: what can be done with the part under the cursor. The commands are the same ones the
     // library window has - place it, add it to the bill of materials, edit it - and a menu on the part is
@@ -13022,6 +13043,36 @@ QDockWidget* MainWindow::makePartsPanel() {
     partsPanelCount_ = new QLabel(body);
     partsPanelCount_->setToolTip(QStringLiteral("What is in view, out of what is connected"));
     v->addWidget(partsPanelCount_);
+    {
+        auto* what = new QWidget(body);
+        auto* wl = new QHBoxLayout(what);
+        wl->setContentsMargins(0, 0, 0, 0);
+        wl->setSpacing(6);
+        wl->addWidget(new QLabel(tr("Double-click places:"), what));
+        struct Which { const char* text; const char* key; const char* tip; };
+        const Which whichOnes[] = {
+            {"mechanical", "mech", "The part as it is in the metal"},
+            {"schematic", "schem", "Its symbol, for a circuit sheet"},
+            {"fanout", "fan", "How the wires break out of it"},
+            {"fanout mirrored", "fanOpp", "The other side of the same fanout"}};
+        QSettings s;
+        for (const Which& w : whichOnes) {
+            auto* box = new QCheckBox(tr(w.text), what);
+            box->setToolTip(tr(w.tip));
+            const QString key = QStringLiteral("ui/partsPanelPlace/") + QLatin1String(w.key);
+            // Mechanical to begin with, which is what it did before there was a choice.
+            box->setChecked(s.value(key, QLatin1String(w.key) == QLatin1String("mech")).toBool());
+            connect(box, &QCheckBox::toggled, this, [key](bool on) {
+                QSettings st;
+                st.setValue(key, on);
+                st.sync();
+            });
+            partsPanelPlaceBoxes_.push_back(box);
+            wl->addWidget(box);
+        }
+        wl->addStretch(1);
+        v->addWidget(what);
+    }
 
     // The two rules about placing a part and counting it. They belong here rather than only in the
     // bill-of-materials window, because this is where parts are put down - and they ARE that window's own
@@ -13284,6 +13335,79 @@ void MainWindow::fillPartsLibraryMenu(QMenu* menu) {
     }
 }
 
+// WHAT A DOUBLE-CLICK ON A PART'S NAME PUTS DOWN: whatever the ticks under the shelf say. One drawing, two,
+// or all of them - and they go down together as one set, side by side, the way the library's own Place does.
+//
+// It used to place "the mechanical drawing if it has one", which is right on an assembly sheet and wrong all
+// day on a schematic; and a part with three drawings had no way of being asked for any but the one.
+void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
+    if (!editor_) return;
+    auto ticked = [this](int at) {
+        return at < static_cast<int>(partsPanelPlaceBoxes_.size()) && partsPanelPlaceBoxes_[at] &&
+               partsPanelPlaceBoxes_[at]->isChecked();
+    };
+    // Nothing ticked is not a request to place nothing - it is a switch somebody has emptied. The old
+    // behaviour stands in for it rather than a shrug.
+    if (!ticked(0) && !ticked(1) && !ticked(2) && !ticked(3)) {
+        placeLibraryPart(partId, hasMech);
+        return;
+    }
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    const LibraryPart* part = catalog.byId(partId);
+    if (!part) return;
+    std::vector<Entity> all;
+    QStringList placed, missing;
+    double at = 0.0;
+    auto addOne = [&](std::vector<Entity> one, const QString& name) {
+        if (one.empty()) {
+            missing << name;
+            return;
+        }
+        Bounds b;
+        for (const Entity& e : one) b.expand(e.bounds());
+        if (b.valid) {
+            const Vec2 shift{at - b.min.x, -(b.min.y + b.max.y) / 2.0};
+            for (Entity& e : one) translateEntity(e, shift);
+            at += b.width() + std::max(2.0, b.width() * 0.1);
+        }
+        for (Entity& e : one) all.push_back(std::move(e));
+        placed << name;
+    };
+    if (ticked(0)) addOne(partBlockInstance(*part, /*mechanical=*/true, Vec2{0.0, 0.0}), tr("mechanical"));
+    if (ticked(1)) addOne(partBlockInstance(*part, /*mechanical=*/false, Vec2{0.0, 0.0}), tr("schematic"));
+    if (ticked(2))
+        addOne(part->fanout.isEmpty()
+                   ? std::vector<Entity>{}
+                   : partDrawingBlockInstance(*part, part->fanout, QStringLiteral("fanout"),
+                                              Vec2{0.0, 0.0}),
+               tr("fanout"));
+    if (ticked(3)) {
+        const QJsonArray other = part->fanoutOpposite.isEmpty() ? part->fanout : part->fanoutOpposite;
+        addOne(other.isEmpty() ? std::vector<Entity>{}
+                               : partDrawingBlockInstance(*part, other,
+                                                          QStringLiteral("fanout (opposite)"),
+                                                          Vec2{0.0, 0.0},
+                                                          part->fanoutOpposite.isEmpty()),
+               tr("fanout mirrored"));
+    }
+    if (all.empty()) {
+        statusBar()->showMessage(
+            tr("%1 has no %2 drawing").arg(part->title(), missing.join(tr(" or "))), 5000);
+        return;
+    }
+    const QString contactId = part->contactId();
+    if (!contactId.isEmpty())
+        for (Entity& e : all) e.meta.insert(QLatin1String(kContactPartKey), contactId);
+    editor_->placeEntities(all);
+    statusBar()->showMessage(
+        missing.isEmpty()
+            ? tr("Click the sheet to place %1 — %2").arg(part->title(), placed.join(tr(" + ")))
+            : tr("Click the sheet to place %1 — %2  (nothing drawn for %3)")
+                  .arg(part->title(), placed.join(tr(" + ")), missing.join(tr(", "))),
+        6000);
+}
+
 void MainWindow::refreshPartsPanel() {
     if (!partsPanelTree_) return;
     partsPanelTree_->clear();
@@ -13307,6 +13431,43 @@ void MainWindow::refreshPartsPanel() {
     QStringList shownFrom = catalog.paths();
     for (const QString& hidden : partsPanelHidden_) shownFrom.removeAll(hidden);
     int shown = 0, connected = 0;
+
+    // WHICH KINDS THERE ARE TO SHOW, and which one is being asked for. A real library is mostly heat-shrink
+    // sizes and marker sleeves - a hundred and twenty rows of which two are the connectors somebody wants -
+    // so the shelf is grouped by what a part IS, and one kind can be asked for on its own. Only the kinds
+    // with something in them are offered: a menu of twenty-six where the library holds six is a menu you
+    // read rather than use.
+    QSet<PartKind> kindsPresent;
+    for (const QString& path : catalog.paths()) {
+        const PartsLibrary* lib = catalog.byPath(path);
+        if (!lib || !shownFrom.contains(path)) continue;
+        for (const LibraryPart& part : lib->parts) kindsPresent.insert(part.kind);
+    }
+    if (catalog.paths().isEmpty())
+        for (const LibraryPart& part : catalog.merged().parts) kindsPresent.insert(part.kind);
+    int wantKind = -1;   // -1 = every kind
+    if (partsPanelKindBox_) {
+        const QVariant was = partsPanelKindBox_->currentData();
+        partsPanelSyncing_ = true;
+        partsPanelKindBox_->clear();
+        partsPanelKindBox_->addItem(tr("All kinds"), -1);
+        std::vector<QPair<QString, int>> offer;
+        for (PartKind k : allPartKinds())
+            if (kindsPresent.contains(k))
+                offer.push_back({partKindName(k), static_cast<int>(k)});
+        std::sort(offer.begin(), offer.end(),
+                  [](const QPair<QString, int>& a, const QPair<QString, int>& b) {
+                      return a.first.localeAwareCompare(b.first) < 0;
+                  });
+        for (const auto& one : offer) partsPanelKindBox_->addItem(one.first, one.second);
+        const int at = was.isValid() ? partsPanelKindBox_->findData(was) : 0;
+        partsPanelKindBox_->setCurrentIndex(at >= 0 ? at : 0);
+        partsPanelSyncing_ = false;
+        wantKind = partsPanelKindBox_->currentData().toInt();
+    }
+    auto wanted = [wantKind](const LibraryPart& part) {
+        return wantKind < 0 || static_cast<int>(part.kind) == wantKind;
+    };
     const bool severalInView = shownFrom.size() > 1;
 
     auto addPart = [this, &shown](const LibraryPart& part, QTreeWidgetItem* under) {
@@ -13352,12 +13513,34 @@ void MainWindow::refreshPartsPanel() {
         ++shown;
     };
 
+    // The parts of one shelf, under a heading per KIND: "Connector", "Heatshrink", each with its own
+    // parts beneath it and collapsible, so the two connectors in a library of a hundred and twenty are
+    // found by opening one heading rather than by scrolling past the sleeves.
+    auto addByKind = [this, &addPart, &wanted, &matches](const std::vector<LibraryPart>& parts,
+                                                        QTreeWidgetItem* under) {
+        for (PartKind k : allPartKinds()) {
+            std::vector<const LibraryPart*> ofKind;
+            for (const LibraryPart& part : parts)
+                if (part.kind == k && wanted(part) && matches(part)) ofKind.push_back(&part);
+            if (ofKind.empty()) continue;
+            QTreeWidgetItem* head = under ? new QTreeWidgetItem(under)
+                                          : new QTreeWidgetItem(partsPanelTree_);
+            head->setText(0, QStringLiteral("%1  (%2)").arg(partKindName(k)).arg(ofKind.size()));
+            QFont f = head->font(0);
+            f.setBold(true);
+            head->setFont(0, f);
+            head->setForeground(0, Chrome::subInk());
+            head->setFirstColumnSpanned(false);
+            head->setExpanded(true);
+            for (const LibraryPart* part : ofKind) addPart(*part, head);
+        }
+    };
+
     if (catalog.paths().isEmpty()) {
         // Nothing connected by name: whatever the catalogue has, as one shelf.
         const PartsLibrary lib = catalog.merged();
         connected = static_cast<int>(lib.parts.size());
-        for (const LibraryPart& part : lib.parts)
-            if (matches(part)) addPart(part, nullptr);
+        addByKind(lib.parts, nullptr);
     } else {
         for (const QString& path : catalog.paths()) {
             const PartsLibrary* lib = catalog.byPath(path);
@@ -13377,10 +13560,9 @@ void MainWindow::refreshPartsPanel() {
                 head->setFirstColumnSpanned(false);
                 head->setExpanded(true);
             }
-            for (const LibraryPart& part : lib->parts)
-                if (matches(part)) addPart(part, head);
+            addByKind(lib->parts, head);
         }
-        partsPanelTree_->setRootIsDecorated(severalInView);
+        partsPanelTree_->setRootIsDecorated(true);   // the kind headings open and close
     }
     if (partsPanelCount_)
         partsPanelCount_->setText(

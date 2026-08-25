@@ -442,7 +442,7 @@ std::vector<PartField> partFields(PartKind kind) {
                     text("shellSize", "Shell size"),
                     text("gender", "Gender"),
                     choice("material", "Shell material", kMetals + kPolymers),
-                    choice("plating", "Material", kMetals),
+                    choice("plating", "Contact material", kMetals),
                     text("temp", "Temperature range", "C"),
                     text("spec", "Specification")};
         case PartKind::ContactPin:

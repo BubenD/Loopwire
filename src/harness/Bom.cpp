@@ -267,8 +267,21 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
         ++views[p.partId][p.view];
         if (!firstView.contains(p.partId)) firstView.insert(p.partId, p.view);
     }
+    // THE SCHEMATIC CARRIES THE COUNT, whenever there is one. A bill of materials is what is BUILT, and
+    // what is built is what the circuit says: four connectors on the schematic are four connectors, whether
+    // the assembly sheet happens to show two of them or six. It used to count whichever view had the most
+    // copies, which is a rule that gives a different answer depending on which sheet somebody was working on
+    // last - and on a drawing where a connector is shown twice mechanically (a front view and a section) it
+    // ordered two.
+    //
+    // With no schematic copy at all, whatever view there is carries it: a mechanical-only drawing is still a
+    // drawing, and counting nothing would be worse than counting the one view it has.
     QHash<QString, QString> countThisView;
     for (auto part = views.cbegin(); part != views.cend(); ++part) {
+        if (part.value().value(QStringLiteral("schematic"), 0) > 0) {
+            countThisView.insert(part.key(), QStringLiteral("schematic"));
+            continue;
+        }
         QString best = firstView.value(part.key());
         int most = part.value().value(best, 0);
         for (auto v = part.value().cbegin(); v != part.value().cend(); ++v)
