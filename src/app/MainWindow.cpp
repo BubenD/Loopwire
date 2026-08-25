@@ -3048,6 +3048,8 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
     if (canvas_) canvas_->setFocus();
 }
 
+void MainWindow::openBomWindowForTest() { showBomDialog(); }
+
 void MainWindow::addPartToBom(const QString& partId) {
     Document* doc = editDoc();
     if (!doc) return;
@@ -3064,6 +3066,9 @@ void MainWindow::addPartToBom(const QString& partId) {
     doc->bom() = table.toJson();
     doc->setDirty(true);
     refreshBomPanel();
+    // AND THE WINDOW, IF IT IS OPEN. It shows the same bill: a line added from the panel that did not appear
+    // there left two views of one list disagreeing, and no way to tell which was right.
+    if (bomDlg_) bomDlg_->reload();
     statusBar()->showMessage(tr("%1 added to the bill of materials — set the quantity in its window")
                                  .arg(part->title()),
                              6000);
@@ -11443,8 +11448,11 @@ void MainWindow::showBomDialog() {
     if (!bomDlg_) {
         bomDlg_ = new BomDialog(editor_, this);
         bomDlg_->setConfigOpener(this); // its Configuration button opens Options on the BOM page
+        // The panel shows the same bill, so it follows every write the window makes.
+        connect(bomDlg_, &BomDialog::bomChanged, this, [this] { refreshBomPanel(); });
     }
     bomDlg_->reload();
+    bomDlg_->markOpened();   // what Cancel in that window will put back
     bomDlg_->show();
     bomDlg_->raise();
     bomDlg_->activateWindow();

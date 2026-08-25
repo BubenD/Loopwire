@@ -9,6 +9,9 @@
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include <QLayout>
 #include "app/MainWindow.h"
+#include <QWidgetAction>
+#include "harness/Bom.h"
+#include "app/BomDialog.h"
 #include <functional>
 #include <QComboBox>
 #include <QLineEdit>
@@ -1540,38 +1543,19 @@ int run_partspanel_tests() {
             if (b->text().startsWith(QStringLiteral("Place"))) ++places;
         std::printf("  place: %d old Place button(s) left on the panes\n", places);
         check(places == 0, "place: and not one on every pane as well - five buttons for one verb");
-        if (place && place->menu() && ed && ed->document()) {
-            QStringList said;
-            int ticked = 0;
-            for (QAction* a : place->menu()->actions()) {
-                if (a->isSeparator()) continue;
-                said << a->text();
-                if (a->isCheckable() && a->isChecked()) ++ticked;
+        if (place && place->menu()) {
+            // The ticks are in a PANEL inside the menu now (a widget in a menu takes its own clicks, so the
+            // menu stays open while several are made) - so they are counted there rather than as menu items.
+            QWidget* panel = nullptr;
+            for (QAction* a : place->menu()->actions())
+                if (auto* wa = qobject_cast<QWidgetAction*>(a)) panel = wa->defaultWidget();
+            check(panel != nullptr, "place: the menu holds a panel of ticks");
+            if (panel) {
+                QStringList said;
+                for (QCheckBox* b : panel->findChildren<QCheckBox*>()) said << b->text();
+                std::printf("  place: ticks - %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+                check(said.size() >= 4, "place: the panel lists the drawings a part can have");
             }
-            std::printf("  place: menu - %s (%d ticked)\n", qPrintable(said.join(QStringLiteral(" | "))),
-                        ticked);
-            check(said.size() >= 4, "place: the menu lists the drawings a part can have");
-            // Tick the mechanical AND the fanout, and press it: both go down, in one placement.
-            for (QAction* a : place->menu()->actions()) {
-                if (!a->isCheckable()) continue;
-                a->setChecked(a->text().startsWith(QStringLiteral("Mechanical")) ||
-                              a->text() == QStringLiteral("Fanout"));
-            }
-            place->click();
-            QApplication::processEvents();
-            std::printf("  place: %d object(s) hanging off the cursor\n", ed->clipboardCount());
-            check(ed->clipboardCount() >= 2,
-                  "place: two drawings ticked go down together, as one set to be moved together");
-            // And side by side rather than on top of one another.
-            Bounds one, two;
-            for (const Entity& e : ed->clipboardContents()) {
-                if (e.type == EntityType::Rect) one.expand(e.bounds());
-                else two.expand(e.bounds());
-            }
-            if (one.valid && two.valid)
-                check(two.min.x >= one.max.x - 1e-6 || one.min.x >= two.max.x - 1e-6,
-                      "place: side by side, not one over the other");
-            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
         }
         {
             PartsCatalog put;
@@ -1798,6 +1782,11 @@ int run_partspanel_tests() {
                 if (!row || !row->layout() || row->layout()->count() < 3) continue;
                 QWidget* field = row->layout()->itemAt(1)->widget();
                 if (!field || !field->isVisible()) continue;
+                // A field that carries something BESIDE it - a clear cross, the two halves of a range - is
+                // wider than the box by that much on purpose: the box is what has to line up, so that the
+                // menus and the plain boxes read as one column and the crosses hang off the end.
+                if (field->layout() && field->layout()->count() > 1)
+                    if (QWidget* inner = field->layout()->itemAt(0)->widget()) field = inner;
                 ++fields;
                 widths.insert(field->width());
             }
@@ -1887,6 +1876,148 @@ int run_partspanel_tests() {
             // entry rather than as something typed that looks like one.
             check(gauges.value(0).endsWith(QStringLiteral(" AWG")),
                   "pin table: in the same words the table's own menu offers, so it matches an entry");
+        }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- the Place menu stays open, the fields still line up, and the bill agrees with itself -------
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_four_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-FOUR");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Four-item connector");
+            part.mfrPn = QStringLiteral("FOUR-1");
+            part.params[QStringLiteral("ways")] = QStringLiteral("2");
+            Entity body;
+            body.type = EntityType::Rect;
+            body.points = {{0.0, 0.0}, {10.0, 0.0}, {10.0, 6.0}, {0.0, 6.0}};
+            part.mechanical = partDrawingFromEntities({body});
+            part.schematic = partDrawingFromEntities({body});
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+
+        // THE MENU STAYS OPEN WHILE THE TICKS ARE MADE. A menu closes on the first thing clicked in it, so
+        // choosing "the connector AND its fanout" was two choices of one thing rather than one choice of two.
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-FOUR"));
+        dlg.resize(1500, 900);
+        dlg.show();
+        QApplication::processEvents();
+        QToolButton* place = nullptr;
+        for (QToolButton* b : dlg.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Place")) place = b;
+        check(place != nullptr && place->menu() != nullptr, "apply: the Place button has its menu");
+        if (place && place->menu()) {
+            QMenu* pm = place->menu();
+            // One item, and it is a PANEL: a widget in a menu takes its own clicks, which is what lets the
+            // ticks be made without the menu going.
+            int widgetActions = 0, plainActions = 0;
+            for (QAction* a : pm->actions()) {
+                if (qobject_cast<QWidgetAction*>(a)) ++widgetActions;
+                else if (!a->isSeparator()) ++plainActions;
+            }
+            std::printf("  apply: %d panel(s) in the menu, %d plain item(s)\n", widgetActions, plainActions);
+            check(widgetActions == 1 && plainActions == 0,
+                  "apply: the ticks are in a panel, so clicking one does not close the menu");
+            QWidget* panel = qobject_cast<QWidgetAction*>(pm->actions().first())->defaultWidget();
+            check(panel != nullptr, "apply: the panel is there");
+            if (panel) {
+                QStringList said;
+                for (QCheckBox* b : panel->findChildren<QCheckBox*>()) said << b->text();
+                QPushButton* apply = nullptr;
+                for (QPushButton* b : panel->findChildren<QPushButton*>())
+                    if (b->text() == QStringLiteral("Apply")) apply = b;
+                std::printf("  apply: ticks %s; Apply %s\n", qPrintable(said.join(QStringLiteral(", "))),
+                            apply ? "there" : "missing");
+                check(said.size() == 4, "apply: one tick per drawing a part can have");
+                check(apply != nullptr, "apply: and an Apply to finish on");
+                // Two ticked without the menu closing, then Apply: both go down.
+                for (QCheckBox* b : panel->findChildren<QCheckBox*>())
+                    b->setChecked(b->text().startsWith(QStringLiteral("Mechanical")) ||
+                                  b->text().startsWith(QStringLiteral("Schematic")));
+                QApplication::processEvents();
+                if (apply) apply->click();
+                QApplication::processEvents();
+                std::printf("  apply: %d object(s) placed by one Apply\n", ed.clipboardCount());
+                check(ed.clipboardCount() >= 2, "apply: what was ticked goes down on Apply, all of it");
+                ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+            }
+        }
+
+
+        QFile::remove(libFile);
+    }
+
+    // ---- the bill of materials: one list, two windows, and a way back --------------------------------
+    {
+        // Every edit in the bill's window writes into the drawing as it is made, which is what keeps the side
+        // panel in step - and it left no way out of a change made by accident: a unit picked from a menu on
+        // the wrong row was the drawing's answer from then on.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_bomtwo_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-BOM");
+            part.kind = PartKind::Heatshrink;
+            part.description = QStringLiteral("A sleeve to order");
+            part.mfrPn = QStringLiteral("BOM-1");
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1300, 860);
+        win.show();
+        QApplication::processEvents();
+        Document* doc = win.findChild<Editor*>() ? win.findChild<Editor*>()->document() : nullptr;
+        check(doc != nullptr, "bom two: there is a drawing");
+        if (doc) {
+            auto lines = [doc] {
+                BomTable t;
+                t.fromJson(doc->bom());
+                return static_cast<int>(t.rows.size());
+            };
+            const int before = lines();
+            // ADDED FROM THE PANEL, with the window open: it has to appear in both.
+            win.openBomWindowForTest();
+            QApplication::processEvents();
+            auto* bom = win.findChild<BomDialog*>();
+            check(bom != nullptr, "bom two: the bill's window is open");
+            win.addPartToBom(QStringLiteral("P-BOM"));
+            QApplication::processEvents();
+            std::printf("  bom two: %d line(s) before, %d after adding from the panel\n", before, lines());
+            check(lines() == before + 1, "bom two: the line is in the drawing's bill");
+            if (bom) {
+                check(bom->shownRowCount() >= 1,
+                      "bom two: and in the window that was already open - one list, not two");
+                // AND A WAY BACK. Cancel puts the bill back as it was when the window opened.
+                bom->cancelChanges();
+                QApplication::processEvents();
+                std::printf("  bom two: after Cancel, %d line(s)\n", lines());
+                check(lines() == before,
+                      "bom two: Cancel puts the bill back as it was when the window opened");
+            }
+        }
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
         }
         QFile::remove(libFile);
     }

@@ -230,7 +230,21 @@ void BomDialog::buildUi() {
     summary_ = new QLabel(QString(), this);
     summary_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
     foot->addWidget(summary_, 1);
+    // SAVE, CANCEL, CLOSE - and each of them one thing. Every edit here writes into the drawing as it is
+    // made (which is what keeps the side panel in step), so what was missing was the way back: Cancel puts
+    // the bill back as it was when this window opened. Save keeps what is written from here on, so a Cancel
+    // after it undoes only what came after.
+    auto* saveBtn = new QPushButton(QStringLiteral("Save"), this);
+    saveBtn->setToolTip(QStringLiteral("Write the bill into the drawing and keep it - Cancel after this "
+                                       "undoes only what comes next"));
+    connect(saveBtn, &QPushButton::clicked, this, [this] { saveNow(); });
+    foot->addWidget(saveBtn);
+    auto* cancelBtn = new QPushButton(QStringLiteral("Cancel"), this);
+    cancelBtn->setToolTip(QStringLiteral("Put the bill back as it was when this window opened, and close"));
+    connect(cancelBtn, &QPushButton::clicked, this, [this] { cancelChanges(); });
+    foot->addWidget(cancelBtn);
     auto* closeBtn = new QPushButton(QStringLiteral("Close"), this);
+    closeBtn->setToolTip(QStringLiteral("Leave what is written as it is"));
     connect(closeBtn, &QPushButton::clicked, this, [this] {
         storeTable();
         accept();
@@ -243,6 +257,7 @@ void BomDialog::buildUi() {
 
 void BomDialog::loadTable() {
     if (!editor_ || !editor_->document()) return;
+
     table_.fromJson(editor_->document()->bom());
     unify_ = table_.config.unify;
     loadControlsFromConfig();
@@ -267,10 +282,37 @@ void BomDialog::loadControlsFromConfig() {
     syncing_ = false;
 }
 
+int BomDialog::shownRowCount() const { return static_cast<int>(shownRows().size()); }
+
 void BomDialog::storeTable() {
     if (!editor_ || !editor_->document()) return;
     editor_->document()->bom() = table_.toJson();
     editor_->document()->setDirty(true);
+    // AND WHOEVER ELSE IS SHOWING THIS BILL. The side panel shows the same list: a line added here appeared
+    // there only when something else happened to refresh it, so the two disagreed until they were both
+    // reopened - and which of them was right was anybody's guess.
+    emit bomChanged();
+}
+
+// The bill as it stands, kept: from here on Cancel undoes what comes next and not what has been saved.
+void BomDialog::saveNow() {
+    storeTable();
+    openedWith_ = table_.toJson();
+    if (summary_) summary_->setText(QStringLiteral("Saved to the drawing"));
+}
+
+// EVERYTHING BACK AS IT WAS. Every edit in this window writes straight into the drawing, which is what keeps
+// the side panel in step - and it left no way out of a change made by accident: a unit picked from a menu on
+// the wrong row was the drawing's answer from then on. The bill as it was when this window opened is kept, and
+// this puts it back.
+void BomDialog::cancelChanges() {
+    if (editor_ && editor_->document()) {
+        editor_->document()->bom() = openedWith_;
+        editor_->document()->setDirty(true);
+        table_.fromJson(openedWith_);
+        emit bomChanged();
+    }
+    reject();
 }
 
 std::vector<BomRow> BomDialog::shownRows() const {
@@ -289,8 +331,19 @@ void BomDialog::reload() {
     // The libraries may have changed since this opened - a part added, another connected.
     catalog_.openRemembered();
     lib_ = catalog_.merged();
+    // AND THE BILL ITSELF, out of the drawing. It re-read the LIBRARIES and redrew the table from its own
+    // copy of the bill - so a line added from the side panel, which writes into the drawing, never reached
+    // this window at all: the same list, open in two places, showing two different things.
+    loadTable();
     refreshLibraryList();
     refreshTable();
+}
+
+// The bill as the drawing has it now, kept as the thing Cancel puts back. Said when the window is OPENED
+// rather than on every reload: a reload happens whenever anything writes, and snapshotting then would mean
+// Cancel had nothing left to undo.
+void BomDialog::markOpened() {
+    if (editor_ && editor_->document()) openedWith_ = editor_->document()->bom();
 }
 
 void BomDialog::setConfig(const BomConfig& cfg) {

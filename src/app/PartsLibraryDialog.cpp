@@ -1,4 +1,6 @@
 #include "app/PartsLibraryDialog.h"
+#include <QLayout>
+#include <QWidgetAction>
 #include <QAction>
 #include <QToolButton>
 #include "harness/PartDataFromWeb.h"
@@ -80,7 +82,11 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
     //
     // A sentence-length field still takes what there is: there is nothing to line it up with.
     constexpr int kFieldWidth = 260;
-    if (!wide) {
+    // A field that is a box is set to the width; a field that is a box WITH SOMETHING BESIDE IT (a clear
+    // cross, the two halves of a range) sets its own inner box to that width and is left alone here, so the
+    // boxes line up and the extra hangs off the end rather than eating into them.
+    const bool carriesMore = field->layout() && field->layout()->count() > 1;
+    if (!wide && !carriesMore) {
         field->setMinimumWidth(kFieldWidth);
         field->setMaximumWidth(kFieldWidth);
     }
@@ -892,24 +898,59 @@ void PartsLibraryDialog::buildUi() {
         placeBtn_->setToolTip(QStringLiteral(
             "Put this part on the sheet - then click where it goes. The arrow beside it says WHICH of its "
             "drawings: tick more than one and they go down together, in the order they are listed."));
+        // THE MENU STAYS OPEN WHILE THE TICKS ARE MADE. A menu closes on the first thing clicked in it, so
+        // choosing "the connector AND its fanout" meant opening the menu twice and hoping the first tick had
+        // stuck - which is not a choice of two things, it is two choices of one. The ticks live in a panel
+        // inside the menu (a widget in a menu takes its own clicks), with an Apply on the end of them: tick
+        // what is wanted, in any order, and press Apply once.
         auto* pm = new QMenu(placeBtn_);
+        auto* panel = new QWidget(pm);
+        auto* pl = new QVBoxLayout(panel);
+        pl->setContentsMargins(10, 6, 10, 6);
+        pl->setSpacing(2);
         struct Which { const char* text; LibraryPartDrawing kind; };
         const Which whichOnes[] = {{"Mechanical drawing", LibraryPartDrawing::Mechanical},
                                    {"Schematic symbol", LibraryPartDrawing::Schematic},
                                    {"Fanout", LibraryPartDrawing::Fanout},
                                    {"Fanout, mirrored", LibraryPartDrawing::FanoutOpposite}};
         for (const Which& w : whichOnes) {
-            auto* act = pm->addAction(QString::fromLatin1(w.text));
+            // Kept as ACTIONS, because that is what everything else already asks (see placeTicked), with a
+            // tick box in the panel driving each one. One state, shown once.
+            auto* act = new QAction(QString::fromLatin1(w.text), this);
             act->setCheckable(true);
             act->setData(static_cast<int>(w.kind));
             act->setChecked(w.kind == LibraryPartDrawing::Mechanical);
+            auto* box = new QCheckBox(QString::fromLatin1(w.text), panel);
+            box->setChecked(act->isChecked());
+            connect(box, &QCheckBox::toggled, act, &QAction::setChecked);
+            connect(act, &QAction::toggled, box, &QCheckBox::setChecked);
+            pl->addWidget(box);
             placeWhat_.push_back(act);
         }
-        pm->addSeparator();
-        pm->addAction(QStringLiteral("All of them it has"), this, [this] {
+        auto* buttons = new QWidget(panel);
+        auto* rl2 = new QHBoxLayout(buttons);
+        rl2->setContentsMargins(0, 4, 0, 0);
+        rl2->setSpacing(6);
+        auto* all = new QPushButton(QStringLiteral("All of them it has"), buttons);
+        connect(all, &QPushButton::clicked, this, [this, pm] {
             for (QAction* a : placeWhat_) a->setChecked(true);
+            pm->close();
             placeTicked();
         });
+        rl2->addWidget(all);
+        rl2->addStretch(1);
+        auto* apply = new QPushButton(QStringLiteral("Apply"), buttons);
+        apply->setDefault(true);
+        apply->setToolTip(QStringLiteral("Place what is ticked - the menu closes on this and nothing else"));
+        connect(apply, &QPushButton::clicked, this, [this, pm] {
+            pm->close();
+            placeTicked();
+        });
+        rl2->addWidget(apply);
+        pl->addWidget(buttons);
+        auto* holder = new QWidgetAction(pm);
+        holder->setDefaultWidget(panel);
+        pm->addAction(holder);
         placeBtn_->setMenu(pm);
         connect(placeBtn_, &QToolButton::clicked, this, [this] { placeTicked(); });
         rl->addWidget(placeBtn_);
@@ -1554,11 +1595,17 @@ void PartsLibraryDialog::rebuildParamForm() {
                 // remembering an empty string as though somebody had answered "". A part whose material
                 // has not been decided yet is a real state and it needs a way to be said.
                 {
+                    // THE CROSS IS NOT PART OF THE FIELD. A row is [label][field][unit], and every field is
+                    // one width so the column reads straight down - but a menu with a cross beside it inside
+                    // that width made the MENU narrower than the plain boxes above and below it by exactly
+                    // the width of the cross. The field keeps the width; the cross hangs off the end of it.
                     auto* host = new QWidget(paramHost_);
                     auto* hl = new QHBoxLayout(host);
                     hl->setContentsMargins(0, 0, 0, 0);
                     hl->setSpacing(2);
-                    hl->addWidget(box, 1);
+                    box->setMinimumWidth(260);
+                    box->setMaximumWidth(260);
+                    hl->addWidget(box, 0);
                     auto* clear = new QToolButton(host);
                     clear->setIcon(crossIcon(QColor("#e0a0a0"), 12));
                     clear->setIconSize(QSize(12, 12));

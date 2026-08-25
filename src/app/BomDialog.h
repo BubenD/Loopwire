@@ -42,6 +42,13 @@ public:
     // Testing / driving.
     const BomTable& table() const { return table_; }
     void reload();                       // re-read the drawing and redraw the table
+    // Written into the drawing as it stands (and kept, so Cancel from here on does not undo it), and
+    // everything back as it was when this window opened.
+    void saveNow();
+    void cancelChanges();
+    void markOpened();   // the bill as it stands is what Cancel will put back
+    // How many lines the window is showing, for a test of "one list, two windows".
+    int shownRowCount() const;
     void addManualRow();
     void addFromLibrary(const QString& partId, double qty);
     void removeCurrentRow();
@@ -56,8 +63,15 @@ public:
     // the new order - they are the rows' places, not something a row carries.
     void moveRow(int from, int to);
 
+signals:
+    // The bill has been written to. The side panel shows the same bill, and a line added in one place has to
+    // appear in the other - two views of one list that disagree is worse than one view.
+    void bomChanged();
+
 private:
     void buildUi();
+    // The bill as the drawing had it when this window opened: what Cancel puts back.
+    QJsonObject openedWith_;
     void refreshTable();
     void refreshLibraryList();
     int shownColumnCount() const;

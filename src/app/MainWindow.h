@@ -125,6 +125,9 @@ public:
     // A library part as a line of this drawing's bill of materials, one of it. Added BY HAND, which is what
     // makes it removable again: the lines the drawing itself calls for are the drawing's to say.
     void addPartToBom(const QString& partId);
+    // The bill's own window, opened. Public beside addPartToBom because the two together are the thing worth
+    // checking: a line added in one place has to appear in the other.
+    void openBomWindowForTest();
     // The menu for a part in the panel: place its drawings, list it, edit it. Built rather than shown, so
     // what is on it can be asked for.
     QMenu* buildPartsPanelMenu(const QString& partId);
