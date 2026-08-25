@@ -1,4 +1,6 @@
 #include "app/BomDialog.h"
+#include <QEvent>
+#include <QDropEvent>
 
 #include "app/UiBits.h"
 #include "app/Editor.h"
@@ -71,8 +73,21 @@ void BomDialog::buildUi() {
     // simply follows - a part is never carried about by its number.
     view_->setSelectionBehavior(QAbstractItemView::SelectRows);
     view_->setSelectionMode(QAbstractItemView::SingleSelection);
+    // A LINE IS DRAGGED BY THE LIST, not only by the little numbers down the side. Dropping BETWEEN two
+    // lines is what moving one means - a bill is read in order, and an order that can only be changed by
+    // dragging an 18-pixel handle is an order nobody changes.
+    view_->setDragEnabled(true);
+    view_->setAcceptDrops(true);
+    view_->viewport()->setAcceptDrops(true);
+    view_->setDropIndicatorShown(true);
     view_->setDragDropMode(QAbstractItemView::InternalMove);
     view_->setDragDropOverwriteMode(false);
+    view_->setDefaultDropAction(Qt::MoveAction);
+    // AND THE DROP MOVES THE LINE. A table left to itself moves the CELLS that were dragged, which on a bill
+    // would carry a description into the row above and leave a hole behind it. The drop is taken here, turned
+    // into "this line goes there", and the table is redrawn from the rows - so what is on the screen and what
+    // is in the bill cannot disagree.
+    view_->viewport()->installEventFilter(this);
     // Right-click a line: take it off. The button is still there, but a list is worked on where the cursor
     // already is, and "remove" is looked for on the thing being removed.
     view_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -397,6 +412,21 @@ void BomDialog::refreshTable() {
                         if (syncing_) return;
                         for (BomRow& tr : table_.rows)
                             if (!tr.fromDrawing && tr.rowId == rowId) {
+                                // THE SAME QUANTITY, SAID ANOTHER WAY. 2 m IS 2000 mm: changing the unit on
+                                // a line used to relabel it and leave the figure alone, so a line that said
+                                // "2 m" became "2 mm" - the program saying something untrue about how much to
+                                // buy, in the one place somebody orders from.
+                                //
+                                // Between a length and a count there is nothing to convert (a hundred
+                                // grommets are not any number of metres), so the figure stands.
+                                const double was = tr.qty;
+                                tr.qty = convertQuantity(tr.qty, tr.unit, u);
+                                if (std::abs(tr.qty - was) > 1e-12 && summary_)
+                                    summary_->setText(QStringLiteral("%1 %2 is %3 %4")
+                                                          .arg(was, 0, 'g', 6)
+                                                          .arg(tr.unit)
+                                                          .arg(tr.qty, 0, 'g', 6)
+                                                          .arg(u));
                                 tr.unit = u;
                                 break;
                             }
@@ -501,6 +531,28 @@ bool BomDialog::exportCsv(const QString& path) {
         out << cells.join(QLatin1Char(',')) << "\r\n";
     }
     return true;
+}
+
+bool BomDialog::eventFilter(QObject* watched, QEvent* e) {
+    if (view_ && watched == view_->viewport() && e->type() == QEvent::Drop) {
+        auto* de = static_cast<QDropEvent*>(e);
+        const int from = view_->currentRow();
+        // WHERE IT LANDS, including between two lines: the row under the cursor if the cursor is in its top
+        // half, the one after it if in its bottom half. Below the last line means the end of the list.
+        const QPoint at = de->position().toPoint();
+        int to = view_->rowAt(at.y());
+        if (to < 0) {
+            to = view_->rowCount() - 1;
+        } else {
+            const QRect r = view_->visualItemRect(view_->item(to, 0));
+            if (r.isValid() && at.y() > r.center().y() && to < view_->rowCount() - 1) ++to;
+        }
+        de->setDropAction(Qt::IgnoreAction);
+        de->accept();
+        if (from >= 0 && to >= 0 && from != to) moveRow(from, to);
+        return true;
+    }
+    return QDialog::eventFilter(watched, e);
 }
 
 void BomDialog::moveRow(int from, int to) {

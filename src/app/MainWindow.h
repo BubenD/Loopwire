@@ -115,6 +115,9 @@ public:
     // drawing, two, or all of them, side by side as one placement. Public because it IS the gesture, and a
     // test of "the ticks decide" has to be able to make it.
     void placeFromPartsPanel(const QString& partId, bool hasMech);
+    // The order the shelf's sections are in, as somebody has dragged them - and that order, written down.
+    std::vector<PartKind> partsPanelKindOrder() const;
+    void rememberPartsPanelKindOrder();
     // Whether a schematic connector is placed with its fanout beside it (the parts panel's own switch,
     // remembered between sessions). Public so a test can read what the switch says without reaching into
     // the panel to find the box.

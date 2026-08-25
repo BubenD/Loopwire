@@ -42,7 +42,10 @@ struct BomRow {
 struct BomConfig {
     // The unit LENGTHS are shown and totalled in. A drawing is in millimetres, but a harness is
     // usually bought and listed by the metre; a row counted in pieces is not touched by this.
-    QString lengthUnit = QStringLiteral("m");
+    // MILLIMETRES, because that is what the drawing is in. A bill in metres of a harness drawn in
+    // millimetres asks everybody reading it to divide by a thousand in their head, and the one place a
+    // rounding creeps in is the place nobody checks.
+    QString lengthUnit = QStringLiteral("mm");
     // Total the rows that name the same part into one line.
     bool unify = true;
     // Include what the drawing itself calls for (a row per connector and per wire).
@@ -64,6 +67,15 @@ struct BomConfig {
 
 // The seven columns, in order. The labels are the DEFAULTS: a drawing may rename any of them, so a
 // company's own wording ends up on the sheet.
+// HOW MANY MILLIMETRES ONE OF THIS UNIT IS, or 0 for a unit that is not a length at all ("each", "off").
+// A quantity in one length unit is the same quantity in another - 2 m IS 2000 mm - so changing the unit on a
+// line converts what is on it rather than relabelling it, which would be the program saying something untrue
+// about how much to buy.
+double lengthUnitInMm(const QString& unit);
+// A quantity carried from one unit to another. Between two lengths it is converted; anything else (pieces to
+// metres) is left alone, because there is no answer - a hundred grommets are not any number of metres.
+double convertQuantity(double qty, const QString& fromUnit, const QString& toUnit);
+
 QStringList bomDefaultHeaders();
 int bomColumnCount();
 

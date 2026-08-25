@@ -93,6 +93,29 @@ std::vector<BomRow> bomApplyConfig(const std::vector<BomRow>& rows, const BomCon
     return out;
 }
 
+double lengthUnitInMm(const QString& unit) {
+    const QString u = unit.trimmed().toLower();
+    if (u == QStringLiteral("mm")) return 1.0;
+    if (u == QStringLiteral("cm")) return 10.0;
+    if (u == QStringLiteral("m")) return 1000.0;
+    if (u == QStringLiteral("km")) return 1000000.0;
+    if (u == QStringLiteral("in") || u == QStringLiteral("inch") || u == QStringLiteral("\"")) return 25.4;
+    if (u == QStringLiteral("ft") || u == QStringLiteral("feet") || u == QStringLiteral("foot") ||
+        u == QStringLiteral("'"))
+        return 304.8;
+    if (u == QStringLiteral("yd") || u == QStringLiteral("yard")) return 914.4;
+    return 0.0;   // "each", "off", "set": a count, not a length
+}
+
+double convertQuantity(double qty, const QString& fromUnit, const QString& toUnit) {
+    const double from = lengthUnitInMm(fromUnit);
+    const double to = lengthUnitInMm(toUnit);
+    // Both lengths: the same quantity said another way. Otherwise there is nothing to say - a hundred
+    // grommets are not any number of metres - so the figure stands and only the word changes.
+    if (from <= 0.0 || to <= 0.0) return qty;
+    return qty * from / to;
+}
+
 QStringList bomDefaultHeaders() {
     // "#" rather than "Line #": the column is one character wide on a sheet, and the heading
     // should not be the widest thing in it.

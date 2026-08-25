@@ -6160,8 +6160,11 @@ int run_harness_tests() {
         // ---- The configuration: what the list works in, and which columns reach the sheet ----
         {
             BomConfig cfg;
-            check(cfg.lengthUnit == QLatin1String("m") && cfg.unify && cfg.includeDrawing,
-                  "bom config: lengths by the metre, totalled, with the drawing included");
+            // MILLIMETRES, because that is what the drawing is in. A bill in metres of a harness drawn in
+            // millimetres asks everybody reading it to divide by a thousand in their head, and the one place
+            // a rounding creeps in is the place nobody checks.
+            check(cfg.lengthUnit == QLatin1String("mm") && cfg.unify && cfg.includeDrawing,
+                  "bom config: lengths in the drawing's own unit, totalled, with the drawing included");
             for (int i = 0; i < bomColumnCount(); ++i)
                 check(cfg.columnShown(i), "bom config: every column reaches the sheet unless told");
             cfg.setColumnShown(2, false);
@@ -7465,6 +7468,35 @@ int run_harness_tests() {
         std::printf("  bom count: mechanical only counts %.0f\n", onlyQty);
         check(std::abs(onlyQty - 1.0) < 1e-9,
               "bom count: with nothing on a circuit sheet, what is drawn is what is counted");
+    }
+
+
+    // ---- a length said in another unit is the same length --------------------------------------------
+    {
+        // 2 m IS 2000 mm. Changing the unit on a line used to relabel it and leave the figure alone, so a
+        // line that said "2 m" became "2 mm" - the program saying something untrue about how much to buy, in
+        // the one place somebody orders from.
+        struct Case { double qty; const char* from; const char* to; double want; };
+        const Case cases[] = {{2.0, "m", "mm", 2000.0},
+                              {2000.0, "mm", "m", 2.0},
+                              {1.0, "m", "cm", 100.0},
+                              {1.0, "ft", "mm", 304.8},
+                              {12.0, "in", "ft", 1.0},
+                              {1.0, "yd", "in", 36.0}};
+        for (const Case& c : cases) {
+            const double got = convertQuantity(c.qty, QString::fromLatin1(c.from),
+                                               QString::fromLatin1(c.to));
+            std::printf("  units: %g %s = %g %s\n", c.qty, c.from, got, c.to);
+            check(std::abs(got - c.want) < 1e-6, "units: a length said another way is the same length");
+        }
+        // A COUNT IS NOT A LENGTH. A hundred grommets are not any number of metres, so the figure stands and
+        // only the word changes - guessing here would be worse than leaving it alone.
+        check(std::abs(convertQuantity(100.0, QStringLiteral("each"), QStringLiteral("m")) - 100.0) < 1e-9,
+              "units: pieces are not converted into metres - there is no answer to convert to");
+        check(std::abs(convertQuantity(5.0, QStringLiteral("m"), QStringLiteral("each")) - 5.0) < 1e-9,
+              "units: nor the other way about");
+        check(std::abs(lengthUnitInMm(QStringLiteral("each"))) < 1e-12,
+              "units: and a count says so - no length in it at all");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

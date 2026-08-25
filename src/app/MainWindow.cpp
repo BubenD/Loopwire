@@ -7040,6 +7040,11 @@ void MainWindow::leavePropertiesPanel() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // A SECTION OF THE SHELF DROPPED IN A NEW PLACE. The tree does the moving; what has to happen after it is
+    // writing the order down and redrawing from it, so the tree and the setting cannot drift apart. Queued,
+    // because at this moment the move has not happened yet - the order is read once it has.
+    if (partsPanelTree_ && obj == partsPanelTree_->viewport() && e->type() == QEvent::Drop)
+        QTimer::singleShot(0, this, [this] { rememberPartsPanelKindOrder(); });
     // The strip along the bottom of the canvas. A right press on a tab opens that sheet's own menu; a
     // right press anywhere else on the strip does nothing at all. Either way it stops here rather than
     // falling through to the canvas, which would answer with the menu for the drawing.
@@ -13004,6 +13009,19 @@ QDockWidget* MainWindow::makePartsPanel() {
     partsPanelTree_->headerItem()->setToolTip(2, tr("Schematic symbol"));
     partsPanelTree_->headerItem()->setToolTip(3, tr("Fanout drawing"));
     partsPanelTree_->setRootIsDecorated(true);   // a heading per kind, which opens and closes
+    // THE SECTIONS CAN BE PUT IN THE ORDER SOMEBODY WORKS IN. The shelf is grouped by kind, and which kind
+    // matters most is the shop's business, not the program's: a connector shop wants connectors at the top
+    // and the heat-shrink sizes further down; a panel shop the other way about. Drag a heading, and the
+    // order is remembered between sessions.
+    //
+    // Only the HEADINGS move. A part belongs to its kind - dragging one out of its section would say it was
+    // something it is not - so a part row is neither dragged nor dropped on.
+    partsPanelTree_->setDragDropMode(QAbstractItemView::InternalMove);
+    partsPanelTree_->setDragEnabled(true);
+    partsPanelTree_->viewport()->setAcceptDrops(true);
+    partsPanelTree_->setDropIndicatorShown(true);
+    partsPanelTree_->setDefaultDropAction(Qt::MoveAction);
+    partsPanelTree_->viewport()->installEventFilter(this);
     partsPanelTree_->setUniformRowHeights(true);
     partsPanelTree_->setAllColumnsShowFocus(true);
     // The part takes what is left, and the three tick columns stay narrow. Left to itself a header stretches
@@ -13443,6 +13461,52 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
         6000);
 }
 
+// THE ORDER THE SHELF'S SECTIONS ARE IN, as somebody has arranged them. Kept as a list of kinds; any kind
+// not in it (a new one, or one never dragged) follows in the program's own order, so the list never has to be
+// complete and a new kind is never lost.
+std::vector<PartKind> MainWindow::partsPanelKindOrder() const {
+    QSettings s;
+    const QStringList said = s.value(QStringLiteral("ui/partsPanelKindOrder")).toStringList();
+    std::vector<PartKind> out;
+    QSet<int> have;
+    for (const QString& one : said) {
+        bool ok = false;
+        const int k = one.toInt(&ok);
+        if (!ok || have.contains(k)) continue;
+        for (PartKind kind : allPartKinds())
+            if (static_cast<int>(kind) == k) {
+                out.push_back(kind);
+                have.insert(k);
+            }
+    }
+    for (PartKind kind : allPartKinds())
+        if (!have.contains(static_cast<int>(kind))) out.push_back(kind);
+    return out;
+}
+
+// The order as the tree now shows it, written down. Taken from the tree AFTER the drop rather than worked out
+// from the drop itself: what the eye sees is the answer, and there is only one place it can be read from.
+void MainWindow::rememberPartsPanelKindOrder() {
+    if (!partsPanelTree_) return;
+    QStringList said;
+    QSet<int> seen;
+    std::function<void(QTreeWidgetItem*)> walk = [&](QTreeWidgetItem* it) {
+        const QVariant kind = it->data(0, Qt::UserRole + 4);
+        if (kind.isValid() && !seen.contains(kind.toInt())) {
+            said << QString::number(kind.toInt());
+            seen.insert(kind.toInt());
+        }
+        for (int i = 0; i < it->childCount(); ++i) walk(it->child(i));
+    };
+    for (int i = 0; i < partsPanelTree_->topLevelItemCount(); ++i)
+        walk(partsPanelTree_->topLevelItem(i));
+    if (said.isEmpty()) return;
+    QSettings s;
+    s.setValue(QStringLiteral("ui/partsPanelKindOrder"), said);
+    s.sync();
+    refreshPartsPanel();   // redrawn from the order, so the tree and the setting cannot disagree
+}
+
 void MainWindow::refreshPartsPanel() {
     if (!partsPanelTree_) return;
     partsPanelTree_->clear();
@@ -13515,6 +13579,8 @@ void MainWindow::refreshPartsPanel() {
         item->setData(0, Qt::UserRole + 1, mech);           // the mechanical drawing where there is one
         item->setData(0, Qt::UserRole + 2, mech || schem);   // is there anything to put down at all
         item->setData(0, Qt::UserRole + 3, fan);
+        // A part belongs to its kind: it is picked and placed, never dragged out of its section.
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         // A column each, ticked: what the part IS, read down the columns rather than opened part by part.
         // A tick and nothing - not a tick and a cross - because the eye counts ticks in a column and stops
         // at the gaps.
@@ -13553,13 +13619,17 @@ void MainWindow::refreshPartsPanel() {
     // found by opening one heading rather than by scrolling past the sleeves.
     auto addByKind = [this, &addPart, &wanted, &matches](const std::vector<LibraryPart>& parts,
                                                         QTreeWidgetItem* under) {
-        for (PartKind k : allPartKinds()) {
+        for (PartKind k : partsPanelKindOrder()) {
             std::vector<const LibraryPart*> ofKind;
             for (const LibraryPart& part : parts)
                 if (part.kind == k && wanted(part) && matches(part)) ofKind.push_back(&part);
             if (ofKind.empty()) continue;
             QTreeWidgetItem* head = under ? new QTreeWidgetItem(under)
                                           : new QTreeWidgetItem(partsPanelTree_);
+            // Which kind this heading is (so the order can be read back off the tree), and draggable -
+            // headings are what moves; the parts under them go with their own kind.
+            head->setData(0, Qt::UserRole + 4, static_cast<int>(k));
+            head->setFlags(Qt::ItemIsEnabled | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
             head->setText(0, QStringLiteral("%1  (%2)").arg(partKindName(k)).arg(ofKind.size()));
             QFont f = head->font(0);
             f.setBold(true);

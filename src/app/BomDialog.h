@@ -68,6 +68,11 @@ signals:
     // appear in the other - two views of one list that disagree is worse than one view.
     void bomChanged();
 
+protected:
+    // A line dropped on the list moves the LINE. Left to itself a table moves the cells that were dragged,
+    // which on a bill carries a description into the row above and leaves a hole behind it.
+    bool eventFilter(QObject* watched, QEvent* e) override;
+
 private:
     void buildUi();
     // The bill as the drawing had it when this window opened: what Cancel puts back.
