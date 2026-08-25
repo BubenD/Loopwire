@@ -1715,8 +1715,10 @@ int run_partspanel_tests() {
         // WHAT A DOUBLE-CLICK PLACES: the ticks say, and they can say more than one.
         std::vector<QCheckBox*> ticks;
         for (QCheckBox* b : win.findChildren<QCheckBox*>())
+            // A fanout is asked for by the SIDE it shows now - front or back - rather than by how the second
+            // one was made.
             if (b->text() == QStringLiteral("mechanical") || b->text() == QStringLiteral("schematic") ||
-                b->text() == QStringLiteral("fanout") || b->text() == QStringLiteral("fanout mirrored"))
+                b->text() == QStringLiteral("fanout front") || b->text() == QStringLiteral("fanout back"))
                 ticks.push_back(b);
         std::printf("  shelf: %lld tick(s) for what a double-click places\n",
                     static_cast<long long>(ticks.size()));
@@ -1849,10 +1851,12 @@ int run_partspanel_tests() {
         QStringList said(heads.begin(), heads.end());
         said.sort();
         std::printf("  pin heads: %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+        // In the words a datasheet uses: what the column holds is the pin's CROSS SECTION, and the unit box
+        // needs no heading because it says AWG or mm2 on its own face.
         check(heads.contains(QStringLiteral("Pin size")) &&
-                  heads.contains(QStringLiteral("Conductor")) &&
+                  heads.contains(QStringLiteral("Cross section")) &&
                   heads.contains(QStringLiteral("Current (A)")) &&
-                  heads.contains(QStringLiteral("Which pins")),
+                  heads.contains(QStringLiteral("Pins")),
               "pin heads: every field of a pin row is named over it");
 
         // AND THE PIN TABLE IS SEEDED FROM THEM. A symbol BUILT from the data is labelled with the pin sizes;
@@ -2011,6 +2015,121 @@ int run_partspanel_tests() {
                 std::printf("  bom two: after Cancel, %d line(s)\n", lines());
                 check(lines() == before,
                       "bom two: Cancel puts the bill back as it was when the window opened");
+            }
+        }
+        {
+            PartsCatalog put;
+            put.openRemembered();
+            put.disconnectLibrary(libFile);
+            put.remember();
+        }
+        QFile::remove(libFile);
+    }
+
+
+    // ---- front and back, and a pin table that writes back to the library ----------------------------
+    {
+        // FRONT AND BACK, not "mirrored". Which side of the connector a fanout is drawn from is what it IS -
+        // the same drawing seen from the face or from the wires - and "mirrored" says how the second one was
+        // made rather than what it shows.
+        MainWindow win;
+        win.resize(1300, 860);
+        win.show();
+        QApplication::processEvents();
+        QStringList ticks;
+        for (QCheckBox* b : win.findChildren<QCheckBox*>())
+            if (b->text().contains(QStringLiteral("fanout"))) ticks << b->text();
+        ticks.sort();
+        std::printf("  sides: the shelf offers %s\n", qPrintable(ticks.join(QStringLiteral(" | "))));
+        check(ticks.contains(QStringLiteral("fanout front")) &&
+                  ticks.contains(QStringLiteral("fanout back")),
+              "sides: a fanout is asked for by the side it shows, not by how it was made");
+        check(!ticks.contains(QStringLiteral("fanout mirrored")),
+              "sides: and \"mirrored\" is not one of the words");
+    }
+
+    // ---- a correction on the drawing reaches the library --------------------------------------------
+    {
+        // The figures went one way only: the library filled the pin table's empty cells, and a correction
+        // made on the drawing stayed on that drawing - so the next connector placed from the same part came
+        // down with the old ones, and the two disagreed with nothing to say which was right.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_back_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-BACK");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Two-way, pins fitted");
+            part.params[QStringLiteral("ways")] = QStringLiteral("2");
+            setPartIncludesPins(part, true);
+            std::vector<PartPinType> types;
+            PartPinType t;
+            t.size = QStringLiteral("size 1");
+            t.unit = QStringLiteral("AWG");
+            t.gauge = QStringLiteral("22");
+            t.amps = QStringLiteral("5");
+            types.push_back(t);
+            setPartPinTypes(part, types);
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+
+        MainWindow win;
+        win.resize(1300, 860);
+        win.show();
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "back: there is a drawing");
+        if (ed && ed->document()) {
+            // A connector on the sheet, and the pin table's answer written back: pin 1 corrected to 20 AWG
+            // at 7 A, pin 2 left as the library had it.
+            Entity conn;
+            conn.id = QStringLiteral("X1");
+            conn.type = EntityType::Connector;
+            conn.a = {0.0, 0.0};
+            conn.meta.insert(QStringLiteral("pinCount"), 2);
+            conn.meta.insert(QStringLiteral("libPart"), QStringLiteral("P-BACK"));
+            QJsonArray gauges{QStringLiteral("20 AWG"), QStringLiteral("22 AWG")};
+            QJsonArray amps{QStringLiteral("7"), QStringLiteral("5")};
+            conn.meta.insert(QStringLiteral("pinGauge"), gauges);
+            conn.meta.insert(QStringLiteral("pinAmp"), amps);
+            ed->document()->entities().push_back(conn);
+            win.writePinTableBackToLibrary(QStringLiteral("X1"));
+            QApplication::processEvents();
+
+            PartsLibrary back;
+            check(back.load(libFile), "back: the library file is readable");
+            const LibraryPart* p = back.byId(QStringLiteral("P-BACK"));
+            check(p != nullptr, "back: the part is still there");
+            if (p) {
+                const std::vector<PartPinType> types = partPinTypes(*p);
+                QStringList said;
+                for (const PartPinType& t : types)
+                    said << QStringLiteral("%1: %2 %3 @%4A [%5]")
+                                .arg(t.size, t.gauge, t.unit, t.amps, t.pins);
+                std::printf("  back: %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+                check(types.size() == 2,
+                      "back: two sizes of pin now, because the table says the two pins differ");
+                bool has20 = false, has22 = false;
+                for (const PartPinType& t : types) {
+                    if (t.gauge == QStringLiteral("20") && t.amps == QStringLiteral("7") &&
+                        t.pins == QStringLiteral("1"))
+                        has20 = true;
+                    if (t.gauge == QStringLiteral("22") && t.amps == QStringLiteral("5") &&
+                        t.pins == QStringLiteral("2"))
+                        has22 = true;
+                }
+                check(has20, "back: the correction made on the drawing is in the library, against pin 1");
+                check(has22, "back: and what was already right is still right, against pin 2");
+                for (const PartPinType& t : types)
+                    if (t.gauge == QStringLiteral("22"))
+                        check(t.size == QStringLiteral("size 1"),
+                              "back: a row that already described that pair keeps its own name for it");
             }
         }
         {

@@ -100,6 +100,9 @@ public:
     void editDrawing(LibraryPartDrawing kind);
     void clearDrawing(bool mechanical);
     bool saveLibrary();
+    // Re-read the connected libraries off disk and redraw. Wanted when something OUTSIDE this window has
+    // written to them - a pin table on the drawing correcting the figures it took from here.
+    void reloadTreeForTest();
     // Seed one fanout side from a one-off mirror of the other - a starting point to hand-correct
     // and capture, not a transform applied every time the fanout is placed. `intoOpposite`: true
     // seeds fanoutOpposite from fanout, false seeds fanout from fanoutOpposite.

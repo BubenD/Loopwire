@@ -11337,6 +11337,89 @@ void MainWindow::showValidationRules() {
     dlg->raise();
 }
 
+// THE PIN TABLE'S ANSWER, BACK INTO THE LIBRARY. Apart from the window that asks for it, because a modal
+// dialog cannot be driven by a test and this is the part worth checking: what ends up in the library file.
+void MainWindow::writePinTableBackToLibrary(const QString& connectorId) {
+    if (connectorId.isEmpty() || !doc_) return;
+    ConnectorSpec s;
+    QString libId;
+    bool found = false;
+    for (const auto& en : doc_->entities())
+        if (en.id == connectorId && en.type == EntityType::Connector) {
+            s = connectorSpecFromMeta(en.meta);
+            libId = en.meta.value(QStringLiteral("libPart")).toString();
+            found = true;
+            break;
+        }
+    if (!found) return;
+// AND BACK INTO THE LIBRARY, when this connector is a copy of a catalogue part that comes with its pins.
+//
+// The figures went one way only: the library filled the table's empty cells, and a correction made on the
+// drawing stayed on that drawing - so the next connector placed from the same part came down with the old
+// ones, and the two disagreed with nothing to say which was right. A datasheet figure corrected once
+// should be corrected everywhere it is kept.
+//
+// Written as ROWS, the way the library holds them: the pins that share a cross-section and a rating are
+// one type, and which pins those are is the list beside it. A row that already described that pair keeps
+// its own name for the size, because "size 1" is somebody's word for it and not ours to replace.
+if (libId.isEmpty()) return;
+    {
+    PartsCatalog catalog;
+    catalog.openRemembered();
+    // The catalogue hands out a part to READ; the library it lives in hands out one to write to - which
+        // is the same object, reached the way anything that writes has to reach it.
+        PartsLibrary* owner = catalog.byPath(catalog.pathOf(libId));
+        LibraryPart* part = owner ? owner->byId(libId) : nullptr;
+        if (part && partIncludesPins(*part)) {
+        const std::vector<PartPinType> had = partPinTypes(*part);
+        std::vector<PartPinType> now;
+        for (int i = 0; i < s.pinCount; ++i) {
+            QString gauge = i < s.pinGauge.size() ? s.pinGauge[i].trimmed() : QString();
+            const QString amps = i < s.pinAmp.size() ? s.pinAmp[i].trimmed() : QString();
+            if (gauge.isEmpty() && amps.isEmpty()) continue;
+            // The unit is written on the figure in the table ("20 AWG"); the library keeps the two apart.
+            QString unit = crossSectionAwg_ ? QStringLiteral("AWG") : QStringLiteral("mm2");
+            if (gauge.endsWith(QStringLiteral("AWG"), Qt::CaseInsensitive)) {
+                gauge.chop(3);
+                gauge = gauge.trimmed();
+                unit = QStringLiteral("AWG");
+            } else if (gauge.endsWith(QStringLiteral("mm2"), Qt::CaseInsensitive)) {
+                gauge.chop(3);
+                gauge = gauge.trimmed();
+                unit = QStringLiteral("mm2");
+            }
+            PartPinType* into = nullptr;
+            for (PartPinType& t : now)
+                if (t.gauge == gauge && t.unit == unit && t.amps == amps) into = &t;
+            if (!into) {
+                PartPinType fresh;
+                fresh.gauge = gauge;
+                fresh.unit = unit;
+                fresh.amps = amps;
+                for (const PartPinType& was : had)
+                    if (was.gauge == gauge && was.unit == unit && was.amps == amps)
+                        fresh.size = was.size;   // its old name for this pair
+                if (fresh.size.isEmpty())
+                    fresh.size = gauge.isEmpty() ? QStringLiteral("size %1").arg(now.size() + 1) : gauge;
+                now.push_back(fresh);
+                into = &now.back();
+            }
+            into->pins += (into->pins.isEmpty() ? QString() : QStringLiteral(",")) +
+                          QString::number(i + 1);
+        }
+        if (!now.empty()) {
+            setPartPinTypes(*part, now);
+            catalog.saveAll();
+            if (libraryDlg_) libraryDlg_->reloadTreeForTest();
+            statusBar()->showMessage(tr("%1 pin type(s) written back to %2 in the library")
+                                         .arg(now.size())
+                                         .arg(part->title()),
+                                     5000);
+        }
+    }
+}
+}
+
 void MainWindow::showPinTable(const QString& connectorId) {
     if (connectorId.isEmpty() || !doc_) return;
     ConnectorSpec s;
@@ -11445,6 +11528,7 @@ void MainWindow::showPinTable(const QString& connectorId) {
     editor_->applyConnectorSpecToSelection(s);
     refreshProperties();
     if (canvas_) canvas_->update();
+    writePinTableBackToLibrary(connectorId);
 }
 
 void MainWindow::showBomDialog() {
@@ -13106,8 +13190,11 @@ QDockWidget* MainWindow::makePartsPanel() {
         const Which whichOnes[] = {
             {"mechanical", "mech", "The part as it is in the metal"},
             {"schematic", "schem", "Its symbol, for a circuit sheet"},
-            {"fanout", "fan", "How the wires break out of it"},
-            {"fanout mirrored", "fanOpp", "The other side of the same fanout"}};
+            // FRONT AND BACK, not "mirrored". Which side of the connector it is drawn from is what a fanout
+            // IS - the same drawing seen from the face or from the wires - and "mirrored" says how the second
+            // one was made rather than what it shows. Somebody placing one is choosing a side.
+            {"fanout front", "fan", "How the wires break out of it, seen from the face"},
+            {"fanout back", "fanOpp", "The same fanout seen from the wires"}};
         QSettings s;
         for (const Which& w : whichOnes) {
             auto* box = new QCheckBox(tr(w.text), what);
@@ -13434,7 +13521,7 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
                    ? std::vector<Entity>{}
                    : partDrawingBlockInstance(*part, part->fanout, QStringLiteral("fanout"),
                                               Vec2{0.0, 0.0}),
-               tr("fanout"));
+               tr("fanout front"));
     if (ticked(3)) {
         const QJsonArray other = part->fanoutOpposite.isEmpty() ? part->fanout : part->fanoutOpposite;
         addOne(other.isEmpty() ? std::vector<Entity>{}
@@ -13442,7 +13529,7 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
                                                           QStringLiteral("fanout (opposite)"),
                                                           Vec2{0.0, 0.0},
                                                           part->fanoutOpposite.isEmpty()),
-               tr("fanout mirrored"));
+               tr("fanout back"));
     }
     if (all.empty()) {
         statusBar()->showMessage(

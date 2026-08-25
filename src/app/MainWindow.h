@@ -131,6 +131,10 @@ public:
     // The bill's own window, opened. Public beside addPartToBom because the two together are the thing worth
     // checking: a line added in one place has to appear in the other.
     void openBomWindowForTest();
+    // The pin table's answer, written back into the library part the connector is a copy of - a correction
+    // made on the drawing belongs everywhere that figure is kept. Public because the window that asks for it
+    // is modal, and what is worth checking is what ends up in the library.
+    void writePinTableBackToLibrary(const QString& connectorId);
     // The menu for a part in the panel: place its drawings, list it, edit it. Built rather than shown, so
     // what is on it can be asked for.
     QMenu* buildPartsPanelMenu(const QString& partId);

@@ -863,7 +863,7 @@ void PartsLibraryDialog::buildUi() {
     // is drawn, checked and placed all day, and the schematic symbol is the occasional one. The first pane is
     // the one the eye lands on.
     const Side sides[] = {{"Mechanical drawing", true}, {"Schematic symbol", false},
-                          {"Fanout", false}};
+                          {"Fanout front", false}};
     // THE EYE, over all three drawings at once. The connection point is drawn ORANGE over the part - the line
     // the harness attaches to - and while the drawing itself is being checked that mark is in the way of seeing
     // it: an orange line reads as part of the part. So it goes, and comes back. One button for the three panes
@@ -911,8 +911,8 @@ void PartsLibraryDialog::buildUi() {
         struct Which { const char* text; LibraryPartDrawing kind; };
         const Which whichOnes[] = {{"Mechanical drawing", LibraryPartDrawing::Mechanical},
                                    {"Schematic symbol", LibraryPartDrawing::Schematic},
-                                   {"Fanout", LibraryPartDrawing::Fanout},
-                                   {"Fanout, mirrored", LibraryPartDrawing::FanoutOpposite}};
+                                   {"Fanout front", LibraryPartDrawing::Fanout},
+                                   {"Fanout back", LibraryPartDrawing::FanoutOpposite}};
         for (const Which& w : whichOnes) {
             // Kept as ACTIONS, because that is what everything else already asks (see placeTicked), with a
             // tick box in the panel driving each one. One state, shown once.
@@ -1266,6 +1266,12 @@ void PartsLibraryDialog::buildUi() {
     });
     foot->addWidget(closeBtn);
     root->addLayout(foot);
+}
+
+void PartsLibraryDialog::reloadTreeForTest() {
+    catalog_.openRemembered();
+    reloadTree();
+    showPart(currentId_);
 }
 
 void PartsLibraryDialog::reloadTree() {
@@ -2710,11 +2716,15 @@ void PartsLibraryDialog::rebuildPinTypes() {
         hl->setContentsMargins(0, 0, 0, 0);
         hl->setSpacing(4);
         struct Col { const char* text; int width; int stretch; };
+        // WHAT EACH COLUMN IS, in the words a datasheet uses. "Conductor" is what the column holds, but what
+        // a datasheet calls it is its CROSS SECTION - and the unit box needs no heading at all, because it
+        // says AWG or mm2 on its own face. "Current (A" was a heading cut in half by a column too narrow for
+        // it, which is worse than no heading.
         const Col cols[] = {{"Pin size", 70, 0},
-                            {"Conductor", 90, 0},
-                            {"in", 62, 0},
-                            {"Current (A)", 55, 0},
-                            {"Which pins", 0, 1}};
+                            {"Cross section", 90, 0},
+                            {"", 62, 0},
+                            {"Current (A)", 70, 0},
+                            {"Pins", 0, 1}};
         for (const Col& c : cols) {
             auto* cap = new QLabel(QString::fromLatin1(c.text), head);
             cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
@@ -2777,7 +2787,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
         hl->addWidget(unit);
         auto* amps = new QLineEdit(types[row].amps, host);
         amps->setPlaceholderText(QStringLiteral("A"));
-        amps->setFixedWidth(55);
+        amps->setFixedWidth(70);   // as wide as its own heading, which was being cut in half
         amps->setToolTip(QStringLiteral("What it is rated to carry, if the datasheet says"));
         connect(amps, &QLineEdit::textEdited, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.amps = t; }); });
