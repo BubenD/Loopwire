@@ -3005,11 +3005,28 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
     // Drawn for the part, or worked out from what the part says: one wire per way, out of the back of the
     // housing and into the bundle. Being sent to the library to draw one is not placing a fanout, and a
     // connector's fanout is exactly the thing its own data can say.
-    QJsonArray drawing = part->fanout;
+    // WHICH SIDE, and the drawing that side has of its own. `fanout` is the front of the connector and
+    // `fanoutOpposite` the back - two drawings, each captured on its own in the library, because the back is
+    // not the front held up to a mirror. The part says which side it is normally placed from (fanoutSide),
+    // and `mirrored` here means "the other one" rather than a transform: asking for the other side of a part
+    // whose back is drawn gets that drawing, not a guess at it.
+    const bool wantBack = (part->fanoutSide() == QStringLiteral("back")) != mirrored;
+    QJsonArray drawing = wantBack ? part->fanoutOpposite : part->fanout;
+    bool useMirrorTransform = false;
+    if (drawing.isEmpty()) {
+        // Nothing drawn for that side: the other side's drawing, mirrored, which is what this always did
+        // for a part with one fanout and no second one. A guess, and said to be one below.
+        const QJsonArray other = wantBack ? part->fanout : part->fanoutOpposite;
+        if (!other.isEmpty()) {
+            drawing = other;
+            useMirrorTransform = true;
+        }
+    }
     bool generated = false;
     if (drawing.isEmpty()) {
         drawing = fanoutFromData(*part);
         generated = true;
+        useMirrorTransform = false;
     }
     if (drawing.isEmpty()) {
         statusBar()->showMessage(
@@ -3018,24 +3035,15 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
             5000);
         return;
     }
-    // Mirrored, and the opposite side has its own captured drawing: place THAT rather than a live
-    // mirror transform of the front - see PartsLibraryDialog::mirrorFanoutFromOpposite(). A part
-    // that has never used the button still gets the old runtime mirror, unchanged.
-    bool useMirrorTransform = mirrored;
-    if (mirrored && !generated && part->hasFanoutOpposite()) {
-        drawing = part->fanoutOpposite;
-        useMirrorTransform = false;
-    }
     std::vector<Entity> block = partDrawingBlockInstance(*part, drawing, QStringLiteral("fanout"),
                                                          Vec2{0.0, 0.0}, useMirrorTransform);
     const QString contactId = part->contactId();
     if (!contactId.isEmpty())
         for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
     editor_->placeEntities(std::move(block));
-    // Which side the copy shows is the whole point of mirroring it, so it is said.
-    const QString shows = part->fanoutSide() == QStringLiteral("front")
-                              ? (mirrored ? tr("back") : tr("front"))
-                              : (mirrored ? tr("front") : tr("back"));
+    // Which side is on the sheet is the whole point of having two, so it is said - and said to be a mirror
+    // of the other one where that is all it is.
+    const QString shows = wantBack ? tr("back") : tr("front");
     statusBar()->showMessage(
         generated
             ? tr("Click the sheet to place a fanout worked out from %1 - %2 way(s) out of the back of the "
@@ -7634,7 +7642,9 @@ void MainWindow::showOptions(const QString& page) {
             bomCols << cb;
             colsL->addWidget(cb, i / 3, i % 3);
         }
-        bf->addRow(QStringLiteral("Columns on the drawing"), colsW);
+        // The ticks govern this window and the side panel as well as the placed table now, so the label no
+        // longer says only "on the drawing" - which was true while they reached the sheet alone.
+        bf->addRow(QStringLiteral("Columns shown"), colsW);
     }
     tabs->addTab(bom, QStringLiteral("BOM"));
     if (!page.isEmpty())
@@ -9434,6 +9444,17 @@ void MainWindow::refreshBomPanel() {
     bomPanel_->setColumnCount(6);
     bomPanel_->setHorizontalHeaderLabels({QStringLiteral("#"), table.header(1), table.header(3),
                                           table.header(4), table.header(5), table.header(6)});
+    // AND ANY OF THEM THE CONFIGURATION HAS SWITCHED OFF IS NOT HERE EITHER. This panel and the bill's own
+    // window are two views of one list; a column left out of the sheet has no business in either. The
+    // description stays whatever the ticks say - it is what every line is read by, and it carries what the
+    // right-click menu needs to know about the row (see below).
+    {
+        const BomConfig& cfg = table.config;
+        const bool pn = cfg.columnShown(3) || cfg.columnShown(2);
+        const bool shown[6] = {cfg.columnShown(0), true, pn, cfg.columnShown(4), cfg.columnShown(5),
+                               cfg.columnShown(6)};
+        for (int c = 0; c < 6; ++c) bomPanel_->setColumnHidden(c, !shown[c]);
+    }
     bomPanel_->setRowCount(static_cast<int>(rows.size()));
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const BomRow& r = rows[static_cast<size_t>(i)];
@@ -12318,8 +12339,8 @@ void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing
     LibraryPart part = *stored;
     const QString drawingKindName = kind == LibraryPartDrawing::Mechanical  ? QStringLiteral("mechanical")
                                     : kind == LibraryPartDrawing::Schematic ? QStringLiteral("schematic")
-                                    : kind == LibraryPartDrawing::Fanout    ? QStringLiteral("fanout")
-                                                                            : QStringLiteral("fanout (opposite)");
+                                    : kind == LibraryPartDrawing::Fanout    ? QStringLiteral("fanout front")
+                                                                            : QStringLiteral("fanout back");
     // WHERE IT CONNECTS AND WHICH WAY IT RUNS, marked before anybody asks - the same reasoning
     // openMechModelEditor uses for a default model. Only the mechanical drawing has anywhere to mark:
     // a schematic symbol and a fanout are not placed by running a direction along a run.
@@ -13346,12 +13367,13 @@ QMenu* MainWindow::buildPartsPanelMenu(const QString& id) {
     if (schem)
         menu.addAction(tr("Place the schematic symbol"), this, [this, id] { placeLibraryPart(id, false); });
     if (fan) {
-        // Both sides, named for what each one shows rather than for what was done to it.
-        const bool drawnFront = part->fanoutSide() == QStringLiteral("front");
-        menu.addAction(tr("Place the fanout (%1 of the connector)").arg(drawnFront ? tr("front") : tr("back")),
+        // Both sides, named for what each one shows rather than for what was done to it, with the part's own
+        // side first - it is the one a plain "fanout" means.
+        const bool frontFirst = part->fanoutSide() != QStringLiteral("back");
+        menu.addAction(tr("Place the fanout (%1 of the connector)").arg(frontFirst ? tr("front") : tr("back")),
                        this, [this, id] { placeLibraryFanout(id, false); });
         menu.addAction(
-            tr("Place the fanout mirrored (%1 of the connector)").arg(drawnFront ? tr("back") : tr("front")),
+            tr("Place the fanout (%1 of the connector)").arg(frontFirst ? tr("back") : tr("front")),
             this, [this, id] { placeLibraryFanout(id, true); });
     } else if (canHaveFanout(*part)) {
         // None drawn - so one is worked out from the part's own data and placed. Being sent to the library
@@ -13516,12 +13538,15 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
     };
     if (ticked(0)) addOne(partBlockInstance(*part, /*mechanical=*/true, Vec2{0.0, 0.0}), tr("mechanical"));
     if (ticked(1)) addOne(partBlockInstance(*part, /*mechanical=*/false, Vec2{0.0, 0.0}), tr("schematic"));
-    if (ticked(2))
-        addOne(part->fanout.isEmpty()
-                   ? std::vector<Entity>{}
-                   : partDrawingBlockInstance(*part, part->fanout, QStringLiteral("fanout"),
-                                              Vec2{0.0, 0.0}),
+    if (ticked(2)) {
+        // Either side may be the one that was drawn, so each falls back to a mirror of the other: a part
+        // whose back is the drawn side still puts a front down when a front is asked for.
+        const QJsonArray front = part->fanout.isEmpty() ? part->fanoutOpposite : part->fanout;
+        addOne(front.isEmpty() ? std::vector<Entity>{}
+                               : partDrawingBlockInstance(*part, front, QStringLiteral("fanout"),
+                                                          Vec2{0.0, 0.0}, part->fanout.isEmpty()),
                tr("fanout front"));
+    }
     if (ticked(3)) {
         const QJsonArray other = part->fanoutOpposite.isEmpty() ? part->fanout : part->fanoutOpposite;
         addOne(other.isEmpty() ? std::vector<Entity>{}
@@ -13687,7 +13712,14 @@ void MainWindow::refreshPartsPanel() {
         QStringList drawings;
         if (mech) drawings << tr("mechanical");
         if (schem) drawings << tr("schematic");
-        if (fan) drawings << tr("fanout (%1)").arg(part.fanoutSide());
+        if (fan) {
+            // WHICH SIDES ARE DRAWN, not just "it has a fanout": a part may have the front, the back or
+            // both, and which of them exists is the thing worth knowing before placing one.
+            QStringList sides;
+            if (!part.fanout.isEmpty()) sides << tr("front");
+            if (!part.fanoutOpposite.isEmpty()) sides << tr("back");
+            drawings << tr("fanout (%1)").arg(sides.join(tr(" and ")));
+        }
         if (!drawings.isEmpty())
             item->setToolTip(0,
                              tr("%1\nDrawings: %2\nDouble-click to place the %3 — right-click for the rest")

@@ -28,6 +28,7 @@ public:
     void setDrawing(const QJsonArray& drawing);
     void setEntities(const std::vector<Entity>& ents);
     void setCaption(const QString& caption);
+    QString caption() const { return caption_; }
     bool isEmpty() const { return ents_.empty(); }
     // What is shown when there is nothing to show ("no drawing yet").
     void setEmptyText(const QString& text);

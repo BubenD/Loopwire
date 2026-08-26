@@ -965,14 +965,21 @@ void PartsLibraryDialog::buildUi() {
         // them have no reason to differ. Small enough that four fit a modest window, big enough to read.
         prev->setMinimumSize(150, 150);
         prev->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        if (isFanout) fanoutPreview_ = prev;
-        else if (sides[i].mechanical) mechPreview_ = prev;
+        if (isFanout) {
+            fanoutPreview_ = prev;
+            prev->setObjectName(QStringLiteral("fanoutPane"));
+        } else if (sides[i].mechanical) mechPreview_ = prev;
         else schemPreview_ = prev;
         paneLay[i]->addWidget(prev, 1);
         if (isFanout) {
-            // Which side of the connector it was drawn from. A fanout is only meaningful with that said:
-            // the same drawing is the front view or the back view depending on it, and the other side is
-            // the same drawing mirrored.
+            // WHICH SIDE OF THE CONNECTOR THIS PANE IS WORKING ON. A connector has two fanouts and they are
+            // two pictures, not one and its reflection: the wires are numbered the other way about, and
+            // keying, a polarising tab or a shielded pair breaking out on one side only mean the back is not
+            // the front held up to a mirror. So each side has its own drawing, captured and edited on its
+            // own, and this box says which of the two the pane below shows and the buttons act on.
+            //
+            // It is also the part's ANSWER: the side showing is the side a plain "place the fanout" gives,
+            // because the one somebody chose to leave selected is the one they meant.
             auto* sideRow = new QWidget(paneHost[i]);
             fanoutSideRow_ = sideRow;
             auto* sl = new QHBoxLayout(sideRow);
@@ -981,7 +988,7 @@ void PartsLibraryDialog::buildUi() {
             // are meant to be the same size, and a splitter hands each pane what its contents ASK for -
             // so anything in a pane that asks for more than the drawing does makes that pane the odd one
             // out. Nothing here needs to hold the row open.
-            auto* sideWords = new QLabel(QStringLiteral("Drawn from the"), sideRow);
+            auto* sideWords = new QLabel(QStringLiteral("Side"), sideRow);
             sideWords->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             sl->addWidget(sideWords);
             fanoutSideBox_ = new QComboBox(sideRow);
@@ -995,6 +1002,7 @@ void PartsLibraryDialog::buildUi() {
                     p->setFanoutSide(fanoutSideBox_->currentData().toString());
                     touched();
                 }
+                showFanoutSide();   // the drawing, the caption and the buttons follow the side
             });
             // AND IT MAY BE NARROW. "front - looking at the face" is a long thing to write in a box, and a
             // splitter gives each pane what its contents ask for: this one asked for half the row and got it,
@@ -1012,21 +1020,35 @@ void PartsLibraryDialog::buildUi() {
         bl->setContentsMargins(0, 0, 0, 0);
         const bool mech = sides[i].mechanical;
         if (isFanout) {
-            // Take it off the sheet, edit it in its own session, put it down as drawn or mirrored for
-            // the other side, seed that other side from a mirror of this one, or throw it away.
+            // All of them on THE SIDE SHOWING: take it off the sheet, edit it in its own session, start it
+            // from a mirror of the other side, or throw it away. Each button asks the box which side that is.
             auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
-            cap->setToolTip(QStringLiteral("Take what is selected on the sheet as this part's fanout"));
-            connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(false); });
+            cap->setToolTip(QStringLiteral(
+                "Take what is selected on the sheet as this part's fanout on the side showing"));
+            connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(showingBackFanout()); });
             bl->addWidget(cap);
             auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
-            edt->setToolTip(QStringLiteral("Open it in its own canvas session to add or move lines"));
-            connect(edt, &QPushButton::clicked, this, [this] { editDrawing(LibraryPartDrawing::Fanout); });
+            edt->setToolTip(QStringLiteral(
+                "Open the side showing in its own canvas session to add or move lines"));
+            connect(edt, &QPushButton::clicked, this, [this] {
+                editDrawing(showingBackFanout() ? LibraryPartDrawing::FanoutOpposite
+                                                : LibraryPartDrawing::Fanout);
+            });
             bl->addWidget(edt);
+            // A STARTING POINT FROM THE OTHER SIDE, for the common case where the two sides really are
+            // mirror images bar a detail: mirrored once into a real drawing that can then be corrected by
+            // hand, not a transform re-applied every time one is placed.
+            fanoutMirrorBtn_ = new QPushButton(QStringLiteral("Mirror the other side"), btns);
+            connect(fanoutMirrorBtn_, &QPushButton::clicked, this,
+                    [this] { mirrorFanoutFromOpposite(showingBackFanout()); });
+            bl->addWidget(fanoutMirrorBtn_);
             auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
+            clr->setToolTip(QStringLiteral("Throw away the drawing on the side showing"));
             connect(clr, &QPushButton::clicked, this, [this] {
                 if (LibraryPart* p = current()) {
-                    p->fanout = QJsonArray();
-                    if (fanoutPreview_) fanoutPreview_->setDrawing(p->fanout);
+                    if (showingBackFanout()) p->fanoutOpposite = QJsonArray();
+                    else p->fanout = QJsonArray();
+                    showFanoutSide();
                     touched();
                     reloadTree();
                 }
@@ -1389,13 +1411,15 @@ void PartsLibraryDialog::showPart(const QString& id) {
     // A component of a standard kind shows its symbol straight away; capturing one for the part
     // replaces it.
     if (schemPreview_) schemPreview_->setDrawing(have ? partSchematicDrawing(*p) : QJsonArray());
-    if (fanoutPreview_) fanoutPreview_->setDrawing(p ? p->fanout : QJsonArray());
     if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(p ? p->fanoutOpposite : QJsonArray());
+    // The part's own side goes into the box, and the pane then shows THAT side's drawing - which is the
+    // point of recording it: a part opens on the side it is normally placed from.
     if (fanoutSideBox_ && p) {
         const QSignalBlocker block(fanoutSideBox_);
         const int at = fanoutSideBox_->findData(p->fanoutSide());
         fanoutSideBox_->setCurrentIndex(at >= 0 ? at : 0);
     }
+    showFanoutSide();
     refreshDatasheetRow();
     if (mechPreview_) {
         if (have && p) mechPreview_->setEntities(markedMechanicalDrawing(*p));
@@ -2297,14 +2321,14 @@ void PartsLibraryDialog::beginCaptureFanout(bool opposite) {
         if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(captured);
     } else {
         p->fanout = captured;
-        if (fanoutPreview_) fanoutPreview_->setDrawing(captured);
     }
+    showFanoutSide();
     touched();
     reloadTree();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured %1 object(s) as the %2fanout")
+        summary_->setText(QStringLiteral("Captured %1 object(s) as the fanout %2 of this connector")
                               .arg(sel.size())
-                              .arg(opposite ? QStringLiteral("opposite ") : QString()));
+                              .arg(opposite ? QStringLiteral("back") : QStringLiteral("front")));
 }
 
 void PartsLibraryDialog::insertFanout(bool mirrored) {
@@ -2423,6 +2447,38 @@ LibraryPart* PartsLibraryDialog::partForSession(const QString& id) {
     return catalog_.active().byId(id);
 }
 
+// WHICH SIDE THE FANOUT PANE IS WORKING ON, and that pane brought into step with it. The front is the
+// part's `fanout`, the back its `fanoutOpposite`: two drawings, because the back of a connector is not the
+// front held up to a mirror (see the pane's own note). Whichever is showing is the side captured into,
+// edited, cleared - and the side the part answers with when a plain fanout is asked for.
+bool PartsLibraryDialog::showingBackFanout() const {
+    return fanoutSideBox_ && fanoutSideBox_->currentData().toString() == QStringLiteral("back");
+}
+
+void PartsLibraryDialog::showFanoutSide() {
+    const LibraryPart* p = current();
+    const bool back = showingBackFanout();
+    const QJsonArray mine = !p ? QJsonArray() : (back ? p->fanoutOpposite : p->fanout);
+    const QJsonArray other = !p ? QJsonArray() : (back ? p->fanout : p->fanoutOpposite);
+    if (fanoutPreview_) {
+        // The caption says which side is on show, because two drawings in one pane with nothing to tell
+        // them apart is worse than one drawing.
+        fanoutPreview_->setCaption(back ? QStringLiteral("Fanout back")
+                                        : QStringLiteral("Fanout front"));
+        fanoutPreview_->setEmptyText(back ? QStringLiteral("nothing drawn for the back yet")
+                                          : QStringLiteral("nothing drawn for the front yet"));
+        fanoutPreview_->setDrawing(mine);
+    }
+    if (fanoutMirrorBtn_) {
+        fanoutMirrorBtn_->setText(back ? QStringLiteral("Mirror the front")
+                                       : QStringLiteral("Mirror the back"));
+        fanoutMirrorBtn_->setToolTip(
+            QStringLiteral("Start this side from a mirror of the %1, then correct it by hand")
+                .arg(back ? QStringLiteral("front") : QStringLiteral("back")));
+        fanoutMirrorBtn_->setEnabled(!other.isEmpty());
+    }
+}
+
 void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
     LibraryPart* p = current();
     if (!p) return;
@@ -2444,8 +2500,8 @@ void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
         if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(mirrored);
     } else {
         p->fanout = mirrored;
-        if (fanoutPreview_) fanoutPreview_->setDrawing(mirrored);
     }
+    showFanoutSide();
     touched();
     saveLibrary();
     reloadTree();

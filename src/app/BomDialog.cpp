@@ -378,6 +378,12 @@ void BomDialog::setUnifyTotals(bool on) {
 
 void BomDialog::refreshTable() {
     if (!view_) return;
+    // THE COLUMNS THE CONFIGURATION ASKS FOR, in this window as well as on the sheet. A column switched off
+    // in Options was still shown here, so the list being worked on and the list that would be printed were
+    // two different lists, and the only way to see what the drawing would say was to place the table and
+    // look at it. A column nobody wants is a column nobody should have to read past.
+    for (int i = 0; i < view_->columnCount(); ++i)
+        view_->setColumnHidden(i, !table_.config.columnShown(i));
     const std::vector<BomRow> rows = shownRows();
     syncing_ = true;
     QStringList heads;
@@ -443,7 +449,7 @@ void BomDialog::refreshTable() {
     syncing_ = false;
     if (cfgSummary_)
         cfgSummary_->setText(
-            QStringLiteral("lengths in %1%2%3 · %4 · %5 of %6 columns on the drawing")
+            QStringLiteral("lengths in %1%2%3 · %4 · %5 of %6 columns shown")
                 .arg(table_.config.lengthUnit,
                      table_.config.sparePercent > 0.0
                          ? QStringLiteral(" +%1%% spare").arg(table_.config.sparePercent, 0, 'f', 0)

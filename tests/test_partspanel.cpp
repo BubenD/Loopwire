@@ -316,20 +316,27 @@ int run_partspanel_tests() {
             for (QAction* a : menu->actions())
                 if (!a->isSeparator()) items << a->text();
             std::printf("  menu: %s\n", qPrintable(items.join(QStringLiteral(" | "))));
-            bool place = false, addBom = false, edit = false, fanout = false, mirrored = false;
+            bool place = false, addBom = false, edit = false, front = false, back = false;
             for (const QString& s : items) {
                 if (s.contains(QStringLiteral("mechanical"))) place = true;
                 if (s.contains(QStringLiteral("bill of materials"))) addBom = true;
                 if (s.contains(QStringLiteral("Edit in the library"))) edit = true;
-                if (s.contains(QStringLiteral("fanout")) && !s.contains(QStringLiteral("mirrored")))
-                    fanout = true;
-                if (s.contains(QStringLiteral("mirrored"))) mirrored = true;
+                // BY SIDE, not by transform. Each side of a connector has its own drawing now, so the two
+                // entries name what each one SHOWS - "mirrored" said how the second was made, which is not
+                // what somebody placing one is choosing between.
+                if (s.contains(QStringLiteral("fanout")) && s.contains(QStringLiteral("front")))
+                    front = true;
+                if (s.contains(QStringLiteral("fanout")) && s.contains(QStringLiteral("back")))
+                    back = true;
             }
             check(place, "menu: place the drawing");
             check(addBom, "menu: add it to the bill of materials");
             check(edit, "menu: edit it in the library");
-            check(fanout && mirrored,
-                  "menu: and the fanout for either side of the connector, since this part has one");
+            check(front && back,
+                  "menu: and the fanout for either side of the connector, each named by the side it shows");
+            for (const QString& s : items)
+                check(!s.contains(QStringLiteral("mirrored")),
+                      "menu: nothing on it is named for what was done to it");
             delete menu;
         }
         // A part with nothing to place says so, rather than offering a command that cannot work.
@@ -2139,6 +2146,197 @@ int run_partspanel_tests() {
             put.remember();
         }
         QFile::remove(libFile);
+    }
+
+
+    // ---- the bill shows the columns the configuration asks for ---------------------------------------
+    {
+        // A column switched off in Options was still in this window and still in the side panel, so the list
+        // being worked on and the list that would be printed were two different lists - and the only way to
+        // find out what the drawing would say was to place the table and look at it.
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BomDialog dlg(&ed);
+        dlg.addManualRow();
+        dlg.addManualRow();
+        // THE BILL's table, not the library list beside it - both are tables, and the list is found first.
+        QTableWidget* view = nullptr;
+        for (QTableWidget* t : dlg.findChildren<QTableWidget*>())
+            if (t->columnCount() == bomColumnCount()) view = t;
+        check(view != nullptr, "cols: the bill has a table");
+        if (view) {
+            BomConfig cfg = dlg.config();
+            for (int i = 0; i < bomColumnCount(); ++i) cfg.setColumnShown(i, true);
+            dlg.setConfig(cfg);
+            QApplication::processEvents();
+            int on = 0;
+            for (int c = 0; c < view->columnCount(); ++c)
+                if (!view->isColumnHidden(c)) ++on;
+            check(on == bomColumnCount(), "cols: with every column asked for, every column is there");
+
+            // The internal part number switched off - the one column a shop that orders by the maker's
+            // number has no use for.
+            cfg.setColumnShown(2, false);
+            cfg.setColumnShown(4, false);
+            dlg.setConfig(cfg);
+            QApplication::processEvents();
+            QStringList still;
+            for (int c = 0; c < view->columnCount(); ++c)
+                if (!view->isColumnHidden(c)) still << QString::number(c);
+            std::printf("  cols: showing %s of %d\n", qPrintable(still.join(QStringLiteral(","))),
+                        bomColumnCount());
+            check(view->isColumnHidden(2), "cols: a column switched off is not in the window either");
+            check(view->isColumnHidden(4), "cols: nor the second one");
+            check(!view->isColumnHidden(1) && !view->isColumnHidden(5),
+                  "cols: and the ones still asked for are still there");
+        }
+    }
+
+    // ---- and so does the side panel -----------------------------------------------------------------
+    {
+        // Two views of one list. A column left off the sheet has no business in either of them.
+        MainWindow win;
+        win.resize(1300, 860);
+        win.show();
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "panelcols: there is a drawing");
+        QTableWidget* panel = nullptr;
+        for (QTableWidget* t : win.findChildren<QTableWidget*>())
+            if (t->columnCount() == 6 && t->horizontalHeaderItem(0) &&
+                t->horizontalHeaderItem(0)->text() == QStringLiteral("#"))
+                panel = t;
+        check(panel != nullptr, "panelcols: the side panel is there");
+        if (panel && ed && ed->document()) {
+            BomTable table;
+            table.fromJson(ed->document()->bom());
+            // Manufacturer (column 4) switched off: a shop with one supplier does not need it.
+            table.config.setColumnShown(4, false);
+            ed->document()->bom() = table.toJson();
+            win.refreshBomPanelForTest();
+            QApplication::processEvents();
+            std::printf("  panelcols: manufacturer column hidden = %s\n",
+                        panel->isColumnHidden(3) ? "yes" : "no");
+            check(panel->isColumnHidden(3),
+                  "panelcols: the column switched off is gone from the panel too");
+            check(!panel->isColumnHidden(1),
+                  "panelcols: and the description, which every line is read by, stays");
+        }
+    }
+
+    // ---- front and back are two drawings, and the one showing is the part's -------------------------
+    {
+        // The pane worked on the front and nothing else: the side box only recorded a word, so the back of a
+        // connector - which is not the front held up to a mirror, the wires being numbered the other way
+        // about - could be neither drawn nor looked at from here.
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_sides_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-SIDES");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Two-way, drawn both sides");
+            part.params[QStringLiteral("ways")] = QStringLiteral("2");
+            // Two DIFFERENT drawings: one line for the front, three for the back.
+            std::vector<Entity> front;
+            Entity a;
+            a.type = EntityType::Line;
+            a.a = {0.0, 0.0};
+            a.b = {10.0, 0.0};
+            front.push_back(a);
+            std::vector<Entity> back;
+            for (int i = 0; i < 3; ++i) {
+                Entity e;
+                e.type = EntityType::Line;
+                e.a = {0.0, static_cast<double>(i)};
+                e.b = {10.0, static_cast<double>(i)};
+                back.push_back(e);
+            }
+            part.fanout = partDrawingFromEntities(front);
+            part.fanoutOpposite = partDrawingFromEntities(back);
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-SIDES"));
+        dlg.resize(1500, 900);
+        dlg.show();
+        QApplication::processEvents();
+
+        auto* pane = dlg.findChild<DrawingPreview*>(QStringLiteral("fanoutPane"));
+        check(pane != nullptr, "sides: the fanout pane is there");
+        QComboBox* side = nullptr;
+        for (QComboBox* b : dlg.findChildren<QComboBox*>())
+            if (b->findData(QStringLiteral("back")) >= 0 && b->findData(QStringLiteral("front")) >= 0)
+                side = b;
+        check(side != nullptr, "sides: and a box to pick the side with");
+        if (pane && side) {
+            std::printf("  sides: opens on %s with %d object(s)\n", qPrintable(pane->caption()),
+                        static_cast<int>(pane->entities().size()));
+            check(pane->caption() == QStringLiteral("Fanout front"),
+                  "sides: it opens on the part's own side, and says which that is");
+            check(pane->entities().size() == 1, "sides: showing the front's own drawing");
+
+            side->setCurrentIndex(side->findData(QStringLiteral("back")));
+            QApplication::processEvents();
+            std::printf("  sides: switched to %s with %d object(s)\n", qPrintable(pane->caption()),
+                        static_cast<int>(pane->entities().size()));
+            check(pane->caption() == QStringLiteral("Fanout back"),
+                  "sides: picking the back shows the back, and says so");
+            check(pane->entities().size() == 3,
+                  "sides: which is its OWN drawing, not the front mirrored");
+            check(dlg.showingBackFanout(), "sides: the window knows which side it is working on");
+
+            // WHAT IS SELECTED IS THE PART'S: the side left showing is the one a plain fanout means.
+            check(dlg.saveLibrary(), "sides: the part saves");
+            PartsLibrary again;
+            check(again.load(libFile), "sides: and reads back");
+            const LibraryPart* p = again.byId(QStringLiteral("P-SIDES"));
+            check(p != nullptr && p->fanoutSide() == QStringLiteral("back"),
+                  "sides: the side chosen is the part's own from now on");
+            if (p) {
+                check(p->fanout.size() > 0 && p->fanoutOpposite.size() > 0,
+                      "sides: and both drawings are still there - picking a side draws neither over");
+                check(p->hasFanout(), "sides: a part with either side drawn has a fanout");
+            }
+
+            // Clearing acts on the side showing and leaves the other alone.
+            for (QPushButton* b : dlg.findChildren<QPushButton*>()) {
+                if (b->text() != QStringLiteral("Clear")) continue;
+                if (!b->parentWidget() || !b->parentWidget()->parentWidget()) continue;
+                if (b->parentWidget()->parentWidget() != pane->parentWidget()) continue;
+                b->click();
+                break;
+            }
+            QApplication::processEvents();
+            check(pane->entities().empty(), "sides: Clear empties the side showing");
+        }
+        QFile::remove(libFile);
+    }
+
+    // ---- a part drawn only on the back still places one ---------------------------------------------
+    {
+        // "Has a fanout" asked about the front alone, so a connector drawn from the wires looked as though it
+        // had none: no menu entry, no tick on the shelf, nothing to place.
+        LibraryPart part;
+        part.id = QStringLiteral("P-BACKONLY");
+        part.kind = PartKind::Connector;
+        std::vector<Entity> back;
+        Entity e;
+        e.type = EntityType::Line;
+        e.a = {0.0, 0.0};
+        e.b = {5.0, 0.0};
+        back.push_back(e);
+        part.fanoutOpposite = partDrawingFromEntities(back);
+        part.setFanoutSide(QStringLiteral("back"));
+        check(part.hasFanout(), "backonly: a fanout on either side is a fanout");
+        check(!part.hasFanoutFront(), "backonly: and it is not on the front");
     }
 
     if (panelFailures == 0) std::printf("  -> ok\n");

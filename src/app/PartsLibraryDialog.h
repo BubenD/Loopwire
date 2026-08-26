@@ -107,6 +107,10 @@ public:
     // and capture, not a transform applied every time the fanout is placed. `intoOpposite`: true
     // seeds fanoutOpposite from fanout, false seeds fanout from fanoutOpposite.
     void mirrorFanoutFromOpposite(bool intoOpposite);
+    // Which side of the connector the fanout pane is working on, and that pane brought into step with it.
+    // Front and back are two drawings, each captured and edited on its own; the side showing is the part's.
+    bool showingBackFanout() const;
+    void showFanoutSide();
     // Write the current part's description from its technical parameters.
     void describeFromData();
     // The datasheet: attached into the datasheet folder, opened, or taken off. Taking it off deletes
@@ -221,6 +225,7 @@ private:
     // drawings the taken one lands in, which is the button that was pressed to get here.
     void importFromDefaultModel(bool mechanical);
     QComboBox* fanoutSideBox_ = nullptr;
+    QPushButton* fanoutMirrorBtn_ = nullptr;
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor

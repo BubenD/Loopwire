@@ -190,7 +190,11 @@ struct LibraryPart {
         params.insert(QStringLiteral("fanoutSide"),
                       side == QStringLiteral("back") ? side : QStringLiteral("front"));
     }
-    bool hasFanout() const { return !fanout.isEmpty(); }
+    // A fanout ON EITHER SIDE. Drawing only the back left the part looking as though it had none - no menu
+    // entry, no tick on the shelf - because this asked about the front alone, and the front is only the
+    // side most people start with rather than the side a fanout has to be on.
+    bool hasFanout() const { return !fanout.isEmpty() || !fanoutOpposite.isEmpty(); }
+    bool hasFanoutFront() const { return !fanout.isEmpty(); }
     bool hasFanoutOpposite() const { return !fanoutOpposite.isEmpty(); }
 
     // The three marks a default mechanical model is placed by (see MechModel), on the MECHANICAL
