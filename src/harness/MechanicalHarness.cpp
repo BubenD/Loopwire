@@ -289,6 +289,9 @@ QString MechHarnessDef::nextSegmentId() const {
 
 // ---- Sizes --------------------------------------------------------------------------------------
 
+double mechAwgMm2(int awg) { return awgToMm2(awg); }
+double mechGaugeMm2(const QString& gauge) { return gaugeMm2(gauge); }
+
 double wireOuterDiameterMm(const QString& gauge) {
     const double mm2 = gaugeMm2(gauge);
     if (mm2 <= 0.0) return 0.0;
@@ -838,7 +841,7 @@ MechLayout layoutMechanicalHarness(const MechHarnessDef& def) {
     MechLayout out;
     const MechNode* root = def.rootNode();
     if (!root) return out;
-    out.nodes.push_back({root->id, def.draw.origin, 0.0});
+    out.nodes.push_back({root->id, def.draw.origin, def.draw.baseDirectionDeg});
 
     // Breadth-first from the root, so a branch of a branch is placed once its parent is. A node
     // whose parent never gets placed is simply not placed - the validator says so.
@@ -1584,6 +1587,25 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(makeText(opt, mid + v * (gap / 2.0 + opt.textHeight * 0.7), label,
                                    opt.textHeight, rad(textDir), QStringLiteral("dia")));
         }
+        // THE RUN'S DESIGNATOR, when it was asked for AND it is worth having. See MechSegment::showName.
+        //
+        // A run BETWEEN TWO PARTS does not get one however the box is ticked: a wire from P1 to P2 is
+        // already identified by its ends, the wire list calls it P1-3 to P2-5, and a designator beside
+        // it on the sheet is a third name for one conductor. Where an end is OPEN there is nothing else
+        // to call the run by, and then the designator is the only identification it has - which is the
+        // harness built from bare wires, and the case the box exists for.
+        if (seg->showName && !seg->cableName.isEmpty()) {
+            const MechNode* from = def.node(seg->fromNode);
+            const MechNode* to = def.node(seg->toNode);
+            const auto isPart = [](const MechNode* n) {
+                return n && n->kind == MechNodeKind::Connector;
+            };
+            if (!(isPart(from) && isPart(to)))
+                out.push_back(makeText(opt, mid + v * (gap / 2.0 + opt.textHeight * 2.0),
+                                       seg->cableName, opt.textHeight, rad(textDir),
+                                       QStringLiteral("label")));
+        }
+
         // A RUN'S LENGTH, which is the figure a harness is actually built to. Drawn when the sheet asks for
         // dimensions, and ALSO when this one run asks for one - a build drawing dimensions the steps that matter
         // and leaves the rest alone, which is a decision per run rather than a setting for the whole sheet.
@@ -1597,10 +1619,33 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(dim);
         }
 
+        // "LONGER THAN IT IS DRAWN": the break mark across the middle of the run.
+        //
+        // A two-metre trunk on an A3 sheet is drawn short and broken, and the DIMENSION says the real
+        // length - which is why the mark is a property of the run and the dimension is untouched by it.
+        // The mark is emitted as an ordinary LengthBreak entity, so what draws it here is the same code
+        // that draws one placed by hand on a schematic: one description of the mark, not two.
+        if (seg && seg->lengthBreak) {
+            Entity mark;
+            mark.id = QStringLiteral("%1-brk").arg(ps.id);
+            mark.type = EntityType::LengthBreak;
+            mark.layer = opt.layer;
+            mark.a = Vec2{(ps.a.x + ps.b.x) * 0.5, (ps.a.y + ps.b.y) * 0.5};
+            mark.rotation = rad(ps.dirDeg);
+            // Reaching clear of the body it crosses: a mark the width of the run is a mark you cannot
+            // see against it.
+            mark.meta.insert(QStringLiteral("size"),
+                             std::max(4.0, across(segmentBodyDiameterMm(def, *seg)) * 0.9));
+            out.push_back(mark);
+        }
+
         // What the run is MADE of, ballooned on the run itself: the cable, or the conductors by size.
         // They are bought parts like any other and the released drawings balloon them exactly here -
         // without which a harness of nothing but wire has a table and no callouts at all.
-        if (opt.balloons) {
+        //
+        // seg->balloon is the per-run exception to opt.balloons: the sheet setting says whether this
+        // drawing balloons at all, the run's own flag says whether THIS one does. Both have to agree.
+        if (opt.balloons && seg->balloon) {
             std::vector<int> items;
             auto want = [&items](int item) {
                 if (item > 0 && std::find(items.begin(), items.end(), item) == items.end())
@@ -1665,7 +1710,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 box.meta.insert(QStringLiteral("mechSeg"), ps.id);
                 out.push_back(box);
             }
-            if (opt.balloons)
+            if (opt.balloons && f.balloon)
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
@@ -1751,6 +1796,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // because the harness is in front of the node rather than behind it.
         bool atToEnd = true;
         const MechSegment* seg = nodeRunSegment(def, *n, &atToEnd);
+        // NO RUN YET: face the connector the way the harness is going to leave.
+        //
+        // nodeRunSegment says "at the to-end" when it has no run to report, which is the safe default
+        // for everything that stacks fittings - but for a lone connector it turned the body round: the
+        // output face pointed BACK along the build direction, so a harness being described left to
+        // right showed its first connector facing left. Adding the run then flipped it, which is the
+        // tell that the no-run case was the odd one out rather than the runs being wrong.
+        //
+        // With nothing attached the harness can only leave forwards, so that is what is assumed. The
+        // preview then shows the connector the right way round from the first step, and does not jump
+        // when the run arrives.
+        if (!seg) atToEnd = false;
         const MechPlacedSegment* ps = seg ? layout.segment(seg->id) : nullptr;
         const double bundleMm = ps ? ps->diameterMm : def.draw.minBundleMm;
         // What is at this end of the run: the bare bundle where the jacket is stripped, the body where
@@ -1873,7 +1930,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 box.meta.insert(QStringLiteral("mechNode"), pn.id);
                 out.push_back(box);
             }
-            if (opt.balloons)
+            if (opt.balloons && f.balloon)
                 out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // A body takes up room for the next one; a layer over the wires does not.
@@ -1926,13 +1983,54 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 }
                 drawn = 0;   // drawn from the model: the generator's own fan is not wanted as well
             }
+            // A LANE PER WIRE, AS WIDE AS THE WIRE IS.
+            //
+            // The fan used to space the wires EVENLY - step i of drawn-1, whatever they were - while
+            // drawing each as a double line whose gap is its own outer diameter. So a 6 mm² conductor
+            // beside a 0.5 mm² one straddled its lane and crossed into its neighbour's: on a bundle
+            // carrying a mixture, which is the ordinary case, the lines ran through one another.
+            //
+            // Each wire is given a share of the fan in proportion to its diameter, and its centre put
+            // at the middle of that share. THE SAME FRACTION IS USED AT BOTH ENDS, which is what makes
+            // the result provable rather than merely better: the fraction is strictly increasing in i,
+            // so the wires are in the same order on the bundle as on the connector face, and two
+            // polylines whose ends are both in order cannot cross - whether the fan is opening out to a
+            // wide shell or closing into a narrow one.
+            //
+            // AND THE FAN IS AT LEAST AS WIDE AS THE WIRES IT CARRIES.
+            //
+            // Proportional lanes alone were not enough, and the reason is arithmetic: the fan was spread
+            // over the connector FACE, and a face worked out from the bundle diameter is narrower than
+            // the conductors laid side by side - a round bundle nests, a row does not. Three 6 AWG and
+            // two 24 AWG want about 20 mm in a row and the face offered 16, so no placement rule
+            // whatever could keep them apart. Measured, they overlapped by up to 6.97 mm.
+            //
+            // So the fan opens out to whatever the row needs, with a margin, and only uses the face
+            // width when that is already the wider of the two. The wires converging on a face narrower
+            // than themselves is what the drawing actually shows.
+            std::vector<double> bandOf(static_cast<size_t>(drawn), 0.4);
+            double totalBand = 0.0;
             for (int i = 0; i < drawn; ++i) {
-                // Evenly spaced across each end, so two wires do not lie on top of one another.
-                const double t = drawn == 1 ? 0.0
-                                            : (static_cast<double>(i) / (drawn - 1)) * 2.0 - 1.0;
                 const MechWire* mw = def.wire(seg->wireIds[i]);
-                const double odMm = mw ? wireOuterDiameterMm(mw->gauge) : 1.5;
-                const Vec2 face = a + v * (t * faceHalf * 0.8);
+                const double od = mw ? wireOuterDiameterMm(mw->gauge) : 1.5;
+                // The SAME figure the wire is drawn at - its double-line gap below - so the lanes and
+                // the ink are measured off one number and cannot drift apart.
+                bandOf[static_cast<size_t>(i)] = std::max(0.4, across(od > 0.0 ? od : 1.5));
+                totalBand += bandOf[static_cast<size_t>(i)];
+            }
+            // A tenth of a wire's width between neighbours: enough that the lines read as separate at
+            // the size these sheets are printed, without splaying the fan wider than it need be.
+            const double faceSpan = std::max(faceHalf * 0.8 * 2.0, totalBand * 1.1);
+            double runningBand = 0.0;
+            for (int i = 0; i < drawn; ++i) {
+                const MechWire* mwi = def.wire(seg->wireIds[i]);
+                const double odMm = mwi ? wireOuterDiameterMm(mwi->gauge) : 1.5;
+                const double band = bandOf[static_cast<size_t>(i)];
+                // The middle of this wire's own share of the fan, as -1..+1 across it.
+                const double centre = totalBand > 0.0 ? (runningBand + band / 2.0) / totalBand : 0.5;
+                runningBand += band;
+                const double t = drawn == 1 ? 0.0 : centre * 2.0 - 1.0;
+                const Vec2 face = a + v * (t * faceSpan / 2.0);
                 const Vec2 knee = face + u * (into * along(straightMm));
                 Entity w = baseEntity(opt, QStringLiteral("wires"));
                 w.type = EntityType::Polyline;
@@ -1953,16 +2051,31 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 w.meta.insert(QStringLiteral("wireOd"), odMm);
                 out.push_back(w);
             }
-            if (drawn < count)
-                out.push_back(makeText(opt, b - v * (bundleHalf + opt.textHeight * 1.2),
-                                       QStringLiteral("%1 conductors").arg(count),
-                                       opt.textHeight * 0.9, 0.0, QStringLiteral("label")));
+            // NO "n conductors" CAPTION. It was written under the fan whenever more wires were declared
+            // than were worth drawing lines for, and on a harness drawing that is not how a conductor
+            // count is stated: the count belongs in the wire list and in the bill, where it can be read
+            // against the gauges and the ends. A word floating under the fan says it a second time, in
+            // the one place nobody checks it, and gets in the way of the wires it is describing.
         }
 
         // The open conductors, dimensioned: from the back of the bodies to whatever covers them first,
         // or to the end of the open length when nothing does. It is one of the figures a harness is
         // actually built to, and the sample drawings carry it at every connector.
-        if (opt.dimensions && openMm > 0.0) {
+        // WITH A RUN, and not otherwise. This dimension measures the stretch of CONDUCTORS that runs
+        // open behind the connector before anything covers them - so on a connector with no run yet
+        // there is nothing to measure, and a 20 mm dimension floating off the back of a lone connector
+        // is a figure about conductors that do not exist.
+        //
+        // AND NOT WHERE THE STEP ASKED FOR ITS OWN DIMENSION. One tick must produce one figure.
+        //
+        // The open length defaults to kMechOpenLengthMm and a connector body defaults to 20 mm wide, so
+        // a dimensioned connector with a run behind it carried TWO 20 mm dimensions starting at the same
+        // face and going opposite ways. They cannot be told apart on the sheet: the reading is identical
+        // and the only difference is which side of the node the arrows are on. Somebody who ticks
+        // "dimension this step" on a connector means the connector - its far face to the face the
+        // harness leaves by - so that is the one that is kept, and the automatic figure about the
+        // conductors stands down at that node rather than arguing with it.
+        if (opt.dimensions && openMm > 0.0 && seg && !n->dimension) {
             const double toMm = firstCoverAtMm >= 0.0 ? firstCoverAtMm : fittedBackMm + openMm;
             const Vec2 a = pn.at + u * (into * along(fittedBackMm));
             const Vec2 b = pn.at + u * (into * along(toMm));
@@ -1983,14 +2096,55 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         }
         if (!opt.connectorBodies) continue;
 
+        // HOW BIG THE BODY ACTUALLY IS, in drawing units, measured back from the node and out to each
+        // side of the run. The dimension below is taken across it, and a figure that does not match the
+        // thing it points at is worse than no figure.
+        //
+        // Kept in DRAWING units rather than millimetres because a library part's own drawing is already
+        // in them: it is whatever size somebody drew it, and along()/across() would scale it twice.
+        // Both ends of it: how far it reaches AWAY from the harness (far) and how far it reaches
+        // towards it (near, negative where the body stops short of the node). A part drawn about its
+        // own middle straddles the node, and taking the node for its near face would dimension half of
+        // it.
+        double bodyFarUnits = 0.0;
+        double bodyNearUnits = 0.0;
+        double bodyHalfAcrossUnits = 0.0;
+        bool haveBodyExtent = false;
+
         const LibraryPart* part = catalog ? catalog->byId(n->libPart) : nullptr;
         if (part && part->hasMechanical()) {
             // The connector as its own drawing says it looks, placed on the end of the run - and
             // turned to face AWAY from it, which is the way one goes on. `into` is -1 where the run
             // arrives here, so the way out of the harness is -into * u.
-            for (Entity& e : placedPartDrawing(*part, pn.at, dirRad, opt,
-                                              QStringLiteral("connector"), u * -into))
-                out.push_back(e);
+            const std::vector<Entity> placed = placedPartDrawing(
+                *part, pn.at, dirRad, opt, QStringLiteral("connector"), u * -into);
+            // MEASURED, NOT ASSUMED. A part with its own drawing is whatever size it was drawn, and the
+            // 20 mm default below is a figure about the box that is NOT being drawn - so a chosen
+            // library connector was dimensioned at 20.0 whatever its real length, with the arrows
+            // landing somewhere inside its outline.
+            for (const Entity& e : placed) {
+                const Bounds eb = e.bounds();
+                if (!eb.valid) continue;
+                const Vec2 corners[4] = {eb.min, Vec2{eb.max.x, eb.min.y}, eb.max,
+                                         Vec2{eb.min.x, eb.max.y}};
+                for (const Vec2& corner : corners) {
+                    const Vec2 d = corner - pn.at;
+                    // Measured ALONG the run, positive away from the harness whichever side of the
+                    // node it is on. A part with an output face declared sits with that face on the
+                    // node and is all "far"; one drawn about its middle straddles it, and then the
+                    // near end is a negative reach that has to be kept or half the part is dimensioned.
+                    const double alongIt = -into * dot(d, u);
+                    if (!haveBodyExtent) {
+                        bodyFarUnits = bodyNearUnits = alongIt;
+                        haveBodyExtent = true;
+                    } else {
+                        bodyFarUnits = std::max(bodyFarUnits, alongIt);
+                        bodyNearUnits = std::min(bodyNearUnits, alongIt);
+                    }
+                    bodyHalfAcrossUnits = std::max(bodyHalfAcrossUnits, std::abs(dot(d, v)));
+                }
+            }
+            for (const Entity& e : placed) out.push_back(e);
         } else {
             // A body proportionate to what arrives at it: wide enough for the pins, deep enough to
             // read as a shell.
@@ -2003,14 +2157,94 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                   across(h), QStringLiteral("connector"));
             body.meta.insert(QStringLiteral("mechNode"), pn.id);
             out.push_back(body);
+            // The default box runs from the node backwards, so the node IS its near face.
+            bodyFarUnits = along(w);
+            bodyNearUnits = 0.0;
+            bodyHalfAcrossUnits = across(h) / 2.0;
+            haveBodyExtent = true;
         }
-        if (opt.balloons && !n->libPart.isEmpty()) {
+        if (opt.balloons && n->balloon && !n->libPart.isEmpty()) {
             const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
             out.push_back(makeBalloon(opt, pn.at,
                                       pn.at + v * (across(h) / 2.0 + 22.0),
                                       balloonText(itemOf(n->libPart, PartKind::Connector,
                                                          QStringLiteral("Connector")))));
         }
+        // ---- THE FURTHER HOUSINGS ON THIS SAME END --------------------------------------------
+        //
+        // Two connectors into one cable. The wires leave both housings and gather into the same run, so
+        // they are drawn side by side ACROSS the harness with a lead from each converging on the node.
+        //
+        // The FIRST connector keeps the axis - it is the one drawn above, unmoved - and the extras step
+        // off it alternately either side. Alternating rather than stacking one way keeps a pair looking
+        // like a pair; and leaving the first one alone is what makes every single-connector harness on
+        // every existing drawing come out exactly as it did before.
+        for (size_t ei = 0; ei < n->extraEnds.size(); ++ei) {
+            const MechExtraEnd& x = n->extraEnds[ei];
+            const double xh = std::max(bundleMm + 4.0, x.pinCount * 2.5 + 6.0);
+            const double xw = 20.0;
+            const int rank = static_cast<int>(ei) / 2 + 1;
+            const double side = (ei % 2 == 0) ? 1.0 : -1.0;
+            const Vec2 face = pn.at + v * across(side * rank * (xh + 5.0));
+            const Vec2 mid = face - u * (into * along(xw) / 2.0);
+
+            const LibraryPart* xp = catalog ? catalog->byId(x.libPart) : nullptr;
+            if (xp && xp->hasMechanical()) {
+                for (Entity& e : placedPartDrawing(*xp, face, dirRad, opt,
+                                                   QStringLiteral("connector"), u * -into))
+                    out.push_back(e);
+            } else {
+                Entity body = makeBox(opt, mid, dirRad, along(xw), across(xh),
+                                      QStringLiteral("connector"));
+                body.meta.insert(QStringLiteral("mechNode"), pn.id);
+                out.push_back(body);
+            }
+            // The lead from this housing to where the harness gathers. Without it the second connector
+            // floats beside the drawing saying nothing about belonging to the same harness.
+            Entity lead = baseEntity(opt, QStringLiteral("wires"));
+            lead.type = EntityType::Polyline;
+            lead.points = {face, pn.at};
+            lead.a = face;
+            lead.b = pn.at;
+            lead.meta.insert(QStringLiteral("mechNode"), pn.id);
+            out.push_back(lead);
+
+            if (!x.name.isEmpty())
+                out.push_back(makeText(opt, face + v * across(side * (xh / 2.0 + 4.0)), x.name,
+                                       opt.textHeight, 0.0, QStringLiteral("label")));
+            if (opt.balloons && x.balloon && !x.libPart.isEmpty())
+                out.push_back(makeBalloon(opt, face,
+                                          face + v * across(side * (xh / 2.0 + 22.0)),
+                                          balloonText(itemOf(x.libPart, PartKind::Connector,
+                                                             QStringLiteral("Connector")))));
+        }
+
+        // THE CONNECTOR'S OWN LENGTH, when the step asks to be dimensioned: from the far face of the
+        // body to the near one, which is the face the harness comes out of.
+        //
+        // That is the figure a connector is dimensioned by on a released drawing - how far it stands
+        // off the end of the harness - and it is measured along the run rather than across it, so it
+        // reads in the same direction as every other length on the sheet.
+        if (opt.dimensions && n->dimension && haveBodyExtent &&
+            bodyFarUnits - bodyNearUnits > 1e-9) {
+            // MEASURED OFF THE BODY THAT WAS DRAWN - see bodyFarUnits. A connector chosen from the
+            // library is as long as its own drawing, not as long as the default box it replaced.
+            const Vec2 far = pn.at - u * (into * bodyFarUnits);
+            const Vec2 nearFace = pn.at - u * (into * bodyNearUnits);
+            // ABOVE THE OBJECT, not below it. The dimension used to be dropped under the body, where on
+            // a connector it lands among the open conductors and the run itself - the one strip of the
+            // sheet that is already full. Above the part is clear on every harness drawing, and it is
+            // the same side every other dimension is going to want.
+            Entity dim = makeDimension(opt, far, nearFace,
+                                       lerp(far, nearFace, 0.5) +
+                                           v * (bodyHalfAcrossUnits + opt.textHeight * 2.2),
+                                       pn.id);
+            if (!n->dimText.isEmpty())
+                dim.meta.insert(QStringLiteral("textOverride"), n->dimText);
+            dim.meta.insert(QStringLiteral("mechNode"), pn.id);
+            out.push_back(dim);
+        }
+
         if (!n->name.isEmpty()) {
             const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
             out.push_back(makeText(opt, pn.at - u * (into * along(26.0)) +

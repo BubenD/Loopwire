@@ -68,12 +68,8 @@ QString resolveEntityColor(const Entity& e, const Document& doc) {
     return QStringLiteral("#ffffff");
 }
 
-int trueColor(const QString& hex) {
-    QColor c(hex);
-    if (!c.isValid()) return -1;
-    return (c.red() << 16) | (c.green() << 8) | c.blue();
-}
-
+// The reverse of this - a colour packed into group code 420 - is deliberately absent. Nothing writes
+// 420 any more: see commonDxf. colorFromTrueColor below stays, because reading it is still required.
 QString colorFromTrueColor(const QString& value) {
     bool ok = false;
     const int rgb = value.toInt(&ok);
@@ -81,12 +77,27 @@ QString colorFromTrueColor(const QString& value) {
     return QStringLiteral("#%1").arg(rgb, 6, 16, QLatin1Char('0'));
 }
 
+// WHAT EVERY ENTITY CARRIES: its layer and its colour, and NOTHING FROM A LATER DXF VERSION.
+//
+// This used to add group code 420, the 24-bit true colour, so an entity kept its exact RGB rather
+// than the nearest of the 255 ACI indices. Code 420 was introduced in AutoCAD 2004 (AC1018). This
+// file declares itself AC1009 - R12, from 1992 - in its header, and a reader that has been told R12
+// and then meets a group code that did not exist for another twelve years is entitled to reject the
+// file. AutoCAD does. Every tolerant reader - Edraw's own importer, ezdxf, the Edo converter - skips
+// the unknown code and says nothing, which is why the file looked fine everywhere except the one
+// program the format exists to talk to.
+//
+// So the writer emits index colour only, and the drawing loses exact RGB on the way out. That is the
+// right trade: 62 carries the colour to within an ACI index, and the alternative - writing a genuine
+// R2000+ file - means handles on every entity, a BLOCK_RECORD table and an OBJECTS section, which is
+// a different piece of work and not one to do by accident.
+//
+// The READER still understands 420, and must: files from AutoCAD 2004 onwards carry it, and Edraw
+// imports those. This is a constraint on what Edraw writes, not on what it accepts.
 QString commonDxf(const Entity& e, const Document& doc) {
     const QString color = resolveEntityColor(e, doc);
-    const int rgb = trueColor(color);
     return pair(8, e.layer.isEmpty() ? QStringLiteral("0") : e.layer) + "\n" +
-           pair(62, QString::number(colorToIndex(color))) +
-           (rgb >= 0 ? "\n" + pair(420, QString::number(rgb)) : QString());
+           pair(62, QString::number(colorToIndex(color)));
 }
 
 QString dxfLine(const Entity& e, const Document& doc, const Vec2& a, const Vec2& b) {
@@ -133,9 +144,50 @@ std::vector<Vec2> ellipsePoints(const Entity& e, int steps = 48) {
 
 QString toDxf(const Document& doc) {
     QStringList L;
-    L << pair(0, "SECTION") << pair(2, "HEADER") << pair(9, "$ACADVER")
-      << pair(1, "AC1009") << pair(0, "ENDSEC");
+    // ONLY VARIABLES THAT EXIST IN R12.
+    //
+    // $INSBASE does. $INSUNITS does NOT - it arrived with AutoCAD 2000 - and it was briefly added
+    // here to record whether the drawing was in millimetres or inches. That is the same mistake as
+    // group code 420 in commonDxf, in the header instead of the entities: a file that announces
+    // itself as R12 and then uses something from eight years later. The unit is carried on the
+    // dimension text instead, which is where a reader of a 1992 format will look for it.
+    L << pair(0, "SECTION") << pair(2, "HEADER")
+      << pair(9, "$ACADVER") << pair(1, "AC1009")
+      << pair(9, "$INSBASE") << pair(10, 0.0) << pair(20, 0.0) << pair(30, 0.0)
+      << pair(0, "ENDSEC");
     L << pair(0, "SECTION") << pair(2, "TABLES");
+
+    // THE TABLES AutoCAD EXPECTS TO FIND, in the order R12 puts them.
+    //
+    // Edraw used to write LTYPE and LAYER and stop there, which is enough for a reader that only
+    // wants the geometry and not enough for AutoCAD. Three are added here because entities in this
+    // file refer to them, directly or by omission:
+    //
+    //   VPORT   *ACTIVE is the drawing's own view. A DXF with no VPORT table has no model space
+    //           configuration to open into.
+    //   STYLE   every TEXT record here omits code 7, which means "the STANDARD style" - so STANDARD
+    //           has to be a style that exists. A TEXT naming a style that was never defined is a
+    //           dangling reference, and the entity it belongs to is the whole label.
+    //   APPID   ACAD, the application id. Conventionally present in every R12 file.
+    L << pair(0, "TABLE") << pair(2, "VPORT") << pair(70, QString::number(1));
+    L << pair(0, "VPORT") << pair(2, "*ACTIVE") << pair(70, QString::number(0))
+      << pair(10, 0.0) << pair(20, 0.0)          // lower-left of the viewport, in paper terms
+      << pair(11, 1.0) << pair(21, 1.0)          // upper-right
+      << pair(12, 0.0) << pair(22, 0.0)          // view centre
+      << pair(13, 0.0) << pair(23, 0.0)          // snap base
+      << pair(14, 10.0) << pair(24, 10.0)        // snap spacing
+      << pair(15, 10.0) << pair(25, 10.0)        // grid spacing
+      << pair(16, 0.0) << pair(26, 0.0) << pair(36, 1.0)   // view direction: straight down +Z
+      << pair(17, 0.0) << pair(27, 0.0) << pair(37, 0.0)   // view target
+      << pair(40, 297.0)                         // view height: an A4 sheet's worth
+      << pair(41, 1.414) << pair(42, 50.0) << pair(43, 0.0) << pair(44, 0.0)
+      << pair(50, 0.0) << pair(51, 0.0)
+      << pair(71, QString::number(0)) << pair(72, QString::number(100))
+      << pair(73, QString::number(1)) << pair(74, QString::number(3))
+      << pair(75, QString::number(0)) << pair(76, QString::number(0))
+      << pair(77, QString::number(0)) << pair(78, QString::number(0));
+    L << pair(0, "ENDTAB");
+
     L << pair(0, "TABLE") << pair(2, "LTYPE") << pair(70, QString::number(1));
     L << pair(0, "LTYPE") << pair(2, "CONTINUOUS") << pair(70, QString::number(0))
       << pair(3, "Solid line") << pair(72, QString::number(65))
@@ -152,7 +204,34 @@ QString toDxf(const Document& doc) {
           << pair(6, "CONTINUOUS");
         ++li;
     }
-    L << pair(0, "ENDTAB") << pair(0, "ENDSEC");
+    L << pair(0, "ENDTAB");
+
+    // STANDARD, the style every TEXT in this file leans on by not naming one.
+    L << pair(0, "TABLE") << pair(2, "STYLE") << pair(70, QString::number(1));
+    L << pair(0, "STYLE") << pair(2, "STANDARD") << pair(70, QString::number(0))
+      << pair(40, 0.0)                    // height 0 = "ask each TEXT for its own", which they give
+      << pair(41, 1.0)                    // width factor
+      << pair(50, 0.0)                    // oblique angle
+      << pair(71, QString::number(0))     // not backwards, not upside down
+      << pair(42, 2.5)                    // last height used
+      << pair(3, "txt") << pair(4, QString());
+    L << pair(0, "ENDTAB");
+
+    L << pair(0, "TABLE") << pair(2, "APPID") << pair(70, QString::number(1));
+    L << pair(0, "APPID") << pair(2, "ACAD") << pair(70, QString::number(0));
+    L << pair(0, "ENDTAB");
+
+    L << pair(0, "ENDSEC");
+
+    // AN EMPTY BLOCKS SECTION, WHICH IS NOT THE SAME AS NO BLOCKS SECTION.
+    //
+    // AutoCAD expects the section to be there in a DXF it is asked to open; it was absent entirely.
+    // Empty is correct rather than merely sufficient: this writer never emits INSERT - blocks and
+    // callouts are stamped down as their constituent entities on the way out - so there is genuinely
+    // nothing for it to hold, and inventing *Model_Space and *Paper_Space definitions that no entity
+    // refers to would be adding fiction to make the file look more conventional.
+    L << pair(0, "SECTION") << pair(2, "BLOCKS") << pair(0, "ENDSEC");
+
     L << pair(0, "SECTION") << pair(2, "ENTITIES");
 
     for (const auto& e : doc.entities()) {
@@ -231,8 +310,34 @@ QString toDxf(const Document& doc) {
             break;
         }
     }
-    L << pair(0, "ENDSEC") << pair(0, "EOF");
-    return L.join("\r\n") + "\r\n";
+    L << pair(0, "ENDSEC");
+
+    L << pair(0, "EOF");
+
+    // LINE ENDINGS, NORMALISED IN ONE PLACE AT THE END. THIS IS NOT TIDYING.
+    //
+    // A DXF is a list of records, each of which is a code line and a value line. Every line in the
+    // file has to end the same way. This used to produce a file where they did not: pair() joined its
+    // code to its value with "\n", and the list of pairs was joined with "\r\n", so every record came
+    // out as
+    //
+    //     0<LF>SECTION<CR><LF>
+    //
+    // - the code line ending LF and the value line ending CRLF, alternating, all the way down.
+    // Tolerant readers normalise that and never mention it, which is why it survived: Edraw's own
+    // importer, ezdxf and the Edo converter all read those files without complaint. AutoCAD reads
+    // lines strictly and would not open them at all.
+    //
+    // Doing it here rather than in pair() is deliberate. Ten helpers in this file build fragments
+    // with "\n" in them, and fixing pair() alone would have left the ones that concatenate their own
+    // records still mixing the two. Normalising the finished document is the only version of this fix
+    // that a new helper cannot silently undo: whatever anything upstream emits, what leaves this
+    // function has CRLF endings and nothing else.
+    QString out = L.join(QLatin1String("\n"));
+    out.replace(QLatin1String("\r\n"), QLatin1String("\n"));   // collapse anything already paired
+    out.replace(QLatin1Char('\r'), QLatin1Char('\n'));         // and any lone CR
+    out.replace(QLatin1Char('\n'), QLatin1String("\r\n"));
+    return out + QLatin1String("\r\n");
 }
 
 namespace {

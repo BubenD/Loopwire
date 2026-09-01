@@ -41,6 +41,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QProcess>
+#include <QCloseEvent>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QMessageBox>
@@ -124,7 +125,25 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
         QSize room(1600, 900);
         if (QScreen* screen = QGuiApplication::primaryScreen())
             room = screen->availableGeometry().size() - QSize(80, 120);
-        resize(std::min(want.width(), room.width()), std::min(std::max(want.height(), 760), room.height()));
+
+        // NOTHING MAY BE SQUEEZED SMALLER THAN ITS CAPTIONS. The layout knows what the widest row of
+        // buttons under a drawing needs; saying so as a MINIMUM means neither a remembered size from a
+        // bigger screen nor a drag of the corner can cut "Capture selection" in half. Clamped to the
+        // screen, because a minimum larger than the display is a window that cannot be used at all.
+        const QSize least = minimumSizeHint().expandedTo(layout() ? layout()->minimumSize() : QSize());
+        setMinimumSize(QSize(std::min(least.width(), room.width()),
+                             std::min(least.height(), room.height())));
+
+        // THE SIZE IT WAS LEFT AT, when there is one. Somebody who has widened this window once so that
+        // every caption reads has already answered the question; asking again on the next opening is
+        // making them answer it repeatedly. Still clamped to the screen in front of them, which may not
+        // be the screen it was last sized on.
+        const QSize remembered =
+            QSettings().value(QStringLiteral("ui/partsLibrarySize")).toSize();
+        const QSize open = remembered.isValid() && remembered.width() > 0 && remembered.height() > 0
+                               ? remembered
+                               : QSize(want.width(), std::max(want.height(), 760));
+        resize(std::min(open.width(), room.width()), std::min(open.height(), room.height()));
     }
     // The chooser and the library list are FILLED here, not by buildUi - which only makes the widgets.
     // Without this the window opened with both of them empty while the status line said which library
@@ -136,6 +155,14 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
     const PartsLibrary merged = catalog_.merged();
     if (!merged.parts.empty()) selectPart(merged.parts.front().id);
     else showPart(QString());
+}
+
+void PartsLibraryDialog::closeEvent(QCloseEvent* e) {
+    // The size, not the position. Where a window sat is tied to the screen layout of the moment - a
+    // second monitor that is not there next time puts it somewhere nobody can reach - while how big it
+    // needs to be to show its captions is a lasting answer about this window's contents.
+    QSettings().setValue(QStringLiteral("ui/partsLibrarySize"), size());
+    QDialog::closeEvent(e);
 }
 
 void PartsLibraryDialog::setLibraryPath(const QString& path) {

@@ -2,6 +2,9 @@
 
 #include "app/Chrome.h"
 #include "app/OutputDialog.h"
+#include "app/MechWizardDialog.h"
+#include "app/OdaSetupDialog.h"
+#include "io/OdaConverter.h"
 #include "app/PageSetupManagerDialog.h"
 
 #include "app/ribbon/RibbonIcons.h"
@@ -112,6 +115,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QHash>
@@ -6339,12 +6343,37 @@ void MainWindow::buildMenus() {
     auto* fileMenu = new QMenu(this);
     fileMenu->addAction(QStringLiteral("&New drawing"), QKeySequence::New, this, [this] { newDrawing(); });
     fileMenu->addAction(QStringLiteral("&Open DWX/DXF..."), QKeySequence::Open, this, [this] { openDrawing(); });
-    fileMenu->addAction(QStringLiteral("&Import PDF into drawing..."), this,
-                        [this] { importPdf(); });
+    // IMPORT, alongside Export, and meaning the opposite of Open.
+    //
+    // Open replaces the drawing on screen; Import adds another drawing to it. Both are wanted and
+    // they were not distinguishable before - PDF was the only thing that could be brought in, and it
+    // sat on the top level as a single entry with no sibling to be told apart from.
+    auto* importMenu = fileMenu->addMenu(QStringLiteral("&Import"));
+    importMenu->addAction(QStringLiteral("&DWG..."), this,
+                          [this] { importDrawingFile(QFileDialog::getOpenFileName(
+                                       this, QStringLiteral("Import DWG into this drawing"),
+                                       QString(), QStringLiteral("DWG (*.dwg)"))); });
+    importMenu->addAction(QStringLiteral("D&XF..."), this,
+                          [this] { importDrawingFile(QFileDialog::getOpenFileName(
+                                       this, QStringLiteral("Import DXF into this drawing"),
+                                       QString(), QStringLiteral("DXF (*.dxf)"))); });
+    importMenu->addSeparator();
+    importMenu->addAction(QStringLiteral("&PDF..."), this, [this] { importPdf(); });
     fileMenu->addAction(QStringLiteral("&Save DWX..."), QKeySequence::Save, this, [this] { saveDwxAs(); });
-    fileMenu->addAction(QStringLiteral("&Export DXF..."), this, [this] { exportDxfAs(); });
-    fileMenu->addAction(QStringLiteral("Export &PDF..."), this, [this] { exportPdf(false); });
-    fileMenu->addAction(QStringLiteral("Export PDF (&window)..."), this, [this] { exportPdf(true); });
+    // THE FOUR EXPORTS, UNDER ONE SUBMENU.
+    //
+    // They were four entries in a row on a menu that also holds New, Open, Import, Save, Publish,
+    // Templates, Options and About - and half of it read "Export ...". A submenu says once what all
+    // four have in common and leaves the File menu to be a list of things that differ.
+    //
+    // The formats are named as formats: DXF, DWG, PDF. "DWG (native)" said what the file is not
+    // rather than what it is - there is no other DWG here to distinguish it from - so it is DWG.
+    auto* exportMenu = fileMenu->addMenu(QStringLiteral("&Export"));
+    exportMenu->addAction(QStringLiteral("&DXF..."), this, [this] { exportDxfAs(); });
+    exportMenu->addAction(QStringLiteral("D&WG..."), this, [this] { exportDwgAs(); });
+    exportMenu->addSeparator();
+    exportMenu->addAction(QStringLiteral("&PDF..."), this, [this] { exportPdf(false); });
+    exportMenu->addAction(QStringLiteral("PDF (&window)..."), this, [this] { exportPdf(true); });
     fileMenu->addSeparator();
     // Output: the whole drawing, or the part of it that is wanted, in the order it is wanted, to paper or
     // to a PDF. The two Export PDF entries above stay for what they are - one quick page of what is
@@ -6357,6 +6386,12 @@ void MainWindow::buildMenus() {
                         [this] { showTemplateDialog(); });
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("&Options..."), this, [this] { showOptions(); });
+    // About carries the Qt/LGPL notice, and the button on it is the only way through to the licence
+    // texts. That is deliberate and it is enough: what the LGPL asks for is a prominent notice (§4(a)),
+    // Qt's copyright among the ones the program displays plus a reference to where the licence copies
+    // are (§4(c)), and that the texts ACCOMPANY the program (§4(b)) - which the files beside the
+    // executable do whether or not a menu points at them. A second menu entry was not required, so
+    // there is not one.
     fileMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
@@ -7375,7 +7410,9 @@ void MainWindow::findText() {
 void MainWindow::showAbout() {
     QDialog dlg(this);
     dlg.setWindowTitle(QStringLiteral("About Edraw"));
-    dlg.setFixedWidth(380);
+    // Wider than it was. The Qt/LGPL notice below is a paragraph rather than a line, and at 380 it wrapped
+    // into a column so narrow the dialog became taller than it was wide.
+    dlg.setFixedWidth(520);
     auto* row = new QHBoxLayout(&dlg);
     row->setContentsMargins(20, 18, 20, 16);
     row->setSpacing(16);
@@ -7397,15 +7434,124 @@ void MainWindow::showAbout() {
         QStringLiteral("CAD workspace for designing 2D wire-harness drawings.\n\n© ETS"),
         &dlg);
     desc->setWordWrap(true);
+
+    // THE NOTICE THE LGPL ASKS FOR, where the licence asks for it: with every copy of the program,
+    // plainly, not buried in a file somebody has to know to open. Edraw links Qt dynamically, so the
+    // toolkit is used under the LGPL v3. This label is the whole of Edraw's §4 notice, and every clause
+    // of it is here for a reason:
+    //
+    //   §4(a) prominent notice that the Library is used and that this License covers it
+    //         -> "uses the Qt toolkit ... under the GNU Lesser General Public License v3.0"
+    //   §4(c) applies BECAUSE this dialog displays a copyright notice during execution ("(c) ETS").
+    //         Where it applies it asks for two further things: the Library's own copyright notice
+    //         among the ones shown, and a reference directing the user to the copies of the GNU GPL
+    //         and the LGPL.
+    //         -> "Copyright (c) The Qt Company Ltd. and other contributors"
+    //         -> "See Third-party licences below ... also in the licenses folder"
+    //
+    // The version is read from Qt itself rather than typed, because a notice that names the wrong
+    // version is not a notice. Do not trim this text without reading §4 of licenses/LGPL-3.0.txt.
+    auto* qtNotice = new QLabel(
+        QStringLiteral("This program uses the Qt toolkit version %1 — Copyright © The Qt Company Ltd. "
+                       "and other contributors — under the GNU Lesser General Public License v3.0. "
+                       "See “Third-party licences” below for the LGPL and GPL texts and for how to "
+                       "obtain Qt's source code; the same documents are supplied in the “licenses” "
+                       "folder beside this program.")
+            .arg(QStringLiteral(QT_VERSION_STR)),
+        &dlg);
+    qtNotice->setWordWrap(true);
+    qtNotice->setStyleSheet(QStringLiteral("color:#9aa7b8;font-size:11px;"));
+
     col->addWidget(name);
     col->addWidget(ver);
     col->addSpacing(6);
     col->addWidget(desc);
+    col->addSpacing(10);
+    col->addWidget(qtNotice);
+
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok, &dlg);
+    // Not an "extra" button in the Ok/Cancel sense - the licences have to be reachable, so the button
+    // that reaches them sits on the same row as Ok rather than behind a menu somewhere.
+    auto* licBtn = bb->addButton(QStringLiteral("Third-party licences..."),
+                                 QDialogButtonBox::ActionRole);
+    connect(licBtn, &QPushButton::clicked, &dlg, [this, &dlg] {
+        dlg.accept();          // About is modal; close it so the licences are not trapped behind it
+        showLicenses();
+    });
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     col->addSpacing(8);
     col->addWidget(bb);
     row->addLayout(col, 1);
+
+    dlg.exec();
+}
+
+// ---- Third-party licences --------------------------------------------------
+//
+// WHAT THIS IS FOR. Edraw ships Qt's libraries beside its own executable, which makes Edraw a combined
+// work under the LGPL v3. Three things follow, and this dialog is where two of them are met: the notice
+// that Qt is used under the LGPL (also on the About dialog), and the supply of the licence texts
+// themselves. The third - the route to Qt's source code - is written into the notices document.
+//
+// The documents come out of the compiled-in resources, not off the disk, so the notice cannot be lost by
+// a copy that missed a subdirectory. The same files are also written into the install folder, as plain
+// text, because that is where anyone auditing the product will look.
+void MainWindow::showLicenses(const QString& document) {
+    struct Doc { QString title; QString path; };
+    // Notices first: it is the document that says what is used and where its source can be had. The two
+    // licence texts follow, in the order the LGPL itself puts them - the LGPL is a set of additional
+    // permissions on top of the GPL, so both are supplied and both are here.
+    const QList<Doc> docs = {
+        {QStringLiteral("Third-party notices"), QStringLiteral(":/licenses/THIRD-PARTY-NOTICES.txt")},
+        {QStringLiteral("GNU LGPL v3"),         QStringLiteral(":/licenses/LGPL-3.0.txt")},
+        {QStringLiteral("GNU GPL v3"),          QStringLiteral(":/licenses/GPL-3.0.txt")},
+    };
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Third-party licences"));
+    dlg.resize(820, 620);
+    auto* outer = new QVBoxLayout(&dlg);
+
+    auto* intro = new QLabel(
+        QStringLiteral("Edraw is proprietary software. It incorporates and distributes third-party "
+                       "software, whose notices and licences are reproduced below. The same documents "
+                       "are supplied as text files beside the program."),
+        &dlg);
+    intro->setWordWrap(true);
+    outer->addWidget(intro);
+
+    auto* tabs = new QTabWidget(&dlg);
+    int openOn = 0;
+    for (int i = 0; i < docs.size(); ++i) {
+        const Doc& d = docs.at(i);
+        auto* view = new QPlainTextEdit(tabs);
+        view->setReadOnly(true);
+        view->setLineWrapMode(QPlainTextEdit::NoWrap);   // the texts are pre-wrapped; re-wrapping them
+                                                        // breaks the licences' own layout
+        view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+        QFile f(d.path);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            view->setPlainText(QString::fromUtf8(f.readAll()));
+        } else {
+            // A build that dropped the resource is a build that does not give the notice. Say so
+            // loudly rather than showing an empty box that looks like there is nothing to declare.
+            view->setPlainText(
+                QStringLiteral("This copy of Edraw is incomplete: the licence document\n\n    %1\n\n"
+                               "is missing from the program. Please report this. The text is also "
+                               "supplied as a file in the \"licenses\" folder beside Edraw.exe, and "
+                               "the licences can be read at https://www.gnu.org/licenses/.")
+                    .arg(d.path));
+        }
+        tabs->addTab(view, d.title);
+        if (!document.isEmpty() && document == d.path) openOn = i;
+    }
+    tabs->setCurrentIndex(openOn);
+    outer->addWidget(tabs, 1);
+
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    outer->addWidget(bb);
 
     dlg.exec();
 }
@@ -9582,8 +9728,11 @@ void MainWindow::buildCommands() {
         {{"connline", "markconnection", "attach"}, "Harness",
          "Mark the selection as this part's connection line (where the harness attaches)",
          [this] { markConnectionLine(); }},
+        {{"buildwizard", "wizard", "harnesswizard"}, "Harness",
+         "Harness build wizard: place one thing at a time, in any order, with the neighbours checked",
+         [this] { showMechWizard(); }},
         {{"buildsteps", "guided", "harnesssteps"}, "Harness",
-         "Harness build wizard: the harness asked for one step at a time, from one end to the others",
+         "Harness build steps (the older fixed eleven-step wizard)",
          [this] { showHarnessSteps(); }},
         {{"voltagedrop", "vdrop", "vd"}, "Harness",
          "Voltage drop: what arrives at the load, wire by wire",
@@ -9643,6 +9792,7 @@ void MainWindow::buildCommands() {
         {{"open"}, "File", "Open a .dwx / .dxf", [this] { openDrawing(); }},
         {{"save", "qsave"}, "File", "Save DWX", [this] { saveDwxAs(); }},
         {{"export", "dxfout"}, "File", "Export DXF", [this] { exportDxfAs(); }},
+        {{"export", "dwgout"}, "File", "Export DWG", [this] { exportDwgAs(); }},
         {{"pdf", "pdfout", "print"}, "File", "Export the drawing to PDF", [this] { exportPdf(false); }},
         {{"pdfwindow", "pdfw"}, "File", "Export a dragged window to PDF", [this] { exportPdf(true); }},
         {{"csv", "csvout"}, "File", "Export the selected table to CSV", [this] { exportTableCsv(); }},
@@ -11373,71 +11523,71 @@ void MainWindow::writePinTableBackToLibrary(const QString& connectorId) {
             break;
         }
     if (!found) return;
-// AND BACK INTO THE LIBRARY, when this connector is a copy of a catalogue part that comes with its pins.
-//
-// The figures went one way only: the library filled the table's empty cells, and a correction made on the
-// drawing stayed on that drawing - so the next connector placed from the same part came down with the old
-// ones, and the two disagreed with nothing to say which was right. A datasheet figure corrected once
-// should be corrected everywhere it is kept.
-//
-// Written as ROWS, the way the library holds them: the pins that share a cross-section and a rating are
-// one type, and which pins those are is the list beside it. A row that already described that pair keeps
-// its own name for the size, because "size 1" is somebody's word for it and not ours to replace.
+// AND BACK INTO THE LIBRARY, when this connector is a copy of a catalogue part that comes with its pins.
+//
+// The figures went one way only: the library filled the table's empty cells, and a correction made on the
+// drawing stayed on that drawing - so the next connector placed from the same part came down with the old
+// ones, and the two disagreed with nothing to say which was right. A datasheet figure corrected once
+// should be corrected everywhere it is kept.
+//
+// Written as ROWS, the way the library holds them: the pins that share a cross-section and a rating are
+// one type, and which pins those are is the list beside it. A row that already described that pair keeps
+// its own name for the size, because "size 1" is somebody's word for it and not ours to replace.
 if (libId.isEmpty()) return;
-    {
-    PartsCatalog catalog;
-    catalog.openRemembered();
+    {
+    PartsCatalog catalog;
+    catalog.openRemembered();
     // The catalogue hands out a part to READ; the library it lives in hands out one to write to - which
         // is the same object, reached the way anything that writes has to reach it.
         PartsLibrary* owner = catalog.byPath(catalog.pathOf(libId));
         LibraryPart* part = owner ? owner->byId(libId) : nullptr;
-        if (part && partIncludesPins(*part)) {
-        const std::vector<PartPinType> had = partPinTypes(*part);
-        std::vector<PartPinType> now;
-        for (int i = 0; i < s.pinCount; ++i) {
-            QString gauge = i < s.pinGauge.size() ? s.pinGauge[i].trimmed() : QString();
-            const QString amps = i < s.pinAmp.size() ? s.pinAmp[i].trimmed() : QString();
-            if (gauge.isEmpty() && amps.isEmpty()) continue;
-            // The unit is written on the figure in the table ("20 AWG"); the library keeps the two apart.
-            QString unit = crossSectionAwg_ ? QStringLiteral("AWG") : QStringLiteral("mm2");
-            if (gauge.endsWith(QStringLiteral("AWG"), Qt::CaseInsensitive)) {
-                gauge.chop(3);
-                gauge = gauge.trimmed();
-                unit = QStringLiteral("AWG");
-            } else if (gauge.endsWith(QStringLiteral("mm2"), Qt::CaseInsensitive)) {
-                gauge.chop(3);
-                gauge = gauge.trimmed();
-                unit = QStringLiteral("mm2");
-            }
-            PartPinType* into = nullptr;
-            for (PartPinType& t : now)
-                if (t.gauge == gauge && t.unit == unit && t.amps == amps) into = &t;
-            if (!into) {
-                PartPinType fresh;
-                fresh.gauge = gauge;
-                fresh.unit = unit;
-                fresh.amps = amps;
-                for (const PartPinType& was : had)
-                    if (was.gauge == gauge && was.unit == unit && was.amps == amps)
-                        fresh.size = was.size;   // its old name for this pair
-                if (fresh.size.isEmpty())
-                    fresh.size = gauge.isEmpty() ? QStringLiteral("size %1").arg(now.size() + 1) : gauge;
-                now.push_back(fresh);
-                into = &now.back();
-            }
-            into->pins += (into->pins.isEmpty() ? QString() : QStringLiteral(",")) +
-                          QString::number(i + 1);
-        }
-        if (!now.empty()) {
-            setPartPinTypes(*part, now);
-            catalog.saveAll();
-            if (libraryDlg_) libraryDlg_->reloadTreeForTest();
-            statusBar()->showMessage(tr("%1 pin type(s) written back to %2 in the library")
-                                         .arg(now.size())
-                                         .arg(part->title()),
-                                     5000);
-        }
-    }
+        if (part && partIncludesPins(*part)) {
+        const std::vector<PartPinType> had = partPinTypes(*part);
+        std::vector<PartPinType> now;
+        for (int i = 0; i < s.pinCount; ++i) {
+            QString gauge = i < s.pinGauge.size() ? s.pinGauge[i].trimmed() : QString();
+            const QString amps = i < s.pinAmp.size() ? s.pinAmp[i].trimmed() : QString();
+            if (gauge.isEmpty() && amps.isEmpty()) continue;
+            // The unit is written on the figure in the table ("20 AWG"); the library keeps the two apart.
+            QString unit = crossSectionAwg_ ? QStringLiteral("AWG") : QStringLiteral("mm2");
+            if (gauge.endsWith(QStringLiteral("AWG"), Qt::CaseInsensitive)) {
+                gauge.chop(3);
+                gauge = gauge.trimmed();
+                unit = QStringLiteral("AWG");
+            } else if (gauge.endsWith(QStringLiteral("mm2"), Qt::CaseInsensitive)) {
+                gauge.chop(3);
+                gauge = gauge.trimmed();
+                unit = QStringLiteral("mm2");
+            }
+            PartPinType* into = nullptr;
+            for (PartPinType& t : now)
+                if (t.gauge == gauge && t.unit == unit && t.amps == amps) into = &t;
+            if (!into) {
+                PartPinType fresh;
+                fresh.gauge = gauge;
+                fresh.unit = unit;
+                fresh.amps = amps;
+                for (const PartPinType& was : had)
+                    if (was.gauge == gauge && was.unit == unit && was.amps == amps)
+                        fresh.size = was.size;   // its old name for this pair
+                if (fresh.size.isEmpty())
+                    fresh.size = gauge.isEmpty() ? QStringLiteral("size %1").arg(now.size() + 1) : gauge;
+                now.push_back(fresh);
+                into = &now.back();
+            }
+            into->pins += (into->pins.isEmpty() ? QString() : QStringLiteral(",")) +
+                          QString::number(i + 1);
+        }
+        if (!now.empty()) {
+            setPartPinTypes(*part, now);
+            catalog.saveAll();
+            if (libraryDlg_) libraryDlg_->reloadTreeForTest();
+            statusBar()->showMessage(tr("%1 pin type(s) written back to %2 in the library")
+                                         .arg(now.size())
+                                         .arg(part->title()),
+                                     5000);
+        }
+    }
 }
 }
 
@@ -11593,7 +11743,10 @@ QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
         ip.end();
         btn->setIcon(QIcon(pm));
     }
-    connect(btn, &QToolButton::clicked, this, [this] { showHarnessSteps(); });
+    // THE REBUILT WIZARD is what this button opens. The old fixed-script one is still reachable from
+    // the command palette while the new one is being proven on real harnesses - see MechWizardDialog
+    // for why the two are different tools rather than two versions of one.
+    connect(btn, &QToolButton::clicked, this, [this] { showMechWizard(); });
     return btn;
 }
 
@@ -12927,6 +13080,15 @@ void MainWindow::markConnectionLine() {
                                  : tr("%1 object(s) marked as the connection line — a part placed by "
                                       "the builder is set down across the wires by it").arg(n),
                              5000);
+}
+
+void MainWindow::showMechWizard() {
+    // Modeless and kept alive for the same reason as the others: a harness is described over several
+    // sittings, and closing the window to look at the sheet must not throw the answers away.
+    if (!mechWizard_) mechWizard_ = new MechWizardDialog(editor_, this);
+    mechWizard_->show();
+    mechWizard_->raise();
+    mechWizard_->activateWindow();
 }
 
 void MainWindow::showHarnessSteps() {
@@ -14329,6 +14491,225 @@ void MainWindow::exportDxfAs() {
         return;
     }
     statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
+}
+
+// IMPORT ANOTHER DRAWING INTO THIS ONE.
+//
+// Not the same gesture as Open, and the difference is the whole point: Open replaces what is on the
+// screen, Import adds to it. A harness sheet being built from a customer's outline wants the second.
+//
+// DWG cannot be read directly - it is Autodesk's binary format - so it goes through the ODA converter
+// to DXF first and then follows exactly the same path as a DXF. One merge, not two.
+void MainWindow::importDrawing() {
+    if (!doc_) return;
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Import drawing into this one"), QString(),
+        QStringLiteral("Drawings (*.dwg *.dxf);;DWG (*.dwg);;DXF (*.dxf);;All files (*)"));
+    if (path.isEmpty()) return;
+    importDrawingFile(path);
+}
+
+void MainWindow::importDrawingFile(const QString& path) {
+    // Empty is what a cancelled file dialog gives back, and the menu entries hand their result
+    // straight here rather than checking first. Cancelling is not an error and says nothing.
+    if (!doc_ || path.isEmpty()) return;
+
+    if (!path.endsWith(QStringLiteral(".dwg"), Qt::CaseInsensitive)) {
+        mergeDxfIntoDrawing(path, QFileInfo(path).fileName());
+        return;
+    }
+
+    // ---- A DWG, which means the converter ---------------------------------------------------------
+    if (!odaExport_) {
+        odaExport_ = new OdaConverter(this);
+        connect(odaExport_, &OdaConverter::progress, this,
+                [this](const QString& what) { statusBar()->showMessage(what); });
+    }
+    if (odaExport_->busy()) {
+        QMessageBox::information(this, QStringLiteral("Import"),
+                                 QStringLiteral("A conversion is already running."));
+        return;
+    }
+    if (!odaExport_->available()) {
+        // The same setup dialog as the export, because it is the same missing tool and the same four
+        // ways forward. Told which errand it is on, so it does not offer to export a DXF to somebody
+        // who is trying to read one.
+        if (OdaSetupDialog::run(odaExport_, this, OdaSetupDialog::Purpose::ImportDwg)
+            != OdaSetupDialog::Result::Detected) {
+            return;
+        }
+    }
+
+    // The converted DXF lands in a temporary directory that lives exactly as long as the merge. It is
+    // an intermediate, not a file the user asked for, and leaving DXFs beside their DWGs after every
+    // import would be litter they never chose.
+    auto* scratch = new QTemporaryDir();
+    if (!scratch->isValid()) {
+        delete scratch;
+        QMessageBox::warning(this, QStringLiteral("Import DWG"),
+                             QStringLiteral("A temporary folder could not be made for the conversion."));
+        return;
+    }
+    const QString asDxf = scratch->path() + QStringLiteral("/imported.dxf");
+    const QString shownAs = QFileInfo(path).fileName();
+
+    // A one-shot connection: this handler belongs to THIS import and must not still be listening when
+    // the next export finishes.
+    auto* link = new QMetaObject::Connection;
+    *link = connect(odaExport_, &OdaConverter::finished, this,
+                    [this, scratch, asDxf, shownAs, link](bool ok, const QString& error) {
+                        disconnect(*link);
+                        delete link;
+                        QApplication::restoreOverrideCursor();
+                        if (!ok) {
+                            statusBar()->clearMessage();
+                            QMessageBox::warning(this, QStringLiteral("Import DWG"), error);
+                        } else {
+                            mergeDxfIntoDrawing(asDxf, shownAs);
+                        }
+                        delete scratch;   // takes the converted DXF with it
+                    });
+
+    QString err;
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    if (!odaExport_->importDwgAsDxf(path, asDxf, &err)) {
+        QApplication::restoreOverrideCursor();
+        disconnect(*link);
+        delete link;
+        delete scratch;
+        statusBar()->clearMessage();
+        QMessageBox::warning(this, QStringLiteral("Import DWG"), err);
+    }
+}
+
+bool MainWindow::mergeDxfIntoDrawing(const QString& dxfPath, const QString& shownAs, QString* said) {
+    if (!doc_) return false;
+
+    // Into a document of its OWN first. dxf::parse REPLACES the entities and layers of whatever it is
+    // given - it is written for opening a file, not adding to one - so reading straight into doc_
+    // would not import the drawing, it would delete it.
+    Document incoming;
+    QString error;
+    if (!dxf::importFile(incoming, dxfPath, &error)) {
+        const QString why = error.isEmpty()
+                                ? QStringLiteral("%1 could not be read.").arg(shownAs)
+                                : QStringLiteral("%1 could not be read:\n%2").arg(shownAs, error);
+        if (said) *said = why;
+        else QMessageBox::warning(this, QStringLiteral("Import failed"), why);
+        return false;
+    }
+    if (incoming.entities().empty()) {
+        const QString nothing = QStringLiteral("There was nothing to import: %1 has no drawable "
+                                               "geometry in it.").arg(shownAs);
+        if (said) *said = nothing;
+        else QMessageBox::information(this, QStringLiteral("Import"), nothing);
+        return false;
+    }
+
+    // THE LAYERS COME TOO, or the entities land on names this drawing has never heard of and the
+    // layers panel cannot show, switch off or colour them. Only the ones that are missing: a layer
+    // this drawing already has keeps ITS settings, because the drawing being imported into is the one
+    // whose conventions win.
+    int addedLayers = 0;
+    for (const Layer& incomingLayer : incoming.layers()) {
+        bool have = false;
+        for (const Layer& mine : doc_->layers())
+            if (mine.name == incomingLayer.name) { have = true; break; }
+        if (!have) {
+            doc_->layers().push_back(incomingLayer);
+            ++addedLayers;
+        }
+    }
+
+    // At the coordinates the file gives. A DXF's numbers mean something - millimetres on a sheet -
+    // and moving the drawing to the origin "so it can be found" would throw that away, which for a
+    // customer outline that has to line up with what is already here is the one thing not to do.
+    // appendEntities pushes an undo step and selects what arrived, so an import that landed somewhere
+    // unhelpful is one Ctrl+Z, or one drag, from being right.
+    const int count = static_cast<int>(incoming.entities().size());
+    // NOT selected. An imported sheet is commonly a thousand objects or more, and leaving all of them
+    // picked means the user's next drag moves the whole import and their next click throws the
+    // selection away - neither of which they asked for. It is one undo step, which is the handle that
+    // actually matters if the import was wrong.
+    editor_->appendEntities(incoming.entities(), /*select=*/false);
+    refreshLayers();
+    refreshEntityList();
+    canvas_->update();
+
+    QString message = tr("Imported %1 object(s) from %2").arg(count).arg(shownAs);
+    if (addedLayers > 0) message += tr(", with %1 new layer(s)").arg(addedLayers);
+    message += tr(" — Ctrl+Z to undo");
+    statusBar()->showMessage(message, 10000);
+    if (said) *said = message;
+    return true;
+}
+
+// EXPORT TO NATIVE DWG.
+//
+// The drawing goes out as DXF to a temporary folder, the ODA File Converter turns that into a DWG,
+// and the DWG is moved to where the user asked for it. All of the interesting behaviour is in what
+// happens when the converter is not installed - which is every machine until somebody installs it,
+// and is not a fault of the user's. See OdaSetupDialog.
+void MainWindow::exportDwgAs() {
+    if (!doc_) return;
+
+    // Made once and kept, so a path the user browsed to in the setup dialog is still known the next
+    // time they export, and so a running conversion is not orphaned by the manager going out of
+    // scope while its process is still working.
+    if (!odaExport_) {
+        odaExport_ = new OdaConverter(this);
+        connect(odaExport_, &OdaConverter::progress, this,
+                [this](const QString& what) { statusBar()->showMessage(what); });
+        connect(odaExport_, &OdaConverter::finished, this,
+                [this](bool ok, const QString& error) {
+                    QApplication::restoreOverrideCursor();
+                    if (!ok) {
+                        statusBar()->clearMessage();
+                        QMessageBox::warning(this, QStringLiteral("Export DWG"), error);
+                        return;
+                    }
+                    statusBar()->showMessage(
+                        QStringLiteral("Exported %1").arg(QFileInfo(odaExportTarget_).fileName()),
+                        4000);
+                });
+    }
+
+    if (odaExport_->busy()) {
+        QMessageBox::information(this, QStringLiteral("Export DWG"),
+                                 QStringLiteral("A DWG export is already running."));
+        return;
+    }
+
+    // The converter is looked for now rather than at start-up: a user who installs it while Edraw is
+    // open should not have to restart to be able to use it.
+    if (!odaExport_->available()) {
+        switch (OdaSetupDialog::run(odaExport_, this)) {
+        case OdaSetupDialog::Result::Cancelled:
+            return;
+        case OdaSetupDialog::Result::FallbackDxf:
+            // Their drawing, out of Edraw, now. Straight to the DXF export they would otherwise have
+            // had to find on the menu themselves.
+            exportDxfAs();
+            return;
+        case OdaSetupDialog::Result::Detected:
+            break;   // found - carry on with the DWG the user actually asked for
+        }
+    }
+
+    QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Export DWG"), QString(), QStringLiteral("DWG (*.dwg)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(".dwg", Qt::CaseInsensitive)) path += QStringLiteral(".dwg");
+    odaExportTarget_ = path;
+
+    QString err;
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    if (!odaExport_->exportToDwg(*doc_, path, &err)) {
+        QApplication::restoreOverrideCursor();
+        statusBar()->clearMessage();
+        QMessageBox::warning(this, QStringLiteral("Export DWG"), err);
+    }
+    // Otherwise the conversion is running; finished() clears the cursor and reports.
 }
 
 void MainWindow::exportPdf(bool windowSelect) {

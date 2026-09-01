@@ -37,6 +37,13 @@ namespace Edraw_Desktop {
 // job from selecting objects, so it does not borrow the selection's blue.
 static const QColor kTableChrome(230, 156, 74);
 
+// The colour a picked RANGE OF CELLS is drawn in - a blue-green, deliberately not either of the two
+// colours already on a table. kTableChrome orange says "this is a table you are working on"; the
+// ordinary selection cyan (#2bd0ff) says "this object is selected". A range of cells is neither of
+// those, and sharing a colour with one of them is how a picked range became indistinguishable from
+// the table holding it.
+static const QColor kCellZone(46, 204, 150);
+
 namespace {
 // Hold this long during a drag before the rectangle becomes a lasso (Edraw's
 // LASSO_DELAY_MS).
@@ -1061,9 +1068,11 @@ bool Editor::expandBlockSelection() {
     }
     if (keys.isEmpty()) return false;
     bool grew = false;
+    QSet<QString> picked = selectionSet();
     for (const Entity& e : doc_->entities()) {
         if (!keys.contains(groupKeyOf(e))) continue;
-        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end()) continue;
+        if (picked.contains(e.id)) continue;
+        picked.insert(e.id);   // kept in step, so the same id cannot be added twice
         selected_.push_back(e.id);
         grew = true;
     }
@@ -5123,10 +5132,11 @@ void Editor::finishRegionSelect(bool subtract) {
     // A zone that catches a wire's TEXT picks that marking on its own - the colour, the
     // cross-section or the label - so it can be slid along the wire without touching anything
     // else. A wire the zone already selected keeps its markings: they move with the wire.
+    const QSet<QString> pickedWires = selectionSet();
     for (const auto& e : doc_->entities()) {
         if (e.type != EntityType::Wire) continue;
         if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked)) continue;
-        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end()) continue;
+        if (pickedWires.contains(e.id)) continue;
         for (const QString& part : wireAnnotParts()) {
             const int n = wireAnnotCountFor(e, part);
             for (int i = 0; i < n; ++i) {
@@ -5279,6 +5289,24 @@ bool Editor::pickedCellOf(const Entity& e, int& row, int& col) const {
     row = cellSel_.front() / cols;
     col = cellSel_.front() % cols;
     return true;
+}
+
+// The colour a selected entity is drawn in. Extracted from drawOverlay so that the scene cache can
+// bake the same highlight when the selection is too big to redraw every frame - two places deciding
+// what "selected" looks like is two places to change it and one of them to forget.
+QColor Editor::selectionOverrideFor(const Entity& e) const {
+    // A table is highlighted in the table colour, not the ordinary selection blue.
+    const bool isTable = e.meta.value("table").toBool();
+    // ...but a table with one of its CELLS picked is not a picked table. Redrawing the whole grid in
+    // the selection colour said it was: working in one cell lit up all two hundred of them, so there
+    // was no telling a cell apart from the table it is in. An invalid colour means "draw it as it
+    // is": the table stays on the sheet and simply does not look picked.
+    if (isTable && cellTableId_ == e.id && !cellSel_.empty()) return QColor();
+    if (isTable) return kTableChrome;
+    // A DETAIL VIEW IN ORANGE, which is where a colour of its own is worth having: it says which ring
+    // belongs to the view you have hold of, on a sheet where every other circle is a hole.
+    if (e.type == EntityType::DetailView) return paperInk(QColor("#e6a23c"));
+    return paperInk(QColor("#2bd0ff"));
 }
 
 void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) const {
@@ -11115,9 +11143,9 @@ void Editor::scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, d
 std::vector<Entity> Editor::modifyPreview() const {
     std::vector<Entity> ghosts;
     if (!doc_ || modifyPts_.empty() || selected_.empty()) return ghosts;
+    const QSet<QString> picked = selectionSet();
     for (const auto& e : doc_->entities())
-        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end())
-            ghosts.push_back(e);
+        if (picked.contains(e.id)) ghosts.push_back(e);
 
     const Vec2 cur = cursor_; // the live (snapped) cursor stands in for the last point
     switch (tool_) {
@@ -14402,9 +14430,10 @@ void Editor::refreshBundleCompanions() {
         if (!b.isEmpty() && !bundles.contains(b)) bundles << b;
     }
     if (bundles.isEmpty()) return;
+    const QSet<QString> pickedBundle = selectionSet();
     for (const auto& e : doc_->entities()) {
         if (e.type != EntityType::Wire) continue;
-        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end())
+        if (pickedBundle.contains(e.id))
             continue; // the selection itself is drawn as selected
         const QString b = e.meta.value(QStringLiteral("bundle")).toString();
         if (!b.isEmpty() && bundles.contains(b)) bundleCompanions_.insert(e.id);
@@ -15295,7 +15324,7 @@ void Editor::placeEntities(const std::vector<Entity>& ents, const std::optional<
     paste(); // the contents now follow the cursor until clicked into place
 }
 
-void Editor::appendEntities(const std::vector<Entity>& ents) {
+void Editor::appendEntities(const std::vector<Entity>& ents, bool select) {
     if (!doc_ || ents.empty()) return;
     pushUndo();
     QSet<QString> ids;
@@ -15336,7 +15365,7 @@ void Editor::appendEntities(const std::vector<Entity>& ents) {
         }
     }
     for (Entity& e : incoming) {
-        selected_.push_back(e.id);
+        if (select) selected_.push_back(e.id);
         doc_->entities().push_back(std::move(e));
     }
     doc_->setDirty(true);
@@ -16243,10 +16272,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 EntityRenderer::draw(p, e, *doc_, vt, companion);
     }
 
-    // Table work is soft orange throughout - the table itself, its headers and the picked cells -
-    // so it reads as "editing a table" rather than as an ordinary selection.
-    // Cells picked in a table: a box round each. The table is selected too (the ribbon's cell tab
-    // hangs off it), so these are drawn on top of its own highlight.
+    // THE PICKED CELLS, AS ONE ZONE.
+    //
+    // The table's own chrome - its outline and its row/column headers - stays soft orange, because
+    // that says "you are working on a table". The picked CELLS are the blue-green zone: what is picked
+    // inside the table is a different question from which table is being worked on, and drawing both
+    // in the same orange meant a range of cells and the table holding them were the same colour.
+    //
+    // Drawn as a ZONE rather than as a box round each cell. A box each puts a line down every internal
+    // boundary, so a picked range reads as a grid of little rectangles rather than as one region - and
+    // it is one region, which is exactly what dragging across the cells says. So the fill goes on every
+    // picked cell and the STROKE goes only on the edges where the neighbour is not picked.
+    //
+    // The union outline is computed rather than a bounding box taken, because the picked set is not
+    // always a rectangle: the lasso pick (see selectCellsInRegion) keeps whichever cell centres fall
+    // inside the loop, and a loop can leave holes or corners out. A bounding box round that would
+    // claim cells the user did not pick.
     if (!cellSel_.empty()) {
         const Entity* t = nullptr;
         for (const auto& x : doc_->entities())
@@ -16257,25 +16298,63 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             const QJsonArray rf = t->meta.value("rowFrac").toArray();
             const int cols = cf.size(), rows = rf.size();
             if (b.valid && cols > 0 && rows > 0) {
+                const QSet<int> picked(cellSel_.begin(), cellSel_.end());
+                const auto isPicked = [&](int r, int c) {
+                    return r >= 0 && r < rows && c >= 0 && c < cols &&
+                           picked.contains(r * cols + c);
+                };
+
+                // Each row's top edge and each column's left edge, worked out once: the loop below
+                // needs the corners of arbitrary cells, not just the one it is standing on.
+                std::vector<double> rowTop(static_cast<size_t>(rows) + 1);
+                rowTop[0] = b.max.y;
+                for (int r = 0; r < rows; ++r)
+                    rowTop[static_cast<size_t>(r) + 1] =
+                        rowTop[static_cast<size_t>(r)] - rf[r].toDouble() * b.height();
+                std::vector<double> colLeft(static_cast<size_t>(cols) + 1);
+                colLeft[0] = b.min.x;
+                for (int c = 0; c < cols; ++c)
+                    colLeft[static_cast<size_t>(c) + 1] =
+                        colLeft[static_cast<size_t>(c)] + cf[c].toDouble() * b.width();
+
                 p.save();
-                p.setPen(QPen(kTableChrome, 1.5));
-                p.setBrush(QColor(kTableChrome.red(), kTableChrome.green(), kTableChrome.blue(), 46));
-                double top = b.max.y;
-                for (int r = 0; r < rows; ++r) {
-                    const double h = rf[r].toDouble() * b.height();
-                    double x = b.min.x;
+
+                // The fill first, over the whole zone, with no pen - so no internal lines.
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(kCellZone.red(), kCellZone.green(), kCellZone.blue(), 60));
+                for (int r = 0; r < rows; ++r)
                     for (int c = 0; c < cols; ++c) {
-                        const double w = cf[c].toDouble() * b.width();
-                        if (std::find(cellSel_.begin(), cellSel_.end(), r * cols + c) !=
-                            cellSel_.end()) {
-                            const QPointF a = vt.toScreen({x, top});
-                            const QPointF d = vt.toScreen({x + w, top - h});
-                            p.drawRect(QRectF(a, d));
-                        }
-                        x += w;
+                        if (!isPicked(r, c)) continue;
+                        const QPointF a = vt.toScreen({colLeft[static_cast<size_t>(c)],
+                                                       rowTop[static_cast<size_t>(r)]});
+                        const QPointF d = vt.toScreen({colLeft[static_cast<size_t>(c) + 1],
+                                                       rowTop[static_cast<size_t>(r) + 1]});
+                        p.drawRect(QRectF(a, d));
                     }
-                    top -= h;
-                }
+
+                // Then the border, only where the zone ends.
+                QPen edge(kCellZone);
+                edge.setCosmetic(true);
+                edge.setWidthF(2.0);
+                p.setPen(edge);
+                p.setBrush(Qt::NoBrush);
+                for (int r = 0; r < rows; ++r)
+                    for (int c = 0; c < cols; ++c) {
+                        if (!isPicked(r, c)) continue;
+                        const double x0 = colLeft[static_cast<size_t>(c)];
+                        const double x1 = colLeft[static_cast<size_t>(c) + 1];
+                        const double y0 = rowTop[static_cast<size_t>(r)];
+                        const double y1 = rowTop[static_cast<size_t>(r) + 1];
+                        if (!isPicked(r - 1, c))
+                            p.drawLine(vt.toScreen({x0, y0}), vt.toScreen({x1, y0}));
+                        if (!isPicked(r + 1, c))
+                            p.drawLine(vt.toScreen({x0, y1}), vt.toScreen({x1, y1}));
+                        if (!isPicked(r, c - 1))
+                            p.drawLine(vt.toScreen({x0, y0}), vt.toScreen({x0, y1}));
+                        if (!isPicked(r, c + 1))
+                            p.drawLine(vt.toScreen({x1, y0}), vt.toScreen({x1, y1}));
+                    }
+
                 p.restore();
             }
         }
@@ -16303,34 +16382,67 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     }
 
     // Selection marking: highlight each selected entity's geometry + draw grips.
-    if (!selected_.empty()) {
-        const QColor hi = paperInk(QColor("#2bd0ff"));
+    // A BIG SELECTION IS ALREADY DRAWN. See Editor::selectionIsBaked: above the threshold the
+    // highlight goes into the scene cache, so this pass has nothing left to do for it - and doing it
+    // anyway would be drawing the whole sheet twice, once cached and once not, which is the cost this
+    // exists to avoid. Grips are off at that size too, so the entire loop is skipped.
+    if (!selected_.empty() && !selectionIsBaked()) {
+        const QSet<QString> picked = selectionSet();
+
+        // GRIPS STOP ABOVE A CERTAIN SIZE OF SELECTION, and this is a feature rather than a shortcut.
+        //
+        // Every selected object draws a handle at each of its points. A whole imported sheet is
+        // thousands of objects and tens of thousands of handles, redrawn on every repaint - which is
+        // every mouse move. The screen becomes a field of white squares that hides the drawing
+        // underneath it, and the application crawls.
+        //
+        // Grips are for grabbing ONE thing by a known point. Nobody drags a vertex out of a selection
+        // of two thousand, so at that size the handles are cost with no use. AutoCAD does the same
+        // thing for the same reason and calls the threshold GRIPOBJLIMIT.
+        //
+        // The highlight itself is NOT withheld: what is selected still looks selected, still moves,
+        // still deletes. Only the per-vertex handles go.
+        const bool showGrips = selected_.size() <= kGripSelectionLimit;
+
+        // ONLY WHAT THE SCREEN CAN SHOW, which is what the scene cache has always done and this pass
+        // never did.
+        //
+        // The selected entities are deliberately left OUT of the cached scene so that this pass can
+        // draw them in the selection colour - which means every one of them is re-rendered on every
+        // frame, uncached, while the rest of the drawing is a single blit. With a whole imported sheet
+        // picked that is the entire drawing being redrawn on every mouse move.
+        //
+        // Culling does not change what appears: an object outside the view was not going to be seen.
+        // It is worth having because the case that hurts - a big drawing, everything selected - is
+        // also the case where most of it is off-screen at any useful zoom.
+        QRectF area = p.clipBoundingRect();
+        if (area.isEmpty())
+            area = QRectF(0, 0, p.device()->width(), p.device()->height());
+        const Vec2 a0 = vt.toWorld(area.topLeft());
+        const Vec2 a1 = vt.toWorld(area.bottomRight());
+        double vMinX = std::min(a0.x, a1.x), vMaxX = std::max(a0.x, a1.x);
+        double vMinY = std::min(a0.y, a1.y), vMaxY = std::max(a0.y, a1.y);
+        const double mx = (vMaxX - vMinX) * 0.05 + 2.0;
+        const double my = (vMaxY - vMinY) * 0.05 + 2.0;
+        vMinX -= mx; vMaxX += mx; vMinY -= my; vMaxY += my;
+
         for (const auto& e : doc_->entities()) {
-            if (std::find(selected_.begin(), selected_.end(), e.id) == selected_.end())
+            if (!picked.contains(e.id)) continue;
+            // A layer switched off is not drawn, selected or not - the cache pass has always taken
+            // this view and the two disagreeing is how a hidden layer stays on screen once picked.
+            if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+            if (const Bounds b = e.bounds();
+                b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY || b.min.y > vMaxY))
                 continue;
-            // A table is highlighted in the table colour, not the ordinary selection blue.
-            const bool isTable = e.meta.value("table").toBool();
-            // AND A DETAIL VIEW IN ORANGE, which is where a colour of its own is worth having: it says which
-            // ring belongs to the view you have hold of, on a sheet where every other circle is a hole. All
-            // the time it would be an orange ring on a released drawing, and the colours on a sheet are the
-            // drawing office's to choose.
-            const bool isDetail = e.type == EntityType::DetailView;
-            // ...but a table with one of its CELLS picked is not a picked table. Redrawing the whole
-            // grid in the selection colour said it was: working in one cell lit up all two hundred of
-            // them, so there was no telling a cell apart from the table it is in. The table still draws
-            // normally - it is the SELECTED look that is withheld - and the row and column headers below
-            // stay, being what makes a cell findable.
-            const bool onlyACell = isTable && cellTableId_ == e.id && !cellSel_.empty();
+            // What "selected" looks like for this entity - blue, table chrome, detail orange, or an
+            // invalid colour meaning "draw it as it is". See selectionOverrideFor.
             // It has to be drawn HERE whatever happens: the scene cache leaves every selected object out
             // on purpose, because this pass puts it back. Skipping the draw to withhold the highlight
             // therefore did not un-highlight the table, it made the table VANISH the moment a cell was
             // clicked. What is withheld is the colour, not the drawing: an invalid override means "draw
             // it as it is", so the table stays on the sheet and simply does not look picked.
-            EntityRenderer::draw(p, e, *doc_, vt,
-                                 onlyACell ? QColor()
-                                           : (isTable ? kTableChrome
-                                                      : (isDetail ? paperInk(QColor("#e6a23c")) : hi)));
-            drawGrips(p, e, vt);
+            EntityRenderer::draw(p, e, *doc_, vt, selectionOverrideFor(e));
+            if (showGrips) drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.
             if (e.type == EntityType::Rect && e.meta.value("table").toBool() &&
@@ -17091,17 +17203,38 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         sp.setWidthF(1.6);
         p.setPen(sp);
         p.setBrush(Qt::NoBrush);
-        // The MIDDLE of something - the midpoint of a line, the centre of a circle - is marked with a
-        // triangle, and an end or a crossing with a square. One shape for every kind of snap said
-        // "something was caught" without saying WHAT, which is the one thing worth knowing when the end
-        // and the middle of a short line are a few pixels apart.
-        if (snapResult_.kind == SnapKind::Midpoint || snapResult_.kind == SnapKind::Center) {
+        // WHICH SHAPE MEANS WHAT is decided by snapMarkerFor() and not here - see SnapMarker. A square
+        // is a joint, a triangle the middle of something, an hourglass a crossing. One shape for every
+        // kind of snap said "something was caught" without saying WHAT, which is the one thing worth
+        // knowing when the end and the middle of a short line are a few pixels apart and a crossing
+        // sits on top of both.
+        //
+        // Sized in SCREEN pixels with a cosmetic pen, so the marker is the same size at every zoom: it
+        // is a piece of the cursor rather than a piece of the drawing.
+        switch (snapMarkerFor(snapResult_.kind)) {
+        case SnapMarker::Triangle: {
             QPolygonF tri;
             tri << QPointF(s.x(), s.y() - 6) << QPointF(s.x() + 6, s.y() + 4)
                 << QPointF(s.x() - 6, s.y() + 4);
             p.drawPolygon(tri);
-        } else {
+            break;
+        }
+        case SnapMarker::Hourglass: {
+            // Two bars with a waist between them. Drawn as ONE closed four-cornered polygon taken
+            // across the diagonal - top-left, top-right, bottom-left, bottom-right - whose four
+            // strokes are exactly the top bar, one diagonal, the bottom bar and the other diagonal.
+            // Four separate lines would draw the same picture with four chances of one of them being
+            // out by a pixel.
+            const double hw = 5.0, hh = 6.0;
+            QPolygonF hour;
+            hour << QPointF(s.x() - hw, s.y() - hh) << QPointF(s.x() + hw, s.y() - hh)
+                 << QPointF(s.x() - hw, s.y() + hh) << QPointF(s.x() + hw, s.y() + hh);
+            p.drawPolygon(hour);
+            break;
+        }
+        case SnapMarker::Square:
             p.drawRect(QRectF(s.x() - 5, s.y() - 5, 10, 10));
+            break;
         }
     }
 
@@ -17129,18 +17262,29 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // or adjusted, and clutter the rest of the time: a finished drawing shows the interruption, and the
     // ends of the run are where the strokes are. So they belong to the selection, not to the drawing,
     // and they are drawn here rather than by the renderer.
-    for (const QString& id : selected_) {
-        const Entity* mark = nullptr;
-        for (const auto& m : doc_->entities())
-            if (m.id == id && m.type == EntityType::LengthBreak) mark = &m;
-        if (!mark || !mark->meta.value(QStringLiteral("endJoints")).toBool(true)) continue;
+    // WALKED THE OTHER WAY ROUND, and that is the whole of the difference.
+    //
+    // This used to be "for each selected id, search the whole document for a break mark with that id"
+    // - with an inner loop that did not even stop when it found one. Selected x entities, every
+    // frame: at two thousand of each that is four million comparisons per repaint, spent almost
+    // entirely on discovering that a drawing with no break marks in it has no break marks in it.
+    // Measured, it was 76 ms of an 80 ms overlay.
+    //
+    // The document is walked once instead, and the selection is asked - which is a hash lookup - so
+    // the cost is the number of entities and not the product of the two.
+    const QSet<QString> pickedMarks = selected_.empty() ? QSet<QString>() : selectionSet();
+    for (const auto& m : doc_->entities()) {
+        if (m.type != EntityType::LengthBreak) continue;
+        if (!pickedMarks.contains(m.id)) continue;
+        const Entity* mark = &m;
+        if (!mark->meta.value(QStringLiteral("endJoints")).toBool(true)) continue;
         // Where the mark actually lies: from its run when it is attached to one.
         Entity shown = *mark;
         const Entity* host = nullptr;
         if (const QString hostId = mark->meta.value(QStringLiteral("host")).toString();
             !hostId.isEmpty())
             for (const auto& h : doc_->entities())
-                if (h.id == hostId) host = &h;
+                if (h.id == hostId) { host = &h; break; }   // one host; stop at it
         if (host) {
             Vec2 pos, dir;
             if (runPointAtFraction(*host, mark->meta.value(QStringLiteral("annT")).toDouble(0.5), pos,

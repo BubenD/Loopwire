@@ -39,8 +39,12 @@ namespace Edraw_Desktop {
 // ---- INSERT ----
 void MainWindow::buildInsertTab() {
     auto [page, lay] = makeTabPage();
-    addGroup(lay, QStringLiteral("Annotation"),
-             toolRow({ToolId::Text, ToolId::Dimension, ToolId::DetailView}));
+
+    // No Annotation group here. Text, Dimension and DetailView are annotation tools and they all live
+    // on the Annotation tab, which carries them alongside MText, NetLabel and the leader - a fuller
+    // set than the three that were duplicated here. This tab is for bringing a drawing, a picture or a
+    // PDF in from somewhere else; a tool that draws a dimension is not that, and having it in two
+    // places only raises the question of whether the two are different.
 
     // ---- Pictures ----
     // A logo, a photograph of the loom, a screenshot of a connector drawing: on the sheet as an

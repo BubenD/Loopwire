@@ -15,6 +15,7 @@
 #include <QJsonArray>
 #include <QPainter>
 #include <QtMath>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -578,6 +579,52 @@ int run_editor_tests() {
         for (const auto& e : d.entities()) if (e.meta.value("table").toBool()) t = &e;
         check(t && t->meta.value("cells").toArray()[7].toString() == QLatin1String("hi"),
               "table: editing a cell stores its text");
+
+        // ---- DRAGGING ACROSS CELLS PICKS THE BLOCK BETWEEN THEM ----------------------------------
+        //
+        // The gesture is press inside a cell, hold, move to another, release; what it must give is the
+        // RECTANGLE the two span.
+        //
+        // A VIEW SCALE IS SET FIRST, and without it this test measures the wrong thing entirely.
+        // worldTolerance() is pixelTol_ / view scale, and a Document starts at scale 1 with a 10-pixel
+        // tolerance - so every pick reaches 10 WORLD units. These cells are 20 x 10, which puts the
+        // table's interior grid-line grips (live whenever the table is selected) within reach of the
+        // middle of every cell, and a press meant for a cell grabs a column boundary instead. That is
+        // correct behaviour at a silly zoom; it is not what a user at a sane zoom does. At scale 10 the
+        // tolerance is one world unit and the cells are picked as intended.
+        if (t) {
+            d.view().scale = 10.0;
+
+            // Table spans x[0..60] y[0..30] as 3 cols x 3 rows: columns x[0..20][20..40][40..60],
+            // rows y[20..30] (merged title), [10..20] (header), [0..10] (data).
+            // From the header row's first column to the data row's second: a 2x2 block.
+            ed.onPointerPress({10, 15}, Qt::LeftButton, Qt::NoModifier);   // r1,c0
+            ed.onPointerMove({30, 5});                                     // r2,c1
+            ed.onPointerRelease({30, 5}, Qt::LeftButton);
+
+            std::vector<int> got = ed.selectedCells();
+            std::sort(got.begin(), got.end());
+            const std::vector<int> want = {3, 4, 6, 7};
+            check(got == want, "table: dragging across cells picks the rectangle between them");
+            check(ed.selectedCellTableId() == t->id,
+                  "table: the picked cells belong to the table dragged on");
+
+            // Either corner may be first: they are corners, not a start and an end.
+            ed.clearCellSelection();
+            ed.onPointerPress({30, 5}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({10, 15});
+            ed.onPointerRelease({10, 15}, Qt::LeftButton);
+            got = ed.selectedCells();
+            std::sort(got.begin(), got.end());
+            check(got == want, "table: the drag is symmetric - either corner may be first");
+
+            // And a press with no move is one cell, not a block.
+            ed.clearCellSelection();
+            ed.onPointerPress({10, 15}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({10, 15}, Qt::LeftButton);
+            check(ed.selectedCells().size() == 1,
+                  "table: a click without a drag picks the one cell");
+        }
     }
 
     // --- Table cell selection + contextual row/column/align operations.
@@ -809,6 +856,102 @@ int run_editor_tests() {
             check(t.snapped && t.kind == SnapKind::Tangent,
                   "snap-tangent: snaps to a tangent point from the anchor");
         }
+    }
+
+    // --- The snap marker says WHICH KIND of place was caught, not merely that one was.
+    //
+    // A square for a joint, a triangle for the middle of something, an hourglass for a crossing. The
+    // shapes are drawn in the overlay, which a test cannot look at - but the DECISION is snapMarkerFor,
+    // and a marker quietly reverting to one shape for everything is invisible in a screenshot and
+    // obvious in a mapping.
+    {
+        // A joint is a point that is part of the object: an end, a vertex, a node, an insertion point,
+        // and equally the definite places worked out on a curve - a quadrant, a tangent point, the
+        // nearest point on a run.
+        check(snapMarkerFor(SnapKind::Endpoint) == SnapMarker::Square,
+              "snap-marker: an endpoint is a joint - a square");
+        check(snapMarkerFor(SnapKind::Node) == SnapMarker::Square, "snap-marker: and so is a node");
+        check(snapMarkerFor(SnapKind::Insertion) == SnapMarker::Square,
+              "snap-marker: and an insertion point");
+        check(snapMarkerFor(SnapKind::Quadrant) == SnapMarker::Square,
+              "snap-marker: and a quadrant, which is a place ON the circle");
+        check(snapMarkerFor(SnapKind::Perpendicular) == SnapMarker::Square,
+              "snap-marker: and a perpendicular foot");
+        check(snapMarkerFor(SnapKind::Tangent) == SnapMarker::Square,
+              "snap-marker: and a tangent point");
+        check(snapMarkerFor(SnapKind::Nearest) == SnapMarker::Square,
+              "snap-marker: and the nearest point on the object");
+
+        // The middle of something is derived from the object rather than built into it.
+        check(snapMarkerFor(SnapKind::Midpoint) == SnapMarker::Triangle,
+              "snap-marker: a midpoint is a triangle");
+        check(snapMarkerFor(SnapKind::Center) == SnapMarker::Triangle,
+              "snap-marker: and the centre of a circle");
+        check(snapMarkerFor(SnapKind::GeometricCenter) == SnapMarker::Triangle,
+              "snap-marker: and a centroid, which is the middle of something too");
+
+        // A crossing belongs to neither object, and that is the distinction worth a shape of its own:
+        // connecting a line to where two others happen to cross is a different act from connecting it
+        // to the end of one of them, and the two candidates are often a pixel apart.
+        check(snapMarkerFor(SnapKind::Intersection) == SnapMarker::Hourglass,
+              "snap-marker: an intersection is an hourglass, NOT a joint");
+
+        // The three must be three. A mapping where two of them coincide is the bug this replaced.
+        check(SnapMarker::Square != SnapMarker::Triangle &&
+                  SnapMarker::Triangle != SnapMarker::Hourglass &&
+                  SnapMarker::Square != SnapMarker::Hourglass,
+              "snap-marker: the three shapes are distinct");
+
+        // AND IT REACHES A REAL SNAP. Asserting the mapping alone would still pass if intersections
+        // were never caught, so a genuine crossing is snapped to and asked what it draws as.
+        Document d; d.entities().clear();
+        Entity a; a.id = "a"; a.type = EntityType::Line; a.a = {0, 50}; a.b = {100, 50};
+        d.entities().push_back(a);
+        Entity b; b.id = "b"; b.type = EntityType::Line; b.a = {30, 0}; b.b = {30, 80};
+        d.entities().push_back(b);
+        // Neither line's midpoint nor either end is at (30,50): a's midpoint is (50,50) and b's is
+        // (30,40), so the crossing is the only thing there and the test is about the crossing.
+        SnapSettings s; s.snapNearest = false;
+        const auto x = resolveSnap(d, {30, 50}, std::nullopt, 3.0, s, {});
+        check(x.snapped && x.kind == SnapKind::Intersection,
+              "snap-marker: two crossing lines are caught as an intersection");
+        check(snapMarkerFor(x.kind) == SnapMarker::Hourglass,
+              "snap-marker: and that catch is drawn as an hourglass");
+
+        // THE CROSSING BEING MADE, not only crossings that already exist.
+        //
+        // Drawing a line across an existing one is the commonest crossing on a board, and there is only
+        // ONE entity in the document while it happens - the rubber band is not committed until the
+        // click lands. So the band is tested against what is there, from the anchor the tool is
+        // tracking from. Without it the cursor at that meeting caught Nearest - a point on the old line
+        // rather than the meeting of the two - and drew as a joint.
+        Document one; one.entities().clear();
+        Entity across; across.id = "x"; across.type = EntityType::Line;
+        across.a = {0, 50}; across.b = {100, 50};
+        one.entities().push_back(across);
+
+        SnapSettings rb;                       // defaults, minus the ones that would shadow it
+        rb.snapNearest = false;
+        // A line being drawn from below, up through the existing one at x = 40.
+        const auto band = resolveSnap(one, {40, 49}, {Vec2{40, 0}}, 3.0, rb, {});
+        check(band.snapped && band.kind == SnapKind::Intersection,
+              "snap-marker: where the line being drawn crosses an existing one IS an intersection");
+        check(near(band.point.x, 40.0) && near(band.point.y, 50.0),
+              "snap-marker: and it lands on the crossing, not merely near it");
+        check(snapMarkerFor(band.kind) == SnapMarker::Hourglass,
+              "snap-marker: so it draws as an hourglass while the line is being drawn");
+
+        // Reached slightly BEFORE the cursor gets there, because the crossing is usually just past
+        // where the hand has got to. Nothing outside the snap radius can win, so this costs nothing.
+        const auto approaching = resolveSnap(one, {40, 48}, {Vec2{40, 0}}, 3.0, rb, {});
+        check(approaching.snapped && approaching.kind == SnapKind::Intersection,
+              "snap-marker: caught on the approach, not only on arrival");
+
+        // WITH NO ANCHOR there is no line being drawn, so there is no crossing to report. Guards
+        // against the band being invented out of the bare cursor position.
+        const auto idle = resolveSnap(one, {40, 49}, std::nullopt, 3.0, rb, {});
+        check(idle.kind != SnapKind::Intersection,
+              "snap-marker: with nothing being drawn there is no crossing to catch");
     }
 
     // --- Object snap finds a dimension's joints (measured points + dim-line ends),

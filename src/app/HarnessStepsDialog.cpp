@@ -793,8 +793,13 @@ void HarnessStepsDialog::showStep() {
     if (steps_.empty()) return;
     const StepRef ref = steps_[static_cast<size_t>(current_)];
     const StepText text = textFor(ref.step);
-    if (heading_) heading_->setText(QString::fromLatin1(text.title));
-    if (hint_) hint_->setText(QString::fromLatin1(text.hint));
+    // fromUtf8, NOT fromLatin1. These literals are UTF-8 in the source and contain em-dashes, so
+    // reading them as Latin-1 turned "1 - the end you start from" into "1 a<?><?> the end you start
+    // from" in the heading while the step LIST beside it - which converts the same pointer through
+    // QString::arg, and so through fromUtf8 - showed it correctly. Two different conversions of one
+    // string is why only half the window was wrong.
+    if (heading_) heading_->setText(QString::fromUtf8(text.title));
+    if (hint_) hint_->setText(QString::fromUtf8(text.hint));
     if (backBtn_) backBtn_->setEnabled(current_ > 0);
     if (nextBtn_) nextBtn_->setEnabled(current_ + 1 < static_cast<int>(steps_.size()));
 

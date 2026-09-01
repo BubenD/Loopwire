@@ -66,6 +66,7 @@ class BundleDiameterDialog;
 class ThermalModelDialog;
 class TemplateDialog;
 class BlockDialog;
+class OdaConverter;
 
 // Top-level application window: ribbon, dockable panels (layers / properties /
 // entity list), command bar, coordinate readout, and view/edit actions.
@@ -143,6 +144,38 @@ public:
     QMenu* buildPartsPanelMenu(const QString& partId);
     // Take a line put there by hand off the bill of materials - `row` as the panel shows it.
     void removeBomPanelRow(int row);
+    // Export the drawing as a native DWG, via the ODA File Converter. Public alongside the rest of
+    // this section because it is a gesture worth driving from a test: the interesting behaviour is
+    // what happens when the converter is NOT installed, which is the state of every machine that has
+    // not been set up for it, and a test of that has to be able to ask for the export.
+    void exportDwgAs();
+
+    // The interaction brain, for tests that need to ask what is SELECTED rather than what is drawn.
+    // Named as the rest of this section names such things.
+    Editor* editorForTest() const { return editor_; }
+
+    // The document the tools and the selection are working in: the drawing in model space, the sheet's
+    // paper space on a layout. Public alongside the rest of this section for the same reason: what an
+    // import or a merge DID is a question about the document, and a test that cannot see the document
+    // can only check the sentence in the status bar.
+    Document* editDoc() const;
+
+    // Bring another drawing INTO this one. `importDrawing()` asks for the file; importDrawingFile()
+    // does the work, and is public so a test can hand it a path without a file dialog in the way.
+    // A DWG goes through the ODA converter to DXF first; a DXF is read directly.
+    void importDrawing();
+    void importDrawingFile(const QString& path);
+    // The DXF, once it is a DXF, merged into the current drawing. Shared by both routes above.
+    bool mergeDxfIntoDrawing(const QString& dxfPath, const QString& shownAs, QString* said = nullptr);
+
+    // About, and the licence paperwork behind it. Public for the same reason as the rest of this section:
+    // both are modal windows, and what is worth checking is what they SAY. The licence notice is not a
+    // nicety - Edraw ships Qt's libraries, and the LGPL asks that every copy of the program state that it
+    // uses Qt under that licence and supply the licence texts. A test that reads these is a test that the
+    // obligation is still being met, so it has to be able to reach them. `document` names the licence to
+    // open on (a ":/licenses/..." resource path); empty opens on the notices.
+    void showAbout();
+    void showLicenses(const QString& document = QString());
     void findAndPlaceLibraryPart();
     // The page setup manager, opened fresh or coming back from picking a plot window. `resumeTarget` is
     // which setup was being edited (-1 = the layout's own) and `resumeWorking` what the user had set.
@@ -387,9 +420,6 @@ private:
     // Write what is on the sheet back into the layout it belongs to. Called on the way out of a layout
     // and before the drawing is saved, so what was drawn on the paper is in the file.
     void flushPaperSpace();
-    // The document the tools and the selection are working in: the drawing in model space, the sheet's
-    // paper space on a layout.
-    Document* editDoc() const;
     // Drop the paper spaces of a drawing that is being closed.
     void forgetPaperSpaces(Document* drawing);
     void syncDrawingSpaceTabs();
@@ -488,6 +518,7 @@ private:
     VoltageDropDialog* voltageDropDlg_ = nullptr;
     MechanicalBuilderDialog* mechDlg_ = nullptr;
     HarnessStepsDialog* stepsDlg_ = nullptr;
+    class MechWizardDialog* mechWizard_ = nullptr;
     MechModelsDialog* modelsDlg_ = nullptr;
     // Which open documents are template-edit sessions, and the template each is drawing. A template
     // edit is a document like a block edit is: its own tab, its own undo, its own canvas colour.
@@ -571,6 +602,9 @@ private:
     void showMechanicalBuilder();
     // The same harness, asked for one step at a time - the way it is built.
     void showHarnessSteps();
+    // The rebuilt wizard: an open sequence rather than a fixed script. Opened beside the old one
+    // while it is being proven; see MechWizardDialog.
+    void showMechWizard();
     // The default mechanical models: the house style, drawn once.
     void showMechModels();
     // Mark (or unmark) the selection as the part's connection line.
@@ -668,7 +702,6 @@ private:
     // AutoCAD-style Options dialog (E menu). `page` names the tab to open on ("BOM" for the bill
     // of materials configurator), so a dialog elsewhere can send the user straight to it.
     void showOptions(const QString& page = QString());
-    void showAbout();            // app name / description / version (E menu)
     // Light-on-dark tooltips, so a hint is readable against this window.
     void loadSettings();         // restore persisted drafting/snap toggles
     void saveSettings();         // persist drafting/snap toggles on close
@@ -676,6 +709,11 @@ private:
     // The ribbon's own sheet, in the scheme now set. One function, called when the ribbon is built and again
     // when the scheme changes - written out twice, the two would drift apart.
     QString ribbonStyleSheet() const;
+
+    // The DWG exporter, made on first use and kept: it remembers where the converter is, and a
+    // conversion in flight must outlive the call that started it.
+    OdaConverter* odaExport_ = nullptr;
+    QString odaExportTarget_;   // where the running conversion is headed, for the "Exported X" line
     void restyleRibbonCorner();        // the tab row's corner, where Undo and Redo sit
     void restyleDrawingSpaceStrip();   // Model / the sheets / + / the scale, under the drawing
     QWidget* ribbonCorner_ = nullptr;

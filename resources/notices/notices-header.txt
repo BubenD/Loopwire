@@ -1,0 +1,128 @@
+==================================================================================================
+EDRAW - THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+==================================================================================================
+
+Edraw is proprietary software. Copyright (C) ETS. All rights reserved.
+
+Edraw incorporates and distributes third-party software. This document gives the notices and
+information required by the licences of that software. Nothing in this document limits or alters
+the licence under which Edraw itself is supplied; nothing in it grants any right in Edraw.
+
+The full text of every licence referred to below is supplied alongside this document, in the
+"licenses" folder next to the Edraw program, and can also be read from within the application
+under "About Edraw" -> "Third-party licences".
+
+
+--------------------------------------------------------------------------------------------------
+1. THE QT TOOLKIT - GNU LESSER GENERAL PUBLIC LICENSE, VERSION 3
+--------------------------------------------------------------------------------------------------
+
+  This program uses the Qt toolkit, version @QT_VERSION@.
+
+  Qt is Copyright (C) The Qt Company Ltd. and other contributors.
+
+  The Qt libraries distributed with Edraw, and their use by Edraw, are covered by the
+  GNU Lesser General Public License, version 3 (LGPL-3.0-only).
+
+  WHY A COPY OF THE GNU GPL IS SUPPLIED WITH THIS PROGRAM
+
+  No part of Edraw, and none of the software distributed with it, is licensed under the GNU
+  General Public License. Edraw contains no GPL-licensed code.
+
+  The GPL text is supplied because the LGPL requires it. The LGPL version 3 is not a standalone
+  licence: it states that it "incorporates the terms and conditions of version 3 of the GNU
+  General Public License, supplemented by the additional permissions listed below". Almost all of
+  its operative terms are therefore in the GPL, and LGPL section 4(b) requires that a combined
+  work be accompanied by "a copy of the GNU GPL and this license document".
+
+  The GPL is thus present as a document the LGPL refers to, and for no other reason. Both are
+  supplied with this program:
+
+      licenses/LGPL-3.0.txt      GNU Lesser General Public License, version 3
+                                 - the licence the Qt libraries are used under
+      licenses/GPL-3.0.txt       GNU General Public License, version 3
+                                 - incorporated by reference into the above; no code in Edraw
+                                   is licensed under it
+
+  The following Qt modules are distributed with Edraw, as dynamically linked libraries placed
+  beside the program, together with the Qt plugins they require:
+
+      @QT_MODULES@
+
+  HOW TO OBTAIN THE SOURCE CODE FOR QT
+
+  The Qt libraries distributed with Edraw are unmodified builds of the official Qt release. The
+  complete corresponding source code for the exact version used is published by The Qt Company
+  and may be obtained from:
+
+      https://download.qt.io/archive/qt/6.8/@QT_VERSION@/single/
+
+  This is the designated place from which to copy that source code. Should it become
+  unavailable, contact ETS quoting the Edraw version shown in "About Edraw", and the
+  corresponding source for the Qt version distributed with this copy will be made available.
+
+  YOUR RIGHT TO REPLACE THE QT LIBRARIES
+
+  The LGPL entitles you to modify the Qt libraries and to run Edraw against your modified
+  version. Edraw is built to make this possible: it links to Qt dynamically, and loads the Qt
+  libraries from ordinary files placed in the program's own folder. To use a Qt build of your
+  own, replace those files with your own binaries of the same Qt version and module set. Edraw
+  performs no integrity check on them and will not prevent their replacement.
+
+
+--------------------------------------------------------------------------------------------------
+2. COMPONENTS WITHIN QT
+--------------------------------------------------------------------------------------------------
+
+  The Qt libraries listed above contain third-party code of their own, which is consequently
+  distributed with Edraw. Those components, their licences and their copyright notices are set
+  out in the schedule at the end of this document.
+
+  Attention is drawn in particular to the FreeType Project, whose licence asks that credit be
+  given in the documentation of software that uses it:
+
+      Portions of this software are copyright (C) The FreeType Project
+      (https://www.freetype.org). All rights reserved.
+
+
+--------------------------------------------------------------------------------------------------
+3. DEFLATE DECOMPRESSION - zlib LICENCE
+--------------------------------------------------------------------------------------------------
+
+  Edraw reads compressed data streams out of PDF files using its own implementation of the
+  DEFLATE algorithm (RFC 1951) and of the zlib wrapper around it (RFC 1950), written in
+  src/io/PdfText.cpp. The canonical Huffman decoder follows the approach of "puff.c", the
+  reference implementation by Mark Adler distributed with zlib, which is acknowledged here:
+
+      Copyright (C) 2002-2013 Mark Adler
+      This software is provided 'as-is', without any express or implied warranty. In no event
+      will the author be held liable for any damages arising from the use of this software.
+      Permission is granted to anyone to use this software for any purpose, including
+      commercial applications, and to alter it and redistribute it freely, subject to the
+      following restrictions:
+        1. The origin of this software must not be misrepresented; you must not claim that you
+           wrote the original software.
+        2. Altered source versions must be plainly marked as such, and must not be
+           misrepresented as being the original software.
+        3. This notice may not be removed or altered from any source distribution.
+
+  Edraw's implementation is an altered version and is plainly marked as such in its source file.
+  No zlib code is distributed with Edraw in binary or source form.
+
+
+--------------------------------------------------------------------------------------------------
+4. TRADEMARKS AND REFERENCED STANDARDS
+--------------------------------------------------------------------------------------------------
+
+  The Edraw parts library identifies real components by manufacturer and part number so that
+  users can select the parts they intend to build with. Names including Raychem, TE Connectivity,
+  ITT, Molex, Amphenol and DR-25 are the trademarks or registered trademarks of their respective
+  owners, and are used for identification only. Their use does not imply any affiliation with,
+  sponsorship by, or endorsement of Edraw or ETS by those owners.
+
+  DXF and AutoCAD are trademarks of Autodesk, Inc. Edraw reads and writes the DXF interchange
+  format from its published specification. Edraw is neither produced by nor endorsed by Autodesk.
+
+  Edraw's drawing conventions refer to industry standards, including IPC/WHMA-A-620 and
+  IEC 60617, by reference only. No part of any standards document is reproduced in Edraw, and
+  reference to a standard is not a claim of certification against it.

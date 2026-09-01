@@ -84,6 +84,28 @@ struct MechFitting {
     // measure after the tolerances have been applied is not what belongs on the sheet.
     bool dimension = false;
     QString dimText;
+    // A BALLOON POINTING AT THIS PART'S BOM LINE. On by default - a released drawing balloons
+    // everything - but per part, because the exceptions are real: twenty ties along a trunk would bury
+    // the sheet in numbers.
+    bool balloon = true;
+};
+
+// ANOTHER CONNECTOR AT THE SAME END OF THE HARNESS.
+//
+// Two connectors feeding one cable is an ordinary harness and not a special case: a twin-lead adaptor,
+// a pair of headers going into one loom, a power and a signal housing sharing a bundle. What that is,
+// physically, is ONE PLACE with two housings on it - the wires leave both and gather into the same run.
+//
+// It is deliberately not modelled as two nodes. Two nodes would need a run between them to be a tree at
+// all, and there is no run: the housings sit side by side. Nor is it a breakout, because a breakout is
+// where the harness parts company and this is where it comes together. So the node keeps a list of the
+// FURTHER housings on it, each with its own designator and way count, and the first connector stays
+// where it was - which means every harness that has only one is untouched by this.
+struct MechExtraEnd {
+    QString libPart;
+    QString name;                           // its own designator: the second connector is not "P1"
+    int pinCount = 0;
+    bool balloon = true;
 };
 
 struct MechNode {
@@ -105,6 +127,15 @@ struct MechNode {
     // the wires have to fan out to the contacts and be inspected, so heatshrink never runs up to the
     // connector face, and how far it stops short is not left to whoever builds it.
     double openLengthMm = kMechOpenLengthMm;
+    // A BALLOON POINTING AT THIS CONNECTOR'S BOM LINE, as MechFitting::balloon. It was the only one of
+    // the three that had no flag, so unticking "balloon it" on a connector step changed nothing.
+    bool balloon = true;
+    // DIMENSION THE CONNECTOR ITSELF: its own length, far face to the face the harness leaves by.
+    // Separate from the open-conductor dimension, which measures the wires behind it and not the part.
+    bool dimension = false;
+    QString dimText;
+    // The FURTHER housings on this same node. Empty for the ordinary one-connector end. See MechExtraEnd.
+    std::vector<MechExtraEnd> extraEnds;
 };
 
 struct MechSegment {
@@ -122,6 +153,16 @@ struct MechSegment {
     double jacketOdMm = 0.0;                // over the jacket; 0 = loose wires, bundle from the cores
     QString cablePart;                      // the library cable, when it comes from one
     QString cableName;                      // what the schematic calls it ("W1", "cable")
+
+    // THE RUN'S DESIGNATOR, WRITTEN ON THE DRAWING. Off by default: a released harness does not letter
+    // every leg of itself, and a designator against each of thirty branches buries the sheet.
+    //
+    // AND WITHHELD ON A RUN BETWEEN TWO PARTS, whatever this says. A wire from P1 to P2 is already
+    // identified by its ends - the wire list calls it P1-3 to P2-5 - so a designator beside it is a
+    // third name for the same conductor and a fourth thing to keep in step. It earns its place where an
+    // end is OPEN and there is nothing else to call the run by, which is exactly the harness that gets
+    // built from bare wires. See MechNodeKind::FreeEnd.
+    bool showName = false;
     // How much jacket is stripped off at each end, so the conductors come out and fan into the
     // connector. Over that length the run is the bundle, with a cone between the two diameters.
     double stripFromMm = 0.0;
@@ -131,6 +172,11 @@ struct MechSegment {
     // on a build drawing is the nominal figure rather than whatever the model measures.
     bool dimension = false;
     QString dimText;
+    bool balloon = true;                    // as MechFitting::balloon
+    // "LONGER THAN IT IS DRAWN": a break mark across the run. A two-metre trunk on an A3 sheet is
+    // drawn short with a break in it and dimensioned at its real length, which is a property of the
+    // run rather than of the paper it lands on.
+    bool lengthBreak = false;
 
     bool isCable() const { return jacketOdMm > 0.0; }
     // A run KNOWN to be a cable - every conductor in it a core of the same one - whose jacket
@@ -156,6 +202,15 @@ struct MechDrawOptions {
     // body so it can be read. Anything other than 1 puts a note on the drawing saying so, because a
     // width scaled off the print would otherwise be wrong.
     double diameterExaggeration = 1.0;
+    // WHICH WAY THE HARNESS RUNS ACROSS THE SHEET.
+    //
+    // The direction the ROOT is laid in; every other node is placed at its parent's direction plus its
+    // own relative turn. So this one figure decides left-to-right (0) or right-to-left (180) for the
+    // whole tree, and every relative turn on every branch is left alone by the change.
+    //
+    // It used to be a literal 0.0 inside layoutMechanicalHarness, which meant a harness could only
+    // ever be built one way across the paper.
+    double baseDirectionDeg = 0.0;
     bool dimensions = true;                 // a length dimension on every segment
     bool diameterLabels = true;             // the bundle diameter written along each run
     // A callout on every part, carrying its BOM item number. On by default: a released harness drawing
@@ -197,6 +252,16 @@ struct MechHarnessDef {
 // figures in the region of ISO 6722 class B; a wire whose own diameter matters is given it
 // explicitly on the wire. Returns 0 when the gauge says nothing at all.
 double wireOuterDiameterMm(const QString& gauge);
+
+// A gauge as a cross-section in mm2, from either "0.5" or "22 AWG" - both are written on real
+// drawings and both arrive here. 0 when it said nothing usable.
+//
+// Exposed because the build script's compliance checks compare a contact's stated gauge range against
+// the conductor it is crimped onto, and that comparison has to be done in ONE unit. A second AWG
+// table elsewhere in the tree is a second table to be wrong.
+double mechGaugeMm2(const QString& gauge);
+// The cross-section of an AWG size. 0 for a size not in the table.
+double mechAwgMm2(int awg);
 
 // The bundle a set of conductors makes. Three cases, because one formula does not cover them:
 //   one wire   -> the wire itself

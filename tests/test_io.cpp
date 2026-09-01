@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QTemporaryDir>
 #include <cmath>
 #include <cstdio>
@@ -42,9 +43,103 @@ Document makeSample() {
 }
 } // namespace
 
+// WHAT AUTOCAD NEEDS OF A DXF, checked as structure rather than as geometry.
+//
+// Edraw's DXF opened in Edraw, in ezdxf and in the Edo converter, and would not open in AutoCAD. All
+// three of those normalise what AutoCAD refuses, so nothing in the project noticed for as long as
+// nobody tried the one program the format exists to talk to. Two faults, both invisible to a tolerant
+// reader:
+//
+//   1. MIXED LINE ENDINGS. pair() joined a code to its value with a bare LF while the records were
+//      joined with CRLF, so every record ended "0<LF>SECTION<CR><LF>". A DXF's lines must all end the
+//      same way.
+//   2. MISSING STRUCTURE. No BLOCKS section at all, and no VPORT or STYLE table - the last of which
+//      every TEXT record depends on, since none of them names a style and so all of them mean
+//      STANDARD.
+//
+// These checks are deliberately about the file's shape. A geometry test would have passed throughout.
+void checkDxfIsWellFormed(const QString& dxf) {
+    // Every line ends CRLF, and no lone LF or CR survives anywhere.
+    const int crlf = static_cast<int>(dxf.count(QStringLiteral("\r\n")));
+    check(crlf > 0, "dxf: has CRLF line endings");
+    check(static_cast<int>(dxf.count(QLatin1Char('\n'))) == crlf, "dxf: no bare LF line ending");
+    check(static_cast<int>(dxf.count(QLatin1Char('\r'))) == crlf, "dxf: no bare CR line ending");
+
+    // The sections AutoCAD expects to find.
+    for (const char* need : {"HEADER", "TABLES", "BLOCKS", "ENTITIES"})
+        check(dxf.contains(QStringLiteral("\r\n%1\r\n").arg(QLatin1String(need))),
+              "dxf: has a section it must have");
+
+    // The named definitions entities lean on: TEXT means STANDARD by not naming a style, every LAYER
+    // names CONTINUOUS, and the drawing needs a viewport to open into.
+    check(dxf.contains(QStringLiteral("\r\nVPORT\r\n")), "dxf: the VPORT table is present");
+    check(dxf.contains(QStringLiteral("\r\nSTYLE\r\n")), "dxf: the STYLE table is present");
+    check(dxf.contains(QStringLiteral("\r\nAPPID\r\n")), "dxf: the APPID table is present");
+    check(dxf.contains(QStringLiteral("STANDARD")), "dxf: the STANDARD text style is defined");
+    check(dxf.contains(QStringLiteral("CONTINUOUS")), "dxf: the CONTINUOUS linetype is defined");
+    check(dxf.contains(QStringLiteral("*ACTIVE")), "dxf: the *ACTIVE viewport is defined");
+
+    // Structure, in order, and properly closed.
+    check(dxf.indexOf(QStringLiteral("BLOCKS")) < dxf.indexOf(QStringLiteral("ENTITIES")),
+          "dxf: BLOCKS comes before ENTITIES");
+    check(dxf.trimmed().endsWith(QStringLiteral("EOF")), "dxf: ends with EOF");
+
+    // NOTHING FROM A LATER DXF VERSION THAN THE ONE THE HEADER CLAIMS.
+    //
+    // This is the check that would have caught the bug that actually kept AutoCAD out. The file says
+    // AC1009 - R12, 1992 - and it was writing group code 420, the 24-bit true colour, which arrived
+    // with AutoCAD 2004. A reader told R12 and then handed a code from twelve years later is entitled
+    // to refuse the file, and AutoCAD does. Every tolerant reader skips the unknown code silently,
+    // so nothing anywhere reported a problem.
+    //
+    // Checked as a WHITELIST rather than by banning the two codes already found. The failure mode is
+    // "somebody adds a group code without checking which version introduced it", and a blacklist only
+    // ever catches the mistakes already made once.
+    check(dxf.contains(QStringLiteral("AC1009")), "dxf: declares R12");
+    // Every group code R12 defines that this writer has any reason to emit, across all three of the
+    // header, the tables and the entities - the VPORT table alone accounts for the 14/24, 15/25,
+    // 16/26/36 and 17/27/37 triples, which are snap spacing, grid spacing, view direction and view
+    // target and are perfectly legal here.
+    static const QSet<int> kR12Codes = {
+        0,   1,   2,   3,   4,   5,   6,   7,   8,   9,   10,  11,  12,  13,
+        14,  15,  16,  17,  20,  21,  22,  23,  24,  25,  26,  27,  30,  31,
+        32,  33,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  50,
+        51,  52,  53,  54,  62,  66,  67,  70,  71,  72,  73,  74,  75,  76,
+        77,  78,  210, 220, 230,
+    };
+    const QStringList lines = dxf.split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+    QSet<int> offenders;
+    for (int i = 0; i + 1 < lines.size(); i += 2) {
+        bool isCode = false;
+        const int code = lines.at(i).trimmed().toInt(&isCode);
+        if (isCode && !kR12Codes.contains(code)) offenders.insert(code);
+    }
+    if (!offenders.isEmpty()) {
+        QStringList names;
+        for (int c : offenders) names << QString::number(c);
+        std::printf("  [FAIL] dxf: group code(s) not in R12: %s\n",
+                    names.join(QStringLiteral(", ")).toUtf8().constData());
+        ++g_fail;
+    }
+}
+
 int run_io_tests() {
     g_fail = 0;
     std::printf("io tests:\n");
+
+    // --- The DXF Edraw writes is one AutoCAD will open.
+    {
+        const QString text = dxf::toDxf(makeSample());
+        checkDxfIsWellFormed(text);
+
+        // And it still says what it used to say: the structure was added around the geometry, not
+        // instead of it.
+        Document back;
+        QString err;
+        check(dxf::parse(back, text, &err), "dxf: what we write, we can read");
+        check(back.entities().size() == makeSample().entities().size(),
+              "dxf: the entities survived the added structure");
+    }
 
     // --- DWX round-trip preserves everything.
     {

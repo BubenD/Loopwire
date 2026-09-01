@@ -719,13 +719,29 @@ void CanvasWidget::drawSceneContent(QPainter& sp, const ViewTransform& vt, const
     QSet<QString> selected;
     if (editor_)
         for (const auto& id : editor_->selection()) selected.insert(id);
+
+    // A BIG SELECTION IS DRAWN HERE, HIGHLIGHT AND ALL, INSTEAD OF ON EVERY FRAME.
+    //
+    // The selected objects are normally left out of this cache so the overlay can paint them in the
+    // selection colour - which is the right trade while the selection is small, because then picking
+    // something costs no cache rebuild. It stops being the right trade when the selection is most of
+    // the drawing: the cache ends up holding almost nothing, and the whole sheet is re-rendered on
+    // every mouse move.
+    //
+    // Above the threshold the highlight is baked in. The canvas already invalidates this cache when
+    // the selection changes, so the extra cost is one rebuild per change and every frame in between
+    // is a blit. Editor::selectionIsBaked decides, and the overlay skips the same objects.
+    const bool bakeSelection = editor_ && editor_->selectionIsBaked();
+
     for (const auto& e : doc_->entities()) {
         if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
-        if (selected.contains(e.id)) continue;
+        const bool isSelected = selected.contains(e.id);
+        if (isSelected && !bakeSelection) continue;   // the overlay will put it back
         const Bounds b = drawnBounds(e);
         if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY || b.min.y > vMaxY))
             continue;
-        EntityRenderer::draw(sp, e, *doc_, vt);
+        EntityRenderer::draw(sp, e, *doc_, vt,
+                             isSelected ? editor_->selectionOverrideFor(e) : QColor());
     }
 }
 

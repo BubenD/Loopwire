@@ -48,6 +48,12 @@ public:
     explicit PartsLibraryDialog(Editor* editor, QWidget* parent = nullptr,
                                 std::function<void(QString, LibraryPartDrawing)> onEdit = {});
 
+    // THE WINDOW REOPENS THE SIZE IT WAS LEFT. Three drawings side by side with a row of buttons under
+    // each is a wide window, and the size that suits one machine's screen and one person's habits is not
+    // a thing to work out afresh every time - having resized it once so nothing is clipped, somebody
+    // should not have to do it again on the next opening.
+    void closeEvent(QCloseEvent* e) override;
+
     // Where the library is read from / written to (the default path unless told otherwise).
     void setLibraryPath(const QString& path);
     QString libraryPath() const { return path_; }

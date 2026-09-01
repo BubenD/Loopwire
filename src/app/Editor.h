@@ -16,6 +16,7 @@
 #include <QObject>
 
 #include <functional>
+#include <QColor>
 #include <QSet>
 #include <QJsonArray>
 #include <QString>
@@ -57,6 +58,27 @@ public:
     const SnapSettings& snapSettings() const { return snap_; }
 
     const std::vector<QString>& selection() const { return selected_; }
+
+    // ---- A BIG SELECTION IS DRAWN INTO THE SCENE CACHE INSTEAD OF ONTO EVERY FRAME ---------------
+    //
+    // Normally the cache leaves the selected objects out and the overlay puts them back in the
+    // selection colour every frame. That is right for the ordinary case - picking three things does
+    // not then cost a cache rebuild - and it is exactly wrong for a big one: with a whole imported
+    // sheet picked, the cache holds nothing and the entire drawing is re-rendered on every mouse
+    // move. Measured at 2000 objects that is about 100 ms a frame, which is ten frames a second.
+    //
+    // Above the threshold the highlight is BAKED into the cache instead. A selection change then
+    // costs one rebuild - which already happens, the canvas invalidates on selectionChanged - and
+    // every frame after it is a blit. Moving the mouse over a fully selected drawing stops costing
+    // anything at all.
+    //
+    // The two paths must agree on both questions, so both are answered here rather than once in the
+    // editor and once in the canvas.
+    bool selectionIsBaked() const { return selected_.size() > kCachedSelectionLimit; }
+
+    // The colour a SELECTED entity is drawn in. An invalid colour means "draw it normally" - which is
+    // what a table with one of its cells being edited wants: it is not the table that is picked.
+    QColor selectionOverrideFor(const Entity& e) const;
     const SnapResult& currentSnap() const { return snapResult_; }
     // The break mark: which of the two styles is placed, and how far it reaches across the run.
     QString& breakStyle() { return breakStyle_; }
@@ -600,7 +622,14 @@ public:
     bool adoptLabelFromSelection();
     // Done fitting: the label stays where it is and the ribbon goes back to normal.
     void endLabelEdit();
-    void appendEntities(const std::vector<Entity>& ents);
+    // Add a set of entities to the drawing: a paste, a block, a part's drawing, an imported file.
+    // Pushes one undo step.
+    //
+    // `select` is what the caller wants to happen NEXT. A paste or a placed block is selected, because
+    // the user is about to move it. An imported drawing is not: an import can be thousands of objects,
+    // and handing somebody a selection that size means their next click deselects it and their next
+    // drag moves the lot.
+    void appendEntities(const std::vector<Entity>& ents, bool select = true);
     // Everything currently selected, copied out (the parts library captures a part's drawing from
     // the sheet this way).
     std::vector<Entity> copyOfSelection() const;
@@ -1347,6 +1376,29 @@ private:
     UndoStack undo_;
 
     std::vector<QString> selected_;
+
+    // The selection as a set, for the places that walk EVERY entity and ask "is this one selected?".
+    //
+    // selected_ is a vector because its ORDER matters - the first pick is the reference for several
+    // modify tools - and a linear search through it inside a loop over the document is O(entities x
+    // selected). With a whole imported sheet picked that is a few million QString comparisons on every
+    // repaint and on every mouse move during a drag, which is exactly as slow as it sounds.
+    //
+    // Built fresh at the top of each such function rather than cached in a member: a cache would have
+    // to be invalidated at every one of the many places that touch selected_, and one missed
+    // invalidation is a selection that draws wrong. Building it costs O(selected) once, against the
+    // O(entities x selected) it removes.
+    // Above this many selected objects the per-vertex grips are not drawn. See drawOverlay for why.
+    // 200 is comfortably more than anyone drags a vertex out of and far below where the handles start
+    // costing anything noticeable.
+    static constexpr std::size_t kGripSelectionLimit = 200;
+
+    // Above this many selected objects the highlight is baked into the scene cache. The same 200:
+    // below it the per-frame redraw is cheap and a cache rebuild per selection change would be the
+    // greater cost, above it that trade turns over.
+    static constexpr std::size_t kCachedSelectionLimit = 200;
+
+    QSet<QString> selectionSet() const { return QSet<QString>(selected_.begin(), selected_.end()); }
     // The other wires of the bundle(s) the selection belongs to: lit for information, never
     // selected, so an edit only ever reaches the wire that was clicked.
     QSet<QString> bundleCompanions_;

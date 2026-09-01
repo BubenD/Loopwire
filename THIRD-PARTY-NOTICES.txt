@@ -1,0 +1,612 @@
+==================================================================================================
+EDRAW - THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+==================================================================================================
+
+Edraw is proprietary software. Copyright (C) ETS. All rights reserved.
+
+Edraw incorporates and distributes third-party software. This document gives the notices and
+information required by the licences of that software. Nothing in this document limits or alters
+the licence under which Edraw itself is supplied; nothing in it grants any right in Edraw.
+
+The full text of every licence referred to below is supplied alongside this document, in the
+"licenses" folder next to the Edraw program, and can also be read from within the application
+under "About Edraw" -> "Third-party licences".
+
+
+--------------------------------------------------------------------------------------------------
+1. THE QT TOOLKIT - GNU LESSER GENERAL PUBLIC LICENSE, VERSION 3
+--------------------------------------------------------------------------------------------------
+
+  This program uses the Qt toolkit, version 6.8.3.
+
+  Qt is Copyright (C) The Qt Company Ltd. and other contributors.
+
+  The Qt libraries distributed with Edraw, and their use by Edraw, are covered by the
+  GNU Lesser General Public License, version 3 (LGPL-3.0-only).
+
+  WHY A COPY OF THE GNU GPL IS SUPPLIED WITH THIS PROGRAM
+
+  No part of Edraw, and none of the software distributed with it, is licensed under the GNU
+  General Public License. Edraw contains no GPL-licensed code.
+
+  The GPL text is supplied because the LGPL requires it. The LGPL version 3 is not a standalone
+  licence: it states that it "incorporates the terms and conditions of version 3 of the GNU
+  General Public License, supplemented by the additional permissions listed below". Almost all of
+  its operative terms are therefore in the GPL, and LGPL section 4(b) requires that a combined
+  work be accompanied by "a copy of the GNU GPL and this license document".
+
+  The GPL is thus present as a document the LGPL refers to, and for no other reason. Both are
+  supplied with this program:
+
+      licenses/LGPL-3.0.txt      GNU Lesser General Public License, version 3
+                                 - the licence the Qt libraries are used under
+      licenses/GPL-3.0.txt       GNU General Public License, version 3
+                                 - incorporated by reference into the above; no code in Edraw
+                                   is licensed under it
+
+  The following Qt modules are distributed with Edraw, as dynamically linked libraries placed
+  beside the program, together with the Qt plugins they require:
+
+      Qt Core, Qt GUI, Qt Widgets, Qt Network, Qt PrintSupport, Qt SVG
+
+  HOW TO OBTAIN THE SOURCE CODE FOR QT
+
+  The Qt libraries distributed with Edraw are unmodified builds of the official Qt release. The
+  complete corresponding source code for the exact version used is published by The Qt Company
+  and may be obtained from:
+
+      https://download.qt.io/archive/qt/6.8/6.8.3/single/
+
+  This is the designated place from which to copy that source code. Should it become
+  unavailable, contact ETS quoting the Edraw version shown in "About Edraw", and the
+  corresponding source for the Qt version distributed with this copy will be made available.
+
+  YOUR RIGHT TO REPLACE THE QT LIBRARIES
+
+  The LGPL entitles you to modify the Qt libraries and to run Edraw against your modified
+  version. Edraw is built to make this possible: it links to Qt dynamically, and loads the Qt
+  libraries from ordinary files placed in the program's own folder. To use a Qt build of your
+  own, replace those files with your own binaries of the same Qt version and module set. Edraw
+  performs no integrity check on them and will not prevent their replacement.
+
+
+--------------------------------------------------------------------------------------------------
+2. COMPONENTS WITHIN QT
+--------------------------------------------------------------------------------------------------
+
+  The Qt libraries listed above contain third-party code of their own, which is consequently
+  distributed with Edraw. Those components, their licences and their copyright notices are set
+  out in the schedule at the end of this document.
+
+  Attention is drawn in particular to the FreeType Project, whose licence asks that credit be
+  given in the documentation of software that uses it:
+
+      Portions of this software are copyright (C) The FreeType Project
+      (https://www.freetype.org). All rights reserved.
+
+
+--------------------------------------------------------------------------------------------------
+3. DEFLATE DECOMPRESSION - zlib LICENCE
+--------------------------------------------------------------------------------------------------
+
+  Edraw reads compressed data streams out of PDF files using its own implementation of the
+  DEFLATE algorithm (RFC 1951) and of the zlib wrapper around it (RFC 1950), written in
+  src/io/PdfText.cpp. The canonical Huffman decoder follows the approach of "puff.c", the
+  reference implementation by Mark Adler distributed with zlib, which is acknowledged here:
+
+      Copyright (C) 2002-2013 Mark Adler
+      This software is provided 'as-is', without any express or implied warranty. In no event
+      will the author be held liable for any damages arising from the use of this software.
+      Permission is granted to anyone to use this software for any purpose, including
+      commercial applications, and to alter it and redistribute it freely, subject to the
+      following restrictions:
+        1. The origin of this software must not be misrepresented; you must not claim that you
+           wrote the original software.
+        2. Altered source versions must be plainly marked as such, and must not be
+           misrepresented as being the original software.
+        3. This notice may not be removed or altered from any source distribution.
+
+  Edraw's implementation is an altered version and is plainly marked as such in its source file.
+  No zlib code is distributed with Edraw in binary or source form.
+
+
+--------------------------------------------------------------------------------------------------
+4. TRADEMARKS AND REFERENCED STANDARDS
+--------------------------------------------------------------------------------------------------
+
+  The Edraw parts library identifies real components by manufacturer and part number so that
+  users can select the parts they intend to build with. Names including Raychem, TE Connectivity,
+  ITT, Molex, Amphenol and DR-25 are the trademarks or registered trademarks of their respective
+  owners, and are used for identification only. Their use does not imply any affiliation with,
+  sponsorship by, or endorsement of Edraw or ETS by those owners.
+
+  DXF and AutoCAD are trademarks of Autodesk, Inc. Edraw reads and writes the DXF interchange
+  format from its published specification. Edraw is neither produced by nor endorsed by Autodesk.
+
+  Edraw's drawing conventions refer to industry standards, including IPC/WHMA-A-620 and
+  IEC 60617, by reference only. No part of any standards document is reproduced in Edraw, and
+  reference to a standard is not a claim of certification against it.
+
+==================================================================================================
+SCHEDULE OF THIRD-PARTY COMPONENTS WITHIN QT
+==================================================================================================
+
+The following components are contained within the Qt 6.8.3 libraries listed above and are
+therefore distributed with Edraw. Each is reproduced here with the copyright notices its licence
+requires be retained. This schedule is generated from the SPDX SBOM published with the Qt
+installation, and is deliberately inclusive: a component listed here may not be active in every
+build configuration.
+
+37 components.
+
+--------------------------------------------------------------------------------------------------
+1. Adobe Glyph List For New Fonts 1.7
+--------------------------------------------------------------------------------------------------
+  Provides standardized names for glyphs.
+
+  Licence: BSD 3-Clause "New" or "Revised" License
+  SPDX:    BSD-3-Clause
+
+  Copyright 2002, 2003, 2005, 2006, 2008, 2010, 2015 Adobe Systems
+
+--------------------------------------------------------------------------------------------------
+2. Anti-aliasing rasterizer from FreeType 2
+--------------------------------------------------------------------------------------------------
+  FreeType is a freely available software library to render fonts.
+
+  Licence: Freetype Project License or GNU General Public License v2.0 only
+  SPDX:    FTL OR GPL-2.0-only
+
+  Copyright 2000-2016 by David Turner, Robert Wilhelm, and Werner Lemberg.
+
+--------------------------------------------------------------------------------------------------
+3. Apache Tika MimeType Definitions 5101bc7fb090ed7deffe56837d7633c9485a1e5d
+--------------------------------------------------------------------------------------------------
+  The Apache Tika MimeTypes list many known MIME types and how to match files (using globs and/or
+  'magic' rules for the file contents)
+
+  Licence: Apache License 2.0
+  SPDX:    Apache-2.0
+
+  Copyright 2024 The Apache Software Foundation
+
+--------------------------------------------------------------------------------------------------
+4. BLAKE2 (reference implementation) ed1974ea83433eba7b2d95c5dcd9ac33cb847913
+--------------------------------------------------------------------------------------------------
+  BLAKE2 is a cryptographic hash function faster than MD5, SHA-1, SHA-2, and SHA-3, yet is at
+  least as secure as the latest standard SHA-3.
+
+  Licence: Creative Commons Zero v1.0 Universal or Apache License 2.0
+  SPDX:    CC0-1.0 OR Apache-2.0
+
+  Copyright 2012, Samuel Neves <sneves@dei.uc.pt>
+
+--------------------------------------------------------------------------------------------------
+5. D3D12 Memory Allocator f128d39b7a95b4235bd228d231646278dc6c24b2
+--------------------------------------------------------------------------------------------------
+  D3D12 Memory Allocator
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (c) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+
+--------------------------------------------------------------------------------------------------
+6. Data Compression Library (zlib) 1.3.1
+--------------------------------------------------------------------------------------------------
+  zlib is a general purpose data compression library.
+
+  Licence: zlib License
+  SPDX:    Zlib
+
+  (C) 1995-2024 Jean-loup Gailly and Mark Adler
+
+--------------------------------------------------------------------------------------------------
+7. Easing Equations by Robert Penner
+--------------------------------------------------------------------------------------------------
+
+  Licence: BSD 3-clause "New" or "Revised" License
+  SPDX:    BSD-3-Clause
+
+  Copyright (c) 2001 Robert Penner
+
+--------------------------------------------------------------------------------------------------
+8. Efficient Binary-Decimal and Decimal-Binary Conversion Routines for IEEE Doubles 3.3.0
+--------------------------------------------------------------------------------------------------
+
+  Licence: BSD 3-clause "New" or "Revised" License
+  SPDX:    BSD-3-Clause
+
+  Copyright 2006-2012, the V8 project authors
+
+--------------------------------------------------------------------------------------------------
+9. Freetype 2 2.13.3
+--------------------------------------------------------------------------------------------------
+  FreeType is a freely available software library to render fonts.
+
+  Licence: Freetype Project License or GNU General Public License v2.0 only
+  SPDX:    FTL OR GPL-2.0-only
+
+  Copyright (c) 2007-2014 Adobe Systems Incorporated
+  Copyright (c) 2004-2024 Albert Chin-A-Young
+  Copyright (c) 2018-2024 Armin Hasitzka, David Turner, Robert Wilhelm, and Werner Lemberg
+  Copyright (c) 2000 Computing Research Labs, New Mexico State University
+  Copyright (c) 1996-2024 David Turner, Robert Wilhelm, Dominik Röttsches, and Werner Lemberg
+  Copyright (c) 2004-2024 David Turner, Robert Wilhelm, Werner Lemberg and George Williams
+  Copyright (c) 2022-2024 David Turner, Robert Wilhelm, Werner Lemberg, and Moazin Khatti
+  Copyright (c) 2008-2024 David Turner, Robert Wilhelm, Werner Lemberg, and suzuki toshiya
+  Copyright (c) 2003-2024 David Turner, Robert Wilhelm, and Werner Lemberg
+  Copyright (c) 2005-2024 David Turner
+  Copyright (c) 2007-2024 Derek Clegg and Michael Toftdal
+  Copyright (c) 2007 Dmitry Timoshkov for Codeweavers
+  Copyright (c) 2001-2015 Francesco Zappa Nardelli
+  Copyright (c) 2005, 2007, 2008, 2013 George Williams
+  Copyright (c) 2013-2024 Google, Inc. Google Author(s) Behdad Esfahbod and Stuart Gill
+  Copyright (c) 2013-2022 Google, Inc.
+  Copyright (c) 2003 Huw D M Davies for Codeweavers
+  Copyright (c) 2010-2024 Joel Klinghed
+  Copyright (c) 1996-2024 Just van Rossum, David Turner, Robert Wilhelm, and Werner Lemberg
+  Copyright (c) 2003-2024 Masatake YAMATO and Redhat K.K.
+  Copyright (c) 2004-2024 Masatake YAMATO, Redhat K.K, David Turner, Robert Wilhelm, and Werner
+      Lemberg
+  Copyright (c) 2019-2024 Nikhil Ramakrishnan, David Turner, Robert Wilhelm, and Werner Lemberg
+  Copyright (c) 2009-2024 Oran Agra and Mickey Gabel
+  Copyright (c) 2007-2024 Rahul Bhalerao <rahul.bhalerao@redhat.com>
+  Copyright (c) 2002-2024 Roberto Alameda
+  Copyright (c) 2015-2024 Werner Lemberg
+  Copyright (c) 2004-2024 suzuki toshiya, Masatake YAMATO, Red Hat K.K., David Turner, Robert
+      Wilhelm, and Werner Lemberg
+  Copyright (c) 2019 nyorain
+  Copyright (c) 2022-2024 David Turner, Robert Wilhelm, Werner Lemberg, George Williams, and
+      Dominik Röttsches
+  Copyright (C) 2009, 2023  Red Hat, Inc.
+
+--------------------------------------------------------------------------------------------------
+10. Freetype 2 - Bitmap Distribution Format (BDF) support 2.13.3
+--------------------------------------------------------------------------------------------------
+  FreeType is a freely available software library to render fonts.
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (c) 2000 Computing Research Labs, New Mexico State University
+  Copyright (c) 2001-2014 Francesco Zappa Nardelli
+
+--------------------------------------------------------------------------------------------------
+11. Freetype 2 - Portable Compiled Format (PCF) support 2.13.3
+--------------------------------------------------------------------------------------------------
+  FreeType is a freely available software library to render fonts.
+
+  Licence: MIT License and MIT Open Group variant
+  SPDX:    MIT AND MIT-open-group
+
+  Copyright (c) 2001, 2012 David Turner, Robert Wilhelm, and Werner Lemberg
+  Copyright (c) 2000-2014 Francesco Zappa Nardelli
+  Copyright (c) 1990, 1994, 1998 The Open Group
+
+--------------------------------------------------------------------------------------------------
+12. Freetype 2 - zlib 2.13.3
+--------------------------------------------------------------------------------------------------
+  FreeType is a freely available software library to render fonts.
+
+  Licence: zlib License
+  SPDX:    Zlib
+
+  Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler
+
+--------------------------------------------------------------------------------------------------
+13. HarfBuzz-NG 10.4.0
+--------------------------------------------------------------------------------------------------
+  HarfBuzz is an OpenType text shaping engine.
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright © 2010-2022  Google, Inc.
+  Copyright © 2015-2020  Ebrahim Byagowi
+  Copyright © 2019,2020  Facebook, Inc.
+  Copyright © 2012,2015  Mozilla Foundation
+  Copyright © 2011  Codethink Limited
+  Copyright © 2008,2010  Nokia Corporation and/or its subsidiary(-ies)
+  Copyright © 2009  Keith Stribley
+  Copyright © 2011  Martin Hosken and SIL International
+  Copyright © 2007  Chris Wilson
+  Copyright © 2005,2006,2020,2021,2022,2023  Behdad Esfahbod
+  Copyright © 2004,2007,2008,2009,2010,2013,2021,2022,2023  Red Hat, Inc.
+  Copyright © 1998-2005  David Turner and Werner Lemberg
+  Copyright © 2016  Igalia S.L.
+  Copyright © 2022  Matthias Clasen
+  Copyright © 2018,2021  Khaled Hosny
+  Copyright © 2018,2019,2020  Adobe, Inc
+  Copyright © 2013-2015  Alexei Podtelezhnikov
+
+--------------------------------------------------------------------------------------------------
+14. LibJPEG-turbo 3.1.0
+--------------------------------------------------------------------------------------------------
+  The Independent JPEG Group's JPEG software
+
+  Licence: Independent JPEG Group License and BSD 3-Clause "New" or "Revised" License
+  SPDX:    IJG AND BSD-3-Clause
+
+  Copyright (C) 2009-2024 D. R. Commander
+  Copyright (C) 2015, 2020 Google, Inc.
+  Copyright (C) 2019-2020 Arm Limited
+  Copyright (C) 2015-2016, 2018 Matthieu Darbois
+  Copyright (C) 2011-2016 Siarhei Siamashka
+  Copyright (C) 2015 Intel Corporation
+  Copyright (C) 2013-2014 Linaro Limited
+  Copyright (C) 2013-2014 MIPS Technologies, Inc.
+  Copyright (C) 2009, 2012 Pierre Ossman for Cendio AB
+  Copyright (C) 2009-2011 Nokia Corporation and/or its subsidiary(-ies)
+  Copyright (C) 1999-2006 MIYASAKA Masaru
+  Copyright (C) 1999 Ken Murchison
+  Copyright (C) 1991-2020 Thomas G. Lane, Guido Vollbeding
+
+--------------------------------------------------------------------------------------------------
+15. LibPNG 1.6.47
+--------------------------------------------------------------------------------------------------
+  libpng is the official PNG reference library.
+
+  Licence: libpng License and PNG Reference Library version 2
+  SPDX:    Libpng AND libpng-2.0
+
+  Copyright (c) 1995-2025 The PNG Reference Library Authors
+  Copyright (c) 2000-2025 Cosmin Truta
+  Copyright (c) 1998-2018 Glenn Randers-Pehrson
+  Copyright (c) 1996-1997 Andreas Dilger
+  Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+  Copyright (c) 2000-2017 Simon-Pierre Cadieux
+  Copyright (c) 2000-2017 Eric S. Raymond
+  Copyright (c) 2000-2017 Mans Rullgard
+  Copyright (c) 2000-2017 Gilles Vollant
+  Copyright (c) 2000-2017 James Yu
+  Copyright (c) 2000-2017 Mandar Sahastrabuddhe
+  Copyright (c) 1998-2000 Tom Lane
+  Copyright (c) 1998-2000 Willem van Schaik
+  Copyright (c) 1996-1997 John Bowler
+  Copyright (c) 1996-1997 Kevin Bracey
+  Copyright (c) 1996-1997 Sam Bushell
+  Copyright (c) 1996-1997 Magnus Holmgren
+  Copyright (c) 1996-1997 Greg Roelofs
+  Copyright (c) 1996-1997 Tom Tanner
+  Copyright (c) 1995-1996 Dave Martindale
+  Copyright (c) 1995-1996 Paul Schmidt
+  Copyright (c) 1995-1996 Tim Wegner
+
+--------------------------------------------------------------------------------------------------
+16. libpsl - C library to handle the Public Suffix List 664f3dc85259ec65e30248a61fa1c45b7b0e4c3f
+--------------------------------------------------------------------------------------------------
+  Libpsl allows checking domains against the Public Suffix List.
+
+  Licence: BSD 3-clause "New" or "Revised" License
+  SPDX:    BSD-3-Clause
+
+  Copyright 2014-2016 The Chromium Authors. All rights reserved.
+
+--------------------------------------------------------------------------------------------------
+17. MD4
+--------------------------------------------------------------------------------------------------
+  An OpenSSL-compatible implementation of the RSA Data Security, Inc. MD4 Message-Digest
+  Algorithm.
+
+  Licence: Public Domain
+  SPDX:    CC0-1.0
+
+  Written by Alexander Peslyak - better known as Solar Designer <solar@openwall.com> - in 2001,
+      and placed in the public domain. There's absolutely no warranty.
+
+--------------------------------------------------------------------------------------------------
+18. MD4C 0.5.2
+--------------------------------------------------------------------------------------------------
+  A CommonMark-compliant Markdown parser.
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright © 2016-2024 Martin Mitáš
+
+--------------------------------------------------------------------------------------------------
+19. MD5
+--------------------------------------------------------------------------------------------------
+  MD5 message-digest algorithm.
+
+  Licence: Public Domain
+  SPDX:    CC0-1.0
+
+  Written by Colin Plumb in 1993, no copyright is claimed. Ian Jackson
+      <ian@chiark.greenend.org.uk>.
+
+--------------------------------------------------------------------------------------------------
+20. Mipmap generator for D3D12 0aa79bad78992da0b6a8279ddb9002c1753cb849
+--------------------------------------------------------------------------------------------------
+  Compute shader for mipmap generation from MiniEngine in DirectX-Graphics-Samples
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (c) 2015 Microsoft
+
+--------------------------------------------------------------------------------------------------
+21. OpenGL Headers Revision 27684
+--------------------------------------------------------------------------------------------------
+  OpenGL header generated from the Khronos OpenGL / OpenGL ES XML API Registry.
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (c) 2013-2014 The Khronos Group Inc.
+
+--------------------------------------------------------------------------------------------------
+22. PCRE2 10.45
+--------------------------------------------------------------------------------------------------
+  The PCRE library is a set of functions that implement regular expression pattern matching using
+  the same syntax and semantics as Perl 5.
+
+  Licence: BSD 3-clause "New" or "Revised" License with PCRE2 binary-like Packages Exception
+  SPDX:    LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception
+
+  Copyright (c) 1997-2024 University of Cambridge
+  Copyright (c) 2010-2024 Zoltan Herczeg
+
+--------------------------------------------------------------------------------------------------
+23. PCRE2 - Stack-less Just-In-Time Compiler 10.45
+--------------------------------------------------------------------------------------------------
+  The PCRE library is a set of functions that implement regular expression pattern matching using
+  the same syntax and semantics as Perl 5.
+
+  Licence: BSD 2-clause "Simplified" License
+  SPDX:    BSD-2-Clause
+
+  Copyright (c) 2009-2024 Zoltan Herczeg
+
+--------------------------------------------------------------------------------------------------
+24. Secure Hash Algorithm SHA-1
+--------------------------------------------------------------------------------------------------
+  Implements the Secure Hash Algorithms SHA 1
+
+  Licence: Public Domain
+  SPDX:    LicenseRef-SHA1-Public-Domain
+
+  Copyright (C) Dominik Reichl <dominik.reichl@t-online.de>
+  Copyright (C) 2016 The Qt Company Ltd
+
+--------------------------------------------------------------------------------------------------
+25. Secure Hash Algorithm SHA-3 - brg_endian 4b9e13ead2c5b5e41ca27c65de4dd69ae0bac228
+--------------------------------------------------------------------------------------------------
+  SHA-3, originally known as Keccak, is a cryptographic hash function.
+
+  Licence: BSD 2-clause "Simplified" License
+  SPDX:    BSD-2-Clause
+
+  Copyright (c) 1998-2013, Brian Gladman, Worcester, UK. All rights reserved.
+
+--------------------------------------------------------------------------------------------------
+26. Secure Hash Algorithm SHA-3 - Keccak 3.2
+--------------------------------------------------------------------------------------------------
+  SHA-3, originally known as Keccak, is a cryptographic hash function.
+
+  Licence: Creative Commons Zero v1.0 Universal
+  SPDX:    CC0-1.0
+
+  Guido Bertoni, Joan Daemen, Michaël Peeters and Gilles Van Assche.
+  To the extent possible under law, the implementers have waived all copyright
+  and related or neighboring rights to the source code in this file.
+
+--------------------------------------------------------------------------------------------------
+27. Secure Hash Algorithms SHA-384 and SHA-512
+--------------------------------------------------------------------------------------------------
+  Implements the Secure Hash Algorithms SHA 384 and SHA-521
+
+  Licence: BSD 3-clause "New" or "Revised" License
+  SPDX:    BSD-3-Clause
+
+  Copyright (c) 2011 IETF Trust and the persons identified as authors of the code.
+
+--------------------------------------------------------------------------------------------------
+28. SipHash Algorithm
+--------------------------------------------------------------------------------------------------
+  Implements the SipHash algorithm.
+
+  Licence: Creative Commons Zero v1.0 Universal
+  SPDX:    CC0-1.0
+
+  Copyright (C) 2012-2014 Jean-Philippe Aumasson
+  Copyright (C) 2012-2014 Daniel J. Bernstein <djb@cr.yp.to>
+  Copyright (C) 2016 Intel Corporation
+
+--------------------------------------------------------------------------------------------------
+29. Smooth Scaling Algorithm
+--------------------------------------------------------------------------------------------------
+  Normal smoothscale method, based on Imlib2's smoothscale.
+
+  Licence: BSD 2-clause "Simplified" License and Imlib2 License
+  SPDX:    BSD-2-Clause AND Imlib2
+
+  Copyright (C) 2004, 2005 Daniel M. Duley.
+  (C) Carsten Haitzler and various contributors.
+  (C) Willem Monsuwe <willem@stack.nl>
+
+--------------------------------------------------------------------------------------------------
+30. sRGB color profile icc file
+--------------------------------------------------------------------------------------------------
+  An ICC color profile for PDF/A-1b compatible PDF files.
+
+  Licence: International Color Consortium License
+  SPDX:    LicenseRef-ICC-License
+
+  Copyright International Color Consortium, 2015
+
+--------------------------------------------------------------------------------------------------
+31. The Public Suffix List 47264b57765919188b9f4144de8d95cf77e1b6dc, fetched on 2025-01-22
+--------------------------------------------------------------------------------------------------
+  The Public Suffix List is an initiative of Mozilla,
+
+  Licence: Mozilla Public License 2.0
+  SPDX:    MPL-2.0
+
+  The list was originally provided by Jo Hermans <jo.hermans@gmail.com>.
+  It is now maintained on github (https://github.com/publicsuffix/list).
+
+--------------------------------------------------------------------------------------------------
+32. TinyCBOR 0.6.1
+--------------------------------------------------------------------------------------------------
+  Concise Binary Object Representation (CBOR) Library
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (C) 2015-2021 Intel Corporation
+
+--------------------------------------------------------------------------------------------------
+33. Unicode Character Database (UCD) 34
+--------------------------------------------------------------------------------------------------
+  The Unicode Character Database (UCD) is a set of files that
+
+  Licence: Unicode License Agreement - Data Files and Software (2016)
+  SPDX:    Unicode-3.0
+
+  Copyright (C) 1991-2022 Unicode, Inc.
+
+--------------------------------------------------------------------------------------------------
+34. Unicode Common Locale Data Repository (CLDR) v46.1
+--------------------------------------------------------------------------------------------------
+  The Unicode CLDR provides key building blocks for software to support the
+
+  Licence: Unicode License v3
+  SPDX:    Unicode-3.0
+
+  Copyright (C) 2004-2023 Unicode, Inc.
+
+--------------------------------------------------------------------------------------------------
+35. WebGradients
+--------------------------------------------------------------------------------------------------
+  WebGradients is a free collection of 180 linear gradients.
+
+  Licence: MIT License
+  SPDX:    MIT
+
+  Copyright (c) 2017 itmeo
+
+--------------------------------------------------------------------------------------------------
+36. Wintab API
+--------------------------------------------------------------------------------------------------
+  Wintab is a de facto API for pointing devices on Windows.
+
+  Licence: LCS-Telegraphics License
+  SPDX:    LicenseRef-Lcs-Telegraphics
+
+  Copyright 1991-1998 by LCS/Telegraphics.
+
+--------------------------------------------------------------------------------------------------
+37. XSVG
+--------------------------------------------------------------------------------------------------
+  Some code for arc handling is derived from code from the XSVG project.
+
+  Licence: Historical Permission Notice and Disclaimer - sell variant
+  SPDX:    HPND-sell-variant
+
+  Copyright 2002 USC/Information Sciences Institute
+
+==================================================================================================
+END OF THIRD-PARTY NOTICES
+==================================================================================================

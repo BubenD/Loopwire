@@ -18,6 +18,13 @@ namespace PdfText {
 // needs the uncompressed length in front of the data, which a PDF stream does not carry, and zlib's own
 // headers are not part of a Qt install. It is the whole format - stored, fixed-Huffman and
 // dynamic-Huffman blocks - because a PDF producer may use any of them.
+//
+// ATTRIBUTION. The canonical-Huffman decoder below follows the approach of "puff.c", the reference
+// DEFLATE decoder written by Mark Adler and distributed with zlib (Copyright (C) 2002-2013 Mark Adler).
+// This is an ALTERED version and is marked as such here, as the zlib licence requires: it is a fresh
+// C++ implementation against RFC 1951 rather than a copy, and no zlib code ships with Edraw. The
+// requirement the licence puts on us is that the origin not be misrepresented - hence this paragraph,
+// which is repeated for the user in THIRD-PARTY-NOTICES.txt. Do not delete it.
 // ==================================================================================================
 
 namespace {
@@ -54,7 +61,8 @@ private:
     bool bad_ = false;
 };
 
-// A canonical Huffman decoder built from code lengths, per RFC 1951 3.2.2.
+// A canonical Huffman decoder built from code lengths, per RFC 1951 3.2.2. Counts-and-symbols decoding
+// after puff.c - see the attribution at the top of this file.
 class Huffman {
 public:
     bool build(const std::vector<int>& lengths) {

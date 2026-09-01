@@ -353,6 +353,31 @@ QString snapKindLabel(SnapKind k) {
     }
 }
 
+SnapMarker snapMarkerFor(SnapKind k) {
+    switch (k) {
+    // THE MIDDLE OF SOMETHING. Derived from the object rather than built into it, and the three of
+    // these are the same kind of answer: halfway along, the centre of the ring, the centroid of the
+    // outline.
+    case SnapKind::Midpoint:
+    case SnapKind::Center:
+    case SnapKind::GeometricCenter:
+        return SnapMarker::Triangle;
+
+    // A CROSSING - a point that belongs to neither object. It used to be drawn as a joint, which is
+    // the one confusion worth spending a shape on: connecting a line to where two others happen to
+    // cross is a different act from connecting it to the end of one of them, and on a busy drawing the
+    // two candidates are often within a pixel of each other.
+    case SnapKind::Intersection:
+        return SnapMarker::Hourglass;
+
+    // Everything else is A JOINT: a point that is part of the object. Ends and vertices obviously so;
+    // a quadrant, a perpendicular foot, a tangent point and the nearest point on a run are all a
+    // definite place ON the object, which is what the square says.
+    default:
+        return SnapMarker::Square;
+    }
+}
+
 namespace {
 
 // Whether everything an object can be snapped to is guaranteed to lie inside its own bounds().
@@ -545,6 +570,40 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                     if (auto x = segmentSegmentIntersection(near[i].first, near[i].second,
                                                            near[j].first, near[j].second))
                         consider(*x, SnapKind::Intersection);
+
+            // AND THE LINE BEING DRAWN, against what is already on the sheet.
+            //
+            // Two EXISTING segments crossing is only half of it, and the smaller half. The commonest
+            // crossing on a drawing board is the one being MADE: a line taken across an existing one,
+            // where the point wanted is exactly where the new line meets the old. There is no second
+            // entity to test yet - the rubber band is not in the document until the click lands - so
+            // the band itself is offered as a segment.
+            //
+            // Without this the cursor at that crossing caught Nearest instead, which is a point ON the
+            // old line rather than the meeting of the two, and it drew as a joint. The reading was a
+            // fraction out and the marker said the wrong thing about what had been caught.
+            //
+            // Extended a little past the cursor, because the crossing is usually just beyond where the
+            // hand has got to. Nothing further from the cursor than the snap radius can be chosen
+            // anyway, so the extension costs nothing and catches the approach rather than only the
+            // arrival.
+            //
+            // ONLY WHERE NOTHING REAL HAS BEEN CAUGHT. A joint that belongs to the drawing outranks a
+            // crossing with a line that does not exist yet: with the cursor all but on a corner, the
+            // corner is what the hand is going for, and the rubber band happens to cross that object's
+            // edge a fraction nearer. Offering the band's crossing there took the pick a hair off the
+            // corner - which is exactly the failure the tracked-angle rule was written to stop.
+            //
+            // Guarded the same way Nearest is, and for the same reason: it is a fallback, not a rival.
+            if (anchor && bestKind == SnapKind::None) {
+                const Vec2 reach = raw - *anchor;
+                if (reach.lengthSq() > 1e-12) {
+                    const Vec2 tip = raw + reach.normalized() * (tolWorld * 2.0);
+                    for (const auto& seg : near)
+                        if (auto x = segmentSegmentIntersection(*anchor, tip, seg.first, seg.second))
+                            consider(*x, SnapKind::Intersection);
+                }
+            }
         }
 
         // Nearest point on an object (lowest priority among object snaps): the

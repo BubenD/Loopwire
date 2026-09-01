@@ -54,6 +54,8 @@ add_library(edraw_core STATIC
     src/io/Dwx.cpp
     src/io/Dxf.h
     src/io/Dxf.cpp
+    src/io/OdaConverter.h
+    src/io/OdaConverter.cpp
     src/tools/ToolId.h
     src/tools/EntityTransforms.h
     src/tools/EntityTransforms.cpp
@@ -69,6 +71,8 @@ add_library(edraw_core STATIC
     src/harness/Datasheet.h
     src/harness/Datasheet.cpp
     src/harness/PartsLibrary.cpp
+    src/harness/MechBuildScript.h
+    src/harness/MechBuildScript.cpp
     src/harness/MechanicalHarness.h
     src/harness/MechModels.h
     src/harness/MechModels.cpp
@@ -119,6 +123,10 @@ add_library(edraw_core STATIC
     src/app/MechModelsDialog.cpp
     src/app/OutputDialog.h
     src/app/OutputDialog.cpp
+    src/app/MechWizardDialog.h
+    src/app/MechWizardDialog.cpp
+    src/app/OdaSetupDialog.h
+    src/app/OdaSetupDialog.cpp
     src/app/PageSetupDialog.h
     src/app/PageSetupDialog.cpp
     src/app/PageSetupManagerDialog.h
@@ -205,10 +213,34 @@ if(WIN32)
     get_filename_component(_edraw_qt_bin "${_edraw_qmake}" DIRECTORY)
     find_program(EDRAW_WINDEPLOYQT windeployqt HINTS "${_edraw_qt_bin}")
     if(EDRAW_WINDEPLOYQT)
+        # THE THREE --no-* GRAPHICS FLAGS ARE LICENCE DECISIONS as much as size ones.
+        #
+        # Left to itself windeployqt copies four graphics libraries beside Edraw.exe:
+        #
+        #   opengl32sw.dll                  Mesa's software rasteriser. MIT - so shipping it means
+        #                                   carrying Mesa's attribution.
+        #   d3dcompiler_47.dll              Microsoft. Not open source; redistributable only on
+        #   dxcompiler.dll, dxil.dll        Microsoft's own terms, which would have to be read and met.
+        #
+        # Edraw uses none of them. The canvas draws through QPainter, and there is no QOpenGL, QRhi,
+        # QSurfaceFormat or Qt Quick anywhere in the source. Not shipping them is simpler than being
+        # entitled to ship them.
+        #
+        # All three flags are needed, and this is the trap: --no-system-d3d-compiler drops only
+        # d3dcompiler_47.dll. dxcompiler.dll and dxil.dll are the newer DirectX Shader Compiler and have
+        # their own flag, --no-system-dxc-compiler. Dropping one and assuming the other followed is how
+        # two undeclared Microsoft binaries end up in a release.
+        #
+        # If Edraw ever does take up Qt Quick or an OpenGL canvas, these flags come off and the notices
+        # file has to grow to match.
         add_custom_command(TARGET Edraw POST_BUILD
             COMMAND "${EDRAW_WINDEPLOYQT}"
                     "--$<IF:$<CONFIG:Debug>,debug,release>"
-                    --no-translations --no-compiler-runtime --verbose 0
+                    --no-translations --no-compiler-runtime
+                    --no-opengl-sw
+                    --no-system-d3d-compiler
+                    --no-system-dxc-compiler
+                    --verbose 0
                     "$<TARGET_FILE:Edraw>"
             COMMENT "Deploying the Qt runtime beside Edraw.exe")
     else()
@@ -216,6 +248,105 @@ if(WIN32)
             "windeployqt was not found next to qmake (${_edraw_qt_bin}). The Qt DLLs will not be kept up "
             "to date beside Edraw.exe, so adding a Qt module can leave an executable that will not start.")
     endif()
+endif()
+
+# --- The licence paperwork, beside the executable ----------------------------
+#
+# THIS IS NOT HOUSEKEEPING, IT IS THE CONDITION ON WHICH EDRAW MAY SHIP.
+#
+# Edraw links Qt dynamically and ships Qt's DLLs. That makes Edraw a combined work under the LGPL v3,
+# and the LGPL asks three things of us in return for it: say that Qt is used and that it is used under
+# the LGPL (§4(a) - the About dialog does that), supply the licence texts (§4(b) - these files), and
+# make Qt's own source code obtainable (the address is written into the notices document).
+#
+# The files are copied on every build rather than only at install time, because build\Edraw.exe IS what
+# gets zipped up and sent to somebody. A copy of the program without these files beside it is a copy
+# that was distributed in breach of the licence, and the way to make that impossible is to leave no
+# build in which they are absent.
+#
+# They are ALSO compiled into the executable (see resources/edraw.qrc), so "About Edraw -> Third-party
+# licences" can always show them. Belt and braces on purpose: the file on disk is what an auditor
+# reads, the resource is what the user is shown, and neither can go missing without the other noticing.
+set(EDRAW_LICENSE_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt")
+set(EDRAW_LICENSE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/licenses")
+
+foreach(_f IN LISTS EDRAW_LICENSE_FILES)
+    if(NOT EXISTS "${_f}")
+        message(FATAL_ERROR
+            "Missing licence document: ${_f}\n"
+            "Edraw may not be built without the notices it is obliged to ship. Regenerate it with:\n"
+            "    python resources/notices/gen_notices.py")
+    endif()
+endforeach()
+foreach(_f "LGPL-3.0.txt" "GPL-3.0.txt")
+    if(NOT EXISTS "${EDRAW_LICENSE_DIR}/${_f}")
+        message(FATAL_ERROR
+            "Missing licence text: ${EDRAW_LICENSE_DIR}/${_f}\n"
+            "The LGPL requires both the LGPL and the GPL texts accompany the program. Fetch them from "
+            "https://www.gnu.org/licenses/ .")
+    endif()
+endforeach()
+
+add_custom_command(TARGET Edraw POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${EDRAW_LICENSE_FILES} "${CMAKE_BINARY_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${EDRAW_LICENSE_DIR}" "${CMAKE_BINARY_DIR}/licenses"
+    COMMENT "Copying the third-party notices and licence texts beside Edraw.exe")
+
+# Regenerating the notices from the Qt SBOM, and auditing for GPL exposure. Neither is part of the
+# normal build - the generated file is committed, so a build needs no Python - but:
+#
+#   cmake --build build --target edraw_notices        refresh the notices after a Qt upgrade
+#   cmake --build build --target edraw_notices_check  fail if somebody upgraded Qt and forgot
+#   cmake --build build --target edraw_gpl_audit      fail if anything linked or shipped is GPL-only
+#
+# The audit is the one to run when changing what Edraw links. Not every Qt module is available under the
+# LGPL - Qt Charts, Qt Data Visualization, Qt Quick 3D and the Qt Virtual Keyboard are GPL-or-commercial
+# only - and adding one would oblige ETS either to publish Edraw's source or to buy a commercial licence.
+# Nothing about adding a find_package component looks like that decision at the time, so it is checked.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+    # Derived here rather than borrowed from the windeployqt block above, which only runs on Windows:
+    # the notices describe the Qt that is installed, and that is worth knowing on any platform.
+    get_target_property(_edraw_qmake_n Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_edraw_qt_bin_n "${_edraw_qmake_n}" DIRECTORY)
+    get_filename_component(_edraw_qt_root "${_edraw_qt_bin_n}" DIRECTORY)
+    set(_edraw_gen "${CMAKE_CURRENT_SOURCE_DIR}/resources/notices/gen_notices.py")
+    add_custom_target(edraw_notices
+        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Regenerating THIRD-PARTY-NOTICES.txt from the Qt SBOM")
+    add_custom_target(edraw_notices_check
+        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}" --check
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Checking THIRD-PARTY-NOTICES.txt against the installed Qt")
+    add_custom_target(edraw_gpl_audit
+        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}" --audit-gpl
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Auditing for GPL exposure in what Edraw links and ships")
+
+    # THE AUDIT RUNS ON EVERY BUILD, and a GPL-only dependency FAILS the build.
+    #
+    # A check somebody has to remember to run is a check that gets run once, on the day it is written.
+    # The thing being guarded against here - a Qt module that turns out to be GPL-or-commercial - arrives
+    # as one word added to a find_package line, by someone who wanted a graph and had no reason to think
+    # they were making a licensing decision. The build is the only place that is certain to be watching.
+    #
+    # It costs a fraction of a second: five JSON files read, no network, no compilation. A missing SBOM
+    # warns rather than fails, so this cannot make Edraw unbuildable on a Qt that predates SBOMs.
+    #
+    # Python is optional for building Edraw, so a machine without it simply does not get the check - which
+    # is why the audit is also a target that can be run deliberately, and why the rule is written down in
+    # the README rather than living only here.
+    add_dependencies(Edraw edraw_gpl_audit)
+else()
+    message(WARNING
+        "Python 3 was not found, so the GPL audit will not run on this machine. Edraw is proprietary and "
+        "must not link GPL-only code; not every Qt module is available under the LGPL. Run "
+        "'python resources/notices/gen_notices.py --audit-gpl' on a machine that has Python before "
+        "shipping, and see the Licensing section of README.md.")
 endif()
 
 # --- Scratch GUI smoke target (only when a source is pointed at it) ----------
