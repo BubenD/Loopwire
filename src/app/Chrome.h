@@ -16,6 +16,35 @@ namespace Chrome {
 void setDark(bool dark);
 bool dark();
 
+// ---- A GROUND OF THE OFFICE'S OWN CHOOSING ------------------------------------------------------
+//
+// The ribbon and the panels are drawn on one colour, and which colour that should be is a house
+// decision rather than a program one: a shop with its drawings on a projector wants a flatter ground
+// than one reading them on a monitor at a desk, and some places simply have a colour they use.
+//
+// KEPT PER SCHEME, because a ground chosen for the dark scheme is meaningless in the light one - the
+// two are not a single preference with a brightness knob. An invalid colour means "the built-in one",
+// which is how a fresh install and a reset both behave.
+void setChosenBack(bool dark, const QColor& c);
+QColor chosenBack(bool dark);
+
+// The ground in force, and the lettering to read against it.
+//
+// `backInk` is not simply the scheme's own ink: somebody who sets a near-black ground while in the
+// light scheme would otherwise get near-black text on it and a window that cannot be read at all. So
+// the ink follows the GROUND's own lightness, and the scheme decides only what the ground is when
+// nobody has chosen one.
+QColor back();
+QColor backInk();
+
+// The two tones that have to go WITH the ground: every other row of a table, and a column heading.
+//
+// They were fixed figures, which is fine while the ground is fixed too and obviously wrong the moment it
+// is not - a pale alternating row striped across a ground somebody set to charcoal. Both are the ground
+// itself, stepped away from it, so a chosen colour brings its own table with it.
+QColor backAlt();
+QColor backHeader();
+
 // Text. `ink` is what is read, `subInk` what is only labelled - a group's name under its buttons, a hint.
 // Both are the FIRST thing to get wrong in a light scheme: pale grey lettering on white says nothing at all.
 QColor ink();

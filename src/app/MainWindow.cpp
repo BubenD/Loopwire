@@ -2512,6 +2512,17 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
 
     newDrawing(); // start with a single empty drawing (no demo, no last session)
 
+    // THE GROUND CHOSEN LAST TIME, read before the theme is applied - applyTheme builds the stylesheets
+    // that ask for it. A setting that is absent leaves the built-in colour in force, which is what a
+    // fresh install and a reset both look like.
+    {
+        const QSettings st;
+        const QString d = st.value(QStringLiteral("ui/chromeBackDark")).toString();
+        const QString l = st.value(QStringLiteral("ui/chromeBackLight")).toString();
+        if (!d.isEmpty() && QColor::isValidColorName(d)) Chrome::setChosenBack(true, QColor(d));
+        if (!l.isEmpty() && QColor::isValidColorName(l)) Chrome::setChosenBack(false, QColor(l));
+    }
+
     // The scheme last chosen. AFTER the first drawing exists: colouring the chrome ends by filling the
     // panels again - a properties row colours itself as it is made - and there is nothing to fill them from
     // until there is a drawing.
@@ -4000,8 +4011,8 @@ QString MainWindow::ribbonStyleSheet() const {
     const bool dark = darkTheme_;
     const QHash<QString, QString> c =
         dark ? QHash<QString, QString>{
-                   {"BG", "#3a3d43"},        {"LINE", "#2a2c31"},   {"RULE", "#b3afa6"},
-                   {"TX", "#c9ccd1"},        {"TXHI", "#ffffff"},   {"LBL", "#c8ccd2"},
+                   {"BG", Chrome::back().name()}, {"LINE", "#2a2c31"}, {"RULE", "#b3afa6"},
+                   {"TX", Chrome::backInk().name()}, {"TXHI", "#ffffff"}, {"LBL", "#c8ccd2"},
                    {"TABBAR", "#2f3237"},    {"HOVER", "#484c53"},  {"HOVERBORD", "#5a5f68"},
                    {"SEL", "#294e74"},       {"PRESS", "#22384f"},  {"FIELD", "#565b64"},
                    {"FIELDTX", "#f2f4f7"},   {"FIELDBORD", "#7b818b"}, {"FOCUS", "#5aa0ff"},
@@ -4009,8 +4020,8 @@ QString MainWindow::ribbonStyleSheet() const {
              : QHash<QString, QString>{
                    // Light: the lettering goes to near-black, not to a paler grey. A group's name and a
                    // tab's name are read at a glance or not at all.
-                   {"BG", "#eceef1"},        {"LINE", "#c2c2c8"},   {"RULE", "#b8b8be"},
-                   {"TX", "#1e2126"},        {"TXHI", "#000000"},   {"LBL", "#4c525b"},
+                   {"BG", Chrome::back().name()}, {"LINE", "#c2c2c8"}, {"RULE", "#b8b8be"},
+                   {"TX", Chrome::backInk().name()}, {"TXHI", "#000000"}, {"LBL", "#4c525b"},
                    {"TABBAR", "#dcdce2"},    {"HOVER", "#d0e3ff"},  {"HOVERBORD", "#9cc4f0"},
                    {"SEL", "#cfe3ff"},       {"PRESS", "#bcd9fb"},  {"FIELD", "#ffffff"},
                    {"FIELDTX", "#1e2126"},   {"FIELDBORD", "#a8aeb8"}, {"FOCUS", "#3d8bfd"},
@@ -6500,15 +6511,19 @@ void MainWindow::applyTheme(bool dark) {
     // icons are light), matching AutoCAD's persistent dark status strip.
     QHash<QString, QString> t;
     if (dark) {
-        t = {{"WIN", "#3a3d43"},   {"TEXT", "#c9ccd1"},   {"PANEL", "#3a3d43"},
-             {"ALT", "#41454c"},   {"HEADER", "#313438"}, {"LINE", "#4a4e55"},
+        t = {{"WIN", Chrome::back().name()}, {"TEXT", Chrome::backInk().name()},
+             {"PANEL", Chrome::back().name()},
+             {"ALT", Chrome::backAlt().name()}, {"HEADER", Chrome::backHeader().name()},
+             {"LINE", "#4a4e55"},
              {"SEL", "#294e74"},   {"SELTX", "#ffffff"},  {"INPUT", "#45484f"},
              {"INBORD", "#585c64"},{"BTN", "#484c53"},    {"HOVER", "#525760"},
              {"SCROLL", "#2d2f34"},{"HANDLE", "#5a5f68"}, {"TABBAR", "#2f3237"},
              {"STBG", "#2d2f34"},  {"STTX", "#aab0b8"}};
     } else {
-        t = {{"WIN", "#e9e9ed"},   {"TEXT", "#1e1e1e"},   {"PANEL", "#f5f5f7"},
-             {"ALT", "#ececf0"},   {"HEADER", "#dcdce0"}, {"LINE", "#c2c2c8"},
+        t = {{"WIN", Chrome::back().name()}, {"TEXT", Chrome::backInk().name()},
+             {"PANEL", Chrome::back().name()},
+             {"ALT", Chrome::backAlt().name()}, {"HEADER", Chrome::backHeader().name()},
+             {"LINE", "#c2c2c8"},
              {"SEL", "#cfe3ff"},   {"SELTX", "#000000"},  {"INPUT", "#ffffff"},
              {"INBORD", "#aeaeb6"},{"BTN", "#e2e2e6"},    {"HOVER", "#d4d4da"},
              {"SCROLL", "#dedee2"},{"HANDLE", "#b4b4ba"}, {"TABBAR", "#dcdce0"},
@@ -7598,6 +7613,60 @@ void MainWindow::showOptions(const QString& page) {
     scheme->setCurrentIndex(darkTheme_ ? 0 : 1);
     df->addRow(QStringLiteral("Color scheme"), scheme);
 
+    // ---- THE GROUND THE RIBBON AND THE PANELS ARE DRAWN ON, per scheme ----
+    //
+    // Two buttons and not one, because a ground chosen for the dark scheme means nothing in the light
+    // one: they are two settings that happen to share a purpose, not one setting with a brightness
+    // knob. Each shows the colour it currently holds, so the pair can be read without opening either.
+    //
+    // Reset is offered beside them rather than as a colour somebody has to find again: "the built-in
+    // one" is a real answer and there is no shade of grey that means it.
+    QColor backDark = Chrome::chosenBack(true);
+    QColor backLight = Chrome::chosenBack(false);
+    bool backChanged = false;
+
+    const auto backRow = [&](const QString& label, QColor* held, bool forDark) {
+        auto* row = new QWidget(disp);
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        auto* pick = new QPushButton(row);
+        pick->setMinimumWidth(120);
+        auto* reset = new QPushButton(QStringLiteral("Built-in"), row);
+        rl->addWidget(pick, 1);
+        rl->addWidget(reset);
+        const auto show = [pick, held, forDark] {
+            const QColor c = held->isValid() ? *held : Chrome::chosenBack(forDark);
+            if (c.isValid()) {
+                pick->setText(c.name());
+                // The button wears the colour, so the choice can be seen without a preview pane.
+                pick->setStyleSheet(QStringLiteral("background:%1;color:%2;")
+                                        .arg(c.name(),
+                                             c.lightness() < 128 ? QStringLiteral("#f0f0f0")
+                                                                 : QStringLiteral("#1e2126")));
+            } else {
+                pick->setText(QStringLiteral("Built-in colour..."));
+                pick->setStyleSheet(QString());
+            }
+        };
+        show();
+        connect(pick, &QPushButton::clicked, &dlg, [&dlg, held, label, show, &backChanged] {
+            const QColor c = QColorDialog::getColor(
+                held->isValid() ? *held : QColor("#3a3d43"), &dlg, label);
+            if (!c.isValid()) return;
+            *held = c;
+            backChanged = true;
+            show();
+        });
+        connect(reset, &QPushButton::clicked, &dlg, [held, show, &backChanged] {
+            *held = QColor();
+            backChanged = true;
+            show();
+        });
+        df->addRow(label, row);
+    };
+    backRow(QStringLiteral("Ribbon and panel colour (dark)"), &backDark, true);
+    backRow(QStringLiteral("Ribbon and panel colour (light)"), &backLight, false);
+
     auto* crossSize = new QSlider(Qt::Horizontal, disp);
     crossSize->setRange(5, 100);
     crossSize->setValue(canvas_->crosshairSize());
@@ -7816,6 +7885,21 @@ void MainWindow::showOptions(const QString& page) {
         doc_->bom() = bomTable.toJson();
         doc_->setDirty(true);
         if (bomDlg_) bomDlg_->reload(); // the list is showing: it follows at once
+    }
+
+    // THE CHOSEN GROUND IS SET BEFORE THE THEME IS APPLIED, because applyTheme is what builds the
+    // stylesheets that read it. Setting it afterwards would leave the window on its old colour until
+    // something else happened to rebuild them.
+    if (backChanged) {
+        Chrome::setChosenBack(true, backDark);
+        Chrome::setChosenBack(false, backLight);
+        QSettings st;
+        // An invalid colour is stored as nothing at all, so "built-in" survives a restart as the
+        // absence of a setting rather than as some particular grey that happens to match today's.
+        if (backDark.isValid()) st.setValue(QStringLiteral("ui/chromeBackDark"), backDark.name());
+        else st.remove(QStringLiteral("ui/chromeBackDark"));
+        if (backLight.isValid()) st.setValue(QStringLiteral("ui/chromeBackLight"), backLight.name());
+        else st.remove(QStringLiteral("ui/chromeBackLight"));
     }
 
     // Apply everything. The theme sets canvas colors; explicit picks override.

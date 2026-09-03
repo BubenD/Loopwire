@@ -1,3 +1,4 @@
+#include "app/Chrome.h"
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
 #include "io/Dwx.h"
@@ -39,7 +40,74 @@ void noSnap(Editor& ed) {
 } // namespace
 
 int run_editor_tests() {
+
     g_fail = 0;
+
+    // --- The chrome's ground can be chosen per scheme, and stays readable whatever is chosen.
+    {
+        // Chrome is global, so what was set is put back before anything else runs.
+        const QColor hadDark = Chrome::chosenBack(true);
+        const QColor hadLight = Chrome::chosenBack(false);
+        const bool wasDark = Chrome::dark();
+
+        Chrome::setChosenBack(true, QColor());
+        Chrome::setChosenBack(false, QColor());
+        Chrome::setDark(true);
+        const QColor builtInDark = Chrome::back();
+        Chrome::setDark(false);
+        const QColor builtInLight = Chrome::back();
+        check(builtInDark.isValid() && builtInLight.isValid(),
+              "chrome: with nothing chosen there is still a ground");
+        check(builtInDark != builtInLight,
+              "chrome: and the two schemes do not share it");
+
+        // ---- PER SCHEME. A ground chosen for dark must not follow you into light. ----
+        Chrome::setChosenBack(true, QColor("#101820"));
+        Chrome::setDark(false);
+        check(Chrome::back() == builtInLight,
+              "chrome: choosing a dark ground leaves the light scheme on its own");
+        Chrome::setDark(true);
+        check(Chrome::back() == QColor("#101820"), "chrome: and the dark scheme takes it");
+
+        // ---- THE INK FOLLOWS THE GROUND, NOT THE SCHEME ----
+        //
+        // Somebody who sets a near-black ground while in the LIGHT scheme would otherwise get
+        // near-black lettering on it and a window that cannot be read at all.
+        Chrome::setChosenBack(false, QColor("#101820"));
+        Chrome::setDark(false);
+        check(Chrome::backInk().lightness() > 128,
+              "chrome: a dark ground gets light lettering even in the light scheme");
+        Chrome::setChosenBack(false, QColor("#f4f4f6"));
+        check(Chrome::backInk().lightness() < 128,
+              "chrome: and a light ground gets dark lettering");
+
+        // ---- THE TABLE TONES COME WITH IT ----
+        //
+        // They were fixed figures, which is a pale stripe across a ground somebody set to charcoal.
+        for (const char* ground : {"#101820", "#f4f4f6", "#2f4f7a"}) {
+            Chrome::setChosenBack(false, QColor(QString::fromLatin1(ground)));
+            const QColor g = Chrome::back();
+            check(Chrome::backAlt() != g,
+                  "chrome: every other row is a step off the ground, so the stripe is visible");
+            check(Chrome::backHeader() != g,
+                  "chrome: and a column heading is too");
+            // And they stay on the same side of the divide as the ground - a stripe must not invert.
+            check((Chrome::backAlt().lightness() < 128) == (g.lightness() < 128) ||
+                      std::abs(Chrome::backAlt().lightness() - g.lightness()) < 40,
+                  "chrome: the stripe is a step, not a flip to the other end of the scale");
+        }
+
+        // ---- BUILT-IN IS A REAL ANSWER, and an invalid colour is how it is said. ----
+        Chrome::setChosenBack(false, QColor());
+        Chrome::setDark(false);
+        check(Chrome::back() == builtInLight,
+              "chrome: clearing a choice puts the built-in ground back");
+
+        Chrome::setChosenBack(true, hadDark);
+        Chrome::setChosenBack(false, hadLight);
+        Chrome::setDark(wasDark);
+    }
+
     std::printf("editor tests:\n");
 
     // --- Draw a line via two presses.
