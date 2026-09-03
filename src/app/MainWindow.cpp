@@ -12684,9 +12684,32 @@ QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(QPen(QColor("#cfe3ff"), 1.6));
+    p.setBrush(Qt::NoBrush);
+
+    // HEATSHRINK HAS AN ICON OF ITS OWN.
+    //
+    // Every kind used to get the LABEL drawing - a run with a rectangle wrapped round it - so the
+    // heatshrink button on the ribbon was the label button with a different tooltip. Two tools that do
+    // different things wearing one picture is a tool nobody can find.
+    //
+    // Drawn as the thing itself: the run, and a sleeve over it pulled in at both ends. That shape is
+    // exactly what tells recovered heatshrink apart from a rigid sleeve on the drawing, so it is what
+    // tells the button apart on the ribbon.
+    if (kind == MechModelKind::Heatshrink || kind == MechModelKind::TransitionHeatshrink ||
+        kind == MechModelKind::BranchSplitHeatshrink) {
+        p.drawLine(2, 14, 26, 14);
+        const double bodyHalf = 6.0, endHalf = 4.0, x0 = 6.0, x1 = 22.0, taper = 3.0;
+        QPolygonF sleeve;
+        sleeve << QPointF(x0, 14 - endHalf) << QPointF(x0 + taper, 14 - bodyHalf)
+               << QPointF(x1 - taper, 14 - bodyHalf) << QPointF(x1, 14 - endHalf)
+               << QPointF(x1, 14 + endHalf) << QPointF(x1 - taper, 14 + bodyHalf)
+               << QPointF(x0 + taper, 14 + bodyHalf) << QPointF(x0, 14 + endHalf);
+        p.drawPolygon(sleeve);
+        return QIcon(pm);
+    }
+
     // The run it sits on, and the label wrapped round it.
     p.drawLine(2, 14, 26, 14);
-    p.setBrush(Qt::NoBrush);
     p.drawRect(QRectF(8, 7, 12, 14));
     if (kind == MechModelKind::LabelUnderHeatshrink) {
         // The clear shrink over the top: a second, wider outline, dashed to read as transparent.

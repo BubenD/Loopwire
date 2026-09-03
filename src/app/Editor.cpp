@@ -45,6 +45,63 @@ static const QColor kTableChrome(230, 156, 74);
 static const QColor kCellZone(46, 204, 150);
 
 namespace {
+
+// What a routed sleeve is drawn at, until somebody says otherwise: the same across as a twisted pair,
+// necked by the same step the harness renderer uses so the two agree on the sheet.
+constexpr double kShrinkRouteWidth = kTwistedPairWidth;
+constexpr double kShrinkRouteNeck = 0.82;
+constexpr double kShrinkRouteTaper = 4.0;
+
+// The sleeve as an object: IT KEEPS THE ROUTE, and the outline is worked out when it is drawn.
+//
+// The first version kept the OUTLINE as the object's points, and that is what made a pulled joint turn
+// the sleeve into a blob: the joints of a polygon are its corners, so dragging one moved a corner of
+// the outline and nothing re-derived the shape. A twisted pair has always done this the other way - its
+// points are the path it runs along and the weave is laid on afterwards - and a sleeve is the same kind
+// of thing: a length of tubing over a stretch of run, not a drawn shape.
+//
+// So the points are the KNEES. Every joint is a knee, dragging one re-lays the sleeve, and the two end
+// knees are what change its length - which is what there is to pull on a sleeve.
+Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
+                           const std::vector<double>& kneeRadii) {
+    Entity e;
+    e.type = EntityType::Polyline;
+    e.points = route;
+    if (route.size() >= 2) {
+        e.a = route.front();
+        e.b = route.back();
+    }
+    e.meta.insert(QStringLiteral("shrunkEnds"), true);
+    e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
+    // ACROSS, and how far the knees are rounded. Held on the object so a sleeve keeps the size and the
+    // corners it was drawn with when it is pulled about afterwards.
+    e.meta.insert(QStringLiteral("shrinkWidth"), width);
+    // AND IT IS A DOUBLE RUN, as far as everything that EDITS it is concerned.
+    //
+    // A sleeve has two sides you can see and a centreline you cannot, which is exactly what a double
+    // polyline is - so saying so gets the joints on both rails, each carrying its own offset so the
+    // point under the cursor stays under it while dragging, and the mid-run handles that move the whole
+    // thing. Written by hand it would be a second copy of that arithmetic, one that drifts.
+    //
+    // The DRAWING is still the sleeve: the renderer takes the shrunkEnds branch before it ever reaches
+    // the double-polyline rails, so what is on the sheet is the necked outline and not two bare lines.
+    e.meta.insert(QStringLiteral("double"), true);
+    e.meta.insert(QStringLiteral("gap"), width);
+    // A RADIUS PER KNEE, in the same meta every other filleted outline uses - so the Fillet tool can
+    // round one knee of a finished sleeve without touching the others, exactly as it does on a
+    // polyline. One radius for the whole sleeve cannot say "this corner is tight and that one is not",
+    // which is most of what dressing a run is.
+    bool anyRadius = false;
+    QJsonArray radii;
+    for (size_t i = 0; i < route.size(); ++i) {
+        const double r = i < kneeRadii.size() ? kneeRadii[i] : 0.0;
+        radii.append(r);
+        if (r > 0.0) anyRadius = true;
+    }
+    if (anyRadius) e.meta.insert(QStringLiteral("cornerRadii"), radii);
+    return e;
+}
+
 // Hold this long during a drag before the rectangle becomes a lasso (Edraw's
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
@@ -8023,6 +8080,50 @@ void Editor::applyEditDrag(const Vec2& target) {
                     // a double polyline's physical-run joint it's the perpendicular
                     // offset, so the centerline vertex follows under the cursor).
                     e->points[index] = target - off;
+
+                // A KNEE DRAGGED ON TO ITS NEIGHBOUR IS GONE, not kept as a segment of no length.
+                //
+                // A zero-length segment has no direction, so nothing that works along the run can say
+                // which way it points: offsetting it - which is how a sleeve's two sides and a double
+                // run's rails are found - produces a step in a direction picked out of nothing, and
+                // what appears on the sheet is a knot at the end of the run. Shortening a sleeve past
+                // its last knee is an ordinary thing to want; the knee has served its purpose and goes.
+                //
+                // Only for runs whose shape is derived from the path - a sleeve, a double run. A plain
+                // polyline keeps every point it was given, because there a coincident pair may be
+                // deliberate and nothing downstream minds.
+                const bool derived = e->meta.value(QStringLiteral("shrunkEnds")).toBool() ||
+                                     e->meta.value(QStringLiteral("double")).toBool();
+                if (derived && e->points.size() > 2) {
+                    // Within a hair of either neighbour, measured in DRAWING units so it behaves the
+                    // same however far in the view is zoomed.
+                    const double bite = std::max(1e-6, worldTolerance() * 0.75);
+                    int drop = -1;
+                    if (index > 0 && distance(e->points[index], e->points[index - 1]) < bite)
+                        drop = index - 1;
+                    else if (index + 1 < static_cast<int>(e->points.size()) &&
+                             distance(e->points[index], e->points[index + 1]) < bite)
+                        drop = index + 1;
+                    if (drop >= 0) {
+                        e->points.erase(e->points.begin() + drop);
+                        // The per-knee arrays are indexed by vertex, so they lose the same one - a
+                        // fillet left behind would be applied to whichever knee inherited its place.
+                        for (const char* key : {"cornerRadii", "bulges", "cornerChamfers",
+                                                "cornerChamfers2"}) {
+                            const QString k = QString::fromLatin1(key);
+                            if (!e->meta.contains(k)) continue;
+                            QJsonArray arr = e->meta.value(k).toArray();
+                            if (drop < arr.size()) arr.removeAt(drop);
+                            e->meta.insert(k, arr);
+                        }
+                        if (e->points.size() >= 2) {
+                            e->a = e->points.front();
+                            e->b = e->points.back();
+                        }
+                        // The joint being held has moved down one if what went was before it.
+                        if (drop < index) editIndex_ = index - 1;
+                    }
+                }
             }
             // A dimension keeps a/b in sync with its measured points.
             if (e->type == EntityType::Dimension && e->points.size() >= 2) {
@@ -8811,6 +8912,12 @@ void Editor::handleDrawPress(const Vec2& p) {
         break;
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
+    // A SLEEVE IS COLLECTED THE WAY A DOUBLE POLYLINE IS: the same knees, the same [C]lose and [U]ndo,
+    // and - the reason for putting it here rather than in a branch of its own - the same PER-KNEE
+    // fillet. draftCornerRadii_ stamps the current radius onto the corner a click COMPLETES, so a
+    // radius set with [F] applies to the knee about to be made and never to one already drawn. A
+    // branch of its own had one radius for the whole sleeve, which is not how a run is dressed.
+    case ToolId::HeatshrinkRoute:
     case ToolId::Spline:
     case ToolId::Wire: {
         // Wire "90° only": snap this vertex to a horizontal/vertical run from the previous
@@ -8883,6 +8990,17 @@ void Editor::handleDrawPress(const Vec2& p) {
         // the next joint (and every later one) but never to corners already drawn.
         if (draftCornerRadii_.size() >= 3)
             draftCornerRadii_[draftCornerRadii_.size() - 2] = cornerRadius_;
+        // ONE KNEE, AND THEN BACK TO SHARP - for a sleeve.
+        //
+        // The shared rule is "the next joint AND EVERY LATER ONE", which is right for a polyline being
+        // drawn to a uniform radius. Dressing a run is not that: the corner round a bracket is tight
+        // and the one after it is not, so a radius that stayed set meant setting it back to zero by
+        // hand before every straight knee. Set with [F], used once, and the next knee is sharp again
+        // unless [F] says otherwise. Every knee already placed keeps what it was given.
+        if (tool_ == ToolId::HeatshrinkRoute && cornerRadius_ > 0.0) {
+            cornerRadius_ = 0.0;
+            emit overlayChanged();
+        }
         drafting_ = true;
         emit message(QStringLiteral("%1: click next point — [A]rc/[L]ine, [C]lose, "
                                     "[U]ndo, Enter to finish")
@@ -9469,6 +9587,19 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
         break;
+    case ToolId::HeatshrinkRoute: {
+        // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.
+        if (draftPts_.size() < 2) { cancelDraw(); return; }
+        const Entity sleeve = heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_);
+        if (sleeve.points.empty()) { cancelDraw(); return; }
+        e.type = sleeve.type;
+        e.points = sleeve.points;
+        e.a = sleeve.a;
+        e.b = sleeve.b;
+        for (auto it = sleeve.meta.begin(); it != sleeve.meta.end(); ++it)
+            e.meta.insert(it.key(), it.value());
+        break;
+    }
     case ToolId::TwistedHarnessRoute:
         // The two generalisations together: the bundle's wire count (TwistedHarness) AND the knees
         // kept as its points (TwistedRoute) - a loom is rarely two wires straight between two ends,
@@ -10007,6 +10138,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::TwistedPair:
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
+    case ToolId::HeatshrinkRoute:
     case ToolId::TwistedHarnessRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
@@ -10072,6 +10204,11 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral(
                    "TWISTED HARNESS ROUTE: click each knee  ·  Enter finishes  ·  %1 wires, all laid up")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
+    case ToolId::HeatshrinkRoute:
+        return QStringLiteral("HEATSHRINK: click along the run  ·  [U]ndo, Enter finishes  ·  "
+                              "[G] across (%1)  ·  [F] fillet the NEXT knee (%2)")
+            .arg(shrinkWidth_, 0, 'f', 1)
+            .arg(cornerRadius_, 0, 'f', 1);
     case ToolId::DoubleLine:
         return QStringLiteral("DOUBLE LINE: [G] gap  ·  [LS] line-start%1  ·  click two points")
             .arg(dpolyLsArm_ ? QStringLiteral(" (pick reference)") : QString());
@@ -10155,6 +10292,11 @@ bool Editor::isDrawOptionChar(QChar ch) const {
     case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g' || c == 'l' || c == 's';
     case ToolId::Spline:         return c == 'c' || c == 'u';
     case ToolId::DoubleLine:     return c == 'g' || c == 'l' || c == 's';
+    // ACROSS AND FILLET, said the way this application says every other drawing option: a letter that
+    // opens the command box. Without the tool listed here the keypress was swallowed on the way in -
+    // "letters ONLY if they are a real option for this tool" - so nothing appeared and nothing could
+    // be typed, whatever the fields behind it were willing to accept.
+    case ToolId::HeatshrinkRoute: return c == 'g' || c == 'f';
     case ToolId::Arc:            return c == 'm' || c == 'i'; // "mi" mirror
     case ToolId::Fillet:          return c == 'r'; // [R] radius
     default:                     return false; // Line/Rect/Circle/Ellipse/...: no letter options
@@ -10184,6 +10326,7 @@ void Editor::lockDrawField(const QString& text) {
     const double v = text.trimmed().toDouble(&ok);
     if (ok && drawFieldIndex_ >= 0 && drawFieldIndex_ < static_cast<int>(drawFieldVals_.size()))
         drawFieldVals_[drawFieldIndex_] = v;
+
 }
 
 bool Editor::commitDrawFields() {
@@ -10200,6 +10343,7 @@ bool Editor::commitDrawFields() {
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
     case ToolId::TwistedHarnessRoute:
+    case ToolId::HeatshrinkRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -10559,8 +10703,13 @@ bool Editor::acceptCommandInput(const QString& text) {
         bool ok = false;
         const double g = t.toDouble(&ok);
         if (ok && g > 0) {
-            doubleLineGap_ = g;
-            emit message(QStringLiteral("Gap = %1").arg(g));
+            if (tool_ == ToolId::HeatshrinkRoute) {
+                shrinkWidth_ = g;
+                emit message(QStringLiteral("Across = %1").arg(g));
+            } else {
+                doubleLineGap_ = g;
+                emit message(QStringLiteral("Gap = %1").arg(g));
+            }
         } else {
             emit message(QStringLiteral("Enter a positive gap value"));
         }
@@ -10595,6 +10744,13 @@ bool Editor::acceptCommandInput(const QString& text) {
     // "g" = gap option. Enters gap-input mode for the double tools; during any
     // other draft it is consumed with a hint (never switches tools mid-draw).
     if (t.compare(QStringLiteral("g"), Qt::CaseInsensitive) == 0) {
+        // A SLEEVE'S WIDTH, asked for the same way a double run's gap is.
+        if (tool_ == ToolId::HeatshrinkRoute) {
+            gapInputMode_ = true;
+            emit message(QStringLiteral("Across <%1>: enter value and press Enter").arg(shrinkWidth_));
+            emit dynamicPrompt(QStringLiteral("Across"));
+            return true;
+        }
         if (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline) {
             gapInputMode_ = true;
             emit message(QStringLiteral("Gap <%1>: enter value and press Enter").arg(doubleLineGap_));
@@ -10634,7 +10790,8 @@ bool Editor::acceptCommandInput(const QString& text) {
     // "f" = fillet option. Enters fillet-radius mode for the (double) polyline
     // tools; consumed with a hint during any other draft.
     if (t.compare(QStringLiteral("f"), Qt::CaseInsensitive) == 0) {
-        if (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline) {
+        if (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline ||
+            tool_ == ToolId::HeatshrinkRoute) {
             filletInputMode_ = true;
             emit message(QStringLiteral("Fillet radius <%1>: enter value and press Enter")
                              .arg(cornerRadius_));
@@ -16685,6 +16842,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
             EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if (tool_ == ToolId::HeatshrinkRoute && pts.size() >= 2) {
+            // Previewed as the sleeve itself, by the same code that will place it - so what is on
+            // screen while it is being drawn is what lands.
+            const Entity sleeve = heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_);
+            if (!sleeve.points.empty())
+                EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
             // Previewed as the thing itself, drawn by the same code that will draw it once placed -
             // so what is on screen while placing it is what is placed.

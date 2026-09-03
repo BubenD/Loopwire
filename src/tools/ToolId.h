@@ -44,6 +44,10 @@ enum class ToolId {
     TwistedRoute,  // ... and the same pair routed through as many knees as it needs
     TwistedHarness,// ... and a whole bundle of them laid up together, however many wires it fans out to
     TwistedHarnessRoute, // ... and that bundle routed through as many knees as IT needs
+    // Heatshrink over a stretch of run, ROUTED like the twisted tools rather than stamped: a sleeve
+    // covers a length of harness, and where that length bends the sleeve bends with it. A fixed-length
+    // placement cannot say a sleeve round a corner at all.
+    HeatshrinkRoute,
     // Modify (reference-point driven)
     Move,
     Rotate,
@@ -113,6 +117,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedRoute: // as many points as the route needs, like a polyline
     case ToolId::TwistedHarness: // two clicks, and however many wires the ribbon says
     case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
+    case ToolId::HeatshrinkRoute: // as many knees as the stretch it covers needs
         return true;
     default:
         return false;
@@ -162,6 +167,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
     case ToolId::TwistedHarness: return QStringLiteral("Twisted harness");
     case ToolId::TwistedHarnessRoute: return QStringLiteral("Twisted harness route");
+    case ToolId::HeatshrinkRoute: return QStringLiteral("Heatshrink over the run");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.
     case ToolId::NetLabel: return QStringLiteral("Wire label");

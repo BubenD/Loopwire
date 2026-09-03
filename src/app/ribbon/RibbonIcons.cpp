@@ -182,6 +182,23 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         }
         break;
     }
+    case ToolId::HeatshrinkRoute: {
+        // THE SLEEVE ITSELF, over a run and round a knee. The run goes through it, and the sleeve is
+        // pulled in at both ends onto what it grips - which is the one feature that says heatshrink
+        // rather than a rigid sleeve, so it is the feature the icon is built round.
+        //
+        // Drawn over a corner rather than straight, because the tool routes: an icon of a straight
+        // sleeve would say this places one between two points, which is the thing it stopped doing.
+        p.drawLine(2, 9, 26, 9);                       // the run
+        p.drawLine(20, 9, 20, 25);                     // and away round the knee
+        QPolygonF sleeve;
+        const double y = 9.0, b = 5.0, n = 3.2;        // body half, neck half
+        sleeve << QPointF(5, y - n) << QPointF(8, y - b) << QPointF(17, y - b)
+               << QPointF(20, y - n) << QPointF(20, y + n) << QPointF(17, y + b)
+               << QPointF(8, y + b) << QPointF(5, y + n);
+        p.drawPolygon(sleeve);
+        break;
+    }
     case ToolId::TwistedHarnessRoute: {
         // The bundle (three strands stand for it, same as the fan below), routed round a knee
         // instead of straight - Twisted route's corner, laid up three wide.

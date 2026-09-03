@@ -1303,6 +1303,64 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Polyline:
+        // A SLEEVE, DRAWN FROM ITS ROUTE. The object holds the knees it was drawn along and the outline
+        // is worked out here - so pulling a knee re-lays the sleeve instead of dragging one corner of a
+        // shape that has forgotten what it is. See shrunkSleeveOutline.
+        if (e.meta.value("shrunkEnds").toBool() && e.points.size() >= 2) {
+            // ACROSS, from the same key the editing machinery uses - see heatshrinkFromRoute. Falling
+            // back to shrinkWidth so a sleeve drawn before the two were made one still draws right.
+            const double across =
+                e.meta.contains("gap") ? e.meta.value("gap").toDouble(6.0)
+                                       : e.meta.value("shrinkWidth").toDouble(6.0);
+            const double bodyHalf = std::max(0.2, across) / 2.0;
+            const std::vector<Vec2> outline =
+                shrunkSleeveOutline(e.points, bodyHalf, bodyHalf * 0.82, 4.0);
+            if (outline.size() >= 3) {
+                // A RADIUS PER KNEE, MAPPED FROM THE ROUTE ONTO THE OUTLINE.
+                //
+                // The knees are the object's points; the outline has TWO vertices for each of them -
+                // one on each side of the sleeve - so a radius set on a knee has to reach both or the
+                // sleeve rounds on one side and stays square on the other. The renderer looked for a
+                // single "shrinkFillet" instead, which nothing writes any more, so every knee came out
+                // sharp however it had been dressed.
+                //
+                // shrunkSleeveOutline lays the outline out as: the head neck, then one vertex per knee
+                // up one side, the two tail necks, then the same knees back down the other side, then
+                // the head neck again. So knee i is at 1+i going out and at 2n+2-i coming back.
+                const int n = static_cast<int>(e.points.size());
+                std::vector<double> radii(outline.size(), 0.0);
+                bool anyKnee = false;
+                if (e.meta.contains("cornerRadii")) {
+                    const QJsonArray rr = e.meta.value("cornerRadii").toArray();
+                    // Interior knees only. The first and last are the ENDS: rounding those would blunt
+                    // the necks, which are the one feature that says what the sleeve is.
+                    for (int i = 1; i + 1 < n && i < rr.size(); ++i) {
+                        const double r = rr[i].toDouble();
+                        if (r <= 0.0) continue;
+                        const size_t outA = static_cast<size_t>(1 + i);
+                        const size_t outB = static_cast<size_t>(2 * n + 2 - i);
+                        if (outA < radii.size()) radii[outA] = r;
+                        if (outB < radii.size()) radii[outB] = r;
+                        anyKnee = true;
+                    }
+                }
+                if (anyKnee) {
+                    // Rounded at the knees by the SAME rounding the fillet tool puts on any closed
+                    // outline - a sleeve pulled round a tight corner creases, and a sharp mitre there
+                    // draws something that cannot be built. Reusing it means a filleted sleeve and a
+                    // filleted anything-else are rounded by one piece of arithmetic.
+                    //
+                    // Not on the necks: those four corners are where it recovers onto the run, and
+                    // rounding them would blunt the one feature that says what the sleeve is.
+                    const std::vector<double> none(outline.size(), 0.0);
+                    p.drawPolygon(toScreenPoly(
+                        filletChamferPolyline(outline, radii, none, none, true), vt));
+                } else {
+                    p.drawPolygon(toScreenPoly(outline, vt));
+                }
+                break;
+            }
+        }
         if (e.points.size() >= 2) {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
             // Per-corner fillet radii (newer drawings). Falls back to the uniform

@@ -1594,6 +1594,13 @@ private:
 
     // In-progress draw state.
     std::vector<Vec2> draftPts_;
+    // WHAT A SLEEVE IS DRAWN AT, and how far its knees are rounded. Set while the tool is armed - [G]
+    // for across, [F] for the fillet - because both are judged against what is already on the sheet
+    // rather than decided in advance, which is the same reason the double-line gap is a key and not a
+    // dialog.
+    double shrinkWidth_ = 6.0;
+    double shrinkFillet_ = 0.0;
+
     bool drafting_ = false;
     // Shift held on the first / most-recent draft click of a double line/polyline:
     // caps that run-end flush to a line it lands on (finishDraw applies the caps).

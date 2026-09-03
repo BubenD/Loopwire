@@ -14,6 +14,7 @@
 #include "app/MechWizardDialog.h"
 #include "geometry/Geometry.h"
 #include "harness/MechBuildScript.h"
+#include "harness/MechModels.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
 #include "model/Document.h"
@@ -1629,6 +1630,62 @@ void testHeatshrinkIsDrawnWithShrunkEnds() {
           "shrink: the neck is deep enough to read at the size these sheets are printed");
 }
 
+// ---- The Heatshrink button on the ribbon has something to place ---------------------------------
+//
+// A button that places nothing is worse than no button: it says the tool exists and then sends you off
+// to draw one. builtInMechModel only drew the two Label kinds, so heatshrink came back EMPTY and the
+// button would have reported that nothing had been drawn yet.
+//
+// And what it places is the recovered shape, the same one the renderer draws for a covering along a
+// run. A placed sleeve and a generated one looking different on the same sheet is the kind of thing
+// that gets noticed on a released drawing and cannot be explained.
+void testTheHeatshrinkButtonHasSomethingToPlace() {
+    const MechModel m = builtInMechModel(MechModelKind::Heatshrink);
+    check(!m.isEmpty(), "hsbutton: there is a built-in heatshrink for the button to place");
+    if (m.isEmpty()) return;
+
+    const std::vector<Entity> es = partDrawingEntities(m.drawing);
+    check(!es.empty(), "hsbutton: and it has an outline");
+    const Entity* sleeve = nullptr;
+    for (const Entity& e : es)
+        if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) sleeve = &e;
+    check(sleeve != nullptr, "hsbutton: drawn as a shrunk sleeve rather than a box");
+    if (!sleeve) return;
+
+    // Measured off the outline itself, as the renderer test is - not from the origin, which is what
+    // made that one read a correct neck as a rounding error.
+    double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
+    bool first = true;
+    for (const Vec2& pt : sleeve->points) {
+        if (first) { minX = maxX = pt.x; minY = maxY = pt.y; first = false; }
+        minX = std::min(minX, pt.x); maxX = std::max(maxX, pt.x);
+        minY = std::min(minY, pt.y); maxY = std::max(maxY, pt.y);
+    }
+    const double axisY = (minY + maxY) / 2.0;
+    double endHalf = 0.0, midHalf = 0.0;
+    for (const Vec2& pt : sleeve->points) {
+        const double half = std::abs(pt.y - axisY);
+        if (std::abs(pt.x - minX) < 1e-6 || std::abs(pt.x - maxX) < 1e-6)
+            endHalf = std::max(endHalf, half);
+        else
+            midHalf = std::max(midHalf, half);
+    }
+    std::printf("  hsbutton: end half %.2f, middle half %.2f\n", endHalf, midHalf);
+    check(endHalf < midHalf && midHalf - endHalf > midHalf * 0.05,
+          "hsbutton: with both ends pulled in by a step that can be seen");
+
+    // THE NECKS ARE HELD WHEN IT STRETCHES. Head and tail are what a model holds back from stretching,
+    // so a sleeve fitted to a longer run lengthens its straight middle and keeps the necks the size
+    // they recover to. Stretching the whole outline would splay them in proportion, which is not what
+    // tubing does.
+    check(m.headMm > 0.0 && m.tailMm > 0.0,
+          "hsbutton: the necks are held back from stretching");
+    check(std::abs(m.headMm - m.tailMm) < 1e-9,
+          "hsbutton: and both by the same amount - it does not go on one way round");
+    check(m.drawnLengthMm > m.headMm + m.tailMm,
+          "hsbutton: leaving a straight middle for the stretch to go into");
+}
+
 void testBalloonCanBeWithheldPerStep() {
     MechBuildScript sc;
     MechStep con;
@@ -2178,6 +2235,7 @@ int run_mechwizard_tests() {
     testLibraryHousingsAtOneStationDoNotOverlap();
     testSubpartsCanBeDraggedIntoOrder();
     testHeatshrinkIsDrawnWithShrunkEnds();
+    testTheHeatshrinkButtonHasSomethingToPlace();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }

@@ -383,6 +383,39 @@ void MainWindow::buildHarnessMechanicalTab() {
         // the bundle actually takes up on the board. They belong here for the same reason the break
         // mark does - they are the furniture of this kind of drawing.
         lgAdd(makePartSymbolButton(lenW, /*schematic=*/false));
+        // HEATSHRINK OVER THE RUN. The Special group had every other piece of furniture a mechanical
+        // drawing needs - the break mark, the twisted bundles, the stock parts, the label - and no
+        // heatshrink, which is the one that goes on nearly every harness. It was reachable only by
+        // describing a step in the wizard or by letting the drawing put one over a splice on its own
+        // account, so a sleeve wanted anywhere else had to be drawn by hand.
+        //
+        // Placed as the recovered shape: pulled in at both ends onto what it grips, standing off over
+        // the middle - see builtInHeatshrink, which draws the same thing the renderer does so a placed
+        // sleeve and a generated one cannot look different on the same sheet.
+        {
+            // ROUTED, NOT STAMPED - the same shape of tool as Twisted harness route.
+            //
+            // A sleeve covers a STRETCH of run, and where that stretch bends the sleeve bends with it,
+            // so it is drawn by clicking along the run rather than dropped at one size and nudged into
+            // place. A fixed-length stamp cannot say a sleeve round a corner at all.
+            auto* hsBtn = new QToolButton(lenW);
+            QAction* hsAct = makeToolAction(toolLabel(ToolId::HeatshrinkRoute),
+                                            ToolId::HeatshrinkRoute);
+            // THE ICON COMES FROM THE ACTION, not set on the button afterwards. A QToolButton with a
+            // default action takes its icon from that action and re-takes it whenever the action
+            // changes, so an icon assigned to the button is in a fight it eventually loses - which is
+            // why this button kept coming up wearing whatever makeToolIcon had for the tool.
+            hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute));
+            hsBtn->setDefaultAction(hsAct);
+            hsBtn->setText(QStringLiteral("Heatshrink"));
+            hsBtn->setAutoRaise(true);
+            hsBtn->setFocusPolicy(Qt::NoFocus);
+            hsBtn->setToolTip(QStringLiteral(
+                "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
+                "recovered - pulled in at both ends onto what it grips, and following the knees in "
+                "between."));
+            lgAdd(hsBtn);
+        }
         // A LABEL on a run, and the same label covered over with clear heatshrink - which is how a label
         // that has to survive a wash or a wipe-down is actually built. One button with the two hung off it
         // rather than a button each: it places a label, and the arrow says which sort. Whichever is chosen

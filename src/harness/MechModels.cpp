@@ -73,6 +73,33 @@ const std::array<KindName, 18> kKinds = {{
 // A label on a run, as one is drawn: the run through it, a flag standing on the run, and a line inside the
 // flag for the text that goes on it. Under clear heatshrink, a second outline over the top, drawn dashed
 // because that is how a see-through sleeve is shown.
+// HEATSHRINK AS IT SITS ONCE RECOVERED, so the button on the ribbon places the same shape the harness
+// renderer draws for a covering along a run - see makeShrunkSleeve. One drawn by hand and one generated
+// looking different is the kind of thing that gets noticed on a released sheet and cannot be explained.
+//
+// It pulls down onto whatever is under it, so it grips at each END and stands off over the MIDDLE where
+// the joint it covers is thicker. Both ends equally: one tapered end is a boot, and drawing heatshrink
+// that way says it goes on one way round.
+//
+// The taper lengths become the model HEAD and TAIL, so stretching a placed one to fit a longer run
+// lengthens the straight middle and leaves the necks the size they recover to.
+std::vector<Entity> builtInHeatshrink() {
+    // Nominal, in the drawing's own millimetres: 24 long over a 6 bundle, necked to 4.9 - the same 18%
+    // step the renderer uses, so the two agree.
+    const double x0 = 0.0, x1 = 24.0, taper = 4.0;
+    const double bodyHalf = 3.0, endHalf = 2.45;
+    Entity body;
+    body.id = QStringLiteral("shrink");
+    body.type = EntityType::Polygon;
+    body.points = {{x0, -endHalf},         {x0 + taper, -bodyHalf}, {x1 - taper, -bodyHalf},
+                   {x1, -endHalf},         {x1, endHalf},           {x1 - taper, bodyHalf},
+                   {x0 + taper, bodyHalf}, {x0, endHalf}};
+    // What the application scales by, as the label's own outline is: the sleeve IS the whole model.
+    body.meta.insert(QStringLiteral("modelScaleRef"), true);
+    body.meta.insert(QStringLiteral("shrunkEnds"), true);
+    return {body};
+}
+
 std::vector<Entity> builtInLabel(bool underShrink) {
     std::vector<Entity> es;
     auto line = [&](const char* id, Vec2 a, Vec2 b, bool dashed = false) {
@@ -132,6 +159,18 @@ bool isInsulationKind(MechModelKind kind) {
 MechModel builtInMechModel(MechModelKind kind) {
     MechModel m;
     m.kind = kind;
+    if (kind == MechModelKind::Heatshrink) {
+        m.drawing = partDrawingFromEntities(builtInHeatshrink());
+        m.drawnLengthMm = 24.0;
+        m.hasConnect = true;
+        m.connectPoint = {12.0, 0.0};      // the middle of it, on the run
+        m.connectAngleRad = 0.0;
+        // The necks are held and the straight middle stretches - see builtInHeatshrink.
+        m.headMm = 4.0;
+        m.tailMm = 4.0;
+        m.exceedMm = 1.0;
+        return m;
+    }
     if (kind != MechModelKind::Label && kind != MechModelKind::LabelUnderHeatshrink) return m;
     const std::vector<Entity> es = builtInLabel(kind == MechModelKind::LabelUnderHeatshrink);
     m.drawing = partDrawingFromEntities(es);

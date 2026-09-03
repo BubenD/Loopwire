@@ -46,6 +46,21 @@ double shortAngleDelta(double current, double target);
 // mitering interior vertices. Used to draw double polylines.
 std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 
+// A SLEEVE ALONG A PATH, pulled in at both ends: the outline recovered heatshrink has.
+//
+// The body follows every knee in `route`, mitred so the two sides stay continuous through a corner
+// instead of crossing inside it, and only the two ENDS neck down to `endHalf` - what the sleeve
+// recovers onto. Both ends equally: one necked end is a boot, which goes on one way round.
+//
+// Shared because two places need the same answer from the same path - the tool that draws one and the
+// renderer that draws it once it is an object. Kept as GEOMETRY rather than as the object's points, so
+// the object can hold its ROUTE and be edited by its knees; an outline stored as the object is an
+// outline that deforms into a blob the first time a joint is pulled.
+//
+// Empty for a route of fewer than two points, or one too short to hold anything.
+std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bodyHalf,
+                                      double endHalf, double taper);
+
 // Offset a CLOSED polygon (rect/polygon) sideways by `dist` (sign picks in/out),
 // mitering every wrapped vertex. Companion to offsetPolyline (which is for open runs).
 std::vector<Vec2> offsetClosedPolygon(const std::vector<Vec2>& pts, double dist);
