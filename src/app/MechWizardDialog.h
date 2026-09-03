@@ -213,6 +213,15 @@ public:
 
     // ROLLING A STATION UP, and which ones are rolled up. A station with parts can be folded away;
     // the state is a fact about the window, so a test reads it rather than inferring it from the rows.
+    // THE SCRIPT TAKES THE ORDER THE TREE IS NOW SHOWING, after something has been dragged. Public so a
+    // test can drive a reorder without a mouse.
+    void reorderFromList();
+
+    // Move a step in the TREE the way a drag does, and let the script follow - which is all a drop
+    // amounts to. `newParentId` empty means top level; `index` is the place among that parent's
+    // children. For a test: the drop itself is the widget's business, the consequence is ours.
+    bool dragStepTo(const QString& stepId, const QString& newParentId, int index);
+
     void rollUp(const QString& stepId, bool up);
     QStringList rolledUpSteps() const;
 

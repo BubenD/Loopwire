@@ -1405,6 +1405,131 @@ void testAStationCanBeRolledUpAndStaysThatWay() {
     check(!w.rolledUpSteps().contains(station), "rollup: and it opens again");
 }
 
+// ---- Library housings at one station do not lie on top of each other ----------------------------
+//
+// The stack used ONE pitch for every housing, taken from the default body formula. That is right while
+// every housing is a default box and wrong the moment one comes from the library, because a real part
+// draws whatever size somebody drew it - a pitch sized for a 2-way default box laid three real drawings
+// on top of one another, and the sheet showed one big part with the others buried under it.
+//
+// The stack test that already existed used default boxes and passed straight through this.
+void testLibraryHousingsAtOneStationDoNotOverlap() {
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    // A part far taller than the default formula would ever guess for a 2-way housing.
+    LibraryPart& big = cat.active().add(PartKind::Connector);
+    big.description = QStringLiteral("A tall 2-way housing");
+    Entity body;
+    body.type = EntityType::Rect;
+    body.points = {{0.0, -22.0}, {30.0, -22.0}, {30.0, 22.0}, {0.0, 22.0}};
+    big.mechanical = partDrawingFromEntities({body});
+    const QString bigId = big.id;
+
+    MechBuildScript sc;
+    MechStep p1;
+    p1.id = QStringLiteral("S1");
+    p1.kind = PartKind::Connector;
+    p1.name = QStringLiteral("P1");
+    p1.libPart = bigId;
+    p1.pinCount = 2;
+    sc.steps.push_back(p1);
+    for (const char* nm : {"P2", "P3"}) {
+        MechStep x;
+        x.id = QStringLiteral("S_%1").arg(QString::fromLatin1(nm));
+        x.kind = PartKind::Connector;
+        x.name = QString::fromLatin1(nm);
+        x.parentStep = QStringLiteral("S1");
+        x.isSubpart = true;
+        x.libPart = bigId;
+        x.pinCount = 2;
+        sc.steps.push_back(x);
+    }
+    MechStep run;
+    run.id = QStringLiteral("S2");
+    run.kind = PartKind::Cable;
+    run.parentStep = QStringLiteral("S1");
+    run.lengthMm = 200.0;
+    run.odMm = 6.0;
+    run.wireCount = 4;
+    run.gauge = QStringLiteral("22 AWG");
+    sc.steps.push_back(run);
+
+    const MechCompiled c = compileMechScript(sc);
+    const MechNode* node = c.def.node(c.stepToNode.value(QStringLiteral("S1")));
+    check(node && node->extraEnds.size() == 2, "libstack: three real housings on one node");
+
+    // The band each housing takes across the harness. The part is 44 tall, so a default-sized pitch
+    // cannot possibly hold three of them apart - which is what makes this the case that bites.
+    std::vector<std::pair<double, double>> bands;
+    for (const Entity& e : buildMechanicalHarness(c.def, &cat)) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (b.valid) bands.push_back({b.min.y, b.max.y});
+    }
+    check(bands.size() == 3, "libstack: all three are drawn");
+    std::sort(bands.begin(), bands.end());
+    int overlaps = 0;
+    double worst = 0.0;
+    for (size_t i = 1; i < bands.size(); ++i) {
+        const double gap = bands[i].first - bands[i - 1].second;
+        if (gap < 0.0) { ++overlaps; worst = std::min(worst, gap); }
+    }
+    if (overlaps > 0)
+        std::printf("  libstack: %d overlapping pair(s), worst by %.1f\n", overlaps, -worst);
+    check(overlaps == 0,
+          "libstack: a housing drawn from the library gets a slot as tall as it actually draws");
+}
+
+// ---- Subparts can be dragged into order ----------------------------------------------------------
+//
+// Which part of a station comes first is the order it is fitted in - the backshell before the boot
+// behind it - and getting it wrong used to mean deleting the steps and describing them again.
+void testSubpartsCanBeDraggedIntoOrder() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    const QString station = w.anchorStepId();
+    w.setCurrentCategory(Cat::Backshell);
+    w.commitSubpart();
+    const QString backshell = w.script().steps.back().id;
+    w.setCurrentCategory(Cat::Boot);
+    w.commitSubpart();
+    const QString boot = w.script().steps.back().id;
+
+    const auto orderOfParts = [&] {
+        QStringList ids;
+        for (const MechStep& st : w.script().steps)
+            if (st.isSubpart) ids << st.id;
+        return ids;
+    };
+    check(orderOfParts() == QStringList({backshell, boot}),
+          "drag: the backshell was described first, so it comes first");
+
+    // DRAG THE BOOT ABOVE THE BACKSHELL.
+    check(w.dragStepTo(boot, station, 0), "drag: the boot can be moved");
+    check(orderOfParts() == QStringList({boot, backshell}),
+          "drag: and the script follows the order the list now shows");
+    check(w.script().steps.size() == 3, "drag: nothing was lost to the move");
+    for (const MechStep& st : w.script().steps)
+        if (st.isSubpart)
+            check(st.parentStep == station, "drag: both are still parts of the station");
+
+    // AND A PART DRAGGED OUT TO THE TOP LEVEL BECOMES A STATION - the tree parent is the script
+    // parent, so a step with nothing above it cannot still be a part of something.
+    check(w.dragStepTo(boot, QString(), 0), "drag: the boot can be moved out to the top level");
+    const MechStep* movedOut = w.script().step(boot);
+    check(movedOut && !movedOut->isSubpart,
+          "drag: dragged out of the station, it is a station of its own");
+    check(movedOut && movedOut->parentStep.isEmpty(), "drag: with nothing before it");
+    check(w.script().steps.size() == 3, "drag: and still nothing lost");
+}
+
 void testBalloonCanBeWithheldPerStep() {
     MechBuildScript sc;
     MechStep con;
@@ -1951,6 +2076,8 @@ int run_mechwizard_tests() {
     testNextCarriesOnFromWhereYouAreStanding();
     testDeletingAStationDoesNotOrphanItsParts();
     testAStationCanBeRolledUpAndStaysThatWay();
+    testLibraryHousingsAtOneStationDoNotOverlap();
+    testSubpartsCanBeDraggedIntoOrder();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }

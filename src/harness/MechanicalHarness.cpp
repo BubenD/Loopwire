@@ -2207,18 +2207,65 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // So all of them share one pitch and the whole stack is CENTRED on the node. With a single
         // housing - every harness that has ever been drawn here - the stack is one slot wide and lands
         // exactly on the axis, so nothing about those drawings changes.
+        // EACH HOUSING GETS A SLOT AS TALL AS IT ACTUALLY DRAWS.
+        //
+        // One pitch for all of them, worked out from the DEFAULT body formula, was wrong the moment a
+        // housing came from the library: a real part's drawing is whatever size somebody drew it, and a
+        // pitch sized for a 2-way default box laid three Micro-Fit drawings on top of one another. What
+        // the sheet then showed was one big part with the others buried under it - the two the step had
+        // been given could not be seen at all.
+        //
+        // Measured, the same way the fan measures its conductors and for the same reason: a lane has to
+        // be as wide as the thing going in it, and only the thing itself knows how wide that is.
         const int housings = 1 + static_cast<int>(n->extraEnds.size());
-        double stackPitch = 0.0;
+        std::vector<double> slotHeight(static_cast<size_t>(housings), 0.0);
+        {
+            // How tall one housing draws, in drawing units, given its part and its way count.
+            const auto heightOf = [&](const QString& libPart, int pinCount) {
+                if (const LibraryPart* hp = catalog && !libPart.isEmpty() ? catalog->byId(libPart)
+                                                                         : nullptr) {
+                    if (hp->hasMechanical()) {
+                        double lo = 0.0, hi = 0.0;
+                        bool have = false;
+                        for (const Entity& e : placedPartDrawing(*hp, pn.at, dirRad, opt,
+                                                                 QStringLiteral("connector"),
+                                                                 u * -into)) {
+                            const Bounds eb = e.bounds();
+                            if (!eb.valid) continue;
+                            const Vec2 corners[4] = {eb.min, Vec2{eb.max.x, eb.min.y}, eb.max,
+                                                     Vec2{eb.min.x, eb.max.y}};
+                            for (const Vec2& c2 : corners) {
+                                const double acrossIt = dot(c2 - pn.at, v);
+                                if (!have) { lo = hi = acrossIt; have = true; }
+                                else { lo = std::min(lo, acrossIt); hi = std::max(hi, acrossIt); }
+                            }
+                        }
+                        if (have && hi - lo > 1e-9) return hi - lo;
+                    }
+                }
+                return across(std::max(bundleMm + 4.0, pinCount * 2.5 + 6.0));
+            };
+            slotHeight[0] = n->bodyHeightMm > 0.0 ? across(n->bodyHeightMm)
+                                                  : heightOf(n->libPart, n->pinCount);
+            for (size_t ei = 0; ei < n->extraEnds.size(); ++ei)
+                slotHeight[ei + 1] = heightOf(n->extraEnds[ei].libPart, n->extraEnds[ei].pinCount);
+        }
+        // The centre of each slot, stacked with a gap between and the whole run centred on the node -
+        // so a single housing still lands exactly on the axis and every drawing made before this is
+        // unchanged.
+        const double stackGap = across(5.0);
+        std::vector<double> slotAt(static_cast<size_t>(housings), 0.0);
         if (housings > 1) {
-            double tallest = n->bodyHeightMm > 0.0
-                                 ? n->bodyHeightMm
-                                 : std::max(bundleMm + 4.0, n->pinCount * 2.5 + 6.0);
-            for (const MechExtraEnd& x : n->extraEnds)
-                tallest = std::max(tallest, std::max(bundleMm + 4.0, x.pinCount * 2.5 + 6.0));
-            stackPitch = across(tallest + 5.0);      // its own height, and a gap to the next
+            double total = stackGap * (housings - 1);
+            for (double h : slotHeight) total += h;
+            double run = -total / 2.0;
+            for (int i = 0; i < housings; ++i) {
+                slotAt[static_cast<size_t>(i)] = run + slotHeight[static_cast<size_t>(i)] / 2.0;
+                run += slotHeight[static_cast<size_t>(i)] + stackGap;
+            }
         }
         const auto slotOffset = [&](int slot) {
-            return housings > 1 ? (slot - (housings - 1) / 2.0) * stackPitch : 0.0;
+            return slot >= 0 && slot < housings ? slotAt[static_cast<size_t>(slot)] : 0.0;
         };
         const Vec2 primaryAt = pn.at + v * slotOffset(0);
 
@@ -2298,6 +2345,9 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // list in the wizard and the housings on the sheet read the same way.
             const double side = slotOffset(static_cast<int>(ei) + 1) >= slotOffset(0) ? 1.0 : -1.0;
             const Vec2 face = pn.at + v * slotOffset(static_cast<int>(ei) + 1);
+            // Its own drawn height, for the label and the balloon beside it - the default formula is
+            // only right for a housing that has no drawing of its own.
+            const double slotH = slotHeight[ei + 1];
             const Vec2 mid = face - u * (into * along(xw) / 2.0);
 
             const LibraryPart* xp = catalog ? catalog->byId(x.libPart) : nullptr;
@@ -2306,7 +2356,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                                    QStringLiteral("connector"), u * -into))
                     out.push_back(e);
             } else {
-                Entity body = makeBox(opt, mid, dirRad, along(xw), across(xh),
+                Entity body = makeBox(opt, mid, dirRad, along(xw), slotH,
                                       QStringLiteral("connector"));
                 body.meta.insert(QStringLiteral("mechNode"), pn.id);
                 out.push_back(body);
@@ -2322,11 +2372,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(lead);
 
             if (!x.name.isEmpty())
-                out.push_back(makeText(opt, face + v * across(side * (xh / 2.0 + 4.0)), x.name,
+                out.push_back(makeText(opt, face + v * (side * (slotH / 2.0 + across(4.0))), x.name,
                                        opt.textHeight, 0.0, QStringLiteral("label")));
             if (opt.balloons && x.balloon && !x.libPart.isEmpty())
                 out.push_back(makeBalloon(opt, face,
-                                          face + v * across(side * (xh / 2.0 + 22.0)),
+                                          face + v * (side * (slotH / 2.0 + across(22.0))),
                                           balloonText(itemOf(x.libPart, PartKind::Connector,
                                                              QStringLiteral("Connector")))));
         }

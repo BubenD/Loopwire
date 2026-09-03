@@ -4,6 +4,7 @@
 #include "app/Editor.h"
 #include "harness/MechanicalHarness.h"
 
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -239,6 +240,11 @@ void MechWizardDialog::buildUi() {
     stepList_->setHeaderHidden(true);
     stepList_->setUniformRowHeights(true);
     stepList_->setExpandsOnDoubleClick(false);   // a double-click is for editing, not for folding
+    // DRAGGED INTO ORDER. Which part of a station comes first is the order it is fitted in - the
+    // backshell before the boot behind it - and getting that wrong meant deleting the steps and
+    // describing them again. InternalMove because a step can only ever move within this harness.
+    stepList_->setDragDropMode(QAbstractItemView::InternalMove);
+    stepList_->setSelectionMode(QAbstractItemView::SingleSelection);
     left->addWidget(stepList_, 1);
 
     auto* catLabel = new QLabel(QStringLiteral("Place next"), this);
@@ -360,6 +366,15 @@ void MechWizardDialog::buildUi() {
 
     // Clicking a step in the list EDITS it. That is the whole of item 2: correcting a figure must not
     // mean describing a new step.
+    // THE TREE IS THE ORDER, once something has been dragged. The widget has already moved the item by
+    // the time this fires, so the script is rewritten to match what the list now shows rather than the
+    // drop being interpreted - there is no arithmetic to get wrong about where it landed.
+    connect(stepList_->model(), &QAbstractItemModel::rowsMoved, this,
+            [this](const QModelIndex&, int, int, const QModelIndex&, int) {
+        if (loading_) return;
+        reorderFromList();
+    });
+
     connect(stepList_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* now, QTreeWidgetItem*) {
         if (loading_ || !now) return;
@@ -1206,6 +1221,76 @@ std::vector<MechStepIssue> MechWizardDialog::issues() const {
 // ==================================================================================================
 // Refreshing
 // ==================================================================================================
+
+bool MechWizardDialog::dragStepTo(const QString& stepId, const QString& newParentId, int index) {
+    const std::function<QTreeWidgetItem*(QTreeWidgetItem*, const QString&)> find =
+        [&](QTreeWidgetItem* it, const QString& id) -> QTreeWidgetItem* {
+        if (it->data(0, Qt::UserRole).toString() == id) return it;
+        for (int i = 0; i < it->childCount(); ++i)
+            if (QTreeWidgetItem* hit = find(it->child(i), id)) return hit;
+        return nullptr;
+    };
+    QTreeWidgetItem* moving = nullptr;
+    QTreeWidgetItem* onto = nullptr;
+    for (int i = 0; i < stepList_->topLevelItemCount(); ++i) {
+        if (!moving) moving = find(stepList_->topLevelItem(i), stepId);
+        if (!onto && !newParentId.isEmpty()) onto = find(stepList_->topLevelItem(i), newParentId);
+    }
+    if (!moving) return false;
+    if (!newParentId.isEmpty() && !onto) return false;
+
+    if (QTreeWidgetItem* was = moving->parent()) was->removeChild(moving);
+    else stepList_->takeTopLevelItem(stepList_->indexOfTopLevelItem(moving));
+
+    if (onto) onto->insertChild(qBound(0, index, onto->childCount()), moving);
+    else stepList_->insertTopLevelItem(qBound(0, index, stepList_->topLevelItemCount()), moving);
+
+    reorderFromList();
+    return true;
+}
+
+void MechWizardDialog::reorderFromList() {
+    // Walked depth-first, which is the order the sheet is worked to: a station, then its parts, then
+    // the next station. Each item's parent in the TREE becomes its parent in the script, so a part
+    // dragged onto another station belongs to that station afterwards.
+    std::vector<MechStep> rebuilt;
+    rebuilt.reserve(script_.steps.size());
+    const std::function<void(QTreeWidgetItem*, const QString&, bool)> take =
+        [&](QTreeWidgetItem* it, const QString& parentId, bool asSubpart) {
+        const QString id = it->data(0, Qt::UserRole).toString();
+        const MechStep* was = id.isEmpty() ? nullptr : script_.step(id);
+        if (was) {
+            MechStep moved = *was;
+            moved.parentStep = parentId;
+            moved.isSubpart = asSubpart;
+            rebuilt.push_back(moved);
+            for (int i = 0; i < it->childCount(); ++i) take(it->child(i), id, true);
+            return;
+        }
+        // The "being described" row carries no id and is not a step; its children, if a drop put any
+        // under it, belong to whatever it hangs off.
+        for (int i = 0; i < it->childCount(); ++i) take(it->child(i), parentId, asSubpart);
+    };
+    for (int i = 0; i < stepList_->topLevelItemCount(); ++i)
+        take(stepList_->topLevelItem(i), QString(), false);
+
+    // NOTHING IS LOST TO A DRAG. A step the walk did not reach - a drop the widget handled in some way
+    // this did not expect - is put back at the end rather than dropped from the harness. Losing a step
+    // to a mis-drag is the one outcome that cannot be undone by dragging again.
+    for (const MechStep& s : script_.steps) {
+        bool kept = false;
+        for (const MechStep& r : rebuilt)
+            if (r.id == s.id) { kept = true; break; }
+        if (!kept) rebuilt.push_back(s);
+    }
+    if (rebuilt.size() != script_.steps.size()) return;   // refuse a rewrite that does not add up
+
+    script_.steps = rebuilt;
+    refreshStepList();
+    refreshFieldsForCategory();
+    refreshPreview();
+    refreshIssues();
+}
 
 void MechWizardDialog::refreshStepList() {
     // Filling the list must not be read as the user picking a row. SAVED AND RESTORED rather than
