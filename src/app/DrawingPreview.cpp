@@ -240,6 +240,10 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool())
             EntityRenderer::draw(p, e, doc, vt, QColor());
         else if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
+        // NOT APPLIED YET - see kPreviewGhostKey. Dimmed to about a third of the contrast the applied
+        // objects have, which is enough to read the shape and not enough to mistake it for the drawing.
+        else if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool())
+            EntityRenderer::draw(p, e, doc, vt, QColor("#5c646e"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
     }
     p.restore();

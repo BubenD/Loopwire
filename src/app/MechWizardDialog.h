@@ -1,6 +1,7 @@
 #pragma once
 
 #include "harness/MechBuildScript.h"
+#include "model/Entity.h"
 #include "harness/PartsLibrary.h"
 
 #include <QDialog>
@@ -146,6 +147,19 @@ public:
     // not, so pressing it again adds another part to the SAME place instead of a chain of one thing
     // after another.
     void commitSubpart();
+
+    // APPLY WHAT IS DESCRIBED TO THE DRAWING - what the Apply button does.
+    //
+    // While a step is being described it is drawn as a ghost (see kPreviewGhostKey) and is not part of
+    // the harness; this is what makes it real. It differs from commitStep in what happens next: this
+    // KEEPS the step selected so it can go on being corrected now it can be seen properly against the
+    // rest, where Next settles it and opens the following step. On a step already applied it means what
+    // it always meant - write the fields back onto it.
+    void applyToDrawing();
+
+    // The objects the preview is showing, ghost flags and all. For a test: whether a step reads as
+    // applied is a fact about the drawing, not about the script.
+    std::vector<Entity> shownEntities() const;
 
     // THE SCRIPT AS THE PREVIEW SHOWS IT: everything described, PLUS the step being typed right now.
     //

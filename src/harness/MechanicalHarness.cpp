@@ -1124,10 +1124,24 @@ void stampAsBlockCopy(std::vector<Entity>& ents, const LibraryPart& part, const 
     }
 }
 
+// Turn a point about the origin.
+Vec2 turnedAbout(const Vec2& d, double turn) {
+    const double c = std::cos(turn), s = std::sin(turn);
+    return Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+}
+
+// `placedFaces`, when asked for, comes back with the midpoint of each of the part's declared output
+// faces WHERE IT ENDS UP once the part is set down.
+//
+// Filled by each placement path with that path's own transform rather than worked out again afterwards:
+// there are three ways a part can be set down and a second copy of the arithmetic would agree with all
+// of them only until one changed.
 std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
                                       const MechDrawOptions& opt, const QString& role,
-                                      const Vec2& outward = Vec2{0.0, 0.0}) {
+                                      const Vec2& outward = Vec2{0.0, 0.0},
+                                      std::vector<Vec2>* placedFaces = nullptr) {
     std::vector<Entity> out;
+    if (placedFaces) placedFaces->clear();
     if (!part.hasMechanical()) return out;
     out = partDrawingEntities(part.mechanical);
     if (out.empty()) return out;
@@ -1196,6 +1210,9 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
             e.layer = opt.layer;
             e.meta.insert(QStringLiteral("mechRole"), role);
         }
+        if (placedFaces)
+            for (const MechOutputFace& f : part.outputs)
+                placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - centre, turn));
         stampAsBlockCopy(out, part, at);
         return out;
     }
@@ -1210,6 +1227,10 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
             e.layer = opt.layer;
             e.meta.insert(QStringLiteral("mechRole"), role);
         }
+        if (placedFaces)
+            for (const MechOutputFace& f : part.outputs)
+                placedFaces->push_back(
+                    at + turnedAbout(lerp(f.a, f.b, 0.5) - part.connectPoint, turn));
         stampAsBlockCopy(out, part, at);
         return out;
     }
@@ -1221,6 +1242,9 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
         e.layer = opt.layer;
         e.meta.insert(QStringLiteral("mechRole"), role);
     }
+    if (placedFaces)
+        for (const MechOutputFace& f : part.outputs)
+            placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - mid, dirRad));
     stampAsBlockCopy(out, part, at);
     return out;
 }
@@ -2088,6 +2112,67 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(dim);
         }
 
+        // ---- WHERE EACH RUN ENTERS THE PART AT THIS JUNCTION ----------------------------------
+        //
+        // Several limbs and a trunk meeting at one place all end at the node POINT, which is right when
+        // there is nothing there but a junction. Where a real part sits on it - a splice block, a
+        // breakout boot, anything whose drawing declares the faces the conductors leave by - each run
+        // has its own way in, and drawing them all converging on one spot says the harness enters the
+        // part somewhere it does not.
+        //
+        // ONLY WHERE THE PART DECLARES FACES. A part that says nothing about them keeps exactly the
+        // behaviour it had: everything meets the junction point. This is an addition for parts that
+        // carry the information, not a new rule imposed on the ones that do not.
+        if (const LibraryPart* jp = catalog && !n->libPart.isEmpty() ? catalog->byId(n->libPart)
+                                                                    : nullptr) {
+            std::vector<Vec2> faces;
+            std::vector<Entity> placedJunction = placedPartDrawing(
+                *jp, pn.at, dirRad, opt, QStringLiteral("fitting"), u * -into, &faces);
+            // AND THE PART ITSELF GETS DRAWN. A connector's own body is drawn further down; anything
+            // else on a node - a splice block, a breakout boot - had nowhere that drew it at all, so a
+            // junction with a real part on it came out as a bare point with the harness meeting in mid
+            // air.
+            if (n->kind != MechNodeKind::Connector)
+                for (Entity& e : placedJunction) {
+                    e.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    out.push_back(e);
+                }
+            // The runs that meet here, and which way each one comes in from.
+            std::vector<Vec2> incoming;
+            for (const MechPlacedSegment& ps2 : layout.segments) {
+                const MechSegment* sg = def.segment(ps2.id);
+                if (!sg) continue;
+                if (sg->fromNode == n->id) incoming.push_back(ps2.b);
+                else if (sg->toNode == n->id) incoming.push_back(ps2.a);
+            }
+            if (faces.size() >= 2 && incoming.size() >= 2) {
+                // Nearest face first, and each face taken once: two runs entering the same face would
+                // be two conductors crimped into one way.
+                std::vector<bool> taken(faces.size(), false);
+                for (const Vec2& from : incoming) {
+                    int best = -1;
+                    double bestD = 0.0;
+                    for (size_t fi = 0; fi < faces.size(); ++fi) {
+                        if (taken[fi]) continue;
+                        const double d = distance(from, faces[fi]);
+                        if (best < 0 || d < bestD) { best = static_cast<int>(fi); bestD = d; }
+                    }
+                    if (best < 0) break;
+                    taken[static_cast<size_t>(best)] = true;
+                    // The run carried on to its own way in. Drawn as bundle rather than as a wire,
+                    // because it is the run itself reaching the part and not a conductor inside it.
+                    Entity lead = baseEntity(opt, QStringLiteral("bundle"));
+                    lead.type = EntityType::Polyline;
+                    lead.points = {from, faces[static_cast<size_t>(best)]};
+                    lead.a = lead.points.front();
+                    lead.b = lead.points.back();
+                    lead.meta.insert(QStringLiteral("mechNode"), pn.id);
+                    lead.meta.insert(QStringLiteral("entryFace"), true);
+                    out.push_back(lead);
+                }
+            }
+        }
+
         if (n->kind != MechNodeKind::Connector) {
             if (!n->name.isEmpty() && n->kind != MechNodeKind::Root)
                 out.push_back(makeText(opt, pn.at + v * (across(bundleMm) / 2.0 + 4.0), n->name,
@@ -2111,13 +2196,39 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         double bodyHalfAcrossUnits = 0.0;
         bool haveBodyExtent = false;
 
+        // ---- SEVERAL HOUSINGS AT ONE STATION, STACKED AND IN ORDER ----------------------------
+        //
+        // A station can carry more than one connector - two housings feeding one cable - and they have
+        // to be read as a set: one above the next, each clear of its neighbour, in the order they were
+        // described. The first attempt kept the first housing on the axis and stepped the others off it
+        // ALTERNATELY, above then below, which reads as one connector with strays either side rather
+        // than as a stack of three.
+        //
+        // So all of them share one pitch and the whole stack is CENTRED on the node. With a single
+        // housing - every harness that has ever been drawn here - the stack is one slot wide and lands
+        // exactly on the axis, so nothing about those drawings changes.
+        const int housings = 1 + static_cast<int>(n->extraEnds.size());
+        double stackPitch = 0.0;
+        if (housings > 1) {
+            double tallest = n->bodyHeightMm > 0.0
+                                 ? n->bodyHeightMm
+                                 : std::max(bundleMm + 4.0, n->pinCount * 2.5 + 6.0);
+            for (const MechExtraEnd& x : n->extraEnds)
+                tallest = std::max(tallest, std::max(bundleMm + 4.0, x.pinCount * 2.5 + 6.0));
+            stackPitch = across(tallest + 5.0);      // its own height, and a gap to the next
+        }
+        const auto slotOffset = [&](int slot) {
+            return housings > 1 ? (slot - (housings - 1) / 2.0) * stackPitch : 0.0;
+        };
+        const Vec2 primaryAt = pn.at + v * slotOffset(0);
+
         const LibraryPart* part = catalog ? catalog->byId(n->libPart) : nullptr;
         if (part && part->hasMechanical()) {
             // The connector as its own drawing says it looks, placed on the end of the run - and
             // turned to face AWAY from it, which is the way one goes on. `into` is -1 where the run
             // arrives here, so the way out of the harness is -into * u.
             const std::vector<Entity> placed = placedPartDrawing(
-                *part, pn.at, dirRad, opt, QStringLiteral("connector"), u * -into);
+                *part, primaryAt, dirRad, opt, QStringLiteral("connector"), u * -into);
             // MEASURED, NOT ASSUMED. A part with its own drawing is whatever size it was drawn, and the
             // 20 mm default below is a figure about the box that is NOT being drawn - so a chosen
             // library connector was dimensioned at 20.0 whatever its real length, with the arrows
@@ -2153,7 +2264,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                  : std::max(bundleMm + 4.0, n->pinCount * 2.5 + 6.0);
             const double w = n->bodyWidthMm > 0.0 ? n->bodyWidthMm : 20.0;
             // Outward: away from the run, whichever side of the node the run is on.
-            Entity body = makeBox(opt, pn.at - u * (into * along(w) / 2.0), dirRad, along(w),
+            Entity body = makeBox(opt, primaryAt - u * (into * along(w) / 2.0), dirRad, along(w),
                                   across(h), QStringLiteral("connector"));
             body.meta.insert(QStringLiteral("mechNode"), pn.id);
             out.push_back(body);
@@ -2183,9 +2294,10 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const MechExtraEnd& x = n->extraEnds[ei];
             const double xh = std::max(bundleMm + 4.0, x.pinCount * 2.5 + 6.0);
             const double xw = 20.0;
-            const int rank = static_cast<int>(ei) / 2 + 1;
-            const double side = (ei % 2 == 0) ? 1.0 : -1.0;
-            const Vec2 face = pn.at + v * across(side * rank * (xh + 5.0));
+            // The next slot down the stack - see slotOffset. In the order they were described, so the
+            // list in the wizard and the housings on the sheet read the same way.
+            const double side = slotOffset(static_cast<int>(ei) + 1) >= slotOffset(0) ? 1.0 : -1.0;
+            const Vec2 face = pn.at + v * slotOffset(static_cast<int>(ei) + 1);
             const Vec2 mid = face - u * (into * along(xw) / 2.0);
 
             const LibraryPart* xp = catalog ? catalog->byId(x.libPart) : nullptr;

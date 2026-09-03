@@ -316,7 +316,8 @@ void MechWizardDialog::buildUi() {
     connect(deleteBtn_, &QPushButton::clicked, this, [this] {
         if (!editing_.isEmpty()) deleteStep(editing_);
     });
-    connect(applyBtn_, &QPushButton::clicked, this, [this] { applyToEditedStep(); });
+    // APPLY IS WHAT PUTS A DESCRIBED STEP ON THE DRAWING - see applyToDrawing.
+    connect(applyBtn_, &QPushButton::clicked, this, [this] { applyToDrawing(); });
     // Item 2: CHANGING THE PART CHANGES THE DRAWING. The combo had no connection at all, so picking a
     // connector left the preview showing the default box - and the one thing a preview is for is
     // showing what the choice just made looks like.
@@ -843,6 +844,27 @@ void MechWizardDialog::removeConductorGroup() {
 // More than one connector at this end
 // ==================================================================================================
 
+void MechWizardDialog::applyToDrawing() {
+    if (!editing_.isEmpty()) {
+        applyToEditedStep();
+        return;
+    }
+    // AND THE STEP IS NOT LEFT SELECTED.
+    //
+    // Keeping it selected read well - "you have just applied it, carry on correcting it" - and was
+    // wrong: with the step still selected, picking the next category EDITED the applied step and
+    // changed its kind instead of starting to describe the next one. So applying a connector and then
+    // reaching for Cable turned the connector into a cable. Clearing it means the window is describing
+    // the next step, which is what somebody who has just applied one is doing.
+    //
+    // Correcting an applied step is still a click on its row in the list, which is what that is for.
+    commitStep();
+}
+
+std::vector<Entity> MechWizardDialog::shownEntities() const {
+    return preview_->entities();
+}
+
 void MechWizardDialog::commitSubpart() {
     // THE SAME COMMIT AS NEXT, with two differences that are the whole point of the button.
     //
@@ -1110,17 +1132,52 @@ void MechWizardDialog::refreshStepList() {
         // wires, P2" is not four stations - it is two, one of them described in three parts. The depth
         // is walked rather than stored, so re-parenting a step by deleting its parent re-indents it
         // without anything having to be kept in step.
+        // NUMBERED SO A SUBPART CANNOT BE MISTAKEN FOR A STATION. Indentation alone was not enough: on
+        // the screen it reads as a list of steps with some of them nudged over, and somebody scanning
+        // the sequence counts stations. A station is 1, 2, 3; its parts are 1.1, 1.2; a part of a part
+        // is 1.1.1 - which is how a build sheet numbers them and says the shape in the number itself.
+        //
+        // The number is WALKED from the tree rather than stored, so deleting a step renumbers what is
+        // left instead of leaving gaps that mean nothing.
+        QString number;
+        if (s.isSubpart) {
+            std::vector<int> parts;
+            for (const MechStep* at = &s; at;) {
+                const MechStep* parent = script_.step(at->parentStep);
+                int among = 0;
+                for (const MechStep* sib : script_.childSteps(at->parentStep)) {
+                    if (sib->isSubpart == at->isSubpart) ++among;
+                    if (sib->id == at->id) break;
+                }
+                parts.push_back(among);
+                if (!parent || !parent->isSubpart) {
+                    // The station this whole chain hangs off, by its own place in the sequence.
+                    int station = 0;
+                    for (const MechStep& t : script_.steps) {
+                        if (!t.isSubpart) ++station;
+                        if (parent && t.id == parent->id) break;
+                    }
+                    parts.push_back(station);
+                    break;
+                }
+                at = parent;
+            }
+            for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+                if (!number.isEmpty()) number += QLatin1Char('.');
+                number += QString::number(*it);
+            }
+            --n;                   // a subpart does not take a station number
+        } else {
+            number = QString::number(n);
+        }
+
         int depth = 0;
         for (const MechStep* up = script_.step(s.parentStep); up && up->isSubpart;
              up = script_.step(up->parentStep))
             ++depth;
         if (s.isSubpart) ++depth;
-        const QString lead = s.isSubpart ? QStringLiteral("    ").repeated(depth) +
-                                               QStringLiteral("└ ")
-                                         : QString();
-        new QListWidgetItem(s.isSubpart ? QStringLiteral("%1%2").arg(lead, what)
-                                        : QStringLiteral("%1  %2").arg(n).arg(what),
-                            stepList_);
+        const QString lead = QStringLiteral("    ").repeated(depth);
+        new QListWidgetItem(QStringLiteral("%1%2  %3").arg(lead, number, what), stepList_);
     }
 
     // THE STEP BEING DESCRIBED GETS A ROW OF ITS OWN, at the bottom, before it has been added.
@@ -1151,7 +1208,12 @@ void MechWizardDialog::refreshStepList() {
     if (stepList_->count() > 0) stepList_->setCurrentRow(want);
     backBtn_->setEnabled(!script_.steps.empty());
     deleteBtn_->setEnabled(!editing_.isEmpty());
-    applyBtn_->setEnabled(!editing_.isEmpty());
+    // Enabled while a step is being DESCRIBED too: that is when it is the button that applies it to the
+    // drawing. It said "Apply to this step" and did nothing at all until a step had been committed by
+    // some other means, which is the wrong way round.
+    applyBtn_->setEnabled(true);
+    applyBtn_->setText(editing_.isEmpty() ? QStringLiteral("Apply to the drawing")
+                                          : QStringLiteral("Apply to this step"));
     loading_ = wasLoading;
 }
 
@@ -1180,8 +1242,12 @@ void MechWizardDialog::refreshFieldsForCategory() {
     show(odLabel_, odSpin_, category_ == Category::Cable);
     show(waysLabel_, waysSpin_, isEnd);
     show(contactLabel_, contactCombo_, isEnd);
-    // A node is a place, not a thing: it has no part, no length and no size of its own.
-    partCombo_->setVisible(!isNode);
+    // A NODE CAN BE A PART TOO. It was treated as a place and nothing else - no part offered - which is
+    // right for a bare breakout and wrong for the ones that are a bought thing: a splice block, a
+    // three-way adaptor, a breakout boot. Those have a drawing, a line in the bill, and faces the
+    // conductors leave by, and none of it was reachable. The other figures stay hidden, because a
+    // junction still has no length or size of its own.
+    partCombo_->setVisible(true);
 
     // WHAT THE NAME FIELD IS CALLED. On an end - a connector, a terminal - and at a node, the answer is
     // a DESIGNATOR: P1, E7, BR1, the reference the wire list and the schematic know the part by. On a
@@ -1379,7 +1445,47 @@ void MechWizardDialog::refreshPreview() {
     // screen until Next was pressed: the one question a preview is asked is what the choice just made
     // looks like, and it could not answer it.
     const MechCompiled c = compileMechScript(previewScript());
-    const std::vector<Entity> ents = buildMechanicalHarness(c.def, &catalog_);
+    std::vector<Entity> ents = buildMechanicalHarness(c.def, &catalog_);
+
+    // AND IT IS DRAWN AS NOT-YET-APPLIED. In place, so applying changes only how the step is drawn and
+    // never where it sits - a step that moved when it was applied would make the preview a picture of
+    // something else.
+    //
+    // WHICH OBJECTS ARE ITS OWN is worked out by BUILDING THE HARNESS BOTH WAYS and ghosting the
+    // difference. Attributing them through the compiler's step map does not work for a step that
+    // modifies what is already there rather than adding to it: an End step lands ON an existing node,
+    // so the node it "made" is the one the run before it made, and ghosting by that would dim the run's
+    // own conductors as well. The difference between the two builds is exactly the step's own doing,
+    // whatever kind of step it is.
+    if (editing_.isEmpty()) {
+        // WHICH OBJECTS ARE THE PENDING STEP'S OWN, asked of the compiler's step maps.
+        //
+        // Not by diffing two builds of the harness, which was the first attempt and is wrong: adding a
+        // run CHANGES HOW WHAT IS ALREADY THERE IS DRAWN - the connector grows its open conductors and
+        // turns to face the run - so nearly every object differed and the whole drawing ghosted.
+        //
+        // A node or segment the step CREATED is all its own. A node it merely LANDED ON is shared with
+        // whatever made it, and then only the housing the step put there belongs to it - which is the
+        // case that made attribution awkward in the first place: an End step adds no object of its own.
+        const QString pendId = script_.nextStepId();
+        const QString pendSeg = c.stepToSegment.value(pendId);
+        const QString pendNode = c.stepToNode.value(pendId);
+        const bool pendIsEnd = mechStepRole(categoryKind(category_)) == MechStepRole::End;
+        for (Entity& e : ents) {
+            const QString seg = e.meta.value(QStringLiteral("mechSeg")).toString();
+            const QString node = e.meta.value(QStringLiteral("mechNode")).toString();
+            bool ghost = false;
+            if (!pendSeg.isEmpty() && seg == pendSeg) ghost = true;
+            if (!pendNode.isEmpty() && node == pendNode) {
+                if (c.objectToStep.value(pendNode) == pendId)
+                    ghost = true;
+                else if (pendIsEnd && e.meta.value(QStringLiteral("mechRole")).toString() ==
+                                          QLatin1String("connector"))
+                    ghost = true;
+            }
+            if (ghost) e.meta.insert(QLatin1String(kPreviewGhostKey), true);
+        }
+    }
     preview_->setEntities(ents);
     summary_->setText(script_.steps.empty()
                           ? QStringLiteral("Pick what goes on the first end, then press Next.")

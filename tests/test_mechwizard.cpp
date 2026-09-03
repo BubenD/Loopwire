@@ -986,6 +986,265 @@ void testDirectionTurnsTheFirstPartRoundInThePreview() {
           "direction: which is baseDirectionDeg, the figure the whole tree is laid from");
 }
 
+// ---- A described step is a ghost until it is applied ---------------------------------------------
+//
+// The preview shows what is on the drawing AND what is being described, and the two have to be told
+// apart at a glance - otherwise a step nobody has committed reads as part of the harness and stops
+// being checked. Drawn IN PLACE, so applying changes only how it is drawn and never where it sits: a
+// step that moved when it was applied would make the preview a picture of something else.
+void testADescribedStepIsGhostedUntilApplied() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    const auto ghostCount = [](const std::vector<Entity>& ents) {
+        int n = 0;
+        for (const Entity& e : ents)
+            if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool()) ++n;
+        return n;
+    };
+    const auto plainCount = [](const std::vector<Entity>& ents) {
+        int n = 0;
+        for (const Entity& e : ents)
+            if (!e.meta.value(QLatin1String(kPreviewGhostKey)).toBool()) ++n;
+        return n;
+    };
+    // Where every object sits, ghost or not - so "applying moved nothing" can be asserted rather than
+    // assumed.
+    // Where each object sits, so "applying moved nothing" can be asserted rather than assumed. `ghosts`
+    // picks which half of the drawing to describe: only the ghosts, or only what is applied.
+    const auto places = [](const std::vector<Entity>& ents, bool ghosts) {
+        QStringList out;
+        for (const Entity& e : ents) {
+            if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool() != ghosts) continue;
+            QString sig = QString::number(static_cast<int>(e.type));
+            for (const Vec2& pt : e.points)
+                sig += QStringLiteral("|%1,%2").arg(pt.x, 0, 'f', 3).arg(pt.y, 0, 'f', 3);
+            out << sig;
+        }
+        out.sort();
+        return out;
+    };
+
+    // A connector, applied. Then a cable being described after it.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.applyToDrawing();
+    check(w.script().steps.size() == 1, "ghost: Apply puts the described step on the drawing");
+    // AND DOES NOT LEAVE IT SELECTED. Keeping it selected meant the next category picked EDITED the
+    // applied step - applying a connector and then reaching for Cable turned the connector into a
+    // cable. Correcting an applied step is a click on its row, which is what the list is for.
+    check(w.editingStepId().isEmpty(),
+          "ghost: and leaves the window describing the NEXT step, not editing the one just applied");
+
+    w.setCurrentCategory(Cat::Cable);
+    const std::vector<Entity> describing = w.shownEntities();
+    check(ghostCount(describing) > 0,
+          "ghost: the cable being described is drawn as not yet applied");
+    check(plainCount(describing) > 0,
+          "ghost: while the connector already applied is drawn as part of the harness");
+
+    // What was a ghost, and where it sat.
+    std::vector<Entity> wereGhosts;
+    for (const Entity& e : describing)
+        if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool()) wereGhosts.push_back(e);
+
+    // NOW APPLY IT. Those objects become part of the drawing, in the SAME PLACES.
+    //
+    // Deliberately not "nothing is a ghost afterwards": the window is at once describing the NEXT step,
+    // and that one is properly drawn as a ghost too. Comparing the whole drawing across an Apply
+    // compares two different harnesses, which is what made the first version of this test fail for a
+    // reason that had nothing to do with the thing it was checking.
+    w.applyToDrawing();
+    const std::vector<Entity> applied = w.shownEntities();
+    check(w.script().steps.size() == 2, "ghost: two steps are on the drawing now");
+
+    const QStringList nowPlain = places(applied, /*ghosts=*/false);
+    const QStringList wasGhost = places(wereGhosts, /*ghosts=*/true);
+    bool allLanded = true;
+    for (const QString& sig : wasGhost)
+        if (!nowPlain.contains(sig)) allLanded = false;
+    check(!wasGhost.isEmpty() && allLanded,
+          "ghost: every object that was a ghost is now part of the drawing, in the same place - "
+          "applying changed its status, not its geometry");
+}
+
+// ---- Several housings at one station read as a stack ---------------------------------------------
+//
+// A station can carry more than one connector, and they have to be read as a set: one above the next,
+// each clear of its neighbour, in the order they were described. They used to be drawn with the first
+// on the axis and the others stepped off it alternately, above then below, which reads as one connector
+// with strays either side rather than as a stack.
+void testSeveralHousingsAtOneStationAreStackedWithGaps() {
+    // Three connectors at one station: one applied, two as parts of it.
+    MechBuildScript sc;
+    MechStep p1;
+    p1.id = QStringLiteral("S1");
+    p1.kind = PartKind::Connector;
+    p1.name = QStringLiteral("P1");
+    p1.pinCount = 4;
+    sc.steps.push_back(p1);
+    for (const char* nm : {"P2", "P3"}) {
+        MechStep extra;
+        extra.id = QStringLiteral("S_%1").arg(QString::fromLatin1(nm));
+        extra.kind = PartKind::Connector;
+        extra.name = QString::fromLatin1(nm);
+        extra.parentStep = QStringLiteral("S1");
+        extra.isSubpart = true;
+        extra.pinCount = 4;
+        sc.steps.push_back(extra);
+    }
+    MechStep run;
+    run.id = QStringLiteral("S2");
+    run.kind = PartKind::Cable;
+    run.parentStep = QStringLiteral("S1");
+    run.lengthMm = 200.0;
+    run.odMm = 6.0;
+    run.wireCount = 6;
+    run.gauge = QStringLiteral("22 AWG");
+    sc.steps.push_back(run);
+
+    const MechCompiled c = compileMechScript(sc);
+    const MechNode* node = c.def.node(c.stepToNode.value(QStringLiteral("S1")));
+    check(node && node->extraEnds.size() == 2, "stack: three housings on one node");
+
+    // Each housing's own band across the harness.
+    std::vector<std::pair<double, double>> bands;   // low, high across the run
+    for (const Entity& e : buildMechanicalHarness(c.def, nullptr)) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (b.valid) bands.push_back({b.min.y, b.max.y});
+    }
+    check(bands.size() == 3, "stack: all three are drawn");
+    std::sort(bands.begin(), bands.end());
+
+    int overlaps = 0;
+    double smallestGap = 1e9;
+    for (size_t i = 1; i < bands.size(); ++i) {
+        const double gap = bands[i].first - bands[i - 1].second;
+        if (gap < 0.0) ++overlaps;
+        smallestGap = std::min(smallestGap, gap);
+    }
+    if (bands.size() == 3)
+        std::printf("  stack: gaps %.2f, overlaps %d\n", smallestGap, overlaps);
+    check(overlaps == 0, "stack: no housing is drawn on top of another");
+    check(bands.size() == 3 && smallestGap > 0.0,
+          "stack: and there is a real gap between each one and the next");
+
+    // CENTRED ON THE NODE, so the stack straddles the harness rather than hanging off one side of it.
+    const MechLayout lay = layoutMechanicalHarness(c.def);
+    double nodeY = 0.0;
+    for (const MechPlacedNode& pn : lay.nodes)
+        if (pn.id == node->id) nodeY = pn.at.y;
+    if (bands.size() == 3) {
+        const double stackMid = (bands.front().first + bands.back().second) / 2.0;
+        check(std::abs(stackMid - nodeY) < 1e-6,
+              "stack: the stack is centred on the station, not hung off one side of it");
+    }
+
+    // AND A SINGLE HOUSING IS UNMOVED. Every harness drawn before this has one, and a stack of one must
+    // land exactly where it always did - on the axis.
+    MechBuildScript alone;
+    alone.steps.push_back(p1);
+    MechStep only = run;
+    alone.steps.push_back(only);
+    const MechCompiled ac = compileMechScript(alone);
+    const MechNode* an = ac.def.node(ac.stepToNode.value(QStringLiteral("S1")));
+    const MechLayout al = layoutMechanicalHarness(ac.def);
+    double aNodeY = 0.0;
+    for (const MechPlacedNode& pn : al.nodes)
+        if (an && pn.id == an->id) aNodeY = pn.at.y;
+    for (const Entity& e : buildMechanicalHarness(ac.def, nullptr)) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        check(std::abs((b.min.y + b.max.y) / 2.0 - aNodeY) < 1e-6,
+              "stack: one housing on its own is still centred on the axis - nothing moved");
+    }
+}
+
+// ---- Each run enters the junction part at its own declared face -----------------------------------
+//
+// Limbs and a trunk meeting at one place all end at the node POINT, which is right when there is
+// nothing there but a junction. Where a real part sits on it - a splice block, a breakout boot, anything
+// whose drawing declares the faces the conductors leave by - each run has its own way in, and drawing
+// them all converging on one spot says the harness enters the part somewhere it does not.
+//
+// AND ONLY WHERE THE PART DECLARES FACES: a part that says nothing keeps exactly the behaviour it had.
+void testRunsEnterTheJunctionPartAtItsOwnFaces() {
+    // A junction part with three declared faces, and three runs meeting on it.
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    LibraryPart& block = cat.active().add(PartKind::YSplit);
+    block.description = QStringLiteral("Three-way splice block");
+    Entity body;
+    body.type = EntityType::Rect;
+    body.points = {{-10.0, -15.0}, {10.0, -15.0}, {10.0, 15.0}, {-10.0, 15.0}};
+    block.mechanical = partDrawingFromEntities({body});
+    block.outputs.push_back({{-10.0, -10.0}, {-10.0, -4.0}});
+    block.outputs.push_back({{-10.0, -3.0}, {-10.0, 3.0}});
+    block.outputs.push_back({{-10.0, 4.0}, {-10.0, 10.0}});
+    const QString blockId = block.id;
+
+    // The same part with NO faces declared, for the comparison that matters.
+    LibraryPart& plain = cat.active().add(PartKind::YSplit);
+    plain.description = QStringLiteral("Same block, no faces given");
+    plain.mechanical = partDrawingFromEntities({body});
+    const QString plainId = plain.id;
+
+    const auto buildWith = [&](const QString& partId) {
+        MechBuildScript sc;
+        MechStep node;
+        node.id = QStringLiteral("S1");
+        node.kind = PartKind::YSplit;
+        node.name = QStringLiteral("BR1");
+        node.libPart = partId;
+        sc.steps.push_back(node);
+        // Three runs off it: two limbs and a trunk, which is the shape that meets at a junction.
+        int n = 0;
+        for (double turn : {90.0, 0.0, -90.0}) {
+            MechStep run;
+            run.id = QStringLiteral("R%1").arg(++n);
+            run.kind = PartKind::Wire;
+            run.parentStep = QStringLiteral("S1");
+            run.turnDeg = turn;
+            run.lengthMm = 120.0;
+            run.wireCount = 2;
+            run.gauge = QStringLiteral("22 AWG");
+            sc.steps.push_back(run);
+        }
+        const MechCompiled c = compileMechScript(sc);
+        return buildMechanicalHarness(c.def, &cat);
+    };
+
+    // ---- With faces: one entry lead per run, each to a DIFFERENT face ----
+    const std::vector<Entity> withFaces = buildWith(blockId);
+    std::vector<Vec2> targets;
+    for (const Entity& e : withFaces)
+        if (e.meta.value(QStringLiteral("entryFace")).toBool() && e.points.size() == 2)
+            targets.push_back(e.points.back());
+    check(targets.size() >= 2,
+          "faces: the runs meeting the block are taken to its declared faces");
+
+    // EACH FACE ONCE. Two runs into one face would be two conductors crimped into one way.
+    bool distinct = true;
+    for (size_t i = 0; i < targets.size(); ++i)
+        for (size_t j = i + 1; j < targets.size(); ++j)
+            if (distance(targets[i], targets[j]) < 1e-6) distinct = false;
+    check(distinct, "faces: no two runs are taken to the same face");
+
+    // ---- With no faces declared: nothing new is drawn ----
+    const std::vector<Entity> withoutFaces = buildWith(plainId);
+    int strays = 0;
+    for (const Entity& e : withoutFaces)
+        if (e.meta.value(QStringLiteral("entryFace")).toBool()) ++strays;
+    check(strays == 0,
+          "faces: a part that declares none keeps the behaviour it had - everything meets the junction");
+}
+
 void testBalloonCanBeWithheldPerStep() {
     MechBuildScript sc;
     MechStep con;
@@ -1383,9 +1642,13 @@ void testTwoConnectorsCanShareOneEnd() {
     const MechNode* node = c.def.node(c.stepToNode.value(station));
     check(node && node->kind == MechNodeKind::Connector,
           "two ends: the station is a connector");
-    check(node && node->extraEnds.size() == 1,
+    const bool haveExtra = node && node->extraEnds.size() == 1;
+    check(haveExtra,
           "two ends: with a SECOND housing on the same node - not overwritten by it");
-    check(node && node->extraEnds.front().name == QStringLiteral("P2"),
+    // GUARDED. With the second housing missing, extraEnds is empty and front() reads off the end of a
+    // vector - so the run CRASHED here instead of reporting, and every assertion after this point went
+    // unchecked. A test has to survive the absence of the thing it is testing.
+    check(!haveExtra || node->extraEnds.front().name == QStringLiteral("P2"),
           "two ends: and the second keeps its own designator");
     check(node && node->name == QStringLiteral("P1"),
           "two ends: while the first keeps its own - the overwrite was the silent data loss");
@@ -1444,11 +1707,19 @@ void testSubpartsNestAndTheListShowsIt() {
     check(rows.size() >= 3, "subpart: the station and its two parts are all listed");
     check(rows.value(0).startsWith(QStringLiteral("1")),
           "subpart: the station carries the step number");
-    check(rows.value(1).contains(QStringLiteral("└")) &&
-              rows.value(2).contains(QStringLiteral("└")),
-          "subpart: and its parts are indented under it rather than numbered as stations");
+    // THE NUMBER SAYS WHICH IT IS. Indentation alone reads as a list of steps with some nudged over,
+    // and somebody scanning the sequence counts stations - so a station is 1 and its parts are 1.1, 1.2.
+    check(rows.value(1).trimmed().startsWith(QStringLiteral("1.1")),
+          "subpart: the first part of station 1 is numbered 1.1, not 2");
+    check(rows.value(2).trimmed().startsWith(QStringLiteral("1.2")),
+          "subpart: and the second is 1.2");
+    check(rows.value(1).startsWith(QStringLiteral(" ")) &&
+              rows.value(2).startsWith(QStringLiteral(" ")),
+          "subpart: and both are indented under the station as well as numbered under it");
 
     // Nesting DEEPER: a part of a part. The wires leave the backshell, not the bare connector.
+    check(w.script().steps.size() >= 2, "subpart: there is a backshell step to nest under");
+    if (w.script().steps.size() < 2) return;
     const MechStep backshell = w.script().steps[1];
     w.editStep(backshell.id);
     const QString onBackshell = backshell.id;
@@ -1468,13 +1739,19 @@ void testSubpartsNestAndTheListShowsIt() {
     // The deepest row is indented further than the one it hangs off - the depth is walked, so it is
     // right however the tree was built up.
     int lead1 = 0, lead2 = 0;
+    QString num2;
     for (const QString& r : deep) {
         const int n = r.length() - r.trimmed().length();
         if (r.contains(QStringLiteral("Backshell"))) lead1 = n;
-        if (r.contains(partKindName(PartKind::Wire))) lead2 = n;
+        if (r.contains(partKindName(PartKind::Wire))) {
+            lead2 = n;
+            num2 = r.trimmed().section(QLatin1Char(' '), 0, 0);
+        }
     }
     check(lead2 > lead1,
           "subpart: a part of a part is indented deeper than the part it belongs to");
+    check(num2.count(QLatin1Char('.')) >= 2,
+          "subpart: and its number says how deep it is - 1.1.1 rather than 1.1");
 }
 
 } // namespace
@@ -1508,6 +1785,9 @@ int run_mechwizard_tests() {
     testAnOpenStartNamesEachWire();
     testTwoConnectorsCanShareOneEnd();
     testSubpartsNestAndTheListShowsIt();
+    testADescribedStepIsGhostedUntilApplied();
+    testSeveralHousingsAtOneStationAreStackedWithGaps();
+    testRunsEnterTheJunctionPartAtItsOwnFaces();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }

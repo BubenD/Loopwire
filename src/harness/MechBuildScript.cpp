@@ -450,6 +450,12 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
             // It goes several ways from here. The branches are the steps naming this one as parent.
             anchor->kind = MechNodeKind::Breakout;
             if (!step.name.isEmpty()) anchor->name = step.name;
+            // AND THE PART THAT SITS ON IT, when there is one. A junction is not always a bare point:
+            // a splice block, a breakout boot, a three-way adaptor is a bought part with a drawing and
+            // its own faces the conductors leave by. The part was simply dropped here - chosen on the
+            // step, absent from the node - so it reached neither the drawing nor the bill.
+            if (!step.libPart.isEmpty()) anchor->libPart = step.libPart;
+            anchor->balloon = step.balloon;
             out.stepToNode.insert(step.id, anchor->id);
             out.objectToStep.insert(anchor->id, step.id);
             break;

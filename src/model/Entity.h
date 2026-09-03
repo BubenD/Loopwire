@@ -124,6 +124,13 @@ inline constexpr char kConnectionLineKey[] = "connectionLine";
 // as a colour chart; these keep their own colour, because with a mark the colour IS its name.
 inline constexpr char kPreviewMarkKey[] = "previewMark";
 
+// NOT ON THE DRAWING YET. A preview shows what has been applied AND what is being described, and the
+// second must be told from the first at a glance - otherwise somebody reads a step they have not
+// committed as part of the harness and stops checking it. Drawn in place, so applying changes only how
+// it is drawn and never where it sits: a step that moved when it was applied would make the preview a
+// picture of something else.
+inline constexpr char kPreviewGhostKey[] = "previewGhost";
+
 // Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
 // horizontal and it stands off in y. The object remembers it ("dimAcross"), because working it out from
 // the geometry each time meant a dimension turned itself round when the geometry moved; only a drawing
