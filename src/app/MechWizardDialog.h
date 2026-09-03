@@ -16,6 +16,8 @@ class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
@@ -209,6 +211,11 @@ public:
     // the root node, and that is why pressing Left on the first connector changed nothing at all.
     bool directionSetsHandedness() const;
 
+    // ROLLING A STATION UP, and which ones are rolled up. A station with parts can be folded away;
+    // the state is a fact about the window, so a test reads it rather than inferring it from the rows.
+    void rollUp(const QString& stepId, bool up);
+    QStringList rolledUpSteps() const;
+
     // What the gauge list offers, as it is written in it.
     QStringList shownGauges() const;
     QStringList shownSteps() const;
@@ -284,7 +291,7 @@ private:
     // asking the same question repeatedly.
     QHash<int, bool> balloonByCategory_;
 
-    QListWidget* stepList_ = nullptr;
+    QTreeWidget* stepList_ = nullptr;
     QListWidget* catList_ = nullptr;
     QLabel* heading_ = nullptr;
     QLabel* hint_ = nullptr;

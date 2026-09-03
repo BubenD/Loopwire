@@ -18,13 +18,16 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSet>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QTreeWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace Edraw_Desktop {
 
@@ -224,8 +227,18 @@ void MechWizardDialog::buildUi() {
     auto* builtLabel = new QLabel(QStringLiteral("The steps so far"), this);
     builtLabel->setStyleSheet(QStringLiteral("font-weight:600;"));
     left->addWidget(builtLabel);
-    stepList_ = new QListWidget(this);
+    // A TREE, NOT A LIST, so a station's parts can be rolled up out of the way.
+    //
+    // The nesting used to be spaces painted into the text of a flat list, which reads as indentation and
+    // is not structure: there is nothing to collapse, and nothing tells you a step HAS parts until you
+    // read the rows under it. Real child items give the disclosure arrow, which says "there is more here"
+    // on a station whose parts are hidden - the one thing painted indentation cannot say.
+    stepList_ = new QTreeWidget(this);
     stepList_->setMinimumWidth(240);
+    stepList_->setColumnCount(1);
+    stepList_->setHeaderHidden(true);
+    stepList_->setUniformRowHeights(true);
+    stepList_->setExpandsOnDoubleClick(false);   // a double-click is for editing, not for folding
     left->addWidget(stepList_, 1);
 
     auto* catLabel = new QLabel(QStringLiteral("Place next"), this);
@@ -347,12 +360,16 @@ void MechWizardDialog::buildUi() {
 
     // Clicking a step in the list EDITS it. That is the whole of item 2: correcting a figure must not
     // mean describing a new step.
-    connect(stepList_, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (loading_) return;
-        if (row < 0) return;
-        // THE LAST ROW IS THE STEP BEING DESCRIBED - see refreshStepList. Clicking it goes back to
-        // describing a new step, which is the natural inverse of clicking a described one to edit it.
-        if (row >= static_cast<int>(script_.steps.size())) {
+    connect(stepList_, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* now, QTreeWidgetItem*) {
+        if (loading_ || !now) return;
+        // THE STEP IS FOUND BY ITS ID, carried on the item. Counting rows worked only while the list was
+        // flat: a tree's rows are not the script's order, and a collapsed station hides its own parts, so
+        // the fifth visible row is not the fifth step.
+        const QString id = now->data(0, Qt::UserRole).toString();
+        // The row for the step being DESCRIBED carries no id. Clicking it goes back to describing a new
+        // step, which is the natural inverse of clicking a described one to edit it.
+        if (id.isEmpty()) {
             if (editing_.isEmpty()) return;
             editing_.clear();
             refreshStepList();
@@ -360,7 +377,7 @@ void MechWizardDialog::buildUi() {
             refreshPreview();
             return;
         }
-        editStep(script_.steps[static_cast<size_t>(row)].id);
+        editStep(id);
     });
 
     // EVERY CHANGE REDRAWS THE PREVIEW, and applies to the step being edited when one is.
@@ -595,6 +612,24 @@ void MechWizardDialog::setScript(const MechBuildScript& script) {
 }
 
 void MechWizardDialog::setCurrentCategory(Category c) {
+    // PICKING A CATEGORY MEANS "PLACE SOMETHING ELSE", not "change what this step is".
+    //
+    // With a step selected, choosing a different category used to rewrite that step's KIND - so
+    // standing on the wires under a connector and reaching for Heatshrink turned the wires INTO
+    // heatshrink and threw away everything only a run has. What somebody reaching for a category wants
+    // is to place one, and where they are standing says where it goes.
+    //
+    // Correcting a step's own figures - its length, its designator, its ways - still edits it, which is
+    // what "changing a field changes the step" meant. Only the category, which decides what KIND of
+    // thing the step is, ends the edit. The anchor stays on the selected step, so the new step lands
+    // after the thing that was being looked at.
+    //
+    // Skipped while loading_, because editStep calls this to show a step its OWN category and must not
+    // cancel the edit it is in the middle of setting up.
+    if (!loading_ && !editing_.isEmpty() && c != category_) {
+        editing_.clear();
+        refreshStepList();
+    }
     category_ = c;
     for (int i = 0; i < catList_->count(); ++i) {
         if (static_cast<Category>(catList_->item(i)->data(Qt::UserRole).toInt()) == c) {
@@ -767,6 +802,18 @@ void MechWizardDialog::editStep(const QString& stepId) {
     while (abs <= -180.0) abs += 360.0;
     setCurrentGoesRight(std::abs(abs) < 90.0);
 
+    // STANDING ON A STEP MEANS THE NEXT THING ATTACHES TO IT.
+    //
+    // Selecting a step used to change only which one the fields were editing; the anchor stayed wherever
+    // the last commit had left it. So clicking back to a connector and pressing Next put the new step
+    // after the END of the harness rather than after the connector - the one place nobody meant. The
+    // anchor follows the selection, which is what "standing on" a step has to mean for Next and Add
+    // subpart to be about the thing on the screen.
+    //
+    // Set AFTER the direction arithmetic above, which borrows the anchor to work out which way the
+    // parent went and puts back what it found.
+    anchor_ = stepId;
+
     loading_ = false;
     refreshFieldsForCategory();
     refreshIssues();
@@ -781,12 +828,17 @@ void MechWizardDialog::applyToEditedStep() {
         // make the tree, and a field edit must not re-hang the harness.
         const QString id = s.id;
         const QString parent = s.parentStep;
+        // AND WHETHER IT IS A PART OF ITS PARENT. Its id and its parent were kept and this was not, so
+        // applying any change to a subpart quietly promoted it to a station - the same silent loss the
+        // part and the wire designators each had, in the one field that decides the shape of the sheet.
+        const bool wasSubpart = s.isSubpart;
         const QString anchorWas = anchor_;
         anchor_ = parent;
         MechStep next = stepFromFields();
         anchor_ = anchorWas;
         next.id = id;
         next.parentStep = parent;
+        next.isSubpart = wasSubpart;
         s = next;
         break;
     }
@@ -804,7 +856,17 @@ void MechWizardDialog::deleteStep(const QString& stepId) {
     // because the alternative is a branch pointing at a step that no longer exists - which compiles to
     // nothing and drops that whole limb off the drawing without a word.
     for (MechStep& s : script_.steps)
-        if (s.parentStep == stepId) s.parentStep = parent;
+        if (s.parentStep == stepId) {
+            s.parentStep = parent;
+            // AN ORPHANED SUBPART IS NOT A SUBPART.
+            //
+            // Deleting a station re-parents whatever hung off it, and a part of that station then has
+            // nothing to be a part OF. Left flagged as one it claimed a mother that no longer existed:
+            // the numbering could find no station to count it under and wrote it "0.1", and the list
+            // showed a single indented orphan where a step and its part had been. What it has become is
+            // a station in its own right, because that is what a step with nothing before it is.
+            if (parent.isEmpty()) s.isSubpart = false;
+        }
 
     script_.steps.erase(std::remove_if(script_.steps.begin(), script_.steps.end(),
                                        [&](const MechStep& s) { return s.id == stepId; }),
@@ -1023,7 +1085,17 @@ MechBuildScript MechWizardDialog::previewScript() const {
 }
 
 void MechWizardDialog::commitStep() {
-    const MechStep s = stepFromFields();
+    MechStep s = stepFromFields();
+    // NEXT CONTINUES WHAT YOU ARE STANDING ON.
+    //
+    // On a main step it adds the next main step - the next station along the harness. On a SUBPART it
+    // carries that subpart on: wires added under a connector, then Next, gives the next thing in the
+    // connector's own group rather than a new station. Both are "carry on from here", and which one it
+    // means is decided by what here IS, not by a second button.
+    //
+    // Add subpart differs from this in staying put: it leaves the anchor on the mother so pressing it
+    // again adds another part to the same station. See commitSubpart.
+    if (const MechStep* at = script_.step(anchor_)) s.isSubpart = at->isSubpart;
     script_.steps.push_back(s);
     anchor_ = s.id;
     editing_.clear();          // a committed step is no longer the one being edited
@@ -1070,7 +1142,39 @@ void MechWizardDialog::undoStep() {
 
 QStringList MechWizardDialog::shownSteps() const {
     QStringList out;
-    for (int i = 0; i < stepList_->count(); ++i) out << stepList_->item(i)->text();
+    // Walked depth-first, with the indent derived from how deep the item sits - so what a test reads is
+    // the shape the tree is showing, INCLUDING the parts of a station that happens to be collapsed.
+    const std::function<void(QTreeWidgetItem*, int)> walk = [&](QTreeWidgetItem* it, int depth) {
+        out << QStringLiteral("    ").repeated(depth) + it->text(0);
+        for (int i = 0; i < it->childCount(); ++i) walk(it->child(i), depth + 1);
+    };
+    for (int i = 0; i < stepList_->topLevelItemCount(); ++i) walk(stepList_->topLevelItem(i), 0);
+    return out;
+}
+
+void MechWizardDialog::rollUp(const QString& stepId, bool up) {
+    const std::function<QTreeWidgetItem*(QTreeWidgetItem*)> find =
+        [&](QTreeWidgetItem* it) -> QTreeWidgetItem* {
+        if (it->data(0, Qt::UserRole).toString() == stepId) return it;
+        for (int i = 0; i < it->childCount(); ++i)
+            if (QTreeWidgetItem* hit = find(it->child(i))) return hit;
+        return nullptr;
+    };
+    for (int i = 0; i < stepList_->topLevelItemCount(); ++i)
+        if (QTreeWidgetItem* it = find(stepList_->topLevelItem(i))) {
+            it->setExpanded(!up);
+            return;
+        }
+}
+
+QStringList MechWizardDialog::rolledUpSteps() const {
+    QStringList out;
+    const std::function<void(QTreeWidgetItem*)> note = [&](QTreeWidgetItem* it) {
+        const QString id = it->data(0, Qt::UserRole).toString();
+        if (!id.isEmpty() && it->childCount() > 0 && !it->isExpanded()) out << id;
+        for (int i = 0; i < it->childCount(); ++i) note(it->child(i));
+    };
+    for (int i = 0; i < stepList_->topLevelItemCount(); ++i) note(stepList_->topLevelItem(i));
     return out;
 }
 
@@ -1111,7 +1215,24 @@ void MechWizardDialog::refreshStepList() {
     // over itself, which lost the wire designators and the banked connectors on a click.
     const bool wasLoading = loading_;
     loading_ = true;
+
+    // WHICH STATIONS WERE ROLLED UP, so they are still rolled up afterwards.
+    //
+    // The list is rebuilt on every keystroke - a designator being typed refreshes it - and a tree that
+    // forgot its expansion state would snap shut under the hand. Remembered by step id rather than by
+    // row, because the rows are about to be thrown away.
+    QSet<QString> collapsed;
+    {
+        const std::function<void(QTreeWidgetItem*)> note = [&](QTreeWidgetItem* it) {
+            const QString id = it->data(0, Qt::UserRole).toString();
+            if (!id.isEmpty() && it->childCount() > 0 && !it->isExpanded()) collapsed.insert(id);
+            for (int i = 0; i < it->childCount(); ++i) note(it->child(i));
+        };
+        for (int i = 0; i < stepList_->topLevelItemCount(); ++i) note(stepList_->topLevelItem(i));
+    }
+
     stepList_->clear();
+    QHash<QString, QTreeWidgetItem*> itemOfStep;
     int n = 0;
     for (const MechStep& s : script_.steps) {
         ++n;
@@ -1176,8 +1297,16 @@ void MechWizardDialog::refreshStepList() {
              up = script_.step(up->parentStep))
             ++depth;
         if (s.isSubpart) ++depth;
-        const QString lead = QStringLiteral("    ").repeated(depth);
-        new QListWidgetItem(QStringLiteral("%1%2  %3").arg(lead, number, what), stepList_);
+        // THE ITEM GOES UNDER ITS PARENT. Depth is the widget's business now, not a string of spaces;
+        // `depth` above is still walked because the numbering needs it, but the indent on screen comes
+        // from where the item actually sits.
+        auto* row = new QTreeWidgetItem();
+        row->setText(0, QStringLiteral("%1  %2").arg(number, what));
+        row->setData(0, Qt::UserRole, s.id);
+        QTreeWidgetItem* under = s.isSubpart ? itemOfStep.value(s.parentStep, nullptr) : nullptr;
+        if (under) under->addChild(row);
+        else stepList_->addTopLevelItem(row);
+        itemOfStep.insert(s.id, row);
     }
 
     // THE STEP BEING DESCRIBED GETS A ROW OF ITS OWN, at the bottom, before it has been added.
@@ -1189,23 +1318,39 @@ void MechWizardDialog::refreshStepList() {
     //
     // It is a placeholder and reads like one. Clicking it goes back to describing a new step; it is not
     // in script_.steps, so nothing downstream can mistake it for something that has been agreed.
+    QTreeWidgetItem* pendingRow = nullptr;
     if (editing_.isEmpty()) {
-        auto* pendingRow = new QListWidgetItem(
-            QStringLiteral("%1  %2 — being described").arg(n + 1).arg(categoryName(category_)),
-            stepList_);
-        QFont f = pendingRow->font();
+        pendingRow = new QTreeWidgetItem();
+        // UNDER THE STATION IT WILL BELONG TO, when what is being described is a part of one. The row
+        // then appears where the step is going to land rather than always at the bottom, which is the
+        // whole use of showing it at all.
+        const MechStep* at = script_.step(anchor_);
+        const bool willBeSubpart = at && at->isSubpart;
+        pendingRow->setText(0, willBeSubpart
+                                   ? QStringLiteral("%1 — being described").arg(
+                                         categoryName(category_))
+                                   : QStringLiteral("%1  %2 — being described")
+                                         .arg(n + 1)
+                                         .arg(categoryName(category_)));
+        QTreeWidgetItem* under = willBeSubpart ? itemOfStep.value(at->parentStep, nullptr) : nullptr;
+        if (under) under->addChild(pendingRow);
+        else stepList_->addTopLevelItem(pendingRow);
+        QFont f = pendingRow->font(0);
         f.setItalic(true);
-        pendingRow->setFont(f);
+        pendingRow->setFont(0, f);
     }
+
+    // Everything open except what was deliberately rolled up - see `collapsed`. A station whose parts
+    // have only just appeared opens, because they were added by somebody who wants to see them.
+    stepList_->expandAll();
+    for (const QString& id : collapsed)
+        if (QTreeWidgetItem* it = itemOfStep.value(id, nullptr)) it->setExpanded(false);
 
     // The row for the step being edited stays selected, so applying a change does not move the
     // selection off the thing that was just changed. Otherwise it is the step being described.
-    int want = stepList_->count() - 1;
-    if (!editing_.isEmpty()) {
-        for (size_t i = 0; i < script_.steps.size(); ++i)
-            if (script_.steps[i].id == editing_) want = static_cast<int>(i);
-    }
-    if (stepList_->count() > 0) stepList_->setCurrentRow(want);
+    if (QTreeWidgetItem* want = !editing_.isEmpty() ? itemOfStep.value(editing_, nullptr)
+                                                    : pendingRow)
+        stepList_->setCurrentItem(want);
     backBtn_->setEnabled(!script_.steps.empty());
     deleteBtn_->setEnabled(!editing_.isEmpty());
     // Enabled while a step is being DESCRIBED too: that is when it is the button that applies it to the

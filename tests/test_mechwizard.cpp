@@ -1245,6 +1245,166 @@ void testRunsEnterTheJunctionPartAtItsOwnFaces() {
           "faces: a part that declares none keeps the behaviour it had - everything meets the junction");
 }
 
+// ---- Next carries on from whatever you are standing on -------------------------------------------
+//
+// Two rules, and which one applies is decided by what is selected rather than by a second button:
+//
+//   Standing on a MAIN step, Next adds the next main step - the next station along the harness.
+//   Standing on a SUBPART, Next carries that subpart on - the next thing in the mother's own group.
+//
+// And selecting a step has to move the anchor at all, which it did not: clicking back to a connector
+// and pressing Next put the new step after the END of the harness, the one place nobody meant.
+void testNextCarriesOnFromWhereYouAreStanding() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // A connector, then a cable after it: two main stations.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    const QString mother = w.script().steps.back().id;
+    w.setCurrentCategory(Cat::Cable);
+    w.commitStep();
+    check(w.script().steps.size() == 2, "standing: two stations so far");
+    check(!w.script().steps.back().isSubpart, "standing: the cable is a station, not a part");
+
+    // ---- STAND BACK ON THE CONNECTOR. The anchor must follow the selection. ----
+    w.editStep(mother);
+    check(w.anchorStepId() == mother,
+          "standing: selecting a step makes it what the next thing attaches to");
+
+    // Add subpart there: wires leaving that connector.
+    w.setCurrentCategory(Cat::Wires);
+    w.commitSubpart();
+    const MechStep wires = w.script().steps.back();
+    check(wires.isSubpart && wires.parentStep == mother,
+          "standing: Add subpart hangs the wires off the connector");
+    check(w.anchorStepId() == mother,
+          "standing: and stays on the mother, so another Add subpart is another part of it");
+
+    // ---- NEXT ON A SUBPART carries the subpart on. ----
+    w.editStep(wires.id);
+    check(w.anchorStepId() == wires.id, "standing: now standing on the wires");
+    w.setCurrentCategory(Cat::Heatshrink);
+    w.commitStep();
+    const MechStep after = w.script().steps.back();
+    check(after.parentStep == wires.id,
+          "standing: Next on a subpart follows the subpart");
+    check(after.isSubpart,
+          "standing: and is STILL a part of the connector's group, not a new station");
+
+    // ---- NEXT ON THE MOTHER adds a station. ----
+    w.editStep(mother);
+    w.setCurrentCategory(Cat::HarnessBody);
+    w.commitStep();
+    const MechStep station = w.script().steps.back();
+    check(station.parentStep == mother, "standing: Next on the mother follows the mother");
+    check(!station.isSubpart,
+          "standing: and is a MAIN step - the next station along the harness");
+
+    // And the list says so: the station takes a number of its own, the subparts take the mother's.
+    const QStringList rows = w.shownSteps();
+    bool sawStationNumber = false, sawDeepSubpart = false;
+    for (const QString& r : rows) {
+        const QString num = r.trimmed().section(QLatin1Char(' '), 0, 0);
+        if (r.contains(partKindName(PartKind::Wire)) && num.count(QLatin1Char('.')) == 1)
+            sawDeepSubpart = true;
+        if (r.contains(partKindName(PartKind::Heatshrink)) && num.count(QLatin1Char('.')) >= 2)
+            sawDeepSubpart = true;
+        if (num == QStringLiteral("3")) sawStationNumber = true;
+    }
+    check(sawDeepSubpart, "standing: the subpart chain is numbered under its mother");
+    check(sawStationNumber, "standing: and the new station is numbered as one");
+}
+
+// ---- Deleting a station does not leave its parts orphaned ---------------------------------------
+//
+// Deleting a step re-parents whatever hung off it, and a PART of that step then has nothing to be a
+// part of. Left flagged as one it claimed a mother that no longer existed: the numbering could find no
+// station to count it under and wrote it "0.1", and the list showed a single indented orphan where a
+// step and its part had been - which reads exactly like the part having eaten the step.
+void testDeletingAStationDoesNotOrphanItsParts() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // A connector, and a part of it.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    const QString station = w.script().steps.back().id;
+    w.setCurrentCategory(Cat::Wires);
+    w.commitSubpart();
+    check(w.script().steps.size() == 2, "orphan: a station and a part of it");
+    check(w.script().steps.back().isSubpart, "orphan: the wires are a part of the connector");
+
+    // NOW DELETE THE STATION. What was its part has nothing left to belong to.
+    w.deleteStep(station);
+    check(w.script().steps.size() == 1, "orphan: one step left");
+    if (w.script().steps.empty()) return;
+    const MechStep left = w.script().steps.front();
+    check(left.parentStep.isEmpty(), "orphan: with nothing before it");
+    check(!left.isSubpart,
+          "orphan: so it is a STATION now - a step with nothing before it cannot be a part of anything");
+
+    // And the list says so: numbered as a station, not indented under one that is not there.
+    const QStringList rows = w.shownSteps();
+    bool sawOrphanNumber = false;
+    for (const QString& r : rows)
+        if (r.trimmed().startsWith(QStringLiteral("0."))) sawOrphanNumber = true;
+    check(!sawOrphanNumber,
+          "orphan: nothing is numbered under station zero - there is no station zero");
+    check(!rows.isEmpty() && rows.value(0).startsWith(QStringLiteral("1")),
+          "orphan: the step that is left is station 1");
+}
+
+// ---- A station's parts can be rolled up, and stay rolled up --------------------------------------
+//
+// The list is rebuilt on every keystroke - typing a designator refreshes it - so a tree that forgot its
+// expansion state would snap shut under the hand. The state is remembered by step ID, because the rows
+// themselves are thrown away and rebuilt each time.
+void testAStationCanBeRolledUpAndStaysThatWay() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // A station with two parts, and a second station after it.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    const QString station = w.script().steps.back().id;
+    w.setCurrentCategory(Cat::Backshell);
+    w.commitSubpart();
+    w.setCurrentCategory(Cat::Boot);
+    w.commitSubpart();
+
+    check(w.rolledUpSteps().isEmpty(),
+          "rollup: a station whose parts have just been added is open - somebody wants to see them");
+
+    // ROLL IT UP.
+    w.rollUp(station, true);
+    check(w.rolledUpSteps().contains(station), "rollup: the station folds away");
+
+    // NOW TYPE. Every keystroke rebuilds the list, and it must still be folded afterwards.
+    w.typeName(QStringLiteral("P1-x"));
+    check(w.rolledUpSteps().contains(station),
+          "rollup: and stays folded through the refresh a keystroke causes");
+
+    // Its parts are still THERE, just hidden - the script is untouched by folding a row.
+    int subparts = 0;
+    for (const MechStep& st : w.script().steps)
+        if (st.isSubpart) ++subparts;
+    check(subparts == 2, "rollup: folding hides its parts and does not remove them");
+
+    // And unrolling brings them back.
+    w.rollUp(station, false);
+    check(!w.rolledUpSteps().contains(station), "rollup: and it opens again");
+}
+
 void testBalloonCanBeWithheldPerStep() {
     MechBuildScript sc;
     MechStep con;
@@ -1788,6 +1948,9 @@ int run_mechwizard_tests() {
     testADescribedStepIsGhostedUntilApplied();
     testSeveralHousingsAtOneStationAreStackedWithGaps();
     testRunsEnterTheJunctionPartAtItsOwnFaces();
+    testNextCarriesOnFromWhereYouAreStanding();
+    testDeletingAStationDoesNotOrphanItsParts();
+    testAStationCanBeRolledUpAndStaysThatWay();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }
