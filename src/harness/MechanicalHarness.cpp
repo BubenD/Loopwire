@@ -194,6 +194,50 @@ Entity makeBox(const MechDrawOptions& opt, const Vec2& mid, double dirRad, doubl
 // are squeezed into facing the connector, a cone, then the body over the cable behind it. Drawn as one
 // closed outline, so the two bars that close it (across the neck and across the back) come with it.
 // A box would be the same size and say nothing about which way round it goes on.
+// RECOVERED HEATSHRINK, drawn as the shape it actually takes.
+//
+// A box is what it was before it went on. Heatshrink recovers - it pulls down onto whatever is under it
+// - so it grips at each END, where there is only the bundle to grip, and stands off over the MIDDLE
+// where the splice or the joint it covers is thicker. What that leaves is a slightly barrelled sleeve
+// with both ends drawn in, and on a released drawing that shape is how heatshrink is told apart at a
+// glance from a rigid sleeve or a length of conduit, which really are boxes.
+//
+// Both ends, and equally. A single tapered end is a BOOT - a thing with a mouth and a back - and drawing
+// heatshrink that way says it goes on one way round, which it does not.
+//
+// `endAcross` is what it recovers to and `bodyAcross` what it stands off to. The caller passes the run
+// it is over as the first and the sleeve's own size as the second; the neck is held to a visible step
+// even where the two are nearly equal, because a sleeve drawn as a box is the thing this replaces.
+Entity makeShrunkSleeve(const MechDrawOptions& opt, const Vec2& mid, double dirRad,
+                        double lengthAlong, double endAcross, double bodyAcross,
+                        const QString& role) {
+    Entity e = baseEntity(opt, role);
+    e.type = EntityType::Polygon;
+    const Vec2 u{std::cos(dirRad), std::sin(dirRad)};
+    const Vec2 v = u.perp();
+
+    const double bodyHalf = std::max(bodyAcross, 1e-6) / 2.0;
+    // Never wider than the body and never so close to it that the neck cannot be seen: a tenth of the
+    // body is about the least that reads at the size these sheets are printed.
+    const double endHalf = std::min(bodyHalf * 0.92, std::max(endAcross / 2.0, bodyHalf * 0.82));
+    // The taper runs about as far along as the neck is deep, which is how recovered tubing pulls in -
+    // a long shallow shoulder rather than a chamfer. Capped so a short sleeve is not all shoulder.
+    const double taper = std::min(lengthAlong * 0.18, std::max(bodyHalf - endHalf, 1e-6) * 2.0);
+    const double half = lengthAlong / 2.0;
+
+    // Round the outline: in along one side, across the far end, back along the other.
+    e.points = {mid - u * half + v * endHalf,
+                mid - u * (half - taper) + v * bodyHalf,
+                mid + u * (half - taper) + v * bodyHalf,
+                mid + u * half + v * endHalf,
+                mid + u * half - v * endHalf,
+                mid + u * (half - taper) - v * bodyHalf,
+                mid - u * (half - taper) - v * bodyHalf,
+                mid - u * half - v * endHalf};
+    e.meta.insert(QStringLiteral("shrunkEnds"), true);
+    return e;
+}
+
 Entity makeTaperBody(const MechDrawOptions& opt, const Vec2& neckAt, const Vec2& u, double lengthAlong,
                      double neckAcross, double bodyAcross, const QString& role) {
     Entity e = baseEntity(opt, role);
@@ -1728,6 +1772,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     stampEntityGroup(e, group);
                     out.push_back(e);
                 }
+            } else if (f.kind == PartKind::Heatshrink) {
+                // HEATSHRINK IS NOT A BOX - see makeShrunkSleeve. It recovers onto the run at each end
+                // and stands off over the middle, and that shape is what tells it apart on the sheet
+                // from a rigid sleeve or a length of conduit, which are boxes.
+                //
+                // Only where there is no drawing of its own and no captured model: an office that has
+                // drawn its own heatshrink has already answered this.
+                Entity sleeve = makeShrunkSleeve(opt, c, rad(ps.dirDeg), along(runMm),
+                                                 across(ps.diameterMm), across(odMm),
+                                                 QStringLiteral("fitting"));
+                sleeve.meta.insert(QStringLiteral("mechSeg"), ps.id);
+                out.push_back(sleeve);
             } else {
                 Entity box = makeBox(opt, c, rad(ps.dirDeg), along(runMm), across(odMm),
                                      QStringLiteral("fitting"));
@@ -1793,8 +1849,12 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const double odMm = g.diameterMm + 2.0;
             const double lenMm = std::max(20.0, g.diameterMm * 3.0);
             const double dirRad = rad(pn->dirDeg);
-            Entity box = makeBox(opt, pn->at, dirRad, along(lenMm), across(odMm),
-                                 QStringLiteral("splice"));
+            // The same shape, for the same reason: this IS heatshrink, put over the splice by the
+            // drawing rather than asked for, and it was the one place a box was still drawn for it.
+            // Over a splice the barrel is pronounced - there is a joint under the middle and only the
+            // conductor at the ends - so the run's own diameter is what it recovers to.
+            Entity box = makeShrunkSleeve(opt, pn->at, dirRad, along(lenMm), across(g.diameterMm),
+                                          across(odMm), QStringLiteral("splice"));
             box.meta.insert(QStringLiteral("mechNode"), g.nodeId);
             box.meta.insert(QStringLiteral("gaugeChange"),
                             QStringLiteral("%1 mm² → %2 mm²").arg(g.fromGauges, g.toGauges));

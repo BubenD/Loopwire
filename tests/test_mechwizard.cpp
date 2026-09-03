@@ -1530,6 +1530,105 @@ void testSubpartsCanBeDraggedIntoOrder() {
     check(w.script().steps.size() == 3, "drag: and still nothing lost");
 }
 
+// ---- Heatshrink is drawn with its ends shrunk in ------------------------------------------------
+//
+// Recovered heatshrink pulls down onto whatever is under it, so it grips at each END - where there is
+// only the bundle - and stands off over the MIDDLE where the joint it covers is thicker. A box is what
+// it looked like before it went on, and on a released drawing that shape is what tells heatshrink apart
+// at a glance from a rigid sleeve or a length of conduit, which really are boxes.
+//
+// BOTH ends, and equally: one tapered end is a BOOT, a thing with a mouth and a back, and drawing
+// heatshrink that way says it goes on one way round.
+void testHeatshrinkIsDrawnWithShrunkEnds() {
+    MechBuildScript sc;
+    MechStep con;
+    con.id = QStringLiteral("S1");
+    con.kind = PartKind::Connector;
+    sc.steps.push_back(con);
+    MechStep run;
+    run.id = QStringLiteral("S2");
+    run.kind = PartKind::Cable;
+    run.parentStep = QStringLiteral("S1");
+    run.lengthMm = 300.0;
+    run.odMm = 8.0;
+    run.wireCount = 4;
+    run.gauge = QStringLiteral("22 AWG");
+    sc.steps.push_back(run);
+    MechStep shrink;
+    shrink.id = QStringLiteral("S3");
+    shrink.kind = PartKind::Heatshrink;
+    shrink.parentStep = QStringLiteral("S2");
+    shrink.lengthMm = 60.0;
+    sc.steps.push_back(shrink);
+    // A tie over the same run, which is NOT heatshrink and must stay the box it always was.
+    MechStep tie;
+    tie.id = QStringLiteral("S4");
+    tie.kind = PartKind::CableTie;
+    tie.parentStep = QStringLiteral("S2");
+    tie.lengthMm = 6.0;
+    sc.steps.push_back(tie);
+
+    const MechCompiled c = compileMechScript(sc);
+    const std::vector<Entity> ents = buildMechanicalHarness(c.def, nullptr);
+
+    const Entity* sleeve = nullptr;
+    int boxes = 0;
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) { sleeve = &e; continue; }
+        if (e.type == EntityType::Rect &&
+            e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting"))
+            ++boxes;
+    }
+    check(sleeve != nullptr, "shrink: the heatshrink is drawn as a shrunk sleeve, not a box");
+    check(boxes > 0, "shrink: and the tie beside it is still a box - only heatshrink changed");
+    if (!sleeve) return;
+
+    // The outline, measured across the run at each end and in the middle. The run is along x, so
+    // across is y.
+    // MEASURED FROM THE RUN, not from the origin.
+    //
+    // The harness is laid out where the layout puts it - the run in this script sits at about y = 300 -
+    // so taking |pt.y| measured every half-width from y = 0 and reported 304.51 against 305.50. The
+    // neck was a correct 18% and the reading made it look like 0.3%. The outline is symmetric about the
+    // run, so the axis is the middle of its own extent.
+    double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
+    bool first = true;
+    for (const Vec2& pt : sleeve->points) {
+        if (first) { minX = maxX = pt.x; minY = maxY = pt.y; first = false; }
+        minX = std::min(minX, pt.x);
+        maxX = std::max(maxX, pt.x);
+        minY = std::min(minY, pt.y);
+        maxY = std::max(maxY, pt.y);
+    }
+    const double axisY = (minY + maxY) / 2.0;
+    double endHalf = 0.0, midHalf = 0.0;
+    for (const Vec2& pt : sleeve->points) {
+        const bool atEnd = std::abs(pt.x - minX) < 1e-6 || std::abs(pt.x - maxX) < 1e-6;
+        const double half = std::abs(pt.y - axisY);
+        if (atEnd) endHalf = std::max(endHalf, half);
+        else midHalf = std::max(midHalf, half);
+    }
+    std::printf("  shrink: end half %.2f, middle half %.2f\n", endHalf, midHalf);
+    check(endHalf > 0.0 && midHalf > 0.0,
+          "shrink: the outline has a width at its ends and across its middle");
+    check(endHalf < midHalf,
+          "shrink: and the ends are drawn IN - narrower than the middle, which is what recovering does");
+
+    // BOTH ENDS, EQUALLY. A sleeve narrow at one end only is a boot.
+    double leftHalf = 0.0, rightHalf = 0.0;
+    for (const Vec2& pt : sleeve->points) {
+        const double half = std::abs(pt.y - axisY);
+        if (std::abs(pt.x - minX) < 1e-6) leftHalf = std::max(leftHalf, half);
+        if (std::abs(pt.x - maxX) < 1e-6) rightHalf = std::max(rightHalf, half);
+    }
+    check(std::abs(leftHalf - rightHalf) < 1e-6,
+          "shrink: both ends are shrunk by the same amount - it does not go on one way round");
+
+    // AND THE NECK IS VISIBLE. A step too small to see is the box this replaced.
+    check(midHalf - endHalf > midHalf * 0.05,
+          "shrink: the neck is deep enough to read at the size these sheets are printed");
+}
+
 void testBalloonCanBeWithheldPerStep() {
     MechBuildScript sc;
     MechStep con;
@@ -2078,6 +2177,7 @@ int run_mechwizard_tests() {
     testAStationCanBeRolledUpAndStaysThatWay();
     testLibraryHousingsAtOneStationDoNotOverlap();
     testSubpartsCanBeDraggedIntoOrder();
+    testHeatshrinkIsDrawnWithShrunkEnds();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }
