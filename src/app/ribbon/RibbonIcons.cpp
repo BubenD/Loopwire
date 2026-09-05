@@ -183,20 +183,43 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         break;
     }
     case ToolId::HeatshrinkRoute: {
-        // THE SLEEVE ITSELF, over a run and round a knee. The run goes through it, and the sleeve is
-        // pulled in at both ends onto what it grips - which is the one feature that says heatshrink
-        // rather than a rigid sleeve, so it is the feature the icon is built round.
+        // THE SLEEVE ITSELF, over the run it grips, under the heat that recovers it.
         //
-        // Drawn over a corner rather than straight, because the tool routes: an icon of a straight
-        // sleeve would say this places one between two points, which is the thing it stopped doing.
-        p.drawLine(2, 9, 26, 9);                       // the run
-        p.drawLine(20, 9, 20, 25);                     // and away round the knee
+        // Two features, and the part is both of them: pulled in at each end onto what it grips, which is
+        // what says sleeve rather than a length of tube lying beside the run; and recovered by HEAT, which
+        // is the wave above it and is what says heatshrink rather than a rigid sleeve pushed on.
+        //
+        // Drawn inside the 24x24 every other icon is drawn on. The version before this one ran out to
+        // x=26 and down to y=25, so the far end of the run and the foot of the knee were cut off by the
+        // edge of the pixmap - what was on the ribbon was a sleeve on a run that stopped in mid-air.
+        //
+        // The neck is drawn far tighter than a real sleeve recovers. At this size the stroke is a third
+        // of the sleeve's whole depth, so a true-to-life neck - a fifth in from the body - is smoothed
+        // away by the pen and the icon becomes a rounded box. Exaggerating it is what keeps the one
+        // feature that names the part legible at 24 pixels.
+        const double y = 16.0;                         // the run, and the sleeve's centreline on it
+        p.drawLine(QPointF(1.2, y), QPointF(22.8, y));
+        QPen sharp = p.pen();
+        sharp.setJoinStyle(Qt::MiterJoin);             // so the shoulders stay shoulders
+        p.setPen(sharp);
         QPolygonF sleeve;
-        const double y = 9.0, b = 5.0, n = 3.2;        // body half, neck half
-        sleeve << QPointF(5, y - n) << QPointF(8, y - b) << QPointF(17, y - b)
-               << QPointF(20, y - n) << QPointF(20, y + n) << QPointF(17, y + b)
-               << QPointF(8, y + b) << QPointF(5, y + n);
+        const double b = 4.3, n = 1.3;                 // body half, neck half
+        const double x0 = 4.5, x1 = 19.5, t = 3.8;     // the two ends, and how long the shoulders are
+        sleeve << QPointF(x0, y - n) << QPointF(x0 + t, y - b) << QPointF(x1 - t, y - b)
+               << QPointF(x1, y - n) << QPointF(x1, y + n) << QPointF(x1 - t, y + b)
+               << QPointF(x0 + t, y + b) << QPointF(x0, y + n);
         p.drawPolygon(sleeve);
+        p.setPen(pen);
+        // The heat, as one wave lying over it. Along the icon rather than down it, because the width is
+        // where the room is: a wave needs most of a period before it reads as a wave and not as a hook,
+        // and three short ones stacked over the sleeve came out as three question marks.
+        QPainterPath heat;
+        for (int i = 0; i <= 32; ++i) {
+            const double f = i / 32.0;
+            const QPointF at(3.5 + f * 17.0, 5.2 + 1.7 * std::sin(f * 2.0 * M_PI * 1.5));
+            if (i == 0) heat.moveTo(at); else heat.lineTo(at);
+        }
+        p.drawPath(heat);
         break;
     }
     case ToolId::TwistedHarnessRoute: {

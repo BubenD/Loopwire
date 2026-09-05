@@ -857,6 +857,23 @@ private:
     QColor col_{"#cdd6e4"};
 };
 
+// HOW NARROW A SIDE PANEL MAY BE PULLED. Narrow enough to get it out of the way of the drawing without
+// closing it, and wide enough that what is left is still a panel and not a sliver.
+constexpr int kNarrowestPanel = 150;
+
+// "You may be squeezed." A caption keeps its own idea of how wide it needs to be, and inside a panel
+// that idea becomes a floor under the whole side. This lets the widget be given less than it asked for -
+// the text is then clipped, so the full wording goes on the tooltip where it can still be read.
+void letSqueeze(QWidget* w) {
+    if (!w) return;
+    if (w->toolTip().isEmpty()) {
+        if (auto* b = qobject_cast<QAbstractButton*>(w)) w->setToolTip(b->text());
+        else if (auto* l = qobject_cast<QLabel*>(w)) w->setToolTip(l->text());
+    }
+    w->setMinimumWidth(0);
+    w->setSizePolicy(QSizePolicy::Ignored, w->sizePolicy().verticalPolicy());
+}
+
 // A thin vertical strip shown when a panel is auto-hidden (collapsed): it shows
 // the panel name rotated, and hovering it re-expands the panel.
 class VerticalStrip : public QWidget {
@@ -983,6 +1000,17 @@ public:
     void setManaged(QWidget* titleBar, QWidget* content) {
         titleBar_ = titleBar;
         content_ = content;
+        // A PANEL HAS TO BE DRAGGABLE NARROW.
+        //
+        // A dock is only as small as what is in it, and what is in these is captions: "Open the bill of
+        // materials" on a button is 334 pixels of minimum all by itself, so the right-hand side could not
+        // be pulled in past about 340 however hard it was dragged. The widest caption in a panel should
+        // not decide how much of the window that panel is entitled to.
+        //
+        // So the panel is given a floor of its own, well under any caption, and the captions inside are
+        // told they may be squeezed (see letSqueeze). Set here rather than at each panel, because it is
+        // true of every one of them and a panel added later would otherwise quietly pin its side again.
+        content_->setMinimumWidth(kNarrowestPanel);
         strip_ = new VerticalStrip(title_, this);
         // Hovering any strip on this side expands the whole side group.
         strip_->onEnter = [this] {
@@ -1707,6 +1735,17 @@ public:
         lay->addWidget(grip_);
 
         lbl_ = new QLabel(title, this);
+        // THE NAME MUST NOT DECIDE HOW NARROW THE PANEL MAY BE PULLED.
+        //
+        // A title bar is as wide as its title, and the dock is at least as wide as its title bar - so
+        // "BILL OF MATERIALS" put a 330-pixel floor under the whole right-hand side, and no amount of
+        // dragging would bring it in past that. The side widened happily and would not narrow, which is
+        // what "cannot change the width" looks like from the outside.
+        //
+        // So the name may be squeezed, and is elided when it is - the full name is on the tooltip, and on
+        // the strip the panel folds down to, so nothing is lost by clipping it.
+        lbl_->setToolTip(title);
+        letSqueeze(lbl_);
         lay->addWidget(lbl_, 1);
         restyle();   // the label exists now, so it gets its colour too
 
@@ -6155,6 +6194,7 @@ void MainWindow::buildPanels() {
 
     auto* curLabel = new QLabel(QStringLiteral("Current layer: 0"), layersWidget);
     curLabel->setObjectName(QStringLiteral("currentLayerLabel"));
+    letSqueeze(curLabel);
     lv->addWidget(curLabel);
 
     auto* nameRow = new QHBoxLayout();
@@ -6282,6 +6322,7 @@ void MainWindow::buildPanels() {
     bv->addWidget(bomPanel_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the bill of materials"), bomWidget);
+        letSqueeze(open);
         connect(open, &QPushButton::clicked, this, [this] { showBomDialog(); });
         bv->addWidget(open);
     }
@@ -6618,6 +6659,9 @@ void MainWindow::applyTheme(bool dark) {
 
     // The ribbon, in the scheme now set - tabs, group names, fields and all.
     if (ribbon_) ribbon_->setStyleSheet(ribbonStyleSheet());
+    // The parts library is kept alive between openings, so its own lettering and signs - which are its
+    // own colours, not the application stylesheet's - have to be told the scheme changed.
+    if (libraryDlg_) libraryDlg_->restyle();
 
     // Ribbon tool icons: light on a dark ribbon, dark on a light ribbon. Retint
     // EVERY tool button instance (a ToolId can appear on several tabs, so the
@@ -6694,6 +6738,17 @@ void MainWindow::applyTheme(bool dark) {
     // The panels are filled with rows the code colours itself - a properties section header, a layer's
     // swatch - and those were coloured when the row was made. Filling them again makes them the scheme's.
     if (!docs_.empty()) refreshPanels();
+    // AND THE TWO PANELS refreshPanels DOES NOT COVER.
+    //
+    // The parts library and the blocks list colour their own rows as they are filled - a part with no
+    // drawing of a kind is dimmed, a heading is subInk - so a row keeps whatever ink was in force when
+    // it was made. Nothing refilled them on a change of scheme, so a library listed while the office was
+    // in the light scheme kept near-black lettering when it went dark, on a near-black panel.
+    //
+    // Here rather than inside refreshPanels: those four are refilled on every change to the drawing, and
+    // these two read the parts catalogue off disk, which is not work to do on every edit.
+    refreshPartsPanel();
+    refreshBlocksPanel();
 
     // The hint beside the command line, and the panel headers that are not the ribbon's.
     if (cmdHintLabel_)
@@ -7098,6 +7153,15 @@ void MainWindow::leavePropertiesPanel() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // A PROPERTIES FIELD THAT BELONGS TO ONE END OF A SLEEVE has that end coloured on the drawing while
+    // the keyboard is in it - see Editor::setSleeveEndHighlight. Cleared on the way out whatever the
+    // field was, so a stale colour cannot outlive the panel being rebuilt under it.
+    if (e->type() == QEvent::FocusIn) {
+        const auto it = sleeveEndFields_.constFind(obj);
+        if (it != sleeveEndFields_.constEnd()) editor_->setSleeveEndHighlight(it.value());
+    } else if (e->type() == QEvent::FocusOut && sleeveEndFields_.contains(obj)) {
+        editor_->setSleeveEndHighlight(-1);
+    }
     // A SECTION OF THE SHELF DROPPED IN A NEW PLACE. The tree does the moving; what has to happen after it is
     // writing the order down and redrawing from it, so the tree and the setting cannot drift apart. Queued,
     // because at this moment the move has not happened yet - the order is read once it has.
@@ -7624,6 +7688,13 @@ void MainWindow::showOptions(const QString& page) {
     QColor backDark = Chrome::chosenBack(true);
     QColor backLight = Chrome::chosenBack(false);
     bool backChanged = false;
+    // WHAT THE WINDOW WAS WEARING WHEN OPTIONS OPENED, so a previewed colour can be taken back off it
+    // again. Apply below puts a ground on the ribbon without writing it down anywhere; Cancel has to
+    // undo that, or "Cancel" leaves the change on screen and only a restart gets rid of it.
+    const QColor origBackDark = backDark;
+    const QColor origBackLight = backLight;
+    const bool origDark = darkTheme_;
+    bool backPreviewed = false;
 
     const auto backRow = [&](const QString& label, QColor* held, bool forDark) {
         auto* row = new QWidget(disp);
@@ -7666,6 +7737,33 @@ void MainWindow::showOptions(const QString& page) {
     };
     backRow(QStringLiteral("Ribbon and panel colour (dark)"), &backDark, true);
     backRow(QStringLiteral("Ribbon and panel colour (light)"), &backLight, false);
+
+    // SEEING IT ON THE RIBBON BEFORE COMMITTING TO IT.
+    //
+    // A ground is chosen against the chrome it will be drawn on, and until now the only way to see it
+    // there was to press OK, look, and reopen Options if it was wrong - so the choice was really being
+    // made from a 120-pixel swatch. This puts it on the window at once with the dialog still open, so
+    // the next pick is judged against the real thing.
+    //
+    // The scheme goes with it, because the two grounds are PER SCHEME: the dark one is invisible while
+    // the light scheme is showing, so previewing it without switching would show nothing at all.
+    //
+    // It is a preview and not a commit - nothing is written to the settings here, and Cancel puts the
+    // window back to what it was wearing when Options opened.
+    auto* applyBack = new QPushButton(QStringLiteral("Apply now"), disp);
+    applyBack->setToolTip(QStringLiteral(
+        "Put these colours on the ribbon and panels now, without closing Options.\n"
+        "Nothing is saved until OK; Cancel puts back what was there before."));
+    connect(applyBack, &QPushButton::clicked, &dlg,
+            [this, &backDark, &backLight, scheme, &backPreviewed] {
+                Chrome::setChosenBack(true, backDark);
+                Chrome::setChosenBack(false, backLight);
+                backPreviewed = true;
+                // Set first, applied second: applyTheme is what builds the stylesheets that read the
+                // chosen ground, which is the order the OK path uses for the same reason.
+                applyTheme(scheme->currentIndex() == 0);
+            });
+    df->addRow(QString(), applyBack);
 
     auto* crossSize = new QSlider(Qt::Horizontal, disp);
     crossSize->setRange(5, 100);
@@ -7871,7 +7969,18 @@ void MainWindow::showOptions(const QString& page) {
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
-    if (dlg.exec() != QDialog::Accepted) return;
+    if (dlg.exec() != QDialog::Accepted) {
+        // A PREVIEW THAT WAS NOT KEPT. Apply put a ground on the window without writing it anywhere,
+        // so Cancel has to take it off again and put back what Options opened on - both the colours and
+        // the scheme, since Apply switches that too. Without this, Cancel leaves the change on screen
+        // and nothing but a restart undoes it, which makes Apply a trap rather than a preview.
+        if (backPreviewed) {
+            Chrome::setChosenBack(true, origBackDark);
+            Chrome::setChosenBack(false, origBackLight);
+            applyTheme(origDark);
+        }
+        return;
+    }
 
     // The drawing's bill-of-materials configuration, as set on the BOM page.
     if (doc_) {
@@ -8118,6 +8227,8 @@ void MainWindow::refreshProperties() {
     // flicker/jitter when changed() fires repeatedly (e.g. dragging a selected object).
     propsTable_->setUpdatesEnabled(false);
     const auto& sel = editor_->selection();
+    // Every field in the table is about to be destroyed, so nothing may be left pointing at one.
+    sleeveEndFields_.clear();
     propsTable_->setRowCount(0);
 
     // Section-header band, themed so the title stays legible in light + dark.
@@ -8139,12 +8250,32 @@ void MainWindow::refreshProperties() {
         blank->setBackground(hbg);
         propsTable_->setItem(r, 1, blank);
     };
+    // THE NAME CELL OF A ROW, with the whole label kept as its tooltip.
+    //
+    // The key column is 110 pixels wide and a good many labels are longer than that, so what is on
+    // screen is the label with its tail cut off - which is fine for "Distance between..." and useless
+    // for two rows that differ only in the part that was cut. Widening the column would take the space
+    // off the value fields, which are already narrow, so the full text is one hover away instead.
+    // `tip` says something the label cannot fit at all; without one the tooltip is the label itself.
+    auto putKey = [&](int r, const QString& k, const QString& tip = QString()) {
+        auto* key = new QTableWidgetItem(k);
+        key->setFlags(Qt::ItemIsEnabled);
+        key->setToolTip(tip.isEmpty() ? k : tip);
+        propsTable_->setItem(r, 0, key);
+    };
+    // A FIELD THAT BELONGS TO ONE END OF A SLEEVE. While the keyboard is in it, that end is coloured on
+    // the drawing; on the way out the colour goes. Done with a filter rather than a signal because a
+    // spin box has no focus signal, and the whole panel is torn down and rebuilt often enough that the
+    // map is cleared and refilled on every pass - a pointer left in it would outlive its widget.
+    auto watchSleeveEnd = [this](QWidget* w, int end) {
+        if (end < 0) return;
+        sleeveEndFields_.insert(w, end);
+        w->installEventFilter(this);
+    };
     auto addRow = [&](const QString& k, const QString& v) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* val = new QTableWidgetItem(v);
         val->setFlags(Qt::ItemIsEnabled);
         propsTable_->setItem(r, 1, val);
@@ -8155,9 +8286,7 @@ void MainWindow::refreshProperties() {
                         bool editable, std::function<void(const QString&)> apply) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* cb = new QComboBox(propsTable_);
         cb->setEditable(editable);
         cb->addItems(items);
@@ -8178,9 +8307,7 @@ void MainWindow::refreshProperties() {
                             std::function<void(const QString&)> apply) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* cb = new QComboBox(propsTable_);
         cb->setIconSize(QSize(72, 14));
         int idx = -1;
@@ -8209,12 +8336,14 @@ void MainWindow::refreshProperties() {
     // (Comparing values, not "was the widget touched": a value typed back to what it already was
     // is not a change either, and a rebuilt field must never look like an edit.)
     auto unchanged = [](double a, double b) { return std::abs(a - b) < 1e-9; };
-    auto addNum = [&](const QString& k, double value, std::function<void(double)> apply) {
+    // `tip` is the hover text for the name cell (the label itself, when empty). `sleeveEnd` marks the
+    // field as belonging to one end of a heatshrink sleeve: while the keyboard is in it, that end is
+    // coloured on the drawing - see watchSleeveEnd.
+    auto addNum = [&](const QString& k, double value, std::function<void(double)> apply,
+                      const QString& tip = QString(), int sleeveEnd = -1) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k, tip);
         // A number that VARIES across a multi-selection arrives as NaN: there is no single
         // number to show, so the row shows the "#Value" marker in a plain field. Typing a
         // number over it applies that number to every selected object.
@@ -8229,6 +8358,7 @@ void MainWindow::refreshProperties() {
                 const double v = le->text().trimmed().toDouble(&ok);
                 if (ok) deferredPropApply([apply, v] { apply(v); });
             });
+            watchSleeveEnd(le, sleeveEnd);
             propsTable_->setCellWidget(r, 1, le);
             return;
         }
@@ -8247,6 +8377,7 @@ void MainWindow::refreshProperties() {
                     if (unchanged(v, value)) return;
                     deferredPropApply([apply, v] { apply(v); });
                 });
+        watchSleeveEnd(sp, sleeveEnd);
         propsTable_->setCellWidget(r, 1, sp);
     };
     // A whole-number cell: an amount of something (how many times a marking is repeated, how
@@ -8254,9 +8385,7 @@ void MainWindow::refreshProperties() {
     auto addInt = [&](const QString& k, int value, std::function<void(int)> apply) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* sp = new QSpinBox(propsTable_);
         sp->setRange(1, 999);
         sp->setKeyboardTracking(false); // don't reformat / emit while typing
@@ -8277,9 +8406,7 @@ void MainWindow::refreshProperties() {
                        const QString& placeholder = QString()) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* le = new QLineEdit(propsTable_);
         le->setText(value);
         if (!placeholder.isEmpty()) le->setPlaceholderText(placeholder);
@@ -8317,14 +8444,12 @@ void MainWindow::refreshProperties() {
     };
     // A value row with its amount and its eye on the end of it. `field` is the editor for the
     // value itself; `amount` (when > 0) is how many times that marking is repeated along the wire.
-    auto addWithEye = [this, eyeIcon](const QString& k, QWidget* field, bool shown,
+    auto addWithEye = [this, eyeIcon, putKey](const QString& k, QWidget* field, bool shown,
                                       std::function<void(bool)> applyShown, int amount = -1,
                                       std::function<void(int)> applyAmount = {}) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* host = new QWidget(propsTable_);
         auto* lay = new QHBoxLayout(host);
         lay->setContentsMargins(0, 0, 0, 0);
@@ -8404,9 +8529,7 @@ void MainWindow::refreshProperties() {
     auto addButton = [&](const QString& k, const QString& text, std::function<void()> onClick) {
         const int r = propsTable_->rowCount();
         propsTable_->insertRow(r);
-        auto* key = new QTableWidgetItem(k);
-        key->setFlags(Qt::ItemIsEnabled);
-        propsTable_->setItem(r, 0, key);
+        putKey(r, k);
         auto* btn = new QPushButton(text, propsTable_);
         connect(btn, &QPushButton::clicked, this, [onClick] { onClick(); });
         propsTable_->setCellWidget(r, 1, btn);
@@ -9316,11 +9439,62 @@ void MainWindow::refreshProperties() {
         const bool isDoubleLine = e->type == EntityType::DoubleLine;
         const bool isDoublePoly =
             e->type == EntityType::Polyline && mv(QStringLiteral("double")).toBool();
-        if (isDoubleLine || isDoublePoly)
+        // A SLEEVE IS A DOUBLE POLYLINE UNDERNEATH - that is how it gets joints on both rails - but what
+        // it is drawn from is not "the spacing between two runs". It is how far apart its two sides run,
+        // and then, per end, how long the shrunk part is and how big the face it recovers to - and those
+        // are what a shop reads off a sleeve, so the panel says them. One row called "Gap" on a necked
+        // outline names none of them.
+        const bool isSleeve = isDoublePoly && mv(QStringLiteral("shrunkEnds")).toBool();
+        if (isSleeve) {
+            addHeader(QStringLiteral("Heatshrink"));
+            const double across = mv(QStringLiteral("gap")).toDouble(6.0);
+            addNum(QStringLiteral("Line spacing"), across, [this](double v) {
+                editor_->setSelectionSleeveAcross(std::max(0.2, v));
+            });
+            // ONE SECTION PER END, rather than four rows saying which end they belong to.
+            //
+            // The key column is 110 pixels wide and "Shrunk length (start)" is half as long again, so
+            // all four rows arrived reading "Shrunk length ..." and "Entry face ..." - the words telling
+            // them apart were the ones cut off. Widening the column would take that space off the value
+            // fields, which are already narrow, so the end goes in the BAND ABOVE instead, where it is
+            // said once and the rows underneath can be short enough to fit.
+            for (int end = 0; end < 2; ++end) {
+                addHeader(end == 0 ? QStringLiteral("Start end") : QStringLiteral("Finish end"));
+                const QString side = end == 0 ? QStringLiteral("Start") : QStringLiteral("End");
+                // Unset reads as the DEFAULT rather than as a zero, so the row opens showing the sleeve
+                // that is on the sheet - a zero would say the end is square when it is not, and redraw
+                // it the moment the field was touched. Typing over it fixes the number for good. A
+                // selection whose sleeves disagree reads "#Value", which mv() carries through as NaN.
+                auto row = [&](const QString& label, const QString& key, double def, double floor,
+                               const QString& tip) {
+                    addNum(label, mv(key).toDouble(def),
+                           [this, key, floor](double v) {
+                               editor_->setSelectionMetaNumber(key, std::max(floor, v));
+                           },
+                           tip, end);
+                };
+                // THE SHRUNK LENGTH: how far in from this end the sleeve takes to reach full width, so
+                // the number measures the shrunk part itself, running up to the straight lines of the
+                // body. Zero is allowed and means a square shoulder - what the end of a length of
+                // tubing recovered onto something its own size looks like.
+                row(QStringLiteral("Shrunk length"), QStringLiteral("shrinkTaper") + side, 4.0, 0.0,
+                    QStringLiteral("Shrunk length at the %1 end: from the end of the sleeve to where "
+                                   "its straight lines begin. 0 = a square shoulder.")
+                        .arg(end == 0 ? QStringLiteral("start") : QStringLiteral("finish")));
+                // THE ENTRY FACE: the line across the very end, which is the size the sleeve has
+                // recovered down to. Shown and typed as the WHOLE line - what is measured on the sheet.
+                row(QStringLiteral("Entry face"), QStringLiteral("shrinkFace") + side, across * 0.82,
+                    0.1,
+                    QStringLiteral("Entry face at the %1 end: the length of the line across the very "
+                                   "end of the sleeve.")
+                        .arg(end == 0 ? QStringLiteral("start") : QStringLiteral("finish")));
+            }
+        } else if (isDoubleLine || isDoublePoly) {
             addNum(QStringLiteral("Gap"), mv(QStringLiteral("gap")).toDouble(10.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("gap"), std::max(0.1, v));
                    });
+        }
         // Balloon callout: arrowhead type/size, leader landing length + the number.
         if (mv(QStringLiteral("balloon")).toBool()) {
             // Arrowhead type (fall menu). Canonical values map to friendly labels.
@@ -13544,6 +13718,7 @@ QDockWidget* MainWindow::makePartsPanel() {
     v->addWidget(fanoutWithSchematicBox_);
     {
         auto* open = new QPushButton(QStringLiteral("Open the parts library"), body);
+        letSqueeze(open);
         connect(open, &QPushButton::clicked, this, [this] { showPartsLibrary(); });
         v->addWidget(open);
     }
@@ -14096,6 +14271,7 @@ QDockWidget* MainWindow::makeBlocksPanel() {
     v->addWidget(blocksPanelList_, 1);
     {
         auto* open = new QPushButton(QStringLiteral("Open the blocks window"), body);
+        letSqueeze(open);
         connect(open, &QPushButton::clicked, this, [this] { showBlockDialog(); });
         v->addWidget(open);
     }

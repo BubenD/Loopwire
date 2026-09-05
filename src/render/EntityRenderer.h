@@ -102,6 +102,19 @@ public:
     static std::vector<Vec2> shieldOutline(const Vec2& center, double rx, double ry, double rot,
                                            bool capsule);
 
+    // A HEATSHRINK SLEEVE'S OUTLINE, worked out from the object - the five numbers it carries (across,
+    // and a shrunk length and an entry face for each end) applied to the route in its points.
+    //
+    // Shared for the same reason the shield helpers are: the renderer draws it, and the editor colours
+    // one shrunk end of it while that end is being typed at. Two copies of this arithmetic would let
+    // the coloured end drift off the drawn one, which is exactly the thing the colour is there to say.
+    //
+    // Empty unless the entity really is a sleeve with a route of two points or more.
+    static std::vector<Vec2> sleeveOutline(const Entity& e);
+    // The SHRUNK END of that outline as its own little closed shape: face, shoulder, shoulder, face.
+    // `end` is 0 for the end the sleeve was started from and 1 for the other. Empty if it has none.
+    static std::vector<Vec2> sleeveEndPatch(const Entity& e, int end);
+
     // Number of decimals shown on dimension labels (Options dialog).
     static void setDimensionDecimals(int d);
     static int dimensionDecimals();

@@ -905,17 +905,40 @@ int run_editor_tests() {
             check(q.snapped && q.kind == SnapKind::Quadrant && near(q.point.x, 110.0),
                   "snap-quadrant: snaps to a circle quadrant point");
         }
-        // Nearest snaps onto the circle RING (not only straight segments).
+        // THE RING IS CATCHABLE ONLY IF "NEAREST" IS ASKED FOR.
+        //
+        // A point on a circle chosen by where the cursor happened to be is not the centre, not a
+        // quadrant, not a crossing - and unticked it must not be offered, or it drowns all three, the
+        // ring being catchable along its whole length where a quadrant is catchable in four places.
+        // Ticked, it is exactly what was asked for: a point anywhere along the thing.
+        //
+        // Either way the cursor is never DRAGGED to the centre by touching the outline. Where the
+        // middle is gets said with a small cross instead - see the editor's overlay - and going to it
+        // catches it as any centre is caught.
         {
-            SnapSettings s; // nearest on by default; higher-priority snaps off nearby
+            SnapSettings s;
             s.snapEndpoint = false; s.snapCenter = false; s.snapQuadrant = false;
             s.snapMidpoint = false; s.snapIntersection = false; s.snapGeometricCenter = false;
             s.snapNode = false;
             // Cursor just outside the circle ring (circle at (100,0) r10) near (112,0).
+            s.snapNearest = false;
             auto nr = resolveSnap(d, {112, 0}, std::nullopt, 5.0, s, {});
+            check(!nr.snapped, "snap-nearest-curve: unticked, the ring offers nothing to catch");
+            s.snapCenter = true;
+            nr = resolveSnap(d, {112, 0}, std::nullopt, 5.0, s, {});
+            check(!nr.snapped,
+                  "snap-nearest-curve: and the centre snap does not drag the cursor there either");
+            // The centre is still caught by going to it.
+            nr = resolveSnap(d, {101, 1}, std::nullopt, 5.0, s, {});
+            check(nr.snapped && nr.kind == SnapKind::Center && near(nr.point.x, 100.0) &&
+                      near(nr.point.y, 0.0),
+                  "snap-nearest-curve: the centre is caught at the centre");
+            // Ticked, the ring answers anywhere along it.
+            s.snapNearest = true;
+            nr = resolveSnap(d, {112, 0}, std::nullopt, 5.0, s, {});
             check(nr.snapped && nr.kind == SnapKind::Nearest && near(nr.point.x, 110.0) &&
                       near(nr.point.y, 0.0),
-                  "snap-nearest-curve: Nearest snaps onto the circle ring");
+                  "snap-nearest-curve: ticked, Nearest snaps onto the circle ring");
         }
         // Tangent from an anchor above the circle to the ring (~(90.3, 2.5)).
         {
@@ -8926,18 +8949,44 @@ int run_editor_tests() {
             return Entity();
         };
         Entity after = lineNow();
-        std::printf("  space turn: picked up at 0,0 and carried to 50,50, the far end went to (%.1f,%.1f)\n", after.b.x, after.b.y);
-        // A quarter turn CLOCKWISE about the point it is held by: the end that was 10 to the +x side of
-        // the cursor is now 10 BELOW it.
-        check(std::abs(after.a.x) < 1e-6 && std::abs(after.a.y) < 1e-6,
-              "space turn: the point it was picked up by does not move - it spins where it stands");
-        check(std::abs(after.b.x) < 1e-6 && std::abs(after.b.y + 10.0) < 1e-6,
-              "space turn: a quarter turn clockwise");
-        // Shift+Space the other way, which puts it back.
-        ed.onKey(Qt::Key_Space, Qt::ShiftModifier);
+        std::printf("  space turn: picked up at 0,0 and carried to 50,50, the far end is still (%.1f,%.1f)\n", after.b.x, after.b.y);
+        // NOTHING REAL HAS TURNED YET. Under the Move tool the objects have not gone anywhere - what is
+        // at the cursor is the preview - so Space turns the preview and the original stands untouched
+        // until it is put down. Turning it here spun the real thing on the far side of the sheet and
+        // left an undo step behind for a move nobody had finished.
+        check(std::abs(after.a.x) < 1e-6 && std::abs(after.a.y) < 1e-6 &&
+                  std::abs(after.b.x - 10.0) < 1e-6 && std::abs(after.b.y) < 1e-6,
+              "space turn: the original is untouched while the move is in the air");
+
+        // PUT IT DOWN, and the turn lands with the move: held by its left-hand end and carried to
+        // (50,50), the end that was 10 to the +x side is now 10 BELOW it.
+        ed.onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
         after = lineNow();
-        std::printf("  space turn: Shift+Space took it back to (%.1f,%.1f)\n", after.b.x, after.b.y);
-        check(std::abs(after.b.x - 10.0) < 1e-6 && std::abs(after.b.y) < 1e-6,
+        std::printf("  space turn: placed at 50,50 with the far end at (%.1f,%.1f)\n", after.b.x, after.b.y);
+        check(std::abs(after.a.x - 50.0) < 1e-6 && std::abs(after.a.y - 50.0) < 1e-6,
+              "space turn: the point it was held by lands where it was carried to");
+        check(std::abs(after.b.x - 50.0) < 1e-6 && std::abs(after.b.y - 40.0) < 1e-6,
+              "space turn: a quarter turn clockwise, applied when it was placed");
+        // AND THE OTHER WAY, on a move of its own. Shift+Space is anticlockwise, and it is worth its
+        // own pick-up now: the turn belongs to the move that is in the air, so once the thing is down
+        // there is nothing left to turn.
+        // The Move tool is one-shot, so it is armed again - otherwise the press below is a DRAG, and a
+        // drag turns the objects themselves because there they are the preview.
+        ed.selectAll();
+        ed.setTool(ToolId::Move);
+        ed.onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);   // held by the same end
+        ed.onPointerMove({100.0, 100.0});
+        check(ed.onKey(Qt::Key_Space, Qt::ShiftModifier), "space turn: Shift+Space is taken too");
+        after = lineNow();
+        check(std::abs(after.b.x - 50.0) < 1e-6 && std::abs(after.b.y - 40.0) < 1e-6,
+              "space turn: and it too leaves the original alone until it is put down");
+        ed.onPointerPress({100.0, 100.0}, Qt::LeftButton, Qt::NoModifier);
+        after = lineNow();
+        std::printf("  space turn: Shift+Space placed at 100,100 with the far end at (%.1f,%.1f)\n",
+                    after.b.x, after.b.y);
+        // The end sat 10 BELOW the point it is held by; a quarter turn anticlockwise puts it 10 to the
+        // +x side of it.
+        check(std::abs(after.b.x - 110.0) < 1e-6 && std::abs(after.b.y - 100.0) < 1e-6,
               "space turn: and Shift+Space turns it back anticlockwise");
     }
 

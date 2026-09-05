@@ -145,9 +145,8 @@ public:
     // backshell on it, the boot behind that, the wires leaving it - and they nest to whatever depth the
     // harness actually has.
     //
-    // The difference from commitStep is where the harness carries on FROM. Next moves along; this does
-    // not, so pressing it again adds another part to the SAME place instead of a chain of one thing
-    // after another.
+    // The difference from commitStep is DEPTH, not direction: commitStep is the next thing at the level
+    // you are on, this is one level in. 1 -> 1.1; Next on 1.1 -> 1.2; this on 1.1 -> 1.1.1.
     void commitSubpart();
 
     // APPLY WHAT IS DESCRIBED TO THE DRAWING - what the Apply button does.
@@ -248,6 +247,10 @@ private:
     void buildUi();
     QWidget* buildFieldsPanel();
     void refreshStepList();
+    // Whether Add subpart has anything to be a part of - see touched_.
+    void refreshSubpartButton();
+    // Blank the form for a step that has not been described yet.
+    void clearDescribedFields();
     void refreshFieldsForCategory();
     // THE PART LIST AND THE CONTACT LIST ARE REBUILT SEPARATELY, and that separation is the fix for a
     // part that would not stay chosen.
@@ -284,6 +287,26 @@ private:
     // may go back and start another branch from it, and that is a different anchor from the end of
     // the branch they just finished.
     QString anchor_;
+    // AND WHETHER WHAT IS BEING DESCRIBED IS A PART OF IT.
+    //
+    // Add subpart means "settle this, and now a part of it". With a parent already there, the step
+    // being described becomes that part and nothing more is needed. But on the VERY FIRST step there
+    // is nothing to be a part of yet - so the step itself is settled first, and its part is what comes
+    // next. This is how the window remembers that: the anchor is the new station, and the thing being
+    // described is a part OF it rather than the station after it.
+    //
+    // Cleared as soon as the step is settled or somebody selects a different one, because after that
+    // the anchor says everything on its own again.
+    bool describingChild_ = false;
+    // WHETHER ANYTHING HAS BEEN SAID ABOUT THE STEP BEING DESCRIBED.
+    //
+    // Add subpart on the very first step settles that step and opens its part - which is right when a
+    // part has been described, and manufactures a nameless, partless connector out of an untouched form
+    // when it has not. So the button waits until the form says something.
+    //
+    // Asked as "has a field been touched" rather than "is the name blank", because a blank name is a
+    // perfectly ordinary thing for a run to have: a 200 mm cable is fully described and named nothing.
+    bool touched_ = false;
     Category category_ = Category::Connector;
     bool goRight_ = true;
     // The step being edited, or empty when a new one is being described.

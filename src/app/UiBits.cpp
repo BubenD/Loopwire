@@ -1,6 +1,7 @@
 #include "app/UiBits.h"
 
 #include "harness/Harness.h"
+#include "app/Chrome.h"
 
 #include <QCoreApplication>
 #include <QColorDialog>
@@ -83,6 +84,15 @@ void saveCustomColour(const QString& code, const QString& name, const QString& h
 }
 
 } // namespace
+
+// The inks that carry a meaning, per scheme - see the note beside their declarations in UiBits.h.
+QColor capInk() { return Chrome::subInk(); }
+QColor faintInk() { return Chrome::dark() ? QColor("#7f8896") : QColor("#6b7280"); }
+QColor ownInk() { return Chrome::dark() ? QColor("#7ee0a0") : QColor("#1e7a48"); }
+QColor infoInk() { return Chrome::dark() ? QColor("#8fb0d6") : QColor("#245a99"); }
+QColor idleInk() { return Chrome::dark() ? QColor("#8b929c") : QColor("#6b7280"); }
+QColor missInk() { return Chrome::dark() ? QColor("#e6b45a") : QColor("#8a5a00"); }
+QColor warnInk() { return Chrome::dark() ? QColor("#e0a0a0") : QColor("#a4302f"); }
 
 QIcon plusIcon(const QColor& ink, int size) {
     return QIcon(signPixmap(ink, size, true, true, false));

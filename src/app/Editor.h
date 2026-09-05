@@ -388,6 +388,18 @@ public:
     // last point of the entity - so the side has to move it, or the drawing keeps the old leg.
     void setSelectionScreenLegDir(const QString& dir); // linetype, plot style, ...
     void setSelectionMetaNumber(const QString& key, double value);
+    // How far apart the two sides of a selected heatshrink sleeve run. Not setSelectionMetaNumber,
+    // because a sleeve keeps its width under TWO keys - `gap`, which is how it gets joints on both
+    // rails as a double polyline, and `shrinkWidth`, which is what it was drawn with - and writing
+    // one of them leaves an object whose two records of its own width disagree. Both, in one step.
+    void setSelectionSleeveAcross(double across);
+    // WHICH END OF A SLEEVE IS BEING TYPED AT. 0 is the end it was drawn from, 1 the other, -1 none.
+    //
+    // The panel has two numbers per end and the two ends look alike, so the rows alone cannot say which
+    // end "start" is on a sleeve drawn right-to-left, or round a knee. Putting the focused end in
+    // colour on the drawing answers that without a word of explanation - so it is set on focus and
+    // cleared on the way out, and it is chrome only: nothing about the drawing changes.
+    void setSleeveEndHighlight(int end);
     // A yes/no property of the selection. Written as a real boolean, so what reads it back gets a
     // boolean and not the string "true".
     void setSelectionMetaBool(const QString& key, bool value);   // gap, ...
@@ -1598,7 +1610,29 @@ private:
     // for across, [F] for the fillet - because both are judged against what is already on the sheet
     // rather than decided in advance, which is the same reason the double-line gap is a key and not a
     // dialog.
+    // THE CIRCLES WHOSE MIDDLE HAS BEEN POINTED OUT during the command in hand.
+    //
+    // Touching a circle's outline shows a small cross at its centre. While a line is being drawn that
+    // mark has to STAY: the whole use of it is to touch the circle, carry the cursor away, and then aim
+    // at the middle you were shown - and a mark that vanishes the moment the outline is left is gone
+    // exactly when it is wanted. So the circles are remembered, by id, and their crosses drawn until
+    // the command ends.
+    //
+    // With no command running there is nothing to remember: the cross follows the cursor and goes when
+    // it does, because nothing is being aimed at.
+    std::vector<QString> shownCentres_;
+
+    // THE TURN A MOVE IS CARRYING, in radians, not yet applied to anything real.
+    //
+    // Space turns what is being moved. Under the Move tool the objects have not gone anywhere yet -
+    // what is at the cursor is the preview - so turning them there spun the original where it stood,
+    // half a sheet from the hand, and wrote an undo step for a move that had not happened. The turn is
+    // kept here instead and applied with the move, when it is put down.
+    double moveTurn_ = 0.0;
     double shrinkWidth_ = 6.0;
+    // Which shrunk end the PROPERTIES panel has the keyboard in - see setSleeveEndHighlight. Chrome,
+    // so it is not saved, not undoable, and never reaches the document.
+    int sleeveEndHi_ = -1;
     double shrinkFillet_ = 0.0;
 
     bool drafting_ = false;

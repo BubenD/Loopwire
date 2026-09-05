@@ -11,6 +11,8 @@
 
 #include "app/DrawingPreview.h"
 #include "app/UiBits.h"
+#include "app/Chrome.h"
+#include <QStyle>
 #include "harness/CableSpec.h"
 #include "app/CableBuilderDialog.h"
 #include "harness/Datasheet.h"
@@ -62,6 +64,47 @@ namespace Edraw_Desktop {
 
 namespace {
 
+// The lettering roles, coloured for the scheme in force.
+//
+// Marked as a PROPERTY on the label and coloured from one stylesheet, rather than a stylesheet per
+// label: the window is kept alive between openings, so a scheme change has to reach labels that
+// already exist - and a list of pointers to them would miss every one built later.
+QString roleStyle() {
+    return QStringLiteral("QLabel[role=\"caption\"]{color:%1;}"
+                          "QLabel[role=\"faint\"]{color:%2;}"
+                          "QLabel[role=\"info\"]{color:%3;}"
+                          "QLabel[role=\"warn\"]{color:%4;}")
+        .arg(capInk().name(), faintInk().name(), infoInk().name(), warnInk().name());
+}
+
+// The tree's own chrome. The hover was a near-black navy, which is a dark blob with dark text on it the
+// moment the window is light, so it follows the scheme too. The selected row stays the library green in
+// both: it is white-on-green either way, and it is the one row that has to be found at a glance.
+QString treeStyle() {
+    return QStringLiteral("QTreeWidget::item:selected{background:#2f6b46;color:#ffffff;}"
+                          "QTreeWidget::item:selected:!active{background:#2f6b46;color:#ffffff;}"
+                          "QTreeWidget::item:hover{background:%1;}"
+                          "QTreeWidget::item{padding:2px 0px;}")
+        .arg(Chrome::dark() ? QStringLiteral("#33414f") : QStringLiteral("#dce6f2"));
+}
+
+// The same ink, thinned - for the wash inside a sign, which has to stay the colour of the outline
+// round it in either scheme.
+QColor withAlpha(QColor c, int a) {
+    c.setAlpha(a);
+    return c;
+}
+
+// A role set after the stylesheet is up needs the widget re-polished, or Qt keeps the colour it first
+// resolved - which is how one label that switches between "all accounted for" and "say which" would
+// have kept whichever of the two it was born with.
+void setRole(QWidget* w, const char* role) {
+    w->setProperty("role", role);
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+}
+
+
 // A small labelled row in the parameter form. `wide` lets a field that holds a SENTENCE - a cable's
 // structure, say - have the width of the form instead of the 260 px a number needs: a line of
 // "3x24AWG + FTP 2x2x28AWG + coax, foil, braid, black" in a 260 px box shows about a third of itself.
@@ -73,7 +116,7 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
     lay->setSpacing(6);
     auto* cap = new QLabel(label, host);
     cap->setFixedWidth(150);
-    cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+    setRole(cap, "caption");
     lay->addWidget(cap);
     // EVERY FIELD THE SAME WIDTH, and the space left over after it. A maximum with a stretch shared with
     // the gap behind it is not a width at all: each field ended up somewhere between its own idea of how
@@ -94,7 +137,7 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
     lay->addWidget(field, wide ? 1 : 0);
     auto* u = new QLabel(unit, host);
     u->setFixedWidth(42);
-    u->setStyleSheet(QStringLiteral("color:#7f8896;"));
+    setRole(u, "faint");
     lay->addWidget(u);
     if (!wide) lay->addStretch(1);
     return host;
@@ -116,6 +159,8 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
     catalog_.openRemembered();
     path_ = catalog_.activePath();
     buildUi();
+    // The roles the labels were tagged with, coloured for the scheme the window is opening in.
+    setStyleSheet(roleStyle());
     // The size the window actually needs, now that everything in it exists: what the layouts ask for,
     // never more than the screen can show. Asked for here rather than guessed at in resize() above,
     // because the thing that decides it is the widest row of buttons under a drawing - and that changes
@@ -165,6 +210,15 @@ void PartsLibraryDialog::closeEvent(QCloseEvent* e) {
     QDialog::closeEvent(e);
 }
 
+void PartsLibraryDialog::restyle() {
+    setStyleSheet(roleStyle());
+    if (tree_) tree_->setStyleSheet(treeStyle());
+    // THE SIGNS HAVE TO BE PAINTED AGAIN. They are little pixmaps with the colour baked into them, so
+    // unlike lettering they cannot follow a stylesheet - the rows have to be laid again for the green
+    // and the amber to come out in the new scheme. Cheap, and only ever on a change of scheme.
+    reloadTree();
+}
+
 void PartsLibraryDialog::setLibraryPath(const QString& path) {
     // Work on this one only - what a driver (or a test) asks for. The set of connected libraries is
     // NOT remembered from here: only the user connecting or disconnecting one changes that, so a
@@ -194,15 +248,15 @@ QIcon symbolSignIcon(bool mechanical, bool own, bool standard) {
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
     if (!own && !standard) {
-        p.setPen(QPen(QColor("#5c636d"), 1.6));
+        p.setPen(QPen(idleInk(), 1.6));
         p.drawLine(4, 8, 12, 8);
         return QIcon(pm);
     }
-    const QColor ink(own ? "#7ee0a0" : "#8fb0d6");
+    const QColor ink(own ? ownInk() : infoInk());
     p.setPen(QPen(ink, 1.6));
     if (mechanical) {
         const QRectF body(2.5, 4.5, 8.0, 7.0);
-        if (own) p.setBrush(QColor(126, 224, 160, 90));
+        if (own) p.setBrush(withAlpha(ownInk(), 90));
         p.drawRoundedRect(body, 1.5, 1.5);
         p.setBrush(Qt::NoBrush);
         p.drawLine(QPointF(10.5, 8.0), QPointF(14.0, 8.0));   // the tail out of it
@@ -229,12 +283,12 @@ QIcon datasheetSignIcon(int attached, int onFile) {
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
     if (attached == 0) {
-        p.setPen(QPen(QColor("#5c636d"), 1.6));
+        p.setPen(QPen(idleInk(), 1.6));
         p.drawLine(4, 8, 12, 8);
         return QIcon(pm);
     }
     const bool missing = onFile < attached;
-    const QColor ink(missing ? "#e6b45a" : "#7ee0a0");
+    const QColor ink(missing ? missInk() : ownInk());
     QPainterPath sheet;
     sheet.moveTo(3.5, 1.5);
     sheet.lineTo(9.5, 1.5);
@@ -243,13 +297,13 @@ QIcon datasheetSignIcon(int attached, int onFile) {
     sheet.lineTo(3.5, 14.5);
     sheet.closeSubpath();
     p.setPen(QPen(ink, 1.4));
-    p.setBrush(missing ? QBrush(Qt::NoBrush) : QBrush(QColor(126, 224, 160, 70)));
+    p.setBrush(missing ? QBrush(Qt::NoBrush) : QBrush(withAlpha(ownInk(), 70)));
     p.drawPath(sheet);
     p.setBrush(Qt::NoBrush);
     p.drawLine(QPointF(9.5, 1.5), QPointF(9.5, 4.5));   // the folded corner
     p.drawLine(QPointF(9.5, 4.5), QPointF(12.5, 4.5));
     if (missing) {
-        p.setPen(QPen(QColor("#e06c6c"), 1.6));
+        p.setPen(QPen(warnInk(), 1.6));
         p.drawLine(QPointF(2.0, 14.0), QPointF(14.0, 2.0));
     } else if (attached > 1) {
         p.setPen(QPen(ink, 1.0));
@@ -324,7 +378,7 @@ void PartsLibraryDialog::refreshLibraryList() {
             f.setBold(true);
             for (int c = 0; c < 3; ++c) it->setFont(c, f);
         }
-        it->setForeground(2, QColor(isConnected ? (isActive ? "#7ee0a0" : "#8fb0d6") : "#8b929c"));
+        it->setForeground(2, isConnected ? (isActive ? ownInk() : infoInk()) : idleInk());
         return it;
     };
 
@@ -457,7 +511,7 @@ void PartsLibraryDialog::buildUi() {
         auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
         auto* cap = new QLabel(QStringLiteral("Working in"), left);
-        cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+        setRole(cap, "caption");
         row->addWidget(cap);
         libraryBox_ = new QComboBox(left);
         libraryBox_->setToolTip(QStringLiteral(
@@ -551,7 +605,7 @@ void PartsLibraryDialog::buildUi() {
         auto* libRow = new QHBoxLayout;
         libRow->setContentsMargins(0, 0, 0, 0);
         libraryTotals_ = new QLabel(left);
-        libraryTotals_->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+        setRole(libraryTotals_, "caption");
         libRow->addWidget(libraryTotals_, 1);
         auto* dropSel = new QPushButton(QStringLiteral("Disconnect selected"), left);
         dropSel->setToolTip(QStringLiteral(
@@ -596,11 +650,7 @@ void PartsLibraryDialog::buildUi() {
     tree_->setColumnWidth(4, 34);
     // The selected part has to be obvious: a row highlighted in the theme's faintest grey is not,
     // especially in a list of fifty where the eye has to come back to it after reading the form.
-    tree_->setStyleSheet(QStringLiteral(
-        "QTreeWidget::item:selected{background:#2f6b46;color:#ffffff;}"
-        "QTreeWidget::item:selected:!active{background:#2f6b46;color:#ffffff;}"
-        "QTreeWidget::item:hover{background:#33414f;}"
-        "QTreeWidget::item{padding:2px 0px;}"));
+    tree_->setStyleSheet(treeStyle());
     tree_->setRootIsDecorated(true);
     connect(tree_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* it, QTreeWidgetItem*) {
@@ -645,7 +695,7 @@ void PartsLibraryDialog::buildUi() {
     int hr = 0;
     auto headRow = [&](const QString& label, QWidget* field) {
         auto* cap = new QLabel(label, head);
-        cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+        setRole(cap, "caption");
         hg->addWidget(cap, hr, 0);
         hg->addWidget(field, hr, 1);
         ++hr;
@@ -805,7 +855,7 @@ void PartsLibraryDialog::buildUi() {
         dsb->addWidget(removeDsBtn_);
         dsLay->addWidget(dsBtns);
         datasheetLabel_ = new QLabel(QString(), dsRow);
-        datasheetLabel_->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+        setRole(datasheetLabel_, "caption");
         datasheetLabel_->hide();   // what it used to say is in the rows themselves now
         headRow(QStringLiteral("Datasheets"), dsRow);
     }
@@ -1274,7 +1324,7 @@ void PartsLibraryDialog::buildUi() {
 
     auto* foot = new QHBoxLayout;
     summary_ = new QLabel(QString(), this);
-    summary_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+    setRole(summary_, "info");
     foot->addWidget(summary_, 1);
     auto* openBtn = new QPushButton(QStringLiteral("Open…"), this);
     openBtn->setToolTip(QStringLiteral("Open another part library (.plb)"));
@@ -1664,7 +1714,7 @@ void PartsLibraryDialog::rebuildParamForm() {
                     box->setMaximumWidth(260);
                     hl->addWidget(box, 0);
                     auto* clear = new QToolButton(host);
-                    clear->setIcon(crossIcon(QColor("#e0a0a0"), 12));
+                    clear->setIcon(crossIcon(warnInk(), 12));
                     clear->setIconSize(QSize(12, 12));
                     clear->setAutoRaise(true);
                     clear->setFocusPolicy(Qt::NoFocus);
@@ -1705,7 +1755,7 @@ void PartsLibraryDialog::rebuildParamForm() {
                     paramWidgets_.insert(key, le);
                     if (half == 1) {
                         auto* dash = new QLabel(QStringLiteral("to"), host);
-                        dash->setStyleSheet(QStringLiteral("color:#7f8896;"));
+                        setRole(dash, "faint");
                         hl->addWidget(dash);
                     }
                     hl->addWidget(le, 1);
@@ -1752,7 +1802,7 @@ void PartsLibraryDialog::refreshDatasheetRow() {
                 text += QStringLiteral("   — shared with %1 other part(s)").arg(tied - 1);
             auto* it = new QListWidgetItem(text, datasheetList_);
             it->setData(Qt::UserRole, sheet);
-            if (!DatasheetStore::exists(sheet)) it->setForeground(QColor("#e6b45a"));
+            if (!DatasheetStore::exists(sheet)) it->setForeground(missInk());
             if (sheet == keep) datasheetList_->setCurrentItem(it);
         }
     }
@@ -2689,7 +2739,7 @@ void PartsLibraryDialog::importFromDefaultModel(bool mechanical) {
     outer->addWidget(split, 1);
 
     auto* said = new QLabel(&dlg);
-    said->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+    setRole(said, "info");
     said->setWordWrap(true);
     outer->addWidget(said);
     auto* row = new QHBoxLayout;
@@ -2810,7 +2860,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
                             {"Pins", 0, 1}};
         for (const Col& c : cols) {
             auto* cap = new QLabel(QString::fromLatin1(c.text), head);
-            cap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+            setRole(cap, "caption");
             if (c.width > 0) cap->setFixedWidth(c.width);
             hl->addWidget(cap, c.stretch);
         }
@@ -2912,7 +2962,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
             int blank = 0;
             for (const QString& g : gauges)
                 if (g.isEmpty()) ++blank;
-            note->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+            setRole(note, "caption");
             note->setText(blank == 0
                               ? QStringLiteral("Every pin is accounted for - the schematic labels each one "
                                                "with its own size.")
@@ -2920,7 +2970,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
                                                "those blank.")
                                     .arg(blank));
         } else {
-            note->setStyleSheet(QStringLiteral("color:#e0a0a0;"));
+            setRole(note, "warn");
             note->setText(QStringLiteral(
                                 "More than one size of pin, so say which pins are which: %1 has none said, "
                                 "and \"all of them\" cannot be true of two types at once.")

@@ -606,13 +606,24 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
             }
         }
 
-        // Nearest point on an object (lowest priority among object snaps): the
-        // nearest point along a segment, OR on a circle/arc/ellipse ring.
+        // THE RING IS CATCHABLE ONLY IF "NEAREST" IS ASKED FOR.
+        //
+        // A point on a circle chosen by where the cursor happened to be is not the centre, not a
+        // quadrant, not a crossing - and until this was behind its own tick it drowned all three,
+        // because the ring is catchable along its whole length and a quadrant only in four places. That
+        // is exactly what Nearest means, though, and somebody who has ticked it has asked for it: a
+        // point anywhere along the thing, wherever the hand is pointing.
+        //
+        // So it is the LAST thing tried and only when the tick says so. With it off, touching a circle
+        // catches nothing and the editor draws a small cross at the middle instead - see the overlay -
+        // which says where the centre is without dragging the cursor to it.
         if (s.snapNearest && bestKind == SnapKind::None) {
+            // Along a segment: lines, polylines, and everything else made of them.
             for (const auto& seg : allSegs) {
                 const auto c = closestPointOnSegment(raw, seg.first, seg.second);
                 if (c.distance < best) { best = c.distance; bestPt = c.point; bestKind = SnapKind::Nearest; }
             }
+            // And round a ring, which is the same idea on something with no segments.
             for (const auto& e : doc.entities()) {
                 if (ignored(e.id)) continue;
                 if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
@@ -632,8 +643,8 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                     const double dd = distance(raw, pt);
                     if (dd < best) { best = dd; bestPt = pt; bestKind = SnapKind::Nearest; }
                 } else if (e.type == EntityType::Ellipse) {
-                    // Approximate: map the cursor into the ellipse's local frame, take
-                    // the parametric point in that direction, map back.
+                    // Approximate: map the cursor into the ellipse's local frame, take the parametric
+                    // point in that direction, map back.
                     const double c = std::cos(e.rotation), sr = std::sin(e.rotation);
                     const Vec2 v = raw - e.center;
                     const double lx = v.x * c + v.y * sr, ly = -v.x * sr + v.y * c;

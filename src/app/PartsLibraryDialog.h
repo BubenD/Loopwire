@@ -56,6 +56,12 @@ public:
 
     // Where the library is read from / written to (the default path unless told otherwise).
     void setLibraryPath(const QString& path);
+    // THE WINDOW FOLLOWS A CHANGE OF SCHEME.
+    //
+    // It is kept alive between openings, so it cannot simply be built in whatever scheme is in force -
+    // one opened in the dark scheme and left open keeps dark-scheme lettering when the office switches
+    // to light, which is pale grey on white. MainWindow calls this from applyTheme.
+    void restyle();
     QString libraryPath() const { return path_; }
     const PartsCatalog& catalog() const { return catalog_; }
     // Every part of every connected library, to read from.

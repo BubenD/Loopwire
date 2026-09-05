@@ -334,6 +334,20 @@ QString MechHarnessDef::nextSegmentId() const {
 // ---- Sizes --------------------------------------------------------------------------------------
 
 double mechAwgMm2(int awg) { return awgToMm2(awg); }
+
+int mechNearestAwg(double mm2) {
+    if (mm2 <= 0.0) return 0;
+    static const int kSizes[] = {30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 1};
+    int best = 0;
+    double bestErr = 1e18;
+    for (int awg : kSizes) {
+        const double a = awgToMm2(awg);
+        if (a <= 0.0) continue;
+        const double err = std::abs(std::log(a / mm2));
+        if (err < bestErr) { bestErr = err; best = awg; }
+    }
+    return best;
+}
 double mechGaugeMm2(const QString& gauge) { return gaugeMm2(gauge); }
 
 double wireOuterDiameterMm(const QString& gauge) {
@@ -2305,8 +2319,12 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 }
                 return across(std::max(bundleMm + 4.0, pinCount * 2.5 + 6.0));
             };
-            slotHeight[0] = n->bodyHeightMm > 0.0 ? across(n->bodyHeightMm)
-                                                  : heightOf(n->libPart, n->pinCount);
+            // A STATION THAT DRAWS NO BODY TAKES NO ROOM. Left with a slot of its own, the empty space
+            // where its housing would have been pushes its parts off to one side of the harness -
+            // which is the station still being drawn, in the only way that cannot be seen.
+            slotHeight[0] = n->hasSubparts ? 0.0
+                            : n->bodyHeightMm > 0.0 ? across(n->bodyHeightMm)
+                                                    : heightOf(n->libPart, n->pinCount);
             for (size_t ei = 0; ei < n->extraEnds.size(); ++ei)
                 slotHeight[ei + 1] = heightOf(n->extraEnds[ei].libPart, n->extraEnds[ei].pinCount);
         }
@@ -2316,12 +2334,19 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const double stackGap = across(5.0);
         std::vector<double> slotAt(static_cast<size_t>(housings), 0.0);
         if (housings > 1) {
-            double total = stackGap * (housings - 1);
-            for (double h : slotHeight) total += h;
+            // Counted over the slots that actually hold something, so the ones that are drawn come out
+            // centred on the node whether or not the station itself is one of them.
+            double total = 0.0;
+            int filled = 0;
+            for (double h : slotHeight)
+                if (h > 0.0) { total += h; ++filled; }
+            total += stackGap * std::max(0, filled - 1);
             double run = -total / 2.0;
             for (int i = 0; i < housings; ++i) {
-                slotAt[static_cast<size_t>(i)] = run + slotHeight[static_cast<size_t>(i)] / 2.0;
-                run += slotHeight[static_cast<size_t>(i)] + stackGap;
+                const double h = slotHeight[static_cast<size_t>(i)];
+                if (h <= 0.0) continue;      // nothing there: it neither moves nor takes room
+                slotAt[static_cast<size_t>(i)] = run + h / 2.0;
+                run += h + stackGap;
             }
         }
         const auto slotOffset = [&](int slot) {
@@ -2329,8 +2354,13 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         };
         const Vec2 primaryAt = pn.at + v * slotOffset(0);
 
+        // A STATION WITH PARTS ON IT DRAWS NO BODY OF ITS OWN - see MechNode::hasSubparts. What stands
+        // there is what was hung on it; its own housing as well would be one nobody described.
         const LibraryPart* part = catalog ? catalog->byId(n->libPart) : nullptr;
-        if (part && part->hasMechanical()) {
+        if (n->hasSubparts) {
+            // Nothing drawn, and no body extent either - the dimension below measures a body, and
+            // there is none to measure.
+        } else if (part && part->hasMechanical()) {
             // The connector as its own drawing says it looks, placed on the end of the run - and
             // turned to face AWAY from it, which is the way one goes on. `into` is -1 where the run
             // arrives here, so the way out of the harness is -into * u.
@@ -2381,7 +2411,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             bodyHalfAcrossUnits = across(h) / 2.0;
             haveBodyExtent = true;
         }
-        if (opt.balloons && n->balloon && !n->libPart.isEmpty()) {
+        if (opt.balloons && n->balloon && !n->hasSubparts && !n->libPart.isEmpty()) {
             const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
             out.push_back(makeBalloon(opt, pn.at,
                                       pn.at + v * (across(h) / 2.0 + 22.0),
@@ -2421,18 +2451,21 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 body.meta.insert(QStringLiteral("mechNode"), pn.id);
                 out.push_back(body);
             }
-            // The lead from this housing to where the harness gathers. Without it the second connector
-            // floats beside the drawing saying nothing about belonging to the same harness.
-            Entity lead = baseEntity(opt, QStringLiteral("wires"));
-            lead.type = EntityType::Polyline;
-            lead.points = {face, pn.at};
-            lead.a = face;
-            lead.b = pn.at;
-            lead.meta.insert(QStringLiteral("mechNode"), pn.id);
-            out.push_back(lead);
+            // NO LEAD BACK TO THE STATION.
+            //
+            // There used to be one from each housing to the node, so a second connector did not float
+            // beside the drawing saying nothing about belonging to the same harness. That reasoning
+            // died with the station's own body: the node is not drawn any more, so every lead ran to
+            // one invisible point and what they made together was a bare vertical line strung through
+            // all the housings - which says less than nothing, because it looks like a conductor.
+            //
+            // What says they belong together is that they are stacked at one place and their
+            // conductors gather into the same run, both of which are drawn.
 
+            // In front of THIS housing, for the same reason as the first one above: a designator names
+            // the part it is beside, and above the stack it names whichever one you take it for.
             if (!x.name.isEmpty())
-                out.push_back(makeText(opt, face + v * (side * (slotH / 2.0 + across(4.0))), x.name,
+                out.push_back(makeText(opt, face - u * (into * along(xw + 8.0)), x.name,
                                        opt.textHeight, 0.0, QStringLiteral("label")));
             if (opt.balloons && x.balloon && !x.libPart.isEmpty())
                 out.push_back(makeBalloon(opt, face,
@@ -2447,7 +2480,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // That is the figure a connector is dimensioned by on a released drawing - how far it stands
         // off the end of the harness - and it is measured along the run rather than across it, so it
         // reads in the same direction as every other length on the sheet.
-        if (opt.dimensions && n->dimension && haveBodyExtent &&
+        // `n->dimension` ALONE, not AND-ed with the sheet setting. A step that asks to be dimensioned
+        // is asking for exactly this, and the two were an AND - so the tick did nothing unless the
+        // sheet happened to be dimensioning everything anyway. The segment and the fitting both read
+        // the pair as an OR; this was the odd one out, and it is the one the wizard offers.
+        if (n->dimension && haveBodyExtent &&
             bodyFarUnits - bodyNearUnits > 1e-9) {
             // MEASURED OFF THE BODY THAT WAS DRAWN - see bodyFarUnits. A connector chosen from the
             // library is as long as its own drawing, not as long as the default box it replaced.
@@ -2467,11 +2504,19 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             out.push_back(dim);
         }
 
-        if (!n->name.isEmpty()) {
-            const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
-            out.push_back(makeText(opt, pn.at - u * (into * along(26.0)) +
-                                            v * (across(h) / 2.0 + 3.0),
-                                   n->name, opt.textHeight * 1.2, 0.0, QStringLiteral("label")));
+        if (!n->name.isEmpty() && !n->hasSubparts) {
+            // IN FRONT OF THE CONNECTOR: past its outward face, level with the housing.
+            //
+            // It used to be hung off the NODE and lifted above it, which is the same spot whatever is
+            // standing there. With two housings stacked at one end the designator sat between them
+            // naming neither; with a library part longer than the default box it landed on the drawing;
+            // and either way it read as a label for the junction rather than for the part.
+            //
+            // Past the far face - the one away from the harness - so it is clear of the body however
+            // long the body turned out to be, and on the side somebody looks for a designator.
+            const double clearUnits = (haveBodyExtent ? bodyFarUnits : along(20.0)) + along(8.0);
+            out.push_back(makeText(opt, primaryAt - u * (into * clearUnits), n->name,
+                                   opt.textHeight * 1.2, 0.0, QStringLiteral("label")));
         }
     }
 

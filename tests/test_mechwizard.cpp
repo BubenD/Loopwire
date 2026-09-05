@@ -560,9 +560,14 @@ void testDimensioningAConnectorMeasuresTheConnector() {
               "condim: and again only the one figure that was asked for");
     }
 
-    // ---- UNTICKED, the automatic conductor figure is still there. The rule is "the tick decides which
-    // of the two", not "dimensions disappear": a harness nobody has dimensioned by hand still carries
-    // the open length at its connectors, which is what the sample drawings do.
+    // ---- UNTICKED, NOTHING IS DIMENSIONED. The wizard asks "Dimension this step" on every step and
+    // has no sheet-wide tick to overrule them, so a step left clear must come out clear - including
+    // the automatic open-conductor figure at a connector, which used to appear whatever was asked.
+    //
+    // It used to be the other way round, on the reasoning that a harness nobody has dimensioned still
+    // wants the open length at its connectors. That reads well until you are the person who unticked
+    // every box on the sheet and is still looking at dimensions: there is then nothing left in the
+    // window to turn them off with. The tick decides, and an untouched step says nothing.
     {
         MechBuildScript sc;
         MechStep con;
@@ -580,8 +585,9 @@ void testDimensioningAConnectorMeasuresTheConnector() {
         sc.steps.push_back(run);
 
         const Found f = look(sc, QStringLiteral("S1"));
-        check(f.openWireDims > 0,
-              "condim: an UNdimensioned connector still shows the open-conductor length");
+        check(f.openWireDims == 0,
+              "condim: an UNdimensioned connector is not dimensioned at all");
+        check(!f.haveDim, "condim: and carries no dimension of its own either");
     }
 
     // ---- A CONNECTOR FROM THE LIBRARY IS AS LONG AS ITS OWN DRAWING.
@@ -1033,12 +1039,19 @@ void testADescribedStepIsGhostedUntilApplied() {
     w.typeName(QStringLiteral("P1"));
     w.applyToDrawing();
     check(w.script().steps.size() == 1, "ghost: Apply puts the described step on the drawing");
-    // AND DOES NOT LEAVE IT SELECTED. Keeping it selected meant the next category picked EDITED the
-    // applied step - applying a connector and then reaching for Cable turned the connector into a
-    // cable. Correcting an applied step is a click on its row, which is what the list is for.
-    check(w.editingStepId().isEmpty(),
-          "ghost: and leaves the window describing the NEXT step, not editing the one just applied");
+    // AND LEAVES YOU STANDING ON IT. Apply is not Next: the reason to apply rather than move on is to
+    // see the thing against the rest of the harness and go on correcting it, so the window is editing
+    // what was just applied and no new step has been opened behind it.
+    //
+    // The cost is that picking a category now RE-KINDS the applied step rather than starting the next
+    // one - the same as picking a category with a row selected in the list, which is what edit mode has
+    // always meant. Next is what opens the following step.
+    check(w.editingStepId() == w.script().steps.front().id,
+          "ghost: and leaves the window editing the step just applied, not opening another");
 
+    // Next opens the following step; THAT is the one drawn as a ghost.
+    w.commitStep();
+    check(w.editingStepId().isEmpty(), "ghost: Next opens a new step to describe");
     w.setCurrentCategory(Cat::Cable);
     const std::vector<Entity> describing = w.shownEntities();
     check(ghostCount(describing) > 0,
@@ -1052,14 +1065,12 @@ void testADescribedStepIsGhostedUntilApplied() {
         if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool()) wereGhosts.push_back(e);
 
     // NOW APPLY IT. Those objects become part of the drawing, in the SAME PLACES.
-    //
-    // Deliberately not "nothing is a ghost afterwards": the window is at once describing the NEXT step,
-    // and that one is properly drawn as a ghost too. Comparing the whole drawing across an Apply
-    // compares two different harnesses, which is what made the first version of this test fail for a
-    // reason that had nothing to do with the thing it was checking.
     w.applyToDrawing();
     const std::vector<Entity> applied = w.shownEntities();
-    check(w.script().steps.size() == 2, "ghost: two steps are on the drawing now");
+    // TWO, not three: Next after an Apply commits nothing. The fields still describe the step that was
+    // just applied, so committing them again would copy it - which is how one connector came out as
+    // 1.1 and 1.1.1 with the same designator. Next only opens the next thing to describe.
+    check(w.script().steps.size() == 2, "ghost: the connector and the cable, and no copy of either");
 
     const QStringList nowPlain = places(applied, /*ghosts=*/false);
     const QStringList wasGhost = places(wereGhosts, /*ghosts=*/true);
@@ -1118,7 +1129,11 @@ void testSeveralHousingsAtOneStationAreStackedWithGaps() {
         const Bounds b = e.bounds();
         if (b.valid) bands.push_back({b.min.y, b.max.y});
     }
-    check(bands.size() == 3, "stack: all three are drawn");
+    // TWO, NOT THREE. A station with parts hung on it draws no body of its own - see
+    // MechNode::hasSubparts - so what is on the sheet is its two parts. The station is still a station:
+    // it keeps its slot in the stack, the parts are still spaced against it, and the run still leaves
+    // from it. It simply is not also a housing.
+    check(bands.size() == 2, "stack: the parts are drawn; the station they hang on is not");
     std::sort(bands.begin(), bands.end());
 
     int overlaps = 0;
@@ -1128,10 +1143,10 @@ void testSeveralHousingsAtOneStationAreStackedWithGaps() {
         if (gap < 0.0) ++overlaps;
         smallestGap = std::min(smallestGap, gap);
     }
-    if (bands.size() == 3)
+    if (bands.size() == 2)
         std::printf("  stack: gaps %.2f, overlaps %d\n", smallestGap, overlaps);
     check(overlaps == 0, "stack: no housing is drawn on top of another");
-    check(bands.size() == 3 && smallestGap > 0.0,
+    check(bands.size() == 2 && smallestGap > 0.0,
           "stack: and there is a real gap between each one and the next");
 
     // CENTRED ON THE NODE, so the stack straddles the harness rather than hanging off one side of it.
@@ -1139,7 +1154,7 @@ void testSeveralHousingsAtOneStationAreStackedWithGaps() {
     double nodeY = 0.0;
     for (const MechPlacedNode& pn : lay.nodes)
         if (pn.id == node->id) nodeY = pn.at.y;
-    if (bands.size() == 3) {
+    if (bands.size() == 2) {
         const double stackMid = (bands.front().first + bands.back().second) / 2.0;
         check(std::abs(stackMid - nodeY) < 1e-6,
               "stack: the stack is centred on the station, not hung off one side of it");
@@ -1282,19 +1297,26 @@ void testNextCarriesOnFromWhereYouAreStanding() {
     const MechStep wires = w.script().steps.back();
     check(wires.isSubpart && wires.parentStep == mother,
           "standing: Add subpart hangs the wires off the connector");
-    check(w.anchorStepId() == mother,
-          "standing: and stays on the mother, so another Add subpart is another part of it");
+    check(w.anchorStepId() == wires.id,
+          "standing: and leaves you standing on the part just added, ready to carry it on");
 
-    // ---- NEXT ON A SUBPART carries the subpart on. ----
+    // ---- NEXT ON A SUBPART GIVES IT A SIBLING, not a child. ----
     w.editStep(wires.id);
     check(w.anchorStepId() == wires.id, "standing: now standing on the wires");
     w.setCurrentCategory(Cat::Heatshrink);
     w.commitStep();
     const MechStep after = w.script().steps.back();
-    check(after.parentStep == wires.id,
-          "standing: Next on a subpart follows the subpart");
+    check(after.parentStep == mother,
+          "standing: Next on a part gives the next part of the same station");
     check(after.isSubpart,
           "standing: and is STILL a part of the connector's group, not a new station");
+
+    // ---- AND ADD SUBPART ON A SUBPART GOES DEEPER. ----
+    w.editStep(wires.id);
+    w.setCurrentCategory(Cat::Heatshrink);
+    w.commitSubpart();
+    check(w.script().steps.back().parentStep == wires.id,
+          "standing: Add subpart on a part makes a part OF that part");
 
     // ---- NEXT ON THE MOTHER adds a station. ----
     w.editStep(mother);
@@ -1468,7 +1490,10 @@ void testLibraryHousingsAtOneStationDoNotOverlap() {
         const Bounds b = e.bounds();
         if (b.valid) bands.push_back({b.min.y, b.max.y});
     }
-    check(bands.size() == 3, "libstack: all three are drawn");
+    // The station draws no body of its own now, so the two parts hung on it are what is on the sheet -
+    // and they are the two this test is about: the point is that a library housing gets a slot as tall
+    // as it really draws, which is checked on the pair just as well as on the trio.
+    check(bands.size() == 2, "libstack: both parts are drawn, the station is not");
     std::sort(bands.begin(), bands.end());
     int overlaps = 0;
     double worst = 0.0;
@@ -2067,15 +2092,18 @@ void testTwoConnectorsCanShareOneEnd() {
     w.typeName(QStringLiteral("P2"));
     check(w.choosePart(bId), "two ends: the power shell is offered");
     w.commitSubpart();
-    check(w.anchorStepId() == station,
-          "two ends: adding a subpart leaves the harness carrying on from the parent");
 
     check(w.script().steps.size() == 2, "two ends: two steps described");
     const MechStep sub = w.script().steps.back();
     check(sub.isSubpart, "two ends: the second is marked as a part of the first");
     check(sub.parentStep == station, "two ends: and hangs off it");
+    check(w.anchorStepId() == sub.id,
+          "two ends: adding a subpart leaves you standing on the part just added");
 
-    // A cable out of that end, so both housings have a run to gather into.
+    // A cable out of that end, so both housings have a run to gather into. STANDING BACK ON THE
+    // STATION first: Next carries on at the level you are on, and after a subpart that level is the
+    // station's parts - so a run has to be asked for from the station itself.
+    w.editStep(station);
     w.setCurrentCategory(Cat::Cable);
     w.commitStep();
 
@@ -2124,16 +2152,19 @@ void testSubpartsNestAndTheListShowsIt() {
     w.commitStep();
     const QString station = w.anchorStepId();
 
-    // Its backshell, as a part of it.
+    // Its backshell, as a part of it. Add subpart goes one level in.
     w.setCurrentCategory(Cat::Backshell);
     w.commitSubpart();
-    check(w.anchorStepId() == station, "subpart: the anchor stays on the station");
+    const QString firstPart = w.anchorStepId();
+    check(firstPart != station,
+          "subpart: after Add subpart you are standing on the part, not back on the station");
 
-    // And its boot, as another part of the SAME station rather than of the backshell - which is the
-    // behaviour that makes several parts at one place describable at all.
+    // And its boot, as another part of the SAME station. NEXT is what gives a sibling: it is the next
+    // thing at the level you are on, and the level you are on is the station's parts.
     w.setCurrentCategory(Cat::Boot);
-    w.commitSubpart();
-    check(w.anchorStepId() == station, "subpart: still on the station after a second one");
+    w.commitStep();
+    check(w.script().steps.back().parentStep == station,
+          "subpart: Next on a part gives another part of the same station");
 
     int subparts = 0;
     for (const MechStep& s : w.script().steps) {

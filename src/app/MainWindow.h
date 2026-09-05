@@ -754,6 +754,10 @@ private:
     std::vector<ValidationIssue> validationRows_; // rows currently shown (for click → locate)
     bool crossSectionAwg_ = false;     // wire cross-section notation: false = mm², true = AWG
     bool applyingPropEdit_ = false;    // a Properties field edit is being applied (allow rebuild)
+    // Which end of a heatshrink sleeve each per-end PROPERTIES field belongs to, so focusing one can
+    // colour that end on the drawing. Rebuilt with the table - see refreshProperties, which clears it
+    // before the fields it points at are destroyed.
+    QHash<QObject*, int> sleeveEndFields_;
 
     QActionGroup* toolGroup_ = nullptr;
     QHash<int, QAction*> toolActions_;

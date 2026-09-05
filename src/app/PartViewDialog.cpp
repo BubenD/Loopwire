@@ -1,4 +1,5 @@
 #include "app/PartViewDialog.h"
+#include "app/UiBits.h"
 
 #include "app/DrawingPreview.h"
 #include "harness/CableSpec.h"
@@ -47,7 +48,7 @@ PartViewDialog::PartViewDialog(QWidget* parent) : QDialog(parent) {
     data_ = new QLabel(QString(), this);
     data_->setWordWrap(true);
     data_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    data_->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+    data_->setStyleSheet(QStringLiteral("color:%1;").arg(capInk().name()));
     root->addWidget(data_);
 
     auto* foot = new QHBoxLayout;

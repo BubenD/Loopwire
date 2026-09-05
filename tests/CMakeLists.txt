@@ -48,6 +48,56 @@ if(WIN32 AND MSVC)
     target_link_options(edraw_tests PRIVATE /STACK:16777216,16777216)
 endif()
 
+# THE QT RUNTIME BESIDE THE TEST BINARY, TOO.
+#
+# windeployqt runs for Edraw.exe and leaves the DLLs in the build root. Nothing put them next to
+# edraw_tests.exe, so running the tests the obvious way - double-clicking them, or from their own
+# directory - stopped dead at "Qt6Widgets.dll was not found" before a single test had run. They worked
+# only when started from the build root, which is a thing somebody has to know and tell you; a test
+# suite that cannot be run by running it is one that quietly stops being run.
+#
+# Same flags as the application's own deployment, and for the same licence reasons - see the long note
+# beside them in the top-level CMakeLists.
+if(WIN32 AND EDRAW_WINDEPLOYQT)
+    add_custom_command(TARGET edraw_tests POST_BUILD
+        COMMAND "${EDRAW_WINDEPLOYQT}"
+                "--$<IF:$<CONFIG:Debug>,debug,release>"
+                --no-translations --no-compiler-runtime
+                --no-opengl-sw
+                --no-system-d3d-compiler
+                --no-system-dxc-compiler
+                --verbose 0
+                "$<TARGET_FILE:edraw_tests>"
+        COMMENT "Deploying the Qt runtime beside edraw_tests.exe")
+endif()
+
+# AND THE OFFSCREEN PLATFORM PLUGIN, WHICH WINDEPLOYQT DOES NOT BRING.
+#
+# It copies the platform plugin the binary looks like it needs - qwindows - and the tests use neither:
+# test_main forces QT_QPA_PLATFORM=offscreen so the suite runs the same on a machine with no display as
+# on one with a screen. With no qoffscreen.dll to load, Qt gives up inside the QApplication constructor
+# and fails fast: the process dies with 0xC0000409 having printed nothing at all, which reads like a
+# crash in the first test rather than a missing file, and sends you looking in the wrong place.
+#
+# Taken from the imported target rather than copied from a path, so the debug build gets qoffscreend.dll
+# and the release build gets qoffscreen.dll without either being spelled out here.
+if(WIN32)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        add_custom_command(TARGET edraw_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:edraw_tests>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>"
+                    "$<TARGET_FILE_DIR:edraw_tests>/platforms"
+            COMMENT "Copying the offscreen platform plugin beside edraw_tests.exe")
+    else()
+        message(WARNING
+            "Qt6::QOffscreenIntegrationPlugin was not found, so qoffscreen.dll will not be copied beside "
+            "edraw_tests.exe. The suite forces QT_QPA_PLATFORM=offscreen and will fail fast on startup "
+            "with no output unless QT_QPA_PLATFORM_PLUGIN_PATH points at a Qt that has it.")
+    endif()
+endif()
+
 add_test(NAME edraw_tests COMMAND edraw_tests)
 
 # THE STAND-IN FOR THE ODA FILE CONVERTER.

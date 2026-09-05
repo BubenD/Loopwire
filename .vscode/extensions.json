@@ -1,0 +1,23 @@
+{
+    // WHAT THIS PROJECT NEEDS INSTALLED BEFORE IT CAN BE BUILT OR TESTED FROM THE EDITOR.
+    //
+    // VS Code offers these when the folder is opened, so a machine that has just cloned Edraw is one
+    // click from being able to configure, build and run the suite - rather than finding out a piece is
+    // missing when a command silently does nothing.
+    //
+    // NOTE THAT NONE OF THEM IS A COMPILER. They drive one; they do not supply one. Edraw is built with
+    // the MSVC toolchain from Visual Studio Build Tools 2022 ("Desktop development with C++"), which
+    // carries cl.exe, CMake and Ninja, and against Qt 6.8 for MSVC 2022. Without those installed
+    // CMake Tools has nothing to configure with, whatever extensions are present.
+    "recommendations": [
+        // CMake Tools - configures, builds, and runs the tests. This is the one that answers "test
+        // all": it reads the CTest registration in tests/CMakeLists.txt and gives the Testing view a
+        // Run Tests button, so the suite can be started without a terminal.
+        "ms-vscode.cmake-tools",
+        // C/C++ - IntelliSense and the debugger. Takes its include paths and defines from CMake Tools,
+        // so a test can be stepped into rather than only passed or failed.
+        "ms-vscode.cpptools",
+        // CMake language support for the CMakeLists files themselves - highlighting and completion.
+        "twxs.cmake"
+    ]
+}

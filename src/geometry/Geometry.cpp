@@ -767,19 +767,39 @@ std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
 //
 // A sleeve covers a STRETCH of harness, and where that stretch bends the sleeve bends with it - so the
 // body follows the knees that were clicked, and only the two ENDS are pulled in onto what they grip.
-// Both ends, equally: one necked end is a boot, which goes on one way round, and heatshrink does not.
+//
+// EACH END ON ITS OWN, in both of the numbers that shape it. A sleeve rarely grips the same thing at
+// both ends - a bundle at one and a backshell or a moulded boot at the other - so one end recovers
+// further than the other and over a different length. Held as one number per end rather than one for
+// the sleeve: shared numbers can only draw a symmetrical sleeve, which is the sleeve nobody fits.
+//
+// `headTaper` / `tailTaper` are the SHRUNK LENGTH at each end: how far in from that end the sleeve
+// takes to reach full width, so the number measures the shrunk part itself, up to where the straight
+// lines of the body begin. Zero is a square shoulder - recovered onto something its own size.
+//
+// `headHalf` / `tailHalf` are half the ENTRY FACE at each end: the line drawn across the very end,
+// which is the size the sleeve has recovered down to.
 //
 // Offset up one side and back down the other, mitred at the knees by offsetPolyline so the outline
 // stays continuous through a corner instead of the two sides crossing inside it.
 std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bodyHalf,
-                                      double endHalf, double taper) {
+                                      double headHalf, double tailHalf,
+                                      double headTaper, double tailTaper) {
     if (route.size() < 2) return {};
 
-    // Where the necks end: `taper` along the route from each end, or the middle of a sleeve too short
-    // to hold two tapers - a short one is all shoulder rather than inside out.
     double total = 0.0;
     for (size_t i = 1; i < route.size(); ++i) total += distance(route[i - 1], route[i]);
-    const double t = std::min(taper, total / 2.0 - 1e-6);
+    // The two shrunk ends have to fit inside the sleeve, and nothing about setting them one at a time
+    // stops the pair being asked for longer than the sleeve is. Scaled down TOGETHER when they do not
+    // fit, which keeps the shape that was set: a long shoulder at one end and a short one at the other
+    // stays long-and-short while the sleeve is pulled shorter, instead of one end eating the other.
+    double head = std::max(0.0, headTaper), tail = std::max(0.0, tailTaper);
+    const double room = std::max(0.0, total - 1e-6);
+    if (head + tail > room && head + tail > 1e-9) {
+        const double k = room / (head + tail);
+        head *= k;
+        tail *= k;
+    }
     const auto alongBy = [&](double want, bool fromStart) {
         double run = 0.0;
         if (fromStart) {
@@ -799,12 +819,12 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
         }
         return route.front();
     };
-    const Vec2 headAt = alongBy(t, true);
-    const Vec2 tailAt = alongBy(t, false);
+    const Vec2 headAt = alongBy(head, true);
+    const Vec2 tailAt = alongBy(tail, false);
     const Vec2 nHead = (route[1] - route[0]).normalized().perp();
     const Vec2 nTail = (route[route.size() - 1] - route[route.size() - 2]).normalized().perp();
 
-    // The body runs between the necks, through every knee in between.
+    // The body runs between the two shoulders, through every knee in between.
     std::vector<Vec2> body{headAt};
     for (size_t i = 1; i + 1 < route.size(); ++i) body.push_back(route[i]);
     body.push_back(tailAt);
@@ -813,12 +833,12 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
     if (left.size() != body.size() || right.size() != body.size()) return {};
 
     std::vector<Vec2> out;
-    out.push_back(route.front() + nHead * endHalf);      // the neck it recovers to
-    for (const Vec2& pt : left) out.push_back(pt);        // out along one side, over the knees
-    out.push_back(route.back() + nTail * endHalf);
-    out.push_back(route.back() - nTail * endHalf);
+    out.push_back(route.front() + nHead * headHalf);   // the face it recovers to
+    for (const Vec2& pt : left) out.push_back(pt);      // out along one side, over the knees
+    out.push_back(route.back() + nTail * tailHalf);
+    out.push_back(route.back() - nTail * tailHalf);
     for (size_t i = right.size(); i > 0; --i) out.push_back(right[i - 1]);
-    out.push_back(route.front() - nHead * endHalf);
+    out.push_back(route.front() - nHead * headHalf);
     return out;
 }
 

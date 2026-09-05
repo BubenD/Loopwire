@@ -1,4 +1,5 @@
 #include "app/PartWebDataDialog.h"
+#include "app/UiBits.h"
 #include <QPlainTextEdit>
 #include <QGuiApplication>
 #include <QFile>
@@ -46,7 +47,7 @@ PartWebDataDialog::PartWebDataDialog(const LibraryPart& part, const QString& url
                        "unticked."),
         this);
     note->setWordWrap(true);
-    note->setStyleSheet(QStringLiteral("color:#8fa2b8;"));
+    note->setStyleSheet(QStringLiteral("color:%1;").arg(infoInk().name()));
     outer->addWidget(note);
 
     auto* buttons = new QDialogButtonBox(this);

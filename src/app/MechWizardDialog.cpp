@@ -287,7 +287,7 @@ void MechWizardDialog::buildUi() {
     auto* row = new QHBoxLayout();
     backBtn_ = new QPushButton(QStringLiteral("Take the last step back"), this);
     deleteBtn_ = new QPushButton(QStringLiteral("Delete this step"), this);
-    applyBtn_ = new QPushButton(QStringLiteral("Apply to this step"), this);
+    applyBtn_ = new QPushButton(QStringLiteral("Apply"), this);
     // ONE GENERAL "ADD SUBPART", replacing the connector-only "bank this one, add another".
     //
     // That button could only ever add a second CONNECTOR, and it did it by a trick - banking whatever
@@ -296,27 +296,33 @@ void MechWizardDialog::buildUi() {
     // wires leaving it. So there is one button, it works for every category, and what it adds is a step
     // that belongs to the step it was pressed on.
     //
-    // The difference from Next is where the harness carries on FROM. Next moves along - the new step
-    // becomes what the one after it follows. Add subpart does not move: the anchor stays on the parent,
-    // so pressing it again adds another part to the SAME station rather than a chain of one thing after
-    // another. That is what makes several housings at one end, and their dressing, describable at all.
+    // The difference from Next is DEPTH. Next is the next thing at the level you are on; this goes one
+    // level in. Station 1, Add subpart, and you have 1.1; Next there gives 1.2; Add subpart there gives
+    // 1.1.1. That is what makes several housings at one end, and their dressing, describable at all.
     subpartBtn_ = new QPushButton(QStringLiteral("Add subpart"), this);
     subpartBtn_->setToolTip(QStringLiteral(
-        "Adds what is described above as a part OF the selected step rather than the next station "
-        "along - a second connector at this end, a backshell on it, the wires leaving it. The harness "
-        "carries on from the parent, so pressing this again adds another part to the same place."));
+        "Adds what is described above as a part OF the selected step rather than the next thing beside "
+        "it - a second connector at this end, a backshell on it, the wires leaving it.\n"
+        "Station 1 becomes 1.1. Next then gives 1.2; Add subpart again gives 1.1.1."));
     subpartBtn_->setAutoDefault(false);
     nextBtn_ = new QPushButton(QStringLiteral("Next ›"), this);
+    nextBtn_->setToolTip(QStringLiteral(
+        "Settles what is described and opens the next thing AT THE SAME LEVEL: on a station, the next "
+        "station along; on a part of one, the next part of that same station."));
     // DELIBERATELY NOT THE DEFAULT BUTTON. With Next as default, pressing Enter after correcting a
     // length committed a whole new step - the opposite of what the person correcting it wanted. Enter
     // now applies the change to the step being edited; adding a step is an explicit click.
     nextBtn_->setAutoDefault(false);
     row->addWidget(backBtn_);
     row->addWidget(deleteBtn_);
-    row->addWidget(applyBtn_);
     row->addStretch(1);
     auto* placeBtn = new QPushButton(QStringLiteral("Place the drawing"), this);
     auto* closeBtn = new QPushButton(QStringLiteral("Close"), this);
+    // APPLY SITS WITH NEXT, not with Delete. The three buttons on the right are what you do with the
+    // step in front of you - settle it and go deeper, settle it and go on, or make it real and stay on
+    // it to correct it. Over on the left with Take back and Delete it read as another way of undoing
+    // something, and it is the opposite: it is the one that makes what is described exist.
+    row->addWidget(applyBtn_);
     row->addWidget(subpartBtn_);
     row->addWidget(nextBtn_);
     row->addSpacing(16);
@@ -400,7 +406,10 @@ void MechWizardDialog::buildUi() {
     // The signals are the live ones - textChanged, valueChanged - and not editingFinished, because the
     // preview exists to show the effect of the change being made rather than the effect of the last one
     // that happened to lose focus. Adding a step is still only ever an explicit click on Next.
-    const auto changed = [this] { fieldChanged(); };
+    const auto changed = [this] {
+        if (!loading_) touched_ = true;   // somebody has said something about this step
+        fieldChanged();
+    };
     connect(nameEdit_, &QLineEdit::textChanged, this, changed);
     connect(dimText_, &QLineEdit::textChanged, this, changed);
     connect(desigEdit_, &QLineEdit::textChanged, this, changed);
@@ -828,6 +837,8 @@ void MechWizardDialog::editStep(const QString& stepId) {
     // Set AFTER the direction arithmetic above, which borrows the anchor to work out which way the
     // parent went and puts back what it found.
     anchor_ = stepId;
+    describingChild_ = false;   // picking a step says where you are; nothing is half-opened under it
+    touched_ = false;
 
     loading_ = false;
     refreshFieldsForCategory();
@@ -926,16 +937,34 @@ void MechWizardDialog::applyToDrawing() {
         applyToEditedStep();
         return;
     }
-    // AND THE STEP IS NOT LEFT SELECTED.
+    // APPLY MAKES WHAT IS DESCRIBED REAL AND THEN STANDS ON IT.
     //
-    // Keeping it selected read well - "you have just applied it, carry on correcting it" - and was
-    // wrong: with the step still selected, picking the next category EDITED the applied step and
-    // changed its kind instead of starting to describe the next one. So applying a connector and then
-    // reaching for Cable turned the connector into a cable. Clearing it means the window is describing
-    // the next step, which is what somebody who has just applied one is doing.
+    // It is not Next. Next settles the step and opens the following one; this settles it and leaves the
+    // window editing what was just applied, because the reason to apply rather than move on is to SEE
+    // the thing against the rest of the harness and go on correcting it.
     //
-    // Correcting an applied step is still a click on its row in the list, which is what that is for.
-    commitStep();
+    // Settling it through commitStep and re-selecting it would work and be wrong twice over: that path
+    // opens a fresh step behind it - the part nobody asked for - and re-selecting reloads the fields
+    // from the step, which zeroes a length that a connector does not carry and a cable does. Nothing is
+    // reset here at all: the fields already say what the step is, and now the step exists.
+    MechStep s = stepFromFields();
+    if (describingChild_) {
+        s.isSubpart = !anchor_.isEmpty();
+    } else if (const MechStep* at = script_.step(anchor_)) {
+        s.isSubpart = at->isSubpart;
+        if (at->isSubpart) s.parentStep = at->parentStep;
+    }
+    script_.steps.push_back(s);
+    anchor_ = s.id;
+    editing_ = s.id;            // standing on it, so nothing new is being described behind it
+    touched_ = false;
+    describingChild_ = false;
+    setCurrentGoesRight(inheritedGoesRight());
+
+    refreshStepList();
+    refreshFieldsForCategory();
+    refreshPreview();
+    refreshIssues();
 }
 
 std::vector<Entity> MechWizardDialog::shownEntities() const {
@@ -943,30 +972,52 @@ std::vector<Entity> MechWizardDialog::shownEntities() const {
 }
 
 void MechWizardDialog::commitSubpart() {
-    // THE SAME COMMIT AS NEXT, with two differences that are the whole point of the button.
+    // THE SAME COMMIT AS NEXT, ONE LEVEL DEEPER.
     //
-    // The step is marked as a part OF its parent rather than the next station along - which is what the
-    // list indents and what lets a second housing at one end be told apart from a connector further
-    // down the harness. And the ANCHOR IS PUT BACK afterwards, so the harness still carries on from the
-    // parent: press it twice and you get two parts at one place, not a chain of two.
+    // The step is marked as a part OF the step in front of you rather than the next thing beside it,
+    // which is what the list indents and what tells a second housing at one end from a connector
+    // further down the harness. Pressed on a subpart it goes deeper again - 1.1 gives 1.1.1 - because
+    // a backshell on a connector has a boot on IT, and a build sheet says so in the number.
+    //
+    // Afterwards you are standing on what was just added, so Next gives it a sibling and this gives it
+    // a child. It used to put the anchor back on the parent, which meant the thing being described
+    // after it showed as the next STATION - the window forgot it was working inside a station's parts.
+    // STANDING ON A STEP THAT ALREADY EXISTS? THEN NOTHING IS COMMITTED.
+    //
+    // Apply leaves the fields as they were, on purpose - the reason to apply rather than move on is to
+    // keep correcting the thing you can now see. So after an Apply the form still describes a step that
+    // IS on the drawing, and committing it again made a copy of it: a connector applied as 1.1 and then
+    // given a part came out as 1.1 and 1.1.1, the same designator twice.
+    //
+    // From here the buttons only open the next thing to describe. Which thing depends on the button,
+    // and that is the only difference between them.
+    if (!editing_.isEmpty()) {
+        anchor_ = editing_;
+        editing_.clear();
+        describingChild_ = true;
+        setCurrentGoesRight(inheritedGoesRight());
+        clearDescribedFields();
+        refreshStepList();
+        refreshFieldsForCategory();
+        refreshPreview();
+        refreshIssues();
+        return;
+    }
     const QString parent = anchor_;
-    MechStep s = stepFromFields();
+    MechStep s = stepFromFields();       // parentStep is the anchor already
     s.isSubpart = !parent.isEmpty();     // nothing to be a part of at the very start
     script_.steps.push_back(s);
 
     editing_.clear();
-    anchor_ = parent.isEmpty() ? s.id : parent;
+    anchor_ = s.id;
+    // THE VERY FIRST STEP HAS NOTHING TO BE A PART OF, so Add subpart there settles the step itself
+    // and opens its part - which is the only reading of the button that does anything at all when the
+    // list is empty. Once there is a parent, the described step IS the part and this stays off.
+    describingChild_ = !s.isSubpart;
+    touched_ = false;
     setCurrentGoesRight(inheritedGoesRight());
 
-    loading_ = true;
-    nameEdit_->clear();
-    dimCheck_->setChecked(false);
-    dimText_->clear();
-    breakCheck_->setChecked(false);
-    showNameCheck_->setChecked(false);
-    desigEdit_->clear();
-    pending_.clear();
-    loading_ = false;
+    clearDescribedFields();
 
     refreshStepList();
     refreshFieldsForCategory();
@@ -978,8 +1029,43 @@ void MechWizardDialog::commitSubpart() {
 // What the fields say, and what the preview shows
 // ==================================================================================================
 
+void MechWizardDialog::clearDescribedFields() {
+    // THE FORM, READY FOR A NEW STEP.
+    //
+    // AND THE PART GOES WITH THE NAME. The designator was cleared and the part was not, so pressing
+    // Next straight after settling a step made a second one of the SAME part with no designator on it -
+    // a connector nobody had chosen, drawn on the sheet and counted on the bill. A new step is a new
+    // step: it starts blank, and a part that really is wanted twice is two deliberate choices.
+    loading_ = true;
+    partCombo_->setCurrentIndex(0);
+    if (contactCombo_) contactCombo_->setCurrentIndex(0);
+    nameEdit_->clear();
+    dimCheck_->setChecked(false);
+    dimText_->clear();
+    breakCheck_->setChecked(false);
+    showNameCheck_->setChecked(false);
+    desigEdit_->clear();
+    pending_.clear();
+    loading_ = false;
+    touched_ = false;
+}
+
+void MechWizardDialog::refreshSubpartButton() {
+    // ADD SUBPART ALWAYS WORKS, INCLUDING ON THE VERY FIRST STEP.
+    //
+    // It was greyed until there was something to be a part of, to stop an untouched form being turned
+    // into a nameless connector to hang the part off. That cured the phantom by taking the button away,
+    // which is worse: pressing it on the first step is exactly how a station with parts is started, and
+    // a button that does nothing tells you nothing about why.
+    //
+    // So it stays live. On the first step it settles what is described - blank or not - as the mother,
+    // and opens a part under it, which is what the button says it does.
+    if (subpartBtn_) subpartBtn_->setEnabled(true);
+}
+
 void MechWizardDialog::fieldChanged() {
     if (loading_) return;
+    refreshSubpartButton();   // the first thing typed is what makes Add subpart mean anything
     // Writes back when a step is being edited; does nothing when a new one is being described.
     applyToEditedStep();
     // AND EITHER WAY the preview and the checks are brought up to date. applyToEditedStep already does
@@ -1100,32 +1186,57 @@ MechBuildScript MechWizardDialog::previewScript() const {
 }
 
 void MechWizardDialog::commitStep() {
+    // STANDING ON A STEP THAT ALREADY EXISTS? THEN NOTHING IS COMMITTED.
+    //
+    // Apply leaves the fields as they were, on purpose - the reason to apply rather than move on is to
+    // keep correcting the thing you can now see. So after an Apply the form still describes a step that
+    // IS on the drawing, and committing it again made a copy of it: a connector applied as 1.1 and then
+    // given a part came out as 1.1 and 1.1.1, the same designator twice.
+    //
+    // From here the buttons only open the next thing to describe. Which thing depends on the button,
+    // and that is the only difference between them.
+    if (!editing_.isEmpty()) {
+        anchor_ = editing_;
+        editing_.clear();
+        describingChild_ = false;
+        setCurrentGoesRight(inheritedGoesRight());
+        clearDescribedFields();
+        refreshStepList();
+        refreshFieldsForCategory();
+        refreshPreview();
+        refreshIssues();
+        return;
+    }
     MechStep s = stepFromFields();
-    // NEXT CONTINUES WHAT YOU ARE STANDING ON.
+    // NEXT IS THE NEXT THING AT THE LEVEL YOU ARE ON. Add subpart is the one that goes deeper.
     //
-    // On a main step it adds the next main step - the next station along the harness. On a SUBPART it
-    // carries that subpart on: wires added under a connector, then Next, gives the next thing in the
-    // connector's own group rather than a new station. Both are "carry on from here", and which one it
-    // means is decided by what here IS, not by a second button.
+    // Between them the two buttons walk a build sheet's outline the way anybody would read it out:
+    // Add subpart on station 1 gives 1.1; Next on 1.1 gives 1.2, the next part of the SAME station;
+    // Add subpart on 1.1 gives 1.1.1. A station is a place on the harness, a subpart is a part of that
+    // place, and Next never changes which of those you are listing.
     //
-    // Add subpart differs from this in staying put: it leaves the anchor on the mother so pressing it
-    // again adds another part to the same station. See commitSubpart.
-    if (const MechStep* at = script_.step(anchor_)) s.isSubpart = at->isSubpart;
+    // It used to be the other way round - Next on a subpart made a part OF that subpart, so a connector
+    // with three things on it came out three levels deep instead of as 1.1, 1.2, 1.3, and the only way
+    // to get a second part at one station was to keep re-selecting the station.
+    if (describingChild_) {
+        // Opened by Add subpart on a step that had no parent: this is that step's part.
+        s.isSubpart = !anchor_.isEmpty();
+    } else if (const MechStep* at = script_.step(anchor_)) {
+        s.isSubpart = at->isSubpart;
+        // A sibling shares the parent; it does not hang off the step beside it.
+        if (at->isSubpart) s.parentStep = at->parentStep;
+    }
     script_.steps.push_back(s);
     anchor_ = s.id;
+    describingChild_ = false;   // settled: the anchor says the level on its own again
+    touched_ = false;
     editing_.clear();          // a committed step is no longer the one being edited
 
     // The next step starts out going the same way as this one - see inheritedGoesRight.
     setCurrentGoesRight(inheritedGoesRight());
 
+    clearDescribedFields();
     loading_ = true;
-    nameEdit_->clear();
-    dimCheck_->setChecked(false);
-    dimText_->clear();
-    breakCheck_->setChecked(false);
-    showNameCheck_->setChecked(false);
-    desigEdit_->clear();       // the wire names belonged to the run just added
-    pending_.clear();          // and so did the groups
     // AND THE CONDUCTORS CARRY ON BY DEFAULT once there is a run behind them. This is the setting that
     // stops the next length of the same bundle being drawn as a splice; it only makes sense when there
     // is something to continue from, which is why it is decided here rather than left ticked.
@@ -1410,14 +1521,17 @@ void MechWizardDialog::refreshStepList() {
         // then appears where the step is going to land rather than always at the bottom, which is the
         // whole use of showing it at all.
         const MechStep* at = script_.step(anchor_);
-        const bool willBeSubpart = at && at->isSubpart;
+        // A part of the anchor when Add subpart opened one under a step that had no parent of its own;
+        // otherwise a part of whatever the anchor is a part of - see describingChild_.
+        const bool willBeSubpart = at && (describingChild_ || at->isSubpart);
+        const QString willHang = describingChild_ ? anchor_ : (at ? at->parentStep : QString());
         pendingRow->setText(0, willBeSubpart
                                    ? QStringLiteral("%1 — being described").arg(
                                          categoryName(category_))
                                    : QStringLiteral("%1  %2 — being described")
                                          .arg(n + 1)
                                          .arg(categoryName(category_)));
-        QTreeWidgetItem* under = willBeSubpart ? itemOfStep.value(at->parentStep, nullptr) : nullptr;
+        QTreeWidgetItem* under = willBeSubpart ? itemOfStep.value(willHang, nullptr) : nullptr;
         if (under) under->addChild(pendingRow);
         else stepList_->addTopLevelItem(pendingRow);
         QFont f = pendingRow->font(0);
@@ -1437,13 +1551,21 @@ void MechWizardDialog::refreshStepList() {
                                                     : pendingRow)
         stepList_->setCurrentItem(want);
     backBtn_->setEnabled(!script_.steps.empty());
+    refreshSubpartButton();
     deleteBtn_->setEnabled(!editing_.isEmpty());
     // Enabled while a step is being DESCRIBED too: that is when it is the button that applies it to the
     // drawing. It said "Apply to this step" and did nothing at all until a step had been committed by
     // some other means, which is the wrong way round.
     applyBtn_->setEnabled(true);
-    applyBtn_->setText(editing_.isEmpty() ? QStringLiteral("Apply to the drawing")
-                                          : QStringLiteral("Apply to this step"));
+    // ONE NAME. It read "Apply to the drawing" while describing and "Apply to this step" while
+    // editing, which is two names for one button doing one thing: make what is in front of you real.
+    // What differs between the two states is said by the tooltip, not by the button changing its mind.
+    applyBtn_->setText(QStringLiteral("Apply"));
+    applyBtn_->setToolTip(editing_.isEmpty()
+                              ? QStringLiteral("Put this step on the drawing and stay on it, so it can "
+                                               "be corrected against the rest of the harness. Next is "
+                                               "what moves on.")
+                              : QStringLiteral("Write these fields back onto the step being edited."));
     loading_ = wasLoading;
 }
 
@@ -1716,6 +1838,29 @@ void MechWizardDialog::refreshPreview() {
             if (ghost) e.meta.insert(QLatin1String(kPreviewGhostKey), true);
         }
     }
+    // AND THE STEP STANDING SELECTED IN THE LIST IS PICKED OUT.
+    //
+    // The list and the picture are two views of one harness, and nothing joined them: with three boxes
+    // on the sheet the only way to find out which one was 1.2 was to change it and watch what moved.
+    // Selecting a row now lights its objects up.
+    //
+    // Attributed through the compiler's step maps, the same way the pending step is above - and the
+    // same limit applies: a step that lands ON something already there owns only what it added, which
+    // is what objectToStep answers.
+    if (!editing_.isEmpty()) {
+        const QString selSeg = c.stepToSegment.value(editing_);
+        const QString selNode = c.stepToNode.value(editing_);
+        for (Entity& e : ents) {
+            const QString seg = e.meta.value(QStringLiteral("mechSeg")).toString();
+            const QString node = e.meta.value(QStringLiteral("mechNode")).toString();
+            bool mine = (!selSeg.isEmpty() && seg == selSeg);
+            if (!mine && !selNode.isEmpty() && node == selNode &&
+                c.objectToStep.value(selNode) == editing_)
+                mine = true;
+            if (mine) e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
+        }
+    }
+
     preview_->setEntities(ents);
     summary_->setText(script_.steps.empty()
                           ? QStringLiteral("Pick what goes on the first end, then press Next.")

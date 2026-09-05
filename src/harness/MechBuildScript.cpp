@@ -2,6 +2,7 @@
 
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -308,6 +309,25 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
     // at its parent's direction plus its own turn, so this one figure flips the whole tree and leaves
     // every relative turn alone. See MechDrawOptions::baseDirectionDeg.
     def.draw.baseDirectionDeg = script.leftToRight ? 0.0 : 180.0;
+    // DIMENSIONS ARE PER STEP HERE, AND ONLY PER STEP.
+    //
+    // MechDrawOptions::dimensions means "a length dimension on every segment" and is on by default,
+    // which is right for the builder - it has a tick for it. The wizard has no such tick: it asks
+    // "Dimension this step" on each step, one at a time. But the drawing code reads the two as
+    // `opt.dimensions || step.dimension`, so the default swamped every one of those boxes - each step
+    // came out dimensioned however carefully the boxes had been left clear, and there was nothing in
+    // the window to turn it off with.
+    //
+    // So the script turns off the AUTOMATIC half only: a step that asks is still dimensioned, and the
+    // bare-conductor length is still stated, but nothing is dimensioned merely for existing.
+    def.draw.dimensions = false;
+
+    // WHICH STATIONS ARE ONLY PLACES. A step with anything hung off it as a part draws none of its own
+    // body - see MechNode::hasSubparts - so the nodes those steps land on are marked once the tree is
+    // built. Collected here, before any node exists, because it is a fact about the SCRIPT.
+    QSet<QString> mothers;
+    for (const MechStep& st : script.steps)
+        if (st.isSubpart && !st.parentStep.isEmpty()) mothers.insert(st.parentStep);
 
     const MechStep* first = script.firstStep();
     if (!first) return out;   // an empty script is not an error, it is an empty drawing
@@ -486,6 +506,20 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
 
         for (const MechStep* child : script.childSteps(step.id))
             queue.push_back({child, outputNode});
+    }
+
+    // THE STATIONS THAT ARE ONLY PLACES, now that every step has landed on a node. A step with parts
+    // hung off it does not draw a body of its own - see MechNode::hasSubparts - and which node that is
+    // can only be said once the tree has been walked.
+    for (const QString& motherStep : mothers) {
+        const QString nodeId = out.stepToNode.value(motherStep);
+        if (nodeId.isEmpty()) continue;
+        // NOT "only where the node is the mother's own". That guard read well and was wrong: a later
+        // step landing on the same node takes ownership of it, so the station un-silenced itself the
+        // moment the next one was being described - which is the one state somebody is always looking
+        // at. The node the mother landed on is where its parts are; that is the whole of the question.
+        for (MechNode& nd : out.def.nodes)
+            if (nd.id == nodeId) nd.hasSubparts = true;
     }
 
     return out;

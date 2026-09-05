@@ -259,6 +259,7 @@ struct PartsLibrary {
     // opened. A library written before this existed has it false, which is what brings the shelf to a
     // library that was made before the shelf did.
     bool standardHeatshrink = false;
+    bool standardCables = false;
 
     // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
@@ -355,6 +356,9 @@ PartsLibrary seedLibrary();
 // that the figures are nominal and the datasheet is the authority. A harness that must hold a tolerance is
 // checked against the datasheet, not against a starter library.
 int addStandardHeatshrink(PartsLibrary& lib);
+// THE COAXIAL SHELF, by RG designation. Cables by RG and not by manufacturer, because the RG number is
+// where a cable's outside diameter is genuinely standard - which is the figure a bundle is added up from.
+int addStandardCables(PartsLibrary& lib);
 
 // Tie a connector and a contact together, from whichever end the user was looking at. Writes BOTH sides where
 // both parts can be reached, so the tie shows on either part when it is opened on its own; passing an empty
@@ -370,6 +374,9 @@ QStringList tiedConnectorsOf(const PartsLibrary& lib, const QString& contactId);
 // Put the shelf in if it has never been put in. Returns how many parts it added, and marks the library so
 // that it is not done again - which is what makes it safe to call every time a library is opened.
 int ensureStandardHeatshrink(PartsLibrary& lib);
+// The same for the coaxial shelf: once per library, and recorded in the file so a type somebody deleted
+// does not come back the next time it is opened.
+int ensureStandardCables(PartsLibrary& lib);
 
 // The standard schematic symbol for the kinds that have one - the components a harness carries in
 // line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the

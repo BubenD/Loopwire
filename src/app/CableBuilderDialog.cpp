@@ -54,7 +54,7 @@ void CableBuilderDialog::buildUi() {
         auto* g = new QHBoxLayout(box);
         auto cap = [this](const QString& t) {
             auto* l = new QLabel(t, this);
-            l->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+            l->setStyleSheet(QStringLiteral("color:%1;").arg(capInk().name()));
             return l;
         };
         g->addWidget(cap(QStringLiteral("Outer diameter")));
@@ -168,7 +168,7 @@ void CableBuilderDialog::buildUi() {
         connect(coverageSpin_, &QSpinBox::valueChanged, this, [this](int) { readCableFields(); });
         g->addWidget(coverageSpin_);
         auto* drainCap = new QLabel(QStringLiteral("Drain wire"), box);
-        drainCap->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
+        drainCap->setStyleSheet(QStringLiteral("color:%1;").arg(capInk().name()));
         g->addWidget(drainCap);
         drainBox_ = new QComboBox(box);
         drainBox_->addItem(QStringLiteral("none"), QString());
@@ -268,7 +268,7 @@ void CableBuilderDialog::buildUi() {
         auto* row = new QHBoxLayout;
         summary_ = new QLabel(QString(), this);
         summary_->setWordWrap(true);
-        summary_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+        summary_->setStyleSheet(QStringLiteral("color:%1;").arg(infoInk().name()));
         row->addWidget(summary_, 1);
         schematic_ = new DrawingPreview(QStringLiteral("Schematic"), this);
         schematic_->setMinimumSize(300, 210);

@@ -130,6 +130,13 @@ inline constexpr char kPreviewMarkKey[] = "previewMark";
 // it is drawn and never where it sits: a step that moved when it was applied would make the preview a
 // picture of something else.
 inline constexpr char kPreviewGhostKey[] = "previewGhost";
+// THE STEP STANDING SELECTED, so it can be picked out of a drawing of everything.
+//
+// A list of steps and a picture of the harness are two views of one thing, and until they were joined
+// up the only way to find out which box on the sheet was step 1.2 was to change it and watch. Marked
+// here rather than drawn differently at source, the same way a ghost is: the builder makes the harness,
+// and what is being looked at is the window's business.
+inline constexpr char kPreviewSelectedKey[] = "previewSelected";
 
 // Which way a LINEAR dimension was placed: true when it measures ACROSS x, so its dimension line lies
 // horizontal and it stands off in y. The object remembers it ("dimAcross"), because working it out from

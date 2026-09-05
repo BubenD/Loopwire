@@ -22,6 +22,27 @@ class QWidget;
 
 namespace Edraw_Desktop {
 
+// ---- Inks that carry a MEANING --------------------------------------------------------------------
+//
+// The parts library and the windows that hang off it colour their lettering by what it MEANS: a caption,
+// a unit, "this part is yours", "attached but not on disk". Those colours were written as hex for the
+// dark scheme, which costs nothing while the dark scheme is the only one - and in the light scheme it is
+// pale lettering on a pale ground, #9fb4c8 captions on white being the plain case of it.
+//
+// So each is a PAIR, asked for by meaning rather than by colour, and kept in ONE place: the same caption
+// grey was spelled out in four separate windows, which is four chances for three of them to be fixed.
+//
+// Plain lettering defers to Chrome, so it lands on the same ink as every other panel. The ones that carry
+// a meaning keep their hue and change only their depth - making them all dark would make them readable
+// and identical, and the whole point of them is that a glance tells them apart.
+QColor capInk();    // a caption: what the field beside it is called
+QColor faintInk();  // a unit, the "to" between two fields - present, not read
+QColor ownInk();    // yours / connected and in use
+QColor infoInk();   // connected, or a line of explanation
+QColor idleInk();   // not connected, nothing attached
+QColor missInk();   // attached, but not on disk
+QColor warnInk();   // wrong, or something that has to be said
+
 // The three signs, drawn: a plus, a minus, and a cross for "take this one out".
 QIcon plusIcon(const QColor& ink = QColor("#8fd6a2"), int size = 16);
 QIcon minusIcon(const QColor& ink = QColor("#e0a0a0"), int size = 16);

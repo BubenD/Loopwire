@@ -96,6 +96,16 @@ public:
     QJsonObject& harnessPresets() { return harnessPresets_; }
     const QJsonObject& harnessPresets() const { return harnessPresets_; }
 
+    // THE BUNDLE MAKE-UPS SAVED INTO THIS DRAWING. What went into a bundle-diameter calculation - the
+    // conductors, their amounts, their sizes - kept by the name it was saved under, so the figure quoted
+    // on this sheet can be got back and checked, or reused for the next bundle on the same sheet.
+    //
+    // WITH THE DRAWING rather than in the application settings, like harnessPresets above and for the
+    // same reason: a bundle belongs to the harness it is part of. Sending somebody the drawing sends the
+    // working with it, and a machine that has never seen it opens it complete.
+    QJsonObject& bundlePresets() { return bundlePresets_; }
+    const QJsonObject& bundlePresets() const { return bundlePresets_; }
+
     // The drawing's bill of materials: the rows someone typed and the column headings they chose.
     // The rows the drawing itself implies are not kept here - they are read off the entities every
     // time, so they cannot go stale (see bomFromDrawing).
@@ -122,6 +132,7 @@ private:
     int polygonSides_ = 5;
     QJsonObject bom_;
     QJsonObject harnessPresets_;
+    QJsonObject bundlePresets_;
     std::vector<DrawingLayout> layouts_;
     Bounds sheet_;                 // invalid unless the file stated its limits
     bool dirty_ = false;

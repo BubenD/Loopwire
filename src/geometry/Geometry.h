@@ -49,8 +49,15 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 // A SLEEVE ALONG A PATH, pulled in at both ends: the outline recovered heatshrink has.
 //
 // The body follows every knee in `route`, mitred so the two sides stay continuous through a corner
-// instead of crossing inside it, and only the two ENDS neck down to `endHalf` - what the sleeve
-// recovers onto. Both ends equally: one necked end is a boot, which goes on one way round.
+// instead of crossing inside it, and only the two ENDS neck down onto what the sleeve recovers to.
+//
+// Each end is shaped by two numbers OF ITS OWN, because a sleeve rarely grips the same thing at both:
+//   headTaper / tailTaper - the SHRUNK LENGTH at that end: how far in from it the sleeve takes to
+//                           reach full width, measured up to where the straight lines of the body
+//                           begin. Zero is a square shoulder. Scaled down as a pair, keeping their
+//                           ratio, when the two together are longer than the route.
+//   headHalf  / tailHalf  - half the ENTRY FACE at that end: the line across the very end of the
+//                           sleeve, which is the size it has recovered down to.
 //
 // Shared because two places need the same answer from the same path - the tool that draws one and the
 // renderer that draws it once it is an object. Kept as GEOMETRY rather than as the object's points, so
@@ -59,7 +66,8 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist);
 //
 // Empty for a route of fewer than two points, or one too short to hold anything.
 std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bodyHalf,
-                                      double endHalf, double taper);
+                                      double headHalf, double tailHalf,
+                                      double headTaper, double tailTaper);
 
 // Offset a CLOSED polygon (rect/polygon) sideways by `dist` (sign picks in/out),
 // mitering every wrapped vertex. Companion to offsetPolyline (which is for open runs).

@@ -123,6 +123,43 @@ std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, d
     out.push_back(out.front());      // close
     return out;
 }
+
+std::vector<Vec2> EntityRenderer::sleeveOutline(const Entity& e) {
+    if (!e.meta.value("shrunkEnds").toBool() || e.points.size() < 2) return {};
+    // ACROSS, from the same key the editing machinery uses - see heatshrinkFromRoute. Falling back to
+    // shrinkWidth so a sleeve drawn before the two were made one still draws right.
+    const double across = e.meta.contains("gap") ? e.meta.value("gap").toDouble(6.0)
+                                                 : e.meta.value("shrinkWidth").toDouble(6.0);
+    const double bodyHalf = std::max(0.2, across) / 2.0;
+    // THE TWO ENDS, EACH WITH ITS OWN TWO NUMBERS - see shrunkSleeveOutline for what they are.
+    //
+    // Not worked out from the body, because what a sleeve recovers to and over what length is not a
+    // share of what it started as: it is set by whatever is under that end, and the two ends are
+    // usually over different things. So both come off the object, per end.
+    //
+    // Absent on a sleeve drawn before the numbers existed, and those fall back to what the renderer
+    // always drew - 82% across, 4 long, the same at both ends - so an old drawing opens as it did.
+    const auto num = [&e](const char* key, double def) { return e.meta.value(key).toDouble(def); };
+    const double faceDef = bodyHalf * 1.64;
+    // Never past the body: heatshrink recovers INWARD, and a face wider than the sleeve draws a flare -
+    // a shape that cannot be got by shrinking anything onto anything.
+    return shrunkSleeveOutline(e.points, bodyHalf,
+                               std::clamp(num("shrinkFaceStart", faceDef) / 2.0, 0.05, bodyHalf),
+                               std::clamp(num("shrinkFaceEnd", faceDef) / 2.0, 0.05, bodyHalf),
+                               std::max(0.0, num("shrinkTaperStart", 4.0)),
+                               std::max(0.0, num("shrinkTaperEnd", 4.0)));
+}
+
+std::vector<Vec2> EntityRenderer::sleeveEndPatch(const Entity& e, int end) {
+    const std::vector<Vec2> o = sleeveOutline(e);
+    const size_t n = e.points.size();
+    // shrunkSleeveOutline lays the outline out as: the head face, one vertex per knee up one side, the
+    // two tail faces, the same knees back down the other side, then the head face again - 2n+4 in all.
+    // So a shrunk end is bounded by the two face corners and the two shoulders just inside them.
+    if (o.size() != 2 * n + 4) return {};
+    if (end == 0) return {o[0], o[1], o[2 * n + 2], o[2 * n + 3]};
+    return {o[n], o[n + 1], o[n + 2], o[n + 3]};
+}
 void EntityRenderer::setBackgroundColor(const QColor& c) { g_bgColor = c; }
 QColor EntityRenderer::backgroundColor() { return g_bgColor; }
 void EntityRenderer::setMonochrome(bool on) { g_monochrome = on; }
@@ -1307,14 +1344,9 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // is worked out here - so pulling a knee re-lays the sleeve instead of dragging one corner of a
         // shape that has forgotten what it is. See shrunkSleeveOutline.
         if (e.meta.value("shrunkEnds").toBool() && e.points.size() >= 2) {
-            // ACROSS, from the same key the editing machinery uses - see heatshrinkFromRoute. Falling
-            // back to shrinkWidth so a sleeve drawn before the two were made one still draws right.
-            const double across =
-                e.meta.contains("gap") ? e.meta.value("gap").toDouble(6.0)
-                                       : e.meta.value("shrinkWidth").toDouble(6.0);
-            const double bodyHalf = std::max(0.2, across) / 2.0;
-            const std::vector<Vec2> outline =
-                shrunkSleeveOutline(e.points, bodyHalf, bodyHalf * 0.82, 4.0);
+            // The five numbers on the object, applied to the route in its points - see sleeveOutline,
+            // which the editor also asks so the end it colours is the end that is drawn.
+            const std::vector<Vec2> outline = sleeveOutline(e);
             if (outline.size() >= 3) {
                 // A RADIUS PER KNEE, MAPPED FROM THE ROUTE ONTO THE OUTLINE.
                 //

@@ -136,6 +136,17 @@ struct MechNode {
     QString dimText;
     // The FURTHER housings on this same node. Empty for the ordinary one-connector end. See MechExtraEnd.
     std::vector<MechExtraEnd> extraEnds;
+    // WHETHER ANYTHING HANGS OFF THIS STATION AS A PART OF IT.
+    //
+    // A station that has parts on it is a PLACE rather than a part: what stands there is what was hung
+    // on it, and drawing the station's own body as well puts a housing on the sheet that nobody
+    // described. So its body, its designator and its balloon stand down and the parts speak.
+    //
+    // This is a change of rule, and it costs the case where two housings feed one cable and BOTH were
+    // meant: the second one is a part of the first, so the first now stands down and one box is drawn
+    // where two were. Two housings that must both appear are two stations, or the second is described
+    // with Next rather than Add subpart.
+    bool hasSubparts = false;
 };
 
 struct MechSegment {
@@ -262,6 +273,12 @@ double wireOuterDiameterMm(const QString& gauge);
 double mechGaugeMm2(const QString& gauge);
 // The cross-section of an AWG size. 0 for a size not in the table.
 double mechAwgMm2(int awg);
+// The AWG size nearest a cross-section - the other way through the same table, so a gauge quoted in
+// mm2 can be restated in AWG without a second table being written down somewhere to disagree with this
+// one. Nearest by RATIO rather than by difference: the sizes are a geometric series, so 0.4 mm2 is
+// nearer 22 than 20 in the way a wire is chosen, though it is closer to 20 in plain subtraction.
+// 0 when the cross-section says nothing.
+int mechNearestAwg(double mm2);
 
 // The bundle a set of conductors makes. Three cases, because one formula does not cover them:
 //   one wire   -> the wire itself

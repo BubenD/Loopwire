@@ -1167,6 +1167,8 @@ void Editor::setDocument(Document* doc) {
     selected_.clear();
     draftPts_.clear();
     modifyPts_.clear();
+    moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+    shownCentres_.clear();
     drafting_ = false;
     editing_ = false;
     gripGrab_ = false;
@@ -1185,6 +1187,8 @@ void Editor::setTool(ToolId t) {
     clearRefusal();   // a fresh command starts with a clean drawing
     cancelDraw();
     modifyPts_.clear();
+    moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+    shownCentres_.clear();
     pickIds_.clear();
     pickPts_.clear();
     offsetHasDist_ = false;
@@ -3700,6 +3704,19 @@ void Editor::onPointerMove(const Vec2& raw) {
         snap.ortho = false;
     }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
+    // A CIRCLE TOUCHED WHILE A COMMAND IS RUNNING IS REMEMBERED - see shownCentres_. The cross at its
+    // middle then stays put while the cursor goes on, which is what makes it usable: the point is
+    // touched, the hand moves away, and the mark is still there to aim at.
+    if (doc_ && snap.objectSnap && (drafting_ || !modifyPts_.empty() || movingByDistance())) {
+        const double tol = worldTolerance();
+        for (const Entity& e : doc_->entities()) {
+            if (e.type != EntityType::Circle || e.radius <= 1e-9) continue;
+            if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+            if (std::abs(distance(raw, e.center) - e.radius) > tol) continue;
+            if (std::find(shownCentres_.begin(), shownCentres_.end(), e.id) == shownCentres_.end())
+                shownCentres_.push_back(e.id);
+        }
+    }
     // A JOINT VERY CLOSE BY BEATS THE TRACKED ANGLE. While a connection point or an output face is being
     // marked, the second click is tracked along an angle from the first - which is what makes a face square
     // to the part - and that tracking was winning even when the cursor was all but on a corner of the
@@ -3970,6 +3987,8 @@ void Editor::beginRectanglePick(std::function<void(Vec2, Vec2)> onDone,
     selected_.clear();
     draftPts_.clear();
     modifyPts_.clear();
+    moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+    shownCentres_.clear();
     drafting_ = false;
     editing_ = false;
     regionMode_ = RegionMode::None;
@@ -10056,6 +10075,7 @@ void Editor::finishDraw() {
 }
 
 void Editor::cancelDraw() {
+    shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
@@ -10579,6 +10599,8 @@ bool Editor::acceptCommandInput(const QString& text) {
             const double rad = -deg * M_PI / 180.0;   // clockwise, as typed
             for (Entity* e : sel) rotateEntity(*e, piv, rad);
             modifyPts_.clear();
+            moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+            shownCentres_.clear();
             doc_->setDirty(true);
             emit changed();
             emit message(QStringLiteral("Turned %1° %2")
@@ -10614,6 +10636,8 @@ bool Editor::acceptCommandInput(const QString& text) {
                 pushUndo();
                 scaleSelection(sel, base, std::max(1e-4, f));
                 modifyPts_.clear();
+                moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+                shownCentres_.clear();
                 doc_->setDirty(true);
                 emit changed();
                 emit message(QStringLiteral("Scaled by %1").arg(f));
@@ -11044,6 +11068,8 @@ void Editor::handleModifyPress(const Vec2& p) {
         mirrorB_ = modifyPts_[1];
         mirrorPending_ = true;
         modifyPts_.clear();
+        moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+        shownCentres_.clear();
         emit changed(); // drop the rubber-band preview line
         emit mirrorChoiceRequested();
         return;
@@ -11056,6 +11082,10 @@ void Editor::handleModifyPress(const Vec2& p) {
         std::vector<QString> movingIds;
         for (Entity* e : sel) movingIds.push_back(e->id);
         for (Entity* e : sel) {
+            // THE TURN GOES ON FIRST, about the point it was picked up by - see moveTurn_. That is the
+            // point the preview was turning about, so the thing that lands is the thing that was on
+            // screen. Turning after the move would spin it about a base point it had already left.
+            if (std::abs(moveTurn_) > 1e-12) rotateEntity(*e, modifyPts_[0], moveTurn_);
             if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
             translateEntity(*e, delta);
         }
@@ -11107,6 +11137,10 @@ void Editor::handleModifyPress(const Vec2& p) {
     }
 
     modifyPts_.clear();
+
+    moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+
+    shownCentres_.clear();
     doc_->setDirty(true);
     emit changed();
     emit message(QStringLiteral("%1 done").arg(toolLabel(tool_)));
@@ -14776,6 +14810,28 @@ void Editor::setSelectionMetaNumber(const QString& key, double value) {
     emit changed();
 }
 
+void Editor::setSelectionSleeveAcross(double across) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel) {
+        if (!e->meta.value(QStringLiteral("shrunkEnds")).toBool()) continue;
+        e->meta[QStringLiteral("gap")] = across;
+        e->meta[QStringLiteral("shrinkWidth")] = across;
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSleeveEndHighlight(int end) {
+    if (sleeveEndHi_ == end) return;
+    sleeveEndHi_ = end;
+    // overlayChanged, not changed: this is chrome. Nothing about the drawing moved, so there is no
+    // undo step, no dirty flag, and above all no panel rebuild - a rebuild here would destroy the
+    // very field the user just clicked into, which is what asked for the colour in the first place.
+    emit overlayChanged();
+}
+
 void Editor::resizeSelectedShield(const QString& key, double value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;
@@ -15308,6 +15364,8 @@ void Editor::cancelMirror() {
     if (!mirrorPending_) return;
     mirrorPending_ = false;
     modifyPts_.clear();
+    moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+    shownCentres_.clear();
     emit message(QStringLiteral("Mirror cancelled"));
     emit changed();
     setTool(ToolId::Select);
@@ -15675,24 +15733,38 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         if (const auto mv = moveVector()) {
             auto sel = selectedEntities();
             if (!sel.empty()) {
-                pushUndo();
                 // Anticlockwise is positive in the arithmetic; a quarter turn clockwise is -pi/2.
                 const double rad = (mods & Qt::ShiftModifier) ? M_PI / 2.0 : -M_PI / 2.0;
-                // ABOUT THE POINT IT WAS PICKED UP BY. The objects themselves have not moved yet - a move
-                // is a preview until it is put down - so turning them about the CURSOR would swing them
-                // round a pivot half a sheet away and fling them off it. Turned about the point they are
-                // held by, they spin where they stand, and the move that follows carries them to the
-                // cursor with the same offset as before: on the screen the thing under the hand turns.
-                for (Entity* e : sel) rotateEntity(*e, mv->first, rad);
-                doc_->setDirty(true);
-                // The ghost IS at the cursor - it is the preview, already carried there - so it turns
-                // about the cursor to show the same result.
-                for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
+                // WHICH OF THE TWO IS THE PREVIEW depends on how the move was started, and only one of
+                // them may turn.
+                //
+                // Under the MOVE TOOL the objects have not moved at all: the ghost at the cursor is the
+                // preview and the originals are still where they were. Turning those turned the real
+                // thing, in place, before it had been put anywhere - it spun on the far side of the
+                // sheet and left an undo step behind for a move nobody had finished. So the turn is
+                // remembered and carried into the move, and only the ghost turns now.
+                //
+                // A DRAG is the other way round: the objects themselves follow the cursor and the ghost
+                // is the mark left where they came from. There the objects ARE the preview, so they are
+                // what turns.
+                const bool previewIsGhost = tool_ == ToolId::Move && modifyPts_.size() == 1;
+                if (previewIsGhost) {
+                    moveTurn_ += rad;
+                    for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
+                    emit overlayChanged();
+                } else {
+                    pushUndo();
+                    // About the point it was picked up by, so it spins where it stands and the drag
+                    // carries it on with the same offset as before.
+                    for (Entity* e : sel) rotateEntity(*e, mv->first, rad);
+                    doc_->setDirty(true);
+                    for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
+                    emit overlayChanged();
+                    emit changed();
+                }
                 emit message((mods & Qt::ShiftModifier)
                                  ? QStringLiteral("Turned a quarter anticlockwise — Space to keep turning")
                                  : QStringLiteral("Turned a quarter clockwise — Shift+Space the other way"));
-                emit overlayChanged();
-                emit changed();
             }
         }
         return true;
@@ -15781,6 +15853,8 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             gripGrab_ = false;
             editMoved_ = false;
             modifyPts_.clear();
+            moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+            shownCentres_.clear();
             clearSelection();
             setTool(ToolId::Select); // leave the Wire function, back to region-select
             emit message(QStringLiteral("Select"));
@@ -15791,6 +15865,8 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         cancelRightDrag();
         cancelDraw();
         modifyPts_.clear();
+        moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
+        shownCentres_.clear();
         pickIds_.clear();
         pickPts_.clear();
         pressed_ = false;
@@ -16599,6 +16675,26 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // clicked. What is withheld is the colour, not the drawing: an invalid override means "draw
             // it as it is", so the table stays on the sheet and simply does not look picked.
             EntityRenderer::draw(p, e, *doc_, vt, selectionOverrideFor(e));
+            // THE SHRUNK END BEING TYPED AT, in the chrome orange. Only while the PROPERTIES panel holds
+            // the keyboard in one of that end's two fields - see setSleeveEndHighlight.
+            //
+            // A sleeve's two ends look alike, and which of them "start" means depends on which way it
+            // happened to be drawn - so with four numbers in the panel and nothing on the sheet, the
+            // only way to find out was to type one and watch what moved. Colouring the end answers it
+            // before anything is typed, and it is the SHRUNK part that is coloured, because that is the
+            // part both of that end's numbers shape.
+            if (sleeveEndHi_ >= 0) {
+                const std::vector<Vec2> patch = EntityRenderer::sleeveEndPatch(e, sleeveEndHi_);
+                if (patch.size() == 4) {
+                    p.save();
+                    p.setPen(QPen(kTableChrome, 1.4));
+                    p.setBrush(QColor(kTableChrome.red(), kTableChrome.green(), kTableChrome.blue(), 90));
+                    QPolygonF poly;
+                    for (const Vec2& v : patch) poly << vt.toScreen(v);
+                    p.drawPolygon(poly);
+                    p.restore();
+                }
+            }
             if (showGrips) drawGrips(p, e, vt);
             // A selected TABLE shows Excel-style headers: column letters (A,B,C…)
             // along the top and row numbers (1,2,3…) down the left, as editing chrome.
@@ -17354,6 +17450,45 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (src)
                 if (auto g = offsetEntityToward(*src, cursor_, offsetDist_))
                     EntityRenderer::draw(p, *g, *doc_, vt, paperInk(QColor(120, 200, 255, 210)));
+        }
+    }
+
+    // A CIRCLE UNDER THE CURSOR SHOWS WHERE ITS CENTRE IS.
+    //
+    // Touching the ring is how somebody asks "where is the middle of this?", and the answer used to be
+    // either nothing at all or - worse - the cursor jumping to the centre, which moves the hand
+    // somewhere it did not ask to go. So the ring says it with a small cross and stays out of the way:
+    // the point is there to be gone to, and going to it catches it the way any centre is caught.
+    //
+    // WHETHER OR NOT A COMMAND IS RUNNING. It was drawn only while something was being drawn or moved,
+    // on the reasoning that a point is only wanted then. But the way somebody works is to look first
+    // and start the command second - so the mark has to be there BEFORE the command, or it is not there
+    // when the question is being asked. It costs nothing when idle: only a circle whose outline is
+    // actually under the cursor draws one, which is one or two at a time and none the rest of the time.
+    if (doc_) {
+        const SnapSettings& ss = snapSettings();
+        if (ss.objectSnap && ss.snapCenter) {
+            const double tol = worldTolerance();
+            QPen cp(paperInk(QColor("#ffd166")));
+            cp.setCosmetic(true);
+            cp.setWidthF(1.2);
+            p.setPen(cp);
+            p.setBrush(Qt::NoBrush);
+            for (const Entity& e : doc_->entities()) {
+                if (e.type != EntityType::Circle || e.radius <= 1e-9) continue;
+                if (const Layer* l = doc_->findLayer(e.layer); l && !l->visible) continue;
+                // Under the cursor NOW - pointing at the outline is the gesture, and being inside it
+                // is not - or pointed at earlier during the command still in hand, in which case the
+                // mark stays so it can be aimed at. See shownCentres_.
+                const bool touching = std::abs(distance(cursor_, e.center) - e.radius) <= tol;
+                const bool remembered =
+                    std::find(shownCentres_.begin(), shownCentres_.end(), e.id) != shownCentres_.end();
+                if (!touching && !remembered) continue;
+                const QPointF c = vt.toScreen(e.center);
+                const double arm = 4.0;   // screen pixels: a mark on the cursor, not on the drawing
+                p.drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()));
+                p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
+            }
         }
     }
 

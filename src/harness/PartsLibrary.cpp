@@ -988,6 +988,7 @@ QJsonObject PartsLibrary::toJson() const {
     root[QStringLiteral("format")] = QStringLiteral("edraw-parts-library");
     root[QStringLiteral("version")] = 1;
     root[QStringLiteral("standardHeatshrink")] = standardHeatshrink;
+    root[QStringLiteral("standardCables")] = standardCables;
     QJsonArray arr;
     for (const LibraryPart& p : parts) {
         QJsonObject o;
@@ -1040,6 +1041,7 @@ QJsonObject PartsLibrary::toJson() const {
 void PartsLibrary::fromJson(const QJsonObject& root) {
     parts.clear();
     standardHeatshrink = root.value(QStringLiteral("standardHeatshrink")).toBool(false);
+    standardCables = root.value(QStringLiteral("standardCables")).toBool(false);
     for (const auto& v : root.value(QStringLiteral("parts")).toArray()) {
         const QJsonObject o = v.toObject();
         LibraryPart p;
@@ -1451,7 +1453,11 @@ void PartsCatalog::openRemembered() {
         // ATUM and TMS-SCE, in every size. Done ONCE and recorded in the file, so a size somebody
         // deliberately deleted does not come back the next time the library is opened - and so a library
         // that has had them since it was seeded is left alone.
-        if (p == def && ensureStandardHeatshrink(lib) > 0) lib.save(p);
+        // The same for the coaxial shelf, and for the same reason: a library made before it existed
+        // has no cable in it at all, so the bundle tool had nothing to offer when asked for one.
+        int stocked = ensureStandardHeatshrink(lib);
+        if (p == def) stocked += ensureStandardCables(lib);
+        if (p == def && stocked > 0) lib.save(p);
         paths_ << p;
         libs_.push_back(lib);
     }
@@ -1563,6 +1569,88 @@ int ensureStandardHeatshrink(PartsLibrary& lib) {
     if (lib.standardHeatshrink) return 0;
     const int added = addStandardHeatshrink(lib);
     lib.standardHeatshrink = true;   // done, and recorded in the file: a deleted size stays deleted
+    return added;
+}
+
+
+int ensureStandardCables(PartsLibrary& lib) {
+    if (lib.standardCables) return 0;
+    const int added = addStandardCables(lib);
+    lib.standardCables = true;   // done, and recorded in the file: a deleted type stays deleted
+    return added;
+}
+
+int addStandardCables(PartsLibrary& lib) {
+    // THE COAXIAL SHELF, BY RG DESIGNATION.
+    //
+    // Cables are shipped by RG type and NOT by manufacturer, because the RG designation is the one
+    // place a cable's outside diameter is genuinely standard: MIL-DTL-17 fixes it, every maker builds
+    // to it, and RG-58 is RG-58 whoever supplies it. A screened multicore is the opposite - its
+    // diameter is that maker's construction and nobody else's - so those are left for a shop to add
+    // from its own data sheets rather than guessed at here and quietly believed.
+    //
+    // The diameter is why this shelf exists at all: the bundle-diameter tool adds up conductors by
+    // their outside diameter, and until there was a cable in the library there was nothing to pick.
+    struct Coax {
+        const char* pn;
+        const char* what;
+        double odMm;         // over the jacket, from the RG designation
+        double impedance;
+        const char* jacket;
+        const char* temp;
+        double bendMm;       // the usual ten times the outside diameter, rounded
+    };
+    // Jacket diameters as MIL-DTL-17 publishes them, converted from the inch figures they are
+    // specified in: 0.100 in, 0.195 in, 0.242 in, 0.390 in and so on.
+    const Coax coaxes[] = {
+        {"RG-316/U", "Coaxial cable RG-316/U, 50 ohm, PTFE, silver-plated", 2.49, 50, "PTFE",
+         "-55 to +200", 25},
+        {"RG-174/U", "Coaxial cable RG-174/U, 50 ohm, PVC, miniature", 2.55, 50, "PVC",
+         "-40 to +80", 25},
+        {"RG-179/U", "Coaxial cable RG-179/U, 75 ohm, PTFE, silver-plated", 2.54, 75, "PTFE",
+         "-55 to +200", 25},
+        {"RG-58C/U", "Coaxial cable RG-58C/U, 50 ohm, PVC, tinned braid", 4.95, 50, "PVC",
+         "-40 to +80", 50},
+        {"RG-142B/U", "Coaxial cable RG-142B/U, 50 ohm, PTFE, double braid", 4.95, 50, "PTFE",
+         "-55 to +200", 50},
+        {"RG-400/U", "Coaxial cable RG-400/U, 50 ohm, PTFE, double braid, flexible", 4.95, 50,
+         "PTFE", "-55 to +200", 50},
+        {"RG-59B/U", "Coaxial cable RG-59B/U, 75 ohm, PVC, video", 6.15, 75, "PVC", "-40 to +80", 62},
+        {"RG-393/U", "Coaxial cable RG-393/U, 50 ohm, PTFE, low loss", 9.91, 50, "PTFE",
+         "-55 to +200", 100},
+    };
+    const QString nominal =
+        QStringLiteral("Diameter is the NOMINAL figure for the RG designation (MIL-DTL-17); a given "
+                       "maker's build can differ by a tenth of a millimetre or so. Check the current "
+                       "datasheet before committing a build to a tolerance.");
+    int added = 0;
+    for (const Coax& c : coaxes) {
+        const QString pn = QString::fromLatin1(c.pn);
+        if (hasPn(lib, pn)) continue;
+        LibraryPart& part = lib.add(PartKind::Cable);
+        part.description = QString::fromLatin1(c.what);
+        part.mfrName = QStringLiteral("MIL-DTL-17 (any qualified source)");
+        part.mfrPn = pn;
+        part.unit = QStringLiteral("m");
+        part.params.insert(QStringLiteral("od"), QString::number(c.odMm, 'f', 2));
+        part.params.insert(QStringLiteral("jacket"), QString::fromLatin1(c.jacket));
+        part.params.insert(QStringLiteral("jacketColour"), QStringLiteral("Black"));
+        part.params.insert(QStringLiteral("material"), QStringLiteral("Copper"));
+        part.params.insert(QStringLiteral("conductor"), QStringLiteral("Stranded"));
+        // A coax is one element: the inner, its dielectric and the screen round it.
+        part.params.insert(QStringLiteral("structure"), QStringLiteral("coax"));
+        part.params.insert(QStringLiteral("cores"), QStringLiteral("1"));
+        part.params.insert(QStringLiteral("screened"), QStringLiteral("1"));
+        part.params.insert(QStringLiteral("bendRadius"), QString::number(c.bendMm, 'f', 0));
+        part.params.insert(QStringLiteral("temp"), QString::fromLatin1(c.temp));
+        part.params.insert(QStringLiteral("spec"), QStringLiteral("MIL-DTL-17"));
+        part.params.insert(QStringLiteral("notes"),
+                           QStringLiteral("%1 ohm coaxial cable, %2 mm over the jacket. %3")
+                               .arg(c.impedance, 0, 'f', 0)
+                               .arg(c.odMm, 0, 'f', 2)
+                               .arg(nominal));
+        ++added;
+    }
     return added;
 }
 
@@ -1952,6 +2040,8 @@ PartsLibrary seedLibrary() {
     }
     // And the heat-shrink shelf: DR-25, RNF-100, RT-375, ATUM and TMS-SCE, every size.
     ensureStandardHeatshrink(lib);
+    // And the coaxial shelf, so a fresh library has a cable in it as well as wire.
+    ensureStandardCables(lib);
     return lib;
 }
 

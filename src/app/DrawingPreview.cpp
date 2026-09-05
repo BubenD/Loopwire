@@ -242,6 +242,10 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         else if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
         // NOT APPLIED YET - see kPreviewGhostKey. Dimmed to about a third of the contrast the applied
         // objects have, which is enough to read the shape and not enough to mistake it for the drawing.
+        // THE STEP SELECTED IN THE LIST - see kPreviewSelectedKey. Brighter than the drawing rather
+        // than dimmer than it: this one is being pointed at, where a ghost is being held back.
+        else if (e.meta.value(QLatin1String(kPreviewSelectedKey)).toBool())
+            EntityRenderer::draw(p, e, doc, vt, QColor("#2bd0ff"));
         else if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool())
             EntityRenderer::draw(p, e, doc, vt, QColor("#5c646e"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
