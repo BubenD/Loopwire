@@ -102,6 +102,12 @@ struct MechFitting {
 // FURTHER housings on it, each with its own designator and way count, and the first connector stays
 // where it was - which means every harness that has only one is untouched by this.
 struct MechExtraEnd {
+    // WHICH HOUSING THIS IS, so a run can say it leaves from this one and not from the station.
+    //
+    // The step id it came from. Without a name of its own an extra housing could only be referred to
+    // by its place in the list, and a run pointing at "the second one" stops meaning that the moment
+    // one is deleted.
+    QString id;
     QString libPart;
     QString name;                           // its own designator: the second connector is not "P1"
     int pinCount = 0;
@@ -150,6 +156,13 @@ struct MechNode {
 };
 
 struct MechSegment {
+    // WHICH HOUSING AT `fromNode` THIS RUN LEAVES, when the station carries more than one.
+    //
+    // Empty means the station itself, which is every run on every harness that has one connector at a
+    // place. Where two housings are stacked at one end they sit at different heights, and their runs
+    // have to leave from THEM: both starting at the station's middle drew two bundles crossing out of
+    // one point that belongs to neither housing.
+    QString fromEnd;
     QString id;
     QString fromNode;
     QString toNode;

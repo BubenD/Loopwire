@@ -376,6 +376,12 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
             MechSegment seg;
             seg.id = def.nextSegmentId();
             seg.fromNode = anchor->id;
+            // AND WHICH HOUSING AT THAT STATION IT LEAVES, when the run hangs off one of them rather
+            // than off the station. The parent step is the housing: wires described under connector 1.1
+            // leave 1.1, not the place 1.1 happens to stand at. Empty for everything else, which is
+            // every run at a station with a single connector on it.
+            for (const MechExtraEnd& x : anchor->extraEnds)
+                if (x.id == step.parentStep) { seg.fromEnd = x.id; break; }
             seg.toNode = far.id;
             seg.lengthMm = step.lengthMm;
             seg.dimension = step.dimension;
@@ -447,6 +453,7 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
             // is already there; see MechExtraEnd.
             if (step.isSubpart && anchor->kind == MechNodeKind::Connector) {
                 MechExtraEnd x;
+                x.id = step.id;   // so a run leaving THIS housing can say so - see MechSegment::fromEnd
                 x.libPart = step.libPart;
                 x.name = step.name;
                 x.pinCount = step.pinCount;

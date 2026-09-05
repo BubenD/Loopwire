@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 
 namespace Edraw_Desktop {
@@ -1357,11 +1358,152 @@ bool mechModelForFitting(PartKind kind, MechModelKind& out) {
     }
 }
 
+namespace {
+
+// THE FRAME A STATION IS DRAWN IN: which way the run leaves it, and how fat the bundle is there.
+//
+// Both the pass that draws the housings and the pass that starts the runs need this, and they have to
+// agree: a run started from a frame worked out slightly differently leaves the housing it belongs to
+// at a slight angle, which is the kind of thing nobody sees and everybody trips over later.
+// One housing's lane at a station: where its middle sits across the run, and how tall it draws.
+struct HousingSlot {
+    double at = 0.0;
+    double height = 0.0;   // 0 for a station that draws no body of its own
+};
+
+struct StationFrame {
+    double dirRad = 0.0;
+    double into = 1.0;      // -1 where the run arrives here, +1 where it leaves
+    double bundleMm = 0.0;
+};
+
+StationFrame stationFrame(const MechHarnessDef& def, const MechLayout& layout, const MechNode& n,
+                          const MechPlacedNode& pn) {
+    StationFrame f;
+    bool atToEnd = true;
+    const MechSegment* seg = nodeRunSegment(def, n, &atToEnd);
+    // With nothing attached the harness can only leave forwards - see the note at the node pass.
+    if (!seg) atToEnd = false;
+    const MechPlacedSegment* ps = seg ? layout.segment(seg->id) : nullptr;
+    f.bundleMm = ps ? ps->diameterMm : def.draw.minBundleMm;
+    f.into = atToEnd ? -1.0 : 1.0;
+    f.dirRad = rad(atToEnd || !ps ? pn.dirDeg : ps->dirDeg);
+    return f;
+}
+
+// HOW FAR EACH HOUSING AT A STATION SITS OFF THE AXIS, measured across the run.
+//
+// Index 0 is the station's own housing and the rest are its extra ends, in the order they were
+// described. Shared for the same reason as the frame above: the pass that draws the housings and the
+// pass that starts a run at the housing it leaves from must put them in the same place, or the run
+// comes out of thin air beside the connector it belongs to.
+//
+// EACH HOUSING GETS A SLOT AS TALL AS IT ACTUALLY DRAWS. One pitch for all of them, worked out from
+// the default body formula, was wrong the moment a housing came from the library: a real part's
+// drawing is whatever size somebody drew it, and a pitch sized for a 2-way default box laid three
+// Micro-Fit drawings on top of one another. Measured, the same way the fan measures its conductors.
+std::vector<HousingSlot> housingSlotOffsets(const MechNode& n, const Vec2& at, const StationFrame& f,
+                                           const MechDrawOptions& opt, const PartsCatalog* catalog) {
+    const double xg = std::max(0.01, opt.diameterExaggeration);
+    const auto across = [&opt, xg](double mm) { return mm * opt.scale * xg; };
+    const Vec2 u{std::cos(f.dirRad), std::sin(f.dirRad)};
+    const Vec2 v = u.perp();
+    const int housings = 1 + static_cast<int>(n.extraEnds.size());
+    std::vector<double> slotHeight(static_cast<size_t>(housings), 0.0);
+    // How tall one housing draws, in drawing units, given its part and its way count.
+    const auto heightOf = [&](const QString& libPart, int pinCount) {
+        if (const LibraryPart* hp = catalog && !libPart.isEmpty() ? catalog->byId(libPart) : nullptr) {
+            if (hp->hasMechanical()) {
+                double lo = 0.0, hi = 0.0;
+                bool have = false;
+                for (const Entity& e : placedPartDrawing(*hp, at, f.dirRad, opt,
+                                                         QStringLiteral("connector"), u * -f.into)) {
+                    const Bounds eb = e.bounds();
+                    if (!eb.valid) continue;
+                    const Vec2 corners[4] = {eb.min, Vec2{eb.max.x, eb.min.y}, eb.max,
+                                             Vec2{eb.min.x, eb.max.y}};
+                    for (const Vec2& c2 : corners) {
+                        const double acrossIt = dot(c2 - at, v);
+                        if (!have) { lo = hi = acrossIt; have = true; }
+                        else { lo = std::min(lo, acrossIt); hi = std::max(hi, acrossIt); }
+                    }
+                }
+                if (have && hi - lo > 1e-9) return hi - lo;
+            }
+        }
+        return across(std::max(f.bundleMm + 4.0, pinCount * 2.5 + 6.0));
+    };
+    // A STATION THAT DRAWS NO BODY TAKES NO ROOM. Left with a slot of its own, the empty space where
+    // its housing would have been pushes its parts off to one side of the harness - which is the
+    // station still being drawn, in the only way that cannot be seen.
+    slotHeight[0] = n.hasSubparts ? 0.0
+                    : n.bodyHeightMm > 0.0 ? across(n.bodyHeightMm)
+                                           : heightOf(n.libPart, n.pinCount);
+    for (size_t ei = 0; ei < n.extraEnds.size(); ++ei)
+        slotHeight[ei + 1] = heightOf(n.extraEnds[ei].libPart, n.extraEnds[ei].pinCount);
+
+    // The centre of each slot, stacked with a gap between and the whole run centred on the node - so a
+    // single housing still lands exactly on the axis and every drawing made before this is unchanged.
+    // Counted over the lanes that actually hold something, so the ones that are drawn come out centred
+    // whether or not the station itself is one of them.
+    std::vector<HousingSlot> lanes(static_cast<size_t>(housings));
+    for (int i = 0; i < housings; ++i) lanes[static_cast<size_t>(i)].height = slotHeight[static_cast<size_t>(i)];
+    if (housings > 1) {
+        const double stackGap = across(5.0);
+        double total = 0.0;
+        int filled = 0;
+        for (double h : slotHeight)
+            if (h > 0.0) { total += h; ++filled; }
+        total += stackGap * std::max(0, filled - 1);
+        double run = -total / 2.0;
+        for (int i = 0; i < housings; ++i) {
+            const double h = slotHeight[static_cast<size_t>(i)];
+            if (h <= 0.0) continue;      // nothing there: it neither moves nor takes room
+            lanes[static_cast<size_t>(i)].at = run + h / 2.0;
+            run += h + stackGap;
+        }
+    }
+    return lanes;
+}
+
+} // namespace
+
 std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const PartsCatalog* catalog) {
     std::vector<Entity> out;
     const MechDrawOptions& opt = def.draw;
-    const MechLayout layout = layoutMechanicalHarness(def);
+    MechLayout layout = layoutMechanicalHarness(def);
     if (layout.segments.empty() && layout.nodes.empty()) return out;
+
+    // A RUN LEAVES THE HOUSING IT BELONGS TO, not the middle of the station.
+    //
+    // Two connectors at one end are drawn one above the other, but they stand on ONE node - so the runs
+    // off them both started at that node's point, which belongs to neither housing. What the sheet
+    // showed was two bundles crossing out of a spot in the air between the two connectors they were
+    // supposed to be leaving.
+    //
+    // So a run that says which housing it comes from - see MechSegment::fromEnd, set by the compiler
+    // when the run hangs off a subpart connector - has its start moved onto that housing's lane. Done
+    // here, once, on the layout, so every pass that follows draws it in the right place: the outline,
+    // the mitring at a junction, the conductor fan, the dimensions. Offsetting it in each of them would
+    // be four chances for one to be left out.
+    for (MechPlacedSegment& ps : layout.segments) {
+        const MechSegment* seg = def.segment(ps.id);
+        if (!seg || seg->fromEnd.isEmpty()) continue;
+        const MechNode* n = def.node(seg->fromNode);
+        const MechPlacedNode* pn = layout.node(seg->fromNode);
+        if (!n || !pn) continue;
+        int slot = -1;
+        for (size_t i = 0; i < n->extraEnds.size(); ++i)
+            if (n->extraEnds[i].id == seg->fromEnd) { slot = static_cast<int>(i) + 1; break; }
+        if (slot < 0) continue;
+        const StationFrame f = stationFrame(def, layout, *n, *pn);
+        const std::vector<HousingSlot> lanes = housingSlotOffsets(*n, pn->at, f, opt, catalog);
+        if (slot >= static_cast<int>(lanes.size())) continue;
+        const Vec2 v = Vec2{std::cos(f.dirRad), std::sin(f.dirRad)}.perp();
+        // Only the end AT that station moves. The far end is wherever the run goes, and dragging it
+        // sideways as well would swing the whole run instead of starting it in the right place.
+        ps.a = ps.a + v * lanes[static_cast<size_t>(slot)].at;
+    }
 
     // Lengths run along the harness at the drawing's scale; widths get the exaggeration as well, so
     // the body can be seen without the lengths being touched.
@@ -2283,74 +2425,13 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // exactly on the axis, so nothing about those drawings changes.
         // EACH HOUSING GETS A SLOT AS TALL AS IT ACTUALLY DRAWS.
         //
-        // One pitch for all of them, worked out from the DEFAULT body formula, was wrong the moment a
-        // housing came from the library: a real part's drawing is whatever size somebody drew it, and a
-        // pitch sized for a 2-way default box laid three Micro-Fit drawings on top of one another. What
-        // the sheet then showed was one big part with the others buried under it - the two the step had
-        // been given could not be seen at all.
-        //
-        // Measured, the same way the fan measures its conductors and for the same reason: a lane has to
-        // be as wide as the thing going in it, and only the thing itself knows how wide that is.
+        // Where each housing sits across the run - see housingSlotOffsets, which the run pass asks the
+        // same question of so a run leaves the housing it belongs to rather than the station's middle.
         const int housings = 1 + static_cast<int>(n->extraEnds.size());
-        std::vector<double> slotHeight(static_cast<size_t>(housings), 0.0);
-        {
-            // How tall one housing draws, in drawing units, given its part and its way count.
-            const auto heightOf = [&](const QString& libPart, int pinCount) {
-                if (const LibraryPart* hp = catalog && !libPart.isEmpty() ? catalog->byId(libPart)
-                                                                         : nullptr) {
-                    if (hp->hasMechanical()) {
-                        double lo = 0.0, hi = 0.0;
-                        bool have = false;
-                        for (const Entity& e : placedPartDrawing(*hp, pn.at, dirRad, opt,
-                                                                 QStringLiteral("connector"),
-                                                                 u * -into)) {
-                            const Bounds eb = e.bounds();
-                            if (!eb.valid) continue;
-                            const Vec2 corners[4] = {eb.min, Vec2{eb.max.x, eb.min.y}, eb.max,
-                                                     Vec2{eb.min.x, eb.max.y}};
-                            for (const Vec2& c2 : corners) {
-                                const double acrossIt = dot(c2 - pn.at, v);
-                                if (!have) { lo = hi = acrossIt; have = true; }
-                                else { lo = std::min(lo, acrossIt); hi = std::max(hi, acrossIt); }
-                            }
-                        }
-                        if (have && hi - lo > 1e-9) return hi - lo;
-                    }
-                }
-                return across(std::max(bundleMm + 4.0, pinCount * 2.5 + 6.0));
-            };
-            // A STATION THAT DRAWS NO BODY TAKES NO ROOM. Left with a slot of its own, the empty space
-            // where its housing would have been pushes its parts off to one side of the harness -
-            // which is the station still being drawn, in the only way that cannot be seen.
-            slotHeight[0] = n->hasSubparts ? 0.0
-                            : n->bodyHeightMm > 0.0 ? across(n->bodyHeightMm)
-                                                    : heightOf(n->libPart, n->pinCount);
-            for (size_t ei = 0; ei < n->extraEnds.size(); ++ei)
-                slotHeight[ei + 1] = heightOf(n->extraEnds[ei].libPart, n->extraEnds[ei].pinCount);
-        }
-        // The centre of each slot, stacked with a gap between and the whole run centred on the node -
-        // so a single housing still lands exactly on the axis and every drawing made before this is
-        // unchanged.
-        const double stackGap = across(5.0);
-        std::vector<double> slotAt(static_cast<size_t>(housings), 0.0);
-        if (housings > 1) {
-            // Counted over the slots that actually hold something, so the ones that are drawn come out
-            // centred on the node whether or not the station itself is one of them.
-            double total = 0.0;
-            int filled = 0;
-            for (double h : slotHeight)
-                if (h > 0.0) { total += h; ++filled; }
-            total += stackGap * std::max(0, filled - 1);
-            double run = -total / 2.0;
-            for (int i = 0; i < housings; ++i) {
-                const double h = slotHeight[static_cast<size_t>(i)];
-                if (h <= 0.0) continue;      // nothing there: it neither moves nor takes room
-                slotAt[static_cast<size_t>(i)] = run + h / 2.0;
-                run += h + stackGap;
-            }
-        }
+        const std::vector<HousingSlot> lanes =
+            housingSlotOffsets(*n, pn.at, StationFrame{dirRad, into, bundleMm}, opt, catalog);
         const auto slotOffset = [&](int slot) {
-            return slot >= 0 && slot < housings ? slotAt[static_cast<size_t>(slot)] : 0.0;
+            return slot >= 0 && slot < housings ? lanes[static_cast<size_t>(slot)].at : 0.0;
         };
         const Vec2 primaryAt = pn.at + v * slotOffset(0);
 
@@ -2437,7 +2518,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const Vec2 face = pn.at + v * slotOffset(static_cast<int>(ei) + 1);
             // Its own drawn height, for the label and the balloon beside it - the default formula is
             // only right for a housing that has no drawing of its own.
-            const double slotH = slotHeight[ei + 1];
+            const double slotH = lanes[ei + 1].height;
             const Vec2 mid = face - u * (into * along(xw) / 2.0);
 
             const LibraryPart* xp = catalog ? catalog->byId(x.libPart) : nullptr;
