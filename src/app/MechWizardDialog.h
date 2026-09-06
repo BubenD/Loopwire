@@ -240,6 +240,9 @@ public:
     void typeName(const QString& text);
     void typeWays(int ways);
     void typeWireDesignators(const QString& text);
+    // How long the run being described is. A run of no length is not previewed at all - see
+    // previewScript - so a test about where a run is DRAWN has to give it one.
+    void setRunLengthForTest(double mm);
 
     // The findings for the script as it stands, in step order.
     std::vector<MechStepIssue> issues() const;

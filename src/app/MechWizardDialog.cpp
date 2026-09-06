@@ -1367,6 +1367,7 @@ int MechWizardDialog::shownWays() const { return waysSpin_ ? waysSpin_->value() 
 void MechWizardDialog::typeName(const QString& text) { nameEdit_->setText(text); }
 void MechWizardDialog::typeWays(int ways) { waysSpin_->setValue(ways); }
 void MechWizardDialog::typeWireDesignators(const QString& text) { desigEdit_->setText(text); }
+void MechWizardDialog::setRunLengthForTest(double mm) { lengthSpin_->setValue(mm); }
 
 std::vector<MechStepIssue> MechWizardDialog::issues() const {
     const MechCompiled c = compileMechScript(script_);

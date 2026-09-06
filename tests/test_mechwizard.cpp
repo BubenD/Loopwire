@@ -2228,6 +2228,95 @@ void testSubpartsNestAndTheListShowsIt() {
 
 } // namespace
 
+// ---- A RUN LEAVES THE HOUSING IT BELONGS TO ------------------------------------------------------
+//
+// Two connectors at one end stand on ONE node but are drawn one above the other. A run described under
+// one of them has to come out of THAT housing: while both started at the node's point, the wires
+// appeared in the middle of the drawing, between the two connectors they were supposed to be leaving,
+// and a second set under the other housing landed on top of the first.
+//
+// Checked on where the run is DRAWN rather than on the segment's endpoints, because two things have to
+// be right for it to look right - the compiler saying which housing the run leaves (MechSegment::
+// fromEnd) and the renderer starting it on that housing's lane - and only the drawing shows both.
+void testARunLeavesItsOwnHousing() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // A station with two housings on it: p1 first, then p3.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitSubpart();
+    const QString station = w.script().steps.front().id;
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("p1"));
+    w.applyToDrawing();
+    const QString p1 = w.script().steps.back().id;
+    w.editStep(station);
+    w.commitSubpart();
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("p3"));
+    w.applyToDrawing();
+    const QString p3 = w.script().steps.back().id;
+
+    // Wires under each housing, both applied.
+    for (const QString& housing : {p1, p3}) {
+        w.editStep(housing);
+        w.commitSubpart();
+        w.setCurrentCategory(Cat::Wires);
+        w.setRunLengthForTest(30.0);
+        w.applyToDrawing();
+    }
+    check(w.script().steps.size() == 5, "own housing: a station, two housings and a run off each");
+
+    // WHICH HOUSING EACH RUN SAYS IT LEAVES.
+    const MechCompiled c = compileMechScript(w.script());
+    QStringList ends;
+    for (const MechSegment& s : c.def.segments) ends << s.fromEnd;
+    ends.sort();
+    check(c.def.segments.size() == 2, "own housing: two runs");
+    check(ends.size() == 2 && !ends[0].isEmpty() && ends[0] != ends[1],
+          "own housing: each run names a housing of its own, not the station");
+
+    // AND WHERE THEY ARE DRAWN. Each run's middle has to sit on a housing, not between them.
+    std::vector<double> housings;
+    std::vector<std::pair<double, double>> runs;   // low, high across the harness, per run
+    QHash<QString, std::pair<double, double>> bySeg;
+    for (const Entity& e : buildMechanicalHarness(c.def, nullptr)) {
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        if (role == QLatin1String("connector")) housings.push_back((b.min.y + b.max.y) / 2.0);
+        if (role != QLatin1String("bundle") && role != QLatin1String("wires")) continue;
+        const QString sid = e.meta.value(QStringLiteral("mechSeg")).toString();
+        if (sid.isEmpty()) continue;
+        auto it = bySeg.find(sid);
+        if (it == bySeg.end()) bySeg.insert(sid, {b.min.y, b.max.y});
+        else { it->first = std::min(it->first, b.min.y); it->second = std::max(it->second, b.max.y); }
+    }
+    for (auto it = bySeg.begin(); it != bySeg.end(); ++it) runs.push_back(it.value());
+    check(housings.size() == 2 && runs.size() == 2,
+          "own housing: two housings and two runs are drawn");
+    if (housings.size() != 2 || runs.size() != 2) return;
+
+    double worst = 0.0;
+    for (const auto& r : runs) {
+        const double mid = (r.first + r.second) / 2.0;
+        double nearest = 1e18;
+        for (double h : housings) nearest = std::min(nearest, std::abs(h - mid));
+        worst = std::max(worst, nearest);
+    }
+    std::printf("  own housing: housings at %.1f and %.1f; the furthest run is %.2f from one\n",
+                housings[0], housings[1], worst);
+    check(worst < 1.0, "own housing: every run is drawn on a housing, not between them");
+
+    // And the two runs are not on top of each other, which is what one shared start point looked like.
+    const double gap = std::abs((runs[0].first + runs[0].second) / 2.0 -
+                                (runs[1].first + runs[1].second) / 2.0);
+    check(gap > 1.0, "own housing: and the two are apart, each on its own connector");
+}
+
 int run_mechwizard_tests() {
     std::printf("Running harness build wizard tests...\n");
     fails = 0;
@@ -2246,6 +2335,7 @@ int run_mechwizard_tests() {
     testARunIsDesignatedAndTheGaugesAreAwg();
     testTheRunDesignatorIsShownOnlyWhereItIsTheOnlyName();
     testFanWiresDoNotCrossOneAnother();
+    testARunLeavesItsOwnHousing();
     testDirectionTurnsTheFirstPartRoundInThePreview();
     testBalloonCanBeWithheldPerStep();
     testChoosingALibraryPartSticks();
