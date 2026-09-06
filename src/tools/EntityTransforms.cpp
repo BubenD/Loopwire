@@ -221,6 +221,39 @@ void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
         return;
     }
     mapPoints(e, [&](const Vec2& p) { return mirrorPoint(p, a, u); });
+
+    // A MIRROR SWAPS WHICH RAIL IS WHICH, so every cut has to change sides with them.
+    //
+    // A trim on a double run is recorded against ONE of its two lines - the slot carries a
+    // "<slot>Side" of +1 or -1, and applyRunCut ignores the cut unless the rail it is drawing matches.
+    // mapPoints reflects where the cut IS, which is right, and says nothing about which line it belongs
+    // to, which after a mirror is the other one: left has become right.
+    //
+    // Left alone, the mirrored copy carried each cut on the rail it used to be on. That rail came out
+    // cut where nothing had cut it, and the rail that should have been cut came out running straight
+    // through - which reads as the mirror having brought the trimmed-away piece along with it.
+    //
+    // Only the SIDE is flipped here and not in mapPoints, because a move or a rotate does not swap the
+    // rails - only a reflection does.
+    for (const char* slot : {"cutStart", "cutStart2", "cutEnd", "cutEnd2"}) {
+        const QString key = QString::fromLatin1(slot) + QStringLiteral("Side");
+        if (!e.meta.contains(key)) continue;
+        const int side = e.meta.value(key).toInt();
+        if (side != 0) e.meta.insert(key, -side);
+    }
+    // A hole trimmed out of one line keeps its side as the first of its five figures - see applyRunCut
+    // and the hole reader beside it - so it changes rails the same way.
+    if (e.meta.contains(QLatin1String("holes"))) {
+        QJsonArray arr = e.meta.value(QLatin1String("holes")).toArray();
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonArray h = arr[i].toArray();
+            if (h.isEmpty()) continue;
+            const int side = h[0].toInt();
+            if (side != 0) h[0] = -side;
+            arr[i] = h;
+        }
+        e.meta.insert(QLatin1String("holes"), arr);
+    }
     // Reflect arc angles about the mirror line direction.
     const double axis = std::atan2(u.y, u.x);
     if (e.type == EntityType::Arc) {

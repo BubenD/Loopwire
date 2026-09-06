@@ -378,7 +378,14 @@ void MechWizardDialog::buildUi() {
     connect(stepList_->model(), &QAbstractItemModel::rowsMoved, this,
             [this](const QModelIndex&, int, int, const QModelIndex&, int) {
         if (loading_) return;
-        reorderFromList();
+        // AFTERWARDS, NOT DURING. This fires in the middle of the widget's own move, while the drag
+        // still holds the items - and reordering rebuilds the list, which deletes every one of them.
+        // Qt then carries on with the drop it was in the middle of, on items that no longer exist, and
+        // the application goes down.
+        //
+        // Queued, so the drop finishes first and the rebuild happens on the next turn of the event
+        // loop with nothing holding a pointer into the old tree.
+        QMetaObject::invokeMethod(this, [this] { reorderFromList(); }, Qt::QueuedConnection);
     });
 
     connect(stepList_, &QTreeWidget::currentItemChanged, this,
@@ -948,12 +955,7 @@ void MechWizardDialog::applyToDrawing() {
     // from the step, which zeroes a length that a connector does not carry and a cable does. Nothing is
     // reset here at all: the fields already say what the step is, and now the step exists.
     MechStep s = stepFromFields();
-    if (describingChild_) {
-        s.isSubpart = !anchor_.isEmpty();
-    } else if (const MechStep* at = script_.step(anchor_)) {
-        s.isSubpart = at->isSubpart;
-        if (at->isSubpart) s.parentStep = at->parentStep;
-    }
+    placeDescribedStep(s);
     script_.steps.push_back(s);
     anchor_ = s.id;
     editing_ = s.id;            // standing on it, so nothing new is being described behind it
@@ -1170,13 +1172,62 @@ int MechWizardDialog::declaredWaysOfChosenPart() const {
     return p ? declaredWays(*p) : 0;
 }
 
+void MechWizardDialog::placeDescribedStep(MechStep& s) const {
+    // WHERE A DESCRIBED STEP LANDS. One function, because the answer was written out three times - in
+    // the preview, in Apply and in Next - and three copies of a rule is two chances for it to drift.
+    // The preview showing a step somewhere other than where committing it puts it is the worst of those
+    // outcomes: a picture of a harness nobody is going to get.
+    if (describingChild_) {
+        // Opened by Add subpart: this is the anchor's part.
+        s.isSubpart = !anchor_.isEmpty();
+        return;
+    }
+    const MechStep* at = script_.step(anchor_);
+    if (!at) return;
+
+    s.isSubpart = at->isSubpart;
+    // A sibling shares the parent; it does not hang off the step beside it.
+    if (at->isSubpart) s.parentStep = at->parentStep;
+
+    // EXCEPT A RUN DESCRIBED ON A CONNECTOR THAT IS ITSELF A PART, which belongs to that connector.
+    //
+    // ONE OF SEVERAL HOUSINGS AT A STATION is the case. The sibling rule sent the run to the STATION,
+    // and a station whose connectors are all parts has no housing of its own - so its lane is the axis,
+    // the gap between the housings, and the wires came out of the middle belonging to neither. Measured:
+    // housings at y 289.5 and 310.5, those wires at 300.
+    //
+    // NOT a run on a connector that is a STATION, which is the ordinary harness: a connector, then the
+    // cable leaving it, then the next connector. That cable is the next station along and making it a
+    // part of the connector was the first version of this rule - it broke "connector, Next, cable",
+    // which is how nearly every harness starts. The suite said so in those words.
+    //
+    // A housing's sibling is another housing; a run off a housing is that housing's.
+    if (mechStepRole(s.kind) == MechStepRole::Run && mechStepRole(at->kind) == MechStepRole::End &&
+        at->isSubpart) {
+        s.parentStep = at->id;
+        s.isSubpart = true;
+    }
+}
+
 MechBuildScript MechWizardDialog::previewScript() const {
     MechBuildScript sc = script_;
     // A step being EDITED is already in the script - applyToEditedStep put it there - so there is
     // nothing to add. Only the step being described is missing.
     if (!editing_.isEmpty()) return sc;
 
-    const MechStep s = stepFromFields();
+    MechStep s = stepFromFields();
+
+    // WHERE IT WILL LAND, worked out the SAME WAY the commit works it out.
+    //
+    // The ghost was pushed on as a plain step, so a part being described previewed as the next STATION
+    // instead of as a part of the one being worked in: it appeared beside its parent rather than on it,
+    // and an END being added as a second housing overwrote the first in the preview while the commit
+    // would have put it alongside. A ghost that lands somewhere other than where Apply will put it is
+    // worse than no ghost - it is a picture of a harness nobody is going to get.
+    //
+    // See placeDescribedStep, which is the one place that decides this.
+    placeDescribedStep(s);
+
     // A run of no length would compile to a segment going nowhere, which draws as a smear at the
     // previous node rather than as a preview of anything. Everything else is worth showing the moment
     // it is chosen, which is the whole point: a connector picked from the library appears at once.
@@ -1218,14 +1269,7 @@ void MechWizardDialog::commitStep() {
     // It used to be the other way round - Next on a subpart made a part OF that subpart, so a connector
     // with three things on it came out three levels deep instead of as 1.1, 1.2, 1.3, and the only way
     // to get a second part at one station was to keep re-selecting the station.
-    if (describingChild_) {
-        // Opened by Add subpart on a step that had no parent: this is that step's part.
-        s.isSubpart = !anchor_.isEmpty();
-    } else if (const MechStep* at = script_.step(anchor_)) {
-        s.isSubpart = at->isSubpart;
-        // A sibling shares the parent; it does not hang off the step beside it.
-        if (at->isSubpart) s.parentStep = at->parentStep;
-    }
+    placeDescribedStep(s);      // the one place that decides where it lands
     script_.steps.push_back(s);
     anchor_ = s.id;
     describingChild_ = false;   // settled: the anchor says the level on its own again
@@ -1395,6 +1439,38 @@ void MechWizardDialog::reorderFromList() {
         if (!kept) rebuilt.push_back(s);
     }
     if (rebuilt.size() != script_.steps.size()) return;   // refuse a rewrite that does not add up
+
+    // AND REFUSE ONE THAT MAKES A LOOP.
+    //
+    // A step dragged into its own descendant leaves a parent chain that eats itself: 1.1 hangs off
+    // 1.1.1 which hangs off 1.1. Nothing here notices, and then everything that WALKS the chain runs
+    // for ever - the numbering, the indent depth, the station lookup - so the window locks up or the
+    // stack runs out and the application goes down. The drop is refused whole rather than half applied:
+    // a tree that cannot be walked is worse than a drag that did nothing.
+    {
+        const auto loops = [&](const MechStep& from) {
+            QSet<QString> seen;
+            for (const MechStep* at = &from; at && !at->parentStep.isEmpty();) {
+                if (seen.contains(at->id)) return true;
+                seen.insert(at->id);
+                const MechStep* parent = nullptr;
+                for (const MechStep& c : rebuilt)
+                    if (c.id == at->parentStep) { parent = &c; break; }
+                if (!parent) return false;          // hangs off nothing: not a loop
+                if (parent->id == at->id) return true;
+                at = parent;
+                // A chain longer than the script cannot be anything but a loop.
+                if (static_cast<int>(seen.size()) > static_cast<int>(rebuilt.size())) return true;
+            }
+            return false;
+        };
+        for (const MechStep& st : rebuilt)
+            if (loops(st)) {
+                // Put the tree back to what the script still says, so the rows match the harness.
+                refreshStepList();
+                return;
+            }
+    }
 
     script_.steps = rebuilt;
     refreshStepList();
@@ -1791,13 +1867,31 @@ void MechWizardDialog::refreshContactCombo() {
     loading_ = wasLoading;
 }
 
+namespace {
+
+// The wizard's own drawing options, applied to a compiled harness before it is drawn.
+//
+// THE BUNDLE DIAMETER IS NOT WRITTEN HERE. On a released sheet it is a figure worth having, and the
+// mechanical builder offers it as a tick - but while a harness is being DESCRIBED it is noise measured
+// off a bundle the user is still assembling: an "Ø3.7" against a run whose conductors are half entered
+// says nothing and covers what is behind it. Turned off for this window only, so the builder's own
+// setting and the drawings it makes are untouched.
+void applyWizardDrawOptions(MechHarnessDef& def) {
+    def.draw.diameterLabels = false;
+    def.draw.wireCounts = false;
+}
+
+} // namespace
+
 void MechWizardDialog::refreshPreview() {
     // THE STEP BEING DESCRIBED IS IN THE PREVIEW - see previewScript. The preview used to show only
     // what had been committed, which meant choosing a connector from the library changed nothing on
     // screen until Next was pressed: the one question a preview is asked is what the choice just made
     // looks like, and it could not answer it.
     const MechCompiled c = compileMechScript(previewScript());
-    std::vector<Entity> ents = buildMechanicalHarness(c.def, &catalog_);
+    MechHarnessDef shownDef = c.def;
+    applyWizardDrawOptions(shownDef);
+    std::vector<Entity> ents = buildMechanicalHarness(shownDef, &catalog_);
 
     // AND IT IS DRAWN AS NOT-YET-APPLIED. In place, so applying changes only how the step is drawn and
     // never where it sits - a step that moved when it was applied would make the preview a picture of
@@ -1906,7 +2000,9 @@ void MechWizardDialog::refreshIssues() {
 void MechWizardDialog::place() {
     if (!editor_) return;
     const MechCompiled c = compileMechScript(script_);
-    const std::vector<Entity> ents = buildMechanicalHarness(c.def, &catalog_);
+    MechHarnessDef placedDef = c.def;
+    applyWizardDrawOptions(placedDef);
+    const std::vector<Entity> ents = buildMechanicalHarness(placedDef, &catalog_);
     if (ents.empty()) {
         summary_->setText(QStringLiteral("Nothing to place yet."));
         return;

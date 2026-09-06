@@ -6578,9 +6578,24 @@ void MainWindow::applyTheme(bool dark) {
         "QTabBar{background:{TABBAR};}"
         "QTabBar::tab{background:transparent;color:{TEXT};padding:5px 14px;border:none;}"
         "QTabBar::tab:selected{color:{TEXT};border-bottom:2px solid #3d8bfd;}"
-        "QTableWidget,QListWidget{background-color:{PANEL};alternate-background-color:{ALT};"
-        "color:{TEXT};gridline-color:{LINE};selection-background-color:{SEL};"
-        "selection-color:{SELTX};border:1px solid {LINE};}"
+        // A TREE IS STYLED LIKE THE LISTS IT IS ONE OF.
+        //
+        // This rule named QTableWidget and QListWidget only, so a QTreeWidget fell through to the
+        // platform's own colours: no visible selection band and lettering in whatever the system
+        // picked, which on this ground came out purple on dark blue. Nothing was wrong with the
+        // selection - it simply could not be seen, which is the same thing to whoever is using it.
+        //
+        // Named here rather than styled on the widget, because the answer has to change with the
+        // scheme like every other colour in the window.
+        "QTableWidget,QListWidget,QTreeWidget,QTreeView{background-color:{PANEL};"
+        "alternate-background-color:{ALT};color:{TEXT};gridline-color:{LINE};"
+        "selection-background-color:{SEL};selection-color:{SELTX};border:1px solid {LINE};}"
+        // AND THE SELECTED ROW CARRIES THE BAND ITSELF. A tree draws its rows through item delegates,
+        // and selection-background-color alone leaves the branch column - the indent and the arrow -
+        // unpainted, so a selected row reads as a band with a gap bitten out of its left end.
+        "QTreeView::item:selected,QTreeWidget::item:selected{background-color:{SEL};color:{SELTX};}"
+        "QTreeView::item:hover,QTreeWidget::item:hover{background-color:{HOVER};}"
+        "QTreeView::branch:selected,QTreeWidget::branch:selected{background-color:{SEL};}"
         "QHeaderView::section{background-color:{HEADER};color:{TEXT};padding:3px 6px;border:none;"
         "border-right:1px solid {LINE};border-bottom:1px solid {LINE};}"
         "QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background-color:{INPUT};color:{TEXT};"
@@ -7363,6 +7378,27 @@ void MainWindow::buildCanvasMenu(QMenu& menu, const Vec2& menuWorld) {
         editor_->beginMatchProps();
         canvas_->setFocus(Qt::OtherFocusReason);
     });
+
+    // DRAW ORDER. Two things in the same place are drawn in the order the sheet holds them, and until now
+    // that order was whatever order they were drawn in - a hatch put over a bundle covered it, and there
+    // was nothing to be done about it. Front and Back are absolute; ABOVE and UNDER move the selection
+    // just clear of the objects it actually overlaps, and leave the rest of the sheet alone.
+    {
+        QMenu* order = menu.addMenu(QStringLiteral("Draw Order"));
+        order->setEnabled(hasSel);
+        using DrawOrder = Editor::DrawOrder;
+        auto add = [&](const QString& text, DrawOrder where) {
+            order->addAction(text, this, [this, where] {
+                editor_->setSelectionDrawOrder(where);
+                canvas_->update();
+            });
+        };
+        add(QStringLiteral("Bring to Front"), DrawOrder::Front);
+        add(QStringLiteral("Send to Back"), DrawOrder::Back);
+        order->addSeparator();
+        add(QStringLiteral("Bring Above Objects"), DrawOrder::AboveTouching);
+        add(QStringLiteral("Send Under Objects"), DrawOrder::UnderTouching);
+    }
 
     // A table under the cursor (or selected): its contents as a CSV file. Offered only when there
     // is a table to export, so the menu says nothing that would do nothing.

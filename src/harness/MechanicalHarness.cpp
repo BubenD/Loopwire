@@ -1486,23 +1486,101 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     // here, once, on the layout, so every pass that follows draws it in the right place: the outline,
     // the mitring at a junction, the conductor fan, the dimensions. Offsetting it in each of them would
     // be four chances for one to be left out.
+    // AND THE FIRST HOUSING MOVES TOO, which is the half that was missing.
+    //
+    // A run off the FIRST connector at a station carries no fromEnd - it leaves "the station itself" -
+    // so it was skipped here and stayed on the node's own point. That is right while the station has
+    // one housing, and wrong the moment a second is added: the first housing steps off the axis into
+    // slot 0 of a two-slot stack and its wires stayed behind in the middle, so adding a connector tore
+    // the wires off the one that was already there.
+    //
+    // With one housing slot 0 sits exactly on the axis, so the shift is zero and every harness with a
+    // single connector at a place draws as it always did.
     for (MechPlacedSegment& ps : layout.segments) {
         const MechSegment* seg = def.segment(ps.id);
-        if (!seg || seg->fromEnd.isEmpty()) continue;
+        if (!seg) continue;
         const MechNode* n = def.node(seg->fromNode);
         const MechPlacedNode* pn = layout.node(seg->fromNode);
         if (!n || !pn) continue;
         int slot = -1;
-        for (size_t i = 0; i < n->extraEnds.size(); ++i)
-            if (n->extraEnds[i].id == seg->fromEnd) { slot = static_cast<int>(i) + 1; break; }
+        if (seg->fromEnd.isEmpty()) {
+            slot = 0;                       // the station's own housing, first in the stack
+        } else {
+            for (size_t i = 0; i < n->extraEnds.size(); ++i)
+                if (n->extraEnds[i].id == seg->fromEnd) { slot = static_cast<int>(i) + 1; break; }
+        }
         if (slot < 0) continue;
         const StationFrame f = stationFrame(def, layout, *n, *pn);
         const std::vector<HousingSlot> lanes = housingSlotOffsets(*n, pn->at, f, opt, catalog);
         if (slot >= static_cast<int>(lanes.size())) continue;
         const Vec2 v = Vec2{std::cos(f.dirRad), std::sin(f.dirRad)}.perp();
-        // Only the end AT that station moves. The far end is wherever the run goes, and dragging it
-        // sideways as well would swing the whole run instead of starting it in the right place.
-        ps.a = ps.a + v * lanes[static_cast<size_t>(slot)].at;
+        const double lane = lanes[static_cast<size_t>(slot)].at;
+        ps.a = ps.a + v * lane;
+
+        // AND A TAIL COMES STRAIGHT OUT OF ITS HOUSING, rather than slanting back to the axis.
+        //
+        // Moving only the start is right where the far end is going somewhere - a run into the next
+        // station, a branch to a breakout - because the run has to reach it. A TAIL is not going
+        // anywhere: it hangs off its housing and stops. Left at the node's own point its far end stayed
+        // on the axis while its start went up to the housing, so adding a second connector did not move
+        // the first one's wires - it SLANTED them, out of the housing and back down again, which reads
+        // as the wires having stayed where they were.
+        //
+        // Measured on a station with two 4-way housings: the fan came out on the housing at y 289.5 and
+        // the far end sat at y 300, so a 30 mm tail sloped ten across its own length.
+        //
+        // A tail is a run that nothing continues from and nothing gathers - so the ends that DO go
+        // somewhere are untouched.
+        if (!seg->toStation.isEmpty()) continue;
+        const MechNode* toNode = def.node(seg->toNode);
+        if (!toNode || toNode->kind != MechNodeKind::FreeEnd) continue;
+        bool continues = false;
+        for (const MechSegment& other : def.segments)
+            if (other.id != seg->id && other.fromNode == seg->toNode) { continues = true; break; }
+        if (!continues) ps.b = ps.b + v * lane;
+    }
+
+    // ---- AND A LIMB'S FAR END MEETS THE STATION IT GATHERS INTO -----------------------------------
+    //
+    // The same move, at the other end of the run: a tail hung off a station reaches the next mother
+    // part rather than stopping in mid air at whatever length it was given. See MechSegment::toStation,
+    // which the compiler sets on the tails of a station once a station follows it.
+    //
+    // Done here for the same reason the start is: once, on the layout, so the outline, the mitring, the
+    // conductor fan and the dimensions all read the moved end. The one thing NOT moved is the start -
+    // a limb leaves its own housing and arrives at the next station, and pulling both ends would slide
+    // the whole thing off the connector it belongs to.
+    for (MechPlacedSegment& ps : layout.segments) {
+        const MechSegment* seg = def.segment(ps.id);
+        if (!seg || seg->toStation.isEmpty()) continue;
+        const MechNode* n = def.node(seg->toStation);
+        const MechPlacedNode* pn = layout.node(seg->toStation);
+        if (!n || !pn) continue;
+        const StationFrame f = stationFrame(def, layout, *n, *pn);
+        const Vec2 u{std::cos(f.dirRad), std::sin(f.dirRad)};
+        const Vec2 v = u.perp();
+
+        // WHERE IT GOES IN. A part that declares the faces its conductors leave by is taken at its
+        // faces, each limb at its own; anything else is met at its own lane across the station, which
+        // is the same spacing the housings there are stacked on. Either way one limb per way in.
+        std::vector<Vec2> faces;
+        if (const LibraryPart* lp = catalog && !n->libPart.isEmpty() ? catalog->byId(n->libPart)
+                                                                     : nullptr)
+            if (lp->hasMechanical())
+                placedPartDrawing(*lp, pn->at, f.dirRad, opt, QStringLiteral("fitting"),
+                                  Vec2{0.0, 0.0}, &faces);
+
+        if (!faces.empty()) {
+            ps.b = faces[static_cast<size_t>(std::clamp(seg->toLane, 0,
+                                                        static_cast<int>(faces.size()) - 1))];
+        } else {
+            const std::vector<HousingSlot> lanes = housingSlotOffsets(*n, pn->at, f, opt, catalog);
+            const double at = lanes.empty()
+                                  ? 0.0
+                                  : lanes[static_cast<size_t>(std::clamp(
+                                        seg->toLane, 0, static_cast<int>(lanes.size()) - 1))].at;
+            ps.b = pn->at + v * at;
+        }
     }
 
     // Lengths run along the harness at the drawing's scale; widths get the exaggeration as well, so
@@ -2072,7 +2150,26 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         double fittedBackMm = 0.0;
         int overWires = 0;
         int stacked = 0;   // how many bodies are already on, so each steps down from the last
-        const double openMm = openAtNode(pn.id);   // 0 at a breakout: nothing comes out there
+        double openMm = openAtNode(pn.id);   // 0 at a breakout: nothing comes out there
+
+        // TWO ENDS CANNOT EACH HAVE 20 mm OF A 30 mm RUN.
+        //
+        // The open length is a figure per END - how far the conductors run bare behind that connector -
+        // and nothing compared it with the run it is measured along. On a short run the two ends both
+        // took their full share and the fans OVERLAPPED across the middle, so every conductor was drawn
+        // twice, once from each end, with the knees facing opposite ways. Measured on a 30 mm run: one
+        // fan over x 100..120 and another over x 110..130, doubled through the middle ten.
+        //
+        // Shared in proportion to what each end asked for, so a run too short for both gets a fan from
+        // each that MEETS in the middle rather than crossing it. The outline has always clamped this
+        // way (see bodyTo); only the conductors were left to overrun.
+        if (seg && seg->lengthMm > 0.0) {
+            const QString otherId = seg->fromNode == pn.id ? seg->toNode : seg->fromNode;
+            const double otherOpen = openAtNode(otherId);
+            const double total = openMm + otherOpen;
+            if (total > seg->lengthMm && total > 1e-9)
+                openMm = seg->lengthMm * (openMm / total);
+        }
         double firstCoverAtMm = -1.0;      // where the first thing over the wires starts
         for (const MechFitting& f : n->fittings) {
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
@@ -2193,8 +2290,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 across(n->bodyHeightMm > 0.0 ? n->bodyHeightMm : std::max(endMm * 1.4, endMm + 2.0)) /
                 2.0;
             const double bundleHalf = across(endMm) / 2.0;
-            const Vec2 a = pn.at;                                        // the connector face
-            const Vec2 b = pn.at + u * (into * along(openMm));           // where the body starts
+            // THE FAN STARTS WHERE THE RUN DOES, not at the middle of the station.
+            //
+            // A run that leaves one housing of several has already been shifted onto that housing's
+            // lane - see MechSegment::fromEnd. The fan was still drawn from pn.at, the node's own
+            // point, which with two housings on it is the gap BETWEEN them: wires described under one
+            // connector fanned out of a spot belonging to neither, which reads as their coming from
+            // both. The run knows where it starts; the fan is the same wires, so it starts there too.
+            const Vec2 runEndHere = ps ? (atToEnd ? ps->b : ps->a) : pn.at;
+            const Vec2 a = runEndHere;                                   // the connector face
+            const Vec2 b = runEndHere + u * (into * along(openMm));      // where the body starts
             // Each conductor at ITS OWN diameter, with a knee where it fans: out of the bundle at an
             // angle, then straight into the face. That is what a released drawing shows and what the
             // hand-drawn view of test1.dwx has - a double run per wire with the middle vertex rounded
@@ -2390,7 +2495,12 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         }
 
         if (n->kind != MechNodeKind::Connector) {
-            if (!n->name.isEmpty() && n->kind != MechNodeKind::Root)
+            // A NAME NOBODY GAVE IS NOT WORTH WRITING. The compiler names each free end after its own
+            // node id so it has something to be referred to by - "n1", "n2" - and that reached the
+            // sheet as a label, so a harness came out annotated with the numbering of its own internal
+            // nodes. A designator somebody typed is worth drawing; the placeholder standing in for one
+            // is noise, and on a released drawing it reads as a reference that means something.
+            if (!n->name.isEmpty() && n->name != n->id && n->kind != MechNodeKind::Root)
                 out.push_back(makeText(opt, pn.at + v * (across(bundleMm) / 2.0 + 4.0), n->name,
                                        opt.textHeight, 0.0, QStringLiteral("label")));
             continue;

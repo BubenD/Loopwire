@@ -210,6 +210,13 @@ public:
     // the root node, and that is why pressing Left on the first connector changed nothing at all.
     bool directionSetsHandedness() const;
 
+    // WHERE A DESCRIBED STEP LANDS - its parent, and whether it is a part of it.
+    //
+    // One function because the answer was written out three times, in the preview and in both commits,
+    // and three copies of a rule is two chances for it to drift. A preview that puts a step somewhere
+    // other than where committing it puts it is a picture of a harness nobody is going to get.
+    void placeDescribedStep(MechStep& s) const;
+
     // ROLLING A STATION UP, and which ones are rolled up. A station with parts can be folded away;
     // the state is a fact about the window, so a test reads it rather than inferring it from the rows.
     // THE SCRIPT TAKES THE ORDER THE TREE IS NOW SHOWING, after something has been dragged. Public so a

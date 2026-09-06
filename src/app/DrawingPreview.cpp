@@ -208,6 +208,18 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         // the generator reads it when it places a part that has one - it simply is not what the eye is
         // pointed at any more.
         shown.meta.remove(QLatin1String(kConnectionLineKey));
+        // NOT APPLIED YET, SAID WITH A DASHED LINE and not with dimness alone.
+        //
+        // A ghost was a darker grey than the drawing, and grey is not a strong enough signal on a dark
+        // ground - especially now that the selected step is drawn in a bright colour, which leaves the
+        // ghost as merely the faintest of three greys. Faint reads as "far away" or "badly drawn", not
+        // as "not on the drawing yet".
+        //
+        // Dashed says provisional, which is what it is, and says it in the one language a drawing
+        // office already reads: a dashed outline is something that is not there. It survives being
+        // printed, photocopied and looked at on a projector, none of which a shade of grey does.
+        if (shown.meta.value(QLatin1String(kPreviewGhostKey)).toBool())
+            shown.meta.insert(QStringLiteral("linetype"), QStringLiteral("HIDDEN"));
         doc.entities().push_back(shown);
         const Bounds eb = e.bounds();
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
@@ -247,7 +259,10 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         else if (e.meta.value(QLatin1String(kPreviewSelectedKey)).toBool())
             EntityRenderer::draw(p, e, doc, vt, QColor("#2bd0ff"));
         else if (e.meta.value(QLatin1String(kPreviewGhostKey)).toBool())
-            EntityRenderer::draw(p, e, doc, vt, QColor("#5c646e"));
+            // Bright enough to READ, because the dashes are what say it is not applied - a ghost that
+            // is both faint and dashed is a shape nobody can make out well enough to judge, which is
+            // the one thing a preview of the step being described has to allow.
+            EntityRenderer::draw(p, e, doc, vt, QColor("#8a93a0"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
     }
     p.restore();

@@ -1319,6 +1319,82 @@ int run_partspanel_tests() {
     }
 
 
+    // ---- the right-click menu offers a draw order ---------------------------------------------------
+    {
+        // Two objects in the same place are drawn in the order the sheet holds them, and there was no way
+        // to say which. The commands are on the right-click menu, where a person looks for them, under a
+        // submenu of their own - and greyed out with nothing picked, because they act on a selection.
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        auto* ed = win.findChild<Editor*>();
+        check(ed != nullptr && ed->document() != nullptr, "draw order menu: there is a drawing");
+        if (ed && ed->document()) {
+            Entity line;
+            line.id = QStringLiteral("ORD-1");
+            line.type = EntityType::Line;
+            line.a = {0.0, 0.0};
+            line.b = {50.0, 0.0};
+            ed->document()->entities().push_back(line);
+
+            auto submenu = [&](QMenu& m) -> QMenu* {
+                for (QAction* a : m.actions())
+                    if (a->menu() && a->text().contains(QStringLiteral("Draw Order"))) return a->menu();
+                return nullptr;
+            };
+
+            // WITH NOTHING PICKED it is there but dead - the commands need something to act on.
+            ed->clearSelection();
+            QMenu idle;
+            win.buildCanvasMenu(idle, {25.0, 0.0});
+            QMenu* off = submenu(idle);
+            check(off != nullptr, "draw order menu: the submenu is on the canvas menu");
+            bool offEnabled = true;
+            for (QAction* a : idle.actions())
+                if (a->menu() == off) offEnabled = a->isEnabled();
+            check(!offEnabled, "draw order menu: with nothing picked it is greyed out");
+
+            // WITH SOMETHING PICKED, all four commands, live.
+            ed->selectById(QStringLiteral("ORD-1"));
+            QMenu live;
+            win.buildCanvasMenu(live, {25.0, 0.0});
+            QMenu* on = submenu(live);
+            check(on != nullptr, "draw order menu: still there with a selection");
+            QStringList said;
+            if (on)
+                for (QAction* a : on->actions())
+                    if (!a->text().isEmpty()) said << a->text();
+            std::printf("  draw order menu: %s\n", qPrintable(said.join(QStringLiteral(" | "))));
+            check(said.contains(QStringLiteral("Bring to Front")), "draw order menu: Bring to Front");
+            check(said.contains(QStringLiteral("Send to Back")), "draw order menu: Send to Back");
+            check(said.contains(QStringLiteral("Bring Above Objects")),
+                  "draw order menu: Bring Above Objects");
+            check(said.contains(QStringLiteral("Send Under Objects")),
+                  "draw order menu: Send Under Objects");
+            bool onEnabled = false;
+            for (QAction* a : live.actions())
+                if (a->menu() == on) onEnabled = a->isEnabled();
+            check(onEnabled, "draw order menu: and with a selection it is live");
+
+            // AND THE ENTRY DOES THE WORK - the menu is not a row of dead words.
+            if (on) {
+                Entity over;
+                over.id = QStringLiteral("ORD-2");
+                over.type = EntityType::Line;
+                over.a = {0.0, 1.0};
+                over.b = {50.0, 1.0};
+                ed->document()->entities().push_back(over);   // ORD-2 now sits in front of ORD-1
+                for (QAction* a : on->actions())
+                    if (a->text() == QLatin1String("Bring to Front")) a->trigger();
+                QApplication::processEvents();
+                const auto& ents = ed->document()->entities();
+                check(!ents.empty() && ents.back().id == QLatin1String("ORD-1"),
+                      "draw order menu: Bring to Front put the picked line in front");
+            }
+        }
+    }
+
     // ---- editing in the library: primitives, and a connector made from data --------------------------
     {
         // ON A SHEET a part is one thing: a click picks the whole connector, which is right, because there

@@ -163,6 +163,19 @@ struct MechSegment {
     // have to leave from THEM: both starting at the station's middle drew two bundles crossing out of
     // one point that belongs to neither housing.
     QString fromEnd;
+
+    // WHERE ITS FAR END LANDS, when that is a station rather than wherever the run happened to reach.
+    //
+    // A station described in parts has limbs hanging off it - a connector, its wires - and those wires
+    // end nowhere until the harness carries on. Add the next mother part and they should MEET it: that
+    // is what a loom is, several tails gathering into the next thing along. Left alone they stopped in
+    // mid air at whatever length each was given, and the new station sat past them unconnected.
+    //
+    // `toStation` is the node they gather on, and `toLane` which way in they take once there - one per
+    // limb, so two wires entering one part do not land on the same spot. Empty means what it has always
+    // meant: the run ends where it ends, which is every run that nothing follows.
+    QString toStation;
+    int toLane = 0;
     QString id;
     QString fromNode;
     QString toNode;

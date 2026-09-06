@@ -310,6 +310,20 @@ public:
     void clearSelection();
     void deleteSelected();
 
+    // ---- WHICH OBJECT IS IN FRONT ---------------------------------------------------------------
+    //
+    // Two objects in the same place are drawn in the order the document holds them, so "in front" is a
+    // position in that list and nothing else. A hatch laid over a bundle, a wipeout over a title block,
+    // a label under the wires it names - on a real sheet these overlap constantly and which one wins is
+    // not something to be settled by the order they happened to be drawn in.
+    //
+    // Front and Back are absolute. ABOVE and UNDER are relative to what the selection actually TOUCHES:
+    // the highest, or lowest, object its own extent overlaps. That is what somebody wants from "bring it
+    // above the objects" - above the things it is interfering with, not above a reference they have to
+    // pick separately - and it leaves everything the selection does not touch where it was.
+    enum class DrawOrder { Front, Back, AboveTouching, UnderTouching };
+    void setSelectionDrawOrder(DrawOrder where);
+
     // Align routing (schematic): the next canvas click picks a reference connector
     // that stays put; every OTHER connector wired to it is shifted so its connecting
     // wires become axis-aligned (horizontal if the run is mostly horizontal, else

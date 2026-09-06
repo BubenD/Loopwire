@@ -15408,6 +15408,73 @@ void Editor::setGeometryValue(const QString& key, double v) {
     emit changed();
 }
 
+void Editor::setSelectionDrawOrder(DrawOrder where) {
+    if (!doc_ || selected_.empty()) return;
+    auto& ents = doc_->entities();
+
+    // The selection, taken out in the order it already had - so a set of objects keeps its own internal
+    // order when it moves as a group. Re-sorting them among themselves would shuffle a hatch behind its
+    // own boundary for no reason anybody asked for.
+    std::vector<Entity> moving;
+    std::vector<Entity> staying;
+    moving.reserve(selected_.size());
+    staying.reserve(ents.size());
+    Bounds reach;
+    for (const Entity& e : ents) {
+        if (std::find(selected_.begin(), selected_.end(), e.id) != selected_.end()) {
+            moving.push_back(e);
+            reach.expand(e.bounds());
+        } else {
+            staying.push_back(e);
+        }
+    }
+    if (moving.empty()) return;
+
+    // Where in what is left the selection goes back in.
+    size_t at = 0;
+    switch (where) {
+    case DrawOrder::Front:
+        at = staying.size();
+        break;
+    case DrawOrder::Back:
+        at = 0;
+        break;
+    case DrawOrder::AboveTouching:
+    case DrawOrder::UnderTouching: {
+        // WHAT IT TOUCHES decides, and nothing else does. An object the selection does not overlap has
+        // no quarrel with it, so moving past that one would be moving for the sake of it.
+        bool found = false;
+        size_t highest = 0, lowest = staying.size();
+        for (size_t i = 0; i < staying.size(); ++i) {
+            const Bounds b = staying[i].bounds();
+            if (!b.valid || !reach.valid) continue;
+            if (b.max.x < reach.min.x || b.min.x > reach.max.x) continue;
+            if (b.max.y < reach.min.y || b.min.y > reach.max.y) continue;
+            if (!found) { highest = i; lowest = i; found = true; }
+            else { highest = std::max(highest, i); lowest = std::min(lowest, i); }
+        }
+        if (!found) {
+            // Nothing under it at all: front and back are the only meanings left, and the one asked for
+            // is the one that gets it out of the way.
+            at = where == DrawOrder::AboveTouching ? staying.size() : 0;
+        } else {
+            at = where == DrawOrder::AboveTouching ? highest + 1 : lowest;
+        }
+        break;
+    }
+    }
+
+    pushUndo();
+    std::vector<Entity> rebuilt;
+    rebuilt.reserve(ents.size());
+    rebuilt.insert(rebuilt.end(), staying.begin(), staying.begin() + static_cast<long>(at));
+    rebuilt.insert(rebuilt.end(), moving.begin(), moving.end());
+    rebuilt.insert(rebuilt.end(), staying.begin() + static_cast<long>(at), staying.end());
+    ents = std::move(rebuilt);
+    doc_->setDirty(true);
+    emit changed();
+}
+
 void Editor::deleteSelected() {
     if (!doc_ || selected_.empty()) return;
     // Deleting the objects an un-placed array is built from ends that array.

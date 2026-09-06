@@ -529,6 +529,58 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
             if (nd.id == nodeId) nd.hasSubparts = true;
     }
 
+    // ---- THE LIMBS OF A STATION GATHER INTO THE NEXT ONE ----------------------------------------
+    //
+    // A station described in parts has tails hanging off it: a connector, and the wires under it. Those
+    // wires end nowhere until the harness carries on - and when the next mother part is added they
+    // should MEET it, because that is what a loom is. Left alone each stopped in mid air at whatever
+    // length it was given while the new station sat past them, joined to nothing.
+    //
+    // A limb is a RUN, hung on as a part, that nothing follows. The station it belongs to is found by
+    // walking up until a step that is not a part; the station it gathers into is the next step at that
+    // station which is NOT a part - the mother part just added. Each limb takes its own way in, in the
+    // order they were described, so two wires entering one part do not land on the same spot.
+    {
+        // Which station each step belongs to, walked once.
+        const auto stationOf = [&](const MechStep& s) {
+            const MechStep* at = &s;
+            while (at && at->isSubpart) at = script.step(at->parentStep);
+            return at ? at->id : QString();
+        };
+        for (const MechStep& limb : script.steps) {
+            if (!limb.isSubpart || mechStepRole(limb.kind) != MechStepRole::Run) continue;
+            if (!script.childSteps(limb.id).empty()) continue;      // something follows it: not a tail
+            const QString station = stationOf(limb);
+            if (station.isEmpty()) continue;
+
+            // The next thing at that station that is a station in its own right.
+            QString mother;
+            for (const MechStep* sib : script.childSteps(station))
+                if (!sib->isSubpart) { mother = sib->id; break; }
+            if (mother.isEmpty()) continue;                          // nothing to gather into yet
+            const QString motherNode = out.stepToNode.value(mother);
+            if (motherNode.isEmpty()) continue;
+
+            const QString segId = out.stepToSegment.value(limb.id);
+            if (segId.isEmpty()) continue;
+            for (MechSegment& sg : out.def.segments) {
+                if (sg.id != segId) continue;
+                sg.toStation = motherNode;
+                // Its place among the limbs gathering here, so each takes its own way in.
+                int lane = 0;
+                for (const MechStep& other : script.steps) {
+                    if (other.id == limb.id) break;
+                    if (!other.isSubpart || mechStepRole(other.kind) != MechStepRole::Run) continue;
+                    if (!script.childSteps(other.id).empty()) continue;
+                    if (stationOf(other) == station) ++lane;
+                }
+                sg.toLane = lane;
+                break;
+            }
+        }
+    }
+
+
     return out;
 }
 

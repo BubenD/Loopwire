@@ -8990,6 +8990,157 @@ int run_editor_tests() {
               "space turn: and Shift+Space turns it back anticlockwise");
     }
 
+    // ---- DRAW ORDER: which of two things in the same place is in front ---------------------------
+    {
+        // Three lines stacked in the same place, and a fourth well away from all of them. The one away
+        // is the whole point of the relative commands: it has no quarrel with the others, so nothing
+        // should ever be moved past it. TOUCHING means the extents overlap - two parallel lines a
+        // millimetre apart do NOT touch, which is why the above/under fixtures below cross instead.
+        auto sheet = [](Document& d) {
+            d.entities().clear();
+            auto line = [&](const char* id, double y) {
+                Entity e;
+                e.id = QString::fromLatin1(id);
+                e.type = EntityType::Line;
+                e.a = {0.0, y};
+                e.b = {100.0, y};
+                d.entities().push_back(e);
+            };
+            line("A", 0.0);
+            line("B", 1.0);
+            line("C", 2.0);
+            Entity far;
+            far.id = QStringLiteral("FAR");
+            far.type = EntityType::Line;
+            far.a = {900.0, 900.0};
+            far.b = {1000.0, 900.0};
+            d.entities().push_back(far);
+        };
+        auto order = [](Document& d) {
+            QStringList out;
+            for (const Entity& e : d.entities()) out << e.id;
+            return out.join(QLatin1Char(','));
+        };
+
+        // ---- FRONT and BACK are absolute. ----
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.selectById(QStringLiteral("A"));
+            ed.setSelectionDrawOrder(Editor::DrawOrder::Front);
+            std::printf("  draw order: front -> %s\n", qPrintable(order(d)));
+            check(order(d) == QLatin1String("B,C,FAR,A"), "draw order: to the front is last of all");
+
+            ed.clearSelection();
+            ed.selectById(QStringLiteral("FAR"));
+            ed.setSelectionDrawOrder(Editor::DrawOrder::Back);
+            std::printf("  draw order: back  -> %s\n", qPrintable(order(d)));
+            check(order(d) == QLatin1String("FAR,B,C,A"), "draw order: to the back is first of all");
+        }
+
+        // ---- A GROUP KEEPS ITS OWN ORDER when it moves as one. ----
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.selectById(QStringLiteral("A"));
+            ed.selectById(QStringLiteral("C"), /*additive=*/true);
+            check(ed.selection().size() == 2, "draw order: both lines are picked");
+            ed.setSelectionDrawOrder(Editor::DrawOrder::Front);
+            std::printf("  draw order: two to the front -> %s\n", qPrintable(order(d)));
+            check(order(d) == QLatin1String("B,FAR,A,C"),
+                  "draw order: A was under C and is still under C");
+        }
+
+        // ---- ABOVE: past what it TOUCHES, and no further. ----
+        {
+            // A is at the bottom, B lies across it, FAR is on top of the pile and touches neither.
+            Document d;
+            d.entities().clear();
+            auto add = [&](const char* id, Vec2 a, Vec2 b) {
+                Entity e;
+                e.id = QString::fromLatin1(id);
+                e.type = EntityType::Line;
+                e.a = a;
+                e.b = b;
+                d.entities().push_back(e);
+            };
+            add("A", {0.0, 0.0}, {100.0, 0.0});
+            add("B", {50.0, -10.0}, {50.0, 10.0});   // crosses A
+            add("FAR", {900.0, 900.0}, {1000.0, 900.0});
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.selectById(QStringLiteral("A"));
+            ed.setSelectionDrawOrder(Editor::DrawOrder::AboveTouching);
+            std::printf("  draw order: above -> %s\n", qPrintable(order(d)));
+            // The tell: FAR is still LAST. Bringing it to the front instead would read "B,FAR,A".
+            check(order(d) == QLatin1String("B,A,FAR"),
+                  "draw order: above clears what it overlaps and stops there");
+        }
+
+        // ---- UNDER: below what it TOUCHES, and no further. ----
+        {
+            Document d;
+            d.entities().clear();
+            auto add = [&](const char* id, Vec2 a, Vec2 b) {
+                Entity e;
+                e.id = QString::fromLatin1(id);
+                e.type = EntityType::Line;
+                e.a = a;
+                e.b = b;
+                d.entities().push_back(e);
+            };
+            add("FAR", {900.0, 900.0}, {1000.0, 900.0});
+            add("B", {50.0, -10.0}, {50.0, 10.0});   // crosses A
+            add("A", {0.0, 0.0}, {100.0, 0.0});
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.selectById(QStringLiteral("A"));
+            ed.setSelectionDrawOrder(Editor::DrawOrder::UnderTouching);
+            std::printf("  draw order: under -> %s\n", qPrintable(order(d)));
+            // The tell: FAR is still FIRST. Sending it to the back would read "A,FAR,B".
+            check(order(d) == QLatin1String("FAR,A,B"),
+                  "draw order: under drops below what it overlaps and stops there");
+        }
+
+        // ---- IT IS AN EDIT, so it can be taken back. ----
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            const QString was = order(d);
+            ed.selectById(QStringLiteral("A"));
+            ed.setSelectionDrawOrder(Editor::DrawOrder::Front);
+            check(order(d) != was, "draw order: the order did change");
+            ed.undo();
+            std::printf("  draw order: undone -> %s (was %s)\n", qPrintable(order(d)),
+                        qPrintable(was));
+            check(order(d) == was, "draw order: and undo puts the order back");
+        }
+
+        // ---- NOTHING SELECTED, nothing happens. ----
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            const QString was = order(d);
+            ed.clearSelection();
+            ed.setSelectionDrawOrder(Editor::DrawOrder::Front);
+            check(order(d) == was, "draw order: with nothing picked the sheet is left alone");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
