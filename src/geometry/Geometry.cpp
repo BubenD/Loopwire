@@ -763,6 +763,23 @@ std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
     return out;
 }
 
+std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm) {
+    const double len = distance(tail, tip);
+    if (len < 1e-9) return {};
+    const Vec2 u = (tip - tail).normalized();
+    const Vec2 v = u.perp();
+    // The head is a little over a third of the length, and never longer than the arrow: a stub arrow is
+    // all head, which still reads as an arrow, where a head longer than the shaft reads as a triangle
+    // somebody has dragged a line out of.
+    const double headLen = std::min(len, len * 0.36);
+    const double shaftHalf = (widthMm > 0.0 ? widthMm : len * 0.18) / 2.0;
+    const double barbHalf = shaftHalf * 2.0;
+    const Vec2 neck = tip - u * headLen;
+    return {tail + v * shaftHalf,  neck + v * shaftHalf,  neck + v * barbHalf,
+            tip,
+            neck - v * barbHalf,   neck - v * shaftHalf,  tail - v * shaftHalf};
+}
+
 // HEATSHRINK ALONG A ROUTE, as the outline it actually has.
 //
 // A sleeve covers a STRETCH of harness, and where that stretch bends the sleeve bends with it - so the

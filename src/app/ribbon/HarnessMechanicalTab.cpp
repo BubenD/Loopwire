@@ -466,6 +466,31 @@ void MainWindow::buildHarnessMechanicalTab() {
             });
             lgAdd(labelBtn);
         }
+        // WHICH WAY, AND ABOUT WHAT. Two things a released mechanical drawing says constantly and
+        // neither of which the sheet could draw: a block arrow for a direction, and an axis with the
+        // turn about it. Both belong in Special for the same reason the break mark does - they are the
+        // furniture of this kind of drawing rather than geometry somebody is modelling.
+        {
+            auto* vaBtn = new QToolButton(lenW);
+            vaBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::VolumeArrow), ToolId::VolumeArrow));
+            vaBtn->setToolTip(QStringLiteral(
+                "A block arrow: click the tail, then the tip. It is a shape with a width, not a "
+                "pointer - what a drawing uses to say which way a thing goes in, or which way it "
+                "turns. Pulling either end re-lays it, so it stays an arrow at any length."));
+            vaBtn->setAutoRaise(true);
+            vaBtn->setFocusPolicy(Qt::NoFocus);
+            lgAdd(vaBtn);
+
+            auto* aaBtn = new QToolButton(lenW);
+            aaBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::AxisAngle), ToolId::AxisAngle));
+            aaBtn->setToolTip(QStringLiteral(
+                "The axis and the turn about it: click where the axis is, then the way it goes. A "
+                "cross marks the axis, an arrow runs off it, and the angle is written beside them - "
+                "one object, so the arrow cannot end up on the sheet without its centre."));
+            aaBtn->setAutoRaise(true);
+            aaBtn->setFocusPolicy(Qt::NoFocus);
+            lgAdd(aaBtn);
+        }
         // TWO EQUAL ROWS. As many columns as it takes to halve them, filled along the top row and then
         // along the bottom - the way a row of pictures is read - so the two rows are the same length and the
         // group is a block rather than a comb. An odd one out goes on the TOP row: the eye starts there.

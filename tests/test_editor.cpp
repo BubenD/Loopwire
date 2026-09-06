@@ -43,6 +43,67 @@ int run_editor_tests() {
 
     g_fail = 0;
 
+    // --- TWO PIECES OF DRAWING FURNITURE: a block arrow, and an axis with the turn about it.
+    //
+    // Both are kept as their two CLICKED POINTS and drawn from them, not as the outline they came out
+    // as. That is the difference between a symbol and a shape somebody once made: pulling an end
+    // re-lays the arrow, where an outline stored as the object deforms into a blob the first time a
+    // corner is dragged - the same reason a heatshrink sleeve keeps its route.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+
+        ed.setTool(ToolId::VolumeArrow);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);      // the tail
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);    // the tip
+        check(d.entities().size() == 1, "volume arrow: two clicks place one object");
+        if (!d.entities().empty()) {
+            const Entity& a = d.entities().front();
+            check(a.meta.value(QStringLiteral("volumeArrow")).toBool(),
+                  "volume arrow: marked as one, so the renderer knows to lay it out");
+            check(near(a.a.x, 0.0) && near(a.b.x, 100.0),
+                  "volume arrow: it keeps the tail and the tip it was drawn between");
+            const std::vector<Vec2> o = volumeArrowOutline(a.a, a.b);
+            check(o.size() == 7, "volume arrow: a shaft, two barbs and a point");
+            double lo = 1e18, hi = -1e18, reach = -1e18;
+            for (const Vec2& v : o) {
+                lo = std::min(lo, v.y);
+                hi = std::max(hi, v.y);
+                reach = std::max(reach, v.x);
+            }
+            check(near(reach, 100.0), "volume arrow: the point lands exactly on the second click");
+            check(hi > 0.0 && near(hi + lo, 0.0),
+                  "volume arrow: and it is symmetric about the line between them");
+            // PROPORTIONED FROM ITS OWN LENGTH. Drawn to fixed millimetres a short arrow is all head
+            // and a long one is a hairline with a dart on it; what a reader recognises is the shape.
+            const std::vector<Vec2> shortOne = volumeArrowOutline({0, 0}, {10, 0});
+            double shortHi = -1e18;
+            for (const Vec2& v : shortOne) shortHi = std::max(shortHi, v.y);
+            std::printf("  volume arrow: 100 long is %.1f wide, 10 long is %.1f\n", hi, shortHi);
+            check(shortHi > 0.0 && shortHi < hi,
+                  "volume arrow: a short one is the same shape smaller, not the same head on a stub");
+        }
+
+        ed.setTool(ToolId::AxisAngle);
+        ed.onPointerPress({50, 50}, Qt::LeftButton, Qt::NoModifier);    // where the axis is
+        ed.onPointerPress({50, 90}, Qt::LeftButton, Qt::NoModifier);    // straight up from it
+        check(d.entities().size() == 2, "axis angle: two clicks place one object");
+        if (d.entities().size() == 2) {
+            const Entity& x = d.entities().back();
+            check(x.meta.value(QStringLiteral("axisAngle")).toBool(),
+                  "axis angle: marked as one - cross, arrow and angle are ONE object");
+            check(near(x.a.x, 50.0) && near(x.a.y, 50.0),
+                  "axis angle: the cross sits where the axis was clicked");
+            // MEASURED IN WORLD COORDINATES. On the screen y runs the other way and every angle would
+            // come out mirrored - straight up would read 270.
+            double deg = std::atan2(x.b.y - x.a.y, x.b.x - x.a.x) * 180.0 / M_PI;
+            if (deg < 0.0) deg += 360.0;
+            std::printf("  axis angle: straight up reads %.1f degrees\n", deg);
+            check(near(deg, 90.0), "axis angle: straight up is 90 degrees, not 270");
+        }
+    }
+
     // --- The chrome's ground can be chosen per scheme, and stays readable whatever is chosen.
     {
         // Chrome is global, so what was set is put back before anything else runs.

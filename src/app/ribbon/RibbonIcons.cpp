@@ -234,7 +234,33 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         }
         break;
     }
-    case ToolId::NetLabel: { QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
+    case ToolId::VolumeArrow: {
+        // The arrow itself, at the proportions the tool draws - a shaft, two barbs and a point. Drawn
+        // as the outline it is, not as a filled dart: the tool places a shape with a width, and an icon
+        // of a solid triangle would say it places a dimension arrowhead.
+        QPolygonF a;
+        const double y = 12.0, sh = 3.0, barb = 6.5, neck = 15.0;
+        a << QPointF(3, y - sh) << QPointF(neck, y - sh) << QPointF(neck, y - barb)
+          << QPointF(22, y) << QPointF(neck, y + barb) << QPointF(neck, y + sh) << QPointF(3, y + sh);
+        p.drawPolygon(a);
+        break;
+    }
+    case ToolId::AxisAngle: {
+        // The cross where the axis is and the arrow off it, which is what the tool draws and what tells
+        // it from a plain arrow: the reader is being shown a centre AND a turn about it.
+        p.drawLine(QPointF(3, 17), QPointF(13, 17));
+        p.drawLine(QPointF(8, 12), QPointF(8, 22));
+        QPainterPath sweep(QPointF(8, 17));
+        sweep.lineTo(QPointF(19, 6));
+        p.drawPath(sweep);
+        // The head on the far end, drawn as two strokes rather than filled - at 24 pixels a filled head
+        // is a blob and the cross is what has to be read first.
+        p.drawLine(QPointF(19, 6), QPointF(14, 7));
+        p.drawLine(QPointF(19, 6), QPointF(18, 11));
+        break;
+    }
+    case ToolId::NetLabel: {
+ QPolygonF a({{4, 8}, {15, 8}, {20, 12}, {15, 16}, {4, 16}}); p.drawPolygon(a); break; }
     case ToolId::Balloon: {
         // Numbered callout: a circle with a leader stub and a "1" inside.
         p.drawEllipse(QPointF(9, 9), 6, 6);

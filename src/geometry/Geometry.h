@@ -69,6 +69,20 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
                                       double headHalf, double tailHalf,
                                       double headTaper, double tailTaper);
 
+// A BLOCK ARROW, tail to tip: the solid outlined arrow that says which way something goes.
+//
+// Seven corners - the shaft's two sides, the two barbs the head steps out to, and the point - given as
+// one closed outline ready to draw or to fill.
+//
+// Proportioned from its own LENGTH so it stays an arrow at any size. Drawn to fixed millimetres, a
+// short one is all head and a long one is a hairline with a dart on the end; a reader recognises the
+// shape, not the measurements. The head takes a little over a third of the length and is twice the
+// width of the shaft, which is roughly what the arrow on any released drawing looks like.
+//
+// `widthMm` overrides the shaft width when the sheet says what it should be; 0 means "work it out".
+// Empty when the two points are the same, which is not an arrow.
+std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm = 0.0);
+
 // Offset a CLOSED polygon (rect/polygon) sideways by `dist` (sign picks in/out),
 // mitering every wrapped vertex. Companion to offsetPolyline (which is for open runs).
 std::vector<Vec2> offsetClosedPolygon(const std::vector<Vec2>& pts, double dist);

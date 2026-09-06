@@ -8879,6 +8879,9 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polygon:
     case ToolId::Note:
     case ToolId::Revision:
+    // Two clicks each: the block arrow's tail then its tip, the axis then the way it is turned.
+    case ToolId::VolumeArrow:
+    case ToolId::AxisAngle:
         if (tool_ == ToolId::DoubleLine) {
             // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
             if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
@@ -9632,6 +9635,26 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        break;
+    case ToolId::VolumeArrow:
+        // A BLOCK ARROW, tail to tip. The object keeps the two ends and the outline is worked out when
+        // it is drawn - see volumeArrowOutline - so pulling an end re-lays the arrow rather than
+        // dragging one corner of a shape that has forgotten what it is.
+        if (draftPts_.size() < 2) return;
+        e.type = EntityType::Polygon;
+        e.a = draftPts_[0];
+        e.b = draftPts_[1];
+        e.meta.insert(QStringLiteral("volumeArrow"), true);
+        break;
+    case ToolId::AxisAngle:
+        // THE AXIS, AND WHICH WAY IT IS TURNED: the cross goes where the first click was, the arrow
+        // runs to the second, and the angle between them is read off the two. One object, so the cross
+        // and its arrow cannot be separated on the sheet - see the renderer.
+        if (draftPts_.size() < 2) return;
+        e.type = EntityType::Line;
+        e.a = draftPts_[0];
+        e.b = draftPts_[1];
+        e.meta.insert(QStringLiteral("axisAngle"), true);
         break;
     case ToolId::TwistedPair:
         // Drawn like a line, between the two points the pair runs between. What shapes it - how far
@@ -17011,6 +17034,24 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             const Entity sleeve = heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_);
             if (!sleeve.points.empty())
                 EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if (tool_ == ToolId::VolumeArrow && pts.size() >= 2) {
+            // Previewed as the arrow itself, by the same code that will place it - so what is on the
+            // screen while it is being drawn is what lands.
+            Entity a;
+            a.type = EntityType::Polygon;
+            a.a = pts[0];
+            a.b = pts[1];
+            a.meta.insert(QStringLiteral("volumeArrow"), true);
+            EntityRenderer::draw(p, a, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if (tool_ == ToolId::AxisAngle && pts.size() >= 2) {
+            // The cross, the arrow and the angle, all live: the angle is the whole reason for the tool
+            // and reading it only after the second click is reading it too late.
+            Entity a;
+            a.type = EntityType::Line;
+            a.a = pts[0];
+            a.b = pts[1];
+            a.meta.insert(QStringLiteral("axisAngle"), true);
+            EntityRenderer::draw(p, a, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
             // Previewed as the thing itself, drawn by the same code that will draw it once placed -
             // so what is on screen while placing it is what is placed.

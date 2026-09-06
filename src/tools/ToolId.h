@@ -48,6 +48,19 @@ enum class ToolId {
     // covers a length of harness, and where that length bends the sleeve bends with it. A fixed-length
     // placement cannot say a sleeve round a corner at all.
     HeatshrinkRoute,
+    // A BLOCK ARROW - the solid outlined arrow a drawing uses to say which way something goes.
+    //
+    // Not a leader and not a dimension: those point AT things and measure them. This one is a shape on
+    // the sheet with a length and a width, drawn tail-to-tip like a line, and it is what says "assemble
+    // in this direction" or "airflow this way" on a released drawing.
+    VolumeArrow,
+    // THE AXIS, AND WHICH WAY IT IS TURNED. A cross where the axis is, an arrow off it the way the part
+    // goes, and the angle of that arrow written beside it.
+    //
+    // Two clicks: the axis, then the direction. The cross marks the axis whatever the arrow does, which
+    // is what tells this from an ordinary arrow - the reader is being shown a centre AND a rotation
+    // about it, and an arrow alone says nothing about where the middle is.
+    AxisAngle,
     // Modify (reference-point driven)
     Move,
     Rotate,
@@ -118,6 +131,8 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedHarness: // two clicks, and however many wires the ribbon says
     case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
     case ToolId::HeatshrinkRoute: // as many knees as the stretch it covers needs
+    case ToolId::VolumeArrow:     // two clicks: the tail, then the tip
+    case ToolId::AxisAngle:       // two clicks: the axis, then the way it is turned
         return true;
     default:
         return false;
@@ -168,6 +183,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::TwistedHarness: return QStringLiteral("Twisted harness");
     case ToolId::TwistedHarnessRoute: return QStringLiteral("Twisted harness route");
     case ToolId::HeatshrinkRoute: return QStringLiteral("Heatshrink over the run");
+    case ToolId::VolumeArrow: return QStringLiteral("Volume arrow");
+    case ToolId::AxisAngle: return QStringLiteral("Axis angle");
     // The tool keeps its NetLabel id for compatibility with saved drawings; what it places
     // is a wire label, and that is what it is called.
     case ToolId::NetLabel: return QStringLiteral("Wire label");

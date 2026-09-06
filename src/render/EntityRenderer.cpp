@@ -1294,6 +1294,49 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     switch (e.type) {
     case EntityType::Line:
+        // THE AXIS AND THE WAY IT IS TURNED: a cross where the axis is, an arrow off it, and the angle
+        // of that arrow written beside it. One object, because it is one thing to whoever reads the
+        // sheet - an arrow that has lost its cross says nothing about where the middle was.
+        if (e.meta.value("axisAngle").toBool()) {
+            const QPointF c = vt.toScreen(e.a);
+            const QPointF t = vt.toScreen(e.b);
+            const double dx = t.x() - c.x(), dy = t.y() - c.y();
+            const double len = std::hypot(dx, dy);
+            // THE CROSS IS DRAWN IN MILLIMETRES, not in screen pixels: it is part of the drawing and
+            // has to plot at the size it was made, the same as a centre mark does.
+            const double arm = std::max(1e-6, e.meta.value("crossSize").toDouble(4.0)) *
+                               EntityRenderer::annotationScale() * vt.scale();
+            p.drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()));
+            p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
+            if (len > 1e-9) {
+                p.drawLine(c, t);
+                const QPointF dir(dx / len, dy / len);
+                const double head = e.meta.value("arrowSize").toDouble(3.3) *
+                                    EntityRenderer::annotationScale();
+                drawArrowHead(p, t, dir, color, std::clamp(head * vt.scale(), 5.0, 40.0));
+                // THE ANGLE THE ARROW MAKES, anticlockwise from the +x axis and always read as 0..360.
+                // Measured in WORLD coordinates and not on the screen, where y runs the other way and
+                // every angle would come out mirrored.
+                double deg = std::atan2(e.b.y - e.a.y, e.b.x - e.a.x) * 180.0 / M_PI;
+                if (deg < 0.0) deg += 360.0;
+                const QString said = e.meta.value("textOverride").toString().isEmpty()
+                                         ? QStringLiteral("%1°").arg(deg, 0, 'f', 1)
+                                         : e.meta.value("textOverride").toString();
+                QFont f = p.font();
+                const double h = e.meta.value("textSize").toDouble(3.5) *
+                                 EntityRenderer::annotationScale() * vt.scale();
+                f.setPixelSize(std::max(7, static_cast<int>(h)));
+                p.setFont(f);
+                // Beside the middle of the arrow and clear of it, on the side the arrow is turning
+                // away from, so the words never lie along the line they are labelling.
+                const QPointF mid((c.x() + t.x()) / 2.0, (c.y() + t.y()) / 2.0);
+                const QPointF off(-dir.y(), dir.x());
+                p.drawText(QPointF(mid.x() + off.x() * h * 0.9 - h * 0.6,
+                                   mid.y() + off.y() * h * 0.9 - h * 0.3),
+                           said);
+            }
+            break;
+        }
         p.drawLine(vt.toScreen(e.a), vt.toScreen(e.b));
         break;
 
@@ -1575,6 +1618,18 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
 
     case EntityType::Rect:
     case EntityType::Polygon:
+        // A BLOCK ARROW, DRAWN FROM ITS TWO ENDS. The object keeps the tail and the tip; the seven
+        // corners are worked out here, so pulling either end re-lays the arrow instead of dragging one
+        // corner of a shape that has forgotten it is an arrow - the same reason a sleeve keeps its
+        // route. See volumeArrowOutline.
+        if (e.meta.value("volumeArrow").toBool()) {
+            const std::vector<Vec2> outline =
+                volumeArrowOutline(e.a, e.b, e.meta.value("arrowWidth").toDouble(0.0));
+            if (outline.size() >= 3) {
+                p.drawPolygon(toScreenPoly(outline, vt));
+                break;
+            }
+        }
         if (e.points.size() >= 2) {
             // Per-corner fillets / chamfers (set by the Fillet / Chamfer tool) shape
             // the closed outline.
