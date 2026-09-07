@@ -493,11 +493,30 @@ BundleCalc bundleCalculation(const std::vector<double>& wireOds, double packingF
     } else {
         c.rule = QStringLiteral("random-lay");
         c.result = c.root * c.packingFactor;
-        QStringList squares;
-        for (double d : c.wireOds) squares << mm(d);
+        // LIKE WITH LIKE, AND COUNTED. A bundle is nearly always a few sizes of wire in quantity, and
+        // writing 2.500² + 2.500² + 2.500² + 1.800² + 1.800² out in full says nothing the reader
+        // cannot already see on the table above - it only gets long enough to wrap and stops being
+        // checkable. Three of one and two of another is how somebody working the figure out by hand
+        // would put it, and it reads straight back against the amount column.
+        //
+        // Grouped on the PRINTED diameter rather than the stored one: two conductors that show the
+        // same number in the table belong in the same term whatever they differ by in the last
+        // decimal place, and a term that says "3 × 2.500²" beside three rows all reading 2.500 is
+        // the whole point of doing this. The list is sorted large-first already, so equal ones are
+        // side by side and one pass over it is enough.
+        QStringList terms;
+        for (size_t i = 0; i < c.wireOds.size();) {
+            const QString d = mm(c.wireOds[i]);
+            size_t n = 0;
+            while (i + n < c.wireOds.size() && mm(c.wireOds[i + n]) == d) ++n;
+            // A size that turns up once is written as itself: "1 ×" in front of it is a count of
+            // nothing worth counting.
+            terms << (n > 1 ? QStringLiteral("%1 × %2²").arg(static_cast<int>(n)).arg(d)
+                            : QStringLiteral("%1²").arg(d));
+            i += n;
+        }
         c.workings << QStringLiteral("D_bundle = √(Σ D²_wire) × k_packing")
-                   << QStringLiteral("Σ D²_wire = %1²  (mm)")
-                          .arg(squares.join(QStringLiteral("² + ")))
+                   << QStringLiteral("Σ D²_wire = %1  (mm)").arg(terms.join(QStringLiteral(" + ")))
                    << QStringLiteral("         = %1 mm²").arg(mm(c.sumOfSquares))
                    << QStringLiteral("√(Σ D²_wire) = %1 mm").arg(mm(c.root))
                    << QStringLiteral("k_packing = %1  (%2)")

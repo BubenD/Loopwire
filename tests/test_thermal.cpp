@@ -70,6 +70,35 @@ int run_thermal_tests() {
               "bundle calc: and names k_packing in it");
         check(!c.explanation().isEmpty(), "bundle calc: with an explanation beside it");
 
+        // ---- THE SUM IS WRITTEN COUNTED, not one conductor at a time. ----
+        {
+            // Three of one size, two of another and one on its own. Written out in full that is six
+            // terms saying what the wire table already says; counted it is a line somebody can check.
+            const BundleCalc mixed =
+                bundleCalculation({2.5, 1.8, 2.5, 1.8, 0.9, 2.5}, -1.0, 1.0);
+            QString sum;
+            for (const QString& line : mixed.workings)
+                if (line.startsWith(QStringLiteral("Σ D²_wire ="))) sum = line;
+            std::printf("    (mixed bundle: %s)\n", qPrintable(sum));
+            // QStringLiteral and not QLatin1String for anything with a × or a ² in it: the source is
+            // UTF-8, and read as Latin-1 each of those becomes two characters that match nothing.
+            check(sum.contains(QStringLiteral("3 × 2.500²")),
+                  "bundle working: three of a size are one counted term");
+            check(sum.contains(QStringLiteral("2 × 1.800²")),
+                  "bundle working: and so are two of the next");
+            // A size that turns up once carries no count - "1 ×" in front of it counts nothing.
+            check(sum.contains(QStringLiteral("0.900²")) && !sum.contains(QStringLiteral("1 × ")),
+                  "bundle working: a lone conductor is written as itself");
+            // LARGEST FIRST, the same order the conductors are counted in.
+            check(sum.indexOf(QLatin1String("2.500")) < sum.indexOf(QLatin1String("1.800")) &&
+                      sum.indexOf(QLatin1String("1.800")) < sum.indexOf(QLatin1String("0.900")),
+                  "bundle working: the terms run largest first");
+            // AND IT STILL ADDS UP TO WHAT WAS SQUARED: grouping is how it is written, not what it
+            // is worth.
+            check(near(mixed.sumOfSquares, 3 * 2.5 * 2.5 + 2 * 1.8 * 1.8 + 0.9 * 0.9, 1e-9),
+                  "bundle working: the counted terms are the same sum as before");
+        }
+
         // A k given by hand is used instead, and says so.
         const BundleCalc byHand = bundleCalculation({1.5, 1.5, 1.5, 1.5}, 1.25, 1.0);
         check(near(byHand.packingFactor, 1.25) && !byHand.packingAuto,
