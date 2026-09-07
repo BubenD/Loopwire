@@ -218,7 +218,10 @@ QString axisAngleLabelText(const Entity& e, bool atStart) {
     auto said = [](double v) {
         QString t = QString::number(v, 'f', 1);
         if (t.endsWith(QLatin1String(".0"))) t.chop(2);
-        return t;
+        // WITH THE DEGREE SIGN, because a bare number beside an arc is a length as readily as an
+        // angle. Only on the numbers this writes itself: an override is words the author chose, and
+        // "OPEN" does not want a degree sign after it.
+        return t + QChar(0x00B0);
     };
     const double from = e.meta.value(QStringLiteral("axisFrom")).toDouble(0.0);
     if (atStart) {
@@ -1370,9 +1373,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                                  e.meta.value("axisZero").toDouble(0.0) * M_PI / 180.0;
             const double sweep = e.meta.value("axisSweep").toDouble(180.0) * M_PI / 180.0;
 
-            // The centre lines run along the sweep's own start direction and across it, so with the
-            // usual half turn the two ends of the arc land ON an axis, which is what makes the drawing
-            // read. Long enough to stand out past the arc at both ends, the way a centre mark does.
+            // HOW FAR THE CENTRE LINES REACH. Long enough to stand out past the arc at both ends, the way a centre mark does.
             // The arms are a length of their own, so a long axis can carry a tight arc. An object
             // with no size of its own keeps the proportional arms it used to have.
             const double ownArm = e.meta.value("axisSize").toDouble(0.0);
@@ -1381,10 +1382,12 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                               : std::max(rWorld * 1.18, e.meta.value("crossSize").toDouble(4.0) *
                                                             EntityRenderer::annotationScale());
             const double arm = armWorld * vt.scale();
-            const double sweepDegForStop = e.meta.value("axisSweep").toDouble(180.0);
-            const double stopOff = std::fmod(std::abs(sweepDegForStop), 90.0);
-            const bool needStop = std::min(stopOff, 90.0 - stopOff) > 0.05;
-            const QPointF u(std::cos(start), -std::sin(start));   // screen y runs the other way
+            // THE CROSS HAS A DIRECTION OF ITS OWN - see axisAngleCrossAngle. It used to be laid
+            // along the sweep's start, which meant the start could never be anywhere but on it: drag
+            // the start round and the whole cross came with it, so the angle was always measured
+            // from itself and always read the same. The datum stays put now; the start moves on it.
+            const double cross = axisAngleCrossAngle(e);
+            const QPointF u(std::cos(cross), -std::sin(cross));   // screen y runs the other way
             const QPointF v(-u.y(), u.x());
             {
                 // THE CROSS, with the object's own pen - so the linetype row on its properties is what
@@ -1392,14 +1395,17 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 // finishDraw), which is why it still arrives dash-dot without being forced to be.
                 p.drawLine(c - u * arm, c + u * arm);
                 p.drawLine(c - v * arm, c + v * arm);
-                // AND THE LINE THE ANGLE STOPS AGAINST, when it does not finish on either of them. A
-                // quarter or a half turn ends on a centre line and is stopped by it already; 45 degrees
-                // ends in mid-air, and an arc stopping in mid-air does not say where the travel ends.
-                if (needStop && rWorld > 1e-9) {
-                    const double endAng = start + sweepDegForStop * M_PI / 180.0;
-                    const QPointF w(std::cos(endAng), -std::sin(endAng));
-                    p.drawLine(c, c + w * arm);
-                }
+                // AND A LINE FOR EITHER LIMIT THAT DOES NOT FINISH ON A CENTRE LINE. A quarter or a
+                // half turn ends on one and is stopped by it already; 45 degrees ends in mid-air, and
+                // an arc stopping in mid-air does not say where the travel ends. BOTH limits are asked
+                // now, not only the far one: with the start free of the cross it can hang in mid-air
+                // exactly as the end always could.
+                if (rWorld > 1e-9)
+                    for (const double at : {start, start + sweep})
+                        if (axisAngleNeedsStop(at, cross)) {
+                            const QPointF w(std::cos(at), -std::sin(at));
+                            p.drawLine(c, c + w * arm);
+                        }
             }
 
             if (r > 1e-9 && std::abs(sweep) > 1e-9) {

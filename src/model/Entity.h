@@ -137,6 +137,21 @@ std::vector<Vec2> entityOutline(const Entity& e);
 // together: a long axis with a tight arc could not be drawn at all. An object from before that carries
 // no size of its own still gets the old proportional arms, so old drawings keep the look they had.
 double axisAngleStartAngle(const Entity& e);
+// WHICH WAY THE CENTRE LINES RUN, in radians.
+//
+// Their own number, so the cross can stand still while the sweep's start is dragged round it. They used
+// to be laid along the start, which meant the start could never leave them - drag it sideways and the
+// whole cross came too, so there was no such thing as a sweep beginning off the datum.
+//
+// Absent on everything drawn before that, and then it IS the start, which is exactly how those were
+// drawn: no old object moves.
+double axisAngleCrossAngle(const Entity& e);
+// Whether a limit at `angleRad` needs a radial line drawn to stop the arc against.
+//
+// It does unless it lands on one of the four centre-line arms. A quarter or a half turn off the datum
+// finishes on one and is stopped by it already; 45 degrees stops in mid-air, and an arc that stops in
+// mid-air does not say where the travel ends.
+bool axisAngleNeedsStop(double angleRad, double crossRad);
 double axisAngleArm(const Entity& e);
 
 // The line on a part's drawing where the harness attaches to it - the face of a connector, the barrel

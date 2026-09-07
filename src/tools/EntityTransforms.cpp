@@ -127,6 +127,14 @@ void rotateEntity(Entity& e, const Vec2& pivot, double angle) {
     e.rotation += angle;
     e.startAngle += angle;
     e.endAngle += angle;
+    // AND AN AXIS ANGLE'S CROSS TURNS WITH IT. The cross is the datum the sweep is measured from, and
+    // once it has been pinned (see the start handle) it is an absolute bearing rather than something
+    // read back off the points - so turning the object has to turn it too, or the centre lines stay
+    // where they were while everything drawn against them swings round.
+    if (e.meta.contains(QLatin1String("axisCross")))
+        e.meta.insert(QLatin1String("axisCross"),
+                      e.meta.value(QLatin1String("axisCross")).toDouble() +
+                          angle * 180.0 / 3.14159265358979323846);
 }
 
 void scaleEntity(Entity& e, const Vec2& base, double factor) {
@@ -223,6 +231,16 @@ void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
         return;
     }
     mapPoints(e, [&](const Vec2& p) { return mirrorPoint(p, a, u); });
+
+    // AN AXIS ANGLE'S CROSS REFLECTS TOO. It is an absolute bearing once pinned, so the points came
+    // back reflected and the centre lines they are measured against did not: a bearing reflected in a
+    // line lying at phi is 2*phi minus itself.
+    if (e.meta.contains(QLatin1String("axisCross"))) {
+        constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+        const double phi = std::atan2(u.y, u.x) * kRadToDeg;
+        e.meta.insert(QLatin1String("axisCross"),
+                      2.0 * phi - e.meta.value(QLatin1String("axisCross")).toDouble());
+    }
 
     // A MIRROR SWAPS WHICH RAIL IS WHICH, so every cut has to change sides with them.
     //

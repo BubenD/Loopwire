@@ -216,6 +216,19 @@ double axisAngleStartAngle(const Entity& e) {
     return clicked + e.meta.value(QLatin1String("axisZero")).toDouble(0.0) * kDegToRad;
 }
 
+double axisAngleCrossAngle(const Entity& e) {
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    const QJsonValue own = e.meta.value(QLatin1String("axisCross"));
+    if (own.isDouble()) return own.toDouble() * kDegToRad;
+    return axisAngleStartAngle(e);
+}
+
+bool axisAngleNeedsStop(double angleRad, double crossRad) {
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    const double off = std::fmod(std::abs((angleRad - crossRad) * kRadToDeg), 90.0);
+    return std::min(off, 90.0 - off) > 0.05;
+}
+
 double axisAngleArm(const Entity& e) {
     const double own = e.meta.value(QLatin1String("axisSize")).toDouble(0.0);
     if (own > 1e-9) return own;

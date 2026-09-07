@@ -201,16 +201,6 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // because picking - which runs above it - has to ask the question of a solid block arrow.
 bool pointInPolygon(const std::vector<Vec2>& poly, const Vec2& p);
 
-// DOES THE SWEEP END ANYWHERE BUT ON AN AXIS - in which case the angle needs a line of its own to stop
-// against. The centre lines are laid along the zero and across it, so a quarter, a half or a
-// three-quarter turn finishes on one of them and is already stopped; 45 degrees is not, and an arc that
-// simply stops in mid-air does not say where the travel ends.
-inline bool axisAngleStopLine(const Entity& e) {
-    const double sweep = e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0);
-    const double off = std::fmod(std::abs(sweep), 90.0);
-    return std::min(off, 90.0 - off) > 0.05;
-}
-
 // Where an axis angle starts its sweep, and where it is on the sheet. Defined further down beside the
 // selection helpers; declared here because the hit test and the handles ask the same questions.
 double axisAngleStart(const Entity& e);
@@ -710,13 +700,17 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             // where there is one - each pulls the axis longer or shorter WITHOUT moving the arc, which
             // is the whole reason the two are separate numbers.
             {
-                const Vec2 u{std::cos(start), std::sin(start)};
+                // THE ARMS FOLLOW THE CROSS, not the sweep's start - the two are separate now.
+                const double cross = axisAngleCrossAngle(e);
+                const Vec2 u{std::cos(cross), std::sin(cross)};
                 const Vec2 v{-u.y, u.x};
                 for (const Vec2& d : {u, Vec2{-u.x, -u.y}, v, Vec2{-v.x, -v.y}})
                     g.push_back({e.a + d * arm, GripRole::AxisArm, 0});
-                if (axisAngleStopLine(e))
-                    g.push_back({e.a + Vec2{std::cos(end) * arm, std::sin(end) * arm},
-                                 GripRole::AxisArm, 0});
+                // And a handle on each stop line there is, for the same reason.
+                for (const double at : {start, end})
+                    if (axisAngleNeedsStop(at, cross))
+                        g.push_back({e.a + Vec2{std::cos(at) * arm, std::sin(at) * arm},
+                                     GripRole::AxisArm, 0});
             }
             g.push_back({e.a + Vec2{std::cos(end) * r, std::sin(end) * r}, GripRole::AxisSweep, 0});
             // THE TWO LABELS, each held by its own handle so it can be put where there is room for
@@ -4781,19 +4775,23 @@ std::vector<std::vector<Vec2>> axisAngleRuns(const Entity& e) {
     const double r = distance(e.a, e.b);
     const double arm = axisAngleArm(e);
     const double start = axisAngleStart(e);
-    const Vec2 u{std::cos(start), std::sin(start)};
+    // THE CROSS HAS ITS OWN DIRECTION - see axisAngleCrossAngle. It used to be laid along the start, so
+    // the start could never be anywhere but on it.
+    const double cross = axisAngleCrossAngle(e);
+    const Vec2 u{std::cos(cross), std::sin(cross)};
     const Vec2 v{-u.y, u.x};
     std::vector<std::vector<Vec2>> out;
     out.push_back({e.a - u * arm, e.a + u * arm});
     out.push_back({e.a - v * arm, e.a + v * arm});
     if (r > 1e-9) {
         const double sweep = e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0) * M_PI / 180.0;
-        // THE STOP LINE, where the sweep ends anywhere but on an axis - see the renderer. It is part of
-        // what the object draws, so a click or a green zone that touches it has touched the object.
-        if (axisAngleStopLine(e)) {
-            const double end = start + sweep;
-            out.push_back({e.a, e.a + Vec2{std::cos(end) * arm, std::sin(end) * arm}});
-        }
+        // A STOP LINE AT EITHER LIMIT THAT NEEDS ONE - see the renderer. Both ends are asked now, not
+        // only the far one: with the start free of the cross it can finish in mid-air just as the end
+        // can. Part of what the object draws, so a click or a green zone that touches it has touched
+        // the object.
+        for (const double at : {start, start + sweep})
+            if (axisAngleNeedsStop(at, cross))
+                out.push_back({e.a, e.a + Vec2{std::cos(at) * arm, std::sin(at) * arm}});
         const int steps = std::clamp(static_cast<int>(std::abs(sweep) / (M_PI / 32.0)) + 2, 4, 128);
         std::vector<Vec2> arc;
         for (int i = 0; i <= steps; ++i) {
@@ -8178,12 +8176,40 @@ void Editor::applyEditDrag(const Vec2& target) {
             e->meta.insert(QStringLiteral("axisSize"), std::max(0.1, distance(e->a, target)));
             break;
         case GripRole::AxisRadius: {
-            // The distance from the axis to where it was dragged - the point is the SNAPPED one, so
-            // pulling the arc onto a joint puts it exactly on that joint. The direction the zero
-            // points is left alone: that is what Rotate is for.
-            const double was = distance(e->a, e->b);
-            const Vec2 dir = was > 1e-9 ? (e->b - e->a).normalized() : Vec2{1.0, 0.0};
-            e->b = e->a + dir * std::max(1e-6, distance(e->a, target));
+            // WHERE THE SWEEP STARTS, AND HOW FAR OUT IT RUNS - both, from one handle.
+            //
+            // Pulled along the axis it changes the radius; pulled round, it moves at that radius and
+            // the sweep starts somewhere else. Which of the two it does is not a mode: the handle goes
+            // where it is dragged, and the drag decides. It used to be projected back onto the start
+            // direction, so the start could only ever move in and out.
+            //
+            // THE CROSS STAYS WHERE IT IS. It is the datum the angle is measured from, and a datum
+            // that follows the thing being measured is not one - so it is pinned here, on the first
+            // drag that would otherwise have taken it along. Rotate turns the cross.
+            //
+            // AND THE FAR LIMIT STAYS WHERE IT IS, so the sweep opens or closes by what the start
+            // moved. Moving the start and carrying the far end round with it would swing the whole
+            // angle and change nothing that is being said.
+            constexpr double kRadToDeg = 180.0 / M_PI;
+            const double cross = axisAngleCrossAngle(*e);
+            if (!e->meta.value(QStringLiteral("axisCross")).isDouble())
+                e->meta.insert(QStringLiteral("axisCross"), cross * kRadToDeg);
+            const double sweepWas = e->meta.value(QStringLiteral("axisSweep")).toDouble(180.0);
+            const double endWas = axisAngleStart(*e) + sweepWas / kRadToDeg;
+
+            const double rWant = std::max(1e-6, distance(e->a, target));
+            const Vec2 dir = rWant > 1e-9 ? (target - e->a).normalized() : Vec2{1.0, 0.0};
+            e->b = e->a + dir * rWant;
+
+            // The zero is a turn added to the clicked direction, so the direction having moved, the
+            // turn is folded away - otherwise the start jumps by whatever the zero was.
+            e->meta.insert(QStringLiteral("axisZero"), 0.0);
+            double sweep = (endWas - axisAngleStart(*e)) * kRadToDeg;
+            // KEEP THE WAY IT WAS GOING, the same as the sweep handle does: an angle that comes back
+            // the other side of a half turn would otherwise flip the arc round.
+            while (sweep - sweepWas > 180.0) sweep -= 360.0;
+            while (sweepWas - sweep > 180.0) sweep += 360.0;
+            e->meta.insert(QStringLiteral("axisSweep"), std::clamp(sweep, -359.9, 359.9));
             break;
         }
         case GripRole::AxisFromText:

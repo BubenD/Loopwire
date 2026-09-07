@@ -9595,26 +9595,83 @@ int run_editor_tests() {
                       "axis linetype: a new one is a centre line, on the object");
         }
 
-        // ---- THE ARC SLIDES IN AND OUT WITHOUT TURNING. ----
+        // ---- THE START GOES WHERE IT IS DRAGGED: out for radius, round for where the sweep begins. ----
         {
             Document d;
             Editor ed;
             fresh(d, ed);
             ed.selectById(d.entities()[0].id);
-            const double wasStart = std::atan2(d.entities()[0].b.y - d.entities()[0].a.y,
-                                               d.entities()[0].b.x - d.entities()[0].a.x);
-            // Grabbed at the handle (0, -50) and dragged well off to one side. The old handle set the
-            // radius AND where the zero pointed, so this drag used to turn the whole annotation.
+            // A fresh one points straight down and sweeps half a turn, so it finishes straight up.
+            const double endWas = std::atan2(d.entities()[0].b.y - d.entities()[0].a.y,
+                                             d.entities()[0].b.x - d.entities()[0].a.x) +
+                                  d.entities()[0].meta.value("axisSweep").toDouble() * M_PI / 180.0;
+            // Grabbed at the handle (0, -50) and dragged off to one side. It used to be projected back
+            // onto the direction it already had, so the only thing this drag could change was the
+            // radius - and an angle whose start cannot be moved is an angle that always reads the same.
             dragTo(ed, {0.0, -50.0}, {60.0, -60.0});
             const Entity& ax = d.entities()[0];
             const double nowStart = std::atan2(ax.b.y - ax.a.y, ax.b.x - ax.a.x);
-            std::printf("  axis radius: dragged to (60,-60) -> r %.2f, zero still %.1f deg\n",
-                        distance(ax.a, ax.b), nowStart * 180.0 / M_PI);
+            const double nowEnd = nowStart + ax.meta.value("axisSweep").toDouble() * M_PI / 180.0;
+            std::printf("  axis start: dragged to (60,-60) -> r %.2f, start %.1f deg, sweep %.1f, "
+                        "cross %.1f deg\n",
+                        distance(ax.a, ax.b), nowStart * 180.0 / M_PI,
+                        ax.meta.value("axisSweep").toDouble(),
+                        ax.meta.value("axisCross").toDouble());
             // The radius is the distance to where it was dragged - hypot(60,60) = 84.85.
             check(std::abs(distance(ax.a, ax.b) - 84.85) < 0.05,
-                  "axis radius: the radius follows the drag");
-            check(std::abs(nowStart - wasStart) < 1e-9,
-                  "axis radius: and the zero does not move with it");
+                  "axis start: the radius follows the drag");
+            check(std::abs(nowStart * 180.0 / M_PI + 45.0) < 1e-6,
+                  "axis start: and so does where the sweep begins");
+            // THE CROSS IS PINNED WHERE IT WAS. It is the datum the angle is measured from, and a
+            // datum that follows the thing being measured tells you nothing.
+            check(std::abs(ax.meta.value("axisCross").toDouble() + 90.0) < 1e-6,
+                  "axis start: the cross stays where it was");
+            // AND THE FAR LIMIT STAYS PUT, so the angle opens by what the start moved: 180 -> 135.
+            check(std::abs(std::remainder(nowEnd - endWas, 2 * M_PI)) < 1e-6,
+                  "axis start: the far limit does not move");
+            check(std::abs(ax.meta.value("axisSweep").toDouble() - 135.0) < 1e-4,
+                  "axis start: so the angle reads 135 instead of 180");
+        }
+
+        // ---- AND A START LEFT IN MID-AIR IS STOPPED BY A LINE OF ITS OWN. ----
+        {
+            // The far end has always had one where it needed it (see THE STOP LINE below). The start
+            // never could: it was pinned to the cross, so it always finished on a centre line. Now it
+            // can be dragged off, and an arc that BEGINS in mid-air says no more about where the
+            // travel starts than one that ends there says about where it finishes.
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            // A start at -45 against a cross still lying where it was, and the axis lengthened to 60
+            // for the same reason the far-end test lengthens it: at the default the stop line is a
+            // stub whose every point is a few millimetres from both centre lines, so a click there
+            // proves nothing. Set here rather than dragged - the drag is tested just above, and this
+            // is about what the object then DRAWS.
+            Entity& ax = d.entities()[0];
+            ax.b = {50.0 * std::cos(-M_PI / 4.0), 50.0 * std::sin(-M_PI / 4.0)};
+            ax.meta.insert(QStringLiteral("axisCross"), -90.0);
+            ax.meta.insert(QStringLiteral("axisSweep"), 135.0);
+            ax.meta.insert(QStringLiteral("axisSize"), 60.0);
+            ed.clearSelection();
+            ed.onPointerPress({28.0, -28.0}, Qt::LeftButton, Qt::NoModifier);
+            std::printf("  axis start stop: a click on the start's stop line picked %d\n",
+                        int(ed.selection().size()));
+            check(ed.selection().size() == 1,
+                  "axis start stop: the start is stopped against a line back to the centre");
+
+            // AND WITH THE START BACK ON THE CROSS there is none, which is the check that the line
+            // above was the stop line and not the arc or an axis.
+            Document d2;
+            Editor ed2;
+            fresh(d2, ed2);
+            d2.entities()[0].meta.insert(QStringLiteral("axisCross"), -90.0);
+            d2.entities()[0].meta.insert(QStringLiteral("axisSize"), 60.0);
+            ed2.clearSelection();
+            ed2.onPointerPress({28.0, -28.0}, Qt::LeftButton, Qt::NoModifier);
+            std::printf("  axis start stop: with the start on the cross it picked %d\n",
+                        int(ed2.selection().size()));
+            check(ed2.selection().empty(),
+                  "axis start stop: a start that lies on a centre line needs no line of its own");
         }
 
         // ---- WHILE IT IS HELD, A TYPED NUMBER IS THE RADIUS. ----
@@ -9641,6 +9698,25 @@ int run_editor_tests() {
                   "axis radius typed: the radius is exactly what was typed");
             check(std::abs(ax.b.x) < 1e-6 && ax.b.y < 0.0,
                   "axis radius typed: along the way it already faced");
+        }
+
+        // ---- THE NUMBERS ARE DEGREES AND SAY SO. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            const QString from = axisAngleLabelText(d.entities()[0], true);
+            const QString to = axisAngleLabelText(d.entities()[0], false);
+            std::printf("  axis degrees: the two limits read \"%s\" and \"%s\"\n",
+                        qPrintable(from), qPrintable(to));
+            check(from == QStringLiteral("0") + QChar(0x00B0) &&
+                      to == QStringLiteral("180") + QChar(0x00B0),
+                  "axis degrees: both limits carry the degree sign");
+            // BUT NOT WORDS SOMEBODY TYPED. A mechanism whose positions are not degrees says OPEN and
+            // SHUT, and "OPEN deg" is nonsense.
+            d.entities()[0].meta.insert(QStringLiteral("axisToText"), QStringLiteral("OPEN"));
+            check(axisAngleLabelText(d.entities()[0], false) == QLatin1String("OPEN"),
+                  "axis degrees: an override is left exactly as it was typed");
         }
 
         // ---- A LABEL GOES WHERE IT IS PUT, AND STAYS THERE. ----
