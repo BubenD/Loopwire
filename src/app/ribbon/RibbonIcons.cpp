@@ -246,17 +246,19 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         break;
     }
     case ToolId::AxisAngle: {
-        // The cross where the axis is and the arrow off it, which is what the tool draws and what tells
-        // it from a plain arrow: the reader is being shown a centre AND a turn about it.
-        p.drawLine(QPointF(3, 17), QPointF(13, 17));
-        p.drawLine(QPointF(8, 12), QPointF(8, 22));
-        QPainterPath sweep(QPointF(8, 17));
-        sweep.lineTo(QPointF(19, 6));
-        p.drawPath(sweep);
-        // The head on the far end, drawn as two strokes rather than filled - at 24 pixels a filled head
-        // is a blob and the cross is what has to be read first.
-        p.drawLine(QPointF(19, 6), QPointF(14, 7));
-        p.drawLine(QPointF(19, 6), QPointF(18, 11));
+        // The axis and the sweep about it, which is what the tool draws and what tells it from a plain
+        // arrow: the reader is shown a centre AND how far the thing travels. Centre lines crossing, and
+        // an arc carried round from one limit to the other.
+        p.drawLine(QPointF(2, 12), QPointF(16, 12));
+        p.drawLine(QPointF(9, 3), QPointF(9, 21));
+        QPainterPath arc;
+        arc.arcMoveTo(QRectF(1, 4, 16, 16), 90.0);        // top of the ring, on the vertical axis
+        arc.arcTo(QRectF(1, 4, 16, 16), 90.0, -180.0);    // round the right-hand side to the bottom
+        p.drawPath(arc);
+        // The head on the end it sweeps to, drawn as two strokes rather than filled - at 24 pixels a
+        // filled head is a blob and the axis is what has to be read first.
+        p.drawLine(QPointF(9, 20), QPointF(6, 16));
+        p.drawLine(QPointF(9, 20), QPointF(13, 17));
         break;
     }
     case ToolId::NetLabel: {

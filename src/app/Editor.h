@@ -324,6 +324,14 @@ public:
     enum class DrawOrder { Front, Back, AboveTouching, UnderTouching };
     void setSelectionDrawOrder(DrawOrder where);
 
+    // An axis angle's arc, held and being slid in or out. While it is, a typed number is the radius the
+    // annotation is to have rather than a distance for the handle to travel.
+    bool draggingAxisRadius() const;
+
+    // Its arc END, held and being dragged round. While it is, a typed number is the swept angle in
+    // degrees rather than a distance for the handle to travel.
+    bool draggingAxisSweep() const;
+
     // Align routing (schematic): the next canvas click picks a reference connector
     // that stays put; every OTHER connector wired to it is shifted so its connecting
     // wires become axis-aligned (horizontal if the run is mostly horizontal, else

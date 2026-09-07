@@ -113,6 +113,32 @@ struct Entity {
     static Entity fromJson(const QJsonObject& obj);
 };
 
+// THE SHAPE AN OBJECT ACTUALLY HAS, for the objects that work theirs out rather than storing it.
+//
+// A volume arrow keeps its two ends and nothing else: the outline is laid out from them when it is
+// drawn, so that pulling an end re-lays the arrow instead of dragging one corner of a shape that has
+// forgotten what it is. The cost was that everything ELSE which asks where an object is - the box it
+// occupies, whether a click is near it, where its handles go, what a cursor can snap to - read the
+// stored point list, found it empty, and concluded there was nothing there. An arrow could be drawn
+// and then never picked again.
+//
+// So there is one place that answers the question. For an ordinary object it is the stored points; for
+// a derived one it is the outline that will be drawn. Anything that needs the shape asks here.
+std::vector<Vec2> entityOutline(const Entity& e);
+
+// WHERE AN AXIS ANGLE STARTS ITS SWEEP, and HOW LONG ITS CENTRE LINES ARE.
+//
+// The zero comes from the second click, which is what makes the object quick to draw, and is then a
+// turn that can be typed on top of it - a mechanism whose datum is not where the cursor happened to
+// land is the normal case. Held as an addition, so sliding the arc in or out never moves the zero and
+// typing the zero never changes the radius.
+//
+// The arms are a length of their own. They used to be worked out from the radius, which tied the two
+// together: a long axis with a tight arc could not be drawn at all. An object from before that carries
+// no size of its own still gets the old proportional arms, so old drawings keep the look they had.
+double axisAngleStartAngle(const Entity& e);
+double axisAngleArm(const Entity& e);
+
 // The line on a part's drawing where the harness attaches to it - the face of a connector, the barrel
 // of a terminal - marked in the editor and kept with the drawing. What it is for: a part placed by the
 // generator is turned and set down so that THIS line is across the wires and its centre is on the

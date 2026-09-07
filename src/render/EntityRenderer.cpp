@@ -211,6 +211,55 @@ QVector<qreal> linetypeDashes(const QString& name, double scale, double penWidth
     return dashes;
 }
 
+// The number an axis angle writes at one end of its sweep. The far one is the datum plus the travel,
+// so the two can never disagree with the arc between them; either can be overridden with words, for a
+// mechanism whose positions are not degrees.
+QString axisAngleLabelText(const Entity& e, bool atStart) {
+    auto said = [](double v) {
+        QString t = QString::number(v, 'f', 1);
+        if (t.endsWith(QLatin1String(".0"))) t.chop(2);
+        return t;
+    };
+    const double from = e.meta.value(QStringLiteral("axisFrom")).toDouble(0.0);
+    if (atStart) {
+        const QString over = e.meta.value(QStringLiteral("textOverride")).toString();
+        return over.isEmpty() ? said(from) : over;
+    }
+    const QString over = e.meta.value(QStringLiteral("axisToText")).toString();
+    return over.isEmpty() ? said(from + e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0))
+                          : over;
+}
+
+Vec2 axisAngleLabelAnchor(const Entity& e, bool atStart) {
+    const char* kx = atStart ? "fromTextX" : "toTextX";
+    const char* ky = atStart ? "fromTextY" : "toTextY";
+    if (e.meta.contains(QLatin1String(kx)))
+        return {e.meta.value(QLatin1String(kx)).toDouble(),
+                e.meta.value(QLatin1String(ky)).toDouble()};
+
+    const double r = distance(e.a, e.b);
+    const double h = e.meta.value(QStringLiteral("textSize")).toDouble(10.0) *
+                     EntityRenderer::annotationScale();
+    const double start = axisAngleStartAngle(e);
+    const double sweep = e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0) * M_PI / 180.0;
+    const double ang = atStart ? start : start + sweep;
+
+    // Out past the arc, so the number is never inside the sweep it measures.
+    const Vec2 out{std::cos(ang), std::sin(ang)};
+    // AND ALONG THE ARC, away from the travel: at the start that is backwards from the way the sweep
+    // sets off, and at the end it is onwards past where the sweep stopped. Either way the label steps
+    // off the line the arc meets, which is the line it used to be written on top of.
+    const double turn = sweep >= 0.0 ? 1.0 : -1.0;
+    const Vec2 along{-out.y * turn, out.x * turn};
+    const Vec2 aside = atStart ? Vec2{-along.x, -along.y} : along;
+    // Far enough for the digits to clear the line: half of what they will measure, plus a gap. Their
+    // width is reckoned from the count of them rather than from the font, which is near enough at a
+    // couple of characters and keeps this answerable without a painter.
+    const double half = 0.55 * h * axisAngleLabelText(e, atStart).size() / 2.0;
+    return {e.a.x + out.x * (r + h * 0.5) + aside.x * (half + h * 0.3),
+            e.a.y + out.y * (r + h * 0.5) + aside.y * (half + h * 0.3)};
+}
+
 QColor EntityRenderer::resolveColor(const Entity& e, const Document& doc) {
     QString layerHex = QStringLiteral("#ffffff");
     if (const Layer* layer = doc.findLayer(e.layer); layer && QColor(layer->color).isValid())
@@ -1298,42 +1347,151 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // of that arrow written beside it. One object, because it is one thing to whoever reads the
         // sheet - an arrow that has lost its cross says nothing about where the middle was.
         if (e.meta.value("axisAngle").toBool()) {
+            // AN AXIS, AND THE ANGLE SWEPT ABOUT IT - drawn the way a released mechanical drawing draws
+            // it: two centre lines crossing where the axis is, an arc carried round from one limit to
+            // the other, and the two limits written at the ends of that arc.
+            //
+            // It used to be a cross with a straight arrow off it and the arrow's own bearing written
+            // beside it, which answers a different question. A bearing says which way one thing points.
+            // What a drawing of a mechanism has to say is how far the thing TRAVELS and between which
+            // two positions - a lid through 180, a hinge through 90 - and that is an arc between two
+            // marked limits. The bearing was never the thing being dimensioned.
+            //
+            // The centre is the first click and the second sets both the radius and where the sweep
+            // STARTS, so the arc begins under the cursor that placed it.
             const QPointF c = vt.toScreen(e.a);
-            const QPointF t = vt.toScreen(e.b);
-            const double dx = t.x() - c.x(), dy = t.y() - c.y();
-            const double len = std::hypot(dx, dy);
-            // THE CROSS IS DRAWN IN MILLIMETRES, not in screen pixels: it is part of the drawing and
-            // has to plot at the size it was made, the same as a centre mark does.
-            const double arm = std::max(1e-6, e.meta.value("crossSize").toDouble(4.0)) *
-                               EntityRenderer::annotationScale() * vt.scale();
-            p.drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()));
-            p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
-            if (len > 1e-9) {
-                p.drawLine(c, t);
-                const QPointF dir(dx / len, dy / len);
+            const double rWorld = distance(e.a, e.b);
+            const double r = rWorld * vt.scale();
+            // WHERE THE ZERO IS. It comes from the second click and is then a number that can be
+            // typed: a mechanism whose zero is not where the cursor happened to land is the normal
+            // case. Held as a turn added to the clicked direction, so moving the point in or out never
+            // moves the zero and typing the zero never changes the radius.
+            const double start = std::atan2(e.b.y - e.a.y, e.b.x - e.a.x) +
+                                 e.meta.value("axisZero").toDouble(0.0) * M_PI / 180.0;
+            const double sweep = e.meta.value("axisSweep").toDouble(180.0) * M_PI / 180.0;
+
+            // The centre lines run along the sweep's own start direction and across it, so with the
+            // usual half turn the two ends of the arc land ON an axis, which is what makes the drawing
+            // read. Long enough to stand out past the arc at both ends, the way a centre mark does.
+            // The arms are a length of their own, so a long axis can carry a tight arc. An object
+            // with no size of its own keeps the proportional arms it used to have.
+            const double ownArm = e.meta.value("axisSize").toDouble(0.0);
+            const double armWorld =
+                ownArm > 1e-9 ? ownArm * EntityRenderer::annotationScale()
+                              : std::max(rWorld * 1.18, e.meta.value("crossSize").toDouble(4.0) *
+                                                            EntityRenderer::annotationScale());
+            const double arm = armWorld * vt.scale();
+            const double sweepDegForStop = e.meta.value("axisSweep").toDouble(180.0);
+            const double stopOff = std::fmod(std::abs(sweepDegForStop), 90.0);
+            const bool needStop = std::min(stopOff, 90.0 - stopOff) > 0.05;
+            const QPointF u(std::cos(start), -std::sin(start));   // screen y runs the other way
+            const QPointF v(-u.y(), u.x());
+            {
+                // THE CROSS, with the object's own pen - so the linetype row on its properties is what
+                // decides how the centre lines are drawn. A new one is created as a centre line (see
+                // finishDraw), which is why it still arrives dash-dot without being forced to be.
+                p.drawLine(c - u * arm, c + u * arm);
+                p.drawLine(c - v * arm, c + v * arm);
+                // AND THE LINE THE ANGLE STOPS AGAINST, when it does not finish on either of them. A
+                // quarter or a half turn ends on a centre line and is stopped by it already; 45 degrees
+                // ends in mid-air, and an arc stopping in mid-air does not say where the travel ends.
+                if (needStop && rWorld > 1e-9) {
+                    const double endAng = start + sweepDegForStop * M_PI / 180.0;
+                    const QPointF w(std::cos(endAng), -std::sin(endAng));
+                    p.drawLine(c, c + w * arm);
+                }
+            }
+
+            if (r > 1e-9 && std::abs(sweep) > 1e-9) {
+                // THE ARC IS SOLID whatever the cross is drawn with: it is a dimension line, not a
+                // centre line, and a dash-dot one reads as another axis rather than as the travel.
+                QPen arcPen = p.pen();
+                arcPen.setStyle(Qt::SolidLine);
+                p.save();
+                p.setPen(arcPen);
+                // Qt measures an arc in sixteenths of a degree, anticlockwise, from the +x axis - which
+                // is the same way round as the world once the box is given in screen coordinates.
+                const QRectF box(c.x() - r, c.y() - r, 2 * r, 2 * r);
+                const double startDeg = start * 180.0 / M_PI;
+                const double sweepDeg = sweep * 180.0 / M_PI;
+                p.drawArc(box, static_cast<int>(std::lround(startDeg * 16.0)),
+                          static_cast<int>(std::lround(sweepDeg * 16.0)));
+
+                // THE ARROW, on the end the sweep runs to, along the tangent there: it is what says
+                // which way round the thing travels. Zero size leaves the arc bare.
                 const double head = e.meta.value("arrowSize").toDouble(3.3) *
                                     EntityRenderer::annotationScale();
-                drawArrowHead(p, t, dir, color, std::clamp(head * vt.scale(), 5.0, 40.0));
-                // THE ANGLE THE ARROW MAKES, anticlockwise from the +x axis and always read as 0..360.
-                // Measured in WORLD coordinates and not on the screen, where y runs the other way and
-                // every angle would come out mirrored.
-                double deg = std::atan2(e.b.y - e.a.y, e.b.x - e.a.x) * 180.0 / M_PI;
-                if (deg < 0.0) deg += 360.0;
-                const QString said = e.meta.value("textOverride").toString().isEmpty()
-                                         ? QStringLiteral("%1°").arg(deg, 0, 'f', 1)
-                                         : e.meta.value("textOverride").toString();
+                const double endAng = start + sweep;
+                const QPointF endPt(c.x() + r * std::cos(endAng), c.y() - r * std::sin(endAng));
+                // WHICH ENDS CARRY AN ARROW. A travel that runs one way is drawn with one arrow; a
+                // travel that goes both ways from a datum is drawn with two; a range that is simply
+                // marked out carries none. All three are drawn on real sheets, so all three are asked
+                // for by name rather than left to whatever the tool happened to do.
+                const QString ends = e.meta.value("arrowEnds").toString(QStringLiteral("end"));
+                const bool atEnd = ends == QLatin1String("end") || ends == QLatin1String("both");
+                const bool atStart = ends == QLatin1String("start") || ends == QLatin1String("both");
+                if (head > 1e-9 && ends != QLatin1String("none")) {
+                    const double px = std::clamp(head * vt.scale(), 5.0, 40.0);
+                    const QString kind = e.meta.value("arrowType").toString(QStringLiteral("closed"));
+                    const double turn = sweep > 0.0 ? 1.0 : -1.0;
+                    // The tangent at an end, pointing the way the sweep travels through it.
+                    auto tangentAt = [&](double ang, double sense) {
+                        QPointF t(-std::sin(ang) * turn * sense, -std::cos(ang) * turn * sense);
+                        const double tl = std::hypot(t.x(), t.y());
+                        return tl > 1e-9 ? QPointF(t.x() / tl, t.y() / tl) : QPointF(1.0, 0.0);
+                    };
+                    // Closed is the filled triangle every arrow here has been; open is the two barbs a
+                    // drawing office uses where a filled head would blot out what is under it; dot
+                    // marks an end that does not travel anywhere.
+                    auto arrow = [&](const QPointF& at, const QPointF& dir) {
+                        if (kind == QLatin1String("open")) {
+                            const QPointF n(-dir.y(), dir.x());
+                            const QPointF base = at - dir * px;
+                            p.drawLine(at, base + n * px * 0.36);
+                            p.drawLine(at, base - n * px * 0.36);
+                        } else if (kind == QLatin1String("dot")) {
+                            p.save();
+                            p.setBrush(color);
+                            p.drawEllipse(at, px * 0.28, px * 0.28);
+                            p.restore();
+                        } else {
+                            drawArrowHead(p, at, dir, color, px);
+                        }
+                    };
+                    if (atEnd) arrow(endPt, tangentAt(endAng, 1.0));
+                    if (atStart) {
+                        const QPointF startPt(c.x() + r * std::cos(start),
+                                              c.y() - r * std::sin(start));
+                        arrow(startPt, tangentAt(start, -1.0));
+                    }
+                }
+
+                // WHAT THE TWO ENDS ARE CALLED. Not the swept angle over again: a hinge that sweeps 90
+                // may be marked 0 and 90, or 15 and 105. Defaults of 0 and 180 are the common case.
                 QFont f = p.font();
                 const double h = e.meta.value("textSize").toDouble(3.5) *
                                  EntityRenderer::annotationScale() * vt.scale();
                 f.setPixelSize(std::max(7, static_cast<int>(h)));
                 p.setFont(f);
-                // Beside the middle of the arrow and clear of it, on the side the arrow is turning
-                // away from, so the words never lie along the line they are labelling.
-                const QPointF mid((c.x() + t.x()) / 2.0, (c.y() + t.y()) / 2.0);
-                const QPointF off(-dir.y(), dir.x());
-                p.drawText(QPointF(mid.x() + off.x() * h * 0.9 - h * 0.6,
-                                   mid.y() + off.y() * h * 0.9 - h * 0.3),
-                           said);
+                // WHAT EACH END IS CALLED comes from axisAngleLabelText, which is also what the
+                // anchor above reckons its width from - the two have to be the same string, or the
+                // label is stepped aside by the width of some other number.
+                //
+                // The far one FOLLOWS THE SWEEP. It used to be a number of its own, so opening the arc
+                // to 90 left "180" written at the end of it: the annotation saying one thing and the
+                // arc it labels another, which is worse than no label at all.
+                const QFontMetricsF fm(f);
+                // Centred on the anchor, wherever that is - out past the arc and to one side of it, or
+                // where it was dragged to. See axisAngleLabelAnchor: the editor puts this label's
+                // handle on the same point, so the handle is always on the text.
+                auto label = [&](const QString& text, bool atStart) {
+                    const QPointF at = vt.toScreen(axisAngleLabelAnchor(e, atStart));
+                    p.drawText(QPointF(at.x() - fm.horizontalAdvance(text) / 2.0, at.y() + h * 0.35),
+                               text);
+                };
+                label(axisAngleLabelText(e, true), true);
+                label(axisAngleLabelText(e, false), false);
+                p.restore();   // the solid arc pen
             }
             break;
         }
@@ -1624,7 +1782,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // route. See volumeArrowOutline.
         if (e.meta.value("volumeArrow").toBool()) {
             const std::vector<Vec2> outline =
-                volumeArrowOutline(e.a, e.b, e.meta.value("arrowWidth").toDouble(0.0));
+                volumeArrowOutline(e.a, e.b, e.meta.value("arrowWidth").toDouble(0.0),
+                                   e.meta.value("arrowHead").toDouble(0.0));
             if (outline.size() >= 3) {
                 p.drawPolygon(toScreenPoly(outline, vt));
                 break;

@@ -201,8 +201,49 @@ bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
     return true;
 }
 
+std::vector<Vec2> entityOutline(const Entity& e) {
+    if (e.meta.value(QLatin1String("volumeArrow")).toBool())
+        return volumeArrowOutline(e.a, e.b, e.meta.value(QLatin1String("arrowWidth")).toDouble(0.0),
+                                  e.meta.value(QLatin1String("arrowHead")).toDouble(0.0));
+    return e.points;
+}
+
+double axisAngleStartAngle(const Entity& e) {
+    // Spelled out rather than taken from M_PI: that name only exists under MSVC when the math defines
+    // are asked for before <cmath>, and by this point Qt has already included it.
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    const double clicked = std::atan2(e.b.y - e.a.y, e.b.x - e.a.x);
+    return clicked + e.meta.value(QLatin1String("axisZero")).toDouble(0.0) * kDegToRad;
+}
+
+double axisAngleArm(const Entity& e) {
+    const double own = e.meta.value(QLatin1String("axisSize")).toDouble(0.0);
+    if (own > 1e-9) return own;
+    // No size of its own: the proportional arms it would have had before there was one.
+    return std::max(distance(e.a, e.b) * 1.18,
+                    e.meta.value(QLatin1String("crossSize")).toDouble(4.0));
+}
+
 Bounds Entity::bounds() const {
     Bounds bnds;
+    // A shape that works its outline out is measured from that outline. Without this the arrow had no
+    // box at all, so a window drag never caught it, "zoom to fit" could not see it, and it counted as
+    // touching nothing when the draw order was asked which objects overlap.
+    if (meta.value(QLatin1String("volumeArrow")).toBool()) {
+        for (const Vec2& p : entityOutline(*this)) bnds.expand(p);
+        if (bnds.valid) return bnds;
+    }
+    // AN AXIS ANGLE is a centre and a point, drawn as an arc with centre lines running out past it -
+    // so the room it takes on the sheet is the reach of those lines, not the gap between the two
+    // stored points. Measured from the reach in every direction: the sweep may put the arc in any
+    // quadrant, and the centre lines cross the whole of it in both.
+    if (meta.value(QLatin1String("axisAngle")).toBool()) {
+        // The arms and the arc are set apart now, so the room it takes is whichever reaches further.
+        const double reach = std::max(axisAngleArm(*this), distance(a, b));
+        bnds.expand({a.x - reach, a.y - reach});
+        bnds.expand({a.x + reach, a.y + reach});
+        if (bnds.valid) return bnds;
+    }
     switch (type) {
     case EntityType::Line:
     case EntityType::DoubleLine:

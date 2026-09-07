@@ -9648,6 +9648,90 @@ void MainWindow::refreshProperties() {
         });
     }
 
+    // --- Block arrow: how wide the shaft is, and how big the head is. ---
+    if (e && e->meta.value(QStringLiteral("volumeArrow")).toBool()) {
+        addHeader(QStringLiteral("Block arrow"));
+        // Both are real millimetres, and both are optional: left at zero each follows the arrow's own
+        // length, which is what a freshly drawn arrow does. Set them and a row of arrows drawn at
+        // different lengths can be given shafts and heads that MATCH - which is the whole reason to
+        // want the numbers, and there was no way to reach them at all.
+        const double len = distance(e->a, e->b);
+        addNum(QStringLiteral("Shaft width"), mv(QStringLiteral("arrowWidth")).toDouble(len * 0.18),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("arrowWidth"), std::max(0.0, v));
+               });
+        addNum(QStringLiteral("Head size"), mv(QStringLiteral("arrowHead")).toDouble(len * 0.36),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("arrowHead"), std::max(0.0, v));
+               });
+    }
+
+    // --- Axis and the angle swept about it. ---
+    if (e && e->meta.value(QStringLiteral("axisAngle")).toBool()) {
+        addHeader(QStringLiteral("Axis angle"));
+        // The sweep is the object's whole point, so it is the first row. Negative sweeps the other way
+        // round, which is how a mechanism that opens anticlockwise is drawn.
+        addNum(QStringLiteral("Swept angle"), mv(QStringLiteral("axisSweep")).toDouble(180.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("axisSweep"),
+                                                   std::clamp(v, -359.9, 359.9));
+               },
+               QStringLiteral("How far the thing travels. The label at the far end follows this."));
+        // WHERE THE ZERO SITS. The second click puts it wherever the cursor was, which is quick but
+        // rarely exactly right; this turns the whole annotation about its axis without touching the
+        // radius, so the zero can be put on the datum the mechanism actually measures from.
+        addNum(QStringLiteral("Turn the zero by"), mv(QStringLiteral("axisZero")).toDouble(0.0),
+               [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("axisZero"), v); },
+               QStringLiteral("Degrees to turn the whole annotation about the axis."));
+        // WHAT THE START IS CALLED. The far end is this plus the sweep - see the renderer - so the two
+        // labels cannot disagree with the arc they are labelling.
+        addNum(QStringLiteral("Marked at the zero"), mv(QStringLiteral("axisFrom")).toDouble(0.0),
+               [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("axisFrom"), v); },
+               QStringLiteral("The number written at the start. The far end is this plus the sweep."));
+        // How far out the arc runs, measured from the axis. It is the distance to the second click and
+        // stays that - the point itself is moved out along its own direction - so the object keeps ONE
+        // answer for where the arc is, whether it was set here or by dragging the handle.
+        addNum(QStringLiteral("Annotation radius"), distance(e->a, e->b),
+               [this](double v) {
+                   editor_->setGeometryValue(QStringLiteral("Radius"), std::max(0.1, v));
+               },
+               QStringLiteral("How far the arc runs out from the axis."));
+        // HOW LONG THE CENTRE LINES ARE, which is nothing to do with how far out the arc runs: the two
+        // were one number, so a long axis with a tight arc could not be drawn.
+        addNum(QStringLiteral("Axis size"), axisAngleArm(*e),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("axisSize"), std::max(0.1, v));
+               },
+               QStringLiteral("How far the centre lines reach from the axis."));
+        // WHICH ENDS CARRY AN ARROW, and what kind. A travel that runs one way is drawn with one; a
+        // travel either side of a datum with two; a range that is simply marked out with none.
+        addCombo(QStringLiteral("Arrow ends"),
+                 {QStringLiteral("end"), QStringLiteral("start"), QStringLiteral("both"),
+                  QStringLiteral("none")},
+                 mv(QStringLiteral("arrowEnds")).toString().isEmpty()
+                     ? QStringLiteral("end")
+                     : mv(QStringLiteral("arrowEnds")).toString(),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionMeta(QStringLiteral("arrowEnds"), v);
+                 });
+        addCombo(QStringLiteral("Arrow type"),
+                 {QStringLiteral("closed"), QStringLiteral("open"), QStringLiteral("dot")},
+                 mv(QStringLiteral("arrowType")).toString().isEmpty()
+                     ? QStringLiteral("closed")
+                     : mv(QStringLiteral("arrowType")).toString(),
+                 false, [this](const QString& v) {
+                     editor_->setSelectionMeta(QStringLiteral("arrowType"), v);
+                 });
+        addNum(QStringLiteral("Arrow size"), mv(QStringLiteral("arrowSize")).toDouble(7.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("arrowSize"), std::max(0.0, v));
+               });
+        addNum(QStringLiteral("Text height"), mv(QStringLiteral("textSize")).toDouble(10.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("textSize"), std::max(0.1, v));
+               });
+    }
+
     // --- Leader section: the words it carries, and the sizes it is drawn at. ---
     if (e && e->type == EntityType::Leader) {
         const QString id = e->id;

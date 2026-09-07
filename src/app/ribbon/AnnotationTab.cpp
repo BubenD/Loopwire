@@ -38,7 +38,12 @@ namespace Edraw_Desktop {
 // ---- ANNOTATION ----
 void MainWindow::buildAnnotationTab() {
     auto [page, lay] = makeTabPage();
-    addGroup(lay, QStringLiteral("Annotate"), toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
+    // The block arrow is one of these: a shape with a width that says which way a thing goes in or
+    // which way it turns. It was on the harness tab under Special, which is where a person looks for a
+    // break mark and not for a piece of writing.
+    addGroup(lay, QStringLiteral("Annotate"),
+             toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel,
+                      ToolId::VolumeArrow}));
     // Where the middle of something is. Both are PICKED rather than drawn: the geometry already says where
     // the middle is, and making a drawing office find it with a cursor is asking them to do arithmetic the
     // program can do exactly.

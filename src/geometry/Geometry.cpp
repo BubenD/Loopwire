@@ -763,7 +763,8 @@ std::vector<Vec2> circleCircleIntersection(const Vec2& c1, double r1,
     return out;
 }
 
-std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm) {
+std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm,
+                                     double headMm) {
     const double len = distance(tail, tip);
     if (len < 1e-9) return {};
     const Vec2 u = (tip - tail).normalized();
@@ -771,7 +772,11 @@ std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double w
     // The head is a little over a third of the length, and never longer than the arrow: a stub arrow is
     // all head, which still reads as an arrow, where a head longer than the shaft reads as a triangle
     // somebody has dragged a line out of.
-    const double headLen = std::min(len, len * 0.36);
+    //
+    // A HEAD SIZE SET ON THE OBJECT wins over that, and is still held to the arrow's own length for the
+    // same reason. It is a real measurement in millimetres, so a row of arrows drawn at different
+    // lengths can be given heads that match each other instead of each one being a third of itself.
+    const double headLen = headMm > 0.0 ? std::min(len, headMm) : std::min(len, len * 0.36);
     const double shaftHalf = (widthMm > 0.0 ? widthMm : len * 0.18) / 2.0;
     const double barbHalf = shaftHalf * 2.0;
     const Vec2 neck = tip - u * headLen;

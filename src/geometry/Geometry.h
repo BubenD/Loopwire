@@ -81,7 +81,8 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
 //
 // `widthMm` overrides the shaft width when the sheet says what it should be; 0 means "work it out".
 // Empty when the two points are the same, which is not an arrow.
-std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm = 0.0);
+std::vector<Vec2> volumeArrowOutline(const Vec2& tail, const Vec2& tip, double widthMm = 0.0,
+                                     double headMm = 0.0);
 
 // Offset a CLOSED polygon (rect/polygon) sideways by `dist` (sign picks in/out),
 // mitering every wrapped vertex. Companion to offsetPolyline (which is for open runs).

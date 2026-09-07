@@ -2317,6 +2317,257 @@ void testARunLeavesItsOwnHousing() {
     check(gap > 1.0, "own housing: and the two are apart, each on its own connector");
 }
 
+// ---- WIRES UNDER ONE HOUSING, DRAWN ON THAT HOUSING AND NOWHERE ELSE ------------------------------
+//
+// The tree from the report: one station, two connector parts at it (p1 and p2), and a run of wires
+// described under the FIRST of them. What the window drew was a fan on p1 AND a second fan out in the
+// gap between the two housings, belonging to neither.
+//
+// A station whose connectors are all parts has no housing of its own, so its own lane IS that gap:
+// anything hung on the station rather than on one of its housings comes out in the middle of the
+// drawing. This lists every wire the preview draws against the housing lanes and fails on any that sit
+// between them - measured, because three previous readings of this fault from the code were wrong.
+void testWiresUnderOneHousingAreDrawnOnlyThere() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // 1 Connector (the station), then two housings at it.
+    w.setCurrentCategory(Cat::Connector);
+    w.typeWays(4);
+    w.commitStep();                       // 1 Connector
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("p1"));
+    w.typeWays(4);
+    w.commitSubpart();                    // 1.1 Connector p1
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("p2"));
+    w.typeWays(4);
+    w.commitStep();                       // 1.2 Connector p2, a sibling of p1
+
+    QString p1Id;
+    for (const MechStep& st : w.script().steps)
+        if (st.name == QLatin1String("p1")) p1Id = st.id;
+    check(!p1Id.isEmpty(), "middle wires: p1 is in the script");
+    if (p1Id.isEmpty()) return;
+
+    // EXACTLY THE PATH FROM THE REPORT: p1 picked out in the list, Add subpart pressed on it, and the
+    // run of wires described under it - which is what puts "Wires - being described" nested inside 1.1
+    // with 1.2 below it. Reached this way and not by picking p1 and choosing a category, which is the
+    // sibling path and was already right.
+    w.editStep(p1Id);
+    w.commitSubpart();
+    w.setCurrentCategory(Cat::Wires);
+    w.setRunLengthForTest(30.0);
+    w.setConductorsForTest(2);   // Conductors: 2, as the form shows
+
+    // WHAT THE PREVIEW IS ACTUALLY ASKED TO DRAW. Printed because the fault is that there are TWO runs
+    // where there should be one, and the drawing alone cannot say which step each belongs to.
+    const MechBuildScript prev = w.previewScript();
+    for (const MechStep& st : prev.steps)
+        std::printf("  middle wires: step %-4s kind=%d sub=%d parent=%-4s name=%s len=%.1f cond=%d\n",
+                    qPrintable(st.id), static_cast<int>(st.kind), st.isSubpart ? 1 : 0,
+                    qPrintable(st.parentStep), qPrintable(st.name), st.lengthMm,
+                    static_cast<int>(st.conductors.size()));
+    const MechCompiled comp = compileMechScript(prev);
+    for (const MechSegment& sg : comp.def.segments)
+        std::printf("  middle wires: seg %-4s from=%-4s to=%-4s fromEnd=[%s] toStation=[%s] lane=%d\n",
+                    qPrintable(sg.id), qPrintable(sg.fromNode), qPrintable(sg.toNode),
+                    qPrintable(sg.fromEnd), qPrintable(sg.toStation), sg.toLane);
+
+    const std::vector<Entity> shown = w.shownEntities();
+    std::vector<double> laneMids;
+    for (const Entity& e : shown) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (b.valid) laneMids.push_back((b.min.y + b.max.y) / 2.0);
+    }
+    std::sort(laneMids.begin(), laneMids.end());
+    QString said;
+    for (double m : laneMids) said += QStringLiteral("%1 ").arg(m, 0, 'f', 2);
+    std::printf("  middle wires: housing lanes at y %s\n", qPrintable(said));
+    check(laneMids.size() >= 2, "middle wires: both housings are drawn");
+    if (laneMids.size() < 2) return;
+
+    // A fan on a housing sits ON that housing's lane, so anything in the middle third of the gap
+    // between the lanes is on neither of them.
+    const double lo = laneMids.front();
+    const double hi = laneMids.back();
+    const double span = hi - lo;
+    int inTheGap = 0;
+    int onALane = 0;
+    for (const Entity& e : shown) {
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        if (role.isEmpty() || role == QLatin1String("connector")) continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        const double mid = (b.min.y + b.max.y) / 2.0;
+        const bool between = mid > lo + span * 0.33 && mid < hi - span * 0.33;
+        const bool isRun = role == QLatin1String("wires") || role == QLatin1String("bundle");
+        std::printf("  middle wires: %-9s y %8.2f..%8.2f (mid %8.2f)  x %8.2f..%8.2f%s\n",
+                    qPrintable(role), b.min.y, b.max.y, mid, b.min.x, b.max.x,
+                    between ? "   <-- IN THE GAP" : "");
+        if (isRun) {
+            if (between) ++inTheGap;
+            else ++onALane;
+        }
+    }
+    // THE RUN IS DRAWN AT ALL, first - a preview with no wires in it would pass the next check for
+    // the one reason it must never pass for.
+    check(onALane + inTheGap > 0, "middle wires: the run being described is drawn");
+    check(inTheGap == 0, "middle wires: and nothing is drawn in the gap between the housings");
+
+    // AND THE ANNOTATION IS IN FRONT OF ITS CONNECTOR, past the far point - not across from the face,
+    // where it stood in the middle of the fan the connector feeds. The harness runs to the +x side, so
+    // "in front" is to the -x side of every housing.
+    double housingMinX = 1e18;
+    for (const Entity& e : shown) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (b.valid) housingMinX = std::min(housingMinX, b.min.x);
+    }
+    int balloons = 0;
+    int inFront = 0;
+    for (const Entity& e : shown) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("balloon")) continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        ++balloons;
+        const bool front = b.max.x <= housingMinX + 1e-6;
+        std::printf("  middle wires: balloon x %8.2f..%8.2f (housings from %8.2f)%s\n", b.min.x,
+                    b.max.x, housingMinX, front ? "  in front" : "   <-- BEHIND THE FACE");
+        if (front) ++inFront;
+    }
+    check(balloons > 0, "annotation: the connector is ballooned at all");
+    check(balloons == inFront, "annotation: every balloon is in front of the connector");
+}
+
+// ---- NOTHING IS DRAWN IN THE GAP BETWEEN TWO STACKED LIBRARY HOUSINGS -----------------------------
+//
+// Two connectors at one station, both drawn from the library, with a run of wires leaving the FIRST of
+// them. Reported as "3 lines between the connectors" appearing the moment the second connector is
+// added - so this lists everything that is drawn, by role AND by type, against the band each housing
+// occupies, and names whatever sits between them.
+//
+// With default boxes there was never anything there; the housings in the report are library parts, and
+// that is the difference this reproduces. Measured rather than read: five readings of this fault from
+// the code have now been wrong.
+void testNothingIsDrawnBetweenStackedHousings() {
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    // A housing deeper than the 20mm default box and taller than the default formula would guess -
+    // both of the things that made the placements miss.
+    LibraryPart& big = cat.active().add(PartKind::Connector);
+    big.description = QStringLiteral("A deep 2-way housing");
+    Entity body;
+    body.type = EntityType::Rect;
+    body.points = {{0.0, -22.0}, {70.0, -22.0}, {70.0, 22.0}, {0.0, 22.0}};
+    big.mechanical = partDrawingFromEntities({body});
+    const QString bigId = big.id;
+
+    MechBuildScript sc;
+    MechStep station;
+    station.id = QStringLiteral("S1");
+    station.kind = PartKind::Connector;
+    sc.steps.push_back(station);
+    // IN THE ORDER THEY WERE DESCRIBED: p1, then its wires, and p2 only afterwards. That is the order
+    // in the report, and it is not the same script as p1, p2, then the wires - the compiler walks the
+    // steps in order, so which housing existed when the run was described can change what it makes.
+    auto housing = [&](const char* nm) {
+        MechStep x;
+        x.id = QStringLiteral("S_%1").arg(QString::fromLatin1(nm));
+        x.kind = PartKind::Connector;
+        x.name = QString::fromLatin1(nm);
+        x.parentStep = QStringLiteral("S1");
+        x.isSubpart = true;
+        x.libPart = bigId;
+        x.pinCount = 2;
+        return x;
+    };
+    sc.steps.push_back(housing("p1"));
+    // The wires, under p1 - 4 conductors, 30mm, as the report shows.
+    MechStep run;
+    run.id = QStringLiteral("S_W");
+    run.kind = PartKind::Wire;
+    run.name = QStringLiteral("W1");
+    run.parentStep = QStringLiteral("S_p1");
+    run.isSubpart = true;
+    run.lengthMm = 30.0;
+    run.wireCount = 4;
+    run.gauge = QStringLiteral("20 AWG");
+    sc.steps.push_back(run);
+    sc.steps.push_back(housing("p2"));   // added last, as in the report
+
+    const MechCompiled c = compileMechScript(sc);
+    for (const MechSegment& sg : c.def.segments)
+        std::printf("  gap: seg %-4s from=%-4s to=%-4s fromEnd=[%s] lane=%d wires=%d\n",
+                    qPrintable(sg.id), qPrintable(sg.fromNode), qPrintable(sg.toNode),
+                    qPrintable(sg.fromEnd), sg.toLane, static_cast<int>(sg.wireIds.size()));
+    const std::vector<Entity> ents = buildMechanicalHarness(c.def, &cat);
+
+    std::vector<std::pair<double, double>> bands;
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (b.valid) bands.push_back({b.min.y, b.max.y});
+    }
+    std::sort(bands.begin(), bands.end());
+    check(bands.size() >= 2, "gap: both housings are drawn");
+    if (bands.size() < 2) return;
+    for (const auto& b : bands)
+        std::printf("  gap: a housing occupies y %8.2f..%8.2f\n", b.first, b.second);
+
+    // THE GAP ITSELF: between the top of the lower housing and the bottom of the upper one. Anything
+    // whose middle lies in there is between the connectors, which is what was reported.
+    const double gapLo = bands[0].second;
+    const double gapHi = bands[1].first;
+    std::printf("  gap: the space between them is y %.2f..%.2f\n", gapLo, gapHi);
+    int inGap = 0;
+    for (const Entity& e : ents) {
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        if (role == QLatin1String("connector")) continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        const double mid = (b.min.y + b.max.y) / 2.0;
+        if (mid <= gapLo || mid >= gapHi) continue;
+        ++inGap;
+        std::printf("  gap: IN THE GAP role=%-9s type=%d  x %8.2f..%8.2f  y %8.2f..%8.2f\n",
+                    qPrintable(role.isEmpty() ? QStringLiteral("(none)") : role),
+                    static_cast<int>(e.type), b.min.x, b.max.x, b.min.y, b.max.y);
+    }
+    std::printf("  gap: %d object(s) between the connectors\n", inGap);
+    check(inGap == 0, "gap: nothing is drawn between the two housings");
+
+    // AND THE ANNOTATION IS CLEAR OF THE BODIES, not written inside one: a balloon placed by a guess
+    // at how deep a library housing is ends up on top of the part it belongs to.
+    double bodyMinX = 1e18, bodyMaxX = -1e18;
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("connector"))
+            continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        bodyMinX = std::min(bodyMinX, b.min.x);
+        bodyMaxX = std::max(bodyMaxX, b.max.x);
+    }
+    int balloons = 0, clear = 0;
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("balloon")) continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        ++balloons;
+        const bool ok = b.max.x <= bodyMinX + 1e-6;
+        std::printf("  gap: balloon x %8.2f..%8.2f (bodies %8.2f..%8.2f)%s\n", b.min.x, b.max.x,
+                    bodyMinX, bodyMaxX, ok ? "  in front" : "   <-- ON THE BODY");
+        if (ok) ++clear;
+    }
+    if (balloons > 0)
+        check(balloons == clear, "gap: no balloon is written on top of a connector body");
+}
+
 int run_mechwizard_tests() {
     std::printf("Running harness build wizard tests...\n");
     fails = 0;
@@ -2355,6 +2606,8 @@ int run_mechwizard_tests() {
     testAStationCanBeRolledUpAndStaysThatWay();
     testLibraryHousingsAtOneStationDoNotOverlap();
     testSubpartsCanBeDraggedIntoOrder();
+    testWiresUnderOneHousingAreDrawnOnlyThere();
+    testNothingIsDrawnBetweenStackedHousings();
     testHeatshrinkIsDrawnWithShrunkEnds();
     testTheHeatshrinkButtonHasSomethingToPlace();
     if (fails == 0) std::printf("  harness build wizard: OK\n");

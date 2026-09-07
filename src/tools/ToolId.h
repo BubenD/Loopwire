@@ -132,7 +132,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
     case ToolId::HeatshrinkRoute: // as many knees as the stretch it covers needs
     case ToolId::VolumeArrow:     // two clicks: the tail, then the tip
-    case ToolId::AxisAngle:       // two clicks: the axis, then the way it is turned
+    case ToolId::AxisAngle:       // two clicks: the axis, then where the sweep starts
         return true;
     default:
         return false;

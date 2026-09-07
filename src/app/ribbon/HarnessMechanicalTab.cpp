@@ -77,7 +77,11 @@ void MainWindow::buildHarnessMechanicalTab() {
     {
         // Annotation: Home's group, with the leader the harness tools use folded in - one group with
         // every way of writing on the drawing, rather than the same balloon on the tab twice. The Table
-        // button goes in the grid with them: seven buttons, two rows.
+        // button goes in the grid with them: eight buttons, two rows.
+        //
+        // The block arrow is here rather than in Special. It was put there as furniture peculiar to a
+        // harness drawing, but it is not: it is a thing WRITTEN ON a drawing to say which way something
+        // goes, the same as a leader or a note, and it is looked for where the rest of the writing is.
         auto* tb = new QToolButton(page);
         tb->setIcon(makeToolIcon(ToolId::Table));
         tb->setIconSize(QSize(28, 28));
@@ -89,7 +93,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         mechGroups_ << addGroupKeep(
             lay, QStringLiteral("Annotation"),
             toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
-                     ToolId::Revision, ToolId::DetailView},
+                     ToolId::Revision, ToolId::DetailView, ToolId::VolumeArrow},
                     {tb}));
     }
     // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break
@@ -466,27 +470,19 @@ void MainWindow::buildHarnessMechanicalTab() {
             });
             lgAdd(labelBtn);
         }
-        // WHICH WAY, AND ABOUT WHAT. Two things a released mechanical drawing says constantly and
-        // neither of which the sheet could draw: a block arrow for a direction, and an axis with the
-        // turn about it. Both belong in Special for the same reason the break mark does - they are the
-        // furniture of this kind of drawing rather than geometry somebody is modelling.
+        // ABOUT WHAT IT TURNS. A released mechanical drawing says this constantly and the sheet could
+        // not draw it: an axis, with the swept angle about it. It belongs in Special for the same reason
+        // the break mark does - it is a convention of this kind of drawing rather than geometry somebody
+        // is modelling. (The block arrow that used to sit beside it is in Annotation now: it is writing
+        // on the drawing, not a convention of it.)
         {
-            auto* vaBtn = new QToolButton(lenW);
-            vaBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::VolumeArrow), ToolId::VolumeArrow));
-            vaBtn->setToolTip(QStringLiteral(
-                "A block arrow: click the tail, then the tip. It is a shape with a width, not a "
-                "pointer - what a drawing uses to say which way a thing goes in, or which way it "
-                "turns. Pulling either end re-lays it, so it stays an arrow at any length."));
-            vaBtn->setAutoRaise(true);
-            vaBtn->setFocusPolicy(Qt::NoFocus);
-            lgAdd(vaBtn);
-
             auto* aaBtn = new QToolButton(lenW);
             aaBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::AxisAngle), ToolId::AxisAngle));
             aaBtn->setToolTip(QStringLiteral(
-                "The axis and the turn about it: click where the axis is, then the way it goes. A "
-                "cross marks the axis, an arrow runs off it, and the angle is written beside them - "
-                "one object, so the arrow cannot end up on the sheet without its centre."));
+                "The axis and the angle swept about it: click where the axis is, then where the sweep "
+                "starts. Centre lines mark the axis and an arc carries the arrow round it, with the "
+                "limits written at its ends - one object, so the arc cannot end up on the sheet "
+                "without its centre. The sweep, the limits and the arrow are all on its properties."));
             aaBtn->setAutoRaise(true);
             aaBtn->setFocusPolicy(Qt::NoFocus);
             lgAdd(aaBtn);

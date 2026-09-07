@@ -243,6 +243,10 @@ public:
     // How long the run being described is. A run of no length is not previewed at all - see
     // previewScript - so a test about where a run is DRAWN has to give it one.
     void setRunLengthForTest(double mm);
+    // How many conductors the run being described carries. A run of none draws its bundle and no wires
+    // at all, so a test about where the WIRES are drawn has to say how many there are - the spin box
+    // reads zero in a window that was never shown.
+    void setConductorsForTest(int n);
 
     // The findings for the script as it stands, in step order.
     std::vector<MechStepIssue> issues() const;

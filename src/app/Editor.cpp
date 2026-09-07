@@ -197,6 +197,25 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
     return true;
 }
 
+// Is a point inside a closed outline. Defined further down with the other loop helpers; declared here
+// because picking - which runs above it - has to ask the question of a solid block arrow.
+bool pointInPolygon(const std::vector<Vec2>& poly, const Vec2& p);
+
+// DOES THE SWEEP END ANYWHERE BUT ON AN AXIS - in which case the angle needs a line of its own to stop
+// against. The centre lines are laid along the zero and across it, so a quarter, a half or a
+// three-quarter turn finishes on one of them and is already stopped; 45 degrees is not, and an arc that
+// simply stops in mid-air does not say where the travel ends.
+inline bool axisAngleStopLine(const Entity& e) {
+    const double sweep = e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0);
+    const double off = std::fmod(std::abs(sweep), 90.0);
+    return std::min(off, 90.0 - off) > 0.05;
+}
+
+// Where an axis angle starts its sweep, and where it is on the sheet. Defined further down beside the
+// selection helpers; declared here because the hit test and the handles ask the same questions.
+double axisAngleStart(const Entity& e);
+std::vector<std::vector<Vec2>> axisAngleRuns(const Entity& e);
+
 // Editable handles ("joints") for an entity, shown as grips when selected and
 // draggable for direct manipulation.
 enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge, Center, Radius,
@@ -214,7 +233,18 @@ enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge,
                       // both are constrained to slide ALONG the wire and nowhere else.
                       WireMark, WireMarkColor, WireMarkLabel, WireLabelSlide,
                       // The label a wire carries itself ("wireLabel"), slid along the run.
-                      WireOwnLabel };
+                      WireOwnLabel,
+                      // The far end of an axis angle's arc: dragging it opens or closes the sweep,
+                      // which is the one number the object exists to say.
+                      AxisSweep,
+                      // How far out the arc runs - and ONLY that, so sliding the annotation in or out
+                      // never turns it. Turning is the Rotate command.
+                      AxisRadius,
+                      // Its two labels, each moved where there is room for it.
+                      AxisFromText, AxisToText,
+                      // An end of the axis itself: how long the centre lines are, which is a length of
+                      // its own so that pulling it never moves the arc.
+                      AxisArm };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -466,10 +496,12 @@ void forEachCutSegmentOf(const Entity& e, std::vector<Vec2>& out) {
         }
         break;
     case EntityType::Rect:
-    case EntityType::Polygon:
-        for (size_t i = 0; i < e.points.size(); ++i)
-            add(e.points[i], e.points[(i + 1) % e.points.size()]);
+    case EntityType::Polygon: {
+        const std::vector<Vec2> outline = entityOutline(e);   // derived for a volume arrow
+        for (size_t i = 0; i < outline.size(); ++i)
+            add(outline[i], outline[(i + 1) % outline.size()]);
         break;
+    }
     default:
         for (size_t i = 1; i < e.points.size(); ++i) add(e.points[i - 1], e.points[i]);
         break;
@@ -664,6 +696,36 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
     std::vector<Grip> g;
     switch (e.type) {
     case EntityType::Line:
+        if (e.meta.value("axisAngle").toBool()) {
+            // Three handles that each mean something on the drawing: the axis itself, how far the arc
+            // runs out and where it starts, and how far round it goes. The midpoint of a line that is
+            // never drawn would mean nothing, so it is not offered.
+            const double r = distance(e.a, e.b);
+            const double start = axisAngleStart(e);
+            const double end = start + e.meta.value("axisSweep").toDouble(180.0) * M_PI / 180.0;
+            const double arm = axisAngleArm(e);
+            g.push_back({e.a, GripRole::LineMid, 0});       // the axis: slides the whole object
+            g.push_back({e.b, GripRole::AxisRadius, 0});    // how far out the arc runs, and only that
+            // A JOINT AT EVERY END OF THE AXIS. Four of them, one per arm, and a fifth on the stop line
+            // where there is one - each pulls the axis longer or shorter WITHOUT moving the arc, which
+            // is the whole reason the two are separate numbers.
+            {
+                const Vec2 u{std::cos(start), std::sin(start)};
+                const Vec2 v{-u.y, u.x};
+                for (const Vec2& d : {u, Vec2{-u.x, -u.y}, v, Vec2{-v.x, -v.y}})
+                    g.push_back({e.a + d * arm, GripRole::AxisArm, 0});
+                if (axisAngleStopLine(e))
+                    g.push_back({e.a + Vec2{std::cos(end) * arm, std::sin(end) * arm},
+                                 GripRole::AxisArm, 0});
+            }
+            g.push_back({e.a + Vec2{std::cos(end) * r, std::sin(end) * r}, GripRole::AxisSweep, 0});
+            // THE TWO LABELS, each held by its own handle so it can be put where there is room for
+            // it. Asked of the same place the renderer asks, so the handle is on the text and not on
+            // the spot the text used to be written at.
+            g.push_back({axisAngleLabelAnchor(e, true), GripRole::AxisFromText, 0});
+            g.push_back({axisAngleLabelAnchor(e, false), GripRole::AxisToText, 0});
+            break;
+        }
         g.push_back({e.a, GripRole::LineA, 0});
         g.push_back({lerp(e.a, e.b, 0.5), GripRole::LineMid, 0});
         g.push_back({e.b, GripRole::LineB, 0});
@@ -909,6 +971,15 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::Polygon:
+        // A BLOCK ARROW is held by its ends, not by the corners of its outline: the corners are worked
+        // out from the ends, so a handle on one of them would be a handle on a number that is about to
+        // be recalculated. Tail, tip, and the middle to slide the whole arrow.
+        if (e.meta.value("volumeArrow").toBool()) {
+            g.push_back({e.a, GripRole::LineA, 0});
+            g.push_back({e.b, GripRole::LineB, 0});
+            g.push_back({{(e.a.x + e.b.x) / 2.0, (e.a.y + e.b.y) / 2.0}, GripRole::LineMid, 0});
+            break;
+        }
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
             g.push_back({e.points[i], GripRole::Vertex, i});
         // Centre joint: a move handle (and an object-snap point) at the centroid.
@@ -1396,6 +1467,20 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     double best = std::numeric_limits<double>::max();
     switch (e.type) {
     case EntityType::Line:
+        // AN AXIS ANGLE is stored as centre-and-a-point but drawn as an arc between two centre lines,
+        // with a line to stop the angle against where it does not finish on one of them. A click has to
+        // land on what is DRAWN: the line from the centre out to the stored point is not drawn at all,
+        // so answering from it would mean the object could only be picked in mid-air.
+        //
+        // Asked of the same helper the green zones and the copying use, rather than worked out again
+        // here - two answers to "where is this object" is how the stop line came to be pickable by a
+        // zone and not by a click.
+        if (e.meta.value("axisAngle").toBool()) {
+            for (const auto& run : axisAngleRuns(e))
+                for (size_t i = 1; i < run.size(); ++i)
+                    best = std::min(best, segDist(run[i - 1], run[i]));
+            break;
+        }
         best = segDist(e.a, e.b);
         break;
     case EntityType::TwistedPair: {
@@ -1553,9 +1638,15 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     }
     case EntityType::Image:
     case EntityType::Rect:
-    case EntityType::Polygon:
-        for (size_t i = 0; i < e.points.size(); ++i)
-            best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
+    case EntityType::Polygon: {
+        // The outline it HAS, which for a volume arrow is worked out from its two ends rather than
+        // stored - so a click lands on the arrow that is on the screen. See entityOutline.
+        const std::vector<Vec2> outline = entityOutline(e);
+        for (size_t i = 0; i < outline.size(); ++i)
+            best = std::min(best, segDist(outline[i], outline[(i + 1) % outline.size()]));
+        // A BLOCK ARROW IS A SOLID: it is a shape with a width, not a pointer, so what you see of it
+        // is its whole area and that is what you click - the same rule as a picture below.
+        if (e.meta.value("volumeArrow").toBool() && pointInPolygon(outline, p)) best = 0.0;
         // Tables / note / revision boxes are pickable anywhere INSIDE (so a cell or
         // the box body can be clicked and double-clicked to edit, not only its border).
         // So is a picture: what you see of it is its whole area, so that is what you click.
@@ -1566,6 +1657,7 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
                 best = 0.0;
         }
         break;
+    }
     case EntityType::Hatch:
     case EntityType::Wipeout: {
         if (e.type == EntityType::Hatch &&
@@ -4674,10 +4766,55 @@ Bounds textInkBounds(const Entity& e) {
 }
 
 // Representative points used to test whether an entity is inside a region.
+
+// Where the zero is, and how long the arms are: both answered in the model, so the renderer, the
+// picking, the handles and the box the object occupies cannot disagree. See Entity.h.
+double axisAngleStart(const Entity& e) { return axisAngleStartAngle(e); }
+
+// WHERE AN AXIS ANGLE IS ON THE SHEET: its two centre lines and its arc, as runs of points.
+//
+// It is stored as a centre and a point, and the line between those two is not drawn - so anything that
+// answered from the stored geometry was answering about a line the drawing does not have. A green zone
+// dragged across the arc found nothing to catch, and one dragged through the empty middle caught the
+// object by a line nobody can see.
+std::vector<std::vector<Vec2>> axisAngleRuns(const Entity& e) {
+    const double r = distance(e.a, e.b);
+    const double arm = axisAngleArm(e);
+    const double start = axisAngleStart(e);
+    const Vec2 u{std::cos(start), std::sin(start)};
+    const Vec2 v{-u.y, u.x};
+    std::vector<std::vector<Vec2>> out;
+    out.push_back({e.a - u * arm, e.a + u * arm});
+    out.push_back({e.a - v * arm, e.a + v * arm});
+    if (r > 1e-9) {
+        const double sweep = e.meta.value(QStringLiteral("axisSweep")).toDouble(180.0) * M_PI / 180.0;
+        // THE STOP LINE, where the sweep ends anywhere but on an axis - see the renderer. It is part of
+        // what the object draws, so a click or a green zone that touches it has touched the object.
+        if (axisAngleStopLine(e)) {
+            const double end = start + sweep;
+            out.push_back({e.a, e.a + Vec2{std::cos(end) * arm, std::sin(end) * arm}});
+        }
+        const int steps = std::clamp(static_cast<int>(std::abs(sweep) / (M_PI / 32.0)) + 2, 4, 128);
+        std::vector<Vec2> arc;
+        for (int i = 0; i <= steps; ++i) {
+            const double t = start + sweep * i / double(steps);
+            arc.push_back({e.a.x + r * std::cos(t), e.a.y + r * std::sin(t)});
+        }
+        out.push_back(arc);
+    }
+    return out;
+}
+
 std::vector<Vec2> entitySelectPoints(const Entity& e) {
     std::vector<Vec2> pts;
     switch (e.type) {
     case EntityType::Line:
+        // An axis angle is its centre lines and its arc, not the line out to the clicked point.
+        if (e.meta.value("axisAngle").toBool()) {
+            for (const auto& run : axisAngleRuns(e))
+                for (const Vec2& q : run) pts.push_back(q);
+            break;
+        }
         pts = {e.a, lerp(e.a, e.b, 0.5), e.b};
         break;
     case EntityType::TwistedPair:
@@ -4734,7 +4871,7 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     case EntityType::Polygon:
     case EntityType::Wipeout:
     case EntityType::Image:
-        pts = e.points;
+        pts = entityOutline(e);   // derived for a block arrow, stored for everything else
         break;
     case EntityType::Circle:
     case EntityType::Arc:
@@ -4848,6 +4985,13 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     auto pts = entitySelectPoints(e);
     switch (e.type) {
     case EntityType::Line:
+        // The real drawn lines, so a green crossing zone touching ANY of them selects - and one in the
+        // empty middle, where only the centre lines run, does not catch it by an invisible radius.
+        if (e.meta.value("axisAngle").toBool()) {
+            for (const auto& run : axisAngleRuns(e))
+                for (size_t i = 1; i < run.size(); ++i) segs.emplace_back(run[i - 1], run[i]);
+            break;
+        }
         segs.emplace_back(e.a, e.b);
         break;
     case EntityType::TwistedPair:
@@ -4945,10 +5089,14 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     case EntityType::Rect:
     case EntityType::Polygon:
     case EntityType::Wipeout:
-    case EntityType::Image:
-        for (size_t i = 0; i < e.points.size(); ++i)
-            segs.emplace_back(e.points[i], e.points[(i + 1) % e.points.size()]);
+    case EntityType::Image: {
+        // The outline it HAS: a block arrow works its own out, so a zone touching the arrow on the
+        // screen catches it rather than finding an empty list and concluding there is nothing there.
+        const std::vector<Vec2> outline = entityOutline(e);
+        for (size_t i = 0; i < outline.size(); ++i)
+            segs.emplace_back(outline[i], outline[(i + 1) % outline.size()]);
         break;
+    }
     case EntityType::Circle: {
         // Tessellate the circle so touching the drawn ring selects it (crossing).
         const int n = 48;
@@ -8023,6 +8171,43 @@ void Editor::applyEditDrag(const Vec2& target) {
             // The middle joint moves the whole line (stays straight, no knee).
             translateEntity(*e, delta);
             break;
+        case GripRole::AxisArm:
+            // How far the centre lines reach. The arc is left exactly where it is - that is the point
+            // of the two being separate - and the point is the snapped one, so an axis can be pulled
+            // out to meet something and land on it.
+            e->meta.insert(QStringLiteral("axisSize"), std::max(0.1, distance(e->a, target)));
+            break;
+        case GripRole::AxisRadius: {
+            // The distance from the axis to where it was dragged - the point is the SNAPPED one, so
+            // pulling the arc onto a joint puts it exactly on that joint. The direction the zero
+            // points is left alone: that is what Rotate is for.
+            const double was = distance(e->a, e->b);
+            const Vec2 dir = was > 1e-9 ? (e->b - e->a).normalized() : Vec2{1.0, 0.0};
+            e->b = e->a + dir * std::max(1e-6, distance(e->a, target));
+            break;
+        }
+        case GripRole::AxisFromText:
+            e->meta.insert(QStringLiteral("fromTextX"), target.x);
+            e->meta.insert(QStringLiteral("fromTextY"), target.y);
+            break;
+        case GripRole::AxisToText:
+            e->meta.insert(QStringLiteral("toTextX"), target.x);
+            e->meta.insert(QStringLiteral("toTextY"), target.y);
+            break;
+        case GripRole::AxisSweep: {
+            // How far round the arc goes, read off where the handle was dragged to. The radius is left
+            // alone - that is the other handle's job - so the arc opens rather than growing.
+            const double start = axisAngleStart(*e);
+            double want = std::atan2(target.y - e->a.y, target.x - e->a.x) - start;
+            // KEEP THE WAY IT WAS GOING. An angle comes back in -180..180, so an arc opened past a half
+            // turn would otherwise snap round and start closing from the other side.
+            const double had = e->meta.value(QStringLiteral("axisSweep")).toDouble(180.0);
+            while (want < 0.0) want += 2 * M_PI;
+            double deg = want * 180.0 / M_PI;
+            if (had < 0.0) deg -= 360.0;
+            e->meta.insert(QStringLiteral("axisSweep"), std::clamp(deg, -359.9, 359.9));
+            break;
+        }
         case GripRole::WireSegMove:
             // Move one wire run: shift both vertices of segment `index` by the drag.
             // (For a straight open wire that segment is the whole wire; for a bent wire
@@ -8879,7 +9064,7 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Polygon:
     case ToolId::Note:
     case ToolId::Revision:
-    // Two clicks each: the block arrow's tail then its tip, the axis then the way it is turned.
+    // Two clicks each: the block arrow's tail then its tip, the axis then where its sweep starts.
     case ToolId::VolumeArrow:
     case ToolId::AxisAngle:
         if (tool_ == ToolId::DoubleLine) {
@@ -9647,14 +9832,37 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("volumeArrow"), true);
         break;
     case ToolId::AxisAngle:
-        // THE AXIS, AND WHICH WAY IT IS TURNED: the cross goes where the first click was, the arrow
-        // runs to the second, and the angle between them is read off the two. One object, so the cross
-        // and its arrow cannot be separated on the sheet - see the renderer.
+        // THE AXIS, AND THE ANGLE SWEPT ABOUT IT: the axis goes where the first click was, and the
+        // second sets how far out the arc runs and where the sweep starts. One object, so the arc and
+        // its centre cannot be separated on the sheet - see the renderer.
+        //
+        // Half a turn to begin with, which is the commonest thing drawn this way and what makes the
+        // object read as itself the moment it lands: an arc from one limit round to the other with both
+        // of them marked. The sweep and the two marks are on its properties, and the far end of the arc
+        // has a handle of its own.
         if (draftPts_.size() < 2) return;
         e.type = EntityType::Line;
         e.a = draftPts_[0];
         e.b = draftPts_[1];
         e.meta.insert(QStringLiteral("axisAngle"), true);
+        e.meta.insert(QStringLiteral("axisSweep"), 180.0);
+        e.meta.insert(QStringLiteral("axisFrom"), 0.0);
+        e.meta.insert(QStringLiteral("arrowSize"), 7.0);
+        // BOTH ENDS: a travel is between two positions, and an arc with one arrow reads as going from
+        // nowhere in particular to somewhere. The row on its properties says otherwise if wanted.
+        e.meta.insert(QStringLiteral("arrowEnds"), QStringLiteral("both"));
+        e.meta.insert(QStringLiteral("textSize"), 10.0);
+        // THE AXIS GROWS WITH THE PULL. One drag out from the centre sizes the whole object: the arc
+        // runs out to where the cursor is and the centre lines run out a little PAST it, which is what
+        // makes the drawing read as an axis with a travel about it rather than an arc with a stub of a
+        // cross inside it. A fixed size could not do that - at 10 a 50mm arc arrived with a cross too
+        // short to see. Afterwards the two are separate: the joints on the arm ends pull the axis
+        // longer or shorter on its own.
+        e.meta.insert(QStringLiteral("axisSize"), distance(e.a, e.b) * 1.18);
+        // A CENTRE LINE, said on the object rather than forced in the renderer - so it arrives looking
+        // the way a centre line looks, and the linetype row can then say otherwise.
+        if (e.meta.value(QStringLiteral("linetype")).toString().isEmpty())
+            e.meta.insert(QStringLiteral("linetype"), QStringLiteral("CENTER"));
         break;
     case ToolId::TwistedPair:
         // Drawn like a line, between the two points the pair runs between. What shapes it - how far
@@ -10171,7 +10379,31 @@ bool Editor::applyDrawInput(const QString& text) {
     return true;
 }
 
+// The arc of an axis angle, held and being slid in or out. Asked before a move is, because while
+// this handle is held a number can only mean one thing and it is not how far the handle travels.
+bool Editor::draggingAxisSweep() const {
+    if (!editing_ || !gripGrab_ || !doc_) return false;
+    if (static_cast<GripRole>(editRole_) != GripRole::AxisSweep) return false;
+    for (const Entity& e : const_cast<Document*>(doc_)->entities())
+        if (e.id == editEntityId_)
+            return e.meta.value(QStringLiteral("axisAngle")).toBool();
+    return false;
+}
+
+bool Editor::draggingAxisRadius() const {
+    if (!editing_ || !gripGrab_ || !doc_) return false;
+    if (static_cast<GripRole>(editRole_) != GripRole::AxisRadius) return false;
+    for (const Entity& e : const_cast<Document*>(doc_)->entities())
+        if (e.id == editEntityId_)
+            return e.meta.value(QStringLiteral("axisAngle")).toBool();
+    return false;
+}
+
 std::vector<QString> Editor::drawInputFieldLabels() const {
+    // THE RADIUS OF THE ANNOTATION being pulled in or out: the number, not the travel.
+    if (draggingAxisRadius()) return {QStringLiteral("Radius")};
+    // THE SWEPT ANGLE, while the end of the arc is held: how far the thing travels, in degrees.
+    if (draggingAxisSweep()) return {QStringLiteral("Angle")};
     // A MOVE UNDER WAY wants one number: how far. The direction is already pointed - that is what the cursor is
     // for - so the field asks for the distance and nothing else, and the box says so rather than sitting blank.
     if (movingByDistance()) return {QStringLiteral("Distance")};
@@ -10520,6 +10752,62 @@ bool Editor::applyMoveDistance(double mm) {
 bool Editor::acceptCommandInput(const QString& text) {
     const QString t = text.trimmed();
     if (t.isEmpty()) return false;
+
+    // THE END OF THE ARC being dragged round takes a plain number as the ANGLE swept, in degrees.
+    // Dragging says roughly how far the thing travels; a number says exactly, which is what a drawing
+    // of a mechanism needs - 90, not 89.4.
+    if (draggingAxisSweep() && !t.contains(QLatin1Char(','))) {
+        bool ok = false;
+        const double v = t.toDouble(&ok);
+        if (ok && std::abs(v) > 1e-9) {
+            if (Entity* e = entityById(editEntityId_)) {
+                e->meta.insert(QStringLiteral("axisSweep"), std::clamp(v, -359.9, 359.9));
+                editing_ = false;
+                gripGrab_ = false;
+                pressed_ = false;
+                editMoved_ = false;
+                editHasFrom_ = false;
+                editGhost_.clear();
+                doc_->setDirty(true);
+                emit message(QStringLiteral("Swept angle %1").arg(v, 0, 'f', 2));
+                emit changed();
+                return true;
+            }
+        }
+        if (ok) {
+            emit message(QStringLiteral("An angle of nothing is not a travel"));
+            return true;
+        }
+    }
+
+    // THE ARC OF AN AXIS ANGLE being slid in or out takes a plain number as the radius it is to have.
+    // Asked before the move below, which would otherwise read the same number as a distance to travel.
+    if (draggingAxisRadius() && !t.contains(QLatin1Char(','))) {
+        bool ok = false;
+        const double v = t.toDouble(&ok);
+        if (ok && v > 1e-9) {
+            if (Entity* e = entityById(editEntityId_)) {
+                const double was = distance(e->a, e->b);
+                const Vec2 dir = was > 1e-9 ? (e->b - e->a).normalized() : Vec2{1.0, 0.0};
+                e->b = e->a + dir * v;
+                // Put down there, the way a placing click ends any other drag.
+                editing_ = false;
+                gripGrab_ = false;
+                pressed_ = false;
+                editMoved_ = false;
+                editHasFrom_ = false;
+                editGhost_.clear();
+                doc_->setDirty(true);
+                emit message(QStringLiteral("Annotation radius %1").arg(v, 0, 'f', 3));
+                emit changed();
+                return true;
+            }
+        }
+        if (ok) {
+            emit message(QStringLiteral("A radius of nothing would draw no arc"));
+            return true;
+        }
+    }
 
     // A MOVE UNDER WAY takes a plain number as the distance to go, along the direction the cursor is pointing.
     // Asked first: while something is being moved, a number can only mean how far, and every other reading of it
@@ -15417,6 +15705,14 @@ void Editor::setGeometryValue(const QString& key, double v) {
         if (e->type == EntityType::Circle || e->type == EntityType::Arc ||
             e->type == EntityType::DetailView)
             e->radius = std::max(1e-6, v);
+        // AN AXIS ANGLE has no radius of its own: the arc runs out as far as the second click, so the
+        // radius IS that point's distance from the centre and setting it slides the point out along the
+        // way it already faces. One answer for where the arc is, whether it was typed or dragged.
+        else if (e->meta.value(QStringLiteral("axisAngle")).toBool()) {
+            const double was = distance(e->a, e->b);
+            const Vec2 dir = was > 1e-9 ? (e->b - e->a).normalized() : Vec2{1.0, 0.0};
+            e->b = e->a + dir * std::max(1e-6, v);
+        }
     }
     else if (key == "Width") {
         if (e->type == EntityType::Circle) e->radius = std::max(1e-6, v / 2.0);
@@ -17051,6 +17347,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             a.a = pts[0];
             a.b = pts[1];
             a.meta.insert(QStringLiteral("axisAngle"), true);
+            a.meta.insert(QStringLiteral("axisSweep"), 180.0);
+            a.meta.insert(QStringLiteral("axisFrom"), 0.0);
+            a.meta.insert(QStringLiteral("arrowSize"), 7.0);
+            a.meta.insert(QStringLiteral("arrowEnds"), QStringLiteral("both"));
+            a.meta.insert(QStringLiteral("textSize"), 10.0);
+            // Sized from the pull, so what grows under the cursor while it is being placed is the
+            // whole object - see finishDraw.
+            a.meta.insert(QStringLiteral("axisSize"), distance(a.a, a.b) * 1.18);
             EntityRenderer::draw(p, a, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::TwistedPair && pts.size() >= 2) {
             // Previewed as the thing itself, drawn by the same code that will draw it once placed -

@@ -50,6 +50,20 @@ struct ViewTransform {
 // that something, because the extension lives in the cap and not in the run's own points.
 void applyDoubleRunCuts(std::vector<Vec2>& rail, const Entity& e, int side);
 
+// WHERE AN AXIS ANGLE'S LABEL SITS, in world units: the number written at the start of the sweep, or
+// the one at the end. Where it has been dragged to, if it has been; otherwise out past the arc and
+// pushed to one side of it, so the digits never sit on top of the centre line the sweep finishes on.
+//
+// Here rather than in the model because it needs the annotation scale, and answered once because the
+// renderer draws the text and the editor has to put a handle on it - and a handle that is not where
+// the text is holds nothing.
+Vec2 axisAngleLabelAnchor(const Entity& e, bool atStart);
+
+// And WHAT that label says: the datum at the start, the datum plus the travel at the end - so the two
+// numbers can never disagree with the arc between them. Either can be overridden with words, for a
+// mechanism whose positions are not degrees.
+QString axisAngleLabelText(const Entity& e, bool atStart);
+
 // The pieces one physical line of a double run is drawn in: the capped line, broken wherever a trim
 // took a piece out of the MIDDLE of it. A middle piece cannot be said with a trimmed end - there is no
 // end there - so it is kept as a hole in that one line, which is also exactly what a run crossing

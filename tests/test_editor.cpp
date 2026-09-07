@@ -9202,6 +9202,681 @@ int run_editor_tests() {
         }
     }
 
+    // ---- A BLOCK ARROW CAN BE PICKED --------------------------------------------------------------
+    {
+        // It keeps its two ends and lays its outline out when it is drawn, and everything that asks
+        // where an object IS was reading the stored point list - which is empty - so an arrow could be
+        // drawn and then never selected, windowed, zoomed to or snapped to again.
+        Document d;
+        d.entities().clear();
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::VolumeArrow);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);      // tail
+        ed.onPointerPress({100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);    // tip
+        check(d.entities().size() == 1, "arrow: one object is drawn");
+        if (d.entities().size() == 1) {
+            const Entity& arrow = d.entities().front();
+            check(arrow.meta.value("volumeArrow").toBool(), "arrow: and it is a block arrow");
+
+            // THE BOX IT OCCUPIES. Without this it had none, so a window drag could not catch it.
+            const Bounds b = arrow.bounds();
+            std::printf("  arrow: box x %.2f..%.2f y %.2f..%.2f\n", b.min.x, b.max.x, b.min.y,
+                        b.max.y);
+            check(b.valid, "arrow: it has a box on the sheet");
+            check(b.valid && std::abs(b.min.x) < 1e-6 && std::abs(b.max.x - 100.0) < 1e-6,
+                  "arrow: the box runs tail to tip");
+            // A 100 long arrow is 18 wide by default, so the shaft is 9 either side - and the barbs are
+            // twice that, 18 either side. That is the tell that the box came from the OUTLINE and not
+            // from the two ends, which would be a box of no height at all.
+            check(b.valid && b.max.y > 17.0 && b.max.y < 19.0,
+                  "arrow: and out to the barbs across it");
+
+            // A CLICK ON IT PICKS IT - on the shaft, and inside the head, because it is a solid.
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1, "arrow: clicking the shaft picks it");
+            ed.clearSelection();
+            ed.onPointerPress({50.0, 8.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1, "arrow: so does clicking inside it");
+            ed.clearSelection();
+            // AND NOT PICKED from well outside it, or the test above would pass on anything.
+            ed.onPointerPress({50.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().empty(), "arrow: a click off the arrow picks nothing");
+        }
+    }
+
+    // ---- the head of a block arrow is a size that can be set --------------------------------------
+    {
+        // Both numbers were on the object and neither could be reached, so every arrow was a third of
+        // its own length in the head and a fifth across - and a row of arrows of different lengths
+        // could not be made to match each other.
+        const std::vector<Vec2> plain = volumeArrowOutline({0.0, 0.0}, {100.0, 0.0});
+        const std::vector<Vec2> stub = volumeArrowOutline({0.0, 0.0}, {100.0, 0.0}, 0.0, 10.0);
+        auto neckX = [](const std::vector<Vec2>& o) {
+            // The outline runs tail, neck, barb, tip, barb, neck, tail - so the neck is the second
+            // point, and where it sits along the arrow is the length of the head.
+            return o.size() >= 2 ? o[1].x : -1.0;
+        };
+        std::printf("  arrow head: neck at %.2f by default, %.2f when set to 10\n", neckX(plain),
+                    neckX(stub));
+        check(std::abs(neckX(plain) - 64.0) < 1e-6, "arrow head: a third of the length by default");
+        check(std::abs(neckX(stub) - 90.0) < 1e-6, "arrow head: and the set size where it is set");
+        // NEVER LONGER THAN THE ARROW, however big a number is typed.
+        const std::vector<Vec2> huge = volumeArrowOutline({0.0, 0.0}, {100.0, 0.0}, 0.0, 500.0);
+        check(std::abs(neckX(huge)) < 1e-6, "arrow head: a head bigger than the arrow is all head");
+    }
+
+    // ---- AN AXIS ANGLE IS ITS ARC ------------------------------------------------------------------
+    {
+        // Drawn as centre lines and a swept arc, so that is what it occupies and what a click has to
+        // land on. It was stored as a centre and a point and answered from the line between them,
+        // which is a line the drawing does not have.
+        Document d;
+        d.entities().clear();
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::AxisAngle);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);      // the axis
+        ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);    // straight down: the start
+        check(d.entities().size() == 1, "axis: one object is drawn");
+        if (d.entities().size() == 1) {
+            const Entity& ax = d.entities().front();
+            check(ax.meta.value("axisAngle").toBool(), "axis: and it is an axis angle");
+            check(std::abs(ax.meta.value("axisSweep").toDouble() - 180.0) < 1e-9,
+                  "axis: half a turn to begin with");
+            // The START is marked 0 and the far end is that plus the sweep, worked out when it is
+            // drawn - so there is no second number to be left saying 180 on a 90 degree arc.
+            check(std::abs(ax.meta.value("axisFrom").toDouble()) < 1e-9,
+                  "axis: with its zero marked 0");
+            check(!ax.meta.contains(QStringLiteral("axisTo")),
+                  "axis: and no end number of its own to go stale");
+
+            // THE ROOM IT TAKES is the reach of the centre lines, not the 50 between the two points.
+            const Bounds b = ax.bounds();
+            std::printf("  axis: box x %.2f..%.2f y %.2f..%.2f\n", b.min.x, b.max.x, b.min.y, b.max.y);
+            // The box is whichever reaches further, the arms or the arc - the two are separate lengths
+            // now, and a fresh one has short arms (10) around a 50 arc.
+            check(b.valid && b.max.x >= 49.99, "axis: the box reaches out to the arc");
+            check(b.valid && b.min.y <= -49.99 && b.max.y >= 49.99,
+                  "axis: and across the whole of it, either side of the axis");
+
+            // A CLICK ON THE ARC PICKS IT. A half turn starting straight down bulges to the +x side,
+            // so (50, 0) is on the arc.
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1, "axis: clicking the arc picks it");
+            // AND NOT from inside the ring, where nothing is drawn but the centre lines - well off to
+            // one side of them, so this is a genuine miss rather than a click on an axis.
+            ed.clearSelection();
+            ed.onPointerPress({25.0, 25.0}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().empty(), "axis: a click in the empty middle picks nothing");
+            // The part of the ring it does NOT sweep is not the object either. Taken at 135 degrees,
+            // which is off both centre lines - (-50, 0) would have been ON the horizontal one, so
+            // picking there is a hit on an axis and says nothing about the arc.
+            ed.clearSelection();
+            ed.onPointerPress({-35.36, 35.36}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().empty(), "axis: nor is the part of the ring it does not sweep");
+        }
+    }
+
+    // ---- the radius of an axis angle keeps one answer ---------------------------------------------
+    {
+        Document d;
+        d.entities().clear();
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::AxisAngle);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+        if (d.entities().size() == 1) {
+            ed.setTool(ToolId::Select);
+            ed.selectById(d.entities().front().id);
+            // Typing a radius MOVES THE POINT rather than being remembered beside it, so the object
+            // has one answer for where the arc is however it was set.
+            ed.setGeometryValue(QStringLiteral("Radius"), 80.0);
+            const Entity& ax = d.entities().front();
+            std::printf("  axis: radius set to 80 -> point at (%.2f, %.2f)\n", ax.b.x, ax.b.y);
+            check(std::abs(distance(ax.a, ax.b) - 80.0) < 1e-6, "axis: the radius is what was typed");
+            check(std::abs(ax.b.x) < 1e-6 && ax.b.y < 0.0,
+                  "axis: and the point slid out the way it already faced");
+            check(!ax.meta.contains(QStringLiteral("axisRadius")),
+                  "axis: with no second answer kept beside it");
+        }
+    }
+
+    // ---- A GREEN ZONE TOUCHING A LINE SELECTS THE OBJECT ------------------------------------------
+    {
+        // Crossing selection asks an object for its drawn segments. A block arrow answered with an
+        // empty list, because its outline is worked out rather than stored, and an axis angle answered
+        // with the line from its centre out to the clicked point - a line the drawing does not have.
+        // So a zone dragged over the arrow caught nothing, and one dragged over the arc caught nothing,
+        // while one dragged through the empty middle of the arc caught the object by an invisible line.
+        //
+        // A crossing zone is dragged RIGHT TO LEFT (see finishRegionSelect), so each of these presses
+        // the right-hand corner first.
+        // A two-click rectangle: press and release on the first corner, then move to the opposite one
+        // and press. Right corner first, because right-to-left is what makes it a crossing zone.
+        auto crossingPick = [](Editor& ed, Vec2 rightCorner, Vec2 leftCorner) {
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress(rightCorner, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(rightCorner, Qt::LeftButton);
+            ed.onPointerMove(leftCorner);
+            ed.onPointerPress(leftCorner, Qt::LeftButton, Qt::NoModifier);
+            return ed.selection().size();
+        };
+
+        {
+            Document d;
+            d.entities().clear();
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::VolumeArrow);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            check(d.entities().size() == 1, "green arrow: an arrow is on the sheet");
+            // A tall thin zone across the middle of the arrow: it cuts both edges of the shaft, so it
+            // has touched the arrow itself and not merely its bounding box.
+            const size_t got = crossingPick(ed, {60.0, 40.0}, {40.0, -40.0});
+            std::printf("  green arrow: a zone across the shaft picked %d object(s)\n",
+                        static_cast<int>(got));
+            check(got == 1, "green arrow: a zone touching the arrow selects it");
+            // AND A ZONE THAT TOUCHES NOTHING selects nothing, or the check above passes on anything.
+            check(crossingPick(ed, {60.0, 140.0}, {40.0, 80.0}) == 0,
+                  "green arrow: a zone clear of it selects nothing");
+        }
+
+        {
+            Document d;
+            d.entities().clear();
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::AxisAngle);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            check(d.entities().size() == 1, "green axis: an axis angle is on the sheet");
+            // A zone out on the +x side, clear of both centre lines (which reach to 59) but across the
+            // arc, which passes through (50, 0).
+            // Both corners well clear of every line the object draws - the arc at r=50 and the centre
+            // lines out to 59 - so only the zone between them can catch it. It spans the arc at 45
+            // degrees, where nothing else of the object runs.
+            const size_t got = crossingPick(ed, {80.0, 80.0}, {12.0, 12.0});
+            std::printf("  green axis: a zone across the arc picked %d object(s)\n",
+                        static_cast<int>(got));
+            check(got == 1, "green axis: a zone touching the arc selects it");
+            // AND A ZONE WELL OUTSIDE IT ALL selects nothing.
+            check(crossingPick(ed, {300.0, 300.0}, {200.0, 200.0}) == 0,
+                  "green axis: a zone clear of it selects nothing");
+        }
+    }
+
+    // ---- the head size reaches the DRAWING, not only the measurements ------------------------------
+    {
+        // The number was read when the object was measured and ignored when it was drawn, so typing a
+        // head size moved the box the arrow occupies and changed nothing anybody could see. Rendered
+        // twice here, because that is the only place the fault showed.
+        Document d;
+        d.entities().clear();
+        Entity arrow;
+        arrow.id = QStringLiteral("VA");
+        arrow.type = EntityType::Polygon;
+        arrow.a = {10.0, 60.0};
+        arrow.b = {110.0, 60.0};
+        arrow.meta.insert(QStringLiteral("volumeArrow"), true);
+        arrow.meta.insert(QStringLiteral("arrowHead"), 15.0);
+        d.entities().push_back(arrow);
+
+        auto shot = [&](double headMm) {
+            d.entities()[0].meta.insert(QStringLiteral("arrowHead"), headMm);
+            ViewTransform vt;
+            vt.view.scale = 1.0;
+            vt.view.x = 0.0;
+            vt.view.y = 120.0;   // world y runs UP the page; without this the arrow draws off the top
+            QImage img(160, 120, QImage::Format_RGB32);
+            img.fill(QColor("#1e2832"));
+            QPainter p(&img);
+            for (const auto& e : d.entities()) EntityRenderer::draw(p, e, d, vt);
+            p.end();
+            return img;
+        };
+        const QImage small = shot(15.0);
+        const QImage big = shot(70.0);
+        // THE PICTURE IS NOT BLANK. Two empty images differ by nothing, so without this the test
+        // passes for the one reason it must never pass for.
+        int drawn = 0;
+        for (int y = 0; y < small.height(); ++y)
+            for (int x = 0; x < small.width(); ++x)
+                if (small.pixel(x, y) != QColor("#1e2832").rgb()) ++drawn;
+        std::printf("  arrow head drawn: %d pixel(s) of arrow in the picture\n", drawn);
+        check(drawn > 100, "arrow head: the arrow is actually drawn");
+        int differing = 0;
+        for (int y = 0; y < small.height(); ++y)
+            for (int x = 0; x < small.width(); ++x)
+                if (small.pixel(x, y) != big.pixel(x, y)) ++differing;
+        std::printf("  arrow head drawn: %d pixel(s) differ between a 15 and a 70 head\n", differing);
+        check(differing > 50, "arrow head: setting it changes what is drawn");
+    }
+
+    // ---- the far label follows the sweep -----------------------------------------------------------
+    {
+        // It used to be a number of its own, so opening the arc to 90 left "180" written at the end of
+        // it: the annotation saying one thing and the arc it labels another. The end is the start plus
+        // however far the thing travels, so a stale number left on an old object must not win.
+        Document d;
+        d.entities().clear();
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::AxisAngle);
+        ed.onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({60.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 1, "axis label: an axis angle is on the sheet");
+        if (d.entities().size() == 1) {
+            check(!d.entities()[0].meta.contains(QStringLiteral("axisTo")),
+                  "axis label: no end number is stored to go stale");
+
+            auto shot = [&]() {
+                ViewTransform vt;
+                vt.view.scale = 1.0;
+                vt.view.x = 0.0;
+                vt.view.y = 160.0;   // world y runs UP the page - see the arrow test above
+                QImage img(200, 160, QImage::Format_RGB32);
+                img.fill(QColor("#1e2832"));
+                QPainter p(&img);
+                for (const auto& e : d.entities()) EntityRenderer::draw(p, e, d, vt);
+                p.end();
+                return img;
+            };
+            auto differ = [](const QImage& x, const QImage& y) {
+                int n = 0;
+                for (int j = 0; j < x.height(); ++j)
+                    for (int i = 0; i < x.width(); ++i)
+                        if (x.pixel(i, j) != y.pixel(i, j)) ++n;
+                return n;
+            };
+
+            // A LEFTOVER axisTo changes nothing: the drawing no longer consults it.
+            const QImage clean = shot();
+            // AND THE PICTURE IS NOT BLANK, or "no difference" below means "nothing was drawn".
+            int drawn = 0;
+            for (int j = 0; j < clean.height(); ++j)
+                for (int i = 0; i < clean.width(); ++i)
+                    if (clean.pixel(i, j) != QColor("#1e2832").rgb()) ++drawn;
+            std::printf("  axis label: %d pixel(s) of axis angle in the picture\n", drawn);
+            check(drawn > 100, "axis label: the axis angle is actually drawn");
+            d.entities()[0].meta.insert(QStringLiteral("axisTo"), 999.0);
+            const QImage stale = shot();
+            std::printf("  axis label: a leftover end number moves %d pixel(s)\n",
+                        differ(clean, stale));
+            check(differ(clean, stale) == 0, "axis label: a stale end number is ignored");
+            d.entities()[0].meta.remove(QStringLiteral("axisTo"));
+
+            // AND THE LABELS ARE REALLY BEING DRAWN FROM THE NUMBERS: moving the datum leaves the arc
+            // and the axes exactly where they were, so anything that changes is the writing.
+            d.entities()[0].meta.insert(QStringLiteral("axisFrom"), 45.0);
+            const QImage moved = shot();
+            std::printf("  axis label: marking the zero 45 instead of 0 moves %d pixel(s)\n",
+                        differ(clean, moved));
+            check(differ(clean, moved) > 5, "axis label: the labels come from the numbers");
+        }
+    }
+
+    // ---- the zero can be turned, and the whole annotation turns with it ---------------------------
+    {
+        // The second click puts the zero wherever the cursor was, which is quick and rarely exactly
+        // right. Turning it moves the whole annotation about its axis WITHOUT touching the radius.
+        Document d;
+        d.entities().clear();
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::AxisAngle);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);   // zero straight down
+        if (d.entities().size() == 1) {
+            // Straight down with a half turn sweeps the RIGHT half of the ring, so the point at -45
+            // degrees is on the arc.
+            ed.setTool(ToolId::Select);
+            ed.clearSelection();
+            ed.onPointerPress({35.36, -35.36}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1, "axis zero: the arc is where it was drawn");
+
+            // Turned a quarter turn, the same half turn sweeps the TOP of the ring instead - so that
+            // same point is no longer on it, and the radius has not moved.
+            const double wasR = distance(d.entities()[0].a, d.entities()[0].b);
+            d.entities()[0].meta.insert(QStringLiteral("axisZero"), 90.0);
+            ed.clearSelection();
+            ed.onPointerPress({35.36, -35.36}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().empty(), "axis zero: turning it takes the arc off that point");
+            ed.clearSelection();
+            ed.onPointerPress({35.36, 35.36}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.selection().size() == 1, "axis zero: and puts it on the other side");
+            check(std::abs(distance(d.entities()[0].a, d.entities()[0].b) - wasR) < 1e-9,
+                  "axis zero: turning the zero leaves the radius alone");
+        }
+    }
+
+    // ---- the axis angle: what its handles do, and what its linetype says --------------------------
+    {
+        // A fresh one, drawn straight down so the sweep covers the right-hand half of the ring.
+        auto fresh = [](Document& d, Editor& ed) {
+            d.entities().clear();
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::AxisAngle);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.setTool(ToolId::Select);
+        };
+        // Take hold of a handle and drag it, the way the mouse does: press on it, move, release.
+        auto dragTo = [](Editor& ed, Vec2 grab, Vec2 to) {
+            ed.onPointerPress(grab, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove(to);
+            ed.onPointerRelease(to, Qt::LeftButton);
+        };
+
+        // ---- IT IS BORN A CENTRE LINE, and says so on itself rather than being forced. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            check(d.entities().size() == 1, "axis linetype: one object");
+            if (d.entities().size() == 1)
+                check(d.entities()[0].meta.value("linetype").toString() ==
+                          QLatin1String("CENTER"),
+                      "axis linetype: a new one is a centre line, on the object");
+        }
+
+        // ---- THE ARC SLIDES IN AND OUT WITHOUT TURNING. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            ed.selectById(d.entities()[0].id);
+            const double wasStart = std::atan2(d.entities()[0].b.y - d.entities()[0].a.y,
+                                               d.entities()[0].b.x - d.entities()[0].a.x);
+            // Grabbed at the handle (0, -50) and dragged well off to one side. The old handle set the
+            // radius AND where the zero pointed, so this drag used to turn the whole annotation.
+            dragTo(ed, {0.0, -50.0}, {60.0, -60.0});
+            const Entity& ax = d.entities()[0];
+            const double nowStart = std::atan2(ax.b.y - ax.a.y, ax.b.x - ax.a.x);
+            std::printf("  axis radius: dragged to (60,-60) -> r %.2f, zero still %.1f deg\n",
+                        distance(ax.a, ax.b), nowStart * 180.0 / M_PI);
+            // The radius is the distance to where it was dragged - hypot(60,60) = 84.85.
+            check(std::abs(distance(ax.a, ax.b) - 84.85) < 0.05,
+                  "axis radius: the radius follows the drag");
+            check(std::abs(nowStart - wasStart) < 1e-9,
+                  "axis radius: and the zero does not move with it");
+        }
+
+        // ---- WHILE IT IS HELD, A TYPED NUMBER IS THE RADIUS. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            ed.selectById(d.entities()[0].id);
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({0.0, -70.0});
+            // The box asks for the radius, not for how far the handle travels - which is what every
+            // other drag in the editor asks for and is no use at all here.
+            const auto asked = ed.drawInputFieldLabels();
+            std::printf("  axis radius typed: the box asks for %s\n",
+                        asked.empty() ? "nothing" : qPrintable(asked.front()));
+            check(asked.size() == 1 && asked.front() == QLatin1String("Radius"),
+                  "axis radius typed: the box asks for a radius");
+            check(ed.acceptCommandInput(QStringLiteral("120")),
+                  "axis radius typed: and the number is taken");
+            const Entity& ax = d.entities()[0];
+            std::printf("  axis radius typed: 120 -> r %.2f at (%.2f, %.2f)\n",
+                        distance(ax.a, ax.b), ax.b.x, ax.b.y);
+            check(std::abs(distance(ax.a, ax.b) - 120.0) < 1e-6,
+                  "axis radius typed: the radius is exactly what was typed");
+            check(std::abs(ax.b.x) < 1e-6 && ax.b.y < 0.0,
+                  "axis radius typed: along the way it already faced");
+        }
+
+        // ---- A LABEL GOES WHERE IT IS PUT, AND STAYS THERE. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            ed.selectById(d.entities()[0].id);
+            // Grabbed where the label actually IS, asked of the same helper the renderer draws it
+            // with - a hard-coded point here would only be testing my arithmetic, and would go stale
+            // the next time the placing rule changes (it just did: the label steps aside now).
+            const Vec2 labelAt = axisAngleLabelAnchor(d.entities()[0], true);
+            std::printf("  axis text: the zero label sits at (%.2f, %.2f)\n", labelAt.x, labelAt.y);
+            // AND IT IS BESIDE THE CENTRE LINE, not on it. The zero of a fresh one points straight
+            // down, so the vertical centre line runs through x = 0 - and a label centred there would
+            // have the dash-dot through the middle of the digits, which is what this fixes.
+            check(std::abs(labelAt.x) > 1.0, "axis text: the label is beside the axis, not on it");
+            dragTo(ed, labelAt, {40.0, -80.0});
+            {
+                const Entity& ax = d.entities()[0];
+                std::printf("  axis text: the zero label moved to (%.2f, %.2f)\n",
+                            ax.meta.value("fromTextX").toDouble(),
+                            ax.meta.value("fromTextY").toDouble());
+                check(ax.meta.contains(QStringLiteral("fromTextX")),
+                      "axis text: the label remembers where it was put");
+                check(std::abs(ax.meta.value("fromTextX").toDouble() - 40.0) < 1e-6 &&
+                          std::abs(ax.meta.value("fromTextY").toDouble() + 80.0) < 1e-6,
+                      "axis text: exactly where it was dragged to");
+            }
+            // OPENING OR CLOSING THE ARC LEAVES IT THERE. A label pinned to the arc would travel with
+            // it, which is what somebody who just moved it clear of the geometry does not want.
+            d.entities()[0].meta.insert(QStringLiteral("axisSweep"), 90.0);
+            check(std::abs(d.entities()[0].meta.value("fromTextX").toDouble() - 40.0) < 1e-6,
+                  "axis text: changing the angle does not move it");
+            // BUT MOVING THE OBJECT TAKES IT ALONG - it is part of the object, not a note beside it.
+            translateEntity(d.entities()[0], {100.0, 0.0});
+            std::printf("  axis text: after moving the object it is at (%.2f, %.2f)\n",
+                        d.entities()[0].meta.value("fromTextX").toDouble(),
+                        d.entities()[0].meta.value("fromTextY").toDouble());
+            check(std::abs(d.entities()[0].meta.value("fromTextX").toDouble() - 140.0) < 1e-6,
+                  "axis text: and moving the object carries it");
+        }
+
+        // ---- TURNING IT IS THE TURN COMMAND, and the whole annotation turns together. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed);
+            const double wasR = distance(d.entities()[0].a, d.entities()[0].b);
+            // A quarter turn anticlockwise about the axis: the zero was straight down, so it ends up
+            // pointing along +x.
+            rotateEntity(d.entities()[0], {0.0, 0.0}, M_PI / 2.0);
+            const Entity& ax = d.entities()[0];
+            std::printf("  axis turn: the zero now points %.1f deg, r %.2f\n",
+                        std::atan2(ax.b.y - ax.a.y, ax.b.x - ax.a.x) * 180.0 / M_PI,
+                        distance(ax.a, ax.b));
+            check(std::abs(ax.b.x - 50.0) < 1e-6 && std::abs(ax.b.y) < 1e-6,
+                  "axis turn: Rotate turns where the zero points");
+            check(std::abs(distance(ax.a, ax.b) - wasR) < 1e-9,
+                  "axis turn: and leaves the radius alone");
+        }
+
+        // ---- SNAP APPLIES while the arc is dragged: it is handed the snapped point. ----
+        {
+            Document d;
+            Editor ed;
+            d.entities().clear();
+            ed.setDocument(&d);
+            // Something to snap TO: a line whose end sits at a distance from the axis that no cursor
+            // position in this test would give by accident.
+            Entity mark;
+            mark.id = QStringLiteral("SNAPME");
+            mark.type = EntityType::Line;
+            mark.a = {77.0, 0.0};
+            mark.b = {77.0, 20.0};
+            d.entities().push_back(mark);
+
+            ed.setTool(ToolId::AxisAngle);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.setTool(ToolId::Select);
+            const QString axId = d.entities().back().id;
+            ed.selectById(axId);
+
+            // Endpoint snapping on, and the arc handle dragged to NEAR that end - close enough to snap
+            // to it, not on it. If the snap is honoured the radius comes out at exactly 77.
+            auto& sn = ed.snapSettings();
+            sn.objectSnap = true;
+            sn.snapEndpoint = true;
+            sn.snapNearest = false;   // nearest would snap to the line itself, not to its end
+            sn.gridSnap = false;
+            sn.ortho = false;
+            sn.polar = false;
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({76.4, 0.6});
+            ed.onPointerRelease({76.4, 0.6}, Qt::LeftButton);
+            const Entity* ax = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.id == axId) ax = &e;
+            check(ax != nullptr, "axis snap: the axis angle is still there");
+            if (ax) {
+                std::printf("  axis snap: dragged near (77,0) -> r %.4f\n", distance(ax->a, ax->b));
+                check(std::abs(distance(ax->a, ax->b) - 77.0) < 1e-6,
+                      "axis snap: the radius lands on the snapped point exactly");
+            }
+        }
+    }
+
+    // ---- what a new axis angle is born with, and the line an angle stops against -------------------
+    {
+        auto fresh = [](Document& d, Editor& ed, double sweepDeg) {
+            d.entities().clear();
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::AxisAngle);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({0.0, -50.0}, Qt::LeftButton, Qt::NoModifier);   // zero straight down
+            if (!d.entities().empty())
+                d.entities()[0].meta.insert(QStringLiteral("axisSweep"), sweepDeg);
+            ed.setTool(ToolId::Select);
+        };
+
+        // ---- THE DEFAULTS. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed, 180.0);
+            check(d.entities().size() == 1, "axis defaults: one object");
+            if (d.entities().size() == 1) {
+                const Entity& ax = d.entities()[0];
+                std::printf("  axis defaults: text %.1f, axis %.1f, arrows %s\n",
+                            ax.meta.value("textSize").toDouble(),
+                            ax.meta.value("axisSize").toDouble(),
+                            qPrintable(ax.meta.value("arrowEnds").toString()));
+                check(std::abs(ax.meta.value("textSize").toDouble() - 10.0) < 1e-9,
+                      "axis defaults: the text is 10 high");
+                // SIZED FROM THE PULL: one drag out from the centre sizes the arc and the centre
+                // lines together, the arms reaching a little past the arc so the thing reads as an
+                // axis with a travel about it. Pulled 50, so the arms are 59.
+                check(std::abs(ax.meta.value("axisSize").toDouble() - 59.0) < 1e-9,
+                      "axis defaults: the axis is sized from the pull");
+                check(ax.meta.value("axisSize").toDouble() > distance(ax.a, ax.b),
+                      "axis defaults: and reaches past the arc");
+                check(ax.meta.value("arrowEnds").toString() == QLatin1String("both"),
+                      "axis defaults: an arrow on both ends");
+                check(std::abs(ax.meta.value("arrowSize").toDouble() - 7.0) < 1e-9,
+                      "axis defaults: and the arrows are 7");
+            }
+        }
+
+        // ---- THE STOP LINE, when the sweep does not finish on a centre line. ----
+        {
+            // 45 degrees from a zero pointing straight down ends at -45, which is on neither centre
+            // line - so the angle needs a line of its own to stop against, or the arc simply ends in
+            // mid-air and the drawing does not say where the travel finishes.
+            Document d;
+            Editor ed;
+            fresh(d, ed, 45.0);
+            // THE AXIS IS LENGTHENED FIRST, to 60. With the default 10 the stop line is a 10mm stub
+            // running out at 45 degrees, whose every point is within a few millimetres of BOTH centre
+            // lines - so a click there lands on an axis and says nothing about the stop line either
+            // way. At 60 the line reaches (42,-42) and a point on it is nowhere near anything else.
+            d.entities()[0].meta.insert(QStringLiteral("axisSize"), 60.0);
+            // Two thirds of the way out: 28 from each centre line, and 10 clear of the arc at 50.
+            ed.clearSelection();
+            ed.onPointerPress({28.0, -28.0}, Qt::LeftButton, Qt::NoModifier);
+            std::printf("  axis stop: a click on the stop line picked %d\n",
+                        static_cast<int>(ed.selection().size()));
+            check(ed.selection().size() == 1, "axis stop: the stop line is part of the object");
+
+            // AND WITH A QUARTER TURN there is no stop line: the sweep finishes ON the horizontal
+            // centre line, which stops it already. The same point now picks nothing, which is the
+            // check that the line above was really the stop line and not something else.
+            Document d2;
+            Editor ed2;
+            fresh(d2, ed2, 90.0);
+            d2.entities()[0].meta.insert(QStringLiteral("axisSize"), 60.0);
+            ed2.clearSelection();
+            ed2.onPointerPress({28.0, -28.0}, Qt::LeftButton, Qt::NoModifier);
+            std::printf("  axis stop: with a quarter turn the same point picked %d\n",
+                        static_cast<int>(ed2.selection().size()));
+            check(ed2.selection().empty(),
+                  "axis stop: an angle that ends on an axis needs no stop line");
+        }
+
+        // ---- THE AXIS LENGTH IS PULLED ON ITS OWN, and the arc stays where it is. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed, 180.0);
+            ed.selectById(d.entities()[0].id);
+            const double wasR = distance(d.entities()[0].a, d.entities()[0].b);
+            // A joint at every end of the axis. The zero points straight down and a 50 pull gives arms
+            // of 59, so they run to (0,-59), (0,59), (59,0) and (-59,0). This one is pushed IN to 30 -
+            // which is also the check that the axis can be made shorter than the arc, the case a
+            // proportional size could never draw.
+            ed.onPointerPress({59.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({30.0, 0.0});
+            ed.onPointerRelease({30.0, 0.0}, Qt::LeftButton);
+            const Entity& ax = d.entities()[0];
+            std::printf("  axis size: moved the arm to 30 -> axis %.2f, arc still %.2f\n",
+                        ax.meta.value("axisSize").toDouble(), distance(ax.a, ax.b));
+            check(std::abs(ax.meta.value("axisSize").toDouble() - 30.0) < 1e-6,
+                  "axis size: the arm end sets how long the axis is");
+            check(ax.meta.value("axisSize").toDouble() < distance(ax.a, ax.b),
+                  "axis size: an axis shorter than its own arc, which is now drawable");
+            check(std::abs(distance(ax.a, ax.b) - wasR) < 1e-9,
+                  "axis size: and the annotation does not move with it");
+        }
+
+        // ---- WHILE THE ARC END IS DRAGGED, A TYPED NUMBER IS THE SWEPT ANGLE. ----
+        {
+            Document d;
+            Editor ed;
+            fresh(d, ed, 180.0);
+            ed.selectById(d.entities()[0].id);
+            // The far end of a half turn from a zero pointing down is straight up, at (0, 50).
+            ed.onPointerPress({0.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({35.0, 35.0});
+            const auto asked = ed.drawInputFieldLabels();
+            std::printf("  axis sweep typed: the box asks for %s\n",
+                        asked.empty() ? "nothing" : qPrintable(asked.front()));
+            check(asked.size() == 1 && asked.front() == QLatin1String("Angle"),
+                  "axis sweep typed: the box asks for an angle");
+            check(ed.acceptCommandInput(QStringLiteral("45")),
+                  "axis sweep typed: and the number is taken");
+            const Entity& ax = d.entities()[0];
+            std::printf("  axis sweep typed: 45 -> sweep %.2f, arc r %.2f\n",
+                        ax.meta.value("axisSweep").toDouble(), distance(ax.a, ax.b));
+            check(std::abs(ax.meta.value("axisSweep").toDouble() - 45.0) < 1e-9,
+                  "axis sweep typed: the sweep is exactly what was typed");
+            check(std::abs(distance(ax.a, ax.b) - 50.0) < 1e-9,
+                  "axis sweep typed: and the radius is left alone");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

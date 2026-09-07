@@ -48,6 +48,8 @@ void mapPoints(Entity& e, F fn) {
     xf("lsRefAx", "lsRefAy");
     xf("lsRefBx", "lsRefBy");
     xf("textPosX", "textPosY"); // moved dimension-text position follows the entity
+    xf("fromTextX", "fromTextY"); // an axis angle's two labels, where they have been moved to
+    xf("toTextX", "toTextY");
     xf("leaderX", "leaderY");   // legacy single balloon leader tip follows the entity
     // Every balloon leader arrow tip (array form) follows the entity too.
     if (e.meta.contains(QLatin1String("leaders"))) {

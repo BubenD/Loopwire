@@ -1969,10 +1969,63 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             }
             const Vec2 tip = lerp(ps.a, ps.b, 0.35);
             const double step = std::max(9.0, opt.textHeight * 2.6);
-            for (size_t i = 0; i < items.size(); ++i)
-                out.push_back(makeBalloon(opt, tip,
-                                          tip + v * (gap / 2.0 + 24.0 + step * static_cast<double>(i)),
-                                          QString::number(items[i])));
+
+            // WHERE THE BALLOON GOES. Across the run is the ordinary place for it and what every
+            // released drawing here looks like - but not where SEVERAL HOUSINGS ARE STACKED at the end
+            // the run leaves from. Then the space across the run is the gap between those housings: the
+            // balloon stood in it with its leader over the wires, and on a two-connector drawing that
+            // reads as a stray run of wire in the middle belonging to neither of them. Measured: the
+            // housings on lanes y 289.5 and 310.5, the balloon at y 315 - on the second housing.
+            //
+            // So for a stacked end it goes IN FRONT OF THE CONNECTOR, out past the far face, where the
+            // designator already goes and where nothing is drawn at all. Everywhere else it stays
+            // exactly where it was, because every existing single-connector sheet is right as it is.
+            const MechNode* fromN = def.node(seg->fromNode);
+            const bool stacked = fromN && !fromN->extraEnds.empty();
+            // HOW DEEP THE HOUSING THIS RUN LEAVES ACTUALLY IS, in drawn units.
+            //
+            // Which housing that is: the run names it in fromEnd when there are several at the end,
+            // and each of those carries its own part. Its drawing is placed exactly as the housing
+            // itself will be placed further down and the reach measured off the placement, so a part
+            // of any depth is cleared by its own depth. Guessing a number here is what put the balloon
+            // inside the connector: any part deeper than the guess swallowed it.
+            double depthUnits = along(fromN && fromN->bodyWidthMm > 0.0 ? fromN->bodyWidthMm : 20.0);
+            QString housingPart = fromN ? fromN->libPart : QString();
+            if (fromN && !seg->fromEnd.isEmpty())
+                for (const MechExtraEnd& xe : fromN->extraEnds)
+                    if (xe.id == seg->fromEnd) housingPart = xe.libPart;
+            if (const LibraryPart* hp = catalog && !housingPart.isEmpty()
+                                            ? catalog->byId(housingPart)
+                                            : nullptr) {
+                if (hp->hasMechanical()) {
+                    double reach = 0.0;
+                    for (const Entity& e :
+                         placedPartDrawing(*hp, ps.a, rad(ps.dirDeg), opt,
+                                           QStringLiteral("connector"), u * -1.0)) {
+                        const Bounds b = e.bounds();
+                        if (!b.valid) continue;
+                        for (const Vec2& corner : {Vec2{b.min.x, b.min.y}, Vec2{b.max.x, b.min.y},
+                                                   Vec2{b.max.x, b.max.y}, Vec2{b.min.x, b.max.y}})
+                            reach = std::max(reach, -dot(corner - ps.a, u));
+                    }
+                    if (reach > 1e-9) depthUnits = reach;
+                }
+            }
+            for (size_t i = 0; i < items.size(); ++i) {
+                const double n = static_cast<double>(i);
+                if (stacked) {
+                    // The far face of the housing this run leaves, and the balloon a clear step beyond
+                    // it. The leader lands on that face rather than on the wires: from out here the
+                    // wires are behind the connector body, and a leader drawn through a connector to
+                    // reach them is worse than one that points at the end the run comes out of.
+                    const Vec2 back = ps.a - u * depthUnits;
+                    out.push_back(makeBalloon(opt, back, back - u * along(22.0 + step * n),
+                                              QString::number(items[i])));
+                } else {
+                    out.push_back(makeBalloon(opt, tip, tip + v * (gap / 2.0 + 24.0 + step * n),
+                                              QString::number(items[i])));
+                }
+            }
         }
 
         // Anything fitted along the run: a sleeve, a conduit, a tie.
@@ -2603,9 +2656,13 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             haveBodyExtent = true;
         }
         if (opt.balloons && n->balloon && !n->hasSubparts && !n->libPart.isEmpty()) {
-            const double h = n->bodyHeightMm > 0.0 ? n->bodyHeightMm : bundleMm + 4.0;
-            out.push_back(makeBalloon(opt, pn.at,
-                                      pn.at + v * (across(h) / 2.0 + 22.0),
+            // IN FRONT OF THE CONNECTOR, past the far face - measured off the body that was actually
+            // drawn, so a part with a drawing of its own is cleared by its own extent and not by the
+            // default box's. Across from the face is where this used to go, which put it in the middle
+            // of the wires the connector is feeding.
+            const double far = haveBodyExtent ? bodyFarUnits : along(20.0);
+            const Vec2 back = primaryAt - u * (into * far);
+            out.push_back(makeBalloon(opt, back, back - u * (into * along(22.0)),
                                       balloonText(itemOf(n->libPart, PartKind::Connector,
                                                          QStringLiteral("Connector")))));
         }
@@ -2631,11 +2688,26 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             const double slotH = lanes[ei + 1].height;
             const Vec2 mid = face - u * (into * along(xw) / 2.0);
 
+            // HOW FAR BACK THIS HOUSING ACTUALLY REACHES from its face, in drawn units. The default
+            // box is xw deep; a part from the library is however deep its drawing is, which is the
+            // number the designator and the balloon below have to clear.
+            double xFarUnits = along(xw);
             const LibraryPart* xp = catalog ? catalog->byId(x.libPart) : nullptr;
             if (xp && xp->hasMechanical()) {
+                double reach = 0.0;
                 for (Entity& e : placedPartDrawing(*xp, face, dirRad, opt,
-                                                   QStringLiteral("connector"), u * -into))
+                                                   QStringLiteral("connector"), u * -into)) {
+                    const Bounds b = e.bounds();
+                    if (b.valid) {
+                        // Every corner of it, measured along the run and positive away from the
+                        // harness - the same reckoning the primary housing uses.
+                        for (const Vec2& corner : {Vec2{b.min.x, b.min.y}, Vec2{b.max.x, b.min.y},
+                                                   Vec2{b.max.x, b.max.y}, Vec2{b.min.x, b.max.y}})
+                            reach = std::max(reach, -into * dot(corner - face, u));
+                    }
                     out.push_back(e);
+                }
+                if (reach > 1e-9) xFarUnits = reach;
             } else {
                 Entity body = makeBox(opt, mid, dirRad, along(xw), slotH,
                                       QStringLiteral("connector"));
@@ -2656,13 +2728,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // In front of THIS housing, for the same reason as the first one above: a designator names
             // the part it is beside, and above the stack it names whichever one you take it for.
             if (!x.name.isEmpty())
-                out.push_back(makeText(opt, face - u * (into * along(xw + 8.0)), x.name,
+                out.push_back(makeText(opt, face - u * (into * (xFarUnits + along(8.0))), x.name,
                                        opt.textHeight, 0.0, QStringLiteral("label")));
-            if (opt.balloons && x.balloon && !x.libPart.isEmpty())
-                out.push_back(makeBalloon(opt, face,
-                                          face + v * (side * (slotH / 2.0 + across(22.0))),
+            // AND THIS ONE TOO, in front of its own housing rather than across from its face. With
+            // two housings stacked at one station, "across from the face" is the gap between them: the
+            // balloon stood there with its leader over the wires, and on the sheet that reads as a run
+            // of wire in the middle belonging to neither connector.
+            if (opt.balloons && x.balloon && !x.libPart.isEmpty()) {
+                const Vec2 back = face - u * (into * xFarUnits);
+                out.push_back(makeBalloon(opt, back, back - u * (into * along(22.0)),
                                           balloonText(itemOf(x.libPart, PartKind::Connector,
                                                              QStringLiteral("Connector")))));
+            }
         }
 
         // THE CONNECTOR'S OWN LENGTH, when the step asks to be dimensioned: from the far face of the
