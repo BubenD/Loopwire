@@ -104,6 +104,32 @@ QString MechBuildScript::nextStepId() const {
     }
 }
 
+QJsonObject MechStepCovering::toJson() const {
+    QJsonObject o;
+    o["kind"] = kindKey(kind);
+    if (!libPart.isEmpty()) o["libPart"] = libPart;
+    if (!name.isEmpty()) o["name"] = name;
+    if (lengthMm > 0.0) o["lengthMm"] = lengthMm;
+    if (atMm > 0.0) o["atMm"] = atMm;
+    if (idMm > 0.0) o["idMm"] = idMm;
+    if (odMm > 0.0) o["odMm"] = odMm;
+    if (!balloon) o["balloon"] = false;
+    return o;
+}
+
+MechStepCovering MechStepCovering::fromJson(const QJsonObject& obj) {
+    MechStepCovering c;
+    c.kind = kindFromKey(obj.value("kind").toString());
+    c.libPart = obj.value("libPart").toString();
+    c.name = obj.value("name").toString();
+    c.lengthMm = obj.value("lengthMm").toDouble(0.0);
+    c.atMm = obj.value("atMm").toDouble(0.0);
+    c.idMm = obj.value("idMm").toDouble(0.0);
+    c.odMm = obj.value("odMm").toDouble(0.0);
+    c.balloon = obj.value("balloon").toBool(true);
+    return c;
+}
+
 QJsonObject MechConductorGroup::toJson() const {
     QJsonObject o;
     o["count"] = count;
@@ -152,6 +178,16 @@ QJsonObject MechStep::toJson() const {
         for (const MechConductorGroup& g : conductors) gs.append(g.toJson());
         o["conductors"] = gs;
     }
+    if (!coverings.empty()) {
+        QJsonArray cs;
+        for (const MechStepCovering& c : coverings) cs.append(c.toJson());
+        o["coverings"] = cs;
+    }
+    if (mainBody) o["mainBody"] = true;
+    // Written whenever the run SAYS something, nought included - nought is an answer.
+    if (openStartMm >= 0.0) o["openStartMm"] = openStartMm;
+    if (openEndMm >= 0.0) o["openEndMm"] = openEndMm;
+    if (!bundled) o["bundled"] = false;
     if (isSubpart) o["subpart"] = true;
     if (!subParts.empty()) {
         QJsonArray subs;
@@ -194,6 +230,13 @@ MechStep MechStep::fromJson(const QJsonObject& obj) {
     s.showName = obj.value("showName").toBool(false);
     for (const QJsonValue& v : obj.value("conductors").toArray())
         s.conductors.push_back(MechConductorGroup::fromJson(v.toObject()));
+    for (const QJsonValue& v : obj.value("coverings").toArray())
+        s.coverings.push_back(MechStepCovering::fromJson(v.toObject()));
+    s.mainBody = obj.value("mainBody").toBool(false);
+    // Absent means the run said nothing, which is not the same as its having said nought.
+    s.openStartMm = obj.value("openStartMm").toDouble(-1.0);
+    s.openEndMm = obj.value("openEndMm").toDouble(-1.0);
+    s.bundled = obj.value("bundled").toBool(true);
     s.isSubpart = obj.value("subpart").toBool(false);
     for (const QJsonValue& v : obj.value("subParts").toArray()) {
         const QJsonObject so = v.toObject();
@@ -281,6 +324,22 @@ QStringList wiresForRun(MechHarnessDef& def, const MechStep& step) {
         }
     }
     return ids;
+}
+
+// A covering ON a run becomes the same fitting a covering described as its own step becomes: one
+// thing for the renderer to draw, however it was said.
+MechFitting fittingFor(const MechStepCovering& c, const QString& runId, int index) {
+    MechFitting f;
+    f.id = QStringLiteral("%1c%2").arg(runId).arg(index);
+    f.libPart = c.libPart;
+    f.kind = c.kind;
+    f.name = c.name;
+    f.lengthMm = c.lengthMm;
+    f.idMm = c.idMm;
+    f.odMm = c.odMm;
+    f.atMm = c.atMm;
+    f.balloon = c.balloon;
+    return f;
 }
 
 MechFitting fittingFor(const MechStep& step) {
@@ -426,6 +485,31 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
                 seg.cableName = step.name;
             }
             seg.showName = step.showName;
+            // HOW MUCH BARE WIRE SHOWS AT EACH END, where this run says so itself.
+            seg.openStartMm = step.openStartMm;
+            seg.openEndMm = step.openEndMm;
+            // NOT BUNDLED: conductors the whole way, and nothing over them. Said by making the run
+            // open for its entire length, which is what "no bundle" IS - the same machinery that
+            // leaves the conductors showing behind a connector, asked for all of it.
+            seg.bundled = step.bundled;
+            if (!step.bundled) {
+                // Open its whole length: that is what "no bundle" means, and it is the same machinery
+                // that leaves the conductors showing behind a connector, asked for all of it.
+                seg.openStartMm = step.lengthMm;
+                seg.openEndMm = 0.0;
+            }
+            // WHAT IT CARRIES OVER ITSELF, described with the run - a screen the whole way, a sleeve
+            // over part of it, heatshrink at one end. See MechStepCovering.
+            // ONLY WHERE THERE IS A BUNDLE TO COVER. A run of loose conductors carries nothing over
+            // itself, and a covering compiled onto it drew as a body of no length at the far end.
+            if (step.bundled)
+                for (size_t ci = 0; ci < step.coverings.size(); ++ci) {
+                    MechFitting cf = fittingFor(step.coverings[ci], seg.id, static_cast<int>(ci));
+                    // The branch's own decision about being called out in the bill covers what is
+                    // laid over it: these are part of the one description, not steps of their own.
+                    cf.balloon = cf.balloon && step.balloon;
+                    seg.coverings.push_back(cf);
+                }
             far.parentSegment = seg.id;
 
             def.segments.push_back(seg);
@@ -580,6 +664,57 @@ MechCompiled compileMechScript(const MechBuildScript& script) {
         }
     }
 
+    // AFTER THE LIMBS ARE GATHERED, because that pass is what says which runs reach this trunk:
+    // a limb keeps its own far end and is drawn REACHING the station, so until it has run there
+    // is nothing recorded as arriving anywhere and the trunk would gather an empty list.
+    // ---- THE TRUNK CARRIES WHAT ARRIVES AT IT ---------------------------------------------------
+    //
+    // A main harness body with two or more runs arriving at it and nothing said about its own make-up
+    // carries THEIR conductors. That is what a trunk IS: the branches gather into it and their wires
+    // go on together, and the alternative is somebody typing out the same forty conductors a second
+    // time and the drawing then believing there is a splice where the two lists meet.
+    //
+    // The same wire ids, not copies of them - which is what stops mechGaugeChanges() reading the join
+    // as a gauge transition and covering it with heatshrink nobody asked for.
+    //
+    // A trunk that DOES declare its own conductors keeps them: "if not defined other". And this runs
+    // after the whole tree is walked, so it does not matter whether the branches were described before
+    // the trunk or after it.
+    for (const MechStep& step : script.steps) {
+        if (!step.mainBody) continue;
+        const QString segId = out.stepToSegment.value(step.id);
+        if (segId.isEmpty()) continue;
+        MechSegment* trunk = nullptr;
+        for (MechSegment& sg : out.def.segments)
+            if (sg.id == segId) trunk = &sg;
+        if (!trunk || !trunk->wireIds.isEmpty()) continue;   // it said what it carries; leave it alone
+
+        // EVERYTHING THAT ARRIVES, in either of the two ways a run can arrive.
+        //
+        // A run can END at the trunk's start node - that is a join in the topology. A LIMB does not:
+        // the limbs of a station keep their own far ends and are drawn REACHING the station, which is
+        // what toStation says (see the limb pass below). A branch hung under a connector and gathered
+        // into the trunk is the second kind, and it is the ordinary case - so a rule that only knew
+        // about the first kind found nothing arriving at any trunk ever.
+        const QString trunkFar = out.stepToNode.value(step.id);
+        QStringList gathered;
+        int arriving = 0;
+        for (const MechSegment& sg : out.def.segments) {
+            if (sg.id == trunk->id) continue;
+            const bool ends = sg.toNode == trunk->fromNode;
+            const bool drawnInto = !sg.toStation.isEmpty() &&
+                                   (sg.toStation == trunk->fromNode || sg.toStation == trunkFar);
+            if (!ends && !drawnInto) continue;
+            ++arriving;
+            for (const QString& w : sg.wireIds)
+                if (!gathered.contains(w)) gathered << w;
+        }
+        // TWO OR MORE. One run arriving is an ordinary carry-on, which the run itself says with
+        // continuesConductors - and reading it here as well would make that tick mean nothing.
+        if (arriving >= 2 && !gathered.isEmpty()) trunk->wireIds = gathered;
+    }
+
+
 
     return out;
 }
@@ -728,6 +863,17 @@ std::vector<MechStepIssue> mechScriptIssues(const MechBuildScript& script,
                 }
                 if (seg) overMm = segmentBodyDiameterMm(compiled.def, *seg);
 
+                // NOTHING LEFT TO COVER. The conductors run bare out of each end, and if those two
+                // stretches add up to the whole run there is no bundle for a screen or a sleeve to be
+                // over - so it is drawn as nothing at all, which looks like the covering was ignored
+                // rather than like the figures disagreeing.
+                if (seg && seg->lengthMm > 0.0 &&
+                    seg->openStartMm + seg->openEndMm >= seg->lengthMm - 1e-9) {
+                    add(MechIssueKind::Gap, step, parent,
+                        QStringLiteral("%1 has nothing to cover: the bare ends add up to the whole "
+                                       "run.")
+                            .arg(step.name.isEmpty() ? step.id : step.name));
+                }
                 if (overMm <= 0.0) {
                     add(MechIssueKind::Gap, step, parent,
                         QStringLiteral("%1 cannot be checked: what it goes over has no diameter yet.")

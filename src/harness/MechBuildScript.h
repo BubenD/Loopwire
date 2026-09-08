@@ -69,6 +69,25 @@ struct MechSubPart {
 // A hook-up run is not "four of 0.5". It is whatever the circuit needs - two of 0.5 and one of 1.5,
 // with a screened pair beside them - and asking for a single count and a single gauge forced that to
 // be described as several runs, which drew several legs of harness where there is one bundle.
+// SOMETHING A RUN CARRIES OVER ITSELF: a braided screen, a sleeve, a length of heatshrink.
+//
+// The same three numbers a fitting has, because that is what it becomes - see fittingFor. A length of
+// zero means the whole run, which is what a screen over a branch usually is; `atMm` is how far along
+// the run it starts, for the heatshrink that covers only the last stretch of it.
+struct MechStepCovering {
+    PartKind kind = PartKind::ShieldBraid;
+    QString libPart;                        // from the library, or empty for the standard drawing
+    QString name;                           // what the drawing calls it
+    double lengthMm = 0.0;                  // 0 -> the whole run
+    double atMm = 0.0;                      // how far along the run it starts
+    double idMm = 0.0;
+    double odMm = 0.0;
+    bool balloon = true;
+
+    QJsonObject toJson() const;
+    static MechStepCovering fromJson(const QJsonObject& o);
+};
+
 struct MechConductorGroup {
     int count = 0;
     QString gauge;              // "0.5" or "22 AWG"
@@ -133,6 +152,34 @@ struct MechStep {
     // single-group fields above (wireCount + gauge) are used instead, which keeps a step that only
     // ever carried one size as simple as it was.
     std::vector<MechConductorGroup> conductors;
+
+    // WHAT THIS RUN CARRIES OVER ITSELF, described with the run rather than as steps hung off it.
+    // See MechStepCovering. Empty for a plain run, which is every run described before there was a
+    // branch to describe.
+    std::vector<MechStepCovering> coverings;
+
+    // THE TRUNK, as opposed to a branch: the length of harness the branches gather INTO.
+    //
+    // A trunk that says nothing about what it carries carries what arrives at it - which is the whole
+    // point of a trunk, and what stops somebody having to type the same forty conductors twice. It is
+    // marked rather than guessed at, because a run that happens to have two runs arriving at it is not
+    // necessarily the trunk: a splice has that shape too.
+    bool mainBody = false;
+
+    // HOW MUCH BARE WIRE SHOWS AT EACH END of this run - the stretch the screen, the sleeve or the
+    // heatshrink stops short of. Zero takes the figure from the end it is at. See
+    // MechSegment::openStartMm.
+    // Negative: not said, so the end's own figure stands. Zero: none. See MechSegment::openStartMm.
+    double openStartMm = -1.0;
+    double openEndMm = -1.0;
+
+    // IS THE BUNDLE INSIDE ANYTHING - a jacket, a sleeve, a length of heatshrink?
+    //
+    // A branch of loose hook-up wire is not: it is so many conductors running side by side the whole
+    // way, and drawing a body round them says there is a covering there that the build sheet never
+    // called for. Unticked, the run is conductors from end to end and there is nothing to cover; the
+    // coverings above are then not offered, because they would have nothing to be over.
+    bool bundled = true;
 
     // THE SAME CONDUCTORS CARRY ON THROUGH THIS RUN.
     //

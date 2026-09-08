@@ -361,6 +361,13 @@ void MechWizardDialog::buildUi() {
             waysSpin_->setValue(ways);
             loading_ = was;
         }
+        // AND THE GAUGE COMES FROM THE WIRE, for the same reason. See declaredGaugeOfChosenPart.
+        if (const QString g = declaredGaugeOfChosenPart(); !g.isEmpty()) {
+            const bool was = loading_;
+            loading_ = true;
+            setGauge(g);
+            loading_ = was;
+        }
         fieldChanged();
     });
     connect(contactCombo_, &QComboBox::currentIndexChanged, this, [this](int) { fieldChanged(); });
@@ -570,6 +577,100 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     groupsLay->addLayout(groupBtns);
     form->addRow(groupsLabel_, groupsBox);
 
+    // ---- HOW MUCH BARE WIRE SHOWS AT EACH END -----------------------------------------------------
+    //
+    // A covering never runs up to the connector face: the wires have to fan out to the contacts and be
+    // inspected. Asked per END because the two are rarely the same - a branch out of a connector shows
+    // 20mm of bare wire there and stops flush where it enters a boot at the other.
+    // ---- IS THE BUNDLE INSIDE ANYTHING? ----------------------------------------------------------
+    //
+    // A branch of loose hook-up wire is not: it is so many conductors running side by side the whole
+    // way, and a body drawn round them says there is a covering the build sheet never called for.
+    // Ticked, the run has a bundle - which can be left bare at its ends and covered along its length.
+    bundledCheck_ = new QCheckBox(
+        QStringLiteral("The bundle runs inside a jacket, a sleeve or heatshrink"), panel);
+    bundledCheck_->setChecked(true);
+    bundledCheck_->setToolTip(QStringLiteral(
+        "Ticked, the conductors are gathered into a bundle: it can be left bare at each end and "
+        "covered along its length. Unticked, the run is drawn as conductors from end to end and "
+        "there is nothing to cover."));
+    form->addRow(QString(), bundledCheck_);
+
+    openStartLabel_ = new QLabel(QStringLiteral("Bare at this end"), panel);
+    openStartSpin_ = new QDoubleSpinBox(panel);
+    // ONE STEP BELOW NOUGHT IS "NOT SAID", and it is where the box starts. Nought is a figure somebody
+    // typed and means no bare wire at all; a run that has not been asked about keeps the figure the
+    // connector at that end carries, which is what every harness drawn so far has used.
+    openStartSpin_->setRange(-1.0, 10000.0);
+    openStartSpin_->setSpecialValueText(QStringLiteral("as the end says"));
+    openStartSpin_->setValue(-1.0);
+    openStartSpin_->setSuffix(QStringLiteral(" mm"));
+    openStartSpin_->setToolTip(QStringLiteral(
+        "How far a covering stops short of this end, leaving the conductors showing. 0 means none at "
+        "all; leave it at \"as the end says\" to use the figure the connector there carries."));
+    form->addRow(openStartLabel_, openStartSpin_);
+
+    openEndLabel_ = new QLabel(QStringLiteral("Bare at the far end"), panel);
+    openEndSpin_ = new QDoubleSpinBox(panel);
+    openEndSpin_->setRange(-1.0, 10000.0);
+    openEndSpin_->setSpecialValueText(QStringLiteral("as the end says"));
+    openEndSpin_->setValue(-1.0);
+    openEndSpin_->setSuffix(QStringLiteral(" mm"));
+    openEndSpin_->setToolTip(QStringLiteral(
+        "The same at the other end of this run. 0 means no bare conductors there at all."));
+    form->addRow(openEndLabel_, openEndSpin_);
+
+    // ---- WHAT COVERS THE RUN ----------------------------------------------------------------------
+    //
+    // A branch is described as one thing: so many conductors, running so far, screened, sleeved, with
+    // heatshrink where it needs one. So the coverings are added HERE, to the run being described,
+    // rather than as separate steps hung off it - which is also what stops the "there is no run before
+    // it yet" complaint, since a covering on a run is over that run by construction.
+    coverLabel_ = new QLabel(QStringLiteral("Covered by"), panel);
+    coverBox_ = new QWidget(panel);
+    auto* coverLay = new QVBoxLayout(coverBox_);
+    coverLay->setContentsMargins(0, 0, 0, 0);
+    coverList_ = new QListWidget(coverBox_);
+    coverList_->setMaximumHeight(72);
+    coverLay->addWidget(coverList_);
+    auto* coverRow = new QHBoxLayout();
+    coverKindCombo_ = new QComboBox(coverBox_);
+    coverKindCombo_->addItem(QStringLiteral("Braided screen"),
+                             static_cast<int>(PartKind::ShieldBraid));
+    coverKindCombo_->addItem(QStringLiteral("Braided sleeve"), static_cast<int>(PartKind::Sleeve));
+    coverKindCombo_->addItem(QStringLiteral("Heatshrink"), static_cast<int>(PartKind::Heatshrink));
+    coverPartCombo_ = new QComboBox(coverBox_);
+    coverPartCombo_->setMinimumWidth(220);
+    coverLenSpin_ = new QDoubleSpinBox(coverBox_);
+    coverLenSpin_->setRange(0.0, 100000.0);
+    coverLenSpin_->setSuffix(QStringLiteral(" mm"));
+    coverLenSpin_->setSpecialValueText(QStringLiteral("all of it"));
+    coverLenSpin_->setToolTip(QStringLiteral(
+        "How much of the run this covers. Left at nothing it covers the whole of it, which is what a "
+        "screen over a branch usually does."));
+    addCoverBtn_ = new QPushButton(QStringLiteral("Add"), coverBox_);
+    dropCoverBtn_ = new QPushButton(QStringLiteral("Remove"), coverBox_);
+    coverRow->addWidget(coverKindCombo_);
+    coverRow->addWidget(coverPartCombo_, 1);
+    coverRow->addWidget(coverLenSpin_);
+    coverRow->addWidget(addCoverBtn_);
+    coverRow->addWidget(dropCoverBtn_);
+    coverLay->addLayout(coverRow);
+    form->addRow(coverLabel_, coverBox_);
+
+    connect(coverKindCombo_, &QComboBox::currentIndexChanged, this,
+            [this](int) { refreshCoverPartCombo(); });
+    connect(addCoverBtn_, &QPushButton::clicked, this, [this] { addCoveringFromFields(); });
+    connect(dropCoverBtn_, &QPushButton::clicked, this,
+            [this] { removeCovering(coverList_->currentRow()); });
+    connect(bundledCheck_, &QCheckBox::toggled, this, [this](bool) {
+        refreshFieldsForCategory();
+        fieldChanged();
+    });
+    connect(openStartSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { fieldChanged(); });
+    connect(openEndSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { fieldChanged(); });
+    refreshCoverPartCombo();
+
     // A DESIGNATOR PER WIRE, and only where the harness starts open.
     //
     // A run out of a connector needs none: the wires are known by the way they go into, so "P1-3" names
@@ -718,6 +819,16 @@ MechStep MechWizardDialog::stepFromFields() const {
     case MechStepRole::Run: {
         s.lengthMm = lengthSpin_->value();
         s.conductors = pending_;
+        // WHAT THIS RUN CARRIES OVER ITSELF - a screen, a sleeve, heatshrink - described with the run
+        // rather than as separate steps hung off it. See MechStepCovering.
+        s.coverings = pendingCoverings_;
+        // THE TRUNK: the length of harness the branches gather into. A trunk that says nothing about
+        // what it carries carries what arrives at it - see compileMechScript.
+        s.mainBody = category_ == Category::HarnessBody;
+        // How much bare wire shows at each end - 0 leaves it to whatever is at that end.
+        s.openStartMm = openStartSpin_ ? openStartSpin_->value() : -1.0;
+        s.openEndMm = openEndSpin_ ? openEndSpin_->value() : -1.0;
+        s.bundled = !bundledCheck_ || bundledCheck_->isChecked();
         const QStringList desigs = splitDesignators(desigEdit_->text());
         // The count/gauge fields describe ONE group. They are used only when no groups were added,
         // so a run carrying a single size stays as simple to describe as it was.
@@ -813,6 +924,12 @@ void MechWizardDialog::editStep(const QString& stepId) {
     breakCheck_->setChecked(s->lengthBreak);
     continueCheck_->setChecked(s->continuesConductors);
     pending_ = s->conductors;
+    pendingCoverings_ = s->coverings;   // and what it carries over itself, so editing keeps it
+    // A run that said nothing shows nothing typed - the spin sits at 0 and the step keeps saying
+    // nothing until somebody touches it.
+    if (openStartSpin_) openStartSpin_->setValue(std::max(-1.0, s->openStartMm));
+    if (openEndSpin_) openEndSpin_->setValue(std::max(-1.0, s->openEndMm));
+    if (bundledCheck_) bundledCheck_->setChecked(s->bundled);
 
     // THE WIRE DESIGNATORS, PUT BACK, for the same reason the part is: a field that is not restored is
     // a field the next apply writes back empty, so merely selecting a step would erase the wire names.
@@ -923,6 +1040,45 @@ void MechWizardDialog::addConductorGroup() {
     g.gauge = gaugeCanon();
     if (g.count <= 0) return;   // a group of nothing is not a group
     pending_.push_back(g);
+    refreshFieldsForCategory();
+    fieldChanged();
+}
+
+void MechWizardDialog::refreshCoverPartCombo() {
+    if (!coverPartCombo_ || !coverKindCombo_) return;
+    const bool was = loading_;
+    loading_ = true;
+    coverPartCombo_->clear();
+    coverPartCombo_->addItem(QStringLiteral("Default (the standard drawing for this kind)"),
+                             QString());
+    const PartKind kind = static_cast<PartKind>(coverKindCombo_->currentData().toInt());
+    for (const LibraryPart* p : catalog_.ofKind(kind))
+        if (p) coverPartCombo_->addItem(partLabelFor(*p), p->id);
+    loading_ = was;
+}
+
+void MechWizardDialog::addCoveringFromFields() {
+    if (!coverKindCombo_) return;
+    addCovering(static_cast<PartKind>(coverKindCombo_->currentData().toInt()),
+                coverPartCombo_ ? coverPartCombo_->currentData().toString() : QString(),
+                coverLenSpin_ ? coverLenSpin_->value() : 0.0);
+}
+
+void MechWizardDialog::addCovering(PartKind kind, const QString& libPart, double lengthMm,
+                                   double atMm) {
+    MechStepCovering c;
+    c.kind = kind;
+    c.libPart = libPart;
+    c.lengthMm = std::max(0.0, lengthMm);
+    c.atMm = std::max(0.0, atMm);
+    pendingCoverings_.push_back(c);
+    refreshFieldsForCategory();
+    fieldChanged();
+}
+
+void MechWizardDialog::removeCovering(int index) {
+    if (index < 0 || index >= static_cast<int>(pendingCoverings_.size())) return;
+    pendingCoverings_.erase(pendingCoverings_.begin() + index);
     refreshFieldsForCategory();
     fieldChanged();
 }
@@ -1048,6 +1204,10 @@ void MechWizardDialog::clearDescribedFields() {
     showNameCheck_->setChecked(false);
     desigEdit_->clear();
     pending_.clear();
+    pendingCoverings_.clear();   // a new step carries nothing over itself yet
+    if (openStartSpin_) openStartSpin_->setValue(-1.0);
+    if (openEndSpin_) openEndSpin_->setValue(-1.0);
+    if (bundledCheck_) bundledCheck_->setChecked(true);
     loading_ = false;
     touched_ = false;
 }
@@ -1162,6 +1322,22 @@ bool MechWizardDialog::startsOpen() const {
         return s && s->parentStep.isEmpty();
     }
     return anchor_.isEmpty();
+}
+
+QString MechWizardDialog::declaredGaugeOfChosenPart() const {
+    if (mechStepRole(categoryKind(category_)) != MechStepRole::Run) return QString();
+    const QString id = partCombo_->currentData().toString();
+    if (id.isEmpty()) return QString();
+    const LibraryPart* p = catalog_.byId(id);
+    if (!p) return QString();
+    // A wire states its conductor as a gauge; a cable states its make-up elsewhere and its own row is
+    // the jacket, so only the kinds whose gauge IS the conductor answer here.
+    if (p->kind != PartKind::Wire) return QString();
+    const QString said = p->value(QStringLiteral("gauge")).trimmed();
+    if (said.isEmpty()) return QString();
+    // "24", "24 AWG", "0.5 mm2" - given back as the list writes it where the list has it, so the row
+    // shows one of its own entries rather than a second spelling of the same size.
+    return said;
 }
 
 int MechWizardDialog::declaredWaysOfChosenPart() const {
@@ -1674,6 +1850,29 @@ void MechWizardDialog::refreshFieldsForCategory() {
     show(countLabel_, countSpin_, isRun);
     show(gaugeLabel_, gaugeCombo_, isRun);
     show(odLabel_, odSpin_, category_ == Category::Cable);
+    // A RUN is the only thing that has ends to leave bare or a length to cover. Every run has them -
+    // wires, a cable, a branch or the trunk - because all four are laid up and covered the same way.
+    // WHAT A RUN WITHOUT A BUNDLE HAS NO USE FOR. Unticked, there is no bundle to leave bare at its
+    // ends and nothing for a covering to be over, so neither is offered rather than being offered and
+    // quietly ignored.
+    const bool bundled = !bundledCheck_ || bundledCheck_->isChecked();
+    if (bundledCheck_) bundledCheck_->setVisible(isRun);
+    show(openStartLabel_, openStartSpin_, isRun && bundled);
+    show(openEndLabel_, openEndSpin_, isRun && bundled);
+    show(coverLabel_, coverBox_, isRun && bundled);
+    if (coverList_) {
+        coverList_->clear();
+        for (const MechStepCovering& c : pendingCoverings_) {
+            const LibraryPart* cp = c.libPart.isEmpty() ? nullptr : catalog_.byId(c.libPart);
+            const QString part = c.libPart.isEmpty() ? QStringLiteral("standard")
+                                                     : (cp ? partLabelFor(*cp) : c.libPart);
+            const QString howMuch = c.lengthMm > 0.0
+                                        ? QStringLiteral("%1 mm").arg(c.lengthMm, 0, 'f', 0)
+                                        : QStringLiteral("all of it");
+            coverList_->addItem(QStringLiteral("%1 - %2 - %3")
+                                    .arg(partKindName(c.kind), part, howMuch));
+        }
+    }
     show(waysLabel_, waysSpin_, isEnd);
     show(contactLabel_, contactCombo_, isEnd);
     // A NODE CAN BE A PART TOO. It was treated as a place and nothing else - no part offered - which is
@@ -2016,6 +2215,25 @@ void MechWizardDialog::place() {
     editor_->placeEntities(ents);
     summary_->setText(QStringLiteral("%1 object(s) ready — click on the sheet to put them down.")
                           .arg(ents.size()));
+
+    // AND THE WINDOW GETS OUT OF THE WAY. The click has to land on the sheet, and this window is
+    // sitting on top of it - so it goes away while the harness is put down and comes back the moment
+    // it is, with everything still described in it.
+    //
+    // Watched rather than timed: the objects follow the cursor until they are clicked into place, and
+    // how long that takes is up to whoever is placing them. The watcher listens to the overlay as well
+    // as to the drawing, so a placement ABANDONED with Esc brings the window back too.
+    hide();
+    auto* placing = new QObject(this);
+    const auto back = [this, placing] {
+        if (editor_ && editor_->placingPaste()) return;   // still on the cursor
+        placing->deleteLater();
+        show();
+        raise();
+        activateWindow();
+    };
+    connect(editor_, &Editor::changed, placing, back);
+    connect(editor_, &Editor::overlayChanged, placing, back);
 }
 
 } // namespace Edraw_Desktop

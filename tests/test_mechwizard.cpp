@@ -20,6 +20,9 @@
 #include "model/Document.h"
 
 #include <QApplication>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonObject>
 
 #include <algorithm>
 #include <cstdio>
@@ -2568,6 +2571,519 @@ void testNothingIsDrawnBetweenStackedHousings() {
         check(balloons == clear, "gap: no balloon is written on top of a connector body");
 }
 
+// ---- A RUN'S FAN LEAVES ITS OWN HOUSING, EVEN WHEN IT IS DRAWN FROM A SAVED MODEL -----------------
+//
+// This is the fault that was reported four times as "wires in the middle of the drawing between the
+// connectors" and did not reproduce five times running.
+//
+// Where wires leave a connector they are drawn as a fan of separate conductors, and an office that has
+// drawn its own view of that keeps it as a MODEL. Two fans therefore exist in the code: the generator's
+// own, and one stretched from the model. The generator's was fixed to start where the run starts; the
+// model's still started at the node's own point, which for a station whose housings are all parts is
+// the gap between them. And the model's is the one that runs - where a model exists the generator's is
+// switched off - so the corrected fan was never drawn at all.
+//
+// It hid because a model has to EXIST for that branch to be taken. A fresh test binary has none, so
+// every reproduction drew the corrected fan and looked right. This test installs one.
+void testTheFanFromAModelLeavesItsOwnHousing() {
+    // A model for open wires at a connector: two lines running along +x, which is all that is needed -
+    // what matters is WHERE it is stretched from, not what it draws.
+    // Installed by writing the office's model file, which is what the application reads - and in the
+    // test binary that file is in the TESTS' own app-data folder ("Edraw tests"), so nothing anybody
+    // has drawn is touched. Taken away again at the end.
+    MechModel om;
+    om.kind = MechModelKind::ConnectorToCableWires;
+    om.isDefault = true;
+    QJsonArray drawing;
+    for (double y : {-1.0, 1.0}) {
+        QJsonObject line;
+        line.insert(QStringLiteral("type"), QStringLiteral("line"));
+        QJsonObject a, b;
+        a.insert(QStringLiteral("x"), 0.0);
+        a.insert(QStringLiteral("y"), y);
+        b.insert(QStringLiteral("x"), 10.0);
+        b.insert(QStringLiteral("y"), y);
+        line.insert(QStringLiteral("a"), a);
+        line.insert(QStringLiteral("b"), b);
+        drawing.append(line);
+    }
+    om.drawing = drawing;
+    const QString modelFile = MechModelSet::defaultPath();
+    const QString kept = modelFile + QStringLiteral(".keep");
+    QFile::remove(kept);
+    const bool had = QFile::exists(modelFile);
+    if (had) QFile::rename(modelFile, kept);
+    {
+        MechModelSet mine;
+        mine.set(om);
+        mine.save(modelFile);
+    }
+    struct PutItBack {
+        QString file, kept;
+        bool had;
+        ~PutItBack() {
+            QFile::remove(file);
+            if (had) QFile::rename(kept, file);
+        }
+    } putItBack{modelFile, kept, had};
+
+    check(mechModels().has(MechModelKind::ConnectorToCableWires),
+          "model fan: the office has a view of open wires");
+    if (!mechModels().has(MechModelKind::ConnectorToCableWires)) return;
+
+    // Two housings at one station, with a run of wires under the FIRST of them.
+    MechBuildScript sc;
+    MechStep station;
+    station.id = QStringLiteral("S1");
+    station.kind = PartKind::Connector;
+    sc.steps.push_back(station);
+    auto housing = [](const char* nm) {
+        MechStep x;
+        x.id = QStringLiteral("S_%1").arg(QString::fromLatin1(nm));
+        x.kind = PartKind::Connector;
+        x.name = QString::fromLatin1(nm);
+        x.parentStep = QStringLiteral("S1");
+        x.isSubpart = true;
+        x.pinCount = 4;
+        return x;
+    };
+    sc.steps.push_back(housing("p1"));
+    MechStep run;
+    run.id = QStringLiteral("S_W");
+    run.kind = PartKind::Wire;
+    run.name = QStringLiteral("W1");
+    run.parentStep = QStringLiteral("S_p1");
+    run.isSubpart = true;
+    run.lengthMm = 30.0;
+    run.wireCount = 4;
+    run.gauge = QStringLiteral("20 AWG");
+    sc.steps.push_back(run);
+    sc.steps.push_back(housing("p2"));
+
+    const MechCompiled c = compileMechScript(sc);
+    const std::vector<Entity> ents = buildMechanicalHarness(c.def, nullptr);
+
+    // The lane each housing sits on, and the lane the run's BUNDLE sits on - the bundle has always been
+    // put on the right one, so it says where the fan belongs.
+    std::vector<double> housingMids;
+    double bundleMid = 0.0;
+    int bundles = 0;
+    for (const Entity& e : ents) {
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        if (role == QLatin1String("connector")) housingMids.push_back((b.min.y + b.max.y) / 2.0);
+        if (role == QLatin1String("bundle")) {
+            bundleMid += (b.min.y + b.max.y) / 2.0;
+            ++bundles;
+        }
+    }
+    std::sort(housingMids.begin(), housingMids.end());
+    check(housingMids.size() >= 2, "model fan: both housings are drawn");
+    check(bundles > 0, "model fan: the run is drawn");
+    if (housingMids.size() < 2 || bundles == 0) return;
+    bundleMid /= static_cast<double>(bundles);
+    std::printf("  model fan: housings on y %.2f and %.2f, the bundle on y %.2f\n",
+                housingMids.front(), housingMids.back(), bundleMid);
+
+    // EVERY WIRE OF THAT RUN IS ON THE BUNDLE'S LANE. The gap between the housings is where the fan
+    // used to go, and the middle of it is roughly halfway between the two lanes.
+    const double gapMid = (housingMids.front() + housingMids.back()) / 2.0;
+    int wires = 0, astray = 0;
+    for (const Entity& e : ents) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("wires")) continue;
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        ++wires;
+        const double mid = (b.min.y + b.max.y) / 2.0;
+        const bool onRun = std::abs(mid - bundleMid) < std::abs(mid - gapMid);
+        std::printf("  model fan: a wire on y %8.2f  (run %8.2f, gap %8.2f)%s\n", mid, bundleMid,
+                    gapMid, onRun ? "" : "   <-- IN THE GAP");
+        if (!onRun) ++astray;
+    }
+    // DRAWN AT ALL, first: a run with no wires would pass the next check for the wrong reason.
+    check(wires > 0, "model fan: the conductors are drawn");
+    check(astray == 0, "model fan: every conductor leaves the housing its run belongs to");
+}
+
+// ---- A BRANCH IS DESCRIBED AS ONE THING ----------------------------------------------------------
+//
+// So many wires or cables, running so far, screened, sleeved, with heatshrink where it needs one - one
+// row in the list, one thing to move or delete, and everything that goes OVER it held ON it.
+//
+// Held on the run rather than as steps hung off it for a second reason as well: a covering described as
+// its own step goes over "the run that ARRIVES", so a screen described straight after the wires it is
+// meant to cover reports that there is no run before it yet. A covering on the run is over that run by
+// construction, and there is nothing left to get wrong.
+void testABranchCarriesItsOwnCoverings() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    w.setCurrentCategory(Cat::Connector);
+    w.typeWays(4);
+    w.commitStep();
+
+    // The branch: 4 conductors for 300mm, with a screen the whole way, a sleeve over the middle of it
+    // and heatshrink at the far end.
+    w.setCurrentCategory(Cat::HarnessBranch);
+    w.typeName(QStringLiteral("B1"));
+    w.setRunLengthForTest(300.0);
+    w.setConductorsForTest(4);
+    w.addCovering(PartKind::ShieldBraid);                        // the whole run
+    w.addCovering(PartKind::Sleeve, QString(), 120.0, 60.0);     // 120mm of it, starting 60 along
+    w.addCovering(PartKind::Heatshrink, QString(), 40.0, 260.0); // the last 40
+    check(w.pendingCoverings().size() == 3, "branch: three coverings are on the run being described");
+    w.commitStep();
+
+    const MechStep* run = nullptr;
+    for (const MechStep& st : w.script().steps)
+        if (st.name == QLatin1String("B1")) run = &st;
+    check(run != nullptr, "branch: the branch is in the script");
+    if (!run) return;
+    check(run->coverings.size() == 3, "branch: and it kept them, as one step");
+
+    // ONE ROW, NOT FOUR: the coverings are part of the branch, so they are not steps of their own.
+    int steps = static_cast<int>(w.script().steps.size());
+    std::printf("  branch: %d step(s) describe a screened, sleeved branch with heatshrink\n", steps);
+    check(steps == 2, "branch: a connector and a branch, and nothing else");
+
+    // AND THEY REACH THE DRAWING as things fitted along that run.
+    const MechCompiled c = compileMechScript(w.script());
+    const QString segId = c.stepToSegment.value(run->id);
+    const MechSegment* seg = segId.isEmpty() ? nullptr : c.def.segment(segId);
+    check(seg != nullptr, "branch: it compiles to a run");
+    if (!seg) return;
+    std::printf("  branch: the run carries %d fitting(s)\n", static_cast<int>(seg->coverings.size()));
+    check(seg->coverings.size() == 3, "branch: all three are fitted along it");
+    int screens = 0, sleeves = 0, shrinks = 0;
+    for (const MechFitting& f : seg->coverings) {
+        if (f.kind == PartKind::ShieldBraid) ++screens;
+        if (f.kind == PartKind::Sleeve) ++sleeves;
+        if (f.kind == PartKind::Heatshrink) ++shrinks;
+    }
+    check(screens == 1 && sleeves == 1 && shrinks == 1,
+          "branch: the screen, the sleeve and the heatshrink each arrive as what it is");
+
+    // AND NOTHING COMPLAINS that there is no run before them, which is what describing them as their
+    // own steps would have done.
+    QString said;
+    for (const QString& e : c.errors) said += e + QStringLiteral(" | ");
+    if (!c.errors.isEmpty()) std::printf("  branch: errors - %s\n", qPrintable(said));
+    check(c.errors.isEmpty(), "branch: and no covering is left with nothing to cover");
+}
+
+// ---- THE TRUNK CARRIES WHAT ARRIVES AT IT --------------------------------------------------------
+//
+// Two branches gathering into a main harness body. The body says nothing about what it carries, so it
+// carries what arrives - which is what a trunk IS. The alternative is somebody typing the same
+// conductors out a second time, and the drawing then reading the join as a gauge change and covering it
+// with heatshrink nobody asked for.
+//
+// BUILT THE WAY THE WIZARD BUILDS IT: the branches are hung under the station as PARTS, and the trunk
+// is the next step at that station that is a station in its own right. That matters - a limb keeps its
+// own far end and is drawn REACHING the trunk rather than joining it in the topology, so a rule that
+// only looked for runs ENDING at the trunk found nothing arriving at any trunk ever. The first version
+// of this test asserted the interesting case behind an `if` that was false, and passed while proving
+// nothing; the counts are checked outright now.
+void testTheTrunkGathersTheBranches() {
+    MechBuildScript sc;
+    MechStep station;
+    station.id = QStringLiteral("S1");
+    station.kind = PartKind::Connector;
+    station.name = QStringLiteral("P1");
+    station.pinCount = 8;
+    sc.steps.push_back(station);
+
+    // Two branches, each a part OF the station: 3 conductors on one, 2 on the other.
+    auto branch = [](const char* id, const char* nm, int wires, const char* gauge) {
+        MechStep b;
+        b.id = QString::fromLatin1(id);
+        b.kind = PartKind::Wire;
+        b.name = QString::fromLatin1(nm);
+        b.parentStep = QStringLiteral("S1");
+        b.isSubpart = true;
+        b.lengthMm = 200.0;
+        b.wireCount = wires;
+        b.gauge = QString::fromLatin1(gauge);
+        return b;
+    };
+    sc.steps.push_back(branch("S2", "B1", 3, "22 AWG"));
+    sc.steps.push_back(branch("S3", "B2", 2, "20 AWG"));
+
+    // THE TRUNK: the next step at the station that is not one of its parts, saying nothing at all
+    // about its own make-up.
+    MechStep trunk;
+    trunk.id = QStringLiteral("S4");
+    trunk.kind = PartKind::Wire;
+    trunk.name = QStringLiteral("TRUNK");
+    trunk.parentStep = QStringLiteral("S1");
+    trunk.lengthMm = 500.0;
+    trunk.mainBody = true;
+    sc.steps.push_back(trunk);
+
+    const MechCompiled c = compileMechScript(sc);
+    const QString segId = c.stepToSegment.value(QStringLiteral("S4"));
+    const MechSegment* body = segId.isEmpty() ? nullptr : c.def.segment(segId);
+    check(body != nullptr, "trunk: the trunk compiles to a run");
+    if (!body) return;
+
+    for (const MechSegment& sg : c.def.segments)
+        std::printf("  trunk: seg %-4s from=%-4s to=%-4s toStation=[%s] wires=%d\n",
+                    qPrintable(sg.id), qPrintable(sg.fromNode), qPrintable(sg.toNode),
+                    qPrintable(sg.toStation), static_cast<int>(sg.wireIds.size()));
+
+    // TWO RUNS REACH IT, and the trunk carries the 3 + 2 they bring.
+    // Counted the way the compiler counts it. A limb is drawn to the station the trunk STANDS at,
+    // which for a run is its far node - not its start - so a check that only looked at the start node
+    // said nothing arrived while the trunk was plainly carrying both branches.
+    const QString trunkFar = c.stepToNode.value(QStringLiteral("S4"));
+    int arriving = 0;
+    for (const MechSegment& sg : c.def.segments) {
+        if (sg.id == body->id) continue;
+        const bool ends = sg.toNode == body->fromNode;
+        const bool drawnInto = !sg.toStation.isEmpty() &&
+                               (sg.toStation == body->fromNode || sg.toStation == trunkFar);
+        if (ends || drawnInto) ++arriving;
+    }
+    std::printf("  trunk: %d run(s) reach it, the trunk carries %d conductor(s)\n", arriving,
+                static_cast<int>(body->wireIds.size()));
+    check(arriving >= 2, "trunk: both branches reach the trunk");
+    check(body->wireIds.size() == 5, "trunk: it carries the conductors of both branches");
+
+    // THE SAME IDS, not copies: that is what stops the join reading as a gauge change.
+    int shared = 0;
+    for (const MechSegment& sg : c.def.segments) {
+        if (sg.id == body->id) continue;
+        for (const QString& wid : sg.wireIds)
+            if (body->wireIds.contains(wid)) ++shared;
+    }
+    check(shared == static_cast<int>(body->wireIds.size()),
+          "trunk: and they are the branches' own conductors, not new ones");
+
+    // A TRUNK THAT DOES SAY what it carries keeps what it said: "if not defined other".
+    MechBuildScript sc2 = sc;
+    for (MechStep& st : sc2.steps)
+        if (st.id == QLatin1String("S4")) {
+            st.wireCount = 7;
+            st.gauge = QStringLiteral("18 AWG");
+        }
+    const MechCompiled c2 = compileMechScript(sc2);
+    const QString seg2 = c2.stepToSegment.value(QStringLiteral("S4"));
+    const MechSegment* body2 = seg2.isEmpty() ? nullptr : c2.def.segment(seg2);
+    check(body2 != nullptr, "trunk: the declared trunk compiles too");
+    if (body2) {
+        std::printf("  trunk: having said 7, it carries %d\n",
+                    static_cast<int>(body2->wireIds.size()));
+        check(body2->wireIds.size() == 7, "trunk: a trunk that says what it carries keeps it");
+    }
+
+    // AND A RUN THAT IS NOT MARKED AS THE TRUNK gathers nothing, however many reach it - a splice has
+    // the same shape, and guessing would put every branch's conductors into it.
+    MechBuildScript sc3 = sc;
+    for (MechStep& st : sc3.steps)
+        if (st.id == QLatin1String("S4")) st.mainBody = false;
+    const MechCompiled c3 = compileMechScript(sc3);
+    const QString seg3 = c3.stepToSegment.value(QStringLiteral("S4"));
+    const MechSegment* body3 = seg3.isEmpty() ? nullptr : c3.def.segment(seg3);
+    if (body3) {
+        std::printf("  trunk: unmarked, the same run carries %d\n",
+                    static_cast<int>(body3->wireIds.size()));
+        check(body3->wireIds.isEmpty(), "trunk: only a run marked as the trunk gathers the branches");
+    }
+}
+
+// ---- A COVERING LIES OVER THE BUNDLE, NOT OVER THE BARE CONDUCTORS -------------------------------
+//
+// A branch runs bare out of each end - far enough for the conductors to fan to the contacts and be
+// inspected - and nothing is laid over that stretch: a screen or a sleeve starts where the bundle
+// starts and stops where it stops. The bundle outline was always drawn that way; the coverings were
+// laid over the WHOLE run, straight across the fan, so a screened branch came out as a body over its
+// own open conductors.
+//
+// Measured along the run, because that is where the fault was visible and nowhere else.
+void testACoveringLiesOverTheBundleOnly() {
+    MechBuildScript sc;
+    MechStep end;
+    end.id = QStringLiteral("S1");
+    end.kind = PartKind::Connector;
+    end.name = QStringLiteral("p2");
+    end.pinCount = 4;
+    sc.steps.push_back(end);
+
+    MechStep br;
+    br.id = QStringLiteral("S2");
+    br.kind = PartKind::Wire;
+    br.name = QStringLiteral("W1");
+    br.parentStep = QStringLiteral("S1");
+    br.lengthMm = 100.0;
+    br.wireCount = 4;
+    br.gauge = QStringLiteral("26 AWG");
+    br.openStartMm = 30.0;
+    br.openEndMm = 3.0;
+    MechStepCovering braid;
+    braid.kind = PartKind::ShieldBraid;
+    br.coverings.push_back(braid);        // "all of it"
+    sc.steps.push_back(br);
+
+    const MechCompiled c = compileMechScript(sc);
+    const std::vector<Entity> ents = buildMechanicalHarness(c.def, nullptr);
+
+    // The bundle is the covered part of the run: it starts 30 in and stops 3 short.
+    double bundleFrom = 1e18, bundleTo = -1e18, coverFrom = 1e18, coverTo = -1e18;
+    double fanFrom = 1e18, fanTo = -1e18;
+    for (const Entity& e : ents) {
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        const Bounds b = e.bounds();
+        if (!b.valid) continue;
+        if (role == QLatin1String("bundle")) {
+            bundleFrom = std::min(bundleFrom, b.min.x);
+            bundleTo = std::max(bundleTo, b.max.x);
+        } else if (role == QLatin1String("fitting")) {
+            coverFrom = std::min(coverFrom, b.min.x);
+            coverTo = std::max(coverTo, b.max.x);
+        } else if (role == QLatin1String("wires")) {
+            fanFrom = std::min(fanFrom, b.min.x);
+            fanTo = std::max(fanTo, b.max.x);
+        }
+    }
+    std::printf("  covering: bundle x %.2f..%.2f, screen x %.2f..%.2f, conductors x %.2f..%.2f\n",
+                bundleFrom, bundleTo, coverFrom, coverTo, fanFrom, fanTo);
+    check(coverTo > coverFrom, "covering: the screen is drawn");
+    if (!(coverTo > coverFrom)) return;
+    // NO BUNDLE RAILS UNDER IT: a screen is opaque, so where it covers the whole stretch its own body
+    // is the outline and the bundle's is not drawn as well. The screen's span is what this test is
+    // about, so it is measured against the figures rather than against the body it replaced.
+    check(!(bundleTo > bundleFrom), "covering: the bundle does not show through the screen");
+
+    // THE SCREEN SPANS THE COVERED PART: 30 in from the connector, 3 short of the far end, on a run
+    // of 100 that starts at x 100.
+    check(std::abs(coverFrom - 130.0) < 0.01 && std::abs(coverTo - 197.0) < 0.01,
+          "covering: the screen covers exactly the bundled stretch");
+    // AND THE CONDUCTORS SHOW BEYOND IT AT BOTH ENDS: 30 at the connector, 3 at the far end. The tell
+    // that the bare stretches were not simply swallowed.
+    check(fanFrom < coverFrom - 1.0, "covering: the conductors show bare at the connector");
+    check(fanTo > coverTo + 1.0, "covering: and bare at the far end");
+    std::printf("  covering: %.1f bare at the connector, %.1f at the far end\n", coverFrom - fanFrom,
+                fanTo - coverTo);
+    check(std::abs((coverFrom - fanFrom) - 30.0) < 0.01, "covering: 30 bare where 30 was asked for");
+    check(std::abs((fanTo - coverTo) - 3.0) < 0.01, "covering: and 3 at the other end");
+}
+
+// ---- NOUGHT BARE MEANS NONE, A COVERING HIDES WHAT IS UNDER IT, AND LOOSE WIRE HAS NO BODY --------
+//
+// Three things a screened branch has to get right, all of them about what is drawn along the run:
+//
+//  - A bare-end figure of NOUGHT is a person saying there is no bare wire there. It used to mean "say
+//    nothing", so the end fell back to the connector's 20mm and a fan of conductors appeared at a far
+//    end that was explicitly set to nothing.
+//  - A covering is opaque. The bundle's own rails were drawn as well, so a screened branch came out as
+//    a body with a narrower body inside it running the whole length.
+//  - A run that is NOT bundled is so many conductors side by side. A body round them says there is a
+//    covering the build sheet never called for.
+void testWhatIsDrawnAlongAScreenedBranch() {
+    auto branchScript = [](double openEnd, bool bundled) {
+        MechBuildScript sc;
+        MechStep end;
+        end.id = QStringLiteral("S1");
+        end.kind = PartKind::Connector;
+        end.name = QStringLiteral("p2");
+        end.pinCount = 4;
+        sc.steps.push_back(end);
+
+        MechStep br;
+        br.id = QStringLiteral("S2");
+        br.kind = PartKind::Wire;
+        br.name = QStringLiteral("W1");
+        br.parentStep = QStringLiteral("S1");
+        br.lengthMm = 100.0;
+        br.wireCount = 4;
+        br.gauge = QStringLiteral("26 AWG");
+        br.openStartMm = 25.0;
+        br.openEndMm = openEnd;
+        br.bundled = bundled;
+        MechStepCovering braid;
+        braid.kind = PartKind::ShieldBraid;
+        br.coverings.push_back(braid);
+        sc.steps.push_back(br);
+        return sc;
+    };
+    struct Spans {
+        double bundleFrom = 1e18, bundleTo = -1e18;
+        double coverFrom = 1e18, coverTo = -1e18;
+        double fanFrom = 1e18, fanTo = -1e18;
+        int bundles = 0, covers = 0, fans = 0;
+    };
+    auto measure = [](const MechBuildScript& sc) {
+        Spans sp;
+        const MechCompiled c = compileMechScript(sc);
+        for (const Entity& e : buildMechanicalHarness(c.def, nullptr)) {
+            const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+            const Bounds b = e.bounds();
+            if (!b.valid) continue;
+            if (role == QLatin1String("bundle")) {
+                sp.bundleFrom = std::min(sp.bundleFrom, b.min.x);
+                sp.bundleTo = std::max(sp.bundleTo, b.max.x);
+                ++sp.bundles;
+            } else if (role == QLatin1String("fitting")) {
+                sp.coverFrom = std::min(sp.coverFrom, b.min.x);
+                sp.coverTo = std::max(sp.coverTo, b.max.x);
+                ++sp.covers;
+            } else if (role == QLatin1String("wires")) {
+                sp.fanFrom = std::min(sp.fanFrom, b.min.x);
+                sp.fanTo = std::max(sp.fanTo, b.max.x);
+                ++sp.fans;
+            }
+        }
+        return sp;
+    };
+
+    // ---- NOUGHT AT THE FAR END: no conductors beyond the covering there. ----
+    {
+        const Spans sp = measure(branchScript(0.0, true));
+        std::printf("  along: far end 0 -> screen x %.2f..%.2f, %d conductor run(s) x %.2f..%.2f\n",
+                    sp.coverFrom, sp.coverTo, sp.fans, sp.fanFrom, sp.fanTo);
+        check(sp.covers > 0, "along: the screen is drawn");
+        check(sp.fans > 0, "along: and the conductors are drawn at the end that is bare");
+        // The run is 100 long from x 100: bare 25 at the connector, nothing bare at the far end, so
+        // the screen reaches the very end of it.
+        check(std::abs(sp.coverTo - 200.0) < 0.01, "along: the screen runs to the far end");
+        check(std::abs(sp.coverFrom - 125.0) < 0.01, "along: and starts where the bare stretch ends");
+        // AND NO CONDUCTORS BEYOND IT. The tell: the fan lies wholly on the connector side.
+        check(sp.fanTo <= sp.coverFrom + 0.01,
+              "along: nought bare at the far end draws no conductors there");
+    }
+
+    // ---- A FAR END THAT DOES ASK for bare wire still gets it, or the check above proves nothing. ----
+    {
+        const Spans sp = measure(branchScript(3.0, true));
+        std::printf("  along: far end 3 -> screen x %.2f..%.2f, conductors to x %.2f\n", sp.coverFrom,
+                    sp.coverTo, sp.fanTo);
+        check(std::abs(sp.coverTo - 197.0) < 0.01, "along: 3 bare leaves the screen 3 short");
+        check(sp.fanTo > 196.0, "along: and the conductors show over those 3");
+    }
+
+    // ---- NOTHING SHOWS INSIDE THE COVERING. ----
+    {
+        const Spans sp = measure(branchScript(0.0, true));
+        std::printf("  along: %d bundle rail(s) under a screen that covers the lot\n", sp.bundles);
+        check(sp.bundles == 0, "along: the bundle is not drawn inside the covering");
+    }
+
+    // ---- NOT BUNDLED: conductors end to end, no body, nothing over them. ----
+    {
+        const Spans sp = measure(branchScript(0.0, false));
+        std::printf("  along: unbundled -> %d body, %d covering(s), conductors x %.2f..%.2f\n",
+                    sp.bundles, sp.covers, sp.fanFrom, sp.fanTo);
+        check(sp.fans > 0, "along: loose wire is drawn as conductors");
+        check(std::abs(sp.fanFrom - 100.0) < 0.01 && std::abs(sp.fanTo - 200.0) < 0.01,
+              "along: and they run the whole length of it");
+        check(sp.bundles == 0, "along: with no body round them");
+        check(sp.covers == 0, "along: and nothing laid over them");
+    }
+}
+
 int run_mechwizard_tests() {
     std::printf("Running harness build wizard tests...\n");
     fails = 0;
@@ -2608,6 +3124,11 @@ int run_mechwizard_tests() {
     testSubpartsCanBeDraggedIntoOrder();
     testWiresUnderOneHousingAreDrawnOnlyThere();
     testNothingIsDrawnBetweenStackedHousings();
+    testTheFanFromAModelLeavesItsOwnHousing();
+    testABranchCarriesItsOwnCoverings();
+    testTheTrunkGathersTheBranches();
+    testACoveringLiesOverTheBundleOnly();
+    testWhatIsDrawnAlongAScreenedBranch();
     testHeatshrinkIsDrawnWithShrunkEnds();
     testTheHeatshrinkButtonHasSomethingToPlace();
     if (fails == 0) std::printf("  harness build wizard: OK\n");

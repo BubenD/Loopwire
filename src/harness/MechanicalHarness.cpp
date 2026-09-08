@@ -1624,10 +1624,18 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     // Where the conductors run OPEN, the bundle has no body: it is not a bundle there, it is so many
     // separate wires on their way to the contacts. So the outline stops short of the connector by that
     // distance and the wires themselves are drawn across the gap.
-    auto openAtNode = [&def](const QString& nodeId) {
+    auto openAtNode = [&def](const QString& nodeId, const MechSegment* seg = nullptr) {
         const MechNode* n = def.node(nodeId);
         if (!n) return 0.0;
         if (n->kind != MechNodeKind::Connector && n->kind != MechNodeKind::FreeEnd) return 0.0;
+        // THE RUN'S OWN FIGURE WINS at the end it names it for. One number on the node cannot say that
+        // one branch off a connector is screened up to 20mm from the face and another is bare - and a
+        // run that says nothing still gets the node's answer, so nothing drawn before this moves.
+        if (seg) {
+            // >= 0, not > 0: nought is a figure somebody typed and it means no bare wire at all.
+            if (seg->fromNode == nodeId && seg->openStartMm >= 0.0) return seg->openStartMm;
+            if (seg->toNode == nodeId && seg->openEndMm >= 0.0) return seg->openEndMm;
+        }
         return std::max(0.0, n->openLengthMm);
     };
 
@@ -1659,8 +1667,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const std::vector<MechStation> profile =
             seg ? segmentProfile(def, *seg) : std::vector<MechStation>{};
         // The body stops short at either end where the conductors are open there.
-        const double openFrom = seg ? openAtNode(seg->fromNode) : 0.0;
-        const double openTo = seg ? openAtNode(seg->toNode) : 0.0;
+        const double openFrom = seg ? openAtNode(seg->fromNode, seg) : 0.0;
+        const double openTo = seg ? openAtNode(seg->toNode, seg) : 0.0;
         const double bodyFrom = openFrom;
         const double bodyTo = seg ? std::max(bodyFrom, seg->lengthMm - openTo) : 0.0;
         if (profile.size() >= 2 && seg && seg->lengthMm > 0.0 && bodyTo > bodyFrom) {
@@ -1841,8 +1849,29 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             else { bb.plus.back() = v; bb.mitredEnd = true; }
         }
     }
+    // Is this run covered end to end by something laid over it - in which case its own outline is
+    // inside that covering and nothing of it should show. See item 2 above.
+    auto sleevedAllTheWay = [&](const QString& segId) {
+        const MechSegment* sg = def.segment(segId);
+        if (!sg) return false;
+        // NO BUNDLE AT ALL, because the run says so: conductors side by side the whole way, and a body
+        // drawn round them says there is a covering the build sheet never called for. Read from the
+        // run and not from its measurements - a short run whose bare ends overrun its length has no
+        // covered span either, and its body is still wanted.
+        if (!sg->bundled) return true;
+        if (sg->coverings.empty()) return false;
+        const double covered =
+            std::max(0.0, sg->lengthMm - openAtNode(sg->fromNode, sg) - openAtNode(sg->toNode, sg));
+        if (covered <= 1e-9) return false;
+        for (const MechFitting& f : sg->coverings) {
+            const double len = f.lengthMm > 0.0 ? f.lengthMm : covered;   // 0 -> all of it
+            if (f.atMm <= 1e-9 && len >= covered - 1e-6) return true;
+        }
+        return false;
+    };
     for (const MechPlacedSegment& ps : layout.segments) {
         const Body& b = bodies.value(ps.id);
+        if (sleevedAllTheWay(ps.id)) continue;   // the covering is the body here
         out.push_back(makeBundleEdge(opt, b.plus, ps.diameterMm, ps.id, +1));
         out.push_back(makeBundleEdge(opt, b.minus, ps.diameterMm, ps.id, -1));
         // A section of the outline is closed off ACROSS ITS WIDTH wherever it stops: at the end of a
@@ -2048,15 +2077,30 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         }
 
         // Anything fitted along the run: a sleeve, a conduit, a tie.
+        //
+        // WHERE THE COVERED PART OF THE RUN IS. The conductors run bare out of each end - so far that
+        // they can fan to the contacts and be inspected - and nothing is laid over that stretch: a
+        // screen or a sleeve starts where the bundle starts and stops where it stops. That is the
+        // shape a released drawing has, and the bundle outline has always been drawn that way; the
+        // coverings were laid over the WHOLE run instead, straight across the bare fan, so a screened
+        // branch came out as a body over its own open conductors.
+        //
+        // So a length measured along this run is measured along the COVERED part of it: "all of it"
+        // means all of the bundle, and `atMm` counts from where the bundle begins.
+        const double bareAtStart = openAtNode(seg->fromNode, seg);
+        const double bareAtEnd = openAtNode(seg->toNode, seg);
+        const double coveredMm = std::max(0.0, seg->lengthMm - bareAtStart - bareAtEnd);
         for (const MechFitting& f : seg->coverings) {
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
             double lengthMm = 0.0, odMm = 0.0;
             fittingSize(f, part, ps.diameterMm, lengthMm, odMm);
-            // A covering with no length of its own runs the whole way.
+            // A covering with no length of its own runs the whole way - of the covered part.
             if (f.lengthMm <= 0.0 && (!part || partNumber(*part, QStringLiteral("length")) <= 0.0))
-                lengthMm = seg->lengthMm;
-            const double startMm = std::clamp(f.atMm, 0.0, std::max(0.0, seg->lengthMm - 1e-9));
-            const double runMm = std::min(lengthMm, std::max(0.0, seg->lengthMm - startMm));
+                lengthMm = coveredMm;
+            const double startMm =
+                bareAtStart + std::clamp(f.atMm, 0.0, std::max(0.0, coveredMm - 1e-9));
+            const double runMm =
+                std::min(lengthMm, std::max(0.0, bareAtStart + coveredMm - startMm));
             const Vec2 c = ps.a + u * along(startMm + runMm / 2.0);
             if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
@@ -2222,7 +2266,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         double fittedBackMm = 0.0;
         int overWires = 0;
         int stacked = 0;   // how many bodies are already on, so each steps down from the last
-        double openMm = openAtNode(pn.id);   // 0 at a breakout: nothing comes out there
+        double openMm = openAtNode(pn.id, seg);   // 0 at a breakout: nothing comes out there
 
         // TWO ENDS CANNOT EACH HAVE 20 mm OF A 30 mm RUN.
         //
@@ -2237,7 +2281,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // way (see bodyTo); only the conductors were left to overrun.
         if (seg && seg->lengthMm > 0.0) {
             const QString otherId = seg->fromNode == pn.id ? seg->toNode : seg->fromNode;
-            const double otherOpen = openAtNode(otherId);
+            const double otherOpen = openAtNode(otherId, seg);
             const double total = openMm + otherOpen;
             if (total > seg->lengthMm && total > 1e-9)
                 openMm = seg->lengthMm * (openMm / total);
@@ -2388,7 +2432,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 const QString group = QStringLiteral("%1|%2|%3|wires")
                                           .arg(QLatin1String(kMechModelGroup), pn.id,
                                                mechModelKey(openKind));
-                for (Entity& e : mechModelEntities(*om, pn.at, dir, along(openMm),
+                for (Entity& e : mechModelEntities(*om, runEndHere, dir, along(openMm),
                                                    across(endMm), drawn)) {
                     e.layer = opt.layer;
                     e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("wires"));

@@ -181,6 +181,20 @@ struct MechSegment {
     QString toNode;
     double lengthMm = 0.0;
     QStringList wireIds;                    // the conductors running through this run
+
+    // HOW MUCH BARE WIRE SHOWS AT EACH END OF THIS RUN, where the run says so itself.
+    //
+    // NEGATIVE means the run says nothing and the end's own figure stands - see MechNode::openLengthMm.
+    // ZERO MEANS NONE, because it is a number somebody typed: a branch that goes straight into a boot
+    // shows no bare wire there, and reading that 0 as "unsaid" drew the default 20mm and a fan of
+    // conductors nobody asked for.
+    double openStartMm = -1.0;
+    double openEndMm = -1.0;
+
+    // IS THERE A BUNDLE HERE AT ALL, or is this run so many conductors side by side the whole way? A
+    // run of loose hook-up wire has no body drawn round it and nothing laid over it. See
+    // MechStep::bundled - it is said on the step, never guessed from the lengths.
+    bool bundled = true;
     std::vector<MechFitting> coverings;     // fitted along it
     // ---- A jacket, when the run is a CABLE rather than loose wires --------------------------------
     // A cable is not the bundle its cores would make loose: a cable whose five conductors add up to

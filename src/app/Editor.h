@@ -565,6 +565,10 @@ public:
     // `heldAt` is the point the cursor holds the set by. Given, the set hangs by THAT point - a part
     // is held by its middle, because that is where you mean to put it - and left out, by the corner of
     // its own extent, which is what a pasted set of objects has always done.
+    // Is something following the cursor, waiting to be clicked into place? Asked by whoever handed
+    // the objects over, so it can get its own window out of the way until they are down.
+    bool placingPaste() const { return pastePlacing_; }
+
     void placeEntities(const std::vector<Entity>& ents,
                        const std::optional<Vec2>& heldAt = std::nullopt);
     // A LABEL laid across the runs it is put on, rather than dropped at a fixed size.

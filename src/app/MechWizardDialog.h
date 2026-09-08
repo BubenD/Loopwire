@@ -136,6 +136,19 @@ public:
     // ---- Conductor groups (a run carrying a mixture) ----------------------------------------------
     void addConductorGroup();
     void removeConductorGroup();
+
+    // ---- WHAT A BRANCH CARRIES OVER ITSELF -------------------------------------------------------
+    //
+    // A branch is described as one thing: so many wires or cables, running so far, screened, sleeved,
+    // with heatshrink where it needs it. These add those coverings TO the run being described rather
+    // than as steps hung off it - which is also what stops the "there is no run before it yet"
+    // complaint, since a covering on the run is over that run by construction.
+    //
+    // `libPart` empty takes the standard drawing for the kind; a length of 0 covers the whole run.
+    void addCovering(PartKind kind, const QString& libPart = QString(), double lengthMm = 0.0,
+                     double atMm = 0.0);
+    void removeCovering(int index);
+    const std::vector<MechStepCovering>& pendingCoverings() const { return pendingCoverings_; }
     const std::vector<MechConductorGroup>& pendingConductors() const { return pending_; }
 
     // ---- A PART OF THIS STEP, rather than the next station along -----------------------------------
@@ -291,6 +304,10 @@ private:
     bool startsOpen() const;
     // The positions a chosen library part states, taken from its pin table first. 0 when it says none.
     int declaredWaysOfChosenPart() const;
+    // THE GAUGE THE CHOSEN WIRE STATES, empty where it states none or where the step is not a run. A
+    // conductor whose part number says 24 AWG and whose gauge row says 20 is a run the drawing, the
+    // bill and the crimp check each read differently.
+    QString declaredGaugeOfChosenPart() const;
 
 
     Editor* editor_ = nullptr;
@@ -331,6 +348,32 @@ private:
 
     // The conductor groups being assembled for the run about to be added.
     std::vector<MechConductorGroup> pending_;
+    // WHAT THE RUN BEING DESCRIBED CARRIES OVER ITSELF: the screen, the sleeve, the heatshrink. Held
+    // beside the conductor groups because it is the same kind of thing - part of the one description
+    // of one branch - and cleared with them when the form is cleared.
+    std::vector<MechStepCovering> pendingCoverings_;
+
+    // HOW MUCH BARE WIRE SHOWS AT EACH END of the run being described, and what covers the rest of it.
+    QLabel* openStartLabel_ = nullptr;
+    QDoubleSpinBox* openStartSpin_ = nullptr;
+    QLabel* openEndLabel_ = nullptr;
+    QDoubleSpinBox* openEndSpin_ = nullptr;
+    QLabel* coverLabel_ = nullptr;
+    QWidget* coverBox_ = nullptr;
+    QComboBox* coverKindCombo_ = nullptr;
+    QComboBox* coverPartCombo_ = nullptr;
+    QDoubleSpinBox* coverLenSpin_ = nullptr;
+    QListWidget* coverList_ = nullptr;
+    QPushButton* addCoverBtn_ = nullptr;
+    QPushButton* dropCoverBtn_ = nullptr;
+    // IS THE BUNDLE INSIDE ANYTHING. Unticked, the run is conductors end to end and the coverings are
+    // not offered - they would have nothing to be over. See MechStep::bundled.
+    QCheckBox* bundledCheck_ = nullptr;
+
+    // The library parts of the kind the covering row is set to, put into its part list.
+    void refreshCoverPartCombo();
+    // Read the row and put it on the list of what this run carries over itself.
+    void addCoveringFromFields();
 
     // WHETHER TO BALLOON, remembered per category. The answer is a habit rather than a decision - a
     // shop balloons its connectors and does not balloon its ties - so asking again every time is
