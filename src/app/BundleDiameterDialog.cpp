@@ -21,6 +21,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QVBoxLayout>
@@ -43,6 +44,89 @@ enum Col {
     kColOdMm,
     kColOdIn,
     kColCount
+};
+
+// THE SIZES A HARNESS IS BUILT FROM, thickest first - 8 AWG down to 32, which is the range the
+// conversion table covers and therefore the range the two units can be swapped between without
+// anything falling off the end. Only the sizes that HAVE a cross-section on that table are offered:
+// an entry the arithmetic cannot turn into mm2 is an entry that reads as an empty diameter.
+const int kGaugeAwgSizes[] = {8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32};
+
+// How a mm2 figure is written in this window. The same rule the unit switch uses, so a size picked
+// from the list and the same size arrived at by changing the unit are the same text: three places at
+// the thin end, two at the thick, because 0.081 and 0.08 are not the same wire and 8.37 needs no
+// third place.
+QString gaugeMm2Text(double mm2) {
+    return QString::number(mm2, 'f', mm2 < 1.0 ? 3 : 2);
+}
+
+// The list a gauge cell drops down, in the unit that row is written in.
+QStringList gaugeChoices(bool awg) {
+    QStringList out;
+    for (int size : kGaugeAwgSizes) {
+        if (awg) {
+            out << QString::number(size);
+        } else {
+            const double mm2 = mechAwgMm2(size);
+            if (mm2 > 0.0) out << gaugeMm2Text(mm2);
+        }
+    }
+    return out;
+}
+
+// A GAUGE IS CHOSEN FROM THE SIZES THAT EXIST, OR TYPED.
+//
+// It was a plain text cell, so every cross-section in the bundle was spelled out by hand - and a
+// cross-section is not free text: there are fifteen of them a harness is ever built from, and typing
+// one is a chance to type "0.35" where the table says "0.34" and get a diameter for a wire that is
+// not the wire. The list removes the chance for the common case.
+//
+// It stays EDITABLE, because the common case is not the only one. A conductor that is not a standard
+// size - a bus bar, something off a data sheet, a figure somebody measured - still has to go in the
+// bundle, and a picker that will not accept it is a picker that sends the person back to a
+// calculator. So the drop-down offers the sizes and the box takes anything.
+//
+// The list follows the ROW's unit, not the window's: AWG and mm2 sit side by side in the same table
+// because a bundle is regularly made of some of each.
+class GaugeDelegate : public QStyledItemDelegate {
+public:
+    GaugeDelegate(QTableWidget* table, int unitColumn, QObject* parent)
+        : QStyledItemDelegate(parent), table_(table), unitColumn_(unitColumn) {}
+
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&,
+                          const QModelIndex& index) const override {
+        auto* box = new QComboBox(parent);
+        box->setEditable(true);
+        box->setInsertPolicy(QComboBox::NoInsert);   // typing a size does not grow the list
+        box->addItems(gaugeChoices(rowIsAwg(index.row())));
+        return box;
+    }
+
+    void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+        auto* box = qobject_cast<QComboBox*>(editor);
+        if (!box) return QStyledItemDelegate::setEditorData(editor, index);
+        const QString had = index.data(Qt::EditRole).toString().trimmed();
+        // What is already in the cell wins over the list: a hand-typed 0.35 opens as 0.35 and not as
+        // whichever standard size happens to be nearest it.
+        const int at = box->findText(had);
+        if (at >= 0) box->setCurrentIndex(at);
+        else box->setEditText(had);
+    }
+
+    void setModelData(QWidget* editor, QAbstractItemModel* model,
+                      const QModelIndex& index) const override {
+        auto* box = qobject_cast<QComboBox*>(editor);
+        if (!box) return QStyledItemDelegate::setModelData(editor, model, index);
+        model->setData(index, box->currentText().trimmed(), Qt::EditRole);
+    }
+
+private:
+    bool rowIsAwg(int row) const {
+        auto* unit = qobject_cast<QComboBox*>(table_->cellWidget(row, unitColumn_));
+        return !unit || unit->currentIndex() == 0;
+    }
+    QTableWidget* table_ = nullptr;
+    int unitColumn_ = 0;
 };
 
 constexpr double kMmPerInch = 25.4;
@@ -106,6 +190,8 @@ void BundleDiameterDialog::buildUi() {
     wires_->setColumnWidth(kColNo, 34);
     wires_->setColumnWidth(kColAmount, 62);
     wires_->setColumnWidth(kColGauge, 96);
+    // The cross-section is picked from the sizes that exist, or typed - see GaugeDelegate.
+    wires_->setItemDelegateForColumn(kColGauge, new GaugeDelegate(wires_, kColGaugeUnit, this));
     wires_->setColumnWidth(kColGaugeUnit, 66);
     wires_->setColumnWidth(kColOdMm, 116);
     wires_->setColumnWidth(kColOdIn, 116);

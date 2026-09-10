@@ -1,7 +1,15 @@
 // The bundle-diameter working and the lumped thermal model. Every figure here is one that can be
 // checked by hand from the formulas the tools display.
 #include "analysis/Thermal.h"
+#include "app/BundleDiameterDialog.h"
+#include "app/Editor.h"
 #include "harness/MechanicalHarness.h"
+#include "model/Document.h"
+
+#include <QComboBox>
+#include <QPushButton>
+#include <QStyleOptionViewItem>
+#include <QTableWidget>
 
 #include <cmath>
 #include <cstdio>
@@ -133,6 +141,95 @@ int run_thermal_tests() {
         check(near(bundleCalculation({1.5, 1.5, 1.5, 1.5}, 1.2, 1.0).result,
                    bundleDiameterMm({1.5, 1.5, 1.5, 1.5}, 1.2, 1.0), 1e-9),
               "bundle calc: the working and the drawn bundle are the same figure");
+    }
+
+    // ---- The gauge cell offers the sizes that exist, and still takes a typed one ------------------
+    {
+        // A cross-section is not free text: there are a dozen or so a harness is ever built from, and
+        // typing one out is a chance to write 0.35 where the table says 0.34 and get the diameter of
+        // a wire that is not the wire. The cell drops down the sizes; it stays editable so a
+        // conductor that is not a standard size can still go in the bundle.
+        Document doc;
+        Editor editor;
+        editor.setDocument(&doc);
+        BundleDiameterDialog dlg(&editor);
+        QTableWidget* t = dlg.findChild<QTableWidget*>();
+        check(t != nullptr, "gauge list: the window has its table");
+        if (!t) return failures;
+        // A conductor to work on.
+        for (QPushButton* b : dlg.findChildren<QPushButton*>())
+            if (b->text().startsWith(QStringLiteral("Conductor"))) { b->click(); break; }
+        check(t->rowCount() == 1, "gauge list: one conductor to work on");
+        if (t->rowCount() != 1) return failures;
+
+        // The gauge column is column 3, the unit beside it column 4 - see the Col enum. Opening the
+        // editor is what the table does on a double click; here it is asked for directly.
+        const int kGauge = 3, kUnit = 4;
+        QAbstractItemDelegate* deleg = t->itemDelegateForColumn(kGauge);
+        check(deleg != nullptr, "gauge list: the gauge column has an editor of its own");
+        if (!deleg) return failures;
+        auto openEditor = [&](int row) {
+            QStyleOptionViewItem opt;
+            return qobject_cast<QComboBox*>(
+                deleg->createEditor(t->viewport(), opt, t->model()->index(row, kGauge)));
+        };
+
+        // ---- AWG: 8 down to 32, which is the range the conversion table covers ----
+        auto* unit = qobject_cast<QComboBox*>(t->cellWidget(0, kUnit));
+        check(unit && unit->currentIndex() == 0, "gauge list: a new conductor is in AWG");
+        QComboBox* box = openEditor(0);
+        check(box != nullptr, "gauge list: and the cell drops down");
+        if (!box) return failures;
+        QStringList sizes;
+        for (int i = 0; i < box->count(); ++i) sizes << box->itemText(i);
+        std::printf("    (gauge list, AWG: %s)\n", qPrintable(sizes.join(QStringLiteral(" "))));
+        check(box->count() == 13, "gauge list: thirteen sizes in AWG");
+        check(sizes.first() == QLatin1String("8") && sizes.last() == QLatin1String("32"),
+              "gauge list: 8 at the top and 32 at the bottom, as asked for");
+        check(sizes.contains(QLatin1String("22")) && sizes.contains(QLatin1String("16")),
+              "gauge list: with the sizes in between");
+        // IT IS EDITABLE. A size that is not on the list is still a size.
+        check(box->isEditable(), "gauge list: and a size can be typed instead of picked");
+        box->setEditText(QStringLiteral("23"));
+        deleg->setModelData(box, t->model(), t->model()->index(0, kGauge));
+        std::printf("    (typed 23 AWG -> cell \"%s\", od %.2f mm)\n",
+                    qPrintable(t->item(0, kGauge)->text()), dlg.rowDiameterMm(0));
+        check(t->item(0, kGauge)->text() == QLatin1String("23"),
+              "gauge list: a typed size goes in exactly as typed");
+        delete box;
+
+        // ---- mm2: the same sizes, said the other way ----
+        t->item(0, kGauge)->setText(QStringLiteral("22"));
+        unit->setCurrentIndex(1);
+        box = openEditor(0);
+        check(box != nullptr, "gauge list: the mm2 row drops down too");
+        if (!box) return failures;
+        QStringList metric;
+        for (int i = 0; i < box->count(); ++i) metric << box->itemText(i);
+        std::printf("    (gauge list, mm2: %s)\n", qPrintable(metric.join(QStringLiteral(" "))));
+        check(box->count() == 13, "gauge list: thirteen sizes in mm2 as well");
+        // 8 AWG is 8.37 mm2 and 32 AWG is 0.032 - the two ends of the same table, so the list a row
+        // offers always matches the unit that row is written in.
+        check(metric.first() == QLatin1String("8.37"),
+              "gauge list: 8 AWG at the top reads as 8.37 mm2");
+        check(metric.last() == QLatin1String("0.032"),
+              "gauge list: and 32 AWG at the bottom as 0.032");
+        // THE LIST AND THE UNIT SWITCH AGREE. Changing the unit converted 22 AWG to a number, and
+        // that number has to be one the list offers - otherwise the same wire is spelled two ways
+        // depending on how it got there.
+        const QString converted = t->item(0, kGauge)->text();
+        std::printf("    (22 AWG converted to \"%s\"; on the list: %s)\n", qPrintable(converted),
+                    metric.contains(converted) ? "yes" : "no");
+        check(metric.contains(converted),
+              "gauge list: a size arrived at by switching the unit is one the list offers");
+        delete box;
+
+        // ---- AND 32 AWG IS A REAL SIZE NOW ----
+        // It was missing from the conversion table, so it could not be offered and a conductor
+        // written as 32 AWG came out with no diameter at all and was left out of the sum.
+        check(mechAwgMm2(32) > 0.0, "gauge list: 32 AWG has a cross-section to convert to");
+        check(wireOuterDiameterMm(QStringLiteral("32 AWG")) > 0.0,
+              "gauge list: and therefore a diameter the bundle can count");
     }
 
     // ---- The thermal loop ----

@@ -33,6 +33,10 @@ bool samePoint(const Vec2& a, const Vec2& b) { return distanceSq(a, b) < 1e-6; }
 // mm2 of an AWG size, for a gauge written in AWG.
 double awgToMm2(int awg) {
     static const QHash<int, double> kAwgMm2 = {
+        // 32 is the thin end of what a harness is built from - it is what a screened pair inside an
+        // instrument is made of - and it was missing, so a gauge picker could not offer it and a
+        // conductor written as 32 AWG converted to nothing at all.
+        {32, 0.0320},
         {30, 0.0507}, {28, 0.0810}, {26, 0.1288}, {24, 0.2047}, {22, 0.3247}, {20, 0.5188},
         {18, 0.8230}, {16, 1.3090}, {14, 2.0810}, {12, 3.3090}, {10, 5.2610}, {8, 8.3670},
         {6, 13.300},  {4, 21.150},  {2, 33.630},  {1, 42.410}};
@@ -338,7 +342,7 @@ double mechAwgMm2(int awg) { return awgToMm2(awg); }
 
 int mechNearestAwg(double mm2) {
     if (mm2 <= 0.0) return 0;
-    static const int kSizes[] = {30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 1};
+    static const int kSizes[] = {32, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 1};
     int best = 0;
     double bestErr = 1e18;
     for (int awg : kSizes) {
