@@ -9051,6 +9051,83 @@ int run_editor_tests() {
               "space turn: and Shift+Space turns it back anticlockwise");
     }
 
+    // ---- Space during a DRAG turns it under the hand, once, and leaves the ghost be ---------------
+    {
+        // The other way of moving something: take hold of its body and drag it, rather than the Move
+        // tool. There the object itself follows the cursor, so the object is what turns - but it has
+        // to turn about the CURSOR, or it swings away from the hand that is carrying it.
+        Document d;
+        Entity line;
+        line.id = QStringLiteral("l");
+        line.type = EntityType::Line;
+        line.a = {0.0, 0.0};
+        line.b = {10.0, 0.0};
+        d.entities().push_back(line);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.setTool(ToolId::Select);
+        auto lineNow = [&d] {
+            for (const Entity& e : d.entities())
+                if (e.id == QStringLiteral("l")) return e;
+            return Entity();
+        };
+        // Grabbed at 2.5 along it - clear of the grips at 0, 5 and 10, so this is the body and not a
+        // joint - and carried out to (50,50), which puts it from (47.5,50) to (57.5,50).
+        ed.onPointerPress({2.5, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({50.0, 50.0});
+        check(ed.movingByDistance(), "drag turn: a drag counts as a move under way");
+        const Entity carried = lineNow();
+        std::printf("  drag turn: carried to (%.1f,%.1f)..(%.1f,%.1f)\n", carried.a.x, carried.a.y,
+                    carried.b.x, carried.b.y);
+        check(ed.onKey(Qt::Key_Space, Qt::NoModifier), "drag turn: Space is taken");
+        const Entity turned = lineNow();
+        std::printf("  drag turn: after Space it is (%.1f,%.1f)..(%.1f,%.1f)\n", turned.a.x,
+                    turned.a.y, turned.b.x, turned.b.y);
+        // ABOUT THE CURSOR, so whatever is under the hand stays under it. Worked out from where the
+        // drag actually left the line rather than hard-coded: a press near the middle of a line takes
+        // hold of its midpoint joint, which re-centres it on the cursor, and that is not what is being
+        // tested here. Turning a point clockwise about (50,50) sends (dx,dy) to (dy,-dx).
+        auto turnedAboutCursor = [](Vec2 p) {
+            const Vec2 d{p.x - 50.0, p.y - 50.0};
+            return Vec2{50.0 + d.y, 50.0 - d.x};
+        };
+        const Vec2 wantA = turnedAboutCursor(carried.a);
+        const Vec2 wantB = turnedAboutCursor(carried.b);
+        std::printf("  drag turn: about the cursor that is (%.1f,%.1f)..(%.1f,%.1f)\n", wantA.x,
+                    wantA.y, wantB.x, wantB.y);
+        check(std::abs(turned.a.x - wantA.x) < 1e-6 && std::abs(turned.a.y - wantA.y) < 1e-6 &&
+                  std::abs(turned.b.x - wantB.x) < 1e-6 && std::abs(turned.b.y - wantB.y) < 1e-6,
+              "drag turn: it turns about the cursor, so it stays under the hand");
+        // AND NOT ABOUT WHERE THE DRAG STARTED, which is what it used to do: from (2.5,0) that pivot
+        // is nowhere near the hand, and the line was flung off across the sheet.
+        check(std::abs(turned.a.x - 2.5) > 1.0 || std::abs(turned.a.y) > 1.0,
+              "drag turn: and not about the far-off point the drag started from");
+        // THE GHOST IS WHERE IT CAME FROM, and that does not change because it was turned on the way.
+        bool ghostMoved = false;
+        for (const Entity& g : ed.dragGhost())
+            if (std::abs(g.a.x) > 1e-6 || std::abs(g.a.y) > 1e-6 || std::abs(g.b.x - 10.0) > 1e-6 ||
+                std::abs(g.b.y) > 1e-6)
+                ghostMoved = true;
+        std::printf("  drag turn: the source ghost holds %d object(s), moved=%d\n",
+                    int(ed.dragGhost().size()), ghostMoved ? 1 : 0);
+        check(!ed.dragGhost().empty() && !ghostMoved,
+              "drag turn: the mark showing where it came from stays put");
+        // AND THE WHOLE DRAG IS ONE THING TO UNDO, however many times Space was pressed. It used to
+        // push a step per press, so a drag with four turns in it took five undos to get back.
+        ed.onKey(Qt::Key_Space, Qt::NoModifier);
+        ed.onKey(Qt::Key_Space, Qt::NoModifier);
+        ed.onPointerRelease({50.0, 50.0}, Qt::LeftButton);
+        ed.undo();
+        const Entity back = lineNow();
+        std::printf("  drag turn: one undo puts it back to (%.1f,%.1f)..(%.1f,%.1f)\n", back.a.x,
+                    back.a.y, back.b.x, back.b.y);
+        check(std::abs(back.a.x) < 1e-6 && std::abs(back.a.y) < 1e-6 &&
+                  std::abs(back.b.x - 10.0) < 1e-6 && std::abs(back.b.y) < 1e-6,
+              "drag turn: one undo takes back the move and every turn in it");
+    }
+
     // ---- DRAW ORDER: which of two things in the same place is in front ---------------------------
     {
         // Three lines stacked in the same place, and a fourth well away from all of them. The one away

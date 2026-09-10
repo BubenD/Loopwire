@@ -16146,7 +16146,8 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             auto sel = selectedEntities();
             if (!sel.empty()) {
                 // Anticlockwise is positive in the arithmetic; a quarter turn clockwise is -pi/2.
-                const double rad = (mods & Qt::ShiftModifier) ? M_PI / 2.0 : -M_PI / 2.0;
+                const bool clockwise = !(mods & Qt::ShiftModifier);
+                const double rad = clockwise ? -M_PI / 2.0 : M_PI / 2.0;
                 // WHICH OF THE TWO IS THE PREVIEW depends on how the move was started, and only one of
                 // them may turn.
                 //
@@ -16158,22 +16159,29 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
                 //
                 // A DRAG is the other way round: the objects themselves follow the cursor and the ghost
                 // is the mark left where they came from. There the objects ARE the preview, so they are
-                // what turns.
+                // what turns - and rotateMoveBy90 is what turns them. It was written for this and had
+                // never been called: this handler grew a copy of it that got three things wrong.
+                //
+                // IT TURNS ABOUT THE CURSOR. The copy turned about the point the drag STARTED from,
+                // which is where the cursor was when the object was grabbed and nowhere near where it
+                // is now - so the object was flung round a distant pivot and out from under the hand.
+                // This comment has always claimed it turned about the point it was held by; it did not.
+                //
+                // ONE UNDO STEP FOR THE WHOLE DRAG, not one per key press: rotateMoveBy90 pushes only
+                // if the drag has not written anything yet, so a drag with four Space presses in it is
+                // still one thing to undo.
+                //
+                // AND THE SOURCE GHOST STAYS PUT. The copy turned that too, so the faint mark showing
+                // where the object had been taken FROM spun on the spot - and where something came from
+                // does not change because you turned it on the way.
                 const bool previewIsGhost = tool_ == ToolId::Move && modifyPts_.size() == 1;
-                if (previewIsGhost) {
-                    moveTurn_ += rad;
-                    for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
-                    emit overlayChanged();
-                } else {
-                    pushUndo();
-                    // About the point it was picked up by, so it spins where it stands and the drag
-                    // carries it on with the same offset as before.
-                    for (Entity* e : sel) rotateEntity(*e, mv->first, rad);
-                    doc_->setDirty(true);
-                    for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
-                    emit overlayChanged();
-                    emit changed();
+                if (!previewIsGhost) {
+                    rotateMoveBy90(clockwise);   // says what it turned, and how to turn it again
+                    return true;
                 }
+                moveTurn_ += rad;
+                for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
+                emit overlayChanged();
                 emit message((mods & Qt::ShiftModifier)
                                  ? QStringLiteral("Turned a quarter anticlockwise — Space to keep turning")
                                  : QStringLiteral("Turned a quarter clockwise — Shift+Space the other way"));
