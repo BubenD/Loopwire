@@ -6323,10 +6323,23 @@ int run_harness_tests() {
     // ---- The library a first run starts from: real parts, 14 to 30 AWG ----
     {
         const PartsLibrary seed = seedLibrary();
-        const std::vector<const LibraryPart*> wires = seed.ofKind(PartKind::Wire);
-        std::printf("    (seed library: %d part(s), %d of them wire)\n",
-                    int(seed.parts.size()), int(wires.size()));
+        const std::vector<const LibraryPart*> allWires = seed.ofKind(PartKind::Wire);
+        // THE ALPHA WIRE HOOK-UP SHELF, which is what every figure below belongs to. The seed carries
+        // the Raychem Spec 55 shelf as well now - 600 V crosslinked ETFE, its own part numbers and its
+        // own resistances - and holding those up against Alpha's data sheet proved nothing except that
+        // they are not Alpha's. They have a shelf test of their own.
+        std::vector<const LibraryPart*> wires;
+        for (const LibraryPart* p : allWires)
+            if (p->mfrName == QLatin1String("Alpha Wire")) wires.push_back(p);
+        std::printf("    (seed library: %d part(s), %d of them wire, %d of those Alpha)\n",
+                    int(seed.parts.size()), int(allWires.size()), int(wires.size()));
         check(wires.size() >= 10, "seed: ten wires to start from");
+        // And the Spec 55 shelf is on it too, which is what the count above no longer includes.
+        int spec55 = 0;
+        for (const LibraryPart* p : allWires)
+            if (p->mfrPn.startsWith(QLatin1String("55A0111-"))) ++spec55;
+        check(spec55 == 36,
+              "seed: and the Spec 55 wire shelf beside it, twelve sizes in three colours");
         // Every gauge from 14 to 30, and every one of them a real Alpha Wire part number with the
         // figures its data sheet gives.
         QSet<int> gauges;

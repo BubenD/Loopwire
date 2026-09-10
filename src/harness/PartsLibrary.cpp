@@ -989,6 +989,7 @@ QJsonObject PartsLibrary::toJson() const {
     root[QStringLiteral("version")] = 1;
     root[QStringLiteral("standardHeatshrink")] = standardHeatshrink;
     root[QStringLiteral("standardCables")] = standardCables;
+    root[QStringLiteral("standardSpec55")] = standardSpec55;
     QJsonArray arr;
     for (const LibraryPart& p : parts) {
         QJsonObject o;
@@ -1042,6 +1043,7 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
     parts.clear();
     standardHeatshrink = root.value(QStringLiteral("standardHeatshrink")).toBool(false);
     standardCables = root.value(QStringLiteral("standardCables")).toBool(false);
+    standardSpec55 = root.value(QStringLiteral("standardSpec55")).toBool(false);
     for (const auto& v : root.value(QStringLiteral("parts")).toArray()) {
         const QJsonObject o = v.toObject();
         LibraryPart p;
@@ -1457,6 +1459,9 @@ void PartsCatalog::openRemembered() {
         // has no cable in it at all, so the bundle tool had nothing to offer when asked for one.
         int stocked = ensureStandardHeatshrink(lib);
         if (p == def) stocked += ensureStandardCables(lib);
+        // And the Spec 55 shelf, for the same reason again: a library made before it existed has no
+        // 55A0111 in it, and that is the wire half these harnesses are built from.
+        if (p == def) stocked += ensureStandardSpec55(lib);
         if (p == def && stocked > 0) lib.save(p);
         paths_ << p;
         libs_.push_back(lib);
@@ -1651,6 +1656,199 @@ int addStandardCables(PartsLibrary& lib) {
                                .arg(nominal));
         ++added;
     }
+    return added;
+}
+
+// ---- Raychem Spec 55: the single wire, the pair, and the screened pair ---------------------------
+//
+// Every figure below is read off TE's own specification control drawings - 55A0111 rev R, 55A0121
+// rev E, 55A1121 rev B1 - and none of it is worked out from anything else. The drawings give inches;
+// a harness is drawn in millimetres, so the inch figure is what is written down here and the
+// conversion is done once, in code, rather than typed out twice and disagreeing with itself.
+//
+// The three go together and are stocked together, because they are the same wire three ways: the
+// pair is two 55A0111s laid up, and the screened pair is that pair with a braid and a jacket over
+// it. A shop that has one on the shelf wants the others beside it.
+int addStandardSpec55(PartsLibrary& lib) {
+    // One AWG size, across all three drawings.
+    struct Spec55Size {
+        int awg;
+        const char* stranding;   // 55A0111 Table I, "number x AWG"
+        double wireOdIn;         // 55A0111 finished wire diameter, nominal
+        double dcrPerKft;        // 55A0111 maximum conductor resistance at 20 C, ohm/1000 ft
+        double pairOdIn;         // 55A0121 outside diameter, nominal
+        double pairMaxIn;        // 55A0121 outside diameter, maximum
+        double screenedOdIn;     // 55A1121 outside diameter, nominal
+        double screenedMaxIn;    // 55A1121 outside diameter, maximum
+        int shieldAwg;           // 55A1121 shield size
+    };
+    // 30 through 8 AWG - the whole range all three drawings are made in.
+    const Spec55Size sizes[] = {
+        {30, "7 x 38",   0.024, 108.4,  0.048, 0.052, 0.081, 0.086, 38},
+        {28, "7 x 36",   0.027,  68.6,  0.054, 0.058, 0.087, 0.092, 38},
+        {26, "19 x 38",  0.032,  41.3,  0.064, 0.068, 0.097, 0.102, 38},
+        {24, "19 x 36",  0.037,  26.2,  0.074, 0.078, 0.107, 0.112, 38},
+        {22, "19 x 34",  0.043,  16.2,  0.086, 0.090, 0.119, 0.125, 38},
+        {20, "19 x 32",  0.050,   9.88, 0.100, 0.104, 0.135, 0.141, 38},
+        {18, "19 x 30",  0.060,   6.23, 0.120, 0.124, 0.155, 0.162, 38},
+        {16, "19 x 29",  0.068,   4.81, 0.136, 0.140, 0.171, 0.178, 38},
+        {14, "19 x 27",  0.085,   3.06, 0.170, 0.176, 0.205, 0.213, 38},
+        {12, "37 x 28",  0.103,   2.02, 0.206, 0.212, 0.243, 0.251, 38},
+        {10, "37 x 26",  0.128,   1.26, 0.256, 0.268, 0.291, 0.306, 38},
+        { 8, "133 x 29", 0.188,   0.701, 0.376, 0.392, 0.417, 0.438, 36},
+    };
+    // MIL-STD-681 colour designators, which is what the "*" on the drawings stands for.
+    struct Spec55Colour {
+        const char* code;
+        const char* name;
+    };
+    // The single wire is stocked in the three colours a harness is mostly made of.
+    const Spec55Colour singles[] = {{"0", "Black"}, {"2", "Red"}, {"9", "White"}};
+
+    // The drawings give ohm per 1000 ft; a harness is measured in metres, and 1000 ft is 304.8 m.
+    const double kKftToM = 304.8;
+    auto mm = [](double in) { return QString::number(in * 25.4, 'f', 2); };
+    auto in3 = [](double in) { return QString::number(in, 'f', 3); };
+    // Ten times the outside diameter, the rule the rest of the shelf uses.
+    auto bend = [](double in) { return QString::number(in * 25.4 * 10.0, 'f', 1); };
+    const QString nominal =
+        QStringLiteral("Diameters are the NOMINAL figures from TE's specification control drawing, "
+                       "converted from the inches it is written in. The drawing puts a tolerance on "
+                       "the wire and a maximum on the cables; check it before committing a build to "
+                       "a tolerance.");
+    int added = 0;
+
+    // ---- 55A0111: the wire itself ----
+    for (const Spec55Size& s : sizes) {
+        for (const Spec55Colour& c : singles) {
+            const QString pn =
+                QStringLiteral("55A0111-%1-%2").arg(s.awg).arg(QString::fromLatin1(c.code));
+            if (hasPn(lib, pn)) continue;
+            LibraryPart& p = lib.add(PartKind::Wire);
+            p.description = QStringLiteral("Spec 55 wire, %1 AWG, crosslinked ETFE, tin-coated "
+                                           "copper, lightweight, %2")
+                                .arg(s.awg)
+                                .arg(QString::fromLatin1(c.name).toLower());
+            p.mfrName = QStringLiteral("TE Connectivity (Raychem)");
+            p.mfrPn = pn;
+            p.unit = QStringLiteral("m");
+            p.params.insert(QStringLiteral("gaugeMode"), QStringLiteral("AWG"));
+            p.params.insert(QStringLiteral("gauge"), QString::number(s.awg));
+            p.params.insert(QStringLiteral("material"), QStringLiteral("Tin-coated copper"));
+            p.params.insert(QStringLiteral("conductor"), QStringLiteral("Stranded"));
+            p.params.insert(QStringLiteral("strands"), QString::fromLatin1(s.stranding));
+            p.params.insert(QStringLiteral("insulation"),
+                            QStringLiteral("Radiation-crosslinked modified ETFE"));
+            p.params.insert(QStringLiteral("voltage"), QStringLiteral("600"));
+            p.params.insert(QStringLiteral("od"), mm(s.wireOdIn));
+            p.params.insert(QStringLiteral("resistance"),
+                            QString::number(s.dcrPerKft / kKftToM, 'f', 4));
+            p.params.insert(QStringLiteral("bendRadius"), bend(s.wireOdIn));
+            p.params.insert(QStringLiteral("colour"), QString::fromLatin1(c.name));
+            p.params.insert(QStringLiteral("temp"), QStringLiteral("-65 to +150"));
+            p.params.insert(QStringLiteral("spec"),
+                            QStringLiteral("Raychem Spec 55A, SCD 55A0111 rev R"));
+            p.params.insert(
+                QStringLiteral("notes"),
+                QStringLiteral("Stranding %1. Finished diameter %2 in (%3 mm). Conductor resistance "
+                               "%4 ohm/1000 ft maximum at 20 C. Colour code %5 = %6 (MIL-STD-681). "
+                               "%7")
+                    .arg(QString::fromLatin1(s.stranding), in3(s.wireOdIn), mm(s.wireOdIn),
+                         QString::number(s.dcrPerKft, 'f', 3), QString::fromLatin1(c.code),
+                         QString::fromLatin1(c.name), nominal));
+            ++added;
+        }
+    }
+
+    // ---- 55A0121: two of them laid up, no screen and no jacket ----
+    //
+    // The two component wires' colours are written with a SLASH between them, which is the drawing's
+    // own notation: 6/9 is a blue one and a white one.
+    for (const Spec55Size& s : sizes) {
+        const QString pn = QStringLiteral("55A0121-%1-6/9").arg(s.awg);
+        if (hasPn(lib, pn)) continue;
+        LibraryPart& p = lib.add(PartKind::Cable);
+        p.description = QStringLiteral("Spec 55 two-conductor cable, unshielded, unjacketed, "
+                                       "%1 AWG, blue and white")
+                            .arg(s.awg);
+        p.mfrName = QStringLiteral("TE Connectivity (Raychem)");
+        p.mfrPn = pn;
+        p.unit = QStringLiteral("m");
+        p.params.insert(QStringLiteral("od"), mm(s.pairOdIn));
+        p.params.insert(QStringLiteral("material"), QStringLiteral("Tin-coated copper"));
+        p.params.insert(QStringLiteral("conductor"), QStringLiteral("Stranded"));
+        p.params.insert(QStringLiteral("insulation"),
+                        QStringLiteral("Radiation-crosslinked modified ETFE"));
+        p.params.insert(QStringLiteral("voltage"), QStringLiteral("600"));
+        // One twisted pair, unscreened - written the way the make-up reader takes it, so the builder
+        // can expand the cable into its two conductors without anybody filling in a table.
+        p.params.insert(QStringLiteral("structure"), QStringLiteral("UTP 1x2x%1AWG").arg(s.awg));
+        p.params.insert(QStringLiteral("cores"), QStringLiteral("2"));
+        p.params.insert(QStringLiteral("screened"), QStringLiteral("0"));
+        p.params.insert(QStringLiteral("bendRadius"), bend(s.pairOdIn));
+        p.params.insert(QStringLiteral("temp"), QStringLiteral("-65 to +150"));
+        p.params.insert(QStringLiteral("spec"),
+                        QStringLiteral("Raychem Spec 55A, SCD 55A0121 rev E"));
+        p.params.insert(
+            QStringLiteral("notes"),
+            QStringLiteral("Component wires 55A0111. Outside diameter %1 in nominal (%2 mm), %3 in "
+                           "maximum. Colours 6/9 = blue and white component wires (MIL-STD-681). %4")
+                .arg(in3(s.pairOdIn), mm(s.pairOdIn), in3(s.pairMaxIn), nominal));
+        ++added;
+    }
+
+    // ---- 55A1121: the pair with a braid and a jacket over it ----
+    //
+    // The jacket colour comes after a DASH, again the drawing's own notation: 6/9-9 is blue and
+    // white cores in a white jacket.
+    for (const Spec55Size& s : sizes) {
+        const QString pn = QStringLiteral("55A1121-%1-6/9-9").arg(s.awg);
+        if (hasPn(lib, pn)) continue;
+        LibraryPart& p = lib.add(PartKind::Cable);
+        p.description = QStringLiteral("Spec 55 two-conductor cable, shielded and jacketed, "
+                                       "%1 AWG, blue and white cores, white jacket")
+                            .arg(s.awg);
+        p.mfrName = QStringLiteral("TE Connectivity (Raychem)");
+        p.mfrPn = pn;
+        p.unit = QStringLiteral("m");
+        p.params.insert(QStringLiteral("od"), mm(s.screenedOdIn));
+        p.params.insert(QStringLiteral("material"), QStringLiteral("Tin-coated copper"));
+        p.params.insert(QStringLiteral("conductor"), QStringLiteral("Stranded"));
+        p.params.insert(QStringLiteral("insulation"),
+                        QStringLiteral("Radiation-crosslinked modified ETFE"));
+        p.params.insert(QStringLiteral("jacket"),
+                        QStringLiteral("Radiation-crosslinked modified ETFE"));
+        p.params.insert(QStringLiteral("jacketColour"), QStringLiteral("White"));
+        p.params.insert(QStringLiteral("voltage"), QStringLiteral("600"));
+        // A braid over the whole cable at 85 per cent coverage, and a white jacket over that.
+        p.params.insert(QStringLiteral("structure"),
+                        QStringLiteral("1x2x%1AWG, braid 85%, white").arg(s.awg));
+        p.params.insert(QStringLiteral("cores"), QStringLiteral("2"));
+        p.params.insert(QStringLiteral("screened"), QStringLiteral("1"));
+        p.params.insert(QStringLiteral("shield"),
+                        QStringLiteral("Tin-coated copper braid, %1 AWG, 85% coverage")
+                            .arg(s.shieldAwg));
+        p.params.insert(QStringLiteral("bendRadius"), bend(s.screenedOdIn));
+        p.params.insert(QStringLiteral("temp"), QStringLiteral("-65 to +150"));
+        p.params.insert(QStringLiteral("spec"),
+                        QStringLiteral("Raychem Spec 55A, SCD 55A1121 rev B1"));
+        p.params.insert(
+            QStringLiteral("notes"),
+            QStringLiteral("Component wires 55A0111, over a %1 AWG tin-coated copper braid at 85 "
+                           "per cent coverage, ETFE jacket. Outside diameter %2 in nominal (%3 mm), "
+                           "%4 in maximum. Colours 6/9-9 = blue and white component wires, white "
+                           "jacket (MIL-STD-681). %5")
+                .arg(QString::number(s.shieldAwg), in3(s.screenedOdIn), mm(s.screenedOdIn),
+                     in3(s.screenedMaxIn), nominal));
+        ++added;
+    }
+    return added;
+}
+
+int ensureStandardSpec55(PartsLibrary& lib) {
+    if (lib.standardSpec55) return 0;
+    const int added = addStandardSpec55(lib);
+    lib.standardSpec55 = true;   // done, and recorded in the file: a size somebody deleted stays gone
     return added;
 }
 
@@ -2042,6 +2240,8 @@ PartsLibrary seedLibrary() {
     ensureStandardHeatshrink(lib);
     // And the coaxial shelf, so a fresh library has a cable in it as well as wire.
     ensureStandardCables(lib);
+    // And the Spec 55 shelf: 55A0111 wire, and the pair and screened pair built from it.
+    ensureStandardSpec55(lib);
     return lib;
 }
 

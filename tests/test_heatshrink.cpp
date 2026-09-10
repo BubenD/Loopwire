@@ -6,6 +6,8 @@
 // tubing - and that adding the range twice does not put a second DR-25 3/8 on every bill of materials.
 #include "harness/PartsLibrary.h"
 
+#include "harness/CableSpec.h"
+
 #include <QJsonObject>
 #include <QSet>
 
@@ -206,6 +208,146 @@ int run_heatshrink_tests() {
         check(!family(seeded, QStringLiteral("DR-25")).empty() &&
                   !family(seeded, QStringLiteral("TMS-SCE")).empty(),
               "seed: a library that starts from nothing starts with the shelf on it");
+    }
+
+    // ---- the Spec 55 shelf: the wire, the pair, and the screened pair ----------------------------
+    {
+        // Every number checked here is read straight off TE's specification control drawings, because
+        // that is the whole point of the shelf: the outside diameter is what a bundle is added up
+        // from, and a diameter somebody guessed at gives a harness that does not fit its gland.
+        PartsLibrary lib;
+        const int added = addStandardSpec55(lib);
+        const auto wires = family(lib, QStringLiteral("55A0111-"));
+        const auto pairs = family(lib, QStringLiteral("55A0121-"));
+        const auto screened = family(lib, QStringLiteral("55A1121-"));
+        std::printf("  spec55: %d parts - %d wire, %d pair, %d screened pair\n", added,
+                    int(wires.size()), int(pairs.size()), int(screened.size()));
+        // Twelve sizes, 30 through 8. The wire in three colours, the two cables in one each.
+        check(wires.size() == 36, "spec55: twelve sizes of wire in three colours");
+        check(pairs.size() == 12, "spec55: twelve sizes of the unscreened pair");
+        check(screened.size() == 12, "spec55: twelve sizes of the screened pair");
+        check(added == 60, "spec55: and that is the whole shelf");
+
+        auto byPn = [&lib](const QString& pn) -> const LibraryPart* {
+            for (const LibraryPart& p : lib.parts)
+                if (p.mfrPn == pn) return &p;
+            return nullptr;
+        };
+        // EVERY SIZE THE DRAWINGS ARE MADE IN, and no size they are not.
+        const int madeIn[] = {30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8};
+        bool allSizes = true;
+        for (int awg : madeIn)
+            if (!byPn(QStringLiteral("55A0111-%1-9").arg(awg)) ||
+                !byPn(QStringLiteral("55A0121-%1-6/9").arg(awg)) ||
+                !byPn(QStringLiteral("55A1121-%1-6/9-9").arg(awg)))
+                allSizes = false;
+        check(allSizes, "spec55: 30 through 8 AWG, in all three families");
+
+        // THE PART NUMBERS ARE THE DRAWINGS' OWN. 55A0111 page 2 gives "AWG 22, white: 55A0111-22-9"
+        // as its worked example, and 55A1121 gives "AWG 22, blue and white component wires; white
+        // jacket: 55A1121-22-6/9-9" as its. Both are on the shelf, spelled that way.
+        const LibraryPart* w22 = byPn(QStringLiteral("55A0111-22-9"));
+        const LibraryPart* p20 = byPn(QStringLiteral("55A0121-20-6/9"));
+        const LibraryPart* s22 = byPn(QStringLiteral("55A1121-22-6/9-9"));
+        check(w22 && p20 && s22, "spec55: the drawings' own worked examples are the part numbers");
+        if (!w22 || !p20 || !s22) return shrinkFailures;
+
+        // AND THE FIGURES ARE THE DRAWINGS', CONVERTED. 22 AWG wire is .043 in over the insulation,
+        // which is 1.09 mm; the 20 AWG pair is .100 in, which is 2.54 mm; the 22 AWG screened pair is
+        // .119 in, which is 3.02 mm.
+        std::printf("  spec55: 55A0111-22-9 od %s mm, R %s ohm/m; 55A0121-20 od %s mm; "
+                    "55A1121-22 od %s mm\n",
+                    qPrintable(w22->params.value(QStringLiteral("od"))),
+                    qPrintable(w22->params.value(QStringLiteral("resistance"))),
+                    qPrintable(p20->params.value(QStringLiteral("od"))),
+                    qPrintable(s22->params.value(QStringLiteral("od"))));
+        check(w22->params.value(QStringLiteral("od")) == QLatin1String("1.09"),
+              "spec55: .043 in over the wire is 1.09 mm");
+        check(p20->params.value(QStringLiteral("od")) == QLatin1String("2.54"),
+              "spec55: .100 in over the pair is 2.54 mm");
+        check(s22->params.value(QStringLiteral("od")) == QLatin1String("3.02"),
+              "spec55: .119 in over the screened pair is 3.02 mm");
+        // The biggest and the smallest, so a transcription slip at either end of the table shows.
+        check(byPn(QStringLiteral("55A0111-30-9"))->params.value(QStringLiteral("od")) ==
+                  QLatin1String("0.61"),
+              "spec55: and 30 AWG, the thinnest, is .024 in = 0.61 mm");
+        check(byPn(QStringLiteral("55A1121-8-6/9-9"))->params.value(QStringLiteral("od")) ==
+                  QLatin1String("10.59"),
+              "spec55: and the 8 AWG screened pair, the fattest, is .417 in = 10.59 mm");
+        // Resistance is given per 1000 ft and kept per metre: 16.2 / 304.8.
+        check(w22->params.value(QStringLiteral("resistance")) == QLatin1String("0.0531"),
+              "spec55: 16.2 ohm/1000 ft is 0.0531 ohm/m");
+        check(w22->params.value(QStringLiteral("strands")) == QLatin1String("19 x 34"),
+              "spec55: with the stranding the drawing gives");
+        check(w22->params.value(QStringLiteral("voltage")) == QLatin1String("600") &&
+                  w22->params.value(QStringLiteral("temp")) == QLatin1String("-65 to +150"),
+              "spec55: 600 V and 150 C, off page 2");
+
+        // A WIRE IS A WIRE AND A CABLE IS A CABLE, or the bundle tool offers the wrong shelf.
+        check(w22->kind == PartKind::Wire, "spec55: the single conductor is filed as wire");
+        check(p20->kind == PartKind::Cable && s22->kind == PartKind::Cable,
+              "spec55: the two-conductor cables are filed as cable");
+        check(p20->params.value(QStringLiteral("screened")) == QLatin1String("0"),
+              "spec55: 55A0121 is the unscreened one");
+        check(s22->params.value(QStringLiteral("screened")) == QLatin1String("1") &&
+                  s22->params.value(QStringLiteral("shield")).contains(QLatin1String("38 AWG")),
+              "spec55: 55A1121 carries its 38 AWG braid");
+        check(byPn(QStringLiteral("55A1121-8-6/9-9"))
+                  ->params.value(QStringLiteral("shield"))
+                  .contains(QLatin1String("36 AWG")),
+              "spec55: and the 8 AWG one its 36 AWG braid, which is the one size that differs");
+
+        // THE MAKE-UP READS BACK. The structure line is not decoration: the harness builder expands a
+        // cable into its conductors from it, so a line it cannot parse is a cable nobody can use.
+        const CableSpec unscreened = cableSpecOf(*p20);
+        const CableSpec withBraid = cableSpecOf(*s22);
+        std::printf("  spec55: 55A0121 reads as \"%s\", 55A1121 as \"%s\"\n",
+                    qPrintable(unscreened.summary()), qPrintable(withBraid.summary()));
+        check(unscreened.conductorCount() == 2 && withBraid.conductorCount() == 2,
+              "spec55: two conductors each, as the title says");
+        check(unscreened.elements.size() == 1 &&
+                  unscreened.elements.front().kind == CableElementKind::Pair &&
+                  unscreened.elements.front().twisted,
+              "spec55: 55A0121 is one twisted pair");
+        check(!unscreened.overallFoil && !unscreened.overallBraid,
+              "spec55: with nothing over it");
+        check(withBraid.overallBraid, "spec55: and 55A1121 has the braid over the lot");
+
+        // ADDING IT TWICE DOES NOT PUT A SECOND ONE ON EVERY BILL OF MATERIALS.
+        const size_t was = lib.parts.size();
+        check(addStandardSpec55(lib) == 0 && lib.parts.size() == was,
+              "spec55: putting the shelf in again adds nothing");
+        // And a size taken out on purpose comes back only if the whole shelf is re-offered, which is
+        // what the flag on the library is for.
+        lib.parts.erase(std::remove_if(lib.parts.begin(), lib.parts.end(),
+                                       [](const LibraryPart& p) {
+                                           return p.mfrPn == QStringLiteral("55A0111-22-9");
+                                       }),
+                        lib.parts.end());
+        check(addStandardSpec55(lib) == 1, "spec55: one taken out comes back, and only that one");
+
+        // A LIBRARY MADE BEFORE THE SHELF EXISTED gets it once, and remembers.
+        PartsLibrary old;
+        check(!old.standardSpec55, "spec55: a library written before it has no flag");
+        check(ensureStandardSpec55(old) == 60 && old.standardSpec55,
+              "spec55: opening it puts the shelf in and records that it was done");
+        check(ensureStandardSpec55(old) == 0, "spec55: opening it again adds nothing");
+        // And the flag survives a trip through the file.
+        PartsLibrary reread;
+        reread.fromJson(old.toJson());
+        check(reread.standardSpec55, "spec55: the flag is written and read back");
+        PartsLibrary older;
+        QJsonObject noFlag = old.toJson();
+        noFlag.remove(QStringLiteral("standardSpec55"));
+        older.fromJson(noFlag);
+        check(!older.standardSpec55,
+              "spec55: a file written before the flag reads as not done, which brings the shelf to it");
+
+        // AND A LIBRARY THAT STARTS FROM NOTHING STARTS WITH IT.
+        const PartsLibrary seeded = seedLibrary();
+        check(!family(seeded, QStringLiteral("55A0111-")).empty() &&
+                  !family(seeded, QStringLiteral("55A1121-")).empty(),
+              "spec55: a freshly seeded library has the shelf on it");
     }
 
     if (shrinkFailures == 0) std::printf("  -> ok\n");

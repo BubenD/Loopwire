@@ -260,6 +260,8 @@ struct PartsLibrary {
     // library that was made before the shelf did.
     bool standardHeatshrink = false;
     bool standardCables = false;
+    // And the Spec 55 shelf: 55A0111 wire, 55A0121 pair and 55A1121 screened pair, every size.
+    bool standardSpec55 = false;
 
     // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
@@ -360,6 +362,12 @@ int addStandardHeatshrink(PartsLibrary& lib);
 // where a cable's outside diameter is genuinely standard - which is the figure a bundle is added up from.
 int addStandardCables(PartsLibrary& lib);
 
+// THE SPEC 55 SHELF: Raychem 55A0111 wire in black, red and white, the 55A0121 unscreened pair and
+// the 55A1121 screened and jacketed pair, in every AWG size from 30 to 8 that TE makes them in. The
+// figures are read off TE's own specification control drawings and converted from the inches they are
+// written in - the outside diameters above all, since that is what a bundle is added up from.
+int addStandardSpec55(PartsLibrary& lib);
+
 // Tie a connector and a contact together, from whichever end the user was looking at. Writes BOTH sides where
 // both parts can be reached, so the tie shows on either part when it is opened on its own; passing an empty
 // contact unties whatever the connector had, and the other way about.
@@ -377,6 +385,8 @@ int ensureStandardHeatshrink(PartsLibrary& lib);
 // The same for the coaxial shelf: once per library, and recorded in the file so a type somebody deleted
 // does not come back the next time it is opened.
 int ensureStandardCables(PartsLibrary& lib);
+// And the same for the Spec 55 shelf: once per library, recorded in the file.
+int ensureStandardSpec55(PartsLibrary& lib);
 
 // The standard schematic symbol for the kinds that have one - the components a harness carries in
 // line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the
