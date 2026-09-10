@@ -1,3 +1,4 @@
+#include "harness/Bom.h"
 #include "app/MechanicalBuilderDialog.h"
 #include "harness/MechModels.h"
 
@@ -1341,8 +1342,14 @@ void MechanicalBuilderDialog::refreshAll() {
 
 void MechanicalBuilderDialog::generate() {
     if (!editor_) return;
-    const std::vector<Entity> ents =
-        buildMechanicalHarness(def_, &catalog_);
+    MechHarnessDef placed = def_;
+    // THE BALLOONS ARE NUMBERED AGAINST THE SHEET'S OWN BILL. A balloon saying 11 is a reference to
+    // line 11 of the bill on this drawing, so the number has to be that line's position in it; a part
+    // the bill does not list balloons as "?" rather than as a number nobody can look up. See
+    // bomItemLookup - and note the bill is read HERE, after anything this window has just added to it.
+    if (Document* doc = editor_->document())
+        placed.draw.bomItemOf = bomItemLookup(*doc, catalog_.merged());
+    const std::vector<Entity> ents = buildMechanicalHarness(placed, &catalog_);
     if (ents.empty()) {
         if (summary_) summary_->setText(QStringLiteral("Nothing to generate yet."));
         return;

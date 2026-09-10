@@ -137,6 +137,25 @@ public:
     void addConductorGroup();
     void removeConductorGroup();
 
+    // ---- THE BUNDLE THE CONDUCTORS MAKE, worked out and shown as the run is described --------------
+    //
+    // A trunk or a branch is described by what it CARRIES - so many of this wire, so many of that -
+    // and the one figure that follows from that and nothing else is how thick the result is. It
+    // decides the backshell, the boot, the braid and the heatshrink chosen at both its ends, so
+    // leaving it to be discovered after the drawing is placed is leaving it too late.
+    //
+    // Every conductor's diameter, largest first: the LIBRARY part's own figure where the wires were
+    // taken from the library (see libraryWireOdMm), and the nominal for the gauge where they were
+    // typed. Read the same way the compiler reads the run - the groups where there are groups, the
+    // count/gauge shorthand where there are none - so the readout cannot disagree with the drawing
+    // beside it.
+    std::vector<double> conductorOds() const;
+    // The bundle those conductors make, with its working. Ø over the JACKET on a cable, because that
+    // is what a cable is drawn and measured at whatever its cores add up to.
+    BundleCalc bundleForDescribedRun() const;
+    // What the readout beside the run says right now, for a test.
+    QString shownBundleText() const;
+
     // ---- WHAT A BRANCH CARRIES OVER ITSELF -------------------------------------------------------
     //
     // A branch is described as one thing: so many wires or cables, running so far, screened, sleeved,
@@ -243,6 +262,28 @@ public:
 
     void rollUp(const QString& stepId, bool up);
     QStringList rolledUpSteps() const;
+    // Folded if it is open, opened if it is folded - what clicking a station with parts does. By id,
+    // because the tree is rebuilt on nearly every change and a row is not a lasting thing.
+    void toggleFold(const QString& stepId);
+
+    // ---- A STATION WITH PARTS IS A HEADING, AND A HEADING IS NOT EDITED ---------------------------
+    //
+    // Once a step has parts OF it, what that step IS has been settled - the parts were described
+    // against it. Its figures then say two things at once: a designator and a size that its own parts
+    // were fitted to, and changing them under the parts is how a backshell ends up sized to a
+    // connector that has since become a different one. So the row stops being a form and becomes what
+    // the number already says it is: the heading 1 over the parts 1.1, 1.2 - and clicking it folds
+    // them away rather than opening it.
+    //
+    // Standing on it still does everything standing on a step means: Next gives it a sibling station,
+    // Add subpart gives it another part, and Delete still removes it (deleting is not editing - the
+    // parts are re-parented onto its own parent, see deleteStep). Only the figures are shut.
+    //
+    // To change what the station is, take its parts off it - or correct the parts, which is where the
+    // figures that matter to the build actually live.
+    bool stepHasSubparts(const QString& stepId) const;
+    // Whether the window is standing on such a station, and so showing its figures read-only.
+    bool editedStepIsLocked() const;
 
     // What the gauge list offers, as it is written in it.
     QStringList shownGauges() const;
@@ -278,6 +319,14 @@ private:
     void refreshSubpartButton();
     // Blank the form for a step that has not been described yet.
     void clearDescribedFields();
+    // The figures shut, and said to be shut, when the step in front of you is a station with parts -
+    // see stepHasSubparts. Called from both refreshers, so however the window got into that state the
+    // fields agree with it.
+    void refreshStationLock();
+    // The bundle readout brought up to date. Called from the category refresher AND from
+    // fieldChanged, because a figure that only followed the category would sit stale while somebody
+    // typed the conductor count that decides it.
+    void refreshBundleReadout();
     void refreshFieldsForCategory();
     // THE PART LIST AND THE CONTACT LIST ARE REBUILT SEPARATELY, and that separation is the fix for a
     // part that would not stay chosen.
@@ -382,6 +431,10 @@ private:
 
     QTreeWidget* stepList_ = nullptr;
     QListWidget* catList_ = nullptr;
+    // EVERY FIGURE OF THE STEP, IN ONE BOX, so they can be shut together - see refreshStationLock. The
+    // heading, the hint and the Checks box sit outside it and stay readable: a greyed-out explanation
+    // of why everything is greyed out is no explanation at all.
+    QWidget* fieldsBox_ = nullptr;
     QLabel* heading_ = nullptr;
     QLabel* hint_ = nullptr;
     QComboBox* partCombo_ = nullptr;
@@ -421,6 +474,9 @@ private:
     QCheckBox* continueCheck_ = nullptr;
     QLabel* groupsLabel_ = nullptr;
     QListWidget* groupList_ = nullptr;
+    // The bundle the run being described comes to, beside the conductors that make it.
+    QLabel* bundleLabel_ = nullptr;
+    QLabel* bundleInfo_ = nullptr;
     QPushButton* addGroupBtn_ = nullptr;
     QPushButton* dropGroupBtn_ = nullptr;
 

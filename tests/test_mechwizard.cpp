@@ -14,6 +14,7 @@
 #include "app/MechWizardDialog.h"
 #include "geometry/Geometry.h"
 #include "harness/MechBuildScript.h"
+#include "harness/Bom.h"
 #include "harness/MechModels.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
@@ -893,10 +894,24 @@ void testFanWiresDoNotCrossOneAnother() {
 
     // AND THE ORDER IS THE SAME AT BOTH ENDS, which is what makes that provable rather than lucky: two
     // polylines whose ends are both in order cannot cross, however wide or narrow the shell.
+    //
+    // ASKED OF THE CONDUCTORS THAT REACH THE BUNDLE. The fan is a picture of a bundle rather than a
+    // tally of it - five leave the face and three arrive - and the ones between them stop where the
+    // closing conductors pass over them (meta "fanMerged"). Those never reach the bundle, so "the
+    // order at both ends" is not a thing that can be said about them: their far end is still out at
+    // their own place across the face. The invariant is about the wires that go the whole way, and it
+    // is those that the no-crossing proof rests on.
+    std::vector<const Entity*> arriving;
+    for (const Entity* e : fan)
+        if (!e->meta.value(QStringLiteral("fanMerged")).toBool()) arriving.push_back(e);
+    std::printf("  fan: %d line(s), %d arriving, %d merging\n", int(fan.size()),
+                int(arriving.size()), int(fan.size() - arriving.size()));
+    check(arriving.size() >= 2 && arriving.size() < fan.size(),
+          "fan: of five conductors at the face, some reach the bundle and some merge into it");
     bool ordered = true;
-    for (size_t i = 1; i < fan.size(); ++i) {
-        const bool startsUp = fan[i]->points.front().y > fan[i - 1]->points.front().y;
-        const bool endsUp = fan[i]->points.back().y > fan[i - 1]->points.back().y;
+    for (size_t i = 1; i < arriving.size(); ++i) {
+        const bool startsUp = arriving[i]->points.front().y > arriving[i - 1]->points.front().y;
+        const bool endsUp = arriving[i]->points.back().y > arriving[i - 1]->points.back().y;
         if (startsUp != endsUp) ordered = false;
     }
     check(ordered, "fan: the wires are in the same order on the bundle as on the connector face");
@@ -932,6 +947,336 @@ void testFanWiresDoNotCrossOneAnother() {
                 caption = true;
         check(!caption,
               "fan: no 'n conductors' caption, even on a bundle too fat to draw every line for");
+    }
+}
+
+// ---- Five at the face, three into the bundle -----------------------------------------------------
+//
+// A branch carrying twenty conductors cannot be DRAWN as twenty conductors - twenty double lines
+// fanning into one shell is a grey band at the size these sheets print, and the one thing the fan is
+// for is lost. So the fan is a picture of the bundle forming: up to five leave the face, three of them
+// carry on, and the ones between stop where the closing conductors pass over them. That is the shape
+// of the hand-drawn view in mytest/mytest1.dwx, which is the specification for this.
+void testTheFanIsAPictureOfTheBundleNotATally() {
+    // A branch of twenty conductors that is NOT bundled: open its whole length, which is the case the
+    // shape was drawn for and the one the wizard produces with the jacket box unticked.
+    MechBuildScript sc;
+    MechStep con;
+    con.id = QStringLiteral("S1");
+    con.kind = PartKind::Connector;
+    con.name = QStringLiteral("P1");
+    con.pinCount = 20;
+    sc.steps.push_back(con);
+    MechStep run;
+    run.id = QStringLiteral("S2");
+    run.kind = PartKind::Wire;
+    run.parentStep = QStringLiteral("S1");
+    run.lengthMm = 100.0;
+    run.wireCount = 20;
+    run.gauge = QStringLiteral("20 AWG");
+    run.bundled = false;
+    sc.steps.push_back(run);
+
+    const MechCompiled c = compileMechScript(sc);
+    check(c.def.wires.size() == 20, "picture: twenty conductors are declared");
+    const std::vector<Entity> ents = buildMechanicalHarness(c.def, nullptr);
+
+    const QString fanNode = c.stepToNode.value(QStringLiteral("S1"));
+    std::vector<const Entity*> fan;
+    for (const Entity& e : ents)
+        if (e.type == EntityType::Polyline &&
+            e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("wires") &&
+            e.meta.contains(QStringLiteral("wireOd")) &&
+            e.meta.value(QStringLiteral("mechNode")).toString() == fanNode)
+            fan.push_back(&e);
+
+    // FIVE LINES, NOT TWENTY.
+    std::printf("    (fan: %d line(s) drawn for 20 conductors)\n", int(fan.size()));
+    check(fan.size() == 5, "picture: five conductors are drawn at the face, whatever the count is");
+
+    int arriving = 0, merging = 0;
+    for (const Entity* e : fan)
+        (e->meta.value(QStringLiteral("fanMerged")).toBool() ? merging : arriving)++;
+    check(arriving == 3, "picture: three of them carry on into the bundle");
+    check(merging == 2, "picture: and the two between them merge into it");
+
+    // THE COUNT IS NOT LOST - the drawing says what it is a picture of.
+    for (const Entity* e : fan)
+        if (e->meta.value(QStringLiteral("fanOf")).toInt() != 20) {
+            check(false, "picture: every line says how many conductors it stands for");
+            break;
+        }
+
+    // THE ARRIVING ONES CLOSE IN AND THEN RUN PARALLEL. Four points: the far end, where it has closed,
+    // the knee, and the face. And they finish nearer the centreline than they started, which is what
+    // "closing into a bundle" means.
+    // Measured as the SPREAD across the fan - how far the outermost conductors are apart - and not as
+    // a distance from the origin: the harness is drawn wherever the sheet puts it, so an absolute y
+    // says nothing about the shape.
+    double faceLo = 1e18, faceHi = -1e18, endLo = 1e18, endHi = -1e18;
+    int withTail = 0;
+    for (const Entity* e : fan) {
+        if (e->meta.value(QStringLiteral("fanMerged")).toBool()) continue;
+        if (e->points.size() == 4) ++withTail;
+        faceLo = std::min(faceLo, e->points.back().y);
+        faceHi = std::max(faceHi, e->points.back().y);
+        endLo = std::min(endLo, e->points.front().y);
+        endHi = std::max(endHi, e->points.front().y);
+        // The last leg is PARALLEL to the run: the far end and the point it closed at are the same
+        // distance across.
+        if (e->points.size() == 4)
+            check(std::abs(e->points[0].y - e->points[1].y) < 1e-6,
+                  "picture: and runs parallel from where it closed to the end of the run");
+    }
+    check(withTail == 3, "picture: each arriving conductor closes and then runs on parallel");
+    std::printf("    (fan: spread %.2f mm at the face, %.2f mm at the bundle)\n",
+                faceHi - faceLo, endHi - endLo);
+    check((endHi - endLo) < (faceHi - faceLo),
+          "picture: the fan is wider at the connector face than at the bundle - it closes in");
+
+    // THE MERGING ONES STOP SHORT, and stop somewhere sensible: past the knee, and no further along
+    // than the point the bundle has closed at.
+    double closedAlong = 0.0;
+    for (const Entity* e : fan)
+        if (!e->meta.value(QStringLiteral("fanMerged")).toBool() && e->points.size() == 4)
+            closedAlong = std::max(closedAlong, std::abs(e->points[1].x - e->points.back().x));
+    for (const Entity* e : fan) {
+        if (!e->meta.value(QStringLiteral("fanMerged")).toBool()) continue;
+        const double ran = std::abs(e->points.front().x - e->points.back().x);
+        const double knee = std::abs(e->points[1].x - e->points.back().x);
+        check(ran > knee && ran <= closedAlong + 1e-6,
+              "picture: a merging conductor stops between its knee and the closed bundle");
+        // And it is still going straight when it stops: it merges, it does not veer.
+        check(std::abs(e->points.front().y - e->points.back().y) < 1e-6,
+              "picture: running straight out of the face when it stops");
+    }
+
+    // AND THE LINES AT THE BUNDLE DO NOT LIE ON TOP OF ONE ANOTHER.
+    //
+    // THIS is the fault that was reported - "I added five conductors and it drew two". A round bundle
+    // NESTS and a row does not: √(ΣD²)×k is less than the same conductors laid side by side, so
+    // spreading them across the bundle diameter drew them through each other and three lines came out
+    // as one thick one. Measured on the ink, not on the centrelines, because it is the ink that
+    // overlapped: each conductor is a double line whose gap is its own diameter.
+    {
+        struct Band { double centre; double half; };
+        std::vector<Band> bands;
+        for (const Entity* e : fan) {
+            if (e->meta.value(QStringLiteral("fanMerged")).toBool()) continue;
+            bands.push_back({e->points.front().y,
+                             e->meta.value(QStringLiteral("gap")).toDouble() / 2.0});
+        }
+        std::sort(bands.begin(), bands.end(),
+                  [](const Band& x, const Band& y) { return x.centre < y.centre; });
+        int overlaps = 0;
+        double worst = 0.0;
+        for (size_t i = 1; i < bands.size(); ++i) {
+            const double clear = (bands[i].centre - bands[i - 1].centre) -
+                                 (bands[i].half + bands[i - 1].half);
+            if (clear < -1e-9) { ++overlaps; worst = std::min(worst, clear); }
+        }
+        if (overlaps > 0)
+            std::printf("  picture: %d overlapping pair(s) at the bundle, worst by %.2f mm\n",
+                        overlaps, -worst);
+        check(overlaps == 0,
+              "picture: the conductors that reach the bundle are drawn side by side, not through "
+              "one another");
+    }
+
+    // AND NOTHING CROSSES. The merging conductors stop at the closing one's near edge, half a
+    // conductor's width short of its centreline, so no two centrelines ever meet.
+    int crossings = 0;
+    for (size_t i = 0; i < fan.size(); ++i)
+        for (size_t j = i + 1; j < fan.size(); ++j)
+            for (size_t a = 1; a < fan[i]->points.size(); ++a)
+                for (size_t b = 1; b < fan[j]->points.size(); ++b)
+                    if (segmentSegmentIntersection(fan[i]->points[a - 1], fan[i]->points[a],
+                                                   fan[j]->points[b - 1], fan[j]->points[b]))
+                        ++crossings;
+    check(crossings == 0, "picture: and no two of the five cross one another");
+
+    // A BUNDLED RUN IS LEFT ALONE. Its fan is open only for the short stretch behind the connector and
+    // its body starts where that stretch ends, so the conductors have to arrive at the bundle exactly
+    // there: two legs, no parallel tail. Changing that would move every drawing already made.
+    {
+        MechBuildScript bs = sc;
+        bs.steps[1].bundled = true;
+        bs.steps[1].openStartMm = 20.0;
+        const MechCompiled bc = compileMechScript(bs);
+        const std::vector<Entity> bents = buildMechanicalHarness(bc.def, nullptr);
+        const QString bNode = bc.stepToNode.value(QStringLiteral("S1"));
+        int lines = 0, threePoint = 0;
+        for (const Entity& e : bents) {
+            if (e.type != EntityType::Polyline) continue;
+            if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("wires")) continue;
+            if (!e.meta.contains(QStringLiteral("wireOd"))) continue;
+            if (e.meta.value(QStringLiteral("mechNode")).toString() != bNode) continue;
+            ++lines;
+            if (e.points.size() == 3) ++threePoint;
+        }
+        check(lines == 5, "picture: a bundled run's fan is five lines too");
+        check(threePoint == lines,
+              "picture: and every one of them is the two-legged fan, arriving at the body");
+    }
+}
+
+// ---- The break mark is in front, and the balloons are the bill's own numbers ----------------------
+//
+// Three separate faults with one thing in common: each is a drawing that says something untrue and
+// looks deliberate while it does it.
+void testBreakMarksAndBalloons() {
+    // A connector with a boot on it, and a run with a break mark across it.
+    MechHarnessDef def;
+    MechNode p1;
+    p1.id = QStringLiteral("p1");
+    p1.kind = MechNodeKind::Connector;
+    p1.name = QStringLiteral("P1");
+    p1.pinCount = 4;
+    p1.openLengthMm = 20.0;
+    p1.libPart = QStringLiteral("lib-conn");
+    MechFitting boot;
+    boot.kind = PartKind::HeatshrinkBoot;
+    boot.name = QStringLiteral("Boot");
+    boot.libPart = QStringLiteral("lib-boot");
+    boot.lengthMm = 28.0;
+    boot.odMm = 13.1;
+    p1.fittings.push_back(boot);
+    def.nodes.push_back(p1);
+    MechNode p2;
+    p2.id = QStringLiteral("p2");
+    p2.kind = MechNodeKind::FreeEnd;
+    p2.parentSegment = QStringLiteral("s1");
+    def.nodes.push_back(p2);
+    for (int i = 0; i < 4; ++i) {
+        MechWire w;
+        w.id = QStringLiteral("w%1").arg(i + 1);
+        w.gauge = QStringLiteral("0.5");
+        def.wires.push_back(w);
+    }
+    MechSegment s;
+    s.id = QStringLiteral("s1");
+    s.fromNode = QStringLiteral("p1");
+    s.toNode = QStringLiteral("p2");
+    s.lengthMm = 400.0;
+    s.lengthBreak = true;              // "longer than it is drawn"
+    for (const MechWire& w : def.wires) s.wireIds.push_back(w.id);
+    def.segments.push_back(s);
+
+    // ---- 2. THE BREAK MARK IS DRAWN IN FRONT ----
+    //
+    // It MASKS the stretch of run between its two strokes, and a mask only masks what was painted
+    // before it. Emitted while its own run was being drawn, everything after it - the conductors, the
+    // fittings, the balloons - painted straight over the gap it had opened.
+    {
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        int marks = 0, lastMark = -1, lastOther = -1;
+        for (int i = 0; i < static_cast<int>(ents.size()); ++i) {
+            if (ents[static_cast<size_t>(i)].type == EntityType::LengthBreak) {
+                ++marks;
+                lastMark = i;
+            } else {
+                lastOther = i;
+            }
+        }
+        check(marks == 1, "break: the run carries its break mark");
+        std::printf("  break: mark at %d of %d, last other object at %d\n", lastMark,
+                    int(ents.size()), lastOther);
+        check(marks == 1 && lastMark > lastOther,
+              "break: and it is listed after everything else, so it is painted in FRONT of what it "
+              "masks");
+    }
+
+    // ---- 3. THE BALLOON NUMBER IS A LINE OF THE DRAWING'S BILL ----
+    {
+        Document doc;
+        PartsLibrary lib;
+        // A bill with the boot on its SECOND line, and the connector nowhere on it.
+        BomTable table;
+        BomRow first;
+        first.rowId = QStringLiteral("r1");
+        first.description = QStringLiteral("Something else entirely");
+        first.mfrPn = QStringLiteral("ZZ-1");
+        first.qty = 1.0;
+        table.rows.push_back(first);
+        BomRow bootRow;
+        bootRow.rowId = QStringLiteral("r2");
+        bootRow.partId = QStringLiteral("lib-boot");
+        bootRow.description = QStringLiteral("Boot");
+        bootRow.qty = 1.0;
+        table.rows.push_back(bootRow);
+        table.config.includeDrawing = false;   // nothing is on the sheet yet
+        doc.bom() = table.toJson();
+
+        MechHarnessDef numbered = def;
+        numbered.draw.bomItemOf = bomItemLookup(doc, lib);
+        const std::vector<Entity> ents = buildMechanicalHarness(numbered, nullptr);
+        QStringList said;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("balloon")).toBool())
+                said << e.meta.value(QStringLiteral("text")).toString();
+        std::printf("  balloons: %s\n", qPrintable(said.join(QStringLiteral(" "))));
+        check(said.contains(QStringLiteral("2")),
+              "balloon: the boot is ballooned 2 - the line it is on in the drawing's bill");
+        check(!said.contains(QStringLiteral("1")),
+              "balloon: and nothing is ballooned 1, which is a part this harness does not have");
+        check(said.contains(QStringLiteral("?")),
+              "balloon: a part the bill does not list is ballooned \"?\" rather than a number "
+              "nobody can look up");
+
+        // NO BILL AT ALL: everything is "?". A sheet with no table has no line numbers to quote, and
+        // inventing them is the one answer that cannot be checked.
+        Document bare;
+        MechHarnessDef none = def;
+        none.draw.bomItemOf = bomItemLookup(bare, lib);
+        QStringList all;
+        for (const Entity& e : buildMechanicalHarness(none, nullptr))
+            if (e.meta.value(QStringLiteral("balloon")).toBool())
+                all << e.meta.value(QStringLiteral("text")).toString();
+        bool everyOneUnknown = !all.isEmpty();
+        for (const QString& t : all)
+            if (t != QLatin1String("?")) everyOneUnknown = false;
+        check(everyOneUnknown, "balloon: with no bill on the sheet, every balloon says \"?\"");
+    }
+
+    // ---- 4. THE BALLOON TOUCHES THE PART IT BELONGS TO ----
+    //
+    // The leader used to be drawn to the CENTRE of the part - straight through its outline, stopping
+    // somewhere inside it - which reads as a balloon lying on top of the drawing rather than as one
+    // pointing at something.
+    {
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        const Entity* bootBody = nullptr;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting") &&
+                e.meta.contains(QStringLiteral("bodyDia")))
+                bootBody = &e;
+        check(bootBody != nullptr, "touch: the boot is drawn");
+        if (!bootBody) return;
+        const Bounds bb = bootBody->bounds();
+        check(bb.valid, "touch: and has an extent");
+
+        int touching = 0, checked = 0;
+        for (const Entity& e : ents) {
+            if (!e.meta.value(QStringLiteral("balloon")).toBool()) continue;
+            const QJsonArray leaders = e.meta.value(QStringLiteral("leaders")).toArray();
+            if (leaders.isEmpty()) continue;
+            const QJsonArray tipArr = leaders.first().toArray();
+            if (tipArr.size() < 2) continue;
+            const Vec2 tip{tipArr[0].toDouble(), tipArr[1].toDouble()};
+            // Is this the boot's balloon? Its tip is somewhere on the boot.
+            if (tip.x < bb.min.x - 1.0 || tip.x > bb.max.x + 1.0) continue;
+            ++checked;
+            // TOUCHING: the tip is ON the outline it points at, within a hair - not at the middle of
+            // it, and not floating clear of it.
+            const double centreY = (bb.min.y + bb.max.y) / 2.0;
+            const double halfAcross = (bb.max.y - bb.min.y) / 2.0;
+            const double off = std::abs(tip.y - centreY);
+            std::printf("  touch: tip %.2f from the middle, half-height %.2f\n", off, halfAcross);
+            if (off > halfAcross * 0.75 && off <= halfAcross + 1.0) ++touching;
+        }
+        check(checked > 0, "touch: the boot has a balloon to look at");
+        check(checked > 0 && touching == checked,
+              "touch: its leader lands ON the boot's outline, not at the middle of it");
     }
 }
 
@@ -1429,6 +1774,147 @@ void testAStationCanBeRolledUpAndStaysThatWay() {
     // And unrolling brings them back.
     w.rollUp(station, false);
     check(!w.rolledUpSteps().contains(station), "rollup: and it opens again");
+}
+
+// ---- A station with parts is a heading, and a heading is not a form -----------------------------
+//
+// Once parts have been described against a station, its own figures are what they were described
+// against: a backshell chosen for a 9-way shell is sized to that shell. Leaving the shell editable
+// under it is how the backshell ends up fitted to a connector that has since become a different one -
+// silently, because nothing on the sheet says the two ever disagreed. So the station becomes what its
+// number already calls it, the heading 1 over the parts 1.1 and 1.2, and a click folds them away.
+void testAStationWithPartsIsAHeadingNotAForm() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    w.setCurrentCategory(Cat::Connector);
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    const QString station = w.script().steps.back().id;
+    check(!w.stepHasSubparts(station), "heading: a station on its own has no parts");
+    w.editStep(station);
+    check(!w.editedStepIsLocked(), "heading: and is an ordinary form while it has none");
+
+    // Give it a part.
+    w.setCurrentCategory(Cat::Backshell);
+    w.typeName(QStringLiteral("BS1"));
+    w.commitSubpart();
+    QString part;
+    for (const MechStep& st : w.script().steps)
+        if (st.isSubpart) part = st.id;
+    check(w.stepHasSubparts(station), "heading: with a part described against it, it has parts");
+
+    // STANDING ON IT: read-only, and nothing gets through to it.
+    w.editStep(station);
+    check(w.editedStepIsLocked(), "heading: standing on it, the window says it is read-only");
+    w.typeName(QStringLiteral("SOMETHING ELSE"));
+    const MechStep* kept = w.script().step(station);
+    check(kept && kept->name == QLatin1String("P1"),
+          "heading: and typing at it changes nothing - the station keeps its designator");
+
+    // Its PART is still a form. That is where the figures that matter to the build live, and where
+    // somebody sent away from the station is being sent.
+    w.editStep(part);
+    check(!w.editedStepIsLocked(), "heading: the part of it is still a form");
+    w.typeName(QStringLiteral("BS2"));
+    const MechStep* edited = w.script().step(part);
+    check(edited && edited->name == QLatin1String("BS2"), "heading: and typing at it does change it");
+
+    // CLICKING A HEADING FOLDS IT. Both ways, and more than once: a fold that only worked the first
+    // time would read as a fold that did not work.
+    check(w.rolledUpSteps().isEmpty(), "heading: a station whose part has just appeared is open");
+    w.toggleFold(station);
+    check(w.rolledUpSteps().contains(station), "heading: and folds its parts away");
+    w.toggleFold(station);
+    check(!w.rolledUpSteps().contains(station), "heading: and opens them again");
+
+    // TAKE THE PART OFF AND IT IS A FORM AGAIN. The rule is about what the station HAS, not a flag
+    // set once on it - so the way out of it is the way in, reversed.
+    w.deleteStep(part);
+    check(!w.stepHasSubparts(station), "heading: with its parts gone it is a station again");
+    w.editStep(station);
+    check(!w.editedStepIsLocked(), "heading: and editable again");
+    w.typeName(QStringLiteral("P9"));
+    const MechStep* back = w.script().step(station);
+    check(back && back->name == QLatin1String("P9"), "heading: and it takes figures again");
+}
+
+// ---- The bundle a trunk or a branch comes to, worked out from the wires taken from the library ----
+//
+// A run is described by what it CARRIES, and the one figure that follows from that is how thick it is -
+// which decides the backshell, the boot, the braid and the heatshrink at both its ends. Two things were
+// wrong: the wire chosen from the library never reached the conductor group at all, so the run was laid
+// up at the nominal for its gauge rather than at the diameter on the data sheet; and the figure was
+// nowhere on the screen, so it could only be found out after the drawing had been placed.
+void testTheBundleIsWorkedOutFromTheWiresTaken() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    // A thick-walled wire: its stated diameter is deliberately NOT the nominal for its gauge, which is
+    // the whole point - the two can be told apart in the answer.
+    PartsCatalog& cat = w.catalogForTest();
+    cat.setRemembering(false);
+    LibraryPart& wire = cat.active().add(PartKind::Wire);
+    wire.description = QStringLiteral("Hook-up, thick wall");
+    wire.mfrPn = QStringLiteral("TW-050");
+    wire.params[QStringLiteral("od")] = QStringLiteral("2.6");
+    const QString wireId = wire.id;
+
+    w.setCurrentCategory(Cat::Connector);
+    w.commitStep();
+    w.setCurrentCategory(Cat::HarnessBody);
+    w.reloadPartsForTest();
+    check(w.choosePart(wireId), "bundle: the library wire is offered on a harness body");
+    w.setRunLengthForTest(400.0);
+    w.setConductorsForTest(4);
+
+    const double nominal = wireOuterDiameterMm(w.gaugeCanon());
+    check(nominal > 0.0 && std::abs(nominal - 2.6) > 0.2,
+          "bundle: the test's wire is not the nominal for its gauge, so the two can be told apart");
+
+    // FOUR OF Ø2.6: √(4 × 2.6²) × 1.2 = 5.2 × 1.2 = 6.24.
+    const std::vector<double> ods = w.conductorOds();
+    check(ods.size() == 4, "bundle: four conductors are counted");
+    check(!ods.empty() && near(ods.front(), 2.6),
+          "bundle: at the diameter the LIBRARY part states, not the nominal for the gauge");
+    const BundleCalc calc = w.bundleForDescribedRun();
+    check(near(calc.result, 6.24, 1e-6), "bundle: and they lay up to Ø6.24");
+    check(calc.unknown == 0, "bundle: with none of them left out for want of a diameter");
+
+    // AND IT IS ON THE SCREEN, beside the conductors it was worked out from.
+    const QString said = w.shownBundleText();
+    std::printf("    (bundle readout: %s)\n", qPrintable(said));
+    check(said.contains(QStringLiteral("6.2")), "bundle: the readout shows the figure");
+    check(said.contains(QStringLiteral("4")), "bundle: and says how it was reached");
+
+    // THE SAME FIGURE THE RUN IS DRAWN AT. The group carries the part and its diameter onto the step,
+    // so the harness is laid up at what the readout said rather than at the gauge's nominal.
+    w.addConductorGroup();
+    check(w.pendingConductors().size() == 1, "bundle: the group is added");
+    check(w.pendingConductors().front().libPart == wireId,
+          "bundle: carrying the library wire it was taken from");
+    check(near(w.pendingConductors().front().odMm, 2.6),
+          "bundle: and the diameter that wire states");
+    w.commitStep();
+
+    const MechCompiled c = compileMechScript(w.script());
+    check(c.errors.isEmpty(), "bundle: the run compiles");
+    const MechStep& run = w.script().steps.back();
+    const MechSegment* seg = c.def.segment(c.stepToSegment.value(run.id));
+    check(seg != nullptr, "bundle: and made a segment");
+    if (seg)
+        check(near(segmentBundleDiameterMm(c.def, *seg), 6.24, 1e-3),
+              "bundle: which is DRAWN at the bundle the readout gave");
+
+    // A CABLE IS ITS JACKET, whatever its cores come to - said rather than showing the cores as
+    // though they were the outside of the thing.
+    w.setCurrentCategory(Cat::Cable);
+    check(w.shownBundleText().contains(QStringLiteral("jacket")),
+          "bundle: on a cable the readout is about the jacket");
 }
 
 // ---- Library housings at one station do not lie on top of each other ----------------------------
@@ -3102,6 +3588,8 @@ int run_mechwizard_tests() {
     testARunIsDesignatedAndTheGaugesAreAwg();
     testTheRunDesignatorIsShownOnlyWhereItIsTheOnlyName();
     testFanWiresDoNotCrossOneAnother();
+    testTheFanIsAPictureOfTheBundleNotATally();
+    testBreakMarksAndBalloons();
     testARunLeavesItsOwnHousing();
     testDirectionTurnsTheFirstPartRoundInThePreview();
     testBalloonCanBeWithheldPerStep();
@@ -3120,6 +3608,8 @@ int run_mechwizard_tests() {
     testNextCarriesOnFromWhereYouAreStanding();
     testDeletingAStationDoesNotOrphanItsParts();
     testAStationCanBeRolledUpAndStaysThatWay();
+    testAStationWithPartsIsAHeadingNotAForm();
+    testTheBundleIsWorkedOutFromTheWiresTaken();
     testLibraryHousingsAtOneStationDoNotOverlap();
     testSubpartsCanBeDraggedIntoOrder();
     testWiresUnderOneHousingAreDrawnOnlyThere();

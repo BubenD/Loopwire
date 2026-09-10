@@ -6,6 +6,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -267,6 +268,17 @@ struct MechDrawOptions {
     // A callout on every part, carrying its BOM item number. On by default: a released harness drawing
     // balloons everything, and a drawing whose parts cannot be looked up in the table is not one.
     bool balloons = true;
+    // WHICH LINE OF THE DRAWING'S BILL OF MATERIALS A PART IS ON - 1-based, 0 for "not on it".
+    //
+    // A balloon that says 11 is a reference to line 11 of the bill, so the number has to be that
+    // line's position in the bill the sheet actually carries. Left unset, the balloons are numbered
+    // against the harness's OWN generated bill (mechBom), which is the right answer inside the
+    // builder - the table is on the screen beside the drawing - and the wrong one on a sheet, where
+    // the bill is the drawing's and its rows are in the drawing's order.
+    //
+    // A part the bill does not list balloons as "?" rather than as a number: a callout pointing at a
+    // line that is not there is worse than one admitting it has nothing to point at.
+    std::function<int(const QString& libPart, PartKind kind, const QString& description)> bomItemOf;
     // The numbered triangles and the NOTES block beside the harness.
     bool deltaNotes = true;
     bool connectorBodies = true;
@@ -303,6 +315,15 @@ struct MechHarnessDef {
 // figures in the region of ISO 6722 class B; a wire whose own diameter matters is given it
 // explicitly on the wire. Returns 0 when the gauge says nothing at all.
 double wireOuterDiameterMm(const QString& gauge);
+
+// The outside diameter a LIBRARY conductor states over its insulation, or 0 where it states none.
+//
+// The part's own figure is the data-sheet one and the reason for picking a part out of the library at
+// all, so it comes first wherever both it and a gauge exist. Zero is returned rather than a guess: a
+// part that says nothing about its diameter leaves a gap for the nominal table (wireOuterDiameterMm)
+// to answer from the gauge, and answering it here would put a made-up figure where a real one is
+// missing.
+double libraryWireOdMm(const LibraryPart& part);
 
 // A gauge as a cross-section in mm2, from either "0.5" or "22 AWG" - both are written on real
 // drawings and both arrive here. 0 when it said nothing usable.

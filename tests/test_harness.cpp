@@ -6125,6 +6125,41 @@ int run_harness_tests() {
         check(one.front().ref.contains(QLatin1String("W1")) &&
                   one.front().ref.contains(QLatin1String("W2")),
               "bom: and it still says where it is used");
+
+        // IS THIS ALREADY ON THE BILL? The very test the totalling uses, asked on its own - so a window
+        // about to add a line and the totalling that would merge it can never answer differently.
+        {
+            check(bomSameThing(a1, a2), "same thing: the same P/N in two units is one part");
+            check(!bomSameThing(a1, b1), "same thing: two different parts are two parts");
+            BomRow byId = a1;
+            byId.partId = QStringLiteral("lib-1");
+            BomRow sameIdOtherPn = byId;
+            sameIdOtherPn.mfrPn = QStringLiteral("SOMETHING-ELSE");
+            check(bomSameThing(byId, sameIdOtherPn),
+                  "same thing: the library part it IS beats the P/N written beside it");
+            BomRow otherId = byId;
+            otherId.partId = QStringLiteral("lib-2");
+            check(!bomSameThing(byId, otherId), "same thing: two library parts are two parts");
+            // A line that says nothing about what it is is the same thing as nothing, itself included:
+            // an empty line is a place to type in, not a part the next empty line is one more of.
+            BomRow blankA, blankB;
+            blankA.rowId = QStringLiteral("r1");
+            blankB.rowId = QStringLiteral("r2");
+            check(!bomSameThing(blankA, blankB) && !bomSameThing(blankA, blankA),
+                  "same thing: a blank line is the same thing as nothing");
+
+            // And the answer for a whole set at once: one entry per row about to be added, saying which
+            // line of the bill already names it.
+            const std::vector<BomRow> bill = {b1, a1};
+            const std::vector<int> found = bomAlreadyListed(bill, {a2, blankA, b1});
+            std::printf("    (already listed: %d, %d, %d)\n", found.size() > 0 ? found[0] : -9,
+                        found.size() > 1 ? found[1] : -9, found.size() > 2 ? found[2] : -9);
+            check(found.size() == 3, "already listed: one answer per row about to be added");
+            check(found.size() == 3 && found[0] == 1,
+                  "already listed: and it points at the line that names it");
+            check(found.size() == 3 && found[1] == -1, "already listed: a blank line is on no bill");
+            check(found.size() == 3 && found[2] == 0, "already listed: the first line is found too");
+        }
         // A row that names nothing is only itself: two blank rows are two lines, not one line of
         // qty 2. (Pressing "+ Row" twice used to read as adding 1 to the first row's quantity.)
         {

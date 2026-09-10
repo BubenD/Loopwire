@@ -6412,6 +6412,12 @@ void MainWindow::buildMenus() {
     importMenu->addSeparator();
     importMenu->addAction(QStringLiteral("&PDF..."), this, [this] { importPdf(); });
     fileMenu->addAction(QStringLiteral("&Save DWX..."), QKeySequence::Save, this, [this] { saveDwxAs(); });
+    // AND EVERY OPEN DRAWING AT ONCE. On the menu as well as on the strip: a command that exists only
+    // as an unlabelled icon is a command half the people using it will never find, and this is also
+    // where its keyboard shortcut is declared.
+    fileMenu->addAction(QStringLiteral("Save a&ll drawings"),
+                        QKeySequence(QStringLiteral("Ctrl+Shift+S")), this,
+                        [this] { saveAllDocuments(); });
     // THE FOUR EXPORTS, UNDER ONE SUBMENU.
     //
     // They were four entries in a row on a menu that also holds New, Open, Import, Save, Publish,
@@ -6459,7 +6465,67 @@ void MainWindow::buildMenus() {
         "QToolButton{background:transparent;border:none;padding:1px 6px;margin:3px 6px;}"
         "QToolButton:hover{background:rgba(255,255,255,28);border-radius:4px;}"
         "QToolButton::menu-indicator{image:none;width:0;}"));
-    menuBar()->setCornerWidget(logo, Qt::TopLeftCorner);
+
+    // ---- THE QUICK-ACCESS STRIP: New, Open, Save, Save all -------------------------------------
+    //
+    // The four things done most often, on the row above the tabs, one click from anywhere.
+    //
+    // They are all on the file menu behind the logo and they all have keyboard shortcuts, and that
+    // was the argument for not having them: everything is already reachable. But "reachable" is not
+    // the same as "to hand" - a save is two clicks and a read of a menu, and it is done twenty times
+    // an hour. The strip is where every drawing program puts them and it is where the hand goes.
+    //
+    // ON THE MENU-BAR ROW rather than in the ribbon, and beside the logo rather than opposite it,
+    // because that row is already the chrome above the tabs and the logo is already the file button:
+    // the file commands belong next to the thing they came out of. Nothing is taken off the menu -
+    // this is a short cut to it, not a replacement for it, and a menu with a hole in it where the
+    // common commands used to be is worse than a menu nobody opens.
+    auto* quick = new QWidget(this);
+    auto* ql = new QHBoxLayout(quick);
+    ql->setContentsMargins(0, 0, 0, 0);
+    ql->setSpacing(0);
+    ql->addWidget(logo);
+    {
+        // Small, flat and iconic. Text would double the width of the row for words that four
+        // twenty-year-old glyphs already say, and the tooltip carries the name and the shortcut -
+        // which is also how somebody LEARNS the shortcut.
+        const QString style = QStringLiteral(
+            "QToolButton{background:transparent;border:none;padding:2px;margin:3px 1px;"
+            "border-radius:4px;}"
+            "QToolButton:hover{background:rgba(255,255,255,28);}"
+            "QToolButton:pressed{background:rgba(255,255,255,50);}"
+            "QToolButton:disabled{background:transparent;}");
+        auto add = [&](const QIcon& icon, const QString& name, const QKeySequence& key,
+                       auto&& doIt) {
+            auto* b = new QToolButton(quick);
+            b->setIcon(icon);
+            b->setIconSize(QSize(18, 18));
+            b->setAutoRaise(true);
+            b->setFocusPolicy(Qt::NoFocus);   // the canvas keeps the keyboard
+            // THE SHORTCUT IN THE TOOLTIP, where it teaches: "Save (Ctrl+S)" on the button somebody
+            // is already reaching for is how the reaching stops.
+            b->setToolTip(key.isEmpty()
+                              ? name
+                              : QStringLiteral("%1  (%2)").arg(
+                                    name, key.toString(QKeySequence::NativeText)));
+            b->setStyleSheet(style);
+            connect(b, &QToolButton::clicked, this, doIt);
+            ql->addWidget(b);
+            return b;
+        };
+        add(newFileIcon(), tr("New drawing"), QKeySequence::New, [this] { newDrawing(); });
+        add(openFileIcon(), tr("Open a drawing"), QKeySequence::Open, [this] { openDrawing(); });
+        add(saveFileIcon(), tr("Save this drawing"), QKeySequence::Save,
+            [this] { if (doc_) saveDocument(activeIndex(), /*forceDialog=*/false); });
+        quickSaveAllBtn_ = add(saveAllFilesIcon(), tr("Save every open drawing"),
+                               QKeySequence(QStringLiteral("Ctrl+Shift+S")),
+                               [this] { saveAllDocuments(); });
+    }
+    ql->addSpacing(6);
+    menuBar()->setCornerWidget(quick, Qt::TopLeftCorner);
+    refreshQuickAccess();
+
+
 
     // Dark-gray menu bar + menus (AutoCAD-style chrome), applied directly so it
     // does not depend on the qss resource.
@@ -13495,7 +13561,15 @@ void MainWindow::showMechWizard() {
 void MainWindow::showHarnessSteps() {
     // Modeless and kept alive, like the builder it shares its model with: a harness is described over
     // several sittings, and closing the window to look at the sheet must not throw the answers away.
-    if (!stepsDlg_) stepsDlg_ = new HarnessStepsDialog(editor_, this);
+    if (!stepsDlg_) {
+        stepsDlg_ = new HarnessStepsDialog(editor_, this);
+        // Its "add the parts to the bill of materials" tick writes the drawing's bill. The panel and
+        // the bill's own window show that same bill, so they follow it.
+        connect(stepsDlg_, &HarnessStepsDialog::bomChanged, this, [this] {
+            refreshBomPanel();
+            if (bomDlg_) bomDlg_->reload();
+        });
+    }
     stepsDlg_->show();
     stepsDlg_->raise();
     stepsDlg_->activateWindow();
@@ -14415,6 +14489,9 @@ void MainWindow::refreshBlocksPanel() {
 }
 
 void MainWindow::updateActiveTabText() {
+    // The strip shows the same fact the tab's asterisk does - whether there is unsaved work - so it
+    // is brought up to date wherever that is.
+    refreshQuickAccess();
     const int i = activeIndex();
     if (i < 0 || i >= static_cast<int>(docs_.size())) return;
     const QString base = docPaths_[i].isEmpty() ? docs_[i]->name()
@@ -14480,6 +14557,57 @@ bool MainWindow::saveDocument(int index, bool forceDialog) {
     updateActiveTabText();
     statusBar()->showMessage(QStringLiteral("Saved %1").arg(QFileInfo(path).fileName()));
     return true;
+}
+
+int MainWindow::saveAllDocuments() {
+    int saved = 0, alreadyClean = 0;
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        if (!docs_[static_cast<size_t>(i)]) continue;
+        // ONLY WHAT HAS CHANGED. Rewriting a file nobody has touched changes its timestamp, which is
+        // one of the things a drawing office reads to answer "what moved since the release?" - so a
+        // clean drawing is left exactly as it is, and counted so that can be said out loud.
+        if (!docs_[static_cast<size_t>(i)]->dirty()) {
+            ++alreadyClean;
+            continue;
+        }
+        // CANCEL ON THE NAME DIALOGUE STOPS THE WHOLE THING. A drawing that has never been saved is
+        // asked for a name like any other; answering Cancel to that and then being shown the next
+        // file dialogue is the program arguing. There is no reading of Cancel that means "ask me
+        // again about a different drawing".
+        if (!saveDocument(i, /*forceDialog=*/false)) break;
+        ++saved;
+    }
+    refreshQuickAccess();
+    // Said plainly, the empty case included: a button that appears to do nothing is a button
+    // somebody presses again.
+    if (saved == 0)
+        statusBar()->showMessage(alreadyClean > 0
+                                     ? tr("Nothing to save — every open drawing is already saved")
+                                     : tr("Nothing to save"),
+                                 4000);
+    else
+        statusBar()->showMessage(tr("Saved %1 drawing(s)").arg(saved), 4000);
+    return saved;
+}
+
+int MainWindow::dirtyDocumentCountForTest() const {
+    int dirty = 0;
+    for (const auto& d : docs_)
+        if (d && d->dirty()) ++dirty;
+    return dirty;
+}
+
+void MainWindow::refreshQuickAccess() {
+    if (!quickSaveAllBtn_) return;
+    // Live only while there is something to write. Greyed, it says "everything is saved" - which is
+    // the question somebody glances at that corner of the window to answer.
+    int dirty = 0;
+    for (const auto& d : docs_)
+        if (d && d->dirty()) ++dirty;
+    quickSaveAllBtn_->setEnabled(dirty > 0);
+    quickSaveAllBtn_->setToolTip(
+        dirty == 0 ? tr("Save every open drawing  (Ctrl+Shift+S) — all of them are saved")
+                   : tr("Save every open drawing  (Ctrl+Shift+S) — %1 unsaved").arg(dirty));
 }
 
 void MainWindow::closeDocument(int index) {

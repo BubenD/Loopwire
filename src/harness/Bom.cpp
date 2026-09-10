@@ -234,6 +234,101 @@ BomRow bomRowFromPart(const LibraryPart& part, double qty) {
     return r;
 }
 
+bool bomSameThing(const BomRow& a, const BomRow& b) {
+    const QString key = identityOf(a);
+    // Nothing said about what it is: the row is only itself, and "itself" is not an answer to
+    // "is this part already on the bill?" - so a blank line is never the same thing as anything,
+    // another blank line included.
+    if (key.startsWith(QLatin1String("row:"))) return false;
+    return key == identityOf(b);
+}
+
+std::vector<int> bomAlreadyListed(const std::vector<BomRow>& rows, const std::vector<BomRow>& adding) {
+    std::vector<int> found;
+    found.reserve(adding.size());
+    for (const BomRow& a : adding) {
+        int at = -1;
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (bomSameThing(a, rows[i])) { at = static_cast<int>(i); break; }
+        found.push_back(at);
+    }
+    return found;
+}
+
+std::vector<BomRow> bomRowsFromMechHarness(const MechHarnessDef& def, const PartsCatalog* catalog) {
+    std::vector<BomRow> out;
+    for (const MechBomLine& line : mechBom(def, catalog)) {
+        // The library part behind the line, when there is one and it is connected: it carries the
+        // internal P/N and the manufacturer's name, which the harness's own table has no column for.
+        const LibraryPart* part =
+            catalog && !line.libPart.isEmpty() ? catalog->byId(line.libPart) : nullptr;
+        BomRow r = part ? bomRowFromPart(*part, line.qty) : BomRow{};
+        if (!part) {
+            r.description = line.description;
+            r.mfrPn = line.mfrPn;
+            r.mfrName = line.mfrName;
+        }
+        // The part it IS, whether or not the library that holds it happens to be connected: a bill
+        // that forgets which part a line was about cannot be totalled against the same part later.
+        r.partId = line.libPart;
+        r.qty = line.qty;
+        r.unit = line.unit;
+        // Where it is used - "P1", "the run to P2" - so a line can be found on the drawing.
+        r.ref = line.where.join(QStringLiteral(", "));
+        r.fromDrawing = false;   // put there by a window, and so removable by hand
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
+std::function<int(const QString&, PartKind, const QString&)> bomItemLookup(const Document& doc,
+                                                                            const PartsLibrary& lib) {
+    BomTable table;
+    table.fromJson(doc.bom());
+    std::vector<BomRow> rows = table.rows;
+    if (table.config.includeDrawing) {
+        const std::vector<BomRow> drawn = bomFromDrawing(doc, lib);
+        rows.insert(rows.end(), drawn.begin(), drawn.end());
+    }
+    if (table.config.unify) rows = bomUnify(rows);
+
+    // The parts the harness will ask about arrive as a library id and a description; the bill's own
+    // lines may have been typed in against a manufacturer's P/N and nothing else. So the identities
+    // are tried as ALTERNATIVES rather than as the single winner bomSameThing picks: the question here
+    // is "which line is this part on", and a line that names the same P/N is that line whether or not
+    // it also remembers which library the part came out of.
+    struct Line {
+        QString partId, mfrPn, internalPn, description;
+    };
+    std::vector<Line> lines;
+    lines.reserve(rows.size());
+    for (const BomRow& r : rows)
+        lines.push_back({r.partId, r.mfrPn.toLower(), r.internalPn.toLower(), r.description.toLower()});
+
+    // The P/Ns of every part the library holds, by id, copied so the lookup owns everything it needs.
+    // Captured rather than holding the library by reference: callers hand over PartsCatalog::merged(),
+    // which is a temporary, and a lookup outliving it would read freed memory.
+    QHash<QString, QPair<QString, QString>> pnOf;
+    for (const LibraryPart& lp : lib.parts)
+        pnOf.insert(lp.id, {lp.mfrPn.toLower(), lp.internalPn.toLower()});
+
+    return [lines, pnOf](const QString& libPart, PartKind, const QString& description) {
+        const QPair<QString, QString> pn = pnOf.value(libPart);
+        const QString mfrPn = pn.first;
+        const QString internalPn = pn.second;
+        const QString desc = description.toLower();
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const Line& l = lines[i];
+            const bool same = (!libPart.isEmpty() && l.partId == libPart) ||
+                              (!mfrPn.isEmpty() && l.mfrPn == mfrPn) ||
+                              (!internalPn.isEmpty() && l.internalPn == internalPn) ||
+                              (!desc.isEmpty() && l.description == desc);
+            if (same) return static_cast<int>(i) + 1;
+        }
+        return 0;
+    };
+}
+
 QString bomNextRowId(const std::vector<BomRow>& rows) {
     for (int i = static_cast<int>(rows.size()) + 1;; ++i) {
         const QString id = QStringLiteral("r%1").arg(i);

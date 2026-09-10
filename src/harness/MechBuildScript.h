@@ -94,6 +94,16 @@ struct MechConductorGroup {
     QString libPart;            // the wire or cable part, when one is chosen
     QString name;               // what the schematic calls them
 
+    // OVER THE INSULATION, as the library part stated it. 0 means "work it out from the gauge" - the
+    // nominal table - which is what a group typed rather than picked from the library falls back to.
+    //
+    // Carried on the group because the compiler has no library to ask: compileMechScript takes a
+    // script and nothing else, on purpose, so a script compiles to the same harness on a machine
+    // where that library is not connected. The diameter is looked up ONCE, when the wires are taken
+    // from the library, and travels with them - which is also what makes the bundle the drawing shows
+    // the bundle the data sheets actually add up to, rather than the nominal for the gauge.
+    double odMm = 0.0;
+
     // A DESIGNATOR PER WIRE, where the wires are named one at a time rather than as a group.
     //
     // A harness that starts at a connector needs none: the wires are known by the way they go into, and

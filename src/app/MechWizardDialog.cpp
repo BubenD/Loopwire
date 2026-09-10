@@ -2,6 +2,7 @@
 
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "harness/Bom.h"
 #include "harness/MechanicalHarness.h"
 
 #include <QAbstractItemView>
@@ -395,6 +396,21 @@ void MechWizardDialog::buildUi() {
         QMetaObject::invokeMethod(this, [this] { reorderFromList(); }, Qt::QueuedConnection);
     });
 
+    // A STATION WITH PARTS OF ITS OWN FOLDS WHEN IT IS CLICKED, because that is the only thing left
+    // for a click on it to mean - its figures are read-only once its parts have been described
+    // against them (see stepHasSubparts). On itemClicked rather than in the selection handler so it
+    // works on the second click as well as the first: selecting a row that is already selected
+    // changes nothing, and a fold that only worked once would read as a fold that did not work.
+    //
+    // The step is folded BY ID. Selecting the row rebuilds the tree, which throws every row away, so
+    // the item this was handed is not the thing to act on - its id is.
+    connect(stepList_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it, int) {
+        if (loading_ || !it) return;
+        const QString id = it->data(0, Qt::UserRole).toString();
+        if (id.isEmpty() || !stepHasSubparts(id)) return;
+        toggleFold(id);
+    });
+
     connect(stepList_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* now, QTreeWidgetItem*) {
         if (loading_ || !now) return;
@@ -459,7 +475,12 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     col->addWidget(hint_);
     col->addSpacing(10);
 
-    auto* form = new QFormLayout();
+    // EVERY FIGURE IN A BOX OF ITS OWN. Not for the look of it: a station that has parts hung off it
+    // shows its figures read-only (see refreshStationLock), and one box is one thing to shut. The
+    // heading, the hint and the Checks group stay outside it so the reason is still readable.
+    fieldsBox_ = new QWidget(panel);
+    auto* form = new QFormLayout(fieldsBox_);
+    form->setContentsMargins(0, 0, 0, 0);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     partCombo_ = new QComboBox(panel);
@@ -576,6 +597,20 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     groupBtns->addStretch(1);
     groupsLay->addLayout(groupBtns);
     form->addRow(groupsLabel_, groupsBox);
+
+    // AND WHAT THAT COMES TO. The conductors are the answer to "what does this run carry"; the bundle
+    // is the answer to "how thick is it", and it is the figure every fitting at either end has to be
+    // chosen against. Shown beside the list rather than found out later from the drawing.
+    bundleLabel_ = new QLabel(QStringLiteral("Bundle Ø"), panel);
+    bundleInfo_ = new QLabel(panel);
+    bundleInfo_->setWordWrap(true);
+    bundleInfo_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    bundleInfo_->setToolTip(QStringLiteral(
+        "Worked out from the conductors this run carries - the diameter each library part states, or "
+        "the nominal for its gauge where it states none. One conductor is its own bundle, two lie side "
+        "by side, three settle into a triangle, and four or more are the random-lay figure "
+        "√(ΣD²) × k. The same figure the run is drawn at."));
+    form->addRow(bundleLabel_, bundleInfo_);
 
     // ---- HOW MUCH BARE WIRE SHOWS AT EACH END -----------------------------------------------------
     //
@@ -711,7 +746,7 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     balloonCheck_->setChecked(true);
     form->addRow(QString(), balloonCheck_);
 
-    col->addLayout(form);
+    col->addWidget(fieldsBox_);
     col->addSpacing(12);
 
     // ---- What is wrong with it -------------------------------------------------------------------
@@ -971,6 +1006,11 @@ void MechWizardDialog::editStep(const QString& stepId) {
 
 void MechWizardDialog::applyToEditedStep() {
     if (loading_ || editing_.isEmpty()) return;
+    // A STATION WITH PARTS IS NOT WRITTEN TO. The fields are shut in the window, and this is the
+    // same rule where it actually bites: every field handler comes through here, and so does the
+    // Apply button, so shutting the widgets alone would leave the keyboard and the tests a way in.
+    // See stepHasSubparts for why a heading stops taking figures.
+    if (stepHasSubparts(editing_)) return;
     for (MechStep& s : script_.steps) {
         if (s.id != editing_) continue;
 
@@ -1039,6 +1079,19 @@ void MechWizardDialog::addConductorGroup() {
     g.count = countSpin_->value();
     g.gauge = gaugeCanon();
     if (g.count <= 0) return;   // a group of nothing is not a group
+    // THE WIRE PICKED FROM THE LIBRARY GOES ON THE GROUP, part and diameter both.
+    //
+    // The part combo was read for the step and not for the group, so a run described as "6 of this
+    // library wire" reached the script as six nameless conductors of that gauge: the bill lost the
+    // part number and the bundle was laid up at the nominal for the gauge rather than at the figure
+    // on the data sheet. A group added from the library now carries both, and the diameter is looked
+    // up here - the one place that has a library to ask (see MechConductorGroup::odMm).
+    const QString chosen = partCombo_ ? partCombo_->currentData().toString() : QString();
+    if (const LibraryPart* p = chosen.isEmpty() ? nullptr : catalog_.byId(chosen))
+        if (p->kind == PartKind::Wire || p->kind == PartKind::Cable) {
+            g.libPart = p->id;
+            g.odMm = libraryWireOdMm(*p);   // 0 where it states none: the gauge answers for it
+        }
     pending_.push_back(g);
     refreshFieldsForCategory();
     fieldChanged();
@@ -1081,6 +1134,93 @@ void MechWizardDialog::removeCovering(int index) {
     pendingCoverings_.erase(pendingCoverings_.begin() + index);
     refreshFieldsForCategory();
     fieldChanged();
+}
+
+std::vector<double> MechWizardDialog::conductorOds() const {
+    // THE SAME MAKE-UP THE COMPILER READS - see wiresForRun in MechBuildScript.cpp: the groups where
+    // there are groups, and the count/gauge shorthand where there are none. Worked out any other way
+    // this is a figure that disagrees with the harness drawn beside it, which is worse than no figure.
+    std::vector<MechConductorGroup> groups = pending_;
+    if (groups.empty() && countSpin_ && countSpin_->value() > 0) {
+        MechConductorGroup only;
+        only.count = countSpin_->value();
+        only.gauge = gaugeCanon();
+        // The part chosen for the step counts as the shorthand group's part, which is what it means:
+        // "six of this wire" with nothing added to the list yet.
+        const QString chosen = partCombo_ ? partCombo_->currentData().toString() : QString();
+        if (const LibraryPart* p = chosen.isEmpty() ? nullptr : catalog_.byId(chosen))
+            if (p->kind == PartKind::Wire || p->kind == PartKind::Cable)
+                only.odMm = libraryWireOdMm(*p);
+        groups.push_back(only);
+    }
+    std::vector<double> ods;
+    for (const MechConductorGroup& g : groups) {
+        // The library part's own figure first, the nominal for the gauge after it - and 0 where
+        // neither says anything, which bundleCalculation counts as a conductor it could not measure
+        // rather than as a conductor of no thickness.
+        const double od = g.odMm > 0.0 ? g.odMm : wireOuterDiameterMm(g.gauge);
+        for (int i = 0; i < std::max(0, g.count); ++i) ods.push_back(od);
+    }
+    return ods;
+}
+
+BundleCalc MechWizardDialog::bundleForDescribedRun() const {
+    // THE FACTOR AND THE FLOOR THE DRAWING USES, not the automatic ones. bundleCalculation will pick
+    // a packing factor from the conductor count if it is asked to; the harness is laid up with
+    // MechDrawOptions::bundleFactor, and a readout that quoted a different k would be a figure
+    // nothing on the sheet agrees with.
+    const MechDrawOptions asDrawn;
+    return bundleCalculation(conductorOds(), asDrawn.bundleFactor, asDrawn.minBundleMm);
+}
+
+QString MechWizardDialog::shownBundleText() const {
+    return bundleInfo_ ? bundleInfo_->text() : QString();
+}
+
+void MechWizardDialog::refreshBundleReadout() {
+    if (!bundleInfo_) return;
+    // A CABLE IS DRAWN AT ITS JACKET whatever its cores add up to, so that is the figure - and where
+    // no jacket has been given yet it says so rather than showing the cores as though they were the
+    // outside of the thing.
+    if (category_ == Category::Cable) {
+        const double jacket = odSpin_ ? odSpin_->value() : 0.0;
+        bundleInfo_->setText(jacket > 0.0
+                                 ? QStringLiteral("Ø%1 over the jacket — a cable is drawn at its "
+                                                  "jacket, whatever its cores come to")
+                                       .arg(jacket, 0, 'f', 1)
+                                 : QStringLiteral("the jacket Ø has not been given yet"));
+        return;
+    }
+    const BundleCalc c = bundleForDescribedRun();
+    if (c.counted == 0 && c.unknown == 0) {
+        bundleInfo_->setText(QStringLiteral("nothing carried yet"));
+        return;
+    }
+    // WHAT IT IS, AND HOW IT WAS REACHED. The rule is named because it is the whole reason the figure
+    // is what it is: two conductors add up and twenty do not, and somebody checking the number by hand
+    // needs to know which arithmetic to check.
+    QString how;
+    if (c.rule == QLatin1String("single")) how = QStringLiteral("one conductor is its own bundle");
+    else if (c.rule == QLatin1String("pair")) how = QStringLiteral("two lie side by side");
+    else if (c.rule == QLatin1String("triple")) how = QStringLiteral("three settle into a triangle");
+    else if (c.rule == QLatin1String("random-lay"))
+        how = QStringLiteral("√(ΣD²) × %1, a random lay of %2")
+                  .arg(QString::number(c.packingFactor, 'f', 2))
+                  .arg(c.counted);
+    else how = QStringLiteral("nothing measurable to add up");
+
+    QString said = QStringLiteral("Ø%1 — %2").arg(QString::number(c.result, 'f', 1), how);
+    // A CONDUCTOR NOBODY CAN MEASURE IS SAID, not quietly left out. A bundle of eight worked out from
+    // six is a figure that reads as an answer and is short by two wires; the gap belongs on the screen
+    // beside it, where it can be filled in.
+    if (c.unknown > 0)
+        said += QStringLiteral("\n%1 conductor(s) left out — neither the part nor the gauge gives a "
+                               "diameter for them, so this figure is short by that much")
+                    .arg(c.unknown);
+    else if (c.clampedToMinimum)
+        said += QStringLiteral("\n(the smallest bundle drawn, Ø%1)")
+                    .arg(MechDrawOptions().minBundleMm, 0, 'f', 1);
+    bundleInfo_->setText(said);
 }
 
 void MechWizardDialog::removeConductorGroup() {
@@ -1228,6 +1368,10 @@ void MechWizardDialog::refreshSubpartButton() {
 void MechWizardDialog::fieldChanged() {
     if (loading_) return;
     refreshSubpartButton();   // the first thing typed is what makes Add subpart mean anything
+    // THE BUNDLE FOLLOWS THE CONDUCTORS AS THEY ARE TYPED. The count, the gauge and the wire chosen
+    // from the library are exactly the three fields it is worked out from, so it has to be brought up
+    // to date here and not only when the category changes.
+    refreshBundleReadout();
     // Writes back when a step is being edited; does nothing when a new one is being described.
     applyToEditedStep();
     // AND EITHER WAY the preview and the checks are brought up to date. applyToEditedStep already does
@@ -1511,6 +1655,54 @@ void MechWizardDialog::rollUp(const QString& stepId, bool up) {
             it->setExpanded(!up);
             return;
         }
+}
+
+void MechWizardDialog::toggleFold(const QString& stepId) {
+    rollUp(stepId, !rolledUpSteps().contains(stepId));
+}
+
+bool MechWizardDialog::stepHasSubparts(const QString& stepId) const {
+    if (stepId.isEmpty()) return false;
+    for (const MechStep* child : script_.childSteps(stepId))
+        if (child && child->isSubpart) return true;
+    return false;
+}
+
+bool MechWizardDialog::editedStepIsLocked() const { return stepHasSubparts(editing_); }
+
+void MechWizardDialog::refreshStationLock() {
+    const bool locked = editedStepIsLocked();
+    // The figures, and the palette that decides WHICH figures: changing the category of a station its
+    // parts were described against is the same edit by another door.
+    if (fieldsBox_) fieldsBox_->setEnabled(!locked);
+    if (catList_) catList_->setEnabled(!locked);
+    // Apply writes the fields back, and there is nothing to write.
+    if (applyBtn_) {
+        applyBtn_->setEnabled(!locked);
+        if (locked)
+            applyBtn_->setToolTip(QStringLiteral(
+                "Nothing to apply: this station has parts of its own, so its figures are read-only. "
+                "Correct the parts, or take them off it."));
+    }
+    if (!hint_) return;
+    // Unlocked again - a different step selected, or the parts taken off this one - and the hint goes
+    // back to saying what the category is for. refreshStepList is called on its own in places, so the
+    // message has to be put back here rather than relying on the category refresher having run.
+    if (!locked) {
+        hint_->setText(categoryHint(category_));
+        return;
+    }
+    // SAID, not merely greyed. A form that has gone grey with no reason given reads as a fault in the
+    // window rather than as a rule, and the way out - work on the parts - is the one thing somebody
+    // in front of it needs to be told.
+    const int parts = static_cast<int>(script_.childSteps(editing_).size());
+    hint_->setText(QStringLiteral(
+                       "This station has %1 part(s) of its own, so it is a heading rather than a form: "
+                       "its figures are read-only and clicking it folds its parts away. Its parts were "
+                       "described against these figures.\n\nNext gives it another station, Add subpart "
+                       "gives it another part, and Delete still removes it. To change what the station "
+                       "IS, work on its parts - or take them off it.")
+                       .arg(parts));
 }
 
 QStringList MechWizardDialog::rolledUpSteps() const {
@@ -1824,6 +2016,7 @@ void MechWizardDialog::refreshStepList() {
                                                "be corrected against the rest of the harness. Next is "
                                                "what moves on.")
                               : QStringLiteral("Write these fields back onto the step being edited."));
+    refreshStationLock();
     loading_ = wasLoading;
 }
 
@@ -1930,6 +2123,9 @@ void MechWizardDialog::refreshFieldsForCategory() {
     // The run-only controls.
     show(groupsLabel_, nullptr, isRun);
     if (groupList_) groupList_->parentWidget()->setVisible(isRun);
+    // The bundle is a fact about a RUN. A connector has no bundle and a boot's size is asked for
+    // directly, so neither is offered a figure that would mean nothing there.
+    show(bundleLabel_, bundleInfo_, isRun);
     if (continueCheck_) continueCheck_->setVisible(isRun);
     if (breakCheck_) breakCheck_->setVisible(isRun);
 
@@ -1964,6 +2160,7 @@ void MechWizardDialog::refreshFieldsForCategory() {
         loading_ = was;
     }
 
+    refreshBundleReadout();
     refreshPartCombo();
     // The row for the step being described names its category, so it moves with the palette.
     refreshStepList();
@@ -2207,6 +2404,12 @@ void MechWizardDialog::place() {
     const MechCompiled c = compileMechScript(script_);
     MechHarnessDef placedDef = c.def;
     applyWizardDrawOptions(placedDef);
+    // THE BALLOONS ARE NUMBERED AGAINST THE SHEET'S OWN BILL. A balloon saying 11 is a reference to
+    // line 11 of the bill on this drawing, so the number has to be that line's position in it; a part
+    // the bill does not list balloons as "?" rather than as a number nobody can look up. See
+    // bomItemLookup - and note the bill is read HERE, after anything this window has just added to it.
+    if (Document* doc = editor_->document())
+        placedDef.draw.bomItemOf = bomItemLookup(*doc, catalog_.merged());
     const std::vector<Entity> ents = buildMechanicalHarness(placedDef, &catalog_);
     if (ents.empty()) {
         summary_->setText(QStringLiteral("Nothing to place yet."));

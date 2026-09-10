@@ -106,6 +106,150 @@ QIcon crossIcon(const QColor& ink, int size) {
     return QIcon(signPixmap(ink, size, false, false, true));
 }
 
+// ---- The file glyphs ----------------------------------------------------------------------------
+
+namespace {
+
+// One pixmap, set up the way all four are drawn: square, transparent, antialiased, and a pen thin
+// enough that an 18-pixel glyph still reads as line-work rather than as a blob.
+QPixmap glyphPixmap(const QColor& ink, int size, double weight = 1.4) {
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(weight * size / 18.0);   // drawn at 18 and scaled, so any size keeps its weight
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.end();
+    return pm;
+}
+
+// A sheet of paper with the top-right corner turned down: the outline, then the fold. Drawn into
+// `p` in a box `size` across, inset by `inset`, so the same sheet can be a whole icon or the front
+// one of a pair.
+void drawSheet(QPainter& p, const QRectF& box) {
+    const double fold = box.width() * 0.30;
+    QPainterPath sheet;
+    sheet.moveTo(box.left(), box.top());
+    sheet.lineTo(box.right() - fold, box.top());
+    sheet.lineTo(box.right(), box.top() + fold);
+    sheet.lineTo(box.right(), box.bottom());
+    sheet.lineTo(box.left(), box.bottom());
+    sheet.closeSubpath();
+    p.drawPath(sheet);
+    // The fold itself, which is what tells a sheet from a plain rectangle.
+    QPainterPath corner;
+    corner.moveTo(box.right() - fold, box.top());
+    corner.lineTo(box.right() - fold, box.top() + fold);
+    corner.lineTo(box.right(), box.top() + fold);
+    p.drawPath(corner);
+}
+
+// A DISKETTE: the body, the shutter across the top, and the label across the bottom. The shutter is
+// filled, because on a real one it is the metal and on an icon this size it is what stops the glyph
+// reading as three stacked rectangles.
+void drawDiskette(QPainter& p, const QRectF& box, const QColor& ink) {
+    const double clip = box.width() * 0.22;
+    QPainterPath body;
+    body.moveTo(box.left(), box.top());
+    body.lineTo(box.right() - clip, box.top());
+    body.lineTo(box.right(), box.top() + clip);
+    body.lineTo(box.right(), box.bottom());
+    body.lineTo(box.left(), box.bottom());
+    body.closeSubpath();
+    p.drawPath(body);
+    // The shutter: a filled block across the top third, inset from both sides.
+    const QRectF shutter(box.left() + box.width() * 0.28, box.top(),
+                         box.width() * 0.30, box.height() * 0.32);
+    p.save();
+    p.setBrush(ink);
+    p.drawRect(shutter);
+    p.restore();
+    // The label: an empty block across the bottom half.
+    p.drawRect(QRectF(box.left() + box.width() * 0.20, box.top() + box.height() * 0.55,
+                      box.width() * 0.60, box.height() * 0.45));
+}
+
+} // namespace
+
+QIcon newFileIcon(const QColor& ink, int size) {
+    QPixmap pm = glyphPixmap(ink, size);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.4 * size / 18.0);
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    const double m = size * 0.14;
+    drawSheet(p, QRectF(m + size * 0.08, m, size * 0.62, size - 2 * m));
+    return QIcon(pm);
+}
+
+QIcon openFileIcon(const QColor& ink, int size) {
+    QPixmap pm = glyphPixmap(ink, size);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.4 * size / 18.0);
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    // AN OPEN FOLDER: the back of it square behind, and the front leaning out and away, which is
+    // what says "open" rather than "a folder".
+    const double w = size, h = size;
+    QPainterPath back;
+    back.moveTo(w * 0.10, h * 0.78);
+    back.lineTo(w * 0.10, h * 0.26);
+    back.lineTo(w * 0.40, h * 0.26);
+    back.lineTo(w * 0.48, h * 0.38);
+    back.lineTo(w * 0.80, h * 0.38);
+    back.lineTo(w * 0.80, h * 0.50);
+    p.drawPath(back);
+    QPainterPath front;
+    front.moveTo(w * 0.10, h * 0.78);
+    front.lineTo(w * 0.72, h * 0.78);
+    front.lineTo(w * 0.92, h * 0.50);
+    front.lineTo(w * 0.28, h * 0.50);
+    front.closeSubpath();
+    p.drawPath(front);
+    return QIcon(pm);
+}
+
+QIcon saveFileIcon(const QColor& ink, int size) {
+    QPixmap pm = glyphPixmap(ink, size);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.4 * size / 18.0);
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    const double m = size * 0.14;
+    drawDiskette(p, QRectF(m, m, size - 2 * m, size - 2 * m), ink);
+    return QIcon(pm);
+}
+
+QIcon saveAllFilesIcon(const QColor& ink, int size) {
+    QPixmap pm = glyphPixmap(ink, size);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(ink);
+    pen.setWidthF(1.3 * size / 18.0);
+    pen.setJoinStyle(Qt::MiterJoin);
+    p.setPen(pen);
+    // TWO OF THEM, one behind the other: "all" said by there being more than one, which is how every
+    // save-all icon says it. The one behind is drawn first and only its two showing edges are needed -
+    // a whole second diskette behind the front one is ink nobody can see.
+    const double w = size, h = size;
+    QPainterPath behind;
+    behind.moveTo(w * 0.34, h * 0.10);
+    behind.lineTo(w * 0.90, h * 0.10);
+    behind.lineTo(w * 0.90, h * 0.66);
+    p.drawPath(behind);
+    drawDiskette(p, QRectF(w * 0.08, h * 0.26, w * 0.62, h * 0.62), ink);
+    return QIcon(pm);
+}
+
 namespace {
 
 QPushButton* signButton(QWidget* parent, const QIcon& icon, const QString& text,

@@ -135,6 +135,7 @@ QJsonObject MechConductorGroup::toJson() const {
     o["count"] = count;
     if (!gauge.isEmpty()) o["gauge"] = gauge;
     if (!libPart.isEmpty()) o["libPart"] = libPart;
+    if (odMm > 0.0) o["odMm"] = odMm;
     if (!name.isEmpty()) o["name"] = name;
     if (!designators.isEmpty()) o["designators"] = QJsonArray::fromStringList(designators);
     return o;
@@ -145,6 +146,7 @@ MechConductorGroup MechConductorGroup::fromJson(const QJsonObject& obj) {
     g.count = obj.value("count").toInt(0);
     g.gauge = obj.value("gauge").toString();
     g.libPart = obj.value("libPart").toString();
+    g.odMm = obj.value("odMm").toDouble(0.0);
     g.name = obj.value("name").toString();
     for (const QJsonValue& v : obj.value("designators").toArray())
         g.designators << v.toString();
@@ -315,6 +317,11 @@ QStringList wiresForRun(MechHarnessDef& def, const MechStep& step) {
                                               : QStringLiteral("%1-%2").arg(g.name).arg(i + 1));
             w.gauge = g.gauge.isEmpty() ? step.gauge : g.gauge;
             w.libPart = g.libPart;
+            // AND THE DIAMETER THE LIBRARY PART STATED, which is what the bundle is worked out from.
+            // Without this a run of conductors picked from the library was laid up at the nominal for
+            // its gauge - so a thick-walled part and a thin-walled one of the same gauge came out as
+            // the same bundle, and the figure on the sheet was not the figure the data sheets give.
+            w.odMm = g.odMm;
             // A CABLE's cores all carry its name, which is what lets a run be recognised as a cable
             // rather than as loose wires. Loose wires carry none, because they are not cores of
             // anything.

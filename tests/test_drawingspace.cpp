@@ -27,6 +27,7 @@
 #include <QMouseEvent>
 #include <QTableWidget>
 #include <QTabBar>
+#include <QMenuBar>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -1261,6 +1262,77 @@ int run_drawingspace_tests() {
             for (int col = 0; col < grid->columnCount(); ++col)
                 check(grid->columnMinimumWidth(col) <= widest + 8,
                       "special: no column reserves room for a caption that has become a tooltip");
+        }
+    }
+
+    // ---- THE QUICK-ACCESS STRIP: New, Open, Save, Save all ------------------------------------
+    //
+    // Four things done constantly, on the row above the tabs. They are all on the file menu behind
+    // the logo, which was the argument for not having them - and "reachable" is not "to hand".
+    {
+        QWidget* corner = win.menuBar()->cornerWidget(Qt::TopLeftCorner);
+        check(corner != nullptr, "quick: there is a strip in the top-left of the menu row");
+        if (corner) {
+            // The logo is still the file button, and the four are beside it - the file commands next
+            // to the thing they came out of.
+            const QList<QToolButton*> btns = corner->findChildren<QToolButton*>();
+            std::printf("  quick: %lld button(s) on the strip\n",
+                        static_cast<long long>(btns.size()));
+            check(btns.size() == 5, "quick: the logo and four commands");
+            QStringList tips;
+            for (QToolButton* b : btns) tips << b->toolTip();
+            const QString all = tips.join(QStringLiteral(" | "));
+            check(all.contains(QStringLiteral("file menu")), "quick: the logo is still there");
+            check(all.contains(QStringLiteral("New drawing")), "quick: New");
+            check(all.contains(QStringLiteral("Open a drawing")), "quick: Open");
+            check(all.contains(QStringLiteral("Save this drawing")), "quick: Save");
+            check(all.contains(QStringLiteral("Save every open drawing")), "quick: Save all");
+            // EVERY ONE OF THEM CARRIES ITS SHORTCUT, which is how somebody stops reaching for the
+            // button: the tooltip on the thing they are already pointing at teaches the key.
+            check(all.contains(QStringLiteral("Ctrl+N")) && all.contains(QStringLiteral("Ctrl+O")) &&
+                      all.contains(QStringLiteral("Ctrl+S")) &&
+                      all.contains(QStringLiteral("Ctrl+Shift+S")),
+                  "quick: and each says the key that does the same thing");
+            // AND EACH HAS A PICTURE. Drawn in code, so there is nothing to fail to load - but an
+            // icon that came out empty would be a strip of four blank buttons, so it is checked.
+            int drawn = 0;
+            for (QToolButton* b : btns)
+                if (!b->icon().isNull() && !b->icon().pixmap(QSize(18, 18)).isNull()) ++drawn;
+            check(drawn == btns.size(), "quick: every button has a glyph on it");
+
+            // SAVE ALL IS LIVE ONLY WHILE THERE IS SOMETHING TO WRITE. Greyed, it answers the
+            // question somebody glances at that corner to ask: is everything saved?
+            QToolButton* saveAll = nullptr;
+            for (QToolButton* b : btns)
+                if (b->toolTip().contains(QStringLiteral("Save every open drawing"))) saveAll = b;
+            check(saveAll != nullptr, "quick: the Save all button is findable");
+            if (saveAll) {
+                // A drawing that has been drawn on has something to save.
+                Document* doc = win.editorForTest() ? win.editorForTest()->document() : nullptr;
+                check(doc != nullptr, "quick: there is a drawing open");
+                if (doc) {
+                    doc->setDirty(true);
+                    win.refreshQuickAccessForTest();
+                    check(saveAll->isEnabled(),
+                          "quick: with unsaved work, Save all is live and says how much");
+                    check(saveAll->toolTip().contains(QStringLiteral("unsaved")),
+                          "quick: and its tooltip counts it");
+                    doc->setDirty(false);
+                    win.refreshQuickAccessForTest();
+                    // Every open drawing, not just the active one: what the button reports is the
+                    // whole window's state, and this test window may be holding more than one.
+                    const int stillDirty = win.dirtyDocumentCountForTest();
+                    if (stillDirty == 0)
+                        check(!saveAll->isEnabled(),
+                              "quick: with everything saved it greys out rather than doing nothing");
+                    // And pressing it then writes nothing at all. Asked only when nothing is dirty:
+                    // a dirty drawing that has never been named would be asked for a name, and a
+                    // modal file dialogue in a test run is a test run that never finishes.
+                    if (stillDirty == 0)
+                        check(win.saveAllDocumentsForTest() == 0,
+                              "quick: a clean drawing is not rewritten - its timestamp is a fact");
+                }
+            }
         }
     }
 

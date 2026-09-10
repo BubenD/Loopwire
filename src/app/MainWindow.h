@@ -432,6 +432,26 @@ private:
     void closeDocument(int index);
     bool maybeSaveDoc(int index);    // prompt to save if dirty; false => cancel
     bool saveDocument(int index, bool forceDialog = false);
+    // EVERY OPEN DRAWING, saved. Returns how many were written. One that has never been saved is
+    // asked for a name like any other, and answering Cancel to that leaves it and the rest alone -
+    // "save all" is not a licence to badger somebody through six file dialogues.
+    int saveAllDocuments();
+    // The quick-access strip: whether Save all has anything to do, said by whether it is live.
+    void refreshQuickAccess();
+    QToolButton* quickSaveAllBtn_ = nullptr;
+
+public:
+    // Driving the strip from a test. Public beside the private pair because what is worth checking is
+    // the BEHAVIOUR - greyed when everything is saved, and writing nothing when pressed then - and
+    // neither can be reached through a button click without a file dialogue in the way.
+    void refreshQuickAccessForTest() { refreshQuickAccess(); }
+    int saveAllDocumentsForTest() { return saveAllDocuments(); }
+    // How many open drawings have unsaved work. Wanted by a test before it presses Save all: with a
+    // dirty drawing that has never been named, saving asks for a name, and a modal file dialogue in a
+    // test run is a test run that never finishes.
+    int dirtyDocumentCountForTest() const;
+
+private:
     void updateActiveTabText();
     void updateWindowTitleForActive();
     int activeIndex() const;

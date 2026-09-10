@@ -55,6 +55,21 @@ QPushButton* makeAddButton(QWidget* parent, const QString& text = QString(),
 QPushButton* makeRemoveButton(QWidget* parent, const QString& text = QString(),
                               const QString& tip = QString(), bool cross = false);
 
+// ---- The file glyphs, for the quick-access strip ------------------------------------------------
+//
+// New, Open, Save and Save all, drawn rather than shipped as images - for the same reason the plus and
+// the minus above are drawn: they are always there, always the same size, always centred, and they
+// follow the ink they are asked for instead of whatever a bitmap was baked in.
+//
+// The shapes are the ones everybody already knows: a sheet with a folded corner, an open folder, a
+// diskette, and a diskette with another behind it. A save icon has been a diskette for forty years and
+// nobody under thirty has seen one - which is exactly why it still works: it is not a picture of a
+// floppy disc any more, it is the word "save".
+QIcon newFileIcon(const QColor& ink = QColor("#d6dae1"), int size = 18);
+QIcon openFileIcon(const QColor& ink = QColor("#d6dae1"), int size = 18);
+QIcon saveFileIcon(const QColor& ink = QColor("#d6dae1"), int size = 18);
+QIcon saveAllFilesIcon(const QColor& ink = QColor("#d6dae1"), int size = 18);
+
 // ---- The eye ------------------------------------------------------------------------------------
 
 // AN EYE, for a button that shows or hides something drawn OVER a drawing - the connection point a part is

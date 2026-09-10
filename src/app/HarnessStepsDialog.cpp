@@ -2,20 +2,25 @@
 
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "model/Document.h"
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTableWidget>
 #include <QVBoxLayout>
 
 namespace Edraw_Desktop {
@@ -218,6 +223,24 @@ void HarnessStepsDialog::buildUi() {
     connect(nextBtn_, &QPushButton::clicked, this, &HarnessStepsDialog::next);
     buttons->addWidget(nextBtn_);
     buttons->addStretch(1);
+    // WHAT IT IS MADE OF, onto the bill - beside the button that places it, because it is the same
+    // press: a harness put on a sheet without its parts on the bill is a drawing nobody can order
+    // from, and going round the parts afterwards adding them one at a time is how one gets missed.
+    // Off until it is asked for, and then remembered: writing to the bill is a second thing done to
+    // the drawing.
+    bomBox_ = new QCheckBox(QStringLiteral("Add the parts to the bill of materials"));
+    bomBox_->setObjectName(QStringLiteral("addToBom"));
+    bomBox_->setToolTip(QStringLiteral(
+        "Every connector, backshell, boot, heatshrink, braid, cable and conductor this harness calls "
+        "for, as lines of the drawing's bill of materials - totalled per part number, the way they are "
+        "bought. A part the bill already lists is put to you before it goes on twice."));
+    bomBox_->setChecked(QSettings().value(QStringLiteral("ui/harnessSteps/addToBom"), false).toBool());
+    connect(bomBox_, &QCheckBox::toggled, this, [](bool on) {
+        QSettings s;
+        s.setValue(QStringLiteral("ui/harnessSteps/addToBom"), on);
+        s.sync();
+    });
+    buttons->addWidget(bomBox_);
     auto* placeBtn = new QPushButton(QStringLiteral("Place the drawing"));
     connect(placeBtn, &QPushButton::clicked, this, &HarnessStepsDialog::place);
     buttons->addWidget(placeBtn);
@@ -1214,15 +1237,192 @@ void HarnessStepsDialog::setDefinition(const MechHarnessDef& def) {
 
 void HarnessStepsDialog::place() {
     if (!editor_) return;
-    const std::vector<Entity> ents = buildMechanicalHarness(def_, &catalog_);
+    // The parts FIRST, while this window still has the person in front of it: the bill is asked about
+    // before the objects start following the cursor, so a question about a part already on the bill is
+    // not put behind a drawing waiting to be clicked down.
+    //
+    // And before the harness is BUILT, because the balloons are numbered off that bill: a part put on
+    // the bill by this very press has a line number, and building first would have ballooned it "?".
+    const int added = addPartsToBom() ? addPartsToBomNow() : 0;
+    MechHarnessDef placed = def_;
+    // THE BALLOONS ARE NUMBERED AGAINST THE SHEET'S OWN BILL. A balloon saying 11 is a reference to
+    // line 11 of the bill on this drawing, so the number has to be that line's position in it; a part
+    // the bill does not list balloons as "?" rather than as a number nobody can look up. See
+    // bomItemLookup - and note the bill is read HERE, after anything this window has just added to it.
+    if (Document* doc = editor_->document())
+        placed.draw.bomItemOf = bomItemLookup(*doc, catalog_.merged());
+    const std::vector<Entity> ents = buildMechanicalHarness(placed, &catalog_);
     if (ents.empty()) {
         if (summary_) summary_->setText(QStringLiteral("Nothing to place yet."));
         return;
     }
     editor_->placeEntities(ents);
-    if (summary_)
-        summary_->setText(QStringLiteral("%1 object(s) ready — click on the sheet to put them down.")
-                              .arg(ents.size()));
+    if (!summary_) return;
+    QString said = QStringLiteral("%1 object(s) ready — click on the sheet to put them down.")
+                       .arg(ents.size());
+    if (addPartsToBom())
+        said += added > 0
+                    ? QStringLiteral(" %1 line(s) added to the bill of materials.").arg(added)
+                    : QStringLiteral(" Nothing added to the bill of materials.");
+    summary_->setText(said);
+}
+
+// ---- the bill of materials ----------------------------------------------------------------------
+
+bool HarnessStepsDialog::addPartsToBom() const { return bomBox_ && bomBox_->isChecked(); }
+
+void HarnessStepsDialog::setAddPartsToBom(bool on) {
+    if (bomBox_) bomBox_->setChecked(on);
+}
+
+std::vector<BomRow> HarnessStepsDialog::partsForBom() const {
+    // THE HARNESS THAT IS PLACED, which is def_ - not previewDefinition(), which is the harness as far
+    // as the steps have been walked. Place puts the whole thing on the sheet, so the whole thing is
+    // what the bill has to list: a bill that stopped where somebody's cursor happened to be is a bill
+    // short of the parts the drawing shows.
+    return bomRowsFromMechHarness(def_, &catalog_);
+}
+
+int HarnessStepsDialog::addPartsToBomNow() {
+    Document* doc = editor_ ? editor_->document() : nullptr;
+    if (!doc) return 0;
+    const std::vector<BomRow> adding = partsForBom();
+    if (adding.empty()) return 0;
+
+    BomTable table;
+    table.fromJson(doc->bom());
+    // EVERY line the bill has, typed in and called for by the drawing alike, because a part already on
+    // the bill is already on it whichever put it there. The drawing's own lines are read off the
+    // drawing rather than kept in it, so they have to be asked for here.
+    std::vector<BomRow> have = table.rows;
+    if (table.config.includeDrawing) {
+        const std::vector<BomRow> drawn = bomFromDrawing(*doc, catalog_.merged());
+        have.insert(have.end(), drawn.begin(), drawn.end());
+    }
+    have = bomUnify(have);   // one line per part, so "how much is on it already" is the whole of it
+
+    const std::vector<int> already = bomAlreadyListed(have, adding);
+    std::vector<bool> takeIt(adding.size(), true);
+    bool anyAlready = false;
+    for (int at : already)
+        if (at >= 0) { anyAlready = true; break; }
+    // Asked once this sitting and answered "do not ask again": every part goes on, which is what that
+    // answer was given for.
+    if (anyAlready && askAlreadyListed_ &&
+        !approveAlreadyListed(adding, have, already, takeIt))
+        return 0;   // Cancel: the bill is left exactly as it was
+
+    int added = 0;
+    for (size_t i = 0; i < adding.size(); ++i) {
+        if (!takeIt[i]) continue;
+        BomRow r = adding[i];
+        r.rowId = bomNextRowId(table.rows);
+        table.rows.push_back(std::move(r));
+        ++added;
+    }
+    if (added == 0) return 0;
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    emit bomChanged();
+    return added;
+}
+
+bool HarnessStepsDialog::approveAlreadyListed(const std::vector<BomRow>& adding,
+                                              const std::vector<BomRow>& have,
+                                              const std::vector<int>& already,
+                                              std::vector<bool>& takeIt) {
+    // Which rows of `adding` the bill already lists, in the order they would go on.
+    std::vector<size_t> dupes;
+    for (size_t i = 0; i < adding.size(); ++i)
+        if (i < already.size() && already[i] >= 0) dupes.push_back(i);
+    if (dupes.empty()) return true;
+    const int decimals = 2;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Parts already on the bill of materials"));
+    auto* v = new QVBoxLayout(&dlg);
+    const size_t fresh = adding.size() - dupes.size();
+    auto* says = new QLabel(
+        QStringLiteral("%1 of this harness's parts %2 already on the bill of materials. Tick the ones "
+                       "to add ANYWAY — the quantity goes on top of what is there, which is what a "
+                       "second harness on the same sheet needs. Left unticked, the line is left exactly "
+                       "as it is.\n\n%3")
+            .arg(dupes.size())
+            .arg(dupes.size() == 1 ? QStringLiteral("is") : QStringLiteral("are"))
+            .arg(fresh == 0
+                     ? QStringLiteral("Nothing else this harness calls for is new to the bill.")
+                     : QStringLiteral("The other %1 part(s) are new to the bill and go on either way.")
+                           .arg(fresh)),
+        &dlg);
+    says->setWordWrap(true);
+    v->addWidget(says);
+
+    auto* view = new QTableWidget(static_cast<int>(dupes.size()), 5, &dlg);
+    view->setHorizontalHeaderLabels({QStringLiteral("Add anyway"), QStringLiteral("What it is"),
+                                     QStringLiteral("Manufacturer P/N"),
+                                     QStringLiteral("Already on the bill"),
+                                     QStringLiteral("This harness adds")});
+    view->verticalHeader()->setVisible(false);
+    view->setSelectionBehavior(QAbstractItemView::SelectRows);
+    view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    view->setAlternatingRowColors(true);
+    QList<QTableWidgetItem*> ticks;
+    for (int r = 0; r < static_cast<int>(dupes.size()); ++r) {
+        const size_t which = dupes[static_cast<size_t>(r)];
+        const BomRow& row = adding[which];
+        const BomRow& on = have[static_cast<size_t>(already[which])];
+        auto* tick = new QTableWidgetItem;
+        tick->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        // UNTICKED to begin with. The whole point of the question is that the part is already ordered:
+        // the answer that changes nothing is the safe one, and doubling a quantity has to be said
+        // rather than arrived at by pressing the button that gets the window off the screen.
+        tick->setCheckState(Qt::Unchecked);
+        view->setItem(r, 0, tick);
+        ticks.append(tick);
+        view->setItem(r, 1, new QTableWidgetItem(row.description));
+        view->setItem(r, 2, new QTableWidgetItem(row.mfrPn));
+        view->setItem(r, 3,
+                      new QTableWidgetItem(QStringLiteral("%1 %2").arg(on.qtyText(decimals), on.unit)));
+        view->setItem(r, 4,
+                      new QTableWidgetItem(QStringLiteral("%1 %2").arg(row.qtyText(decimals), row.unit)));
+    }
+    view->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    for (int c : {0, 2, 3, 4})
+        view->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    v->addWidget(view, 1);
+
+    auto* everyOne = new QPushButton(QStringLiteral("Tick every one"), &dlg);
+    connect(everyOne, &QPushButton::clicked, &dlg, [&ticks] {
+        for (QTableWidgetItem* t : ticks) t->setCheckState(Qt::Checked);
+    });
+    auto* dontAsk = new QCheckBox(
+        QStringLiteral("Do not ask again this sitting — add duplicates without asking"), &dlg);
+    dontAsk->setToolTip(
+        QStringLiteral("For the rest of this sitting a part already on the bill goes on again without "
+                       "this question. To stop adding parts at all, untick \"Add the parts to the bill "
+                       "of materials\" beside the Place button."));
+
+    auto* row = new QHBoxLayout;
+    row->addWidget(everyOne);
+    row->addStretch(1);
+    v->addLayout(row);
+    v->addWidget(dontAsk);
+
+    auto* buttons = new QDialogButtonBox(&dlg);
+    // WHAT IT WILL DO, rather than "OK": the new parts go on along with whatever is ticked, and Cancel
+    // leaves the bill alone altogether - including the parts that are new to it.
+    buttons->addButton(QStringLiteral("Add to the bill of materials"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(QStringLiteral("Cancel — leave the bill alone"), QDialogButtonBox::RejectRole);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    v->addWidget(buttons);
+    dlg.resize(780, 420);
+    if (dlg.exec() != QDialog::Accepted) return false;
+
+    for (int r = 0; r < ticks.size(); ++r)
+        takeIt[dupes[static_cast<size_t>(r)]] = ticks.at(r)->checkState() == Qt::Checked;
+    if (dontAsk->isChecked()) askAlreadyListed_ = false;
+    return true;
 }
 
 } // namespace Edraw_Desktop

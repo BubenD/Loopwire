@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/Bom.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
 
@@ -87,8 +88,31 @@ public:
     };
     StepRef stepAt(int index) const;
 
-    // Generate and hand to the editor to be placed by a click.
+    // Generate and hand to the editor to be placed by a click. With "add the parts to the bill of
+    // materials" ticked, the parts the harness is made of go onto the drawing's bill at the same time.
     void place();
+
+    // ---- the bill of materials ------------------------------------------------------------------
+    // Whether placing the harness also puts its parts on the drawing's bill of materials. Remembered
+    // between sittings, and off to begin with: writing to the bill is a second thing done to the
+    // drawing, and it is asked for rather than assumed.
+    bool addPartsToBom() const;
+    void setAddPartsToBom(bool on);
+    // The parts the harness is made of, as the lines they would go onto the bill as. What the tick box
+    // would add - so it can be looked at, and tested, without a drawing to add it to.
+    std::vector<BomRow> partsForBom() const;
+    // The parts put onto the drawing's bill now, duplicates put to the person first (see
+    // approveAlreadyListed). Returns how many lines were added; 0 when there was nothing to add or the
+    // question was answered with Cancel.
+    int addPartsToBomNow();
+
+signals:
+    // The drawing's bill of materials has been written to. The panel and the bill's own window show that
+    // same bill, and a line added here has to appear in both - two views of one list that disagree is
+    // worse than one view.
+    void bomChanged();
+
+public:
     // Driving it from a test: the harness the preview/summary actually show right now - trimmed to
     // what has been said so far (see previewDefinition()) - as opposed to definition(), which is the
     // whole thing including every step's eagerly-created default.
@@ -117,6 +141,13 @@ private:
     // is "2 branch(es)" said about a harness that has only said what its first end is.
     MechHarnessDef previewDefinition();
     void apply();             // the controls of the current page written back into the definition
+
+    // The parts the bill already lists, put to the person before anything is ordered twice: one line
+    // per such part, saying how much is on the bill and how much this harness would add, each with its
+    // own tick for "add it anyway". `takeIt` comes back one entry per row of `adding` - true for a row
+    // to add. False from the whole function means Cancel: the bill is left exactly as it was.
+    bool approveAlreadyListed(const std::vector<BomRow>& adding, const std::vector<BomRow>& have,
+                              const std::vector<int>& already, std::vector<bool>& takeIt);
 
     // ---- the definition, by step ----------------------------------------------------------------
     // The node a step is about: the root for steps 1-3, the breakout for 6, a branch's tip for 9-11.
@@ -159,6 +190,11 @@ private:
     DrawingPreview* preview_ = nullptr;
     QPushButton* backBtn_ = nullptr;
     QPushButton* nextBtn_ = nullptr;
+    QCheckBox* bomBox_ = nullptr;
+    // Whether a part the bill already lists is still put to the person. Turned off by the "do not ask
+    // again" tick in that question, for the rest of the sitting: somebody placing the same harness at
+    // four places on a sheet has answered it once and means it.
+    bool askAlreadyListed_ = true;
 
     // #1 / #11 - an end
     QComboBox* endKind_ = nullptr;

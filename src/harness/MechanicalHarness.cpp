@@ -351,6 +351,11 @@ int mechNearestAwg(double mm2) {
 }
 double mechGaugeMm2(const QString& gauge) { return gaugeMm2(gauge); }
 
+double libraryWireOdMm(const LibraryPart& part) {
+    const double od = part.params.value(QStringLiteral("od")).trimmed().toDouble();
+    return od > 0.0 ? od : 0.0;
+}
+
 double wireOuterDiameterMm(const QString& gauge) {
     const double mm2 = gaugeMm2(gauge);
     if (mm2 <= 0.0) return 0.0;
@@ -1612,9 +1617,14 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     // of the table", so the sheet and the table are one document rather than two that have to be kept
     // in step by hand.
     const std::vector<MechBomLine> bom = mechBom(def, catalog);
-    auto itemOf = [&bom, catalog](const QString& libPart, PartKind kind, const QString& name) {
+    auto itemOf = [&bom, catalog, &opt](const QString& libPart, PartKind kind, const QString& name) {
         const LibraryPart* part = catalog && !libPart.isEmpty() ? catalog->byId(libPart) : nullptr;
         const QString desc = part && !part->description.isEmpty() ? part->description : name;
+        // THE DRAWING'S OWN BILL WHERE THERE IS ONE - see MechDrawOptions::bomItemOf. Its answer is
+        // taken as it stands, 0 included: 0 means the part is not on that bill, and a balloon saying
+        // so ("?") is the truth, where falling back to the generated numbering would put a confident
+        // number on a line nobody can look up.
+        if (opt.bomItemOf) return opt.bomItemOf(libPart, part ? part->kind : kind, desc);
         return mechBomItem(bom, libPart, part ? part->kind : kind, desc);
     };
     auto balloonText = [](int item) {
@@ -2068,10 +2078,14 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     // reach them is worse than one that points at the end the run comes out of.
                     const Vec2 back = ps.a - u * depthUnits;
                     out.push_back(makeBalloon(opt, back, back - u * along(22.0 + step * n),
-                                              QString::number(items[i])));
+                                              balloonText(items[i])));
                 } else {
-                    out.push_back(makeBalloon(opt, tip, tip + v * (gap / 2.0 + 24.0 + step * n),
-                                              QString::number(items[i])));
+                    // THE LEADER LANDS ON THE RUN, not on its centreline: the tip is the edge the
+                    // balloon sits beyond, so the arrow touches the thing it is calling out instead
+                    // of being drawn through it to a point inside it.
+                    out.push_back(makeBalloon(opt, tip + v * (gap / 2.0),
+                                              tip + v * (gap / 2.0 + 24.0 + step * n),
+                                              balloonText(items[i])));
                 }
             }
         }
@@ -2141,7 +2155,12 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 out.push_back(box);
             }
             if (opt.balloons && f.balloon)
-                out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
+                // TOUCHING IT. The tip is the fitting's own outline on the side the balloon sits,
+                // not the middle of it: a leader to the centre is drawn straight THROUGH the part
+                // and stops somewhere inside, which reads as a balloon lying on top of the drawing
+                // rather than as one pointing at a part.
+                out.push_back(makeBalloon(opt, c + v * (across(odMm) / 2.0),
+                                          c + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
             // the drawing is the length in the table.
@@ -2215,7 +2234,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                                        .arg(g.fromGauges, g.toGauges),
                                    opt.textHeight, 0.0, QStringLiteral("label")));
             if (opt.balloons)
-                out.push_back(makeBalloon(opt, pn->at, pn->at + v * (across(odMm) / 2.0 + 22.0),
+                out.push_back(makeBalloon(opt, pn->at + v * (across(odMm) / 2.0),
+                                          pn->at + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(QString(), PartKind::Heatshrink,
                                                              partKindName(PartKind::Heatshrink)))));
         }
@@ -2384,7 +2404,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 out.push_back(box);
             }
             if (opt.balloons && f.balloon)
-                out.push_back(makeBalloon(opt, c, c + v * (across(odMm) / 2.0 + 22.0),
+                out.push_back(makeBalloon(opt, c + v * (across(odMm) / 2.0),
+                                          c + v * (across(odMm) / 2.0 + 22.0),
                                           balloonText(itemOf(f.libPart, f.kind, f.name))));
             // A body takes up room for the next one; a layer over the wires does not.
             if (!overTheWires) fittedBackMm = startMm + occupiedMm;
@@ -2398,14 +2419,32 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         if (openMm > 0.0 && seg && !seg->wireIds.isEmpty() &&
             (n->kind == MechNodeKind::Connector || n->kind == MechNodeKind::FreeEnd)) {
             const int count = static_cast<int>(seg->wireIds.size());
-            // Every conductor, up to the point where drawing more lines says less rather than more.
-            int drawn = std::min(count, 24);
+            // FIVE AT THE FACE, THREE INTO THE BUNDLE - the hand-drawn view in mytest/mytest1.dwx.
+            //
+            // A branch carrying twenty conductors cannot be drawn as twenty conductors: at the size
+            // these sheets print, twenty double lines fanning into one shell is a grey band, and the
+            // one thing the fan is for - showing that the harness leaves the connector as separate
+            // wires and gathers into a bundle - is the first thing lost. It used to draw up to
+            // twenty-four of them.
+            //
+            // So the fan is a PICTURE of the bundle rather than a tally of it. Up to five leave the
+            // face, spread across it; three of those carry on into the bundle and the ones between
+            // them stop where the closing conductors pass over them. That is how a released drawing
+            // shows a bundle forming, and it is what the hand-drawn view does with five and three.
+            //
+            // THE COUNT ITSELF IS NOT LOST, because it was never the fan's job: it is beside the run
+            // as "(n)" (MechDrawOptions::wireCounts), and in the wire list and the bill, where it can
+            // be read against the gauges and the ends.
+            // Not const: where this office has captured its OWN drawing of open conductors, that
+            // is used instead and this is zeroed so the generator's fan is not drawn as well.
+            int drawn = std::min(count, 5);
+            // How many of them reach the bundle is settled below, once the conductors' own widths are
+            // known: a row of them needs room, and how much room there is depends on what they are.
             // At the connector they are spread across its face; at the far end they close into the
             // bundle they come out of.
             const double faceHalf =
                 across(n->bodyHeightMm > 0.0 ? n->bodyHeightMm : std::max(endMm * 1.4, endMm + 2.0)) /
                 2.0;
-            const double bundleHalf = across(endMm) / 2.0;
             // THE FAN STARTS WHERE THE RUN DOES, not at the middle of the station.
             //
             // A run that leaves one housing of several has already been shifted onto that housing's
@@ -2482,34 +2521,212 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // A tenth of a wire's width between neighbours: enough that the lines read as separate at
             // the size these sheets are printed, without splaying the fan wider than it need be.
             const double faceSpan = std::max(faceHalf * 0.8 * 2.0, totalBand * 1.1);
-            double runningBand = 0.0;
+
+            // ---- WHERE THE FAN CLOSES, AND WHAT IT DOES AFTERWARDS ----------------------------
+            //
+            // A run that is BUNDLED is open only for the short stretch behind the connector, and its
+            // body starts where that stretch ends: the conductors have to arrive at the bundle
+            // exactly there, because the outline takes over from them. That is the two-legged fan -
+            // straight out of the face, then in to the bundle - and it is left alone.
+            //
+            // A run that is NOT bundled is open its whole length (MechBuildScript sets openStartMm to
+            // the run length for it), and nothing else is drawn along it at all. Closing the fan over
+            // the whole run then draws a fan a run long, which reads as wires that never gather -
+            // and gathering is the whole point. So it closes near the connector and runs PARALLEL
+            // from there, which is the shape the hand-drawn view has: straight for a fifth of the
+            // run, closing over the next sixth, parallel for the rest.
+            //
+            // The proportions are capped by the width of the fan itself, so a two-metre branch closes
+            // just behind its connector rather than a third of a metre down the sheet. faceSpan is an
+            // ACROSS distance and the two axes can be at different scales (the formboard
+            // exaggeration), so it is brought back onto the along axis before being used as a length.
+            const bool parallelAfterClosing = seg && !seg->bundled;
+            const double faceSpanAlong = xg > 0.0 ? faceSpan / xg : faceSpan;
+            const double openAlong = along(openMm);
+            const double leadAlong = parallelAfterClosing
+                                         ? std::min(openAlong * 0.20, faceSpanAlong * 1.3)
+                                         : along(straightMm);
+            const double closedAlong =
+                parallelAfterClosing
+                    ? std::min(openAlong * 0.36, leadAlong + faceSpanAlong * 1.1)
+                    : openAlong;
+            // Whether there is any parallel stretch left to draw once it has closed.
+            const bool hasTail = closedAlong < openAlong - 1e-6;
+
+            // Where wire `i` sits across the fan at the face, as -1..+1, and where it sits in the
+            // bundle. Wanted for every wire before any is drawn, because a wire that stops needs to
+            // know where its neighbours are going in order to know where it is stopped.
+            std::vector<double> faceT(static_cast<size_t>(drawn), 0.0);
+            {
+                double runningBand = 0.0;
+                for (int i = 0; i < drawn; ++i) {
+                    const double band = bandOf[static_cast<size_t>(i)];
+                    const double centre =
+                        totalBand > 0.0 ? (runningBand + band / 2.0) / totalBand : 0.5;
+                    runningBand += band;
+                    faceT[static_cast<size_t>(i)] = drawn == 1 ? 0.0 : centre * 2.0 - 1.0;
+                }
+            }
+            // ---- HOW MANY REACH THE BUNDLE, AND WHERE THEY SIT ACROSS IT ----------------------
+            //
+            // A ROUND BUNDLE NESTS AND A ROW DOES NOT, and that is the whole of this.
+            //
+            // The bundle diameter is √(ΣD²) × k - the figure for conductors settling into a round
+            // section - and it is always LESS than the same conductors laid out in a line. So
+            // spreading the ones that carry on across the bundle diameter drew them through one
+            // another: four 20 AWG conductors in a Ø3.7 bundle came out as three lines lying on top
+            // of each other, which on the screen is two lines, and "I added five conductors and it
+            // drew two" is exactly what that looks like.
+            //
+            // Each conductor therefore gets its own share of the far end in proportion to its width -
+            // the same rule the face uses, so a heavy conductor gets a heavy lane at both ends - and
+            // the far end is made wide enough for the row.
+            //
+            // The share is strictly increasing in i at both ends, so the conductors are in the SAME
+            // ORDER on the bundle as on the face, and two polylines whose ends are both in order
+            // cannot cross. (Re-spreading them evenly over the bundle's own full width breaks
+            // something subtler: the outermost then sits at the full bundle half while reaching only
+            // 0.8 of the face half, so it moves OUTWARD on the way in - a fan that opens out rather
+            // than closing. Measured, 8.17 mm across at the bundle against 7.32 mm at the face.)
+            // Three is the fewest that still reads as a bundle - two lines are a pair and one is a
+            // wire - and with three or fewer conductors every one of them carries through, so nothing
+            // is stylised that did not need to be.
+            //
+            // NOT REDUCED FURTHER TO FIT INSIDE THE OUTLINE, which was tried and is wrong: the bundle
+            // diameter has a FLOOR (MechDrawOptions::minBundleMm, 2 mm) so that an empty run still has
+            // a body to draw, and a run whose conductors state no diameter sits on that floor - 2 mm
+            // of outline with 1.5 mm conductors on it. Asking how many 1.5s fit inside 2 answers
+            // "one", so a five-conductor run came out as a single line into the bundle. The
+            // conductors are drawn at their own size and the outline at its own, and where the
+            // outline is thinner than the wires it carries, the wires win: they are the thing being
+            // counted.
+            const int carried = std::min(drawn, 3);
+
+            // WHICH ones carry through: evenly spaced across the fan, so the outermost two and the
+            // middle are kept and the ones between them are the ones that merge. Sampling the fan
+            // evenly is what keeps the picture symmetrical - dropping the last two instead would
+            // leave the bundle hanging off one edge of the shell.
+            std::vector<bool> carriesOn(static_cast<size_t>(std::max(drawn, 1)), true);
+            if (carried < drawn) {
+                std::fill(carriesOn.begin(), carriesOn.end(), false);
+                for (int j = 0; j < carried; ++j) {
+                    const int at = carried == 1
+                                       ? drawn / 2
+                                       : static_cast<int>(std::llround(
+                                             static_cast<double>(j) * (drawn - 1) / (carried - 1)));
+                    carriesOn[static_cast<size_t>(std::min(at, drawn - 1))] = true;
+                }
+            }
+
+            // HOW WIDE THE FAR END OF THE FAN IS: whichever is the greater of the outline it arrives
+            // at and the room the row of conductors actually needs.
+            //
+            // The outline, because a bundle drawn Ø12 with three conductors huddled in the middle of
+            // it reads as a thin bundle inside a fat one. The row, because a row of three needs three
+            // diameters and √(ΣD²)×k is less than that - which is the whole bug: spread over the
+            // bundle diameter they were drawn through one another.
+            //
+            // And never wider than the face, so the fan closes IN rather than opening out. That costs
+            // nothing: the face is already at least as wide as every conductor laid in a row
+            // (faceSpan >= totalBand * 1.1), so it is always wide enough for the subset of them that
+            // carries on.
+            double carriedBand = 0.0;
+            for (int i = 0; i < drawn; ++i)
+                if (carriesOn[static_cast<size_t>(i)]) carriedBand += bandOf[static_cast<size_t>(i)];
+            const double bundleSpan =
+                std::min(faceSpan, std::max(carriedBand * 1.05, across(endMm)));
+
+            std::vector<double> bundleAt(static_cast<size_t>(std::max(drawn, 1)), 0.0);
+            {
+                double running = 0.0;
+                for (int i = 0; i < drawn; ++i) {
+                    if (!carriesOn[static_cast<size_t>(i)]) continue;
+                    const double band = bandOf[static_cast<size_t>(i)];
+                    const double centre = carriedBand > 0.0 ? (running + band / 2.0) / carriedBand : 0.5;
+                    running += band;
+                    bundleAt[static_cast<size_t>(i)] =
+                        (carried == 1 ? 0.0 : centre * 2.0 - 1.0) * bundleSpan / 2.0;
+                }
+            }
+            const auto bundleOffsetOf = [&](int i) { return bundleAt[static_cast<size_t>(i)]; };
+
             for (int i = 0; i < drawn; ++i) {
                 const MechWire* mwi = def.wire(seg->wireIds[i]);
                 const double odMm = mwi ? wireOuterDiameterMm(mwi->gauge) : 1.5;
-                const double band = bandOf[static_cast<size_t>(i)];
-                // The middle of this wire's own share of the fan, as -1..+1 across it.
-                const double centre = totalBand > 0.0 ? (runningBand + band / 2.0) / totalBand : 0.5;
-                runningBand += band;
-                const double t = drawn == 1 ? 0.0 : centre * 2.0 - 1.0;
-                const Vec2 face = a + v * (t * faceSpan / 2.0);
-                const Vec2 knee = face + u * (into * along(straightMm));
+                const double t = faceT[static_cast<size_t>(i)];
+                const double faceOffset = t * faceSpan / 2.0;
+                const Vec2 face = a + v * faceOffset;
+                const Vec2 knee = face + u * (into * leadAlong);
+                const double kneeRadius =
+                    std::max(1.0, std::min(std::max(leadAlong, 1.0), across(odMm) * 3.0));
+
                 Entity w = baseEntity(opt, QStringLiteral("wires"));
                 w.type = EntityType::Polyline;
-                w.points = {b + v * (t * bundleHalf), knee, face};
+                QJsonArray radii;
+                if (carriesOn[static_cast<size_t>(i)]) {
+                    const double bundleOffset = bundleOffsetOf(i);
+                    const Vec2 closed = a + u * (into * closedAlong) + v * bundleOffset;
+                    // From the bundle end, back through the knee, into the face - the order the fan
+                    // has always been built in, so `points.back()` is the connector face and
+                    // `points.front()` is the far end of it.
+                    if (hasTail) {
+                        w.points = {a + u * (into * openAlong) + v * bundleOffset, closed, knee, face};
+                        radii.append(0.0);
+                        radii.append(kneeRadius);
+                        radii.append(kneeRadius);
+                        radii.append(0.0);
+                    } else {
+                        w.points = {closed, knee, face};
+                        radii.append(0.0);
+                        radii.append(kneeRadius);
+                        radii.append(0.0);
+                    }
+                } else {
+                    // THIS ONE MERGES. It runs straight out of the face and stops where the nearest
+                    // closing conductor passes over it - which is what the hand-drawn view does, and
+                    // reads as the wire disappearing into the bundle rather than as a line that gave
+                    // up. Stopped at the neighbour's NEAR EDGE and not at its centreline, so the two
+                    // centrelines still never meet: half a conductor's width of clearance is left.
+                    double stopAlong = closedAlong;
+                    for (int j = 0; j < drawn; ++j) {
+                        if (!carriesOn[static_cast<size_t>(j)]) continue;
+                        const double from = faceT[static_cast<size_t>(j)] * faceSpan / 2.0;
+                        const double to = bundleOffsetOf(j);
+                        // Its near edge: half its own width on the side this wire is on.
+                        const double edge = across(std::max(0.4, odMm)) / 2.0;
+                        const double nearFrom = from + (from > faceOffset ? -edge : edge);
+                        const double nearTo = to + (from > faceOffset ? -edge : edge);
+                        if (std::abs(nearTo - nearFrom) < 1e-9) continue;
+                        const double frac = (faceOffset - nearFrom) / (nearTo - nearFrom);
+                        if (frac <= 1e-6 || frac > 1.0) continue;   // it never reaches this wire
+                        stopAlong = std::min(stopAlong,
+                                             leadAlong + frac * (closedAlong - leadAlong));
+                    }
+                    // Never before the knee: a conductor that stopped inside its own straight leg
+                    // would be a stub off the connector face rather than a wire going anywhere.
+                    stopAlong = std::max(stopAlong, leadAlong + (closedAlong - leadAlong) * 0.15);
+                    w.points = {a + u * (into * stopAlong) + v * faceOffset, knee, face};
+                    radii.append(0.0);
+                    radii.append(kneeRadius);
+                    radii.append(0.0);
+                    // Said on the entity, so anything reading the drawing back can tell a conductor
+                    // that stops from one that arrives - and so a test can check that it does.
+                    w.meta.insert(QStringLiteral("fanMerged"), true);
+                }
                 w.a = w.points.front();
                 w.b = w.points.back();
                 w.meta.insert(QStringLiteral("double"), true);
                 w.meta.insert(QStringLiteral("gap"), std::max(0.4, across(odMm)));
                 // Rounded at the knee and nowhere else, so the ends stay square on the bundle and on
                 // the face. The radius is kept inside the fan it is turning through.
-                QJsonArray radii;
-                radii.append(0.0);
-                radii.append(std::max(1.0, std::min(along(straightMm), across(odMm) * 3.0)));
-                radii.append(0.0);
                 w.meta.insert(QStringLiteral("cornerRadii"), radii);
                 w.meta.insert(QStringLiteral("mechNode"), pn.id);
                 w.meta.insert(QStringLiteral("mechSeg"), seg->id);
                 w.meta.insert(QStringLiteral("wireOd"), odMm);
+                // HOW MANY IT STANDS FOR. Five lines can be a bundle of twenty, so the drawing says
+                // what it is a picture of rather than leaving a reader to count the lines and believe
+                // them.
+                if (drawn < count) w.meta.insert(QStringLiteral("fanOf"), count);
                 out.push_back(w);
             }
             // NO "n conductors" CAPTION. It was written under the fan whenever more wires were declared
@@ -3013,6 +3230,25 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             }
         }
     }
+
+    // ---- THE BREAK MARK GOES IN FRONT OF EVERYTHING IT CROSSES ----
+    //
+    // A break mark does not just draw two strokes: it MASKS the stretch of run between them, because
+    // that is what a break means - the drawing does not claim to show that stretch (see
+    // EntityType::LengthBreak in EntityRenderer).
+    //
+    // A mask only masks what was painted before it, and entities are painted in the order they are
+    // listed. The mark was emitted while its own run was being drawn, so everything that comes after
+    // it - the conductors, the coverings, the fittings, the balloons and every other run - was
+    // painted straight over the gap it had just opened, and the mark read as two strokes lying on an
+    // unbroken harness.
+    //
+    // So every mark is moved to the end, keeping the order they were made in. Stable, because two
+    // marks on one sheet are still in the order of the runs they belong to, and that is the order
+    // anything reading the drawing back expects them in.
+    std::stable_partition(out.begin(), out.end(), [](const Entity& e) {
+        return e.type != EntityType::LengthBreak;
+    });
 
     return out;
 }

@@ -413,7 +413,7 @@ void BundleDiameterDialog::fillRowFromPart(int row, const LibraryPart& part) {
     syncing_ = was;
     // The part's OWN diameter first - that is the number on the data sheet and the reason for
     // picking a part at all. Only when it says nothing does the nominal table get a turn.
-    const double od = part.params.value(QStringLiteral("od")).trimmed().toDouble();
+    const double od = libraryWireOdMm(part);
     if (od > 0.0) writeDiameter(row, od);
     else diameterFromGauge(row);
 }

@@ -4,6 +4,7 @@
 // those answers into that harness.
 #include "app/DrawingPreview.h"
 #include "app/HarnessStepsDialog.h"
+#include "harness/Bom.h"
 #include "harness/MechanicalHarness.h"
 
 #include <QCheckBox>
@@ -304,6 +305,55 @@ int run_stepsbuilder_tests() {
                 bar = std::max(bar, distance(e.a, e.b));
         check(widest > 0.0 && bar <= widest + 0.01,
               "to scale: a bar across the outline measures the diameter itself");
+    }
+
+    // THE PARTS ONTO THE BILL. The tick box beside Place says whether the harness's parts go onto the
+    // drawing's bill of materials at the same time as its drawing goes onto the sheet - and what goes on
+    // is what is PLACED, the whole harness, not the harness as far as the steps have been walked.
+    {
+        HarnessStepsDialog dlg3(nullptr);
+        auto* box = dlg3.findChild<QCheckBox*>(QStringLiteral("addToBom"));
+        check(box != nullptr, "bill: the window has an \"add the parts\" tick beside Place");
+        dlg3.setAddPartsToBom(false);
+        check(!dlg3.addPartsToBom(), "bill: turned off, it is off");
+        dlg3.setAddPartsToBom(true);
+        check(dlg3.addPartsToBom(), "bill: turned on, it is on");
+
+        if (goTo(dlg3, Step::MainRun)) field<QDoubleSpinBox>(dlg3, "runLength")->setValue(500.0);
+        const std::vector<BomRow> parts = dlg3.partsForBom();
+        std::printf("    (bill: %d line(s) for the harness)\n", int(parts.size()));
+        check(!parts.empty(), "bill: a harness with a run in it has parts to buy");
+        bool everyQtySaid = !parts.empty();
+        bool anyWire = false;
+        for (const BomRow& r : parts) {
+            if (r.qty <= 0.0 || r.unit.trimmed().isEmpty()) everyQtySaid = false;
+            if (r.description.startsWith(QLatin1String("Wire"))) anyWire = true;
+            // Put there by this window, and so removable by hand - as against a line the drawing itself
+            // calls for, which is read off the drawing every time.
+            if (r.fromDrawing) everyQtySaid = false;
+        }
+        check(everyQtySaid, "bill: every line says how much, in what, and that it was put there by hand");
+        check(anyWire, "bill: the conductors it is made of are on it");
+
+        // The whole harness, not the step that is showing: the bill of a harness placed in full cannot
+        // stop where somebody's cursor happened to be.
+        const size_t atStep4 = parts.size();
+        dlg3.goToStep(dlg3.stepCount() - 1);
+        check(dlg3.partsForBom().size() == atStep4,
+              "bill: the same parts whichever step is showing - Place puts the whole harness down");
+
+        // ALREADY ON THE BILL. Nothing is on an empty bill; everything is on a bill that is already this
+        // harness's own parts - which is the case the question is asked about.
+        const std::vector<int> onEmpty = bomAlreadyListed({}, parts);
+        bool noneOnEmpty = onEmpty.size() == parts.size();
+        for (int at : onEmpty)
+            if (at >= 0) noneOnEmpty = false;
+        check(noneOnEmpty, "bill: an empty bill lists none of them");
+        const std::vector<int> onItself = bomAlreadyListed(parts, parts);
+        bool everyOneFound = onItself.size() == parts.size();
+        for (int at : onItself)
+            if (at < 0) everyOneFound = false;
+        check(everyOneFound, "bill: placing it twice finds every part already on the bill");
     }
 
     if (failures == 0) std::printf("  -> ok\n");
