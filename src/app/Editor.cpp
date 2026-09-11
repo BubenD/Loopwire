@@ -11678,8 +11678,19 @@ std::vector<Entity> Editor::modifyPreview() const {
     const Vec2 cur = cursor_; // the live (snapped) cursor stands in for the last point
     switch (tool_) {
     case ToolId::Move: {
+        // THE TURN SPACE HAS PUT ON IT, and then where it is being carried to - the same two steps in
+        // the same order as the commit, because this preview is the promise the commit has to keep.
+        //
+        // It used to be the translation alone. Space recorded the turn and the placement applied it,
+        // so the thing that landed was turned and the thing on screen never was: you pressed Space,
+        // nothing moved, you pressed it three more times to make something happen, and then put down
+        // an object that had spun a full turn and a quarter. The preview is the only way to see what
+        // the turn is going to do, and it was the one thing not being told about it.
         const Vec2 delta = cur - modifyPts_[0];
-        for (Entity& g : ghosts) translateEntity(g, delta);
+        for (Entity& g : ghosts) {
+            if (std::abs(moveTurn_) > 1e-12) rotateEntity(g, modifyPts_[0], moveTurn_);
+            translateEntity(g, delta);
+        }
         break;
     }
     case ToolId::Rotate: {
@@ -16179,8 +16190,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
                     rotateMoveBy90(clockwise);   // says what it turned, and how to turn it again
                     return true;
                 }
+                // REMEMBERED, AND THE PREVIEW IS BUILT FROM IT - see modifyPreview, which turns by
+                // this before it carries the ghost to the cursor. It used to turn editGhost_ here
+                // instead, which under the Move tool is EMPTY: nothing has been grabbed, so there is
+                // no source ghost. So the loop ran over nothing, the preview never turned, and the
+                // only sign that Space had done anything at all was the object landing turned.
                 moveTurn_ += rad;
-                for (Entity& g : editGhost_) rotateEntity(g, mv->second, rad);
                 emit overlayChanged();
                 emit message((mods & Qt::ShiftModifier)
                                  ? QStringLiteral("Turned a quarter anticlockwise — Space to keep turning")

@@ -1076,6 +1076,13 @@ public:
     // dragged objects plus the wires attached to any dragged connector.
     const std::vector<Entity>& dragGhost() const { return editGhost_; }
 
+    // The selection transformed by the in-progress modify (Move/Rotate/Mirror/Scale/Offset) using the
+    // collected points and the live cursor - the ghost drawn at the cursor until the command
+    // finishes. Public because it is what the person is LOOKING at: a test that only checks where
+    // the object lands cannot tell the difference between a preview that turns and one that does not,
+    // and that difference is exactly what went wrong here once already.
+    std::vector<Entity> modifyPreview() const;
+
     // Overlay painting (after entities are drawn).
     void drawOverlay(QPainter& p, const ViewTransform& vt) const;
 
@@ -1303,10 +1310,6 @@ private:
     // Offset tool (AutoCAD OFFSET): set a distance (two clicks or a typed value), then
     // repeatedly pick an object and click the side to drop an offset copy. Esc exits.
     void handleOffsetPress(const Vec2& p);
-    // The selection transformed by the in-progress modify (Move/Rotate/Mirror/
-    // Scale/Offset) using the collected points + the live cursor — drawn as a ghost
-    // preview until the command finishes.
-    std::vector<Entity> modifyPreview() const;
     // Reference length for a 2-click scale: the selection's bounding-box diagonal,
     // so dragging out to ~that distance is ~1x.
     double selectionRefLength(const std::vector<Entity*>& sel) const;

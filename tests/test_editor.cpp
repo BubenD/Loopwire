@@ -9049,6 +9049,77 @@ int run_editor_tests() {
         // +x side of it.
         check(std::abs(after.b.x - 110.0) < 1e-6 && std::abs(after.b.y - 100.0) < 1e-6,
               "space turn: and Shift+Space turns it back anticlockwise");
+
+        // AND THE PREVIEW SHOWS IT, which is the whole point of pressing Space before putting the
+        // thing down. Checking only where the object LANDS cannot tell a preview that turns from one
+        // that does not - and it did not: the turn was recorded and applied on placement while the
+        // ghost at the cursor went on lying flat, so the only way to find out what Space had done was
+        // to do it and see.
+        {
+            Document d2;
+            Entity r;
+            r.id = QStringLiteral("r");
+            r.type = EntityType::Line;
+            r.a = {0.0, 0.0};
+            r.b = {10.0, 0.0};
+            d2.entities().push_back(r);
+            Editor ed2;
+            ed2.setDocument(&d2);
+            noSnap(ed2);
+            ed2.selectAll();
+            ed2.setTool(ToolId::Move);
+            ed2.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // held by its left end
+            ed2.onPointerMove({50.0, 50.0});
+            auto preview = ed2.modifyPreview();
+            check(preview.size() == 1, "space preview: one object is previewed at the cursor");
+            if (preview.size() == 1) {
+                std::printf("  space preview: before Space the ghost is (%.1f,%.1f)..(%.1f,%.1f)\n",
+                            preview[0].a.x, preview[0].a.y, preview[0].b.x, preview[0].b.y);
+                check(std::abs(preview[0].a.x - 50.0) < 1e-6 &&
+                          std::abs(preview[0].b.x - 60.0) < 1e-6 &&
+                          std::abs(preview[0].b.y - 50.0) < 1e-6,
+                      "space preview: carried to the cursor, still lying flat");
+            }
+            ed2.onKey(Qt::Key_Space, Qt::NoModifier);
+            preview = ed2.modifyPreview();
+            if (preview.size() == 1) {
+                std::printf("  space preview: after Space it is (%.1f,%.1f)..(%.1f,%.1f)\n",
+                            preview[0].a.x, preview[0].a.y, preview[0].b.x, preview[0].b.y);
+                // Turned a quarter clockwise about the point it is held by, then carried: the end
+                // that was 10 to the +x side is now 10 BELOW the hand.
+                check(std::abs(preview[0].a.x - 50.0) < 1e-6 &&
+                          std::abs(preview[0].a.y - 50.0) < 1e-6 &&
+                          std::abs(preview[0].b.x - 50.0) < 1e-6 &&
+                          std::abs(preview[0].b.y - 40.0) < 1e-6,
+                      "space preview: and the GHOST turns, not just the thing that lands");
+            }
+            // The original is still untouched behind it, and the two agree when it is put down: what
+            // was on screen is what lands.
+            const Entity ghostWas = preview.empty() ? Entity() : preview[0];
+            ed2.onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+            const Entity& landed = d2.entities().front();
+            std::printf("  space preview: placed as (%.1f,%.1f)..(%.1f,%.1f)\n", landed.a.x,
+                        landed.a.y, landed.b.x, landed.b.y);
+            check(std::abs(landed.a.x - ghostWas.a.x) < 1e-6 &&
+                      std::abs(landed.a.y - ghostWas.a.y) < 1e-6 &&
+                      std::abs(landed.b.x - ghostWas.b.x) < 1e-6 &&
+                      std::abs(landed.b.y - ghostWas.b.y) < 1e-6,
+                  "space preview: what was on screen is exactly what was put down");
+            // FOUR PRESSES COME BACK ROUND. The preview turning is what tells somebody they have
+            // pressed it enough - without it they press until something happens, which is never.
+            ed2.selectAll();
+            ed2.setTool(ToolId::Move);
+            ed2.onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+            ed2.onPointerMove({80.0, 80.0});
+            const Entity flat = ed2.modifyPreview().front();
+            for (int i = 0; i < 4; ++i) ed2.onKey(Qt::Key_Space, Qt::NoModifier);
+            const Entity round = ed2.modifyPreview().front();
+            std::printf("  space preview: four presses -> (%.1f,%.1f)..(%.1f,%.1f)\n", round.a.x,
+                        round.a.y, round.b.x, round.b.y);
+            check(std::abs(round.a.x - flat.a.x) < 1e-6 && std::abs(round.a.y - flat.a.y) < 1e-6 &&
+                      std::abs(round.b.x - flat.b.x) < 1e-6 && std::abs(round.b.y - flat.b.y) < 1e-6,
+                  "space preview: four quarter turns is a whole one, and the ghost is back");
+        }
     }
 
     // ---- Space during a DRAG turns it under the hand, once, and leaves the ghost be ---------------
