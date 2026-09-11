@@ -6450,7 +6450,8 @@ void MainWindow::buildMenus() {
     // are (§4(c)), and that the texts ACCOMPANY the program (§4(b)) - which the files beside the
     // executable do whether or not a menu points at them. A second menu entry was not required, so
     // there is not one.
-    fileMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
+    // About has moved to the Help menu, which is where a person looks for it - see below. The LGPL
+    // notice it carries is unaffected by which menu points at it.
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
@@ -6544,8 +6545,10 @@ void MainWindow::buildMenus() {
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Select &all"), QKeySequence::SelectAll, this, [this] { editor_->selectAll(); });
     editMenu->addAction(QStringLiteral("&Delete"), QKeySequence::Delete, this, [this] { editor_->deleteSelected(); });
-    editMenu->addSeparator();
-    editMenu->addAction(QStringLiteral("Color: By&Layer"), this, [this] { editor_->setColorsByLayer(); });
+    // "Color: ByLayer" used to sit here. It is a property command, not an edit one - it belongs with
+    // the colour picker on the ribbon, which is where somebody setting a colour already is - and one
+    // lonely entry under a separator made the menu look like it had been left half-finished. Still
+    // reachable by typing BYLAYER, which is where the command list says it is.
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&View"));
     // No bare "F" shortcut: a single-letter accelerator fires before the canvas
@@ -6557,8 +6560,12 @@ void MainWindow::buildMenus() {
                         [this] { canvas_->fitView(); });
 
     QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
-    helpMenu->addAction(QStringLiteral("&Commands..."), QKeySequence::HelpContents, this,
+    helpMenu->addAction(QStringLiteral("&Commands and keys..."), QKeySequence::HelpContents, this,
                         [this] { showHelp(); });
+    helpMenu->addSeparator();
+    // Where a person looks for it. It used to be under File, between the licences and Exit, which is
+    // nowhere anybody looks for what version they are running.
+    helpMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
 }
 
 // ---- Theme (Dark / Light) --------------------------------------------------
@@ -10286,59 +10293,191 @@ void MainWindow::runCommand(const QString& text) {
         QStringLiteral("Unknown command: %1  (type 'help' for the list)").arg(cmd));
 }
 
+namespace {
+// EVERY KEY THE DRAWING ANSWERS TO, gathered in one place.
+//
+// A typed command is discoverable - type the first letters and it is offered. A key combination is
+// not discoverable at all: Shift+Space turns the thing you are carrying and nothing on the screen
+// will ever tell you so. So the keys that are written nowhere else are written here.
+//
+// Read off the handlers rather than remembered. Editor::onKey and CanvasWidget::keyPressEvent are
+// between them the whole of it, plus the menu accelerators - and the canvas gets first refusal, which
+// is why the same key does different things in different states. Each state is a line of its own:
+// one row saying "Space" would be a lie three times over.
+//
+// The menu accelerators are asked of QKeySequence instead of being typed out, so this says whatever
+// the platform actually binds rather than assuming Ctrl.
+QString nativeKeys(QKeySequence::StandardKey k) {
+    const QKeySequence seq(k);
+    // Empty means the platform binds nothing to it - Quit has no accelerator on Windows - and the
+    // row is dropped rather than printed with a dash. A reference that lists keys which do nothing
+    // is worse than one that is short.
+    return seq.isEmpty() ? QString() : seq.toString(QKeySequence::NativeText);
+}
+
+struct KeyRow {
+    QString keys;
+    QString what;
+    bool header = false;
+};
+
+std::vector<KeyRow> keyboardReference() {
+    auto head = [](const char* t) { return KeyRow{QString::fromLatin1(t), QString(), true}; };
+    auto row = [](const QString& k, const char* t) {
+        return KeyRow{k, QString::fromLatin1(t), false};
+    };
+    auto lit = [&](const char* k, const char* t) { return row(QString::fromLatin1(k), t); };
+
+    std::vector<KeyRow> out;
+    out.push_back(head("Getting out of things"));
+    out.push_back(lit("Esc", "Cancel what is going on and drop the selection. A dragged joint goes "
+                             "back; a harness waiting to be placed returns to the builder"));
+    out.push_back(lit("Enter", "Finish the object being drawn. Places a pinned preview, closes an "
+                               "array, ends a Quick Select pick"));
+    out.push_back(lit("Space", "With nothing going on: run the last tool again"));
+
+    out.push_back(head("Carrying something about"));
+    out.push_back(lit("Space", "Turn what is being moved a quarter turn clockwise. Only the "
+                               "preview turns; the object turns when it is put down"));
+    out.push_back(lit("Shift+Space", "The same, anticlockwise"));
+    out.push_back(lit("Space  /  R", "Turn what is waiting to be placed - a paste, a block, a part "
+                                   "out of the library, a generated harness"));
+    out.push_back(lit("Shift+Space  /  Shift+R", "The same, anticlockwise"));
+    out.push_back(lit("X  /  Y", "Mirror what is being placed or right-drag-copied: X flips it "
+                                 "left to right, Y top to bottom"));
+
+    out.push_back(head("While drawing"));
+    out.push_back(lit("Tab", "Pin the preview so the ribbon's numbers can be tried on the real "
+                             "thing - twisted bundle, length break, label, connector, screen, twist"));
+    out.push_back(lit("Tab", "Where a tool asks for more than one number, move between them "
+                             "(Length and Angle, X radius and Y radius)"));
+    out.push_back(lit("Ctrl", "Drawing an arc: flip it to the sweep the other way round"));
+    out.push_back(lit("Ctrl", "Drawing a double line or double polyline: swap which side of the "
+                              "line you draw the second line falls"));
+    out.push_back(lit("Shift+1 to Shift+9", "Fanning wires out of a connector: add or drop that one "
+                                       "pin's wire"));
+    out.push_back(lit("Shift", "Fanning wires out of a connector: route one from every pin"));
+
+    out.push_back(head("Typing while drawing"));
+    out.push_back(lit("a number", "How far along the direction the cursor is pointing"));
+    out.push_back(lit("x,y", "An absolute point"));
+    out.push_back(lit("@dx,dy", "A point relative to the last one"));
+    out.push_back(lit("g  /  f", "Set the double-line gap / the polyline fillet radius"));
+    out.push_back(lit("a letter", "With nothing going on, starts a command at the cursor"));
+
+    out.push_back(head("The usual editing"));
+    out.push_back(row(nativeKeys(QKeySequence::SelectAll), "Select everything"));
+    out.push_back(row(nativeKeys(QKeySequence::Copy), "Copy"));
+    out.push_back(lit("Ctrl+Shift+C", "Copy, then pick the point it is held by"));
+    out.push_back(row(nativeKeys(QKeySequence::Cut), "Cut"));
+    out.push_back(row(nativeKeys(QKeySequence::Paste), "Paste - then click to put it down"));
+    out.push_back(row(nativeKeys(QKeySequence::Undo), "Undo"));
+    out.push_back(row(nativeKeys(QKeySequence::Redo), "Redo"));
+    out.push_back(row(nativeKeys(QKeySequence::Delete) + QStringLiteral("  /  Backspace"),
+                      "Delete what is selected"));
+
+    out.push_back(head("Files, and looking at them"));
+    out.push_back(row(nativeKeys(QKeySequence::New), "New drawing"));
+    out.push_back(row(nativeKeys(QKeySequence::Open), "Open a drawing"));
+    out.push_back(row(nativeKeys(QKeySequence::Save), "Save"));
+    out.push_back(lit("Ctrl+Shift+S", "Save every open drawing"));
+    out.push_back(row(nativeKeys(QKeySequence::Print), "Print and export"));
+    out.push_back(lit("Ctrl+Shift+F", "Fit the whole drawing on screen"));
+    out.push_back(row(nativeKeys(QKeySequence::HelpContents), "This window"));
+    out.push_back(row(nativeKeys(QKeySequence::Quit), "Leave Edraw"));
+    return out;
+}
+} // namespace
+
+bool MainWindow::hasCommandNamed(const QString& name) const {
+    for (const Command& c : commands_)
+        for (const QString& n : c.names)
+            if (n.compare(name, Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
 void MainWindow::showHelp() {
     QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("Commands"));
-    dlg.resize(560, 640);
+    dlg.setWindowTitle(QStringLiteral("Commands and keys"));
+    dlg.resize(680, 680);
     auto* lay = new QVBoxLayout(&dlg);
 
-    auto* table = new QTableWidget(&dlg);
-    table->setColumnCount(2);
-    table->setHorizontalHeaderLabels({"Command (aliases)", "Description"});
-    table->horizontalHeader()->setStretchLastSection(true);
-    table->verticalHeader()->setVisible(false);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setSelectionMode(QAbstractItemView::NoSelection);
-    table->setColumnWidth(0, 200);
+    // TWO LISTS, because they are two different things and mixing them helps nobody: what you can
+    // TYPE, and what you can PRESS. A typed command is discoverable already - the box offers it as
+    // soon as the first letters are in - so the keys are the half that actually needed writing down.
+    auto* tabs = new QTabWidget(&dlg);
+    const QColor headBg = darkTheme_ ? QColor("#313438") : QColor("#d2d2d8");
 
-    // Group rows by category, in a fixed display order.
-    const QStringList order = {"Draw", "Modify", "Harness", "Edit", "View", "File", "Help"};
-    auto addRow = [&](const QString& a, const QString& b, bool header) {
-        const int r = table->rowCount();
-        table->insertRow(r);
+    auto makeTable = [&](const QString& left, const QString& right, int leftWidth) {
+        auto* t = new QTableWidget(&dlg);
+        t->setColumnCount(2);
+        t->setHorizontalHeaderLabels({left, right});
+        t->horizontalHeader()->setStretchLastSection(true);
+        t->verticalHeader()->setVisible(false);
+        t->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        t->setSelectionMode(QAbstractItemView::NoSelection);
+        t->setColumnWidth(0, leftWidth);
+        t->setWordWrap(true);
+        return t;
+    };
+    auto addTo = [&](QTableWidget* t, const QString& a, const QString& b, bool header) {
+        const int r = t->rowCount();
+        t->insertRow(r);
         auto* c0 = new QTableWidgetItem(a);
         auto* c1 = new QTableWidgetItem(b);
         if (header) {
-            QFont f = c0->font(); f.setBold(true); c0->setFont(f);
-            const QColor hb = darkTheme_ ? QColor("#313438") : QColor("#d2d2d8");
-            c0->setBackground(hb);
-            c1->setBackground(hb);
+            QFont f = c0->font();
+            f.setBold(true);
+            c0->setFont(f);
+            c0->setBackground(headBg);
+            c1->setBackground(headBg);
+        } else {
+            // The key itself reads as a key: fixed pitch, so Ctrl+Shift+S lines up under Ctrl+S.
+            QFont f = c0->font();
+            f.setFamily(QStringLiteral("Consolas"));
+            c0->setFont(f);
         }
-        table->setItem(r, 0, c0);
-        table->setItem(r, 1, c1);
+        c0->setTextAlignment(Qt::AlignLeft | Qt::AlignTop);
+        c1->setTextAlignment(Qt::AlignLeft | Qt::AlignTop);
+        t->setItem(r, 0, c0);
+        t->setItem(r, 1, c1);
     };
+
+    // ---- What you can type ----
+    auto* typed = makeTable(QStringLiteral("Command (aliases)"), QStringLiteral("Description"), 200);
+    const QStringList order = {"Draw", "Modify", "Harness", "Edit", "View", "File", "Help"};
     for (const QString& cat : order) {
         bool first = true;
         for (const auto& c : commands_) {
             if (c.category != cat) continue;
-            if (first) { addRow(cat, QString(), true); first = false; }
+            if (first) { addTo(typed, cat, QString(), true); first = false; }
             QString name = c.names.first().toUpper();
             if (c.names.size() > 1) {
                 QStringList al;
                 for (int i = 1; i < c.names.size(); ++i) al << c.names[i].toUpper();
                 name += QStringLiteral("  (%1)").arg(al.join(", "));
             }
-            addRow(name, c.desc, false);
+            addTo(typed, name, c.desc, false);
         }
     }
-    // Note the live-input options.
-    addRow(QStringLiteral("(while drawing)"), QString(), true);
-    addRow(QStringLiteral("<number>"), QStringLiteral("Distance along the cursor direction"), false);
-    addRow(QStringLiteral("x,y  /  @dx,dy"), QStringLiteral("Absolute / relative point"), false);
-    addRow(QStringLiteral("g  /  f"), QStringLiteral("Set double-line gap / polyline fillet radius"), false);
-    addRow(QStringLiteral("Space / Enter"), QStringLiteral("Repeat last tool (Esc cancels)"), false);
+    tabs->addTab(typed, QStringLiteral("Commands"));
 
-    lay->addWidget(table);
+    // ---- What you can press ----
+    auto* keys = makeTable(QStringLiteral("Keys"), QStringLiteral("What it does"), 190);
+    for (const KeyRow& k : keyboardReference())
+        if (k.header || !k.keys.isEmpty()) addTo(keys, k.keys, k.what, k.header);
+    tabs->addTab(keys, QStringLiteral("Keyboard"));
+
+    // SIZED ONCE THE TABLE HAS ITS REAL WIDTH, and again whenever a tab is shown. Called while the
+    // dialog is still being built it measures a wrapped column against a width the table has not got
+    // yet, and every row comes out several times too tall - one line of text in a box half the window
+    // deep. A hidden tab has no width to measure at all, so the second one is sized when it is first
+    // turned to.
+    auto fit = [typed, keys] { typed->resizeRowsToContents(); keys->resizeRowsToContents(); };
+    connect(tabs, &QTabWidget::currentChanged, &dlg, [fit](int) { fit(); });
+    QTimer::singleShot(0, &dlg, fit);
+
+    lay->addWidget(tabs);
     auto* box = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);

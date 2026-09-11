@@ -450,6 +450,9 @@ public:
     // dirty drawing that has never been named, saving asks for a name, and a modal file dialogue in a
     // test run is a test run that never finishes.
     int dirtyDocumentCountForTest() const;
+    // Is there a typed command by this name or alias? A menu entry can be taken away without taking
+    // the feature away, and this is how a test says which of the two happened.
+    bool hasCommandNamed(const QString& name) const;
 
 private:
     void updateActiveTabText();

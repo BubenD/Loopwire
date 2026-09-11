@@ -1336,6 +1336,62 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- The menu bar: what is on it, and what is no longer on it --------------------------------
+    {
+        MainWindow mw;
+        auto menuNamed = [&mw](const QString& title) -> QMenu* {
+            for (QMenu* m : mw.menuBar()->findChildren<QMenu*>())
+                if (m->title().remove(QLatin1Char('&')) == title) return m;
+            return nullptr;
+        };
+        auto itemsOf = [](QMenu* m) {
+            QStringList out;
+            if (m)
+                for (QAction* a : m->actions())
+                    if (!a->isSeparator()) out << a->text().remove(QLatin1Char('&'));
+            return out;
+        };
+
+        QMenu* edit = menuNamed(QStringLiteral("Edit"));
+        QMenu* help = menuNamed(QStringLiteral("Help"));
+        QMenu* file = menuNamed(QStringLiteral("File"));
+        check(edit && help, "menus: Edit and Help are both on the bar");
+        const QStringList editItems = itemsOf(edit);
+        const QStringList helpItems = itemsOf(help);
+        std::printf("  menus: Edit = %s\n", qPrintable(editItems.join(QStringLiteral(" | "))));
+        std::printf("  menus: Help = %s\n", qPrintable(helpItems.join(QStringLiteral(" | "))));
+
+        // COLOUR BY LAYER IS OFF THE EDIT MENU. It is a property command, not an edit one, and it sat
+        // alone under a separator looking like the menu had been left half-finished.
+        bool anyColour = false;
+        for (const QString& s : editItems)
+            if (s.contains(QLatin1String("Color"), Qt::CaseInsensitive) ||
+                s.contains(QLatin1String("Colour"), Qt::CaseInsensitive))
+                anyColour = true;
+        check(!anyColour, "menus: Edit no longer offers Color: ByLayer");
+        // But the command itself is still reachable by typing it - removing the menu entry was not
+        // meant to remove the feature.
+        check(mw.hasCommandNamed(QStringLiteral("bylayer")),
+              "menus: and BYLAYER is still there to be typed");
+        // The rest of Edit is untouched.
+        check(editItems.contains(QStringLiteral("Undo")) &&
+                  editItems.contains(QStringLiteral("Select all")),
+              "menus: Undo and Select all are where they were");
+
+        // ABOUT IS UNDER HELP, which is where a person looks for it.
+        bool aboutInHelp = false, aboutInFile = false;
+        for (const QString& s : helpItems)
+            if (s.startsWith(QLatin1String("About"))) aboutInHelp = true;
+        for (const QString& s : itemsOf(file))
+            if (s.startsWith(QLatin1String("About"))) aboutInFile = true;
+        check(aboutInHelp, "menus: Help has About Edraw");
+        check(!aboutInFile, "menus: and File no longer does");
+        bool commandsInHelp = false;
+        for (const QString& s : helpItems)
+            if (s.contains(QLatin1String("Commands"))) commandsInHelp = true;
+        check(commandsInHelp, "menus: Help still opens the command list");
+    }
+
     if (spaceFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", spaceFailures);
     return spaceFailures;
