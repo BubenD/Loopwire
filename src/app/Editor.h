@@ -706,6 +706,11 @@ public:
     // which is two commands and an undo when the drop lands in the wrong place.
     bool placementPreviewActive() const { return pastePlacing_ || harnessPlacing_; }
     void rotatePlacementPreview(bool clockwise);
+    // The turn Space has put on what is waiting to be placed, in radians. The same number draws the
+    // ghost and commits the placement, so it is the whole of what the turn means. Public so a test
+    // can see the PREVIEW has turned and not only what eventually lands: those two came apart once
+    // already under the Move tool, and only the second half was being checked.
+    double placementRotation() const { return placeRot_; }
     // How far it has been turned, in radians (a multiple of a quarter turn).
     double placementPreviewRotation() const { return placeRot_; }
     void undo();

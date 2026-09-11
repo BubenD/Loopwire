@@ -9122,6 +9122,70 @@ int run_editor_tests() {
         }
     }
 
+    // ---- Space turns what is being PASTED, the same as what is being moved -----------------------
+    {
+        // A block off the clipboard arrives the way it was drawn and is very often wanted the other
+        // way round. The turn was plumbed the whole way through - the ghost is drawn with it, the
+        // placement commits with it - and no key was bound to it, so nothing waiting to be placed
+        // could be turned at all.
+        Document d;
+        Entity line;
+        line.id = QStringLiteral("l");
+        line.type = EntityType::Line;
+        line.a = {0.0, 0.0};
+        line.b = {10.0, 0.0};
+        d.entities().push_back(line);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectAll();
+        ed.copySelection();          // base point is the selection's bottom-left: (0,0)
+        ed.paste();
+        check(ed.placingPaste(), "paste turn: a paste is waiting to be placed");
+        check(ed.placementPreviewActive(), "paste turn: which is a placement preview");
+        ed.onPointerMove({50.0, 50.0});
+        check(std::abs(ed.placementRotation()) < 1e-12,
+              "paste turn: it comes off the clipboard the way it was drawn");
+
+        // SPACE TURNS IT, and only the preview: nothing has been placed, so the drawing still holds
+        // the one line it started with.
+        check(ed.onKey(Qt::Key_Space, Qt::NoModifier), "paste turn: Space is taken while it waits");
+        std::printf("  paste turn: after Space the preview is turned %.1f deg, %d object(s) on the "
+                    "sheet\n",
+                    ed.placementRotation() * 180.0 / M_PI, int(d.entities().size()));
+        check(std::abs(ed.placementRotation() + M_PI / 2.0) < 1e-9,
+              "paste turn: a quarter turn clockwise");
+        check(d.entities().size() == 1, "paste turn: and nothing has landed yet");
+
+        // PUT IT DOWN, and the turn lands with it. Held by (0,0) and dropped at (50,50), the end that
+        // was 10 to the +x side is now 10 below.
+        ed.onPointerPress({50.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 2, "paste turn: the click places the copy");
+        if (d.entities().size() == 2) {
+            const Entity& put = d.entities().back();
+            std::printf("  paste turn: placed as (%.1f,%.1f)..(%.1f,%.1f)\n", put.a.x, put.a.y,
+                        put.b.x, put.b.y);
+            check(std::abs(put.a.x - 50.0) < 1e-6 && std::abs(put.a.y - 50.0) < 1e-6 &&
+                      std::abs(put.b.x - 50.0) < 1e-6 && std::abs(put.b.y - 40.0) < 1e-6,
+                  "paste turn: it lands turned the way the preview was");
+        }
+        // And the next paste starts square again, rather than carrying the last one's turn.
+        ed.paste();
+        check(std::abs(ed.placementRotation()) < 1e-12,
+              "paste turn: something picked up next starts the way it was drawn");
+
+        // SHIFT+SPACE THE OTHER WAY, and four presses come back round - the same as Move, because a
+        // person who has learnt the key there should not have to learn a second one here.
+        check(ed.onKey(Qt::Key_Space, Qt::ShiftModifier), "paste turn: Shift+Space is taken too");
+        check(std::abs(ed.placementRotation() - M_PI / 2.0) < 1e-9,
+              "paste turn: and goes anticlockwise");
+        for (int i = 0; i < 3; ++i) ed.onKey(Qt::Key_Space, Qt::ShiftModifier);
+        std::printf("  paste turn: four anticlockwise presses leave it at %.1f deg\n",
+                    ed.placementRotation() * 180.0 / M_PI);
+        check(std::abs(ed.placementRotation()) < 1e-9,
+              "paste turn: four quarter turns is a whole one, and it is back where it started");
+    }
+
     // ---- Space during a DRAG turns it under the hand, once, and leaves the ghost be ---------------
     {
         // The other way of moving something: take hold of its body and drag it, rather than the Move

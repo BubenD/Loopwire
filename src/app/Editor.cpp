@@ -15940,7 +15940,7 @@ void Editor::rotatePlacementPreview(bool clockwise) {
     while (placeRot_ > M_PI + 1e-9) placeRot_ -= 2.0 * M_PI;
     while (placeRot_ < -M_PI - 1e-9) placeRot_ += 2.0 * M_PI;
     const int deg = static_cast<int>(std::lround(placeRot_ * 180.0 / M_PI));
-    emit message(QStringLiteral("Turned %1° — R turns it clockwise, Shift+R the other way")
+    emit message(QStringLiteral("Turned %1° — Space turns it clockwise, Shift+Space the other way")
                      .arg(deg > 0 ? QStringLiteral("+%1").arg(deg) : QString::number(deg)));
     emit overlayChanged();
 }
@@ -16152,6 +16152,25 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     //
     // It turns about the point it is being HELD BY, so the thing stays under the cursor while it spins:
     // turning about its own middle would swing it out from under the hand.
+    // SPACE TURNS WHAT IS BEING PLACED, exactly as it turns what is being moved. A block off the
+    // clipboard or a generated harness arrives the way it was drawn and is very often wanted the
+    // other way round; dropping it, turning it and moving it back is three commands to avoid one
+    // key. Same key, same quarter turn, same Shift for the other way - a person who has learnt it
+    // for Move should not have to learn a second one for paste.
+    //
+    // rotatePlacementPreview was written for this and, like rotateMoveBy90 before it, had never been
+    // called by anything: the turn was plumbed all the way through - the ghost is drawn with it and
+    // the placement commits with it - and there was simply no key bound to it, so nothing that was
+    // being placed could be turned at all.
+    //
+    // ONLY THE PREVIEW MOVES. Nothing has been placed yet, so there is nothing real to turn; the
+    // angle rides on placeRot_ until the click that puts it down, and that is where it becomes real.
+    // Ahead of the move branch below because the two states are different commands, and a paste
+    // waiting to land is the more particular of the two.
+    if (key == Qt::Key_Space && placementPreviewActive()) {
+        rotatePlacementPreview(!(mods & Qt::ShiftModifier));
+        return true;
+    }
     if (key == Qt::Key_Space && movingByDistance()) {
         if (const auto mv = moveVector()) {
             auto sel = selectedEntities();
