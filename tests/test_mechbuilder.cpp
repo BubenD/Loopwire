@@ -1107,6 +1107,68 @@ int run_mechbuilder_tests() {
               "dogleg: switched off, a run is the straight line between its ends");
     }
 
+    // ---- What is pulled over a bent run goes round the bend with it -------------------------------
+    {
+        // A braid, a sleeve, a length of heatshrink: all of them used to be one rigid box put at the
+        // middle of the covered stretch and turned to the run's direction. Over a run that bends, the
+        // box was laid straight across the corner - so the covering cut the bend while the conductors
+        // inside it went round, and the run arrived at its connector from a different direction from
+        // the thing covering it.
+        MechHarnessDef def;
+        MechNode root;
+        root.id = QStringLiteral("root");
+        MechNode far;
+        far.id = QStringLiteral("p1");
+        far.parentSegment = QStringLiteral("s1");
+        far.angleDeg = 30.0;
+        def.nodes.push_back(root);
+        def.nodes.push_back(far);
+        MechSegment s;
+        s.id = QStringLiteral("s1");
+        s.fromNode = QStringLiteral("root");
+        s.toNode = QStringLiteral("p1");
+        s.lengthMm = 600.0;
+        MechFitting braid;
+        braid.kind = PartKind::ShieldBraid;
+        braid.name = QStringLiteral("Braid");
+        s.coverings.push_back(braid);       // no length of its own: the whole run
+        def.segments.push_back(s);
+
+        const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+        const Entity* cover = nullptr;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fitting") &&
+                e.type == EntityType::Polygon && e.points.size() > 4)
+                cover = &e;
+        check(cover != nullptr, "bent cover: the covering is drawn as an outline of its own");
+        if (!cover) return failures;
+        std::printf("    (bent cover: %d point(s))\n", int(cover->points.size()));
+        // A box has four corners. Following a run with two knees needs more than that, and the extra
+        // ones are the knees - which is the whole difference between going round the bend and cutting
+        // across it.
+        check(cover->points.size() >= 6,
+              "bent cover: with a point at each knee, not the four corners of a box");
+        // AND IT ENDS FLAT, like the run it is on: the last stretch before the connector is
+        // horizontal, so the two points at that end share a height with each other and the covering
+        // meets the connector square.
+        const MechLayout lay = layoutMechanicalHarness(def);
+        const MechPlacedSegment* ps = lay.segment(QStringLiteral("s1"));
+        check(ps && ps->path.size() == 4, "bent cover: the run it is on is a dogleg");
+        if (!ps) return failures;
+        // Every point of the covering is within half a bundle's width of the run's own path - which
+        // says it follows the run rather than cutting anywhere.
+        double worst = 0.0;
+        for (const Vec2& p : cover->points) {
+            double best = 1e18;
+            for (size_t i = 1; i < ps->path.size(); ++i)
+                best = std::min(best, closestPointOnSegment(p, ps->path[i - 1], ps->path[i]).distance);
+            worst = std::max(worst, best);
+        }
+        std::printf("    (bent cover: furthest point %.2f from the run)\n", worst);
+        check(worst < 40.0,
+              "bent cover: every corner of it sits on the run, not out in the space it cuts across");
+    }
+
     // ---- A length is ordered in the unit the PART is issued in, not the drawing's -----------------
     {
         // Everything measured off a harness is in millimetres, because that is what the drawing is in.

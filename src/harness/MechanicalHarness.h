@@ -595,6 +595,24 @@ inline void segmentPointAt(const MechPlacedSegment& ps, double at, Vec2* point, 
     if (dir) *dir = Vec2{1.0, 0.0};
 }
 
+// HOW MUCH LONGER THE DRAWN RUN IS than the straight line between its ends.
+//
+// A dogleg goes further to get to the same place. Everything placed along a run is measured in the
+// run's own millimetres - 0 at one end, its length at the other - and those have to be spread over
+// the path that is actually drawn, or the body is laid out for a shorter run than the one on the
+// sheet: it stops before the last leg and the connector at the end is left with nothing arriving at
+// it. 1 for a straight run, so nothing that was drawn before this moves.
+//
+// It does mean a dogleg is not to scale ALONG itself. That is how a harness drawing works - the
+// length is what the dimension says, not what a ruler on the paper says - and it is the whole reason
+// a run can be drawn with a bend in it at all.
+inline double segmentStretch(const MechPlacedSegment& ps) {
+    if (ps.path.size() < 2) return 1.0;
+    const double straight = distance(ps.a, ps.b);
+    if (straight < 1e-12) return 1.0;
+    return segmentPathLength(ps) / straight;
+}
+
 inline Vec2 segmentPointAlong(const MechPlacedSegment& ps, double at) {
     Vec2 p;
     segmentPointAt(ps, at, &p, nullptr);
@@ -615,6 +633,69 @@ inline Vec2 segmentEndDir(const MechPlacedSegment& ps) {
     for (size_t i = p.size(); i >= 2; --i)
         if (distance(p[i - 2], p[i - 1]) > 1e-12) return (p[i - 1] - p[i - 2]).normalized();
     return Vec2{1.0, 0.0};
+}
+
+
+// ---- A covering that goes round a bend ------------------------------------------------------------
+//
+// Everything pulled over a run - a sleeve, a braid, a length of heatshrink, a conduit - used to be
+// drawn as one rigid shape: a box, or the part's own drawing, put at the middle of the covered stretch
+// and turned to the run's direction. That is right for a run that is a straight line, and wrong the
+// moment the run bends: the box is laid straight across the corner, so the braid and the DR-25 over a
+// branch were drawn cutting the bend while the conductors inside them went round it.
+//
+// So where a covering spans a knee it is drawn as what it is: the run's own path over that stretch,
+// offset either side by half the covering's diameter and closed at both ends. One outline, following
+// the wire.
+
+// Does the stretch [fromAt, toAt] along the drawn path cross a bend?
+inline bool spansBend(const MechPlacedSegment& ps, double fromAt, double toAt) {
+    if (ps.path.size() < 3) return false;
+    double acc = 0.0;
+    for (size_t i = 1; i + 1 < ps.path.size(); ++i) {
+        acc += distance(ps.path[i - 1], ps.path[i]);
+        if (acc > fromAt + 1e-9 && acc < toAt - 1e-9) return true;
+    }
+    return false;
+}
+
+// The points of the run's path between two distances along it, ends included.
+inline std::vector<Vec2> pathBetween(const MechPlacedSegment& ps, double fromAt, double toAt) {
+    std::vector<Vec2> out;
+    out.push_back(segmentPointAlong(ps, fromAt));
+    double acc = 0.0;
+    for (size_t i = 1; i + 1 < ps.path.size(); ++i) {
+        acc += distance(ps.path[i - 1], ps.path[i]);
+        if (acc > fromAt + 1e-9 && acc < toAt - 1e-9) out.push_back(ps.path[i]);
+    }
+    out.push_back(segmentPointAlong(ps, toAt));
+    return out;
+}
+
+// Two rails either side of a run of points, mitred at the corners: the outline of something laid over
+// it. Returned as one closed loop - up the plus side and back down the minus side.
+inline std::vector<Vec2> sleeveOutlineAlong(const std::vector<Vec2>& pts, double halfWidth) {
+    std::vector<Vec2> plus, minus;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        Vec2 u;
+        if (i + 1 < pts.size() && i > 0) {
+            // At a corner, square to the average of the two legs - the way the corner turns.
+            const Vec2 in = (pts[i] - pts[i - 1]).normalized();
+            const Vec2 outv = (pts[i + 1] - pts[i]).normalized();
+            u = Vec2{in.x + outv.x, in.y + outv.y};
+        } else if (i + 1 < pts.size()) {
+            u = pts[i + 1] - pts[i];
+        } else {
+            u = pts[i] - pts[i - 1];
+        }
+        if (u.length() < 1e-12) continue;
+        const Vec2 v = u.normalized().perp();
+        plus.push_back(pts[i] + v * halfWidth);
+        minus.push_back(pts[i] - v * halfWidth);
+    }
+    std::vector<Vec2> loop = plus;
+    for (auto it = minus.rbegin(); it != minus.rend(); ++it) loop.push_back(*it);
+    return loop;
 }
 
 struct MechLayout {

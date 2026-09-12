@@ -1756,21 +1756,67 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const double bodyFrom = openFrom;
         const double bodyTo = seg ? std::max(bodyFrom, seg->lengthMm - openTo) : 0.0;
         if (profile.size() >= 2 && seg && seg->lengthMm > 0.0 && bodyTo > bodyFrom) {
+            // WHERE THE RAILS NEED A POINT: every station on the profile - each change of diameter -
+            // AND every knee the run bends at.
+            //
+            // The profile of a plain run is two stations, one at each end. Offsetting those two and
+            // joining them draws the straight line between them, which on a dogleg is not the run:
+            // the bend is simply missed, and the body cuts the corner and stops short of the far end
+            // while the connector waits somewhere it never reaches. The knees have no station of
+            // their own because nothing about the run CHANGES there - it is the same bundle all the
+            // way - so they have to be put in here.
+            struct Rung { double at; double dia; };
+            std::vector<Rung> rungs;
+            const double stretch = segmentStretch(ps);
             for (const MechStation& st : profile) {
                 const double atMm = std::clamp(st.atMm, bodyFrom, bodyTo);
+                rungs.push_back({along(atMm) * stretch, across(st.diameterMm)});
+            }
+            std::sort(rungs.begin(), rungs.end(),
+                      [](const Rung& a, const Rung& b) { return a.at < b.at; });
+            if (!rungs.empty()) {
+                const std::vector<Vec2> legs = segmentPath(ps);
+                double acc = 0.0;
+                for (size_t i = 1; i + 1 < legs.size(); ++i) {
+                    acc += distance(legs[i - 1], legs[i]);
+                    if (acc <= rungs.front().at + 1e-9 || acc >= rungs.back().at - 1e-9) continue;
+                    // The bundle is whatever it is at that point: read off the profile either side.
+                    double dia = rungs.back().dia;
+                    for (size_t k = 1; k < rungs.size(); ++k) {
+                        if (acc > rungs[k].at) continue;
+                        const double span = rungs[k].at - rungs[k - 1].at;
+                        const double t = span > 1e-12 ? (acc - rungs[k - 1].at) / span : 0.0;
+                        dia = rungs[k - 1].dia + t * (rungs[k].dia - rungs[k - 1].dia);
+                        break;
+                    }
+                    rungs.push_back({acc, dia});
+                }
+                std::sort(rungs.begin(), rungs.end(),
+                          [](const Rung& a, const Rung& b) { return a.at < b.at; });
+            }
+            for (const Rung& r : rungs) {
                 Vec2 c, u;
-                segmentPointAt(ps, along(atMm), &c, &u);
-                const Vec2 across_ = u.perp();
-                const double half = across(st.diameterMm) / 2.0;
-                body.plus.push_back(c + across_ * half);
-                body.minus.push_back(c - across_ * half);
+                segmentPointAt(ps, r.at, &c, &u);
+                body.plus.push_back(c + u.perp() * (r.dia / 2.0));
+                body.minus.push_back(c - u.perp() * (r.dia / 2.0));
             }
         } else {
             // One width from end to end - but still along whatever legs the run has, or a dogleg with
             // no profile on it would come out as the straight line it is not.
-            for (const Vec2& c : segmentPath(ps)) {
-                body.plus.push_back(c + v * (gap / 2.0));
-                body.minus.push_back(c - v * (gap / 2.0));
+            const std::vector<Vec2> legs = segmentPath(ps);
+            for (size_t i = 0; i < legs.size(); ++i) {
+                // Square to the leg at an end, and to the average of the two legs at a knee - which
+                // is the direction the corner actually turns about.
+                Vec2 u = i + 1 < legs.size() ? (legs[i + 1] - legs[i]) : (legs[i] - legs[i - 1]);
+                if (i > 0 && i + 1 < legs.size()) {
+                    const Vec2 in = (legs[i] - legs[i - 1]).normalized();
+                    const Vec2 outv = (legs[i + 1] - legs[i]).normalized();
+                    u = Vec2{in.x + outv.x, in.y + outv.y};
+                }
+                if (u.length() < 1e-12) u = dir;
+                const Vec2 vv = u.normalized().perp();
+                body.plus.push_back(legs[i] + vv * (gap / 2.0));
+                body.minus.push_back(legs[i] - vv * (gap / 2.0));
             }
         }
         bodies.insert(ps.id, body);
@@ -2197,16 +2243,32 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 bareAtStart + std::clamp(f.atMm, 0.0, std::max(0.0, coveredMm - 1e-9));
             const double runMm =
                 std::min(lengthMm, std::max(0.0, bareAtStart + coveredMm - startMm));
+            const double fromAt = along(startMm) * segmentStretch(ps);
+            const double toAt = along(startMm + runMm) * segmentStretch(ps);
             Vec2 c, cu;
-            segmentPointAt(ps, along(startMm + runMm / 2.0), &c, &cu);
-            if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
+            segmentPointAt(ps, (fromAt + toAt) / 2.0, &c, &cu);
+            if (spansBend(ps, fromAt, toAt)) {
+                // IT GOES ROUND THE BEND WITH THE RUN. A rigid box laid across a corner draws a
+                // braid cutting the bend while the conductors inside it go round - see
+                // sleeveOutlineAlong. Whatever the covering would otherwise have been drawn as, over
+                // a bend it is the run's own shape at the covering's diameter.
+                Entity sleeve = baseEntity(opt, QStringLiteral("fitting"));
+                sleeve.type = EntityType::Polygon;
+                sleeve.points = sleeveOutlineAlong(pathBetween(ps, fromAt, toAt), across(odMm) / 2.0);
+                if (!sleeve.points.empty()) {
+                    sleeve.a = sleeve.points.front();
+                    sleeve.b = sleeve.points.back();
+                }
+                sleeve.meta.insert(QStringLiteral("mechSeg"), ps.id);
+                out.push_back(sleeve);
+            } else if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
             } else if (MechModelKind mk;
                        mechModelForFitting(f.kind, mk) && mechModelFor(mk, f.modelName)) {
                 Vec2 from, fu;
-                segmentPointAt(ps, along(startMm), &from, &fu);
+                segmentPointAt(ps, along(startMm) * segmentStretch(ps), &from, &fu);
                 // One placed model is ONE object on the sheet. The key is worked out from where it went
                 // rather than made up, so regenerating the drawing gives the same fitting the same key.
                 const QString group = QStringLiteral("%1|%2|%3|seg")
@@ -2249,8 +2311,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
             // the drawing is the length in the table.
             if ((opt.dimensions || f.dimension) && runMm > 0.0) {
-                const Vec2 a = segmentPointAlong(ps, along(startMm));
-                const Vec2 b = segmentPointAlong(ps, along(startMm + runMm));
+                const Vec2 a = segmentPointAlong(ps, fromAt);
+                const Vec2 b = segmentPointAlong(ps, toAt);
                 Entity dim = makeDimension(opt, a, b,
                                            lerp(a, b, 0.5) + v * (across(odMm) / 2.0 +
                                                                   opt.textHeight * 1.4),
