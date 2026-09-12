@@ -2,6 +2,10 @@
 #include <QDateTime>
 #include "harness/MechanicalHarness.h"
 
+// lengthUnitInMm / convertQuantity: the bill is measured off the drawing in millimetres and ordered
+// in whatever the part is issued in, and those two have to be reconciled where the line is made.
+#include "harness/Bom.h"
+
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
 #include "harness/MechModels.h"
@@ -787,6 +791,16 @@ std::vector<MechBomLine> mechBom(const MechHarnessDef& def, const PartsCatalog* 
         // Nothing said: a thing is counted each, a length in the millimetres the drawing is in.
         if (line.unit.trimmed().isEmpty())
             line.unit = boughtByLength(line.kind) ? QStringLiteral("mm") : QStringLiteral("each");
+        // AND THE FIGURE IS PUT INTO THAT UNIT. Everything measured off the harness is in
+        // millimetres, because that is what the drawing is in; the unit is the part's own, because
+        // that is what it is ORDERED in. Those are two different things, and taking one and printing
+        // it beside the other is how 1400 mm of wire became "1400 m" - a thousand times the whole
+        // build, on a line nobody would question because the number looked reasonable.
+        //
+        // Only between lengths. A hundred grommets are not any number of metres, and convertQuantity
+        // leaves a count alone.
+        if (lengthUnitInMm(line.unit) > 0.0)
+            qty = convertQuantity(qty, QStringLiteral("mm"), line.unit);
         const QString key = bomKey(line.libPart, line.kind, line.description);
         auto it = at.find(key);
         if (it == at.end()) {

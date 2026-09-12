@@ -6,6 +6,11 @@
 #include "harness/MechanicalHarness.h"
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
+#include "harness/Bom.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QJsonObject>
 #include "model/Block.h"
 #include "model/Document.h"
@@ -1011,6 +1016,93 @@ int run_mechbuilder_tests() {
         for (const Entity& e : ents)
             if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("balloon"))
                 balloonText << e.meta.value(QStringLiteral("text")).toString();
+    // ---- A length is ordered in the unit the PART is issued in, not the drawing's -----------------
+    {
+        // Everything measured off a harness is in millimetres, because that is what the drawing is in.
+        // The unit on the bill is the part's own, because that is what it is ORDERED in. Those are two
+        // different things, and printing one beside the other is how 1400 mm of wire came out as
+        // "1400 m" - a thousand times the whole build, on a line nobody would question because the
+        // number itself looked perfectly reasonable.
+        PartsLibrary lib;
+        LibraryPart& byMetre = lib.add(PartKind::Wire);
+        byMetre.id = QStringLiteral("W-M");
+        byMetre.mfrPn = QStringLiteral("WIRE-BY-THE-METRE");
+        byMetre.description = QStringLiteral("Wire sold by the metre");
+        byMetre.unit = QStringLiteral("m");
+        LibraryPart& byMm = lib.add(PartKind::Heatshrink);
+        byMm.id = QStringLiteral("H-MM");
+        byMm.mfrPn = QStringLiteral("SLEEVE-BY-THE-MM");
+        byMm.description = QStringLiteral("Sleeving sold by the millimetre");
+        byMm.unit = QStringLiteral("mm");
+        LibraryPart& counted = lib.add(PartKind::Backshell);
+        counted.id = QStringLiteral("B-EA");
+        counted.mfrPn = QStringLiteral("BACKSHELL");
+        counted.description = QStringLiteral("A backshell, counted");
+        counted.unit = QStringLiteral("each");
+
+        const QString libPath =
+            QDir::tempPath() + QStringLiteral("/edraw-bom-units-%1.plb").arg(QCoreApplication::applicationPid());
+        check(lib.save(libPath), "bom units: a library to look the parts up in");
+        PartsCatalog cat;
+        cat.setRemembering(false);
+        check(cat.connectLibrary(libPath), "bom units: and it is connected");
+
+        // A harness 1400 mm long, carrying that wire, with that sleeving over it and a backshell on
+        // the end.
+        MechHarnessDef def;
+        MechNode root;
+        root.id = QStringLiteral("root");
+        MechNode end;
+        end.id = QStringLiteral("p1");
+        MechFitting bs;
+        bs.kind = PartKind::Backshell;
+        bs.libPart = QStringLiteral("B-EA");
+        bs.lengthMm = 15.0;
+        end.fittings.push_back(bs);
+        def.nodes.push_back(root);
+        def.nodes.push_back(end);
+        MechSegment seg;
+        seg.id = QStringLiteral("s1");
+        seg.fromNode = QStringLiteral("root");
+        seg.toNode = QStringLiteral("p1");
+        seg.lengthMm = 1400.0;
+        // The conductor lives on the harness and the run names it, which is how a wire that goes
+        // through several runs is still one wire.
+        MechWire w;
+        w.id = QStringLiteral("w1");
+        w.gauge = QStringLiteral("22 AWG");
+        w.libPart = QStringLiteral("W-M");
+        def.wires.push_back(w);
+        seg.wireIds = {w.id};
+        MechFitting sleeve;
+        sleeve.kind = PartKind::Heatshrink;
+        sleeve.libPart = QStringLiteral("H-MM");
+        sleeve.lengthMm = 1400.0;
+        seg.coverings.push_back(sleeve);
+        def.segments.push_back(seg);
+
+        double metres = -1.0, millimetres = -1.0, each = -1.0;
+        QString metreUnit, mmUnit, eachUnit;
+        for (const MechBomLine& l : mechBom(def, &cat)) {
+            std::printf("      %-32s %10.3f %s\n", qPrintable(l.description), l.qty,
+                        qPrintable(l.unit));
+            if (l.libPart == QLatin1String("W-M")) { metres = l.qty; metreUnit = l.unit; }
+            if (l.libPart == QLatin1String("H-MM")) { millimetres = l.qty; mmUnit = l.unit; }
+            if (l.libPart == QLatin1String("B-EA")) { each = l.qty; eachUnit = l.unit; }
+        }
+        // 1400 mm of a wire issued by the metre is 1.4 m, and it says metres.
+        check(metreUnit == QLatin1String("m"), "bom units: the wire is ordered in its own unit");
+        check(std::abs(metres - 1.4) < 1e-9,
+              "bom units: and 1400 mm of it is 1.4 of them, not 1400");
+        // Sleeving issued by the millimetre is left exactly as measured.
+        check(mmUnit == QLatin1String("mm") && std::abs(millimetres - 1400.0) < 1e-9,
+              "bom units: a part issued in mm keeps the figure the drawing gave");
+        // And a thing that is COUNTED is not a length at all: one backshell is one backshell.
+        check(eachUnit == QLatin1String("each") && std::abs(each - 1.0) < 1e-9,
+              "bom units: a counted part is not converted into anything");
+        QFile::remove(libPath);
+    }
+
     // ---- the wizard says which side, and which of the drawn models ---------------------------------
     {
         // A part is drawn one way round and used both ways round: the same boot on the other side of the
