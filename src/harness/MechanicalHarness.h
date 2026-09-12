@@ -281,6 +281,13 @@ struct MechDrawOptions {
     std::function<int(const QString& libPart, PartKind kind, const QString& description)> bomItemOf;
     // The numbered triangles and the NOTES block beside the harness.
     bool deltaNotes = true;
+    // A BRANCH LEAVES AND ARRIVES HORIZONTALLY, dropping across in between - see MechPlacedSegment
+    // ::path. This is how a harness is drawn: what sits at either end of a run is a connector, and a
+    // connector is drawn square. Off, a branch is the single slanted line it always was.
+    bool squareBranches = true;
+    // How much straight run to leave at each end before the diagonal starts, in millimetres. Enough
+    // to get clear of the breakout and to give the backshell and boot something straight to sit on.
+    double branchLeadMm = 60.0;
     bool connectorBodies = true;
     bool wireCounts = false;                // "(6)" beside each run
     // A junction where a conductor changes gauge has a splice in it, and a splice is never left bare:
@@ -500,6 +507,16 @@ struct MechPlacedNode {
     QString id;
     Vec2 at{0.0, 0.0};
     double dirDeg = 0.0;   // the direction its incoming segment arrives on
+    // THE DIRECTION IT IS DRAWN ALONG, which is not always the one it arrived on.
+    //
+    // A branch that turns is routed as a dogleg (see MechPlacedSegment::path) so that it comes IN
+    // horizontally, and what sits here - a connector, its backshell, its boot, its designator - is
+    // squared to that last leg rather than to the slant the branch took to get here.
+    //
+    // dirDeg is left alone because it is also the base every child of this node is placed from: a
+    // branch of a branch is measured against the way its parent was HEADING, and squaring that would
+    // quietly move every sub-branch on the sheet.
+    double faceDeg = 0.0;
 };
 
 struct MechPlacedSegment {
@@ -507,6 +524,18 @@ struct MechPlacedSegment {
     Vec2 a{0.0, 0.0};
     Vec2 b{0.0, 0.0};
     double dirDeg = 0.0;
+    // THE WAY THE RUN ACTUALLY GOES, when it is not a straight line from a to b.
+    //
+    // A harness drawing does not send a branch off diagonally and leave it there. It leaves its
+    // breakout horizontally, drops across to the height the other end is at, and arrives horizontally
+    // - because what is at either end is a connector, and a connector is drawn square. A run that
+    // arrives at 30 degrees puts its backshell, its boot and its designator on the slant.
+    //
+    // Empty means the run IS the straight line a..b, which is what a run in line with its parent is
+    // and what every harness drawn before this was. Where it is set, the first and last legs are
+    // horizontal (or rather: along the node directions at either end), so everything placed AT an end
+    // - the mitre into the breakout, the fittings, the conductors - is square to it as before.
+    std::vector<Vec2> path;
     double diameterMm = 0.0;        // the body: the jacket when it is a cable, else the bundle
     // What it is at each end, which is the body again unless the jacket is stripped back there. The
     // outline is mitred at a junction on THESE, not on the body - a cable that comes out of its jacket
@@ -514,6 +543,79 @@ struct MechPlacedSegment {
     double fromDiameterMm = 0.0;
     double toDiameterMm = 0.0;
 };
+
+
+// ---- Walking a run that is not a straight line ---------------------------------------------------
+//
+// Everything placed along a run - a fitting, a sleeve, a break mark, the figure that dimensions it -
+// asks the same two questions: where is `x` millimetres along, and which way is the run going there.
+// While every run was a straight line both had one-line answers (a + dir * x, and dir). A run that
+// leaves its breakout horizontally, drops across and arrives horizontally has three legs, and the
+// answers have to walk them.
+//
+// The path is in DRAWING units already, so the millimetre figure is scaled by the caller exactly as it
+// was before - these take the distance in drawing units and nothing changes about who scales what.
+
+// The legs of a run, whether it has a path or is still the straight line a..b.
+inline std::vector<Vec2> segmentPath(const MechPlacedSegment& ps) {
+    if (ps.path.size() >= 2) return ps.path;
+    return {ps.a, ps.b};
+}
+
+// How long the drawn path is. A dogleg is LONGER than the straight line between its ends, which
+// matters: a fitting 30 mm along is 30 mm along the wire, not 30 mm along the line of sight.
+inline double segmentPathLength(const MechPlacedSegment& ps) {
+    const std::vector<Vec2> p = segmentPath(ps);
+    double total = 0.0;
+    for (size_t i = 1; i < p.size(); ++i) total += distance(p[i - 1], p[i]);
+    return total;
+}
+
+// Where `at` (in drawing units, from the start) falls on the run, and which way the run is heading
+// there. Before the start and past the end it carries on along the first and last legs, so a fitting
+// that overhangs an end lands where it would have if the run had been longer, rather than piling up
+// on the end point.
+inline void segmentPointAt(const MechPlacedSegment& ps, double at, Vec2* point, Vec2* dir) {
+    const std::vector<Vec2> p = segmentPath(ps);
+    double left = at;
+    for (size_t i = 1; i < p.size(); ++i) {
+        const Vec2 d = p[i] - p[i - 1];
+        const double len = d.length();
+        if (len < 1e-12) continue;
+        const Vec2 u = d / len;
+        // The last leg takes everything that is left, so a point past the end runs on along it.
+        if (left <= len || i + 1 == p.size()) {
+            if (point) *point = p[i - 1] + u * left;
+            if (dir) *dir = u;
+            return;
+        }
+        left -= len;
+    }
+    if (point) *point = ps.a;
+    if (dir) *dir = Vec2{1.0, 0.0};
+}
+
+inline Vec2 segmentPointAlong(const MechPlacedSegment& ps, double at) {
+    Vec2 p;
+    segmentPointAt(ps, at, &p, nullptr);
+    return p;
+}
+
+// Which way the run LEAVES its start, and which way it ARRIVES at its end. These are what a junction
+// mitres against and what a connector is squared to - on a dogleg they are the two horizontal legs,
+// which is the whole point of drawing one.
+inline Vec2 segmentStartDir(const MechPlacedSegment& ps) {
+    const std::vector<Vec2> p = segmentPath(ps);
+    for (size_t i = 1; i < p.size(); ++i)
+        if (distance(p[i - 1], p[i]) > 1e-12) return (p[i] - p[i - 1]).normalized();
+    return Vec2{1.0, 0.0};
+}
+inline Vec2 segmentEndDir(const MechPlacedSegment& ps) {
+    const std::vector<Vec2> p = segmentPath(ps);
+    for (size_t i = p.size(); i >= 2; --i)
+        if (distance(p[i - 2], p[i - 1]) > 1e-12) return (p[i - 1] - p[i - 2]).normalized();
+    return Vec2{1.0, 0.0};
+}
 
 struct MechLayout {
     std::vector<MechPlacedNode> nodes;

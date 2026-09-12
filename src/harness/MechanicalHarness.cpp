@@ -942,7 +942,14 @@ MechLayout layoutMechanicalHarness(const MechHarnessDef& def) {
     MechLayout out;
     const MechNode* root = def.rootNode();
     if (!root) return out;
-    out.nodes.push_back({root->id, def.draw.origin, def.draw.baseDirectionDeg});
+    out.nodes.push_back({root->id, def.draw.origin, def.draw.baseDirectionDeg,
+                         def.draw.baseDirectionDeg});
+
+    // How many runs LEAVE each node. A breakout that lets two branches go cannot send both of them
+    // off along the trunk - they would be drawn on top of each other - so a run leaving a node that
+    // divides keeps its own angle and straightens out afterwards. See below.
+    QHash<QString, int> leaving;
+    for (const MechSegment& s : def.segments) leaving[s.fromNode]++;
 
     // Breadth-first from the root, so a branch of a branch is placed once its parent is. A node
     // whose parent never gets placed is simply not placed - the validator says so.
@@ -959,11 +966,59 @@ MechLayout layoutMechanicalHarness(const MechHarnessDef& def) {
             const double r = rad(dirDeg);
             const double len = seg->lengthMm * def.draw.scale;
             const Vec2 at{parent->at.x + std::cos(r) * len, parent->at.y + std::sin(r) * len};
-            out.nodes.push_back({n.id, at, dirDeg});
-            out.segments.push_back({seg->id, parent->at, at, dirDeg,
-                                    segmentBodyDiameterMm(def, *seg),
-                                    segmentEndDiameterMm(def, *seg, /*atToEnd=*/false),
-                                    segmentEndDiameterMm(def, *seg, /*atToEnd=*/true)});
+
+            // ---- HOW THE RUN GETS THERE, AND WHICH WAY THE FAR END FACES ----
+            //
+            // A released harness drawing does not send a branch off at 30 degrees and leave it there.
+            // What sits at the end of a run is a connector, and a connector is drawn square - so the
+            // run drops across to the height the far end sits at and comes in straight, and the
+            // backshell, the boot and the designator sit on a straight length instead of on a slant.
+            //
+            // The branch angle still decides WHERE the far end goes, exactly as it did, so nothing
+            // changes size or moves on the sheet. Only the route between them changes.
+            //
+            // LEAVING A BREAKOUT IS DIFFERENT. Where a node divides, every branch leaving it
+            // horizontally would put them all on the same line, one drawn over another. So a run out
+            // of a dividing node sets off at its own angle - which is what makes the funnel at a
+            // breakout read - and straightens out once it is clear. A run leaving a node that has
+            // only this one run to give can start straight, which is the shape asked for: out flat,
+            // across, and flat again.
+            const bool turns = def.draw.squareBranches &&
+                               std::abs(std::remainder(n.angleDeg, 360.0)) > 0.01;
+            const bool leadOut = leaving.value(seg->fromNode) <= 1;
+            double faceDeg = dirDeg;
+            std::vector<Vec2> path;
+            if (turns) {
+                faceDeg = parent->dirDeg;                    // squared to the trunk it came off
+                const double fr = rad(faceDeg);
+                const Vec2 u{std::cos(fr), std::sin(fr)};    // the direction both leads run along
+                // Capped at a third of the run each end, so a short branch still gets a diagonal
+                // rather than two leads meeting in the middle and leaving nothing between them.
+                const double lead = std::min(def.draw.branchLeadMm * def.draw.scale, len / 3.0);
+                const Vec2 k1 = leadOut ? parent->at + u * lead : parent->at;
+                const Vec2 k2 = at - u * lead;
+                // Only worth a dogleg if the knees are apart and in front of one another: a branch
+                // that turns back on itself is better drawn as the straight line it was.
+                if (distance(k1, k2) > 1e-9 && dot(k2 - k1, u) > 0.0)
+                    path = leadOut ? std::vector<Vec2>{parent->at, k1, k2, at}
+                                   : std::vector<Vec2>{parent->at, k2, at};
+                else
+                    faceDeg = dirDeg;                        // no dogleg: it faces the way it came
+            }
+
+            out.nodes.push_back({n.id, at, dirDeg, faceDeg});
+            // Named rather than laid out in order: the path sits among these now, and an aggregate
+            // initialiser that is one field out puts a diameter into it without anybody noticing.
+            MechPlacedSegment ps;
+            ps.id = seg->id;
+            ps.a = parent->at;
+            ps.b = at;
+            ps.dirDeg = dirDeg;
+            ps.path = path;
+            ps.diameterMm = segmentBodyDiameterMm(def, *seg);
+            ps.fromDiameterMm = segmentEndDiameterMm(def, *seg, /*atToEnd=*/false);
+            ps.toDiameterMm = segmentEndDiameterMm(def, *seg, /*atToEnd=*/true);
+            out.segments.push_back(std::move(ps));
             grew = true;
         }
     }
@@ -1429,7 +1484,7 @@ StationFrame stationFrame(const MechHarnessDef& def, const MechLayout& layout, c
     const MechPlacedSegment* ps = seg ? layout.segment(seg->id) : nullptr;
     f.bundleMm = ps ? ps->diameterMm : def.draw.minBundleMm;
     f.into = atToEnd ? -1.0 : 1.0;
-    f.dirRad = rad(atToEnd || !ps ? pn.dirDeg : ps->dirDeg);
+    f.dirRad = rad(atToEnd || !ps ? pn.faceDeg : ps->dirDeg);
     return f;
 }
 
@@ -1688,7 +1743,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
     for (const MechPlacedSegment& ps : layout.segments) {
         const MechSegment* seg = def.segment(ps.id);
         const double gap = across(ps.diameterMm);
-        const Vec2 dir = (ps.b - ps.a).normalized();
+        // The run may be a dogleg, so each station is found by walking it - see segmentPointAt.
+        const Vec2 dir = segmentStartDir(ps);
         const Vec2 v = dir.perp();
         Body body;
         body.gap = gap;
@@ -1702,14 +1758,20 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         if (profile.size() >= 2 && seg && seg->lengthMm > 0.0 && bodyTo > bodyFrom) {
             for (const MechStation& st : profile) {
                 const double atMm = std::clamp(st.atMm, bodyFrom, bodyTo);
-                const Vec2 c = ps.a + dir * along(atMm);
+                Vec2 c, u;
+                segmentPointAt(ps, along(atMm), &c, &u);
+                const Vec2 across_ = u.perp();
                 const double half = across(st.diameterMm) / 2.0;
-                body.plus.push_back(c + v * half);
-                body.minus.push_back(c - v * half);
+                body.plus.push_back(c + across_ * half);
+                body.minus.push_back(c - across_ * half);
             }
         } else {
-            body.plus = {ps.a + v * (gap / 2.0), ps.b + v * (gap / 2.0)};
-            body.minus = {ps.a - v * (gap / 2.0), ps.b - v * (gap / 2.0)};
+            // One width from end to end - but still along whatever legs the run has, or a dogleg with
+            // no profile on it would come out as the straight line it is not.
+            for (const Vec2& c : segmentPath(ps)) {
+                body.plus.push_back(c + v * (gap / 2.0));
+                body.minus.push_back(c - v * (gap / 2.0));
+            }
         }
         bodies.insert(ps.id, body);
     }
@@ -1723,11 +1785,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // Half the width AT THIS END - which is the bundle, not the jacket, on a cable that has
             // come out of its jacket before it reaches the junction.
             if (seg->fromNode == pn.id) {
-                const Vec2 d = (ps.b - ps.a).normalized();
+                const Vec2 d = segmentStartDir(ps);
                 legs.push_back({ps.id, true, d, across(ps.fromDiameterMm) / 2.0,
                                 std::atan2(d.y, d.x)});
             } else if (seg->toNode == pn.id) {
-                const Vec2 d = (ps.a - ps.b).normalized();
+                const Vec2 d = Vec2{-segmentEndDir(ps).x, -segmentEndDir(ps).y};
                 legs.push_back({ps.id, false, d, across(ps.toDiameterMm) / 2.0,
                                 std::atan2(d.y, d.x)});
             }
@@ -1942,9 +2004,11 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const MechSegment* seg = def.segment(ps.id);
         if (!seg) continue;
         const double gap = across(ps.diameterMm);
-        const Vec2 u = (ps.b - ps.a).normalized();
+        // Halfway ALONG the run, which on a dogleg is on its diagonal and not on the line between its
+        // ends - the figure and the label belong on the wire, not out in the space it cuts across.
+        Vec2 mid, u;
+        segmentPointAt(ps, segmentPathLength(ps) * 0.5, &mid, &u);
         const Vec2 v = u.perp();
-        const Vec2 mid = lerp(ps.a, ps.b, 0.5);
         // Text reads along the run, and is turned the right way up rather than upside down on a
         // branch that heads left.
         double textDir = ps.dirDeg;
@@ -2133,14 +2197,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                 bareAtStart + std::clamp(f.atMm, 0.0, std::max(0.0, coveredMm - 1e-9));
             const double runMm =
                 std::min(lengthMm, std::max(0.0, bareAtStart + coveredMm - startMm));
-            const Vec2 c = ps.a + u * along(startMm + runMm / 2.0);
+            Vec2 c, cu;
+            segmentPointAt(ps, along(startMm + runMm / 2.0), &c, &cu);
             if (part && part->hasMechanical() && mechDrawsFromLibrary(part->kind)) {
                 for (Entity& e : placedPartDrawing(*part, c, rad(ps.dirDeg), opt,
                                                    QStringLiteral("fitting")))
                     out.push_back(e);
             } else if (MechModelKind mk;
                        mechModelForFitting(f.kind, mk) && mechModelFor(mk, f.modelName)) {
-                const Vec2 from = ps.a + u * along(startMm);
+                Vec2 from, fu;
+                segmentPointAt(ps, along(startMm), &from, &fu);
                 // One placed model is ONE object on the sheet. The key is worked out from where it went
                 // rather than made up, so regenerating the drawing gives the same fitting the same key.
                 const QString group = QStringLiteral("%1|%2|%3|seg")
@@ -2183,8 +2249,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // Its own length dimension: a sleeve is as long as it is, where it is, and the length on
             // the drawing is the length in the table.
             if ((opt.dimensions || f.dimension) && runMm > 0.0) {
-                const Vec2 a = ps.a + u * along(startMm);
-                const Vec2 b = ps.a + u * along(startMm + runMm);
+                const Vec2 a = segmentPointAlong(ps, along(startMm));
+                const Vec2 b = segmentPointAlong(ps, along(startMm + runMm));
                 Entity dim = makeDimension(opt, a, b,
                                            lerp(a, b, 0.5) + v * (across(odMm) / 2.0 +
                                                                   opt.textHeight * 1.4),
@@ -2289,7 +2355,7 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const double bareMm = seg ? nodeBareLengthMm(def, *n) : 0.0;
         // Into the run: -1 when it arrives here (fittings stack back along it), +1 when it leaves.
         const double into = atToEnd ? -1.0 : 1.0;
-        const double dirRad = rad(atToEnd || !ps ? pn.dirDeg : ps->dirDeg);
+        const double dirRad = rad(atToEnd || !ps ? pn.faceDeg : ps->dirDeg);
         const Vec2 u{std::cos(dirRad), std::sin(dirRad)};
         const Vec2 v = u.perp();
 

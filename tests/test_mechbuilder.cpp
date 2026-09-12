@@ -1016,6 +1016,97 @@ int run_mechbuilder_tests() {
         for (const Entity& e : ents)
             if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("balloon"))
                 balloonText << e.meta.value(QStringLiteral("text")).toString();
+    // ---- A run that changes height goes out flat, across, and flat again -------------------------
+    {
+        // What sits at the end of a run is a connector, and a connector is drawn square. A branch
+        // that arrives at 30 degrees hangs its backshell, its boot and its designator on the slant.
+        // So the branch angle still says WHERE the far end goes - nothing moves on the sheet - and
+        // the route between drops across and comes in straight.
+        auto horizontal = [](const Vec2& a, const Vec2& b) {
+            return std::abs(b.y - a.y) < 1e-6 && std::abs(b.x - a.x) > 1e-6;
+        };
+
+        // ONE RUN, turning: out flat, across, in flat. Four points, three legs.
+        MechHarnessDef def;
+        MechNode root;
+        root.id = QStringLiteral("root");
+        MechNode far;
+        far.id = QStringLiteral("p1");
+        far.parentSegment = QStringLiteral("s1");
+        far.angleDeg = 30.0;
+        def.nodes.push_back(root);
+        def.nodes.push_back(far);
+        MechSegment s;
+        s.id = QStringLiteral("s1");
+        s.fromNode = QStringLiteral("root");
+        s.toNode = QStringLiteral("p1");
+        s.lengthMm = 600.0;
+        def.segments.push_back(s);
+
+        const MechLayout lay = layoutMechanicalHarness(def);
+        const MechPlacedSegment* ps = lay.segment(QStringLiteral("s1"));
+        const MechPlacedNode* pn = lay.node(QStringLiteral("p1"));
+        check(ps && pn, "dogleg: the run and its far end are placed");
+        if (!ps || !pn) return failures;
+        std::printf("    (dogleg: %d point(s) ", int(ps->path.size()));
+        for (const Vec2& p : ps->path) std::printf("(%.0f,%.0f) ", p.x, p.y);
+        std::printf("- far end faces %.0f deg, heads %.0f)\n", pn->faceDeg, pn->dirDeg);
+        check(ps->path.size() == 4, "dogleg: three legs - out, across, in");
+        check(horizontal(ps->path[0], ps->path[1]), "dogleg: it leaves flat");
+        check(horizontal(ps->path[2], ps->path[3]), "dogleg: and arrives flat");
+        check(std::abs(ps->path[2].y - ps->path[3].y) < 1e-6 &&
+                  std::abs(ps->path[1].y - ps->path[0].y) < 1e-6 &&
+                  std::abs(ps->path[2].y - ps->path[1].y) > 1e-6,
+              "dogleg: with the change of height in the middle");
+        // WHERE IT ENDS UP IS EXACTLY WHERE IT USED TO. The branch angle still decides that, so no
+        // harness moves or changes size on the sheet because of how it is now routed.
+        const double r = 30.0 * 3.14159265358979323846 / 180.0;
+        // Measured from where the run STARTS: the harness has an origin of its own, and this is about
+        // the offset the angle and the length give, not about where the sheet was set up.
+        check(std::abs((ps->b.x - ps->a.x) - (600.0 * std::cos(r))) < 1e-6 &&
+                  std::abs((ps->b.y - ps->a.y) - (600.0 * std::sin(r))) < 1e-6,
+              "dogleg: the far end is where the angle and the length put it");
+        // The far end is DRAWN square, but still HEADS the way it came - a branch of this branch is
+        // measured from that, and squaring it would quietly move every sub-branch.
+        check(std::abs(pn->faceDeg) < 1e-9, "dogleg: the far end is drawn square");
+        check(std::abs(pn->dirDeg - 30.0) < 1e-9, "dogleg: and still heads the way the branch went");
+
+        // A BREAKOUT IS DIFFERENT. Two branches leaving one node cannot both set off flat - they
+        // would be drawn one on top of the other - so each keeps its own angle until it is clear,
+        // and only then straightens out. Two legs, not three, and the last one is still flat.
+        MechHarnessDef y = def;
+        MechNode other;
+        other.id = QStringLiteral("p2");
+        other.parentSegment = QStringLiteral("s2");
+        other.angleDeg = -30.0;
+        y.nodes.push_back(other);
+        MechSegment s2 = s;
+        s2.id = QStringLiteral("s2");
+        s2.toNode = QStringLiteral("p2");
+        y.segments.push_back(s2);
+        const MechLayout ylay = layoutMechanicalHarness(y);
+        const MechPlacedSegment* a = ylay.segment(QStringLiteral("s1"));
+        const MechPlacedSegment* b = ylay.segment(QStringLiteral("s2"));
+        check(a && b, "dogleg: both branches of the breakout are placed");
+        if (!a || !b) return failures;
+        std::printf("    (breakout: %d and %d point(s))\n", int(a->path.size()), int(b->path.size()));
+        check(a->path.size() == 3 && b->path.size() == 3,
+              "dogleg: out of a breakout it is two legs - away, then flat");
+        check(horizontal(a->path[1], a->path[2]) && horizontal(b->path[1], b->path[2]),
+              "dogleg: both still arrive flat");
+        // And they genuinely part company at the breakout rather than lying on each other.
+        check(std::abs(a->path[1].y - b->path[1].y) > 1e-6,
+              "dogleg: the two branches leave on different lines");
+
+        // TURNED OFF, a branch is the single slanted line it always was.
+        MechHarnessDef plain = def;
+        plain.draw.squareBranches = false;
+        const MechPlacedSegment* straight =
+            layoutMechanicalHarness(plain).segment(QStringLiteral("s1"));
+        check(straight && straight->path.empty(),
+              "dogleg: switched off, a run is the straight line between its ends");
+    }
+
     // ---- A length is ordered in the unit the PART is issued in, not the drawing's -----------------
     {
         // Everything measured off a harness is in millimetres, because that is what the drawing is in.
