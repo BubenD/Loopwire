@@ -9186,6 +9186,91 @@ int run_editor_tests() {
               "paste turn: four quarter turns is a whole one, and it is back where it started");
     }
 
+    // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
+    {
+        // A generated harness is not one thing and it is not fifty things. It is a handful of parts,
+        // each drawn as several objects: a run is two rails, its conductors and the figure that
+        // dimensions it. Clicking one rail used to select that rail and leave the rest of the run
+        // behind, which is not what anybody means by clicking a run.
+        Document d;
+        auto add = [&d](const char* id, double y, const char* node, const char* seg) {
+            Entity e;
+            e.id = QString::fromLatin1(id);
+            e.type = EntityType::Line;
+            e.a = {0.0, y};
+            e.b = {100.0, y};
+            if (*node) e.meta.insert(QStringLiteral("mechNode"), QString::fromLatin1(node));
+            if (*seg) e.meta.insert(QStringLiteral("mechSeg"), QString::fromLatin1(seg));
+            d.entities().push_back(e);
+        };
+        add("rail1", 0.0, "", "s1");        // the run: two rails ...
+        add("rail2", 2.0, "", "s1");
+        add("wire1", 1.0, "N1", "s1");      // ... and conductors that also name where they start
+        add("dimS1", 4.0, "", "s1");        // ... and the figure that dimensions it
+        add("body", 20.0, "N1", "");        // the connector at that end
+        add("dimN1", 22.0, "", "N1");       // and ITS dimension, which the builder files under seg
+        add("loose", 40.0, "", "");         // something that is not part of a harness at all
+
+        auto joined = [](const std::vector<QString>& v) {
+            QStringList s;
+            for (const QString& x : v) s << x;
+            return s.join(QStringLiteral(", "));
+        };
+        auto has = [](const std::vector<QString>& v, const char* id) {
+            return std::find(v.begin(), v.end(), QString::fromLatin1(id)) != v.end();
+        };
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        auto clickAt = [&ed](double y) {
+            ed.clearSelection();
+            ed.onPointerPress({50.0, y}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({50.0, y}, Qt::LeftButton);
+            // selection() hands back a std::vector; sorted, so the check reads the same whatever
+            // order the picking happened to add them in.
+            std::vector<QString> got = ed.selection();
+            std::sort(got.begin(), got.end());
+            return got;
+        };
+
+        // THE WHOLE RUN, from a click on one rail of it.
+        const std::vector<QString> run = clickAt(0.0);
+        std::printf("  harness part: clicking a rail selected %s\n",
+                    qPrintable(joined(run)));
+        check(run.size() == 4, "harness part: a click on a rail takes the whole run");
+        check(has(run, "rail2") && has(run, "wire1") && has(run, "dimS1"),
+              "harness part: its other rail, its conductors and its dimension come with it");
+
+        // THE CONDUCTORS BELONG TO THE RUN and not to the connector they start at, even though they
+        // name both. Dragging a run has to take its wires; leaving them with the connector would
+        // strip the run bare.
+        const std::vector<QString> fromWire = clickAt(1.0);
+        check(fromWire == run, "harness part: clicking a conductor selects the same run");
+
+        // THE CONNECTOR IS ITS OWN PART - and its dimension is part of it, though the builder files
+        // that under the segment field. Keeping them apart would leave the figure behind whenever
+        // the connector was moved.
+        const std::vector<QString> conn = clickAt(20.0);
+        std::printf("  harness part: clicking the connector selected %s\n",
+                    qPrintable(joined(conn)));
+        check(conn.size() == 2 && has(conn, "dimN1"),
+              "harness part: a connector takes its own dimension and nothing of the run");
+
+        // SOMETHING THAT IS NOT A HARNESS IS LEFT ALONE.
+        const std::vector<QString> loose = clickAt(40.0);
+        check(loose.size() == 1 && loose.front() == QStringLiteral("loose"),
+              "harness part: an ordinary object still selects on its own");
+
+        // AND A DELIBERATE SELECTION OF MANY IS NOT WIDENED. Select-all, a green zone, the set a
+        // paste just put down - those are choices somebody made, and quietly adding to them would be
+        // a different command from the one they gave.
+        ed.selectAll();
+        const int all = int(ed.selection().size());
+        std::printf("  harness part: select-all holds %d of %d\n", all, int(d.entities().size()));
+        check(all == static_cast<int>(d.entities().size()),
+              "harness part: select-all selects everything, and is not grown further");
+    }
+
     // ---- Space during a DRAG turns it under the hand, once, and leaves the ghost be ---------------
     {
         // The other way of moving something: take hold of its body and drag it, rather than the Move

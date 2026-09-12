@@ -1167,6 +1167,12 @@ void Editor::hookSelectionCompanions() {
             emit selectionChanged();   // it grew - go round once more, then settle
             return;
         }
+        // AND A CLICK ON A HARNESS PICKS THE PART IT LANDED ON - the whole connector, the whole run -
+        // rather than the one line under the cursor. See expandHarnessPartSelection.
+        if (expandHarnessPartSelection()) {
+            emit selectionChanged();
+            return;
+        }
         refreshBundleCompanions();
     });
 }
@@ -1176,6 +1182,64 @@ void Editor::hookSelectionCompanions() {
 static QString groupKeyOf(const Entity& e) {
     const QString block = entityBlockInstance(e);
     return block.isEmpty() ? entityTemplateGroup(e) : block;
+}
+
+
+// WHICH PART OF A HARNESS AN OBJECT BELONGS TO.
+//
+// A generated harness is not one thing and it is not fifty things. It is a handful of PARTS - this
+// connector, that run, the breakout between them - and each of those is drawn as several objects: a
+// connector is a body and a face and a designator, a run is two rails and its conductors and the
+// figure that dimensions it.
+//
+// Clicking one of them used to pick exactly that one: a single rail out of a run, leaving the other
+// rail and the wires behind. Nobody means one rail. They mean the run.
+//
+// The builder already writes down which part each object came from - mechNode for the things at a
+// joint, mechSeg for the things along a run - so the answer is read from what is there rather than
+// worked out from where things are. A node beats a segment where an object carries both: a balloon
+// on a connector says the connector it labels and the run it hangs off, and it belongs to the
+// connector.
+//
+// NOT the block mechanism, deliberately. A block has no grips - it moves as one and is edited in its
+// own window - and a harness has to stay editable on the sheet: dragging a run's end is how a harness
+// is adjusted. This only widens what a click SELECTS.
+static QString harnessPartKeyOf(const Entity& e) {
+    // THE RUN WINS WHERE AN OBJECT NAMES BOTH. The conductors leaving a connector carry the connector
+    // they start at AND the run they travel along; they are part of the run - dragging the run has to
+    // take its wires, and taking them with the connector instead would strip the run bare.
+    //
+    // One id space, not two, and no prefix on either. The builder itself puts a NODE id through the
+    // segment field when it dimensions a connector (see makeDim), so a connector body says mechNode=N1
+    // and the figure beside it says mechSeg=N1 - and those two are the same part. Keeping them apart
+    // would leave a dimension behind every time its connector was moved.
+    const QString seg = e.meta.value(QStringLiteral("mechSeg")).toString();
+    if (!seg.isEmpty()) return seg;
+    return e.meta.value(QStringLiteral("mechNode")).toString();
+}
+
+bool Editor::expandHarnessPartSelection() {
+    if (!doc_ || selected_.empty()) return false;
+    // EVERYTHING ALREADY SELECTED IS LEFT ALONE. Select-all, a green zone across the sheet, the set a
+    // paste just put down - all of those are deliberate selections of many things, and quietly adding
+    // more to them would be a different command. Only a selection that is ONE object is widened, which
+    // is what a click makes.
+    if (selected_.size() != 1) return false;
+    const Entity* first = entityById(selected_.front());
+    if (!first) return false;
+    const QString key = harnessPartKeyOf(*first);
+    if (key.isEmpty()) return false;
+
+    bool grew = false;
+    QSet<QString> picked = selectionSet();
+    for (const Entity& e : doc_->entities()) {
+        if (harnessPartKeyOf(e) != key) continue;
+        if (picked.contains(e.id)) continue;
+        picked.insert(e.id);
+        selected_.push_back(e.id);
+        grew = true;
+    }
+    return grew;
 }
 
 bool Editor::expandBlockSelection() {

@@ -1130,6 +1130,10 @@ public:
     // A placed block is one object: pull every piece of a picked copy into the selection. True when
     // that added anything, so the caller knows to announce the selection again.
     bool expandBlockSelection();
+    // A click on a generated harness picks the PART it landed on - this connector, this run - and not
+    // the single line under the cursor. Only ever widens a selection of one, so select-all and a green
+    // zone are left as they were.
+    bool expandHarnessPartSelection();
     // Part of a block that has been placed - and so not editable on the sheet. Static: it asks only
     // about the entity, and is called from const paths that draw the grips.
     static bool isBlockPiece(const Entity& e);
