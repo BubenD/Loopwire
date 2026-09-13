@@ -1519,6 +1519,21 @@ inline LeaderWords leaderWords(const Entity& e) {
 }
 
 double distanceToEntity(const Entity& e, const Vec2& p) {
+    // A HEATSHRINK SLEEVE ANSWERS FROM ITS OUTLINE, whatever it is filed as - see
+    // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
+    // route down its middle, which is the one line of it that is never drawn: a green zone laid
+    // across its end caught nothing, and a snap found the centreline instead of the edge.
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+        double best = std::numeric_limits<double>::max();
+        for (size_t i = 0; i < sleeve.size(); ++i)
+            best = std::min(best, closestPointOnSegment(p, sleeve[i],
+                                                        sleeve[(i + 1) % sleeve.size()]).distance);
+        // AND ANYWHERE INSIDE IT. A sleeve is a solid on the sheet - it is a thing with a width
+        // pulled over the run - so what you see of it is its whole area, the same rule a block
+        // arrow and a picture keep.
+        if (pointInPolygon(sleeve, p)) best = 0.0;
+        return best;
+    }
     auto segDist = [&](const Vec2& a, const Vec2& b) {
         return closestPointOnSegment(p, a, b).distance;
     };
@@ -4868,6 +4883,11 @@ std::vector<std::vector<Vec2>> axisAngleRuns(const Entity& e) {
 }
 
 std::vector<Vec2> entitySelectPoints(const Entity& e) {
+    // A HEATSHRINK SLEEVE ANSWERS FROM ITS OUTLINE, whatever it is filed as - see
+    // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
+    // route down its middle, which is the one line of it that is never drawn: a green zone laid
+    // across its end caught nothing, and a snap found the centreline instead of the edge.
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) return sleeve;
     std::vector<Vec2> pts;
     switch (e.type) {
     case EntityType::Line:
@@ -5043,6 +5063,16 @@ std::vector<Vec2> doubleRunRail(const Entity& ent, double s) {
 }
 
 std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
+    // A HEATSHRINK SLEEVE ANSWERS FROM ITS OUTLINE, whatever it is filed as - see
+    // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
+    // route down its middle, which is the one line of it that is never drawn: a green zone laid
+    // across its end caught nothing, and a snap found the centreline instead of the edge.
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+        std::vector<std::pair<Vec2, Vec2>> segs;
+        for (size_t i = 0; i < sleeve.size(); ++i)
+            segs.emplace_back(sleeve[i], sleeve[(i + 1) % sleeve.size()]);
+        return segs;
+    }
     std::vector<std::pair<Vec2, Vec2>> segs;
     auto pts = entitySelectPoints(e);
     switch (e.type) {

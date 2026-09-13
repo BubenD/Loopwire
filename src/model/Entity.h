@@ -124,6 +124,10 @@ struct Entity {
 //
 // So there is one place that answers the question. For an ordinary object it is the stored points; for
 // a derived one it is the outline that will be drawn. Anything that needs the shape asks here.
+// The outline a heatshrink sleeve has, worked out from the route it stores - empty for anything that
+// is not one. See the definition: the shape on the screen is nowhere in the stored points, so a click,
+// a green zone and a snap all have to ask for it rather than reading the centreline.
+std::vector<Vec2> shrunkSleeveOutlineOf(const Entity& e);
 std::vector<Vec2> entityOutline(const Entity& e);
 
 // WHERE AN AXIS ANGLE STARTS ITS SWEEP, and HOW LONG ITS CENTRE LINES ARE.

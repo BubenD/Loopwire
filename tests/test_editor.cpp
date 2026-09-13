@@ -9186,6 +9186,67 @@ int run_editor_tests() {
               "paste turn: four quarter turns is a whole one, and it is back where it started");
     }
 
+    // ---- A heatshrink sleeve is caught by the lines it actually draws -----------------------------
+    {
+        // A sleeve stores the ROUTE it was drawn along and works its outline out from that: a body of
+        // one width recovered down to a narrower face at each end. The shape on the screen is nowhere
+        // in the stored points - so a click, a green zone and a snap were all answering about a line
+        // down the middle that is never drawn. A zone laid across the end of a sleeve caught nothing.
+        Document d;
+        Entity s;
+        s.id = QStringLiteral("SLV");
+        s.type = EntityType::Polyline;   // a sleeve is a polyline carrying "double", not its own type
+        s.points = {{0.0, 0.0}, {100.0, 0.0}};
+        s.meta.insert(QStringLiteral("shrunkEnds"), true);
+        s.meta.insert(QStringLiteral("double"), true);
+        s.meta.insert(QStringLiteral("gap"), 20.0);          // 20 across the body, so ±10
+        s.meta.insert(QStringLiteral("shrinkFaceStart"), 8.0);
+        s.meta.insert(QStringLiteral("shrinkFaceEnd"), 8.0);
+        s.meta.insert(QStringLiteral("shrinkTaperStart"), 15.0);
+        s.meta.insert(QStringLiteral("shrinkTaperEnd"), 15.0);
+        d.entities().push_back(s);
+
+        const std::vector<Vec2> outline = shrunkSleeveOutlineOf(d.entities().front());
+        std::printf("  sleeve: its outline has %d corner(s)\n", int(outline.size()));
+        check(outline.size() >= 8, "sleeve: it has an outline of its own, worked out from the route");
+
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+
+        // ---- A CLICK ON ITS EDGE. The body rail is 10 off the route; the route itself is empty air.
+        ed.clearSelection();
+        ed.onPointerPress({50.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({50.0, 10.0}, Qt::LeftButton);
+        std::printf("  sleeve: a click on the top rail picked %d\n", int(ed.selection().size()));
+        check(ed.selection().size() == 1, "sleeve: a click on the line it draws picks it");
+
+        // ---- A GREEN ZONE THAT ONLY TOUCHES ITS END. Across the recovered face at the right-hand
+        // end, well clear of the centreline - which is what the old answer was made of.
+        // Two clicks, which is how a region is given: press-release at one corner, then the other.
+        ed.clearSelection();
+        ed.onPointerPress({130.0, 12.0}, Qt::LeftButton, Qt::NoModifier);   // right to left = crossing
+        ed.onPointerRelease({130.0, 12.0}, Qt::LeftButton);
+        ed.onPointerMove({95.0, 3.0});
+        ed.onPointerPress({95.0, 3.0}, Qt::LeftButton, Qt::NoModifier);
+        std::printf("  sleeve: a green zone over its end picked %d\n", int(ed.selection().size()));
+        check(ed.selection().size() == 1,
+              "sleeve: a crossing zone that touches any of its lines catches it");
+
+        // ---- NEAREST SNAPS ONTO THE EDGE, not onto the route. Asked just outside the top rail.
+        SnapSettings sn;
+        sn.objectSnap = true;
+        sn.snapNearest = true;
+        sn.snapEndpoint = false;
+        sn.snapMidpoint = false;
+        const SnapResult r = resolveSnap(d, {50.0, 13.0}, std::nullopt, 6.0, sn);
+        std::printf("  sleeve: nearest from (50,13) -> (%.2f,%.2f) hit=%d\n", r.point.x, r.point.y,
+                    r.snapped ? 1 : 0);
+        check(r.snapped, "sleeve: nearest point finds it");
+        check(std::abs(r.point.y - 10.0) < 1e-6,
+              "sleeve: and lands on the rail it draws, not on the route down the middle");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,

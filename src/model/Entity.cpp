@@ -201,7 +201,47 @@ bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
     return true;
 }
 
+// THE OUTLINE A HEATSHRINK SLEEVE ACTUALLY HAS.
+//
+// A sleeve stores its ROUTE - the centreline it was drawn along - and works its outline out from that
+// when it is drawn: a body of one width, recovered down to a narrower face at each end over a taper.
+// The shape on the screen is nowhere in the stored points.
+//
+// So everything that asks "where is this object" - a click, a green zone, what a cursor can snap to,
+// the box it occupies - was answering about a line down the middle that is never drawn. A zone laid
+// across the end of a sleeve caught nothing, because the lines it was touching were not in the model,
+// and a snap found the centreline rather than the edge the eye is on.
+//
+// The reading of the numbers moved here from the renderer, which had it, so that the drawing and the
+// picking cannot disagree about what shape it is: the renderer asks this too now.
+std::vector<Vec2> shrunkSleeveOutlineOf(const Entity& e) {
+    if (!e.meta.value(QLatin1String("shrunkEnds")).toBool() || e.points.size() < 2) return {};
+    // ACROSS, from the same key the editing machinery uses. Falling back to shrinkWidth so a sleeve
+    // drawn before the two were made one still answers right.
+    const double across = e.meta.contains(QLatin1String("gap"))
+                              ? e.meta.value(QLatin1String("gap")).toDouble(6.0)
+                              : e.meta.value(QLatin1String("shrinkWidth")).toDouble(6.0);
+    const double bodyHalf = std::max(0.2, across) / 2.0;
+    // THE TWO ENDS, EACH WITH ITS OWN TWO NUMBERS - see shrunkSleeveOutline for what they are. Not a
+    // share of the body: what a sleeve recovers to, and over what length, is set by whatever is under
+    // that end, and the two ends are usually over different things. Absent on a sleeve drawn before
+    // the numbers existed, and those fall back to what was always drawn - 82% across, 4 long, both
+    // ends the same - so an old drawing opens as it did.
+    const auto num = [&e](const char* key, double def) {
+        return e.meta.value(QLatin1String(key)).toDouble(def);
+    };
+    const double faceDef = bodyHalf * 1.64;
+    // Never past the body: heatshrink recovers INWARD, and a face wider than the sleeve draws a flare,
+    // which is a shape that cannot be got by shrinking anything onto anything.
+    return shrunkSleeveOutline(e.points, bodyHalf,
+                               std::clamp(num("shrinkFaceStart", faceDef) / 2.0, 0.05, bodyHalf),
+                               std::clamp(num("shrinkFaceEnd", faceDef) / 2.0, 0.05, bodyHalf),
+                               std::max(0.0, num("shrinkTaperStart", 4.0)),
+                               std::max(0.0, num("shrinkTaperEnd", 4.0)));
+}
+
 std::vector<Vec2> entityOutline(const Entity& e) {
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) return sleeve;
     if (e.meta.value(QLatin1String("volumeArrow")).toBool())
         return volumeArrowOutline(e.a, e.b, e.meta.value(QLatin1String("arrowWidth")).toDouble(0.0),
                                   e.meta.value(QLatin1String("arrowHead")).toDouble(0.0));

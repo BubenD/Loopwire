@@ -41,6 +41,15 @@ bool tableGridLines(const Entity& e, std::vector<double>& xb, std::vector<double
 // Collect the segment list that represents an entity's linear skeleton, used
 // for midpoint/nearest/intersection snapping.
 void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
+    // A HEATSHRINK SLEEVE SNAPS TO ITS OUTLINE. It is a double polyline by type, so the rails below
+    // would be worked out from its route at one width from end to end - which is not the shape it
+    // draws: a sleeve recovers down to a narrower face at each end. The cursor caught a line that
+    // was never on the screen. See shrunkSleeveOutlineOf.
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+        for (size_t i = 0; i < sleeve.size(); ++i)
+            out.emplace_back(sleeve[i], sleeve[(i + 1) % sleeve.size()]);
+        return;
+    }
     switch (e.type) {
     case EntityType::Line:
         out.emplace_back(e.a, e.b);
@@ -148,6 +157,13 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
 }
 
 void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
+    // AND ITS CORNERS ARE THE OUTLINE'S. The corners of a sleeve are where it recovers - the face
+    // corners and the two shoulders at each end - and those are points somebody genuinely wants to
+    // catch. The route's own two ends are inside the shape and are not drawn.
+    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+        for (const Vec2& p : sleeve) out.push_back(p);
+        return;
+    }
     switch (e.type) {
     case EntityType::Line:
         out.push_back(e.a);

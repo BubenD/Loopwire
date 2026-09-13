@@ -124,31 +124,9 @@ std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, d
     return out;
 }
 
-std::vector<Vec2> EntityRenderer::sleeveOutline(const Entity& e) {
-    if (!e.meta.value("shrunkEnds").toBool() || e.points.size() < 2) return {};
-    // ACROSS, from the same key the editing machinery uses - see heatshrinkFromRoute. Falling back to
-    // shrinkWidth so a sleeve drawn before the two were made one still draws right.
-    const double across = e.meta.contains("gap") ? e.meta.value("gap").toDouble(6.0)
-                                                 : e.meta.value("shrinkWidth").toDouble(6.0);
-    const double bodyHalf = std::max(0.2, across) / 2.0;
-    // THE TWO ENDS, EACH WITH ITS OWN TWO NUMBERS - see shrunkSleeveOutline for what they are.
-    //
-    // Not worked out from the body, because what a sleeve recovers to and over what length is not a
-    // share of what it started as: it is set by whatever is under that end, and the two ends are
-    // usually over different things. So both come off the object, per end.
-    //
-    // Absent on a sleeve drawn before the numbers existed, and those fall back to what the renderer
-    // always drew - 82% across, 4 long, the same at both ends - so an old drawing opens as it did.
-    const auto num = [&e](const char* key, double def) { return e.meta.value(key).toDouble(def); };
-    const double faceDef = bodyHalf * 1.64;
-    // Never past the body: heatshrink recovers INWARD, and a face wider than the sleeve draws a flare -
-    // a shape that cannot be got by shrinking anything onto anything.
-    return shrunkSleeveOutline(e.points, bodyHalf,
-                               std::clamp(num("shrinkFaceStart", faceDef) / 2.0, 0.05, bodyHalf),
-                               std::clamp(num("shrinkFaceEnd", faceDef) / 2.0, 0.05, bodyHalf),
-                               std::max(0.0, num("shrinkTaperStart", 4.0)),
-                               std::max(0.0, num("shrinkTaperEnd", 4.0)));
-}
+// ONE ANSWER, in the model - see shrunkSleeveOutlineOf. The reading of the numbers used to live here,
+// which meant the drawing knew the sleeve's shape and the picking did not.
+std::vector<Vec2> EntityRenderer::sleeveOutline(const Entity& e) { return shrunkSleeveOutlineOf(e); }
 
 std::vector<Vec2> EntityRenderer::sleeveEndPatch(const Entity& e, int end) {
     const std::vector<Vec2> o = sleeveOutline(e);
