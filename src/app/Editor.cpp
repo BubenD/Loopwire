@@ -236,6 +236,19 @@ enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge,
                       DimText, LeaderTip, LeaderLanding, LeaderKnee, TableColEdge, TableRowEdge,
                       ConnPinText, ConnDesText, ConnPnText, ConnAllText, WireSegMove, TwistMove,
                       ShieldRy,
+                      // THE CORNERS OF A HEATSHRINK SLEEVE, which are the only points on it worth
+                      // taking hold of and were the only ones it did not offer.
+                      //
+                      // A sleeve is filed as a double polyline, so its joints came off the two rails
+                      // half the BODY width either side of the route - and a sleeve is not that shape
+                      // at its ends: it necks down. The handles sat out in the air beside the drawing,
+                      // level with a body the end does not have.
+                      //
+                      // SleeveFace is a corner of the end face: it says where that end IS and how wide
+                      // the sleeve has recovered to there, which is exactly the two things a corner of
+                      // a face means. SleeveShoulder is where the body stops being full width and the
+                      // taper begins, so it sets how long that taper is.
+                      SleeveFace, SleeveShoulder,
                       // A wire's colour/gauge marking, and a Wire label attached to a wire:
                       // both are constrained to slide ALONG the wire and nowhere else.
                       WireMark, WireMarkColor, WireMarkLabel, WireLabelSlide,
@@ -845,6 +858,49 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         break;
     }
     case EntityType::Polyline:
+        // A HEATSHRINK SLEEVE IS TAKEN HOLD OF BY ITS CORNERS, which is a different set of points
+        // from a double polyline's.
+        //
+        // Handled before the double branch below, because a sleeve IS filed as a double polyline and
+        // would otherwise get that branch's joints: two rails half the BODY width either side of the
+        // route. A sleeve is not that shape at its ends - it necks down onto what it grips - so those
+        // handles sat out in the air beside the drawing, level with a body the end does not have.
+        //
+        // Four corners at each end, and every one of them means something:
+        //   the FACE corners  - where that end is, and how wide it has recovered to there
+        //   the SHOULDERS     - where the full body stops and the taper begins
+        // Plus the mid-run handles, which move the whole thing and are what the rails were useful
+        // for. The route's own knees keep their joints too, so a sleeve round a corner is still
+        // dragged by that corner.
+        if (!e.points.empty()) {
+            if (const std::vector<Vec2> o = shrunkSleeveOutlineOf(e); !o.empty()) {
+                const size_t n = e.points.size();
+                // shrunkSleeveOutline lays the outline out as: the head's two face corners, one
+                // vertex per knee up one side, the tail's two face corners, the same knees back down
+                // the other side. 2n+4 in all - see sleeveEndPatch, which reads the same shape.
+                if (o.size() == 2 * n + 4) {
+                    // index 0 = the start of the route, 1 = the end of it; the two entries per end
+                    // are its two sides.
+                    g.push_back({o[0], GripRole::SleeveFace, 0});
+                    g.push_back({o[2 * n + 3], GripRole::SleeveFace, 0});
+                    g.push_back({o[n + 1], GripRole::SleeveFace, 1});
+                    g.push_back({o[n + 2], GripRole::SleeveFace, 1});
+                    // The shoulder just inside each face corner, on each side.
+                    g.push_back({o[1], GripRole::SleeveShoulder, 0});
+                    g.push_back({o[2 * n + 2], GripRole::SleeveShoulder, 0});
+                    g.push_back({o[n], GripRole::SleeveShoulder, 1});
+                    g.push_back({o[n + 3], GripRole::SleeveShoulder, 1});
+                }
+                // AND THE KNEES IT BENDS AT, so a sleeve round a corner can still be re-laid by that
+                // corner. The ends are left to the face corners above - dragging a route end and a
+                // face corner would be two handles in the same place doing different things.
+                for (size_t i = 1; i + 1 < n; ++i)
+                    g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
+                for (size_t i = 1; i < n; ++i)
+                    g.push_back({lerp(e.points[i - 1], e.points[i], 0.5), GripRole::LineMid, 0});
+                break;
+            }
+        }
         // A DOUBLE polyline gets joints on its two PHYSICAL runs — a vertex joint at
         // each end/bend (drags the matching centerline vertex via its offset) and a
         // midpoint joint on each run segment (moves the whole double polyline).
@@ -4104,6 +4160,17 @@ void Editor::onDragTick() {
         dragTimer_->stop(); // cursor moves drive the repaint from here
     }
     emit overlayChanged(); // animate the countdown while still deciding (repaint only)
+}
+
+std::vector<Vec2> Editor::selectionGripPoints() const {
+    std::vector<Vec2> out;
+    if (!doc_) return out;
+    // The document is walked rather than entityById asked, which is not const.
+    const QSet<QString> picked(selected_.begin(), selected_.end());
+    for (const Entity& e : doc_->entities())
+        if (picked.contains(e.id))
+            for (const Grip& g : gripsOf(e, collectPinEnds(doc_), doc_)) out.push_back(g.pos);
+    return out;
 }
 
 void Editor::setSnapRectangles(std::vector<Bounds> rects) { snapRects_ = std::move(rects); }
@@ -8579,6 +8646,61 @@ void Editor::applyEditDrag(const Vec2& target) {
             if (e->type == EntityType::Screen && repositionScreenAtX(*e, target.x)) break;
             translateEntity(*e, delta);
             break;
+        case GripRole::SleeveFace: {
+            // A CORNER OF THE END FACE says two things at once, and dragging it sets both: how far
+            // along the sleeve reaches, and how far it has recovered in by the time it gets there.
+            //
+            // ALONG the route moves that end of the route, which is what makes a sleeve longer or
+            // shorter. ACROSS it sets the face width at that end - a sleeve recovers onto whatever is
+            // under it, and what that is differs end to end, which is why the two ends carry their own
+            // numbers rather than a share of one.
+            if (e->points.size() < 2) break;
+            const bool atEnd = index != 0;
+            const size_t vi = atEnd ? e->points.size() - 1 : 0;
+            const Vec2 other = atEnd ? e->points[e->points.size() - 2] : e->points[1];
+            Vec2 u = e->points[vi] - other;
+            if (u.length() < 1e-9) break;
+            u = u.normalized();
+            const Vec2 v = u.perp();
+            const Vec2 d = target - other;
+            // The end goes where the cursor is along the route, never behind the knee before it: a
+            // sleeve turned inside out is not a shape anything could be shrunk into.
+            const double reach = std::max(1e-3, dot(d, u));
+            e->points[vi] = other + u * reach;
+            // Across, doubled: the corner is half a face from the centreline. Never wider than the
+            // body - heatshrink recovers INWARD, and a face wider than the sleeve draws a flare, a
+            // shape that cannot be got by shrinking anything onto anything.
+            const double body = e->meta.contains(QStringLiteral("gap"))
+                                    ? e->meta.value(QStringLiteral("gap")).toDouble(6.0)
+                                    : e->meta.value(QStringLiteral("shrinkWidth")).toDouble(6.0);
+            const double face = std::clamp(std::abs(dot(d, v)) * 2.0, 0.1, std::max(0.1, body));
+            e->meta.insert(atEnd ? QStringLiteral("shrinkFaceEnd") : QStringLiteral("shrinkFaceStart"),
+                           face);
+            if (vi == 0) e->a = e->points.front();
+            else e->b = e->points.back();
+            break;
+        }
+        case GripRole::SleeveShoulder: {
+            // WHERE THE TAPER BEGINS. The body runs full width up to here and necks down from here to
+            // the face, so this handle is how long the recovered end is - the one number that says
+            // whether the sleeve grips over a stretch or drops away at the very end.
+            //
+            // Measured back from that end along the route, and never longer than the sleeve: a taper
+            // longer than the thing it is on has no shoulder left to start at.
+            if (e->points.size() < 2) break;
+            const bool atEnd = index != 0;
+            const Vec2 tip = atEnd ? e->points.back() : e->points.front();
+            const Vec2 other = atEnd ? e->points[e->points.size() - 2] : e->points[1];
+            Vec2 u = tip - other;
+            const double span = u.length();
+            if (span < 1e-9) break;
+            u = u / span;
+            // How far back from the tip the cursor is, along the run.
+            const double back = std::clamp(dot(tip - target, u), 0.0, span);
+            e->meta.insert(
+                atEnd ? QStringLiteral("shrinkTaperEnd") : QStringLiteral("shrinkTaperStart"), back);
+            break;
+        }
         case GripRole::ShieldRy: {
             // Large-radius joint: the half-height follows the cursor's projection onto the
             // shield's major axis. WHICH wires that new size catches is settled on release

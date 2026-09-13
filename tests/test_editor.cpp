@@ -9300,6 +9300,79 @@ int run_editor_tests() {
               "square sleeve: with no taper at the start");
     }
 
+    // ---- A sleeve's joints are on its corners, where there is something to take hold of ----------
+    {
+        // A sleeve is filed as a double polyline, so its joints came off the two rails half the BODY
+        // width either side of the route - and a sleeve is not that shape at its ends, it necks down.
+        // The handles sat out in the air beside the drawing, level with a body the end does not have.
+        Document d;
+        Entity s;
+        s.id = QStringLiteral("SLV");
+        s.type = EntityType::Polyline;
+        s.points = {{0.0, 0.0}, {100.0, 0.0}};
+        s.meta.insert(QStringLiteral("shrunkEnds"), true);
+        s.meta.insert(QStringLiteral("double"), true);
+        s.meta.insert(QStringLiteral("gap"), 20.0);            // body ±10
+        s.meta.insert(QStringLiteral("shrinkFaceStart"), 8.0);  // face ±4
+        s.meta.insert(QStringLiteral("shrinkFaceEnd"), 8.0);
+        s.meta.insert(QStringLiteral("shrinkTaperStart"), 15.0);
+        s.meta.insert(QStringLiteral("shrinkTaperEnd"), 15.0);
+        d.entities().push_back(s);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectById(QStringLiteral("SLV"));
+
+        // EVERY JOINT IS ON THE OUTLINE. Not one of them out in the air beside it.
+        const std::vector<Vec2> outline = shrunkSleeveOutlineOf(d.entities().front());
+        double worst = 0.0;
+        int onCorner = 0;
+        for (const Vec2& j : ed.selectionGripPoints()) {
+            double best = 1e18;
+            for (size_t i = 0; i < outline.size(); ++i)
+                best = std::min(best, closestPointOnSegment(j, outline[i],
+                                                            outline[(i + 1) % outline.size()]).distance);
+            worst = std::max(worst, best);
+            for (const Vec2& c : outline)
+                if (distance(j, c) < 1e-6) { ++onCorner; break; }
+        }
+        std::printf("  sleeve joints: %d joint(s), %d on a corner, furthest %.3f off the outline\n",
+                    int(ed.selectionGripPoints().size()), onCorner, worst);
+        // The four face corners and the four shoulders, which is what the eye picks out: the vertical
+        // ends, and where the straight sides meet the diagonals. The one that is NOT on the outline is
+        // the mid-run handle, which sits on the centreline INSIDE the shape and moves the whole sleeve
+        // - that one is meant to be there.
+        check(onCorner >= 8, "sleeve joints: on the end faces and on the shoulders");
+        check(worst < 10.0 + 1e-6,
+              "sleeve joints: and nothing is out beyond the shape it belongs to");
+
+        // A FACE CORNER SETS THE FACE. Dragged in across the run, the end recovers further.
+        auto sleeve = [&d] { return d.entities().front(); };
+        const Vec2 faceCorner{100.0, 4.0};
+        // A grabbed joint follows the cursor until the NEXT CLICK puts it down - a release does not
+        // end it - so each drag here is press, move, press.
+        ed.onPointerPress(faceCorner, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100.0, 2.0});
+        ed.onPointerPress({100.0, 2.0}, Qt::LeftButton, Qt::NoModifier);
+        std::printf("  sleeve joints: pulling the face corner in -> face %.2f\n",
+                    sleeve().meta.value(QStringLiteral("shrinkFaceEnd")).toDouble());
+        check(std::abs(sleeve().meta.value(QStringLiteral("shrinkFaceEnd")).toDouble() - 4.0) < 1e-6,
+              "sleeve joints: the face corner sets how far that end has recovered");
+
+        // A SHOULDER SETS THE TAPER. Dragged towards the end, the recovered stretch gets shorter.
+        ed.selectById(QStringLiteral("SLV"));
+        const Vec2 shoulder{85.0, 10.0};
+        ed.onPointerPress(shoulder, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({95.0, 10.0});
+        ed.onPointerPress({95.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        std::printf("  sleeve joints: pushing the shoulder out -> taper %.2f, route (%.1f,%.1f)..(%.1f,%.1f)\n",
+                    sleeve().meta.value(QStringLiteral("shrinkTaperEnd")).toDouble(),
+                    sleeve().points.front().x, sleeve().points.front().y,
+                    sleeve().points.back().x, sleeve().points.back().y);
+        check(std::abs(sleeve().meta.value(QStringLiteral("shrinkTaperEnd")).toDouble() - 5.0) < 1e-6,
+              "sleeve joints: the shoulder sets how long the recovered end is");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,

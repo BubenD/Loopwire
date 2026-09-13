@@ -1082,6 +1082,11 @@ public:
     // True while a region (rectangle or lasso) selection is being defined.
     bool hasSelectionBox() const { return regionMode_ != RegionMode::None; }
 
+    // WHERE THE JOINTS ARE on what is selected - the little squares somebody drags. Public because
+    // where a handle SITS is half of what a handle is: one that is not on the shape it belongs to
+    // cannot be grabbed by aiming at the drawing, and only its position says so.
+    std::vector<Vec2> selectionGripPoints() const;
+
     // The faint "where it came from" snapshot drawn during a move / joint drag: the
     // dragged objects plus the wires attached to any dragged connector.
     const std::vector<Entity>& dragGhost() const { return editGhost_; }
