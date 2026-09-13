@@ -1292,10 +1292,20 @@ Vec2 turnedAbout(const Vec2& d, double turn) {
 // Filled by each placement path with that path's own transform rather than worked out again afterwards:
 // there are three ways a part can be set down and a second copy of the arithmetic would agree with all
 // of them only until one changed.
+// WHERE A PART'S OWN TWO ENDS LANDED. A part says where its ends are - see LibraryPart::nearPoint
+// and farPoint - and only placedPartDrawing knows how the drawing was turned and set down, so it is
+// the only place that can say where those marks ended up.
+struct PlacedEnds {
+    bool have = false;
+    Vec2 nearAt{0.0, 0.0};
+    Vec2 farAt{0.0, 0.0};
+};
+
 std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
                                       const MechDrawOptions& opt, const QString& role,
                                       const Vec2& outward = Vec2{0.0, 0.0},
-                                      std::vector<Vec2>* placedFaces = nullptr) {
+                                      std::vector<Vec2>* placedFaces = nullptr,
+                                      PlacedEnds* placedEnds = nullptr) {
     std::vector<Entity> out;
     if (placedFaces) placedFaces->clear();
     if (!part.hasMechanical()) return out;
@@ -1369,6 +1379,11 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
         if (placedFaces)
             for (const MechOutputFace& f : part.outputs)
                 placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - centre, turn));
+        if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
+            placedEnds->have = true;
+            placedEnds->nearAt = at + turnedAbout(part.nearPoint - centre, turn);
+            placedEnds->farAt = at + turnedAbout(part.farPoint - centre, turn);
+        }
         stampAsBlockCopy(out, part, at);
         return out;
     }
@@ -1387,6 +1402,11 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
             for (const MechOutputFace& f : part.outputs)
                 placedFaces->push_back(
                     at + turnedAbout(lerp(f.a, f.b, 0.5) - part.connectPoint, turn));
+        if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
+            placedEnds->have = true;
+            placedEnds->nearAt = at + turnedAbout(part.nearPoint - part.connectPoint, turn);
+            placedEnds->farAt = at + turnedAbout(part.farPoint - part.connectPoint, turn);
+        }
         stampAsBlockCopy(out, part, at);
         return out;
     }
@@ -1401,6 +1421,11 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
     if (placedFaces)
         for (const MechOutputFace& f : part.outputs)
             placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - mid, dirRad));
+    if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
+        placedEnds->have = true;
+        placedEnds->nearAt = at + turnedAbout(part.nearPoint - mid, dirRad);
+        placedEnds->farAt = at + turnedAbout(part.farPoint - mid, dirRad);
+    }
     stampAsBlockCopy(out, part, at);
     return out;
 }
@@ -3034,8 +3059,10 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
             // The connector as its own drawing says it looks, placed on the end of the run - and
             // turned to face AWAY from it, which is the way one goes on. `into` is -1 where the run
             // arrives here, so the way out of the harness is -into * u.
+            PlacedEnds ends;
             const std::vector<Entity> placed = placedPartDrawing(
-                *part, primaryAt, dirRad, opt, QStringLiteral("connector"), u * -into);
+                *part, primaryAt, dirRad, opt, QStringLiteral("connector"), u * -into, nullptr,
+                &ends);
             // MEASURED, NOT ASSUMED. A part with its own drawing is whatever size it was drawn, and the
             // 20 mm default below is a figure about the box that is NOT being drawn - so a chosen
             // library connector was dimensioned at 20.0 whatever its real length, with the arrows
@@ -3061,6 +3088,24 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
                     }
                     bodyHalfAcrossUnits = std::max(bodyHalfAcrossUnits, std::abs(dot(d, v)));
                 }
+            }
+            // IF THE PART SAYS WHERE ITS ENDS ARE, THOSE ARE WHAT IS DIMENSIONED.
+            //
+            // The reach above is measured off the corners of everything drawn, which is the right
+            // answer only when nobody has said better. A part that declares its near and far points
+            // HAS said better: they are the two ends of the part as the person who drew it means
+            // them, and they are not the same as the corners of its outline. A coupling nut standing
+            // proud, a rope and ring hanging off a dust cap, a lead-in line - all of those push the
+            // bounding box out past the body, and the figure came out longer than the part is.
+            //
+            // The width across is still measured, because that is only used to stand the dimension
+            // clear of the drawing and it has to clear ALL of it.
+            if (ends.have) {
+                const double n1 = -into * dot(ends.nearAt - pn.at, u);
+                const double f1 = -into * dot(ends.farAt - pn.at, u);
+                bodyNearUnits = std::min(n1, f1);
+                bodyFarUnits = std::max(n1, f1);
+                haveBodyExtent = true;
             }
             for (const Entity& e : placed) out.push_back(e);
         } else {

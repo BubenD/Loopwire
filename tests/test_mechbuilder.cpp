@@ -1169,6 +1169,80 @@ int run_mechbuilder_tests() {
               "bent cover: every corner of it sits on the run, not out in the space it cuts across");
     }
 
+    // ---- A dimensioned connector is measured between the ends the PART declares ------------------
+    {
+        // A part says where its two ends are - see LibraryPart::nearPoint and farPoint. Those are the
+        // ends as the person who drew it means them, and they are not the corners of its outline: a
+        // coupling nut standing proud, a rope and ring hanging off a dust cap, a lead-in line all push
+        // the bounding box out past the body, and the figure then reads longer than the part is.
+        PartsLibrary lib;
+        LibraryPart& conn = lib.add(PartKind::Connector);
+        conn.id = QStringLiteral("C1");
+        conn.mfrPn = QStringLiteral("CONN-WITH-A-TAIL");
+        conn.description = QStringLiteral("A connector with something hanging off it");
+        conn.unit = QStringLiteral("each");
+        // The body is 25 long from the face. Then something sticks out to 60 - a lanyard, a ring -
+        // which is drawn but is NOT part of the length anybody dimensions.
+        Entity body;
+        body.type = EntityType::Rect;
+        body.points = {{0.0, -8.0}, {25.0, -8.0}, {25.0, 8.0}, {0.0, 8.0}};
+        body.a = {0.0, -8.0};
+        body.b = {25.0, 8.0};
+        Entity tail;
+        tail.type = EntityType::Line;
+        tail.a = {25.0, 0.0};
+        tail.b = {60.0, 0.0};
+        QJsonArray drawing;
+        drawing.append(body.toJson());
+        drawing.append(tail.toJson());
+        conn.mechanical = drawing;
+        conn.hasConnect = true;
+        conn.connectPoint = {0.0, 0.0};
+        conn.connectAngleRad = 0.0;
+        conn.hasNearPoint = true;
+        conn.nearPoint = {0.0, 0.0};      // the face the harness meets
+        conn.hasFarPoint = true;
+        conn.farPoint = {25.0, 0.0};      // the far end of the BODY, not of the lanyard
+        conn.outputs.push_back({Vec2{0.0, -8.0}, Vec2{0.0, 8.0}});
+
+        const QString libPath = QDir::tempPath() +
+                                QStringLiteral("/edraw-ends-%1.plb").arg(QCoreApplication::applicationPid());
+        check(lib.save(libPath), "part ends: a library to look it up in");
+        PartsCatalog cat;
+        cat.setRemembering(false);
+        check(cat.connectLibrary(libPath), "part ends: and it is connected");
+
+        MechHarnessDef def;
+        MechNode root;
+        root.id = QStringLiteral("root");
+        MechNode end;
+        end.id = QStringLiteral("p1");
+        end.kind = MechNodeKind::Connector;   // only a connector node draws a body to dimension
+        end.parentSegment = QStringLiteral("s1");
+        end.libPart = QStringLiteral("C1");
+        end.dimension = true;            // THIS is the tick the wizard offers
+        def.nodes.push_back(root);
+        def.nodes.push_back(end);
+        MechSegment s;
+        s.id = QStringLiteral("s1");
+        s.fromNode = QStringLiteral("root");
+        s.toNode = QStringLiteral("p1");
+        s.lengthMm = 300.0;
+        def.segments.push_back(s);
+        def.draw.dimensions = false;     // only the step's own tick, so this is the one being tested
+
+        double measured = -1.0;
+        for (const Entity& e : buildMechanicalHarness(def, &cat))
+            if (e.type == EntityType::Dimension &&
+                e.meta.value(QStringLiteral("mechNode")).toString() == QLatin1String("p1"))
+                measured = distance(e.a, e.b);
+        std::printf("    (part ends: the connector dimensions %.2f)\n", measured);
+        // 25, the body - not 60, which is where the lanyard reaches.
+        check(std::abs(measured - 25.0) < 1e-6,
+              "part ends: it measures the part's own two ends, not the corners of its drawing");
+        QFile::remove(libPath);
+    }
+
     // ---- A length is ordered in the unit the PART is issued in, not the drawing's -----------------
     {
         // Everything measured off a harness is in millimetres, because that is what the drawing is in.
