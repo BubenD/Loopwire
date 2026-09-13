@@ -3,6 +3,8 @@
 #include "geometry/Geometry.h"
 #include "io/Dwx.h"
 #include "geometry/Snap.h"
+#include "harness/PartsLibrary.h"
+#include "model/Block.h"
 #include "model/Document.h"
 #include "app/ribbon/RibbonIcons.h"
 #include "model/PartSymbols.h"
@@ -9371,6 +9373,84 @@ int run_editor_tests() {
                     sleeve().points.back().x, sleeve().points.back().y);
         check(std::abs(sleeve().meta.value(QStringLiteral("shrinkTaperEnd")).toDouble() - 5.0) < 1e-6,
               "sleeve joints: the shoulder sets how long the recovered end is");
+    }
+
+    // ---- A part put down from the library has something to take hold of --------------------------
+    {
+        // A placed part is a BLOCK: it moves as one and its lines are changed in its own editor, so it
+        // has no joints of its own - handing out one per line would be handing out the ability to pull
+        // the part apart on the sheet. But none at all left it with nothing to aim at: it could only be
+        // shoved with the mouse and hoped at.
+        LibraryPart p;
+        p.id = QStringLiteral("P1");
+        p.kind = PartKind::Connector;
+        p.mfrPn = QStringLiteral("TEST-CONN");
+        p.description = QStringLiteral("A test connector");
+        // TWO lines, so "the whole copy moves" is a claim with something to prove.
+        auto seg = [](Vec2 a, Vec2 b) {
+            Entity e;
+            e.type = EntityType::Line;
+            e.a = a;
+            e.b = b;
+            return e;
+        };
+        QJsonArray drawing;
+        drawing.append(seg({0.0, 0.0}, {20.0, 0.0}).toJson());
+        drawing.append(seg({0.0, 10.0}, {20.0, 10.0}).toJson());
+        p.mechanical = drawing;
+
+        Document d;
+        // A block instance comes back with its ids cleared - a stored drawing has no business naming
+        // objects in whatever document it lands in - so the document gives them one, as the
+        // application does when a part is inserted.
+        int nth = 0;
+        for (Entity e : partBlockInstance(p, /*mechanical=*/true, Vec2{50.0, 50.0})) {
+            e.id = QStringLiteral("PART-%1").arg(++nth);
+            d.entities().push_back(e);
+        }
+        check(d.entities().size() == 2, "placed part: both of its lines are on the sheet");
+        if (d.entities().size() != 2) return g_fail;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectById(d.entities().front().id);
+        // Picking any of it picks all of it - that is what a block is.
+        check(ed.selection().size() == 2, "placed part: it is picked as one thing");
+
+        const std::vector<Vec2> joints = ed.selectionGripPoints();
+        std::printf("  placed part: %d joint(s)\n", int(joints.size()));
+        // Its corners, the middles of its sides, and its centre - nine, and ONCE for the copy rather
+        // than nine per line in it.
+        check(joints.size() == 9, "placed part: the copy has handles of its own, drawn once");
+        Bounds b;
+        for (const Entity& e : d.entities()) {
+            const Bounds eb = e.bounds();
+            if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
+        }
+        bool onCorner = false;
+        for (const Vec2& j : joints)
+            if (distance(j, b.min) < 1e-6) onCorner = true;
+        check(onCorner, "placed part: with one on the corner of what it occupies");
+
+        // AND DRAGGING ONE MOVES THE WHOLE COPY. Moving only the line that happened to be carrying the
+        // handle would pull the part apart, which is the one thing a block exists to prevent.
+        const Vec2 corner = b.min;
+        ed.onPointerPress(corner, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({corner.x + 30.0, corner.y + 5.0});
+        ed.onPointerPress({corner.x + 30.0, corner.y + 5.0}, Qt::LeftButton, Qt::NoModifier);
+        Bounds after;
+        for (const Entity& e : d.entities()) {
+            const Bounds eb = e.bounds();
+            if (eb.valid) { after.expand(eb.min); after.expand(eb.max); }
+        }
+        std::printf("  placed part: dragged its corner -> (%.1f,%.1f)..(%.1f,%.1f)\n", after.min.x,
+                    after.min.y, after.max.x, after.max.y);
+        check(std::abs(after.min.x - (b.min.x + 30.0)) < 1e-6 &&
+                  std::abs(after.min.y - (b.min.y + 5.0)) < 1e-6,
+              "placed part: the handle moves the copy to where it was dragged");
+        check(std::abs((after.max.x - after.min.x) - (b.max.x - b.min.x)) < 1e-6 &&
+                  std::abs((after.max.y - after.min.y) - (b.max.y - b.min.y)) < 1e-6,
+              "placed part: and moves all of it, so the part keeps its shape");
     }
 
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------

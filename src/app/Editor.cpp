@@ -249,6 +249,18 @@ enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge,
                       // a face means. SleeveShoulder is where the body stops being full width and the
                       // taper begins, so it sets how long that taper is.
                       SleeveFace, SleeveShoulder,
+                      // A HANDLE ON A PLACED BLOCK - a part put down from the library, a sheet frame.
+                      //
+                      // A block has no joints of its own on purpose: it moves as one and its lines are
+                      // changed in its own editor, so handing out a handle per line would be handing
+                      // out the ability to pull the part apart on the sheet. But NO handles at all
+                      // left a placed part with nothing to take hold of and nothing to aim at - you
+                      // could only shove it with the mouse and hope.
+                      //
+                      // These are the instance's own: its corners and the middles of its sides, drawn
+                      // once for the whole copy. Dragging one moves the copy, all of it, so the part
+                      // can be picked up by a known point and - with snap - dropped exactly on one.
+                      BlockHandle,
                       // A wire's colour/gauge marking, and a Wire label attached to a wire:
                       // both are constrained to slide ALONG the wire and nowhere else.
                       WireMark, WireMarkColor, WireMarkLabel, WireLabelSlide,
@@ -711,6 +723,39 @@ std::vector<Vec2> doubleRunCentre(const std::vector<Vec2>& drawn, double gap,
 
 // `doc` is only needed for entities whose handle position is defined by ANOTHER entity
 // (a Wire label attached to a wire sits wherever that wire's fraction lands).
+
+// THE HANDLES A PLACED BLOCK OFFERS - see GripRole::BlockHandle.
+//
+// Drawn ONCE for the whole copy, not once per line in it, so the first entity of the instance carries
+// them and the rest carry none. Which one is "first" is document order, which is stable: the copy was
+// added in one go and nothing reorders it.
+//
+// Where they go: the corners of what the copy occupies and the middles of its sides, plus its centre.
+// Those are the points a person aims at when putting a part somewhere - and being real points, snap
+// catches them from the other side too, so one placed part can be lined up on another.
+std::vector<Grip> blockInstanceGrips(const Entity& e, const Document* doc) {
+    std::vector<Grip> g;
+    if (!doc) return g;
+    const QString key = entityBlockInstance(e);
+    if (key.isEmpty()) return g;
+    Bounds b;
+    bool first = true;
+    for (const Entity& x : doc->entities()) {
+        if (entityBlockInstance(x) != key) continue;
+        if (first && x.id != e.id) return g;    // another line of it is carrying the handles
+        first = false;
+        const Bounds xb = x.bounds();
+        if (xb.valid) { b.expand(xb.min); b.expand(xb.max); }
+    }
+    if (!b.valid) return g;
+    const Vec2 mid{(b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0};
+    const Vec2 pts[9] = {{b.min.x, b.min.y}, {mid.x, b.min.y},  {b.max.x, b.min.y},
+                         {b.max.x, mid.y},   {b.max.x, b.max.y}, {mid.x, b.max.y},
+                         {b.min.x, b.max.y}, {b.min.x, mid.y},  mid};
+    for (const Vec2& p : pts) g.push_back({p, GripRole::BlockHandle, 0});
+    return g;
+}
+
 std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {},
                           const Document* doc = nullptr) {
     std::vector<Grip> g;
@@ -4167,9 +4212,17 @@ std::vector<Vec2> Editor::selectionGripPoints() const {
     if (!doc_) return out;
     // The document is walked rather than entityById asked, which is not const.
     const QSet<QString> picked(selected_.begin(), selected_.end());
-    for (const Entity& e : doc_->entities())
-        if (picked.contains(e.id))
-            for (const Grip& g : gripsOf(e, collectPinEnds(doc_), doc_)) out.push_back(g.pos);
+    for (const Entity& e : doc_->entities()) {
+        if (!picked.contains(e.id)) continue;
+        // THE SAME GATE THE DRAWING USES. A piece of a block has no joints - that is what makes a
+        // block move as one - and an accessor that handed them out anyway would report handles
+        // nobody can see or grab.
+        if (isBlockPiece(e)) {
+            for (const Grip& g : blockInstanceGrips(e, doc_)) out.push_back(g.pos);
+            continue;
+        }
+        for (const Grip& g : gripsOf(e, collectPinEnds(doc_), doc_)) out.push_back(g.pos);
+    }
     return out;
 }
 
@@ -5744,7 +5797,11 @@ void Editor::drawGrips(QPainter& p, const Entity& e, const ViewTransform& vt) co
         e.meta.value(QStringLiteral("labelGroup")).toString() == labelGroup_) {
         int idx = 0;
         for (const Vec2& j : labelJoints()) handles.push_back({j, GripRole::Radius, idx++});
-    } else if (!isBlockPiece(e)) {
+    } else if (isBlockPiece(e)) {
+        // A block has no joints of its own - it moves as one - but it is not nothing to take hold
+        // of either. The copy gets handles of its own: see blockInstanceGrips.
+        handles = blockInstanceGrips(e, doc_);
+    } else {
         handles = gripsOf(e, collectPinEnds(doc_), doc_);
         if (int row = 0, col = 0; pickedCellOf(e, row, col))
             handles = pickedCellGrips(e, handles, row, col);
@@ -5851,11 +5908,12 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     for (const auto& id : selected_) {
         Entity* e = entityById(id);
         if (!e) continue;
-        if (isBlockPiece(*e)) continue;   // and none to grab, for the same reason
-        // The same handles that are DRAWN, or a table's cell handles would be shown in one place and
-        // grabbable in another.
-        std::vector<Grip> handles = gripsOf(*e, pinEnds, doc_);
-        if (int row = 0, col = 0; pickedCellOf(*e, row, col))
+        // The same handles that are DRAWN, or they would be shown in one place and grabbable in
+        // another - a table's cell handles, and a block copy's own handles, which used to be skipped
+        // here because a block had none to skip.
+        std::vector<Grip> handles = isBlockPiece(*e) ? blockInstanceGrips(*e, doc_)
+                                                     : gripsOf(*e, pinEnds, doc_);
+        if (int row = 0, col = 0; !isBlockPiece(*e) && pickedCellOf(*e, row, col))
             handles = pickedCellGrips(*e, handles, row, col);
         for (const auto& gr : handles) {
             const double d = distance(at, gr.pos);
@@ -5934,6 +5992,15 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
                     if (m != arrow && distance(m->center, arrow ? arrow->center : e->center) >=
                                           dGrab - 1e-6)
                         editGrips_.push_back({m->id, static_cast<int>(GripRole::Move), 0, {}});
+            } else if (gr.role == GripRole::BlockHandle) {
+                // A HANDLE ON A BLOCK MOVES THE WHOLE COPY. It is one handle for all of it, so the
+                // drag has to carry every line of the copy - moving only the entity that happened to
+                // be carrying the handle would pull the part apart on the sheet, which is the one
+                // thing a block exists to prevent.
+                const QString key = entityBlockInstance(*e);
+                for (const Entity& x : doc_->entities())
+                    if (entityBlockInstance(x) == key)
+                        editGrips_.push_back({x.id, static_cast<int>(GripRole::Move), 0, {}});
             } else if (isPointJoint(gr.role)) {
                 const Vec2 jp = gr.pos;
                 for (const auto& sid : selected_) {
