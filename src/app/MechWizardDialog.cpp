@@ -8,6 +8,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFont>
@@ -90,6 +91,8 @@ QString categoryHint(MechWizardDialog::Category c) {
 // once that they exist.
 void selectByData(QComboBox* box, const QString& id);
 QString partLabelFor(const LibraryPart& p);
+// Lets a part picker be typed into - see the definition.
+void makePartPickerSearchable(QComboBox* box);
 
 // The designators typed for a run's wires, one per wire in the order the conductors are counted.
 //
@@ -484,6 +487,7 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     partCombo_ = new QComboBox(panel);
+    makePartPickerSearchable(partCombo_);
     form->addRow(QStringLiteral("Part"), partCombo_);
 
     // The label is set per category in refreshFieldsForCategory: DESIGNATOR on a connector or a
@@ -577,6 +581,7 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
 
     contactLabel_ = new QLabel(QStringLiteral("Contact"), panel);
     contactCombo_ = new QComboBox(panel);
+    makePartPickerSearchable(contactCombo_);
     form->addRow(contactLabel_, contactCombo_);
 
     // SEVERAL GROUPS OF CONDUCTORS in one run. A hook-up bundle is whatever the circuit needs - two
@@ -675,6 +680,7 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     coverKindCombo_->addItem(QStringLiteral("Braided sleeve"), static_cast<int>(PartKind::Sleeve));
     coverKindCombo_->addItem(QStringLiteral("Heatshrink"), static_cast<int>(PartKind::Heatshrink));
     coverPartCombo_ = new QComboBox(coverBox_);
+    makePartPickerSearchable(coverPartCombo_);
     coverPartCombo_->setMinimumWidth(220);
     coverLenSpin_ = new QDoubleSpinBox(coverBox_);
     coverLenSpin_->setRange(0.0, 100000.0);
@@ -2182,14 +2188,52 @@ void selectByData(QComboBox* box, const QString& id) {
 }
 
 // A part as a person would recognise it: what it is, and its part number when it has one.
+// WHAT A PART IS CALLED IN A PICKER, and what can be TYPED to find it.
+//
+// A part is identified by whichever of its names the person happens to know. The buyer knows the house
+// number, the draughtsman knows the description, the person holding the reel knows what is printed on
+// it, and somebody working off a bill of materials knows the manufacturer. The list showed the
+// description with the manufacturer's number in brackets, so three of those four could not be typed at
+// all - the text simply was not there to match against.
+//
+// So every name the part has goes in the label, which is what makes the box searchable: the picker
+// completes on what is shown, and now what is shown is everything the part is known by. The
+// manufacturer's number leads, because that is what a part is ordered and marked by and it is the one
+// people scan a list for; then what it is; then who makes it; then the house number if there is one.
 QString partLabelFor(const LibraryPart& p) {
-    QString label = p.description.trimmed();
-    if (label.isEmpty()) label = p.mfrPn.trimmed();
-    if (label.isEmpty()) label = p.id;
-    if (!p.mfrPn.trimmed().isEmpty() && label != p.mfrPn.trimmed())
-        label += QStringLiteral("  (%1)").arg(p.mfrPn.trimmed());
-    return label;
+    QStringList bits;
+    const QString pn = p.mfrPn.trimmed();
+    const QString desc = p.description.trimmed();
+    const QString mfr = p.mfrName.trimmed();
+    const QString house = p.internalPn.trimmed();
+    if (!pn.isEmpty()) bits << pn;
+    if (!desc.isEmpty()) bits << desc;
+    if (!mfr.isEmpty() && mfr != pn) bits << mfr;
+    if (!house.isEmpty() && house != pn) bits << house;
+    if (bits.isEmpty()) bits << p.id;
+    return bits.join(QStringLiteral("  —  "));
 }
+
+// MAKE A PART PICKER TYPEABLE. The box takes any of the names above and narrows the list to what
+// contains it, rather than only jumping to what STARTS with it - nobody knows which of a part's four
+// names the list happens to be sorted by, so matching only the beginning means knowing the answer
+// before you ask.
+//
+// Nothing can be typed INTO the library from here: the box is a way of finding one of the parts that
+// are already there, and a part number that matches nothing is not a new part, it is a typing mistake.
+void makePartPickerSearchable(QComboBox* box) {
+    if (!box) return;
+    box->setEditable(true);
+    box->setInsertPolicy(QComboBox::NoInsert);
+    box->lineEdit()->setPlaceholderText(
+        QStringLiteral("Type a part number, a description or a maker"));
+    if (QCompleter* c = box->completer()) {
+        c->setCompletionMode(QCompleter::PopupCompletion);
+        c->setCaseSensitivity(Qt::CaseInsensitive);
+        c->setFilterMode(Qt::MatchContains);
+    }
+}
+
 
 } // namespace
 
@@ -2233,15 +2277,25 @@ void MechWizardDialog::refreshPartCombo() {
     // step is drawn from the office's own standard model for that kind of thing, which is how a
     // harness gets described before anybody has settled on part numbers.
     partCombo_->addItem(QStringLiteral("Default (the standard drawing for this kind)"), QString());
-    for (const LibraryPart* p : catalog_.ofKind(kind)) {
-        if (!p) continue;
-        partCombo_->addItem(partLabelFor(*p), p->id);
+    // IN ORDER, because a library of two hundred parts offered in the order they happened to be
+    // added to the file is a list nobody can scan. Sorted on the label, which leads with the part
+    // number - so the list reads the way a parts list reads, and typing narrows it from there.
+    {
+        std::vector<std::pair<QString, QString>> rows;
+        for (const LibraryPart* p : catalog_.ofKind(kind))
+            if (p) rows.push_back({partLabelFor(*p), p->id});
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+            return a.first.compare(b.first, Qt::CaseInsensitive) < 0;
+        });
+        for (const auto& r : rows) partCombo_->addItem(r.first, r.second);
     }
     selectByData(partCombo_, had);
 
     loading_ = wasLoading;
     refreshContactCombo();
 }
+
+QString MechWizardDialog::partLabelForTest(const LibraryPart& p) { return partLabelFor(p); }
 
 void MechWizardDialog::refreshContactCombo() {
     const bool wasLoading = loading_;
@@ -2258,11 +2312,16 @@ void MechWizardDialog::refreshContactCombo() {
         const QString chosen = partCombo_->currentData().toString();
         const QStringList tied =
             chosen.isEmpty() ? QStringList() : tiedContactsOf(catalog_.active(), chosen);
+        std::vector<std::pair<QString, QString>> rows;
         for (const LibraryPart* p : catalog_.ofKind(PartKind::ContactPin)) {
             if (!p) continue;
             if (!tied.isEmpty() && !tied.contains(p->id)) continue;
-            contactCombo_->addItem(partLabelFor(*p), p->id);
+            rows.push_back({partLabelFor(*p), p->id});
         }
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+            return a.first.compare(b.first, Qt::CaseInsensitive) < 0;
+        });
+        for (const auto& r : rows) contactCombo_->addItem(r.first, r.second);
     }
     selectByData(contactCombo_, had);
 

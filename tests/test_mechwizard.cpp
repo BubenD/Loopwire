@@ -3570,6 +3570,47 @@ void testWhatIsDrawnAlongAScreenedBranch() {
     }
 }
 
+// A part is found by whichever of its names you happen to know.
+void testAPartIsFoundByAnyOfItsNames() {
+// ---- A part is found by whichever of its names you happen to know ----------------------------
+{
+    // The buyer knows the house number, the draughtsman knows the description, the person holding
+    // the reel knows what is printed on it, and somebody working off a bill of materials knows the
+    // manufacturer. The picker used to show the description with the manufacturer's number in
+    // brackets, so three of those four could not be typed at all - the text was not there to match.
+    PartsLibrary lib;
+    LibraryPart& p = lib.add(PartKind::Connector);
+    p.id = QStringLiteral("P1");
+    p.mfrPn = QStringLiteral("D38999/26WB35PD");
+    p.description = QStringLiteral("CONN CIRCULAR D38999 III SHELL-11 PLUG");
+    p.mfrName = QStringLiteral("AMPHENOL");
+    p.internalPn = QStringLiteral("HOUSE-0042");
+
+    const QString label = MechWizardDialog::partLabelForTest(p);
+    std::printf("    (picker: \"%s\")\n", qPrintable(label));
+    // Every name the part has is in what the box shows, which is what makes it typeable: a
+    // completer matches on the text it displays.
+    check(label.contains(p.mfrPn), "picker: the manufacturer's part number can be typed");
+    check(label.contains(p.description), "picker: and the description");
+    check(label.contains(p.mfrName), "picker: and the maker's name");
+    check(label.contains(p.internalPn), "picker: and the house part number");
+    // The part number LEADS, because that is what a part is ordered and marked by and it is what
+    // a person scans a list for.
+    check(label.startsWith(p.mfrPn), "picker: with the part number in front");
+
+    // A part with only a description still reads as itself rather than as a string of separators.
+    LibraryPart bare;
+    bare.id = QStringLiteral("B1");
+    bare.description = QStringLiteral("Something nobody numbered");
+    check(MechWizardDialog::partLabelForTest(bare) == bare.description,
+          "picker: a part with one name is called by it, with nothing hung off it");
+    // And one with no names at all falls back to something rather than to blank.
+    LibraryPart nameless;
+    nameless.id = QStringLiteral("N1");
+    check(!MechWizardDialog::partLabelForTest(nameless).isEmpty(), "picker: a nameless part still has a line");
+}
+}
+
 int run_mechwizard_tests() {
     std::printf("Running harness build wizard tests...\n");
     fails = 0;
@@ -3621,6 +3662,7 @@ int run_mechwizard_tests() {
     testWhatIsDrawnAlongAScreenedBranch();
     testHeatshrinkIsDrawnWithShrunkEnds();
     testTheHeatshrinkButtonHasSomethingToPlace();
+    testAPartIsFoundByAnyOfItsNames();
     if (fails == 0) std::printf("  harness build wizard: OK\n");
     return fails;
 }

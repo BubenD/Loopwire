@@ -205,6 +205,9 @@ public:
     // wizard opens whatever libraries the machine remembers, which is right for a person and useless
     // for a test that needs to assert something about a specific part.
     PartsCatalog& catalogForTest() { return catalog_; }
+    // What a part is CALLED in a picker - and therefore what can be typed to find it. Public so a
+    // test can check every one of a part's names is in there without driving a combo box.
+    static QString partLabelForTest(const LibraryPart& p);
     // Rebuild the part list after changing that library.
     void reloadPartsForTest() { refreshPartCombo(); }
     // Choose a part by its library id, as picking it from the list does.
