@@ -137,6 +137,11 @@ public:
     //
     // Corners snap as endpoints, the middle of each edge as a midpoint, and anywhere along an edge as
     // nearest - each only if that snap is switched on, like any other.
+    // Square-cut ends instead of recovered ones - "cable over the run with heatshrink". Set from the
+    // ribbon before the tool is used; the next sleeve drawn is of that sort.
+    void setShrinkSquareEnds(bool on) { shrinkSquareEnds_ = on; }
+    bool shrinkSquareEnds() const { return shrinkSquareEnds_; }
+
     void setSnapRectangles(std::vector<Bounds> rects);
     const std::vector<Bounds>& snapRectangles() const { return snapRects_; }
 
@@ -1668,6 +1673,11 @@ private:
     // kept here instead and applied with the move, when it is put down.
     double moveTurn_ = 0.0;
     double shrinkWidth_ = 6.0;
+    // WHICH SORT OF SLEEVE THE TOOL DRAWS. False is heatshrink: it recovers, so its ends pull in
+    // onto what they grip and the outline necks down over a taper. True is a cable running under a
+    // length of heatshrink - one width from end to end, cut square - which is a different thing on
+    // the sheet and cannot be got by editing the first into shape afterwards without knowing to.
+    bool shrinkSquareEnds_ = false;
     // Which shrunk end the PROPERTIES panel has the keyboard in - see setSleeveEndHighlight. Chrome,
     // so it is not saved, not undoable, and never reaches the document.
     int sleeveEndHi_ = -1;

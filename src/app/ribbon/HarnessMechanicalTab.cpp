@@ -403,21 +403,54 @@ void MainWindow::buildHarnessMechanicalTab() {
             // so it is drawn by clicking along the run rather than dropped at one size and nudged into
             // place. A fixed-length stamp cannot say a sleeve round a corner at all.
             auto* hsBtn = new QToolButton(lenW);
+            hsBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            hsBtn->setIconSize(QSize(26, 26));
+            hsBtn->setAutoRaise(true);
+            hsBtn->setFocusPolicy(Qt::NoFocus);
+            hsBtn->setPopupMode(QToolButton::MenuButtonPopup);
             QAction* hsAct = makeToolAction(toolLabel(ToolId::HeatshrinkRoute),
                                             ToolId::HeatshrinkRoute);
-            // THE ICON COMES FROM THE ACTION, not set on the button afterwards. A QToolButton with a
-            // default action takes its icon from that action and re-takes it whenever the action
-            // changes, so an icon assigned to the button is in a fight it eventually loses - which is
-            // why this button kept coming up wearing whatever makeToolIcon had for the tool.
+            // THE ICON COMES FROM THE ACTION, not set on the button afterwards - a QToolButton with a
+            // default action re-takes its icon whenever the action changes, so one assigned to the
+            // button is in a fight it eventually loses.
             hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute));
             hsBtn->setDefaultAction(hsAct);
             hsBtn->setText(QStringLiteral("Heatshrink"));
-            hsBtn->setAutoRaise(true);
-            hsBtn->setFocusPolicy(Qt::NoFocus);
-            hsBtn->setToolTip(QStringLiteral(
-                "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
-                "recovered - pulled in at both ends onto what it grips, and following the knees in "
-                "between."));
+            auto* hm = new QMenu(hsBtn);
+            struct Sort { bool square; const char* onButton; const char* inMenu; const char* tip; };
+            const Sort sorts[2] = {
+                {false, "Heatshrink", "Heatshrink over the run",
+                 "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
+                 "recovered - pulled in at both ends onto what it grips, and following the knees in "
+                 "between."},
+                {true, "Cable", "Cable over the run with heatshrink",
+                 "A cable running along the run under a length of heatshrink: one width from end to "
+                 "end, cut square across each end rather than recovered onto what is under it."}};
+            for (const Sort& sort : sorts) {
+                QAction* a = hm->addAction(makeToolIcon(ToolId::HeatshrinkRoute),
+                                           QString::fromLatin1(sort.inMenu));
+                a->setToolTip(QString::fromLatin1(sort.tip));
+                const bool square = sort.square;
+                const QString text = QString::fromLatin1(sort.onButton);
+                const QString tip = QString::fromLatin1(sort.tip);
+                connect(a, &QAction::triggered, this, [this, hsBtn, hsAct, square, text, tip] {
+                    hsBtn->setText(text);
+                    hsBtn->setToolTip(tip);
+                    // WHICH sort, held on the button rather than read back out of its caption: a
+                    // choice remembered as display text breaks the moment the display changes.
+                    hsBtn->setProperty("squareEnds", square);
+                    if (editor_) editor_->setShrinkSquareEnds(square);
+                    hsAct->trigger();   // picks the tool, and checks it on the ribbon
+                });
+            }
+            hsBtn->setToolTip(QString::fromLatin1(sorts[0].tip));
+            hsBtn->setMenu(hm);
+            hsBtn->setProperty("squareEnds", false);
+            // Pressing the button itself draws whichever sort it is wearing. The default action sets
+            // the tool; this only has to say which sort of sleeve that tool is to draw.
+            connect(hsAct, &QAction::triggered, this, [this, hsBtn] {
+                if (editor_) editor_->setShrinkSquareEnds(hsBtn->property("squareEnds").toBool());
+            });
             lgAdd(hsBtn);
         }
         // A LABEL on a run, and the same label covered over with clear heatshrink - which is how a label

@@ -63,7 +63,7 @@ constexpr double kShrinkRouteTaper = 4.0;
 // So the points are the KNEES. Every joint is a knee, dragging one re-lays the sleeve, and the two end
 // knees are what change its length - which is what there is to pull on a sleeve.
 Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
-                           const std::vector<double>& kneeRadii) {
+                           const std::vector<double>& kneeRadii, bool squareEnds = false) {
     Entity e;
     e.type = EntityType::Polyline;
     e.points = route;
@@ -87,6 +87,23 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
     // the double-polyline rails, so what is on the sheet is the necked outline and not two bare lines.
     e.meta.insert(QStringLiteral("double"), true);
     e.meta.insert(QStringLiteral("gap"), width);
+    // A CABLE UNDER HEATSHRINK IS CUT SQUARE, not recovered.
+    //
+    // Heatshrink pulls in onto what it grips, so its ends neck down over a taper - that is what the
+    // default draws and it is what a length of tubing over a bundle looks like. A CABLE running the
+    // length of the run under it does not shrink onto anything: it is one width from end to end and
+    // it stops at a face square across it.
+    //
+    // Said with the numbers the outline already understands - the face is the full body and the taper
+    // is nothing - rather than with a flag of its own, so every end that reads a sleeve keeps reading
+    // one: the properties panel still offers both ends, and either can be pulled back into a taper
+    // afterwards without the object having to change what it is.
+    if (squareEnds) {
+        e.meta.insert(QStringLiteral("shrinkFaceStart"), width);
+        e.meta.insert(QStringLiteral("shrinkFaceEnd"), width);
+        e.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
+        e.meta.insert(QStringLiteral("shrinkTaperEnd"), 0.0);
+    }
     // A RADIUS PER KNEE, in the same meta every other filleted outline uses - so the Fillet tool can
     // round one knee of a finished sleeve without touching the others, exactly as it does on a
     // polyline. One radius for the whole sleeve cannot say "this corner is tight and that one is not",
@@ -9917,7 +9934,8 @@ void Editor::finishDraw() {
     case ToolId::HeatshrinkRoute: {
         // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.
         if (draftPts_.size() < 2) { cancelDraw(); return; }
-        const Entity sleeve = heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_);
+        const Entity sleeve =
+            heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_, shrinkSquareEnds_);
         if (sleeve.points.empty()) { cancelDraw(); return; }
         e.type = sleeve.type;
         e.points = sleeve.points;
@@ -17489,7 +17507,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else if (tool_ == ToolId::HeatshrinkRoute && pts.size() >= 2) {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
             // screen while it is being drawn is what lands.
-            const Entity sleeve = heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_);
+            const Entity sleeve =
+                heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_, shrinkSquareEnds_);
             if (!sleeve.points.empty())
                 EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::VolumeArrow && pts.size() >= 2) {

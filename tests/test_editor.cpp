@@ -9247,6 +9247,59 @@ int run_editor_tests() {
               "sleeve: and lands on the rail it draws, not on the route down the middle");
     }
 
+    // ---- Cable over the run with heatshrink: cut square, not recovered ----------------------------
+    {
+        // Heatshrink RECOVERS - it pulls in onto what it grips, so its ends neck down over a taper.
+        // A cable running the length of the run under it does not: it is one width from end to end and
+        // stops at a face square across it. Two different shapes on the sheet, and the second could
+        // not be drawn at all.
+        auto drawSleeve = [](bool square) {
+            Document d;
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setShrinkSquareEnds(square);
+            ed.setTool(ToolId::HeatshrinkRoute);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            return d.entities().empty() ? Entity() : d.entities().front();
+        };
+        // How far out the outline reaches at the very ends, against how far out it reaches in the
+        // middle: a recovered end is narrower than the body, a square one is not.
+        auto endHalf = [](const Entity& e) {
+            const std::vector<Vec2> o = shrunkSleeveOutlineOf(e);
+            // The BODY is the widest the outline ever gets - a two-point sleeve has no vertices in
+            // the middle of its span to sample, only its end faces and the shoulders beside them.
+            double atEnd = 0.0, body = 0.0;
+            for (const Vec2& p : o) {
+                body = std::max(body, std::abs(p.y));
+                if (p.x < 1.0) atEnd = std::max(atEnd, std::abs(p.y));
+            }
+            return std::make_pair(atEnd, body);
+        };
+
+        const Entity shrunk = drawSleeve(false);
+        const Entity cable = drawSleeve(true);
+        check(!shrunk.points.empty() && !cable.points.empty(), "square sleeve: both are drawn");
+        if (shrunk.points.empty() || cable.points.empty()) return g_fail;
+        const auto s = endHalf(shrunk);
+        const auto c = endHalf(cable);
+        std::printf("  square sleeve: recovered end %.2f of body %.2f; square end %.2f of body %.2f\n",
+                    s.first, s.second, c.first, c.second);
+        check(s.first < s.second - 0.1,
+              "square sleeve: heatshrink necks down at its end, as it always did");
+        check(std::abs(c.first - c.second) < 1e-6,
+              "square sleeve: a cable is the same width at its end as in the middle");
+        // AND IT IS STILL A SLEEVE. Said with the numbers the outline already understands rather than
+        // a flag of its own, so the properties panel still offers both ends and either can be pulled
+        // back into a taper afterwards without the object changing what it is.
+        check(cable.meta.value(QStringLiteral("shrunkEnds")).toBool(),
+              "square sleeve: it is still a sleeve, and still editable end by end");
+        check(std::abs(cable.meta.value(QStringLiteral("shrinkTaperStart")).toDouble()) < 1e-9,
+              "square sleeve: with no taper at the start");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,
