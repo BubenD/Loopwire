@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "app/BlockDialog.h"
+#include "app/Chrome.h"
 #include "app/ribbon/RibbonIcons.h"
 #include "app/Editor.h"
 #include "harness/Harness.h"
@@ -413,43 +414,56 @@ void MainWindow::buildHarnessMechanicalTab() {
             // THE ICON COMES FROM THE ACTION, not set on the button afterwards - a QToolButton with a
             // default action re-takes its icon whenever the action changes, so one assigned to the
             // button is in a fight it eventually loses.
-            hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute));
+            hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute, Chrome::ink()));
             hsBtn->setDefaultAction(hsAct);
             hsBtn->setText(QStringLiteral("Heatshrink"));
             auto* hm = new QMenu(hsBtn);
-            struct Sort { bool square; const char* onButton; const char* inMenu; const char* tip; };
-            const Sort sorts[2] = {
-                {false, "Heatshrink", "Heatshrink over the run",
+            struct Sort { ShrinkRouteMode mode; int icon; const char* onButton; const char* inMenu;
+                          const char* tip; };
+            const Sort sorts[3] = {
+                {ShrinkRouteMode::Sleeve, 0, "Heatshrink", "Heatshrink over the run",
                  "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
                  "recovered - pulled in at both ends onto what it grips, and following the knees in "
                  "between."},
-                {true, "Cable", "Cable over the run with heatshrink",
+                {ShrinkRouteMode::Cable, 1, "Cable", "Cable over the run with heatshrink",
                  "A cable running along the run under a length of heatshrink: one width from end to "
-                 "end, cut square across each end rather than recovered onto what is under it."}};
+                 "end, cut square across each end rather than recovered onto what is under it."},
+                {ShrinkRouteMode::CableEnds, 2, "Cable ends",
+                 "Cable over the run with heatshrink on ends",
+                 "Cable over the run with heatshrink on its ends: the cable shows between the two "
+                 "sleeves, each split line can be dragged, and each end keeps its own face and "
+                 "shrunk length."}};
             for (const Sort& sort : sorts) {
-                QAction* a = hm->addAction(makeToolIcon(ToolId::HeatshrinkRoute),
-                                           QString::fromLatin1(sort.inMenu));
+                QAction* a = hm->addAction(
+                    makeToolIcon(ToolId::HeatshrinkRoute, Chrome::ink(), sort.icon),
+                    QString::fromLatin1(sort.inMenu));
                 a->setToolTip(QString::fromLatin1(sort.tip));
-                const bool square = sort.square;
+                const ShrinkRouteMode mode = sort.mode;
+                const int icon = sort.icon;
                 const QString text = QString::fromLatin1(sort.onButton);
                 const QString tip = QString::fromLatin1(sort.tip);
-                connect(a, &QAction::triggered, this, [this, hsBtn, hsAct, square, text, tip] {
+                connect(a, &QAction::triggered, this,
+                        [this, hsBtn, hsAct, mode, icon, text, tip] {
                     hsBtn->setText(text);
                     hsBtn->setToolTip(tip);
                     // WHICH sort, held on the button rather than read back out of its caption: a
                     // choice remembered as display text breaks the moment the display changes.
-                    hsBtn->setProperty("squareEnds", square);
-                    if (editor_) editor_->setShrinkSquareEnds(square);
+                    hsBtn->setProperty("shrinkMode", static_cast<int>(mode));
+                    hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute,
+                                                Chrome::ink(), icon));
+                    if (editor_) editor_->setShrinkRouteMode(mode);
                     hsAct->trigger();   // picks the tool, and checks it on the ribbon
                 });
             }
             hsBtn->setToolTip(QString::fromLatin1(sorts[0].tip));
             hsBtn->setMenu(hm);
-            hsBtn->setProperty("squareEnds", false);
+            hsBtn->setProperty("shrinkMode", static_cast<int>(ShrinkRouteMode::Sleeve));
             // Pressing the button itself draws whichever sort it is wearing. The default action sets
             // the tool; this only has to say which sort of sleeve that tool is to draw.
             connect(hsAct, &QAction::triggered, this, [this, hsBtn] {
-                if (editor_) editor_->setShrinkSquareEnds(hsBtn->property("squareEnds").toBool());
+                if (editor_)
+                    editor_->setShrinkRouteMode(static_cast<ShrinkRouteMode>(
+                        hsBtn->property("shrinkMode").toInt()));
             });
             lgAdd(hsBtn);
         }

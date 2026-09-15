@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace Edraw_Desktop {
 
@@ -201,6 +202,8 @@ bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
     return true;
 }
 
+namespace {
+
 // THE OUTLINE A HEATSHRINK SLEEVE ACTUALLY HAS.
 //
 // A sleeve stores its ROUTE - the centreline it was drawn along - and works its outline out from that
@@ -214,34 +217,208 @@ bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2) {
 //
 // The reading of the numbers moved here from the renderer, which had it, so that the drawing and the
 // picking cannot disagree about what shape it is: the renderer asks this too now.
+bool cableWithEndSleeves(const Entity& e) {
+    return e.type == EntityType::Polyline &&
+           e.meta.value(QLatin1String("shrunkEnds")).toBool() &&
+           e.meta.value(QLatin1String("shrinkEndsOnly")).toBool();
+}
+
+double sleeveAcross(const Entity& e) {
+    return e.meta.contains(QLatin1String("gap"))
+               ? e.meta.value(QLatin1String("gap")).toDouble(6.0)
+               : e.meta.value(QLatin1String("shrinkWidth")).toDouble(6.0);
+}
+
+double sleeveFaceAcross(const Entity& e, int end) {
+    const double def = std::max(0.2, sleeveAcross(e)) * 0.82;
+    const QString key = end == 0 ? QStringLiteral("shrinkFaceStart")
+                                 : QStringLiteral("shrinkFaceEnd");
+    return std::clamp(e.meta.value(key).toDouble(def), 0.1, std::max(0.1, sleeveAcross(e)));
+}
+
+double sleeveTaper(const Entity& e, int end) {
+    const QString key = end == 0 ? QStringLiteral("shrinkTaperStart")
+                                 : QStringLiteral("shrinkTaperEnd");
+    return std::max(0.0, e.meta.value(key).toDouble(4.0));
+}
+
+// A slice of the route, with every vertex it kept still saying which route vertex it came from. The
+// two cut points are not vertices of the source route (SIZE_MAX), so a fillet on a real knee cannot
+// wander onto the sleeve/cable split.
+struct RouteSlice {
+    std::vector<Vec2> points;
+    std::vector<size_t> source;
+};
+
+RouteSlice routeSlice(const std::vector<Vec2>& route, double from, double to) {
+    RouteSlice out;
+    if (route.size() < 2 || to - from < 1e-7) return out;
+    Vec2 p, tangent;
+    if (samplePolyline(route, from, false, p, tangent)) {
+        out.points.push_back(p);
+        out.source.push_back(std::numeric_limits<size_t>::max());
+    }
+    double walked = 0.0;
+    for (size_t i = 1; i < route.size(); ++i) {
+        const double seg = distance(route[i - 1], route[i]);
+        const double at = walked + seg;
+        if (at > from + 1e-7 && at < to - 1e-7) {
+            out.points.push_back(route[i]);
+            out.source.push_back(i);
+        }
+        walked = at;
+    }
+    if (samplePolyline(route, to, false, p, tangent)) {
+        out.points.push_back(p);
+        out.source.push_back(std::numeric_limits<size_t>::max());
+    }
+    return out;
+}
+
+RouteSlice sleeveSectionRoute(const Entity& e, int end) {
+    double start = 0.0, finish = 0.0;
+    if (!sleeveEndCoverageOf(e, start, finish)) return {};
+    const double total = polylineLength(e.points);
+    return routeSlice(e.points, end == 0 ? 0.0 : total - finish,
+                      end == 0 ? start : total);
+}
+
+std::vector<double> routeSliceRadii(const Entity& e, const RouteSlice& slice, double add) {
+    std::vector<double> radii(slice.points.size(), 0.0);
+    const QJsonArray rr = e.meta.value(QLatin1String("cornerRadii")).toArray();
+    for (size_t i = 0; i < slice.source.size(); ++i) {
+        const size_t at = slice.source[i];
+        if (at != std::numeric_limits<size_t>::max() && at < static_cast<size_t>(rr.size()))
+            radii[i] = std::max(0.0, rr[static_cast<int>(at)].toDouble()) + add;
+    }
+    return radii;
+}
+
+std::vector<Vec2> rawEndOutline(const Entity& e, int end) {
+    const RouteSlice slice = sleeveSectionRoute(e, end);
+    if (slice.points.size() < 2) return {};
+    const double bodyHalf = std::max(0.2, sleeveAcross(e)) / 2.0;
+    return end == 0 ? shrunkSleeveOutline(slice.points, bodyHalf, sleeveFaceAcross(e, 0) / 2.0,
+                                          bodyHalf, sleeveTaper(e, 0), 0.0)
+                    : shrunkSleeveOutline(slice.points, bodyHalf, bodyHalf,
+                                          sleeveFaceAcross(e, 1) / 2.0, 0.0, sleeveTaper(e, 1));
+}
+
+std::vector<Vec2> filletedEndOutline(const Entity& e, int end) {
+    const RouteSlice slice = sleeveSectionRoute(e, end);
+    std::vector<Vec2> outline = rawEndOutline(e, end);
+    if (outline.size() != slice.points.size() * 2 + 4) return outline;
+
+    const std::vector<double> sliceRadii = routeSliceRadii(e, slice, 0.0);
+    const size_t n = slice.points.size();
+    std::vector<double> radii(outline.size(), 0.0);
+    bool any = false;
+    for (size_t i = 1; i + 1 < n; ++i) {
+        const double r = sliceRadii[i];
+        if (r <= 0.0) continue;
+        const size_t outA = 1 + i;
+        const size_t outB = 2 * n + 2 - i;
+        if (outA < radii.size()) radii[outA] = r;
+        if (outB < radii.size()) radii[outB] = r;
+        any = true;
+    }
+    if (any) {
+        const std::vector<double> none(outline.size(), 0.0);
+        outline = filletChamferPolyline(outline, radii, none, none, true);
+    }
+    return outline;
+}
+
+} // namespace
+
+bool sleeveEndCoverageOf(const Entity& e, double& start, double& end) {
+    if (!cableWithEndSleeves(e) || e.points.size() < 2) return false;
+    const double total = polylineLength(e.points);
+    if (total < 1e-7) return false;
+    // Twenty millimetres of sleeve on each end is the starting figure; a short run proportions it
+    // down rather than letting the two sleeves pass through one another.
+    const double def = std::min(20.0, total * 0.25);
+    start = std::clamp(e.meta.value(QStringLiteral("shrinkCoverStart")).toDouble(def), 0.0, total);
+    end = std::clamp(e.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble(def), 0.0, total);
+    if (start + end > total && start + end > 1e-9) {
+        const double k = total / (start + end);
+        start *= k;
+        end *= k;
+    }
+    return true;
+}
+
 std::vector<Vec2> shrunkSleeveOutlineOf(const Entity& e) {
-    if (!e.meta.value(QLatin1String("shrunkEnds")).toBool() || e.points.size() < 2) return {};
-    // ACROSS, from the same key the editing machinery uses. Falling back to shrinkWidth so a sleeve
-    // drawn before the two were made one still answers right.
-    const double across = e.meta.contains(QLatin1String("gap"))
-                              ? e.meta.value(QLatin1String("gap")).toDouble(6.0)
-                              : e.meta.value(QLatin1String("shrinkWidth")).toDouble(6.0);
-    const double bodyHalf = std::max(0.2, across) / 2.0;
-    // THE TWO ENDS, EACH WITH ITS OWN TWO NUMBERS - see shrunkSleeveOutline for what they are. Not a
-    // share of the body: what a sleeve recovers to, and over what length, is set by whatever is under
-    // that end, and the two ends are usually over different things. Absent on a sleeve drawn before
-    // the numbers existed, and those fall back to what was always drawn - 82% across, 4 long, both
-    // ends the same - so an old drawing opens as it did.
-    const auto num = [&e](const char* key, double def) {
-        return e.meta.value(QLatin1String(key)).toDouble(def);
-    };
-    const double faceDef = bodyHalf * 1.64;
-    // Never past the body: heatshrink recovers INWARD, and a face wider than the sleeve draws a flare,
-    // which is a shape that cannot be got by shrinking anything onto anything.
+    if (e.type != EntityType::Polyline ||
+        !e.meta.value(QLatin1String("shrunkEnds")).toBool() || e.points.size() < 2 ||
+        cableWithEndSleeves(e))
+        return {};
+    const double bodyHalf = std::max(0.2, sleeveAcross(e)) / 2.0;
+    // THE TWO ENDS, EACH WITH ITS OWN TWO NUMBERS. Not a share of the body: what a sleeve recovers
+    // to, and over what length, is set by whatever is under that end, and the two ends are usually
+    // over different things. Absent on a sleeve drawn before the numbers existed, and those fall back
+    // to what was always drawn - 82% across, 4 long, both ends the same - so an old drawing opens as
+    // it did.
     return shrunkSleeveOutline(e.points, bodyHalf,
-                               std::clamp(num("shrinkFaceStart", faceDef) / 2.0, 0.05, bodyHalf),
-                               std::clamp(num("shrinkFaceEnd", faceDef) / 2.0, 0.05, bodyHalf),
-                               std::max(0.0, num("shrinkTaperStart", 4.0)),
-                               std::max(0.0, num("shrinkTaperEnd", 4.0)));
+                               std::clamp(sleeveFaceAcross(e, 0) / 2.0, 0.05, bodyHalf),
+                               std::clamp(sleeveFaceAcross(e, 1) / 2.0, 0.05, bodyHalf),
+                               sleeveTaper(e, 0), sleeveTaper(e, 1));
+}
+
+std::vector<Vec2> shrunkSleeveEndOutlineOf(const Entity& e, int end) {
+    if (end != 0 && end != 1) return {};
+    if (cableWithEndSleeves(e)) return rawEndOutline(e, end);
+    return shrunkSleeveOutlineOf(e);
+}
+
+std::vector<std::vector<Vec2>> shrunkSleeveRunsOf(const Entity& e) {
+    std::vector<std::vector<Vec2>> runs;
+    if (e.type != EntityType::Polyline ||
+        !e.meta.value(QLatin1String("shrunkEnds")).toBool() || e.points.size() < 2) return runs;
+    if (!cableWithEndSleeves(e)) {
+        std::vector<Vec2> outline = shrunkSleeveOutlineOf(e);
+        if (!outline.empty()) {
+            outline.push_back(outline.front());
+            runs.push_back(std::move(outline));
+        }
+        return runs;
+    }
+
+    double coverStart = 0.0, coverEnd = 0.0;
+    if (!sleeveEndCoverageOf(e, coverStart, coverEnd)) return runs;
+    const double total = polylineLength(e.points);
+    const double body = std::max(0.2, sleeveAcross(e));
+    const double cable =
+        std::clamp(e.meta.value(QStringLiteral("shrinkCableWidth")).toDouble(body * 0.82),
+                   0.1, body);
+    const RouteSlice middle = routeSlice(e.points, coverStart, total - coverEnd);
+    if (middle.points.size() >= 2 && polylineLength(middle.points) > 1e-7) {
+        // The cable keeps its own narrower width between the sleeves. A fillet set on a knee of the
+        // run rounds its centreline first, exactly as the ordinary double-polyline rails do.
+        const std::vector<double> radii = routeSliceRadii(e, middle, cable / 2.0);
+        const std::vector<Vec2> centre = roundedPolylinePerCorner(middle.points, radii);
+        const std::vector<Vec2> above = offsetPolyline(centre, cable / 2.0);
+        const std::vector<Vec2> below = offsetPolyline(centre, -cable / 2.0);
+        if (above.size() >= 2) runs.push_back(above);
+        if (below.size() >= 2) runs.push_back(below);
+    }
+    for (int end = 0; end < 2; ++end) {
+        std::vector<Vec2> outline = filletedEndOutline(e, end);
+        if (outline.size() >= 3) {
+            outline.push_back(outline.front());
+            runs.push_back(std::move(outline));
+        }
+    }
+    return runs;
 }
 
 std::vector<Vec2> entityOutline(const Entity& e) {
-    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) return sleeve;
+    if (e.meta.value(QLatin1String("shrunkEnds")).toBool()) {
+        std::vector<Vec2> points;
+        for (const auto& run : shrunkSleeveRunsOf(e))
+            points.insert(points.end(), run.begin(), run.end());
+        if (!points.empty()) return points;
+    }
     if (e.meta.value(QLatin1String("volumeArrow")).toBool())
         return volumeArrowOutline(e.a, e.b, e.meta.value(QLatin1String("arrowWidth")).toDouble(0.0),
                                   e.meta.value(QLatin1String("arrowHead")).toDouble(0.0));
@@ -283,6 +460,13 @@ Bounds Entity::bounds() const {
     // box at all, so a window drag never caught it, "zoom to fit" could not see it, and it counted as
     // touching nothing when the draw order was asked which objects overlap.
     if (meta.value(QLatin1String("volumeArrow")).toBool()) {
+        for (const Vec2& p : entityOutline(*this)) bnds.expand(p);
+        if (bnds.valid) return bnds;
+    }
+    // A sleeve's stored points are its route, not the drawing: include the cable and the two sleeve
+    // sections when that is the sort it is, or zoom-fit and overlap checks measure only the wire down
+    // the middle.
+    if (meta.value(QLatin1String("shrunkEnds")).toBool()) {
         for (const Vec2& p : entityOutline(*this)) bnds.expand(p);
         if (bnds.valid) return bnds;
     }

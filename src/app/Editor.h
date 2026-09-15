@@ -39,6 +39,11 @@ struct ValidationIssue {
     Vec2 at{0.0, 0.0};
 };
 
+// Which sort of routed sleeve the Heatshrink tool draws. Sleeve is recovered at both ends; Cable is
+// one square-cut width for the whole run; CableEnds leaves the cable visible in the middle and puts
+// an editable sleeve over each end.
+enum class ShrinkRouteMode { Sleeve, Cable, CableEnds };
+
 // The interaction brain: owns the active tool, snapping, selection, undo stack,
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
 // paint overlays (previews, selection highlights, snap markers). Mirrors the
@@ -137,10 +142,14 @@ public:
     //
     // Corners snap as endpoints, the middle of each edge as a midpoint, and anywhere along an edge as
     // nearest - each only if that snap is switched on, like any other.
-    // Square-cut ends instead of recovered ones - "cable over the run with heatshrink". Set from the
-    // ribbon before the tool is used; the next sleeve drawn is of that sort.
-    void setShrinkSquareEnds(bool on) { shrinkSquareEnds_ = on; }
-    bool shrinkSquareEnds() const { return shrinkSquareEnds_; }
+    // Which sort of run the Heatshrink tool draws next. The old square-end switch remains as a
+    // compatibility spelling for callers and tests written before there was a third sort.
+    void setShrinkRouteMode(ShrinkRouteMode mode) { shrinkMode_ = mode; }
+    ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
+    void setShrinkSquareEnds(bool on) {
+        shrinkMode_ = on ? ShrinkRouteMode::Cable : ShrinkRouteMode::Sleeve;
+    }
+    bool shrinkSquareEnds() const { return shrinkMode_ == ShrinkRouteMode::Cable; }
 
     void setSnapRectangles(std::vector<Bounds> rects);
     const std::vector<Bounds>& snapRectangles() const { return snapRects_; }
@@ -1678,11 +1687,10 @@ private:
     // kept here instead and applied with the move, when it is put down.
     double moveTurn_ = 0.0;
     double shrinkWidth_ = 6.0;
-    // WHICH SORT OF SLEEVE THE TOOL DRAWS. False is heatshrink: it recovers, so its ends pull in
-    // onto what they grip and the outline necks down over a taper. True is a cable running under a
-    // length of heatshrink - one width from end to end, cut square - which is a different thing on
-    // the sheet and cannot be got by editing the first into shape afterwards without knowing to.
-    bool shrinkSquareEnds_ = false;
+    // WHICH SORT OF SLEEVE THE TOOL DRAWS. Sleeve recovers onto what it grips; Cable is square for
+    // the whole run; CableEnds leaves the cable bare in the middle and keeps an editable sleeve at
+    // each end.
+    ShrinkRouteMode shrinkMode_ = ShrinkRouteMode::Sleeve;
     // Which shrunk end the PROPERTIES panel has the keyboard in - see setSleeveEndHighlight. Chrome,
     // so it is not saved, not undoable, and never reaches the document.
     int sleeveEndHi_ = -1;

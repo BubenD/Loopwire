@@ -63,7 +63,8 @@ constexpr double kShrinkRouteTaper = 4.0;
 // So the points are the KNEES. Every joint is a knee, dragging one re-lays the sleeve, and the two end
 // knees are what change its length - which is what there is to pull on a sleeve.
 Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
-                           const std::vector<double>& kneeRadii, bool squareEnds = false) {
+                           const std::vector<double>& kneeRadii,
+                           ShrinkRouteMode mode = ShrinkRouteMode::Sleeve) {
     Entity e;
     e.type = EntityType::Polyline;
     e.points = route;
@@ -98,11 +99,19 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
     // is nothing - rather than with a flag of its own, so every end that reads a sleeve keeps reading
     // one: the properties panel still offers both ends, and either can be pulled back into a taper
     // afterwards without the object having to change what it is.
-    if (squareEnds) {
+    if (mode == ShrinkRouteMode::Cable) {
         e.meta.insert(QStringLiteral("shrinkFaceStart"), width);
         e.meta.insert(QStringLiteral("shrinkFaceEnd"), width);
         e.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
         e.meta.insert(QStringLiteral("shrinkTaperEnd"), 0.0);
+    } else if (mode == ShrinkRouteMode::CableEnds) {
+        // A cable with sleeve only over its ends. The route is still the object's points; the cable
+        // itself is the narrower pair of rails between the two cover lengths, and each sleeve section
+        // keeps the same recovered face and shrunk length the properties panel and end joints edit.
+        e.meta.insert(QStringLiteral("shrinkEndsOnly"), true);
+        e.meta.insert(QStringLiteral("shrinkCoverStart"), 20.0);
+        e.meta.insert(QStringLiteral("shrinkCoverEnd"), 20.0);
+        e.meta.insert(QStringLiteral("shrinkCableWidth"), width * 0.82);
     }
     // A RADIUS PER KNEE, in the same meta every other filleted outline uses - so the Fillet tool can
     // round one knee of a finished sleeve without touching the others, exactly as it does on a
@@ -247,8 +256,9 @@ enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge,
                       // SleeveFace is a corner of the end face: it says where that end IS and how wide
                       // the sleeve has recovered to there, which is exactly the two things a corner of
                       // a face means. SleeveShoulder is where the body stops being full width and the
-                      // taper begins, so it sets how long that taper is.
-                      SleeveFace, SleeveShoulder,
+                      // taper begins, so it sets how long that taper is. SleeveLimit is the transverse
+                      // line where a sleeve on a cable end stops and bare cable begins.
+                      SleeveFace, SleeveShoulder, SleeveLimit,
                       // A HANDLE ON A PLACED BLOCK - a part put down from the library, a sheet frame.
                       //
                       // A block has no joints of its own on purpose: it moves as one and its lines are
@@ -756,6 +766,48 @@ std::vector<Grip> blockInstanceGrips(const Entity& e, const Document* doc) {
     return g;
 }
 
+// The route of a sleeve is not drawn, so a joint put on it hangs in the air between the two lines.
+// The two nearest pieces of derived linework are the two sides of the sleeve, or the two cable rails
+// in the bare middle; those are the places the route's own joint is worn at.
+void addSleevePhysicalJoints(const Entity& e, std::vector<Grip>& g) {
+    const auto runs = shrunkSleeveRunsOf(e);
+    if (runs.empty()) return;
+    auto twoAt = [&](const Vec2& at, bool verticesOnly) {
+        std::vector<std::pair<double, Vec2>> hits;
+        for (const auto& run : runs) {
+            if (verticesOnly) {
+                size_t n = run.size();
+                if (n >= 2 && distance(run.front(), run.back()) < 1e-7) --n;
+                for (size_t i = 0; i < n; ++i)
+                    hits.emplace_back(distance(at, run[i]), run[i]);
+            } else {
+                for (size_t i = 1; i < run.size(); ++i) {
+                    const ClosestOnSegment hit =
+                        closestPointOnSegment(at, run[i - 1], run[i]);
+                    hits.emplace_back(hit.distance, hit.point);
+                }
+            }
+        }
+        std::stable_sort(hits.begin(), hits.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<Vec2> out;
+        for (const auto& hit : hits) {
+            bool same = false;
+            for (const Vec2& p : out)
+                if (distance(p, hit.second) < 1e-6) { same = true; break; }
+            if (!same) out.push_back(hit.second);
+            if (out.size() == 2) break;
+        }
+        return out;
+    };
+    for (size_t i = 1; i + 1 < e.points.size(); ++i)
+        for (const Vec2& at : twoAt(e.points[i], true))
+            g.push_back({at, GripRole::Vertex, static_cast<int>(i), at - e.points[i]});
+    for (size_t i = 1; i < e.points.size(); ++i)
+        for (const Vec2& at : twoAt(lerp(e.points[i - 1], e.points[i], 0.5), false))
+            g.push_back({at, GripRole::LineMid, 0});
+}
+
 std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {},
                           const Document* doc = nullptr) {
     std::vector<Grip> g;
@@ -915,9 +967,36 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
         //   the FACE corners  - where that end is, and how wide it has recovered to there
         //   the SHOULDERS     - where the full body stops and the taper begins
         // Plus the mid-run handles, which move the whole thing and are what the rails were useful
-        // for. The route's own knees keep their joints too, so a sleeve round a corner is still
-        // dragged by that corner.
+        // for. Every such joint is worn on a drawn line; the route underneath is not drawn, so no
+        // handle is left in the air between the two sides.
         if (!e.points.empty()) {
+            const bool endsOnly = e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
+            if (endsOnly) {
+                // Each sleeve section has the same two editable ends as a whole sleeve: the outer
+                // face and shoulder, plus the transverse limit where it lets the cable show.
+                for (int end = 0; end < 2; ++end) {
+                    const std::vector<Vec2> o = shrunkSleeveEndOutlineOf(e, end);
+                    if (o.size() < 8 || o.size() % 2) continue;
+                    const size_t n = (o.size() - 4) / 2;
+                    if (end == 0) {
+                        g.push_back({o[0], GripRole::SleeveFace, 0});
+                        g.push_back({o[2 * n + 3], GripRole::SleeveFace, 0});
+                        g.push_back({o[1], GripRole::SleeveShoulder, 0});
+                        g.push_back({o[2 * n + 2], GripRole::SleeveShoulder, 0});
+                        g.push_back({o[n + 1], GripRole::SleeveLimit, 0});
+                        g.push_back({o[n + 2], GripRole::SleeveLimit, 0});
+                    } else {
+                        g.push_back({o[n + 1], GripRole::SleeveFace, 1});
+                        g.push_back({o[n + 2], GripRole::SleeveFace, 1});
+                        g.push_back({o[n], GripRole::SleeveShoulder, 1});
+                        g.push_back({o[n + 3], GripRole::SleeveShoulder, 1});
+                        g.push_back({o[0], GripRole::SleeveLimit, 1});
+                        g.push_back({o[2 * n + 3], GripRole::SleeveLimit, 1});
+                    }
+                }
+                addSleevePhysicalJoints(e, g);
+                break;
+            }
             if (const std::vector<Vec2> o = shrunkSleeveOutlineOf(e); !o.empty()) {
                 const size_t n = e.points.size();
                 // shrunkSleeveOutline lays the outline out as: the head's two face corners, one
@@ -936,13 +1015,10 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                     g.push_back({o[n], GripRole::SleeveShoulder, 1});
                     g.push_back({o[n + 3], GripRole::SleeveShoulder, 1});
                 }
-                // AND THE KNEES IT BENDS AT, so a sleeve round a corner can still be re-laid by that
-                // corner. The ends are left to the face corners above - dragging a route end and a
-                // face corner would be two handles in the same place doing different things.
-                for (size_t i = 1; i + 1 < n; ++i)
-                    g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
-                for (size_t i = 1; i < n; ++i)
-                    g.push_back({lerp(e.points[i - 1], e.points[i], 0.5), GripRole::LineMid, 0});
+                // AND THE KNEES IT BENDS AT, worn on the outline they draw rather than left in the
+                // middle of it. The ends are left to the face corners above - dragging a route end
+                // and a face corner would be two handles in the same place doing different things.
+                addSleevePhysicalJoints(e, g);
                 break;
             }
         }
@@ -1641,15 +1717,18 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
     // route down its middle, which is the one line of it that is never drawn: a green zone laid
     // across its end caught nothing, and a snap found the centreline instead of the edge.
-    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+    if (const auto sleeve = shrunkSleeveRunsOf(e); !sleeve.empty()) {
         double best = std::numeric_limits<double>::max();
-        for (size_t i = 0; i < sleeve.size(); ++i)
-            best = std::min(best, closestPointOnSegment(p, sleeve[i],
-                                                        sleeve[(i + 1) % sleeve.size()]).distance);
-        // AND ANYWHERE INSIDE IT. A sleeve is a solid on the sheet - it is a thing with a width
-        // pulled over the run - so what you see of it is its whole area, the same rule a block
-        // arrow and a picture keep.
-        if (pointInPolygon(sleeve, p)) best = 0.0;
+        for (const auto& run : sleeve) {
+            for (size_t i = 1; i < run.size(); ++i)
+                best = std::min(best, closestPointOnSegment(p, run[i - 1], run[i]).distance);
+            // AND ANYWHERE INSIDE A SLEEVE. It is a solid on the sheet - a thing with a width pulled
+            // over the run - so what you see of it is its whole area, the same rule a block arrow and
+            // a picture keep. Cable rails stay line-only.
+            if (run.size() >= 4 && distance(run.front(), run.back()) < 1e-7 &&
+                pointInPolygon(std::vector<Vec2>(run.begin(), run.end() - 1), p))
+                best = 0.0;
+        }
         return best;
     }
     auto segDist = [&](const Vec2& a, const Vec2& b) {
@@ -5024,7 +5103,11 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
     // route down its middle, which is the one line of it that is never drawn: a green zone laid
     // across its end caught nothing, and a snap found the centreline instead of the edge.
-    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) return sleeve;
+    if (const auto sleeve = shrunkSleeveRunsOf(e); !sleeve.empty()) {
+        std::vector<Vec2> points;
+        for (const auto& run : sleeve) points.insert(points.end(), run.begin(), run.end());
+        return points;
+    }
     std::vector<Vec2> pts;
     switch (e.type) {
     case EntityType::Line:
@@ -5204,10 +5287,11 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
     // route down its middle, which is the one line of it that is never drawn: a green zone laid
     // across its end caught nothing, and a snap found the centreline instead of the edge.
-    if (const std::vector<Vec2> sleeve = shrunkSleeveOutlineOf(e); !sleeve.empty()) {
+    if (const auto sleeve = shrunkSleeveRunsOf(e); !sleeve.empty()) {
         std::vector<std::pair<Vec2, Vec2>> segs;
-        for (size_t i = 0; i < sleeve.size(); ++i)
-            segs.emplace_back(sleeve[i], sleeve[(i + 1) % sleeve.size()]);
+        for (const auto& run : sleeve)
+            for (size_t i = 1; i < run.size(); ++i)
+                segs.emplace_back(run[i - 1], run[i]);
         return segs;
     }
     std::vector<std::pair<Vec2, Vec2>> segs;
@@ -8768,6 +8852,23 @@ void Editor::applyEditDrag(const Vec2& target) {
                 atEnd ? QStringLiteral("shrinkTaperEnd") : QStringLiteral("shrinkTaperStart"), back);
             break;
         }
+        case GripRole::SleeveLimit: {
+            // WHERE THE HEATSHRINK STOPS AND THE CABLE SHOWS. It is a length along the route, so the
+            // handle follows the nearest point on the run rather than only the first segment - a limit
+            // can be pulled round a knee and still mean the same thing.
+            if (e->points.size() < 2) break;
+            double coverStart = 0.0, coverEnd = 0.0;
+            if (!sleeveEndCoverageOf(*e, coverStart, coverEnd)) break;
+            const double total = polylineLength(e->points);
+            const double at = wireFractionNearest(*e, target) * total;
+            if (index == 0)
+                coverStart = std::clamp(at, 0.0, total - coverEnd);
+            else
+                coverEnd = std::clamp(total - at, 0.0, total - coverStart);
+            e->meta.insert(QStringLiteral("shrinkCoverStart"), coverStart);
+            e->meta.insert(QStringLiteral("shrinkCoverEnd"), coverEnd);
+            break;
+        }
         case GripRole::ShieldRy: {
             // Large-radius joint: the half-height follows the cursor's projection onto the
             // shield's major axis. WHICH wires that new size catches is settled on release
@@ -10124,7 +10225,7 @@ void Editor::finishDraw() {
         // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.
         if (draftPts_.size() < 2) { cancelDraw(); return; }
         const Entity sleeve =
-            heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_, shrinkSquareEnds_);
+            heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_, shrinkMode_);
         if (sleeve.points.empty()) { cancelDraw(); return; }
         e.type = sleeve.type;
         e.points = sleeve.points;
@@ -17697,7 +17798,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
             // screen while it is being drawn is what lands.
             const Entity sleeve =
-                heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_, shrinkSquareEnds_);
+                heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_, shrinkMode_);
             if (!sleeve.points.empty())
                 EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::VolumeArrow && pts.size() >= 2) {

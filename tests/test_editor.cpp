@@ -1,6 +1,7 @@
 #include "app/Chrome.h"
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
+#include "io/Dxf.h"
 #include "io/Dwx.h"
 #include "geometry/Snap.h"
 #include "harness/PartsLibrary.h"
@@ -9300,6 +9301,168 @@ int run_editor_tests() {
               "square sleeve: it is still a sleeve, and still editable end by end");
         check(std::abs(cable.meta.value(QStringLiteral("shrinkTaperStart")).toDouble()) < 1e-9,
               "square sleeve: with no taper at the start");
+    }
+
+    // ---- Cable over the run with heatshrink on its ends -----------------------------------------
+    {
+        // A third sort, beside the whole-run sleeve and the whole-run square cable: the cable is bare
+        // through the middle, each end has a sleeve over it, and the transverse line where the sleeve
+        // stops is part of the drawing rather than only where a colour changes.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setShrinkRouteMode(ShrinkRouteMode::CableEnds);
+        ed.setTool(ToolId::HeatshrinkRoute);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d.entities().size() == 1, "end sleeves: the tool draws one routed object");
+        if (d.entities().empty()) return g_fail;
+        const Entity& cable = d.entities().front();
+        check(cable.meta.value(QStringLiteral("shrunkEnds")).toBool() &&
+                  cable.meta.value(QStringLiteral("shrinkEndsOnly")).toBool(),
+              "end sleeves: it is still a sleeve, with the cable between two ends");
+        double coverStart = 0.0, coverEnd = 0.0;
+        check(sleeveEndCoverageOf(cable, coverStart, coverEnd) && near(coverStart, 20.0) &&
+                  near(coverEnd, 20.0),
+              "end sleeves: both sleeve lengths are set and editable");
+
+        const auto runs = shrunkSleeveRunsOf(cable);
+        check(runs.size() == 4, "end sleeves: two cable rails plus two sleeve outlines");
+        auto hasPoint = [](const std::vector<Vec2>& run, const Vec2& want) {
+            for (const Vec2& p : run) if (distance(p, want) < 1e-5) return true;
+            return false;
+        };
+        int openRails = 0, closedSleeves = 0;
+        for (const auto& run : runs) {
+            const bool closed = run.size() >= 4 && distance(run.front(), run.back()) < 1e-6;
+            closedSleeves += closed ? 1 : 0;
+            if (closed) continue;
+            ++openRails;
+            // The bare cable is narrower than the sleeve: at +/-2.46 on a six-wide run, and only
+            // between the two twenty-long sleeves.
+            check(run.size() == 2 && near(run.front().x, 20.0) && near(run.back().x, 80.0) &&
+                      std::abs(std::abs(run.front().y) - 2.46) < 1e-3,
+                  "end sleeves: the cable shows only between the two sleeves");
+        }
+        check(openRails == 2 && closedSleeves == 2,
+              "end sleeves: cable in the middle, sleeve over each end");
+        check(hasPoint(runs[2], {20.0, 3.0}) && hasPoint(runs[2], {20.0, -3.0}),
+              "end sleeves: the start sleeve has the transverse split line");
+        check(hasPoint(runs[3], {80.0, 3.0}) && hasPoint(runs[3], {80.0, -3.0}),
+              "end sleeves: the finish sleeve has the transverse split line");
+
+        // WHAT IS DRAWN IS WHAT IS PICKED AND SNAPPED: a click on the exposed cable rail picks the
+        // one object, and a nearest snap lands on that rail rather than on the hidden route.
+        ed.clearSelection();
+        ed.onPointerPress({50.0, 2.46}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({50.0, 2.46}, Qt::LeftButton);
+        check(ed.selection().size() == 1, "end sleeves: clicking the visible cable picks it");
+        SnapSettings sn;
+        sn.objectSnap = true;
+        sn.snapNearest = true;
+        sn.snapEndpoint = false;
+        sn.snapMidpoint = false;
+        const SnapResult nearCable = resolveSnap(d, {50.0, 4.0}, std::nullopt, 5.0, sn);
+        check(nearCable.snapped && near(nearCable.point.y, 2.46, 1e-3),
+              "end sleeves: nearest snap lands on the visible cable rail");
+        const Bounds box = cable.bounds();
+        check(box.valid && near(box.max.x, 100.0) && near(box.max.y, 3.0) &&
+                  near(box.min.y, -3.0),
+              "end sleeves: its box is the compound linework, not the hidden route");
+
+        const QString dxf = dxf::toDxf(d);
+        int polyCount = 0;
+        const QString polyMark = QStringLiteral("0\r\nPOLYLINE\r\n");
+        for (int at = dxf.indexOf(polyMark); at >= 0;
+             at = dxf.indexOf(polyMark, at + 1))
+            ++polyCount;
+        check(polyCount == 4, "end sleeves: DXF writes the two rails and both sleeve outlines");
+
+        // THE SPLIT LINE IS A JOINT. Dragging it changes how far that end's sleeve covers the cable;
+        // the other end is left where it was.
+        ed.selectById(cable.id);
+        auto offLinework = [](const Vec2& at, const std::vector<std::vector<Vec2>>& lines) {
+            double best = 1e18;
+            for (const auto& line : lines)
+                for (size_t i = 1; i < line.size(); ++i)
+                    best = std::min(best, closestPointOnSegment(at, line[i - 1], line[i]).distance);
+            return best;
+        };
+        double off = 0.0;
+        for (const Vec2& joint : ed.selectionGripPoints())
+            off = std::max(off, offLinework(joint, runs));
+        check(ed.selectionGripPoints().size() == 14,
+              "end sleeves: both ends have face, shoulder and split-line joints");
+        check(off < 1e-6,
+              "end sleeves: every joint is on a drawn line, none in the middle between them");
+        ed.onPointerPress({20.0, 3.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({30.0, 3.0});
+        ed.onPointerPress({30.0, 3.0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity& moved = d.entities().front();
+        check(near(moved.meta.value(QStringLiteral("shrinkCoverStart")).toDouble(), 30.0) &&
+                  near(moved.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble(), 20.0),
+              "end sleeves: the split-line joint sets that end's sleeve length");
+        const auto after = shrunkSleeveRunsOf(moved);
+        check(!after.empty() && near(after.front().front().x, 30.0) &&
+                  near(after.front().back().x, 80.0),
+              "end sleeves: the visible cable begins where the moved sleeve stopped");
+
+        // The OUTER end is still edited the same way as a whole-run sleeve: its own face and shrunk
+        // length, now on the sleeve section rather than the whole route.
+        Entity& edited = d.entities().front();
+        edited.meta.insert(QStringLiteral("shrinkFaceStart"), 2.0);
+        edited.meta.insert(QStringLiteral("shrinkTaperStart"), 8.0);
+        const auto left = shrunkSleeveEndOutlineOf(edited, 0);
+        check(hasPoint(left, {0.0, 1.0}) && hasPoint(left, {8.0, 3.0}),
+              "end sleeves: the outer heatshrink face and taper stay editable");
+
+        // The new numbers are lengths, so a scale carries them with the route; and they are ordinary
+        // metadata, so a save/load leaves the same four pieces of linework rather than baking a
+        // picture of it into the file.
+        scaleEntity(edited, {0.0, 0.0}, 2.0);
+        check(near(edited.meta.value(QStringLiteral("shrinkCoverStart")).toDouble(), 60.0) &&
+                  near(edited.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble(), 40.0) &&
+                  near(edited.meta.value(QStringLiteral("shrinkCableWidth")).toDouble(), 9.84),
+              "end sleeves: scaling carries the cable and both sleeve lengths");
+        check(shrunkSleeveRunsOf(edited).size() == 4,
+              "end sleeves: scaling leaves the same cable-plus-two-sleeves linework");
+        Document back;
+        dwx::fromJson(back, dwx::toJson(d));
+        check(back.entities().size() == 1 &&
+                  back.entities().front().meta.value(QStringLiteral("shrinkEndsOnly")).toBool() &&
+                  shrunkSleeveRunsOf(back.entities().front()).size() == 4,
+              "end sleeves: a DWX round trip keeps it editable, not a baked outline");
+
+        // ROUND A KNEE TOO: the bend's route point is still the thing being edited, but its joints
+        // are worn on the two cable rails it lies between, not on the invisible centreline.
+        Document bentDoc;
+        Editor bentEd;
+        bentEd.setDocument(&bentDoc);
+        noSnap(bentEd);
+        bentEd.setShrinkRouteMode(ShrinkRouteMode::CableEnds);
+        bentEd.setTool(ToolId::HeatshrinkRoute);
+        bentEd.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        bentEd.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        bentEd.onPointerPress({100.0, 50.0}, Qt::LeftButton, Qt::NoModifier);
+        bentEd.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(bentDoc.entities().size() == 1, "end sleeves: a bent run still draws one object");
+        if (!bentDoc.entities().empty()) {
+            const Entity& bent = bentDoc.entities().front();
+            const auto bentRuns = shrunkSleeveRunsOf(bent);
+            bentEd.selectById(bent.id);
+            bool onCentre = false;
+            double offBent = 0.0;
+            for (const Vec2& joint : bentEd.selectionGripPoints()) {
+                offBent = std::max(offBent, offLinework(joint, bentRuns));
+                if (distance(joint, bent.points[1]) < 1e-6) onCentre = true;
+            }
+            check(!onCentre && offBent < 1e-6,
+                  "end sleeves: a knee's joints sit on the cable lines, not between them");
+            check(bentRuns.size() >= 2 && bentRuns[0].size() > 2 && bentRuns[1].size() > 2,
+                  "end sleeves: both cable rails follow the knee");
+        }
     }
 
     // ---- A sleeve's joints are on its corners, where there is something to take hold of ----------

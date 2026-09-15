@@ -18,6 +18,7 @@
 #include <QCursor>
 #include <QDockWidget>
 #include <QGridLayout>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -1262,6 +1263,35 @@ int run_drawingspace_tests() {
             for (int col = 0; col < grid->columnCount(); ++col)
                 check(grid->columnMinimumWidth(col) <= widest + 8,
                       "special: no column reserves room for a caption that has become a tooltip");
+        }
+        QToolButton* heatshrink = nullptr;
+        for (QToolButton* b : group ? group->findChildren<QToolButton*>() : QList<QToolButton*>())
+            if (b->defaultAction() &&
+                b->defaultAction()->data().toInt() == static_cast<int>(ToolId::HeatshrinkRoute))
+                heatshrink = b;
+        check(heatshrink && heatshrink->menu(),
+              "special: the heatshrink button has the sleeve choices behind it");
+        if (heatshrink && heatshrink->menu()) {
+            const QList<QAction*> acts = heatshrink->menu()->actions();
+            QStringList labels;
+            QList<qint64> glyphs;
+            for (QAction* a : acts) {
+                labels << a->text();
+                glyphs << a->icon().pixmap(QSize(24, 24)).cacheKey();
+            }
+            check(acts.size() == 3 &&
+                      labels.join(QStringLiteral(" | ")).contains(
+                          QStringLiteral("Cable over the run with heatshrink on ends")),
+                  "special: cable with heatshrink on its ends is one of the choices");
+            check(glyphs.size() == 3 && glyphs[0] != glyphs[1] && glyphs[1] != glyphs[2] &&
+                      glyphs[0] != glyphs[2],
+                  "special: each sleeve choice wears its own picture");
+            if (acts.size() == 3 && win.editorForTest()) {
+                acts[2]->trigger();
+                check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::CableEnds,
+                      "special: choosing it sets the tool to cable with heatshrink ends");
+                acts[0]->trigger();
+            }
         }
     }
 

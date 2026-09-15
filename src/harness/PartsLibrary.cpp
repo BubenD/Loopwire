@@ -1156,12 +1156,12 @@ LibraryPart* PartsLibrary::duplicate(const QString& id) {
     const LibraryPart* src = byId(id);
     if (!src) return nullptr;
     LibraryPart copy = *src;
-    LibraryPart& fresh = add(src->kind);
+    LibraryPart& fresh = add(copy.kind);
     const QString newId = fresh.id;
     copy.id = newId;
-    copy.description = src->description.isEmpty()
+    copy.description = copy.description.isEmpty()
                            ? QStringLiteral("(copy)")
-                           : src->description + QStringLiteral(" (copy)");
+                           : copy.description + QStringLiteral(" (copy)");
     fresh = copy;
     return byId(newId);
 }

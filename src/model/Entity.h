@@ -128,6 +128,17 @@ struct Entity {
 // is not one. See the definition: the shape on the screen is nowhere in the stored points, so a click,
 // a green zone and a snap all have to ask for it rather than reading the centreline.
 std::vector<Vec2> shrunkSleeveOutlineOf(const Entity& e);
+// Every piece of line a sleeve draws, each run closed by repeating its first point when it is a
+// polygon. An ordinary sleeve is one outline; a cable with heatshrink only at its ends is the two
+// cable rails plus the outline of each sleeve section. Selection, snapping and DXF all read this so
+// they cannot disagree with the renderer.
+std::vector<std::vector<Vec2>> shrunkSleeveRunsOf(const Entity& e);
+// The outline of one sleeve end. For a cable-with-end-sleeves object this is the section at that
+// end, not the whole run; for the other two sorts it is the whole sleeve as before.
+std::vector<Vec2> shrunkSleeveEndOutlineOf(const Entity& e, int end);
+// How far heatshrink covers the route from each end, in drawing units. False unless the entity is
+// the cable-with-end-sleeves sort; the values are clamped so the two ends cannot overlap.
+bool sleeveEndCoverageOf(const Entity& e, double& start, double& end);
 std::vector<Vec2> entityOutline(const Entity& e);
 
 // WHERE AN AXIS ANGLE STARTS ITS SWEEP, and HOW LONG ITS CENTRE LINES ARE.

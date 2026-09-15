@@ -263,7 +263,18 @@ QString toDxf(const Document& doc) {
             break;
         case EntityType::Polyline: {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);
-            if (e.meta.value("double").toBool()) {
+            if (e.meta.value("shrunkEnds").toBool()) {
+                // Export what is drawn: a whole sleeve as its outline, and the cable/end-sleeve sort
+                // as its two cable rails plus each sleeve outline and split face.
+                for (const auto& run : shrunkSleeveRunsOf(e)) {
+                    if (run.size() < 2) continue;
+                    const bool closed = run.size() >= 4 &&
+                                        distance(run.front(), run.back()) < 1e-7;
+                    L << dxfPolyline(e, doc,
+                                     closed ? std::vector<Vec2>(run.begin(), run.end() - 1) : run,
+                                     closed);
+                }
+            } else if (e.meta.value("double").toBool()) {
                 const double gap = e.meta.value("gap").toDouble(10.0);
                 // Round centerline at cr+gap/2 so both runs fillet (inner radius = cr).
                 const std::vector<Vec2> center =

@@ -129,12 +129,11 @@ std::vector<Vec2> EntityRenderer::shieldOutline(const Vec2& center, double rx, d
 std::vector<Vec2> EntityRenderer::sleeveOutline(const Entity& e) { return shrunkSleeveOutlineOf(e); }
 
 std::vector<Vec2> EntityRenderer::sleeveEndPatch(const Entity& e, int end) {
-    const std::vector<Vec2> o = sleeveOutline(e);
-    const size_t n = e.points.size();
-    // shrunkSleeveOutline lays the outline out as: the head face, one vertex per knee up one side, the
-    // two tail faces, the same knees back down the other side, then the head face again - 2n+4 in all.
-    // So a shrunk end is bounded by the two face corners and the two shoulders just inside them.
-    if (o.size() != 2 * n + 4) return {};
+    const std::vector<Vec2> o = shrunkSleeveEndOutlineOf(e, end);
+    if (o.size() < 8 || o.size() % 2) return {};
+    const size_t n = (o.size() - 4) / 2;
+    // The same outline layout whether this is a whole-run sleeve or one of the two sections over a
+    // cable's ends: face, knees out one side, far face, knees back down the other.
     if (end == 0) return {o[0], o[1], o[2 * n + 2], o[2 * n + 3]};
     return {o[n], o[n + 1], o[n + 2], o[n + 3]};
 }
@@ -1529,6 +1528,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // is worked out here - so pulling a knee re-lays the sleeve instead of dragging one corner of a
         // shape that has forgotten what it is. See shrunkSleeveOutline.
         if (e.meta.value("shrunkEnds").toBool() && e.points.size() >= 2) {
+            if (e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool()) {
+                // Cable in the middle, a sleeve section over each end, and a transverse face where
+                // each sleeve stops. The model has already worked out every run - including rounded
+                // knees - so drawing it cannot drift from what clicking and snapping use.
+                for (const std::vector<Vec2>& run : shrunkSleeveRunsOf(e)) {
+                    if (run.size() < 2) continue;
+                    if (run.size() >= 4 && distance(run.front(), run.back()) < 1e-7) {
+                        p.drawPolygon(toScreenPoly(
+                            std::vector<Vec2>(run.begin(), run.end() - 1), vt));
+                    } else {
+                        p.drawPolyline(toScreenPoly(run, vt));
+                    }
+                }
+                break;
+            }
             // The five numbers on the object, applied to the route in its points - see sleeveOutline,
             // which the editor also asks so the end it colours is the end that is drawn.
             const std::vector<Vec2> outline = sleeveOutline(e);

@@ -146,7 +146,10 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
     // gap, trim-cap radii, the uniform corner radius, and the shield ellipse radii (rx/ry)
     // — so a shield resizes with the wires/harness when they are scaled together.
     for (const char* k : {"gap", "cutStartR", "cutEndR", "cornerRadius", "landing", "rx", "ry",
-                          "twistWidth", "twistPitch", "twistEnds"})
+                          "twistWidth", "twistPitch", "twistEnds", "shrinkWidth",
+                          "shrinkFaceStart", "shrinkFaceEnd", "shrinkTaperStart",
+                          "shrinkTaperEnd", "shrinkCoverStart", "shrinkCoverEnd",
+                          "shrinkCableWidth"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.

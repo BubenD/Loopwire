@@ -14,7 +14,7 @@ namespace Edraw_Desktop {
 
 // Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
 // icon grid without external assets.
-QIcon makeToolIcon(ToolId id, const QColor& ink) {
+QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     QPixmap pm(24, 24);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
@@ -183,6 +183,47 @@ QIcon makeToolIcon(ToolId id, const QColor& ink) {
         break;
     }
     case ToolId::HeatshrinkRoute: {
+        const auto heatWave = [&p] {
+            QPainterPath heat;
+            for (int i = 0; i <= 32; ++i) {
+                const double f = i / 32.0;
+                const QPointF at(3.5 + f * 17.0, 5.2 + 1.7 * std::sin(f * 2.0 * M_PI * 1.5));
+                if (i == 0) heat.moveTo(at); else heat.lineTo(at);
+            }
+            p.drawPath(heat);
+        };
+        if (variant == 1) {
+            // Cable under a full-length square sleeve: two rails the same width all the way, with the
+            // heat cue above.
+            p.drawLine(QPointF(3, 10), QPointF(21, 10));
+            p.drawLine(QPointF(3, 18), QPointF(21, 18));
+            p.drawLine(QPointF(3, 10), QPointF(3, 18));
+            p.drawLine(QPointF(21, 10), QPointF(21, 18));
+            heatWave();
+            break;
+        }
+        if (variant == 2) {
+            // Cable over the middle and a sleeve over each end: the narrower pair is visible between
+            // the two transverse split lines, while each end still has the recovered sleeve outline.
+            const double y = 15.0;
+            p.drawLine(QPointF(9, y - 1.7), QPointF(15, y - 1.7));
+            p.drawLine(QPointF(9, y + 1.7), QPointF(15, y + 1.7));
+            QPen sharp = p.pen();
+            sharp.setJoinStyle(Qt::MiterJoin);
+            p.setPen(sharp);
+            const double body = 4.2, face = 1.7;
+            QPolygonF left;
+            left << QPointF(3, y - face) << QPointF(6, y - body) << QPointF(9, y - body)
+                 << QPointF(9, y + body) << QPointF(6, y + body) << QPointF(3, y + face);
+            QPolygonF right;
+            right << QPointF(15, y - body) << QPointF(18, y - body) << QPointF(21, y - face)
+                  << QPointF(21, y + face) << QPointF(18, y + body) << QPointF(15, y + body);
+            p.drawPolygon(left);
+            p.drawPolygon(right);
+            p.setPen(pen);
+            heatWave();
+            break;
+        }
         // THE SLEEVE ITSELF, over the run it grips, under the heat that recovers it.
         //
         // Two features, and the part is both of them: pulled in at each end onto what it grips, which is

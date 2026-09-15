@@ -6779,6 +6779,9 @@ void MainWindow::applyTheme(bool dark) {
         wear(ToolId::Ellipse, makeEllipseMethodIcon(static_cast<int>(editor_->ellipseMode())));
         wear(ToolId::Spline, makeSplineMethodIcon(static_cast<int>(editor_->splineMode())));
         wear(ToolId::Dimension, makeDimMethodIcon(static_cast<int>(editor_->dimMode())));
+        wear(ToolId::HeatshrinkRoute,
+             makeToolIcon(ToolId::HeatshrinkRoute, ink,
+                          static_cast<int>(editor_->shrinkRouteMode())));
     }
     // Modify "Operations" icon buttons follow the same ink as the tool icons.
     for (const auto& ob : opButtons_)
@@ -9557,9 +9560,18 @@ void MainWindow::refreshProperties() {
         if (isSleeve) {
             addHeader(QStringLiteral("Heatshrink"));
             const double across = mv(QStringLiteral("gap")).toDouble(6.0);
+            const bool endsOnly = mv(QStringLiteral("shrinkEndsOnly")).toBool();
             addNum(QStringLiteral("Line spacing"), across, [this](double v) {
                 editor_->setSelectionSleeveAcross(std::max(0.2, v));
             });
+            if (endsOnly) {
+                addNum(QStringLiteral("Cable width"),
+                       mv(QStringLiteral("shrinkCableWidth")).toDouble(across * 0.82),
+                       [this, across](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("shrinkCableWidth"),
+                                                           std::clamp(v, 0.1, across));
+                       });
+            }
             // ONE SECTION PER END, rather than four rows saying which end they belong to.
             //
             // The key column is 110 pixels wide and "Shrunk length (start)" is half as long again, so
@@ -9582,6 +9594,15 @@ void MainWindow::refreshProperties() {
                            },
                            tip, end);
                 };
+                if (endsOnly) {
+                    // THE SLEEVE'S OWN LENGTH along the cable: where its split line sits, measured
+                    // inward from this end. The face and taper below still edit the recovered outside
+                    // end exactly as they do on a whole-run sleeve.
+                    row(QStringLiteral("Sleeve length"),
+                        QStringLiteral("shrinkCover") + side, 20.0, 0.0,
+                        QStringLiteral("How far heatshrink covers the cable from the %1 end.")
+                            .arg(end == 0 ? QStringLiteral("start") : QStringLiteral("finish")));
+                }
                 // THE SHRUNK LENGTH: how far in from this end the sleeve takes to reach full width, so
                 // the number measures the shrunk part itself, running up to the straight lines of the
                 // body. Zero is allowed and means a square shoulder - what the end of a length of
