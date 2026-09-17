@@ -224,6 +224,21 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
             heatWave();
             break;
         }
+        if (variant == 3) {
+            // Two parallel rails run into a square-faced transition; only its free end recovers.
+            p.drawLine(QPointF(3, 10), QPointF(9, 10));
+            p.drawLine(QPointF(3, 18), QPointF(9, 18));
+            QPen sharp = p.pen();
+            sharp.setJoinStyle(Qt::MiterJoin);
+            p.setPen(sharp);
+            QPolygonF boot;
+            boot << QPointF(9, 10) << QPointF(16, 10) << QPointF(21, 13.5)
+                 << QPointF(21, 14.5) << QPointF(16, 18) << QPointF(9, 18);
+            p.drawPolygon(boot);
+            p.setPen(pen);
+            heatWave();
+            break;
+        }
         // THE SLEEVE ITSELF, over the run it grips, under the heat that recovers it.
         //
         // Two features, and the part is both of them: pulled in at each end onto what it grips, which is
@@ -271,6 +286,24 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
             pa.cubicTo(QPointF(7, 15 - 2.4 * s), QPointF(8, 15 + 2.4 * s), QPointF(13, 15 + 2.4 * s));
             pa.lineTo(QPointF(16 + 2.4 * s, 15 + 2.4 * s));   // the corner
             pa.lineTo(QPointF(16 + 2.4 * s, 3));
+            p.drawPath(pa);
+        }
+        break;
+    }
+    case ToolId::WiresRun: {
+        // THE SAME BUNDLE, NOT LAID UP: wires side by side the whole way, spread out at the ends and
+        // packed together in between. Drawn as the fan, the trunk and the fan, because that is what
+        // tells it apart from the laid-up bundle beside it on the ribbon - the wires never cross.
+        //
+        // Three wires rather than four: at 24 pixels a fourth line closes the partings up and the
+        // trunk reads as one thick bar instead of as wires lying together.
+        for (int k = 0; k < 3; ++k) {
+            const double out = 5.0 + k * 7.0;    // where it sits at the ends, spread apart
+            const double in = 11.0 + k * 2.6;    // ...and in the trunk, packed
+            QPainterPath pa(QPointF(2, out));
+            pa.cubicTo(QPointF(6, out), QPointF(6, in), QPointF(9, in));
+            pa.lineTo(QPointF(15, in));
+            pa.cubicTo(QPointF(18, in), QPointF(18, out), QPointF(22, out));
             p.drawPath(pa);
         }
         break;

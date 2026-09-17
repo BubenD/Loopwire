@@ -39,10 +39,10 @@ struct ValidationIssue {
     Vec2 at{0.0, 0.0};
 };
 
-// Which sort of routed sleeve the Heatshrink tool draws. Sleeve is recovered at both ends; Cable is
-// one square-cut width for the whole run; CableEnds leaves the cable visible in the middle and puts
-// an editable sleeve over each end.
-enum class ShrinkRouteMode { Sleeve, Cable, CableEnds };
+// Which sort of sleeve the Heatshrink tool makes. Sleeve is recovered at both ends; Cable is one
+// square-cut width for the whole run; CableEnds leaves the cable visible in the middle and puts an
+// editable sleeve over each end; Transition is fitted by crossing the parallel lines it covers.
+enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition };
 
 // The interaction brain: owns the active tool, snapping, selection, undo stack,
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
@@ -105,6 +105,12 @@ public:
     bool breakBandStarted() const { return tool_ == ToolId::LengthBreak && wireBandHasStart_; }
     Vec2 breakBandStart() const { return wireBandStart_; }
     Vec2 breakBandEnd() const { return breakFrozen_ ? breakFrozenAt_ : cursor_; }
+    // The transition sleeve the crossing line currently describes, for the overlay and tests.
+    Entity transitionPreview() const;
+    bool transitionBandStarted() const {
+        return tool_ == ToolId::HeatshrinkRoute && shrinkMode_ == ShrinkRouteMode::Transition &&
+               wireBandHasStart_;
+    }
     // Where the cursor actually IS once the snaps have had it - the point a click would use, rather than
     // the raw position of the mouse. What the status readout shows, and what a test of a snap has to ask.
     Vec2 snappedCursor() const { return cursor_; }
@@ -114,14 +120,25 @@ public:
 
     // How many wires a twisted bundle is drawn with (2..12), set on the ribbon while the tool is armed.
     int& twistWires() { return twistWires_; }
+    // Which end(s) it spreads them out at: "left", "right" or "both".
+    QString twistSpread() const { return twistSpread_; }
+    void setTwistSpread(const QString& spread);
+    // HOW FAR APART THE WIRES SIT WHERE THEY ARE SPREAD, centre to centre. Nought means the drawing's
+    // own figure - half again the pitch they run at packed in the bundle - so a run drawn without
+    // anybody setting this comes out the way these drawings are drawn by hand.
+    double twistLane() const { return twistLane_; }
+    void setTwistLane(double mm);
     // Tab while one is being drawn PINS it where it is, so the count and the rest can be tried on the
     // real thing without the cursor moving it. The next click, or Enter, places it.
     void freezeTwistedPreview();
     bool twistedFrozen() const { return twistedFrozen_; }
-    // Is a twisted pair / route / harness / harness route being drawn?
+    // Is a bundle of wires being drawn - laid up (pair / route / harness / harness route) or running
+    // straight (wires run)? They are the same object with the same ribbon and the same Tab, so
+    // everything that asks this means all of them.
     static bool isTwistedTool(ToolId t) {
         return t == ToolId::TwistedPair || t == ToolId::TwistedRoute ||
-               t == ToolId::TwistedHarness || t == ToolId::TwistedHarnessRoute;
+               t == ToolId::TwistedHarness || t == ToolId::TwistedHarnessRoute ||
+               t == ToolId::WiresRun;
     }
 
     // Ask the user for a rectangle: two clicks, with everything a click normally gets - every running
@@ -488,6 +505,9 @@ public:
     // The mark a line drawn from `a` to `b` across the runs describes: where it sits, which way it
     // lies, how far it reaches, and which run it belongs to. False when the line crossed nothing.
     bool breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
+    // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
+    // parallel line segments; false for any other catch.
+    bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
     // The four corners of what a break mark hides, in world units: stroke 0's two ends then stroke 1's
     // (so the quad reads round its edge). Empty when the mark masks nothing.
     std::vector<Vec2> breakMaskQuad(const Entity& mark) const;
@@ -582,6 +602,9 @@ public:
     // Is something following the cursor, waiting to be clicked into place? Asked by whoever handed
     // the objects over, so it can get its own window out of the way until they are down.
     bool placingPaste() const { return pastePlacing_; }
+    // Put the ghost down without putting the objects on the sheet. The clipboard keeps them, so the
+    // same part can still be picked up again with Ctrl+V; Esc is only abandoning this placement.
+    void cancelPastePlacement();
 
     void placeEntities(const std::vector<Entity>& ents,
                        const std::optional<Vec2>& heldAt = std::nullopt);
@@ -1222,6 +1245,12 @@ signals:
     // A harness placement finished: `placed` is true if it landed, false if Esc abandoned
     // it. The Harness Builder hides itself while placing and comes back on this.
     void harnessPlacementFinished(bool placed);
+    // A paste/library placement is now on the cursor. The host puts keyboard focus on the sheet so
+    // Esc, mirroring and rotation reach the editor even when the button that started it had focus.
+    void pastePlacementStarted();
+    // A paste/library placement finished the same way: true when a click put it down, false when Esc
+    // abandoned the ghost. Windows that step aside while the sheet is used listen for this.
+    void pastePlacementFinished(bool placed);
     // Double-clicked a connector pin label — the host opens the inline editor for it
     // (font = the connector's current pin font, so the picker starts on it).
     void editConnectorPinRequested(const QString& id, int pin, const QString& text, Vec2 at,
@@ -1299,6 +1328,10 @@ private:
     void applyTrimFence(const Vec2& a, const Vec2& b);
     // Extend every line a fence line crosses to the reference boundary object.
     void applyExtendFence(const Vec2& a, const Vec2& b);
+    // WHAT A BUNDLE IS MADE OF, in one place. The run that is placed and the ghost drawn while it is
+    // being drawn are the same object, and they said so in two copies of these six lines - so a value
+    // added to one of them came out on the sheet and not under the cursor, or the other way about.
+    void writeBundleMeta(Entity& e, bool straight) const;
     // Record the exact cut boundary (line or circle) at each end of a trimmed/
     // extended DOUBLE entity so the renderer clips both physical runs flush to it.
     void recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints);
@@ -1321,6 +1354,13 @@ private:
                        const std::vector<Entity>& refs, QString* why);
     bool trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
                              const std::vector<Entity>& refs, QString* why = nullptr);
+
+    // AND THE SAME GESTURE THE OTHER WAY. A fence across ONE line of a double run says that line
+    // alone when it extends, exactly as it does when it trims: the two lines of a run reach different
+    // things, and a run whose second line was dragged along with the first has to be pulled back by
+    // hand every time. Both lines crossed is the whole-run gesture and is left to extendEntityTo.
+    bool extendOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
+                               const std::vector<Entity>& refs) const;
     // Record a cut for ONE physical line at an end, KEEPING whatever cut the other line has there. Each
     // end has two slots, one per line, so the two lines of a run can come back to different places -
     // with a single slot the second line to be trimmed simply replaced the first.
@@ -1488,6 +1528,8 @@ private:
     double breakAngle_ = -1.0;                        // <0 = the shape's own lean (30° / upright)
     bool breakFrozen_ = false;                        // Tab pinned the preview
     int twistWires_ = 4;             // what a twisted harness fans out to, until the ribbon says otherwise
+    QString twistSpread_ = QStringLiteral("both"); // which end(s) it fans out at
+    double twistLane_ = 0.0;                       // spread pitch; 0 = the drawing's own figure
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};

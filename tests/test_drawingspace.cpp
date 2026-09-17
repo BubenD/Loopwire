@@ -9,6 +9,7 @@
 #include "app/Editor.h"
 #include "io/Dwx.h"
 #include "app/MainWindow.h"
+#include "app/ScientificCalculatorDialog.h"
 #include "model/Document.h"
 #include "render/CanvasWidget.h"
 #include "render/EntityRenderer.h"
@@ -19,6 +20,7 @@
 #include <QDockWidget>
 #include <QGridLayout>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -294,6 +296,22 @@ int run_drawingspace_tests() {
             check(canvas->activeLayoutViewport() == 0, "window: a double click steps into it");
             check(editor->document() == drawing,
                   "window: inside it the editor works in the model, not on the sheet");
+
+            // A part handed to the cursor inside the window is still a placement. Esc puts THAT down:
+            // it does not step out of the window leaving the ghost half-handled.
+            Entity held;
+            held.type = EntityType::Line;
+            held.a = {0.0, 0.0};
+            held.b = {10.0, 0.0};
+            const size_t beforePlace = drawing->entities().size();
+            editor->placeEntities({held});
+            check(editor->placingPaste(), "window place: the part follows the cursor inside it");
+            QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &esc);
+            check(!editor->placingPaste() && drawing->entities().size() == beforePlace,
+                  "window place: Esc cancels it without putting anything down");
+            check(canvas->activeLayoutViewport() == 0 && editor->document() == drawing,
+                  "window place: and it does not step out of the window to do it");
 
             const size_t inModel = drawing->entities().size();
             const size_t onSheet = paper->entities().size();
@@ -700,7 +718,7 @@ int run_drawingspace_tests() {
 
     // ---- the View tab: which panels are on the screen, and which side -----------------------------
     {
-        // Five panels, five buttons, each on its own. Before this a panel closed by its own x could only be
+        // Six panels, six buttons, each on its own. Before this a panel closed by its own x could only be
         // brought back by knowing that a floating panel dragged to an edge re-docks - which nobody knows.
         // On the screen for this one: a panel showing or not showing is the whole subject, and a window that
         // was never shown has nothing showing in it.
@@ -715,13 +733,13 @@ int run_drawingspace_tests() {
 
         const QStringList wanted{QStringLiteral("Properties"), QStringLiteral("Layers"),
                                  QStringLiteral("Bill of materials"), QStringLiteral("Parts list"),
-                                 QStringLiteral("Blocks list")};
+                                 QStringLiteral("Blocks list"), QStringLiteral("Calculator")};
         QList<QToolButton*> panelBtns;
         for (QToolButton* b : win.findChildren<QToolButton*>())
             if (b->isCheckable() && wanted.contains(b->text())) panelBtns.append(b);
         check(panelBtns.size() == wanted.size(),
-              "view: a button each for the properties, the layers, the bill of materials, the parts and "
-              "the blocks");
+              "view: a button each for the properties, the layers, the bill of materials, the parts, "
+              "the blocks and the calculator");
         bool allLive = !panelBtns.isEmpty();
         for (QToolButton* b : panelBtns) {
             if (!b->isEnabled()) allLive = false;              // wired to a panel that exists
@@ -754,7 +772,7 @@ int run_drawingspace_tests() {
             if (b->text() == QStringLiteral("Hide all")) b->click();
         QApplication::processEvents();
         bool noneShowing = true;
-        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS"})
+        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS", "CALCULATOR"})
             for (QDockWidget* d : win.findChildren<QDockWidget*>())
                 if (d->windowTitle() == QLatin1String(title) && !d->isHidden()) noneShowing = false;
         check(noneShowing, "view: Hide all leaves the drawing the whole screen");
@@ -762,7 +780,7 @@ int run_drawingspace_tests() {
             if (b->text() == QStringLiteral("Show all")) b->click();
         QApplication::processEvents();
         bool allShowing = true;
-        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS"}) {
+        for (const char* title : {"PROPERTIES", "LAYERS", "BILL OF MATERIALS", "PARTS", "BLOCKS", "CALCULATOR"}) {
             bool one = false;
             for (QDockWidget* d : win.findChildren<QDockWidget*>())
                 if (d->windowTitle() == QLatin1String(title) && !d->isHidden()) one = true;
@@ -1223,6 +1241,65 @@ int run_drawingspace_tests() {
     }
 
 
+    // ---- the shared Tools group carries a scientific calculator -----------------------------------
+    {
+        ScientificCalculatorDialog calc;
+        double out = 0.0;
+        QString error;
+        check(calc.evaluateForTest(QStringLiteral("2 + 3 * 4"), true, out, &error) &&
+                  near(out, 14.0),
+              "calculator: ordinary precedence");
+        check(calc.evaluateForTest(QStringLiteral("sqrt(9) + pow(2,4)"), true, out) &&
+                  near(out, 19.0),
+              "calculator: roots, powers and functions");
+        check(calc.evaluateForTest(QStringLiteral("sin(30)"), true, out) && near(out, 0.5),
+              "calculator: degrees mode");
+        check(calc.evaluateForTest(QStringLiteral("sin(pi/2)"), false, out) && near(out, 1.0),
+              "calculator: radians mode");
+        check(calc.evaluateForTest(QStringLiteral("5! + 50% * 200"), true, out) &&
+                  near(out, 220.0),
+              "calculator: factorial and per cent");
+        check(!calc.evaluateForTest(QStringLiteral("sqrt(-1)"), true, out, &error) &&
+                  error.contains(QStringLiteral("not negative")),
+              "calculator: a domain error says what it is");
+
+        calc.setExpressionForTest(QStringLiteral("2 + 2"));
+        calc.calculateForTest();
+        calc.setExpressionForTest(QStringLiteral("ans * 3"));
+        calc.calculateForTest();
+        check(calc.displayForTest() == QStringLiteral("12") && calc.historyCountForTest() == 2,
+              "calculator: Ans carries the last answer and the work is remembered");
+
+        MainWindow toolWin;
+        QList<QToolButton*> buttons;
+        for (QToolButton* b : toolWin.findChildren<QToolButton*>())
+            if (b->text() == QStringLiteral("Scientific\ncalculator")) buttons << b;
+        check(buttons.size() == 2,
+              "calculator: on the Tools group of both schematic and mechanical tabs");
+        if (!buttons.isEmpty() && buttons.first()->parentWidget()) {
+            auto* toolsGrid = qobject_cast<QGridLayout*>(buttons.first()->parentWidget()->layout());
+            check(toolsGrid && toolsGrid->rowCount() == 1,
+                  "calculator: the Tools buttons get the ribbon's full height, so their labels are not clipped");
+        }
+        check(toolWin.hasCommandNamed(QStringLiteral("calculator")),
+              "calculator: it can also be typed as a command");
+        QDockWidget* dock = nullptr;
+        for (QDockWidget* d : toolWin.findChildren<QDockWidget*>())
+            if (d->windowTitle() == QStringLiteral("CALCULATOR")) dock = d;
+        check(dock != nullptr, "calculator: it is a side panel, not only a floating window");
+        if (dock) {
+            check(dock->isHidden(), "calculator: it waits until it is asked for");
+            check(dock->findChild<ScientificCalculatorDialog*>() != nullptr,
+                  "calculator: the panel carries the calculator itself");
+        }
+        if (!buttons.isEmpty() && dock) {
+            buttons.first()->click();
+            QApplication::processEvents();
+            check(!dock->isHidden(), "calculator: the ribbon button opens the panel");
+            dock->hide();
+        }
+    }
+
     // ---- the Special group: two equal rows of icons, and no dead columns ----------------------------
     {
         // The pieces of furniture a mechanical drawing needs - the break mark, the twisted runs, the
@@ -1279,17 +1356,24 @@ int run_drawingspace_tests() {
                 labels << a->text();
                 glyphs << a->icon().pixmap(QSize(24, 24)).cacheKey();
             }
-            check(acts.size() == 3 &&
-                      labels.join(QStringLiteral(" | ")).contains(
-                          QStringLiteral("Cable over the run with heatshrink on ends")),
-                  "special: cable with heatshrink on its ends is one of the choices");
-            check(glyphs.size() == 3 && glyphs[0] != glyphs[1] && glyphs[1] != glyphs[2] &&
-                      glyphs[0] != glyphs[2],
-                  "special: each sleeve choice wears its own picture");
-            if (acts.size() == 3 && win.editorForTest()) {
+            const QString allLabels = labels.join(QStringLiteral(" | "));
+            check(acts.size() == 4 &&
+                      allLabels.contains(
+                          QStringLiteral("Cable over the run with heatshrink on ends")) &&
+                      allLabels.contains(QStringLiteral("Transition heatshrink")),
+                  "special: cable-end and transition sleeves are both on the heatshrink menu");
+            bool distinctGlyphs = glyphs.size() == 4;
+            for (int i = 0; distinctGlyphs && i < glyphs.size(); ++i)
+                for (int j = i + 1; j < glyphs.size(); ++j)
+                    distinctGlyphs = glyphs[i] != glyphs[j];
+            check(distinctGlyphs, "special: each sleeve choice wears its own picture");
+            if (acts.size() == 4 && win.editorForTest()) {
                 acts[2]->trigger();
                 check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::CableEnds,
                       "special: choosing it sets the tool to cable with heatshrink ends");
+                acts[3]->trigger();
+                check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Transition,
+                      "special: choosing Transition heatshrink sets its crossing-line mode");
                 acts[0]->trigger();
             }
         }

@@ -64,7 +64,12 @@ void forEachCutSegment(const Entity& e, F&& f) {
         break;
     }
     case EntityType::Polyline:
-        if (e.meta.value("double").toBool() && e.points.size() >= 2) {
+        if (e.meta.value("shrunkEnds").toBool()) {
+            // A sleeve cuts and is extended to by the shape it draws, not by its invisible route or by
+            // two plain offset rails. This is also what a transition's square and recovered faces give.
+            for (const auto& run : shrunkSleeveRunsOf(e))
+                for (size_t i = 1; i < run.size(); ++i) f(run[i - 1], run[i]);
+        } else if (e.meta.value("double").toBool() && e.points.size() >= 2) {
             const double gap = e.meta.value("gap").toDouble(10.0);
             for (double s : {gap / 2.0, -gap / 2.0}) {
                 std::vector<Vec2> run = offsetPolyline(e.points, s);
@@ -927,6 +932,30 @@ bool whollyInsideCircle(const Entity& e, const Entity& ref) {
 }
 
 bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
+    // A sleeve is the outline it draws, not its stored route or a plain pair of rails.
+    if (const auto sleeve = shrunkSleeveRunsOf(e); !sleeve.empty()) {
+        for (const auto& run : sleeve) {
+            for (size_t i = 1; i < run.size(); ++i) {
+                const Vec2 A = run[i - 1], B = run[i], D = B - A;
+                const double L2 = D.lengthSq();
+                for (const auto& c : others) {
+                    if (!e.id.isEmpty() && c.id == e.id) continue;
+                    if (isCurvedCutter(c) && L2 > 1e-12) {
+                        std::vector<double> ts;
+                        appendCurvedCuts(c, A, D, L2, 0.0, ts);
+                        if (!ts.empty()) return true;
+                        continue;
+                    }
+                    bool hit = false;
+                    forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                        if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;
+                    });
+                    if (hit) return true;
+                }
+            }
+        }
+        return false;
+    }
     // A DOUBLE run IS its two physical lines: they are what is drawn, and they are what a reference
     // meets. Asking its centreline instead answers "they do not meet" for a run whose two lines straddle
     // the reference - which is most of them, the centreline being half a gap away from each line - and
@@ -1430,8 +1459,9 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
         auto r = rayToBoundary(fixed, moving, others, e.id);
         if (!r) return false;
         if (front) e.points.front() = r->pt; else e.points.back() = r->pt;
-        // A double polyline caps its physical runs flush to the boundary too.
-        if (e.meta.value("double").toBool())
+        // A double polyline caps its physical runs flush to the boundary too. A sleeve instead
+        // derives its whole outline from the route just moved, so no stale rail cap belongs on it.
+        if (e.meta.value("double").toBool() && !e.meta.value("shrunkEnds").toBool())
             setExtendCap(e, front ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), *r);
         return true;
     }

@@ -1418,6 +1418,15 @@ void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
 
 void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     syncEditorScale();
+    // Esc first lets go of a part or harness being placed inside a window. Leaving the viewport would
+    // take the user out of the function while the ghost was still in hand, which is exactly the
+    // half-cancelled state Esc exists to avoid.
+    if (layoutMode_ && activeViewport_ >= 0 && e->key() == Qt::Key_Escape &&
+        editor_ && editor_->placementPreviewActive()) {
+        editor_->onKey(e->key(), e->modifiers());
+        e->accept();
+        return;
+    }
     // Esc steps back out of a window onto the paper - the way out of anything else here.
     if (layoutMode_ && activeViewport_ >= 0 && e->key() == Qt::Key_Escape) {
         leaveLayoutViewport();

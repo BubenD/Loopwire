@@ -63,6 +63,12 @@ QIcon panelIcon(const QString& key) {
         // Two blocks, one of them a copy of the other.
         p.drawRect(QRectF(5.5, 6.5, 7, 6));
         p.drawRect(QRectF(11.5, 12.5, 7, 6));
+    } else if (key == QLatin1String("calculator")) {
+        // A calculator: a small body, its display and a keypad.
+        p.drawRect(QRectF(7.5, 5.5, 10, 14));
+        p.drawLine(9, 8, 16, 8);
+        for (int y = 12; y <= 16; y += 4)
+            for (int x = 10; x <= 15; x += 3) p.drawPoint(x, y);
     }
     p.end();
     return QIcon(pm);
@@ -101,6 +107,7 @@ void MainWindow::buildViewTab() {
         {"bom", QStringLiteral("Bill of materials"), QStringLiteral("what the drawing is made of")},
         {"parts", QStringLiteral("Parts list"), QStringLiteral("the library, to place from")},
         {"blocks", QStringLiteral("Blocks list"), QStringLiteral("the blocks, to place from")},
+        {"calculator", QStringLiteral("Calculator"), QStringLiteral("a scientific calculator")},
     };
 
     auto* w = new QWidget(page);
@@ -237,6 +244,7 @@ QDockWidget* MainWindow::panelByKey(const QString& key) const {
     if (key == QLatin1String("bom")) return bomDock_;
     if (key == QLatin1String("parts")) return partsDock_;
     if (key == QLatin1String("blocks")) return blocksDock_;
+    if (key == QLatin1String("calculator")) return calculatorDock_;
     return nullptr;
 }
 
@@ -261,7 +269,8 @@ void MainWindow::syncViewPanelButtons() {
 }
 
 void MainWindow::setPanelsVisible(bool on) {
-    for (QDockWidget* d : {propsDock_, layersDock_, bomDock_, partsDock_, blocksDock_})
+    for (QDockWidget* d : {propsDock_, layersDock_, bomDock_, partsDock_, blocksDock_,
+                           calculatorDock_})
         if (d) {
             d->setVisible(on);
             if (on) d->raise();

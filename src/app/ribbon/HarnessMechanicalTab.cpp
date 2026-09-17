@@ -143,6 +143,11 @@ void MainWindow::buildHarnessMechanicalTab() {
             specialCells.push_back(w);
             ++specialAt;
         };
+        auto lgAddFirst = [&](QWidget* w) {
+            sizeCell(w);
+            specialCells.insert(specialCells.begin(), w);
+            ++specialAt;
+        };
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
         // loom on an A3 sheet - and the mark is how a drawing says so: the run is interrupted, the
         // dimension says the real length.
@@ -325,15 +330,15 @@ void MainWindow::buildHarnessMechanicalTab() {
             auto* thBtn = new QToolButton(thW);
             QAction* act = makeToolAction(toolLabel(ToolId::TwistedHarness), ToolId::TwistedHarness);
             thBtn->setDefaultAction(act);
-            thBtn->setText(QStringLiteral("Twisted\nharness"));
+            thBtn->setText(QStringLiteral("Wires\nharness"));
             thBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
             thBtn->setIconSize(QSize(26, 26));
             thBtn->setAutoRaise(true);
             thBtn->setFocusPolicy(Qt::NoFocus);
             thBtn->setToolTip(QStringLiteral(
-                "Draw a twisted harness: click the two ends and every wire of the bundle is laid up "
-                "together, fanning out to straight ends. Tab pins it so the number of wires can be set "
-                "with it on screen."));
+                "Wires harness: click the two ends and every wire of the bundle is laid up together, "
+                "fanning out to straight ends. Tab pins it so the number of wires can be set with it "
+                "on screen."));
             tg->addWidget(thBtn);
             // Its one setting, beside the button and only while the tool is armed.
             {
@@ -356,15 +361,65 @@ void MainWindow::buildHarnessMechanicalTab() {
                     editor_->twistWires() = v;
                     canvas_->update();   // a pinned bundle re-draws with the new count
                     statusBar()->showMessage(
-                        QStringLiteral("Twisted harness: %1 wires").arg(v), 2000);
+                        QStringLiteral("Wires harness: %1 wires").arg(v), 2000);
+                });
+                auto* sl = new QLabel(QStringLiteral("Spread"), optW);
+                sl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistSpreadCombo_ = new QComboBox(optW);
+                twistSpreadCombo_->addItem(QStringLiteral("Left"), QStringLiteral("left"));
+                twistSpreadCombo_->addItem(QStringLiteral("Right"), QStringLiteral("right"));
+                twistSpreadCombo_->addItem(QStringLiteral("Both"), QStringLiteral("both"));
+                twistSpreadCombo_->setCurrentIndex(2);
+                twistSpreadCombo_->setMinimumWidth(64);
+                twistSpreadCombo_->setToolTip(QStringLiteral(
+                    "Which end of the run the wires fan out at: the left end, the right end, or both."));
+                og->addWidget(sl, 1, 0);
+                og->addWidget(twistSpreadCombo_, 1, 1);
+                connect(twistSpreadCombo_, &QComboBox::currentIndexChanged, this,
+                        [this](int index) {
+                            const QString spread =
+                                twistSpreadCombo_->itemData(index).toString();
+                            editor_->setTwistSpread(spread);
+                            canvas_->update();   // a pinned bundle re-draws with the new spread
+                            statusBar()->showMessage(
+                                QStringLiteral("Wires harness: spread %1")
+                                    .arg(twistSpreadCombo_->itemText(index).toLower()),
+                                2000);
+                        });
+                // HOW FAR APART THE SPREAD WIRES SIT. Only the straight run uses it - a laid-up
+                // bundle spreads its wires across its own width, which is what its width is for -
+                // so the row is hidden for the other tools rather than sitting there doing nothing.
+                twistLaneLabel_ = new QLabel(QStringLiteral("Spacing"), optW);
+                twistLaneLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistLaneSpin_ = new QDoubleSpinBox(optW);
+                twistLaneSpin_->setRange(0.0, 200.0);
+                twistLaneSpin_->setDecimals(1);
+                twistLaneSpin_->setSingleStep(0.5);
+                twistLaneSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistLaneSpin_->setValue(editor_->twistLane());
+                twistLaneSpin_->setMinimumWidth(64);
+                twistLaneSpin_->setToolTip(QStringLiteral(
+                    "How far apart the wires sit where they are spread out, centre to centre. Auto "
+                    "is half again the pitch they run at packed in the run."));
+                og->addWidget(twistLaneLabel_, 2, 0);
+                og->addWidget(twistLaneSpin_, 2, 1);
+                connect(twistLaneSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistLane(v);
+                    canvas_->update();   // a pinned run re-draws at the new spacing
+                    statusBar()->showMessage(
+                        v > 1e-9 ? QStringLiteral("Wires run: spread wires %1 apart").arg(v)
+                                 : QStringLiteral("Wires run: spread wires at the drawing's own "
+                                                  "spacing"),
+                        2000);
                 });
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);
             }
-            lgAdd(thW);
+            lgAddFirst(thW);
         }
-        // And that bundle ROUTED: the same wire count as Twisted harness, but through as many knees
+        // And that bundle ROUTED: the same wire count as Wires harness, but through as many knees
         // as the loom needs rather than straight between two points - the same relationship Twisted
         // route bears to Twisted pair. Shares twistOptionsGroup_ (the Wires field), which shows for
         // either bundle tool (see syncBreakOptions()).
@@ -373,16 +428,36 @@ void MainWindow::buildHarnessMechanicalTab() {
             QAction* act =
                 makeToolAction(toolLabel(ToolId::TwistedHarnessRoute), ToolId::TwistedHarnessRoute);
             thrBtn->setDefaultAction(act);
-            thrBtn->setText(QStringLiteral("Twisted\nharness route"));
+            thrBtn->setText(QStringLiteral("Wires\nharness route"));
             thrBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
             thrBtn->setIconSize(QSize(26, 26));
             thrBtn->setAutoRaise(true);
             thrBtn->setFocusPolicy(Qt::NoFocus);
             thrBtn->setToolTip(QStringLiteral(
-                "Route a twisted harness through as many knees as it needs: click each knee, Enter "
-                "finishes. The whole bundle is laid up together, fanning out to straight ends. Tab "
-                "pins it so the number of wires can be set with it on screen."));
+                "Wires harness route: click each knee, Enter finishes. The whole bundle is laid up "
+                "together, fanning out to straight ends. Tab pins it so the number of wires can be "
+                "set with it on screen."));
             lgAdd(thrBtn);
+        }
+        // THE SAME BUNDLE RUNNING STRAIGHT, which is how most of a loom is drawn: the wires lie side
+        // by side the whole way and are only laid up where the drawing says they are twisted. One
+        // object with the laid-up bundle, so a run can be made either afterwards from its properties
+        // - and the same ribbon, the same Tab, the same wire count. What it adds is the spacing the
+        // wires are spread out at, which a laid-up bundle has no use for.
+        {
+            auto* wrBtn = new QToolButton(lenW);
+            wrBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::WiresRun), ToolId::WiresRun));
+            wrBtn->setText(QStringLiteral("Wires\nrun"));
+            wrBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            wrBtn->setIconSize(QSize(26, 26));
+            wrBtn->setAutoRaise(true);
+            wrBtn->setFocusPolicy(Qt::NoFocus);
+            wrBtn->setToolTip(QStringLiteral(
+                "Wires run: click each knee, Enter finishes. The wires run straight - side by side "
+                "the whole way rather than laid up - and spread out at whichever end the ribbon "
+                "says, at the spacing it says. Tab pins it so all of that can be set with the run "
+                "on screen."));
+            lgAdd(wrBtn);
         }
         // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
         // the bundle actually takes up on the board. They belong here for the same reason the break
@@ -420,7 +495,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             auto* hm = new QMenu(hsBtn);
             struct Sort { ShrinkRouteMode mode; int icon; const char* onButton; const char* inMenu;
                           const char* tip; };
-            const Sort sorts[3] = {
+            const Sort sorts[4] = {
                 {ShrinkRouteMode::Sleeve, 0, "Heatshrink", "Heatshrink over the run",
                  "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
                  "recovered - pulled in at both ends onto what it grips, and following the knees in "
@@ -432,7 +507,10 @@ void MainWindow::buildHarnessMechanicalTab() {
                  "Cable over the run with heatshrink on ends",
                  "Cable over the run with heatshrink on its ends: the cable shows between the two "
                  "sleeves, each split line can be dragged, and each end keeps its own face and "
-                 "shrunk length."}};
+                 "shrunk length."},
+                {ShrinkRouteMode::Transition, 3, "Transition", "Transition heatshrink",
+                 "Transition heatshrink: draw a line across the parallel lines it covers; the sleeve "
+                 "is fitted at their closest end, using the longest line when their lengths differ."}};
             for (const Sort& sort : sorts) {
                 QAction* a = hm->addAction(
                     makeToolIcon(ToolId::HeatshrinkRoute, Chrome::ink(), sort.icon),
@@ -672,6 +750,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         tg->addWidget(makeVoltageDropButton(tw), 0, 0);
         tg->addWidget(makeBundleDiameterButton(tw), 0, 1);
         tg->addWidget(makeThermalButton(tw), 0, 2);
+        tg->addWidget(makeCalculatorButton(tw), 0, 3);
         QWidget* toolsGroup = addGroupKeep(lay, QStringLiteral("Tools"), tw);
         mechGroups_ << toolsGroup;
         mechModelHiddenGroups_ << toolsGroup;

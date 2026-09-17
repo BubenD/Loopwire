@@ -52,6 +52,15 @@ constexpr double kShrinkRouteWidth = kTwistedPairWidth;
 constexpr double kShrinkRouteNeck = 0.82;
 constexpr double kShrinkRouteTaper = 4.0;
 
+// HOW FAR A SLEEVE STANDS OFF WHAT IT IS FITTED OVER. A sleeve drawn to the exact spacing of the two
+// lines it goes on comes out flush with them: its own sides land on top of theirs, and what is on the
+// sheet reads as a piece butted BETWEEN the rails rather than a length of tubing pushed OVER them. The
+// same reason a label is drawn a little clear of the outermost wire it covers - see labelFitFor. A
+// proportion with a floor, so it is still visible over a thin cable and still looks like a sleeve on a
+// fat one.
+constexpr double kSleeveStandoff = 1.0;
+constexpr double kSleeveStandoffFrac = 0.12;
+
 // The sleeve as an object: IT KEEPS THE ROUTE, and the outline is worked out when it is drawn.
 //
 // The first version kept the OUTLINE as the object's points, and that is what made a pulled joint turn
@@ -112,6 +121,13 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
         e.meta.insert(QStringLiteral("shrinkCoverStart"), 20.0);
         e.meta.insert(QStringLiteral("shrinkCoverEnd"), 20.0);
         e.meta.insert(QStringLiteral("shrinkCableWidth"), width * 0.82);
+    } else if (mode == ShrinkRouteMode::Transition) {
+        // A transition is square where the two rails meet it and recovered only at its free end.
+        e.meta.insert(QStringLiteral("shrinkTransition"), true);
+        e.meta.insert(QStringLiteral("shrinkFaceStart"), width);
+        e.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
+        e.meta.insert(QStringLiteral("shrinkFaceEnd"), width * kShrinkRouteNeck);
+        e.meta.insert(QStringLiteral("shrinkTaperEnd"), width * 0.65);
     }
     // A RADIUS PER KNEE, in the same meta every other filleted outline uses - so the Fillet tool can
     // round one knee of a finished sleeve without touching the others, exactly as it does on a
@@ -4263,6 +4279,7 @@ void Editor::onPointerMove(const Vec2& raw) {
         trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_) ||
         arrayAwaitingCenter() || // a polar array's centre tracks the cursor until clicked
         harnessPlacing_ ||       // the generated harness ghosts under the cursor
+        transitionBandStarted() ||
         ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
         emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
 }
@@ -4648,6 +4665,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         placeRot_ = 0.0;
         doc_->setDirty(true);
         emit message(QStringLiteral("Pasted %1 object(s)").arg(clipboard_.size()));
+        emit pastePlacementFinished(true);
         emit selectionChanged();
         emit changed();
         return;
@@ -4733,6 +4751,33 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         doc_->setDirty(true);
         emit changed();
         emit message(QStringLiteral("Break placed"));
+        setTool(ToolId::Select);
+        return;
+    }
+    // Transition heatshrink is placed by crossing the rails it goes on: first click starts the
+    // crossing line, the second finishes it and fits the sleeve at the nearer end.
+    if (tool_ == ToolId::HeatshrinkRoute && shrinkMode_ == ShrinkRouteMode::Transition) {
+        if (!wireBandHasStart_) {
+            wireBandStart_ = raw;
+            wireBandHasStart_ = true;
+            emit message(QStringLiteral(
+                "Now click the other end of the line across the parallel lines"));
+            emit overlayChanged();
+            return;
+        }
+        Entity sleeve;
+        if (!transitionFromBand(wireBandStart_, raw, sleeve)) {
+            emit message(QStringLiteral(
+                "Draw the line across the PARALLEL lines to fit the transition heatshrink"));
+            return;
+        }
+        pushUndo();
+        sleeve.layer = doc_->activeLayer();
+        addEntity(std::move(sleeve));
+        wireBandHasStart_ = false;
+        doc_->setDirty(true);
+        emit changed();
+        emit message(QStringLiteral("Transition heatshrink placed"));
         setTool(ToolId::Select);
         return;
     }
@@ -9475,6 +9520,14 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral(
             "Twisted harness route: click the next knee — Enter finishes the run, Esc exits"));
         break;
+    case ToolId::WiresRun:
+        // The same run, laid STRAIGHT: the wires keep their own lanes the whole way instead of being
+        // laid up round one another.
+        draftPts_.push_back(p);
+        drafting_ = true;
+        emit message(QStringLiteral(
+            "Wires run: click the next knee — Enter finishes the run, Esc exits"));
+        break;
     case ToolId::TwistedHarness:
     case ToolId::TwistedPair:
         // Pinned (Tab), the click means "place it" rather than "put the far end here": the end stays
@@ -10217,6 +10270,7 @@ void Editor::finishDraw() {
         e.a = draftPts_[0];
         e.b = draftPts_[1];
         e.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+        e.meta.insert(QStringLiteral("twistSpread"), twistSpread_);
         e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
@@ -10244,10 +10298,17 @@ void Editor::finishDraw() {
         e.points = draftPts_;
         e.a = draftPts_.front();
         e.b = draftPts_.back();
-        e.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
-        e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
-        e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
-        e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        writeBundleMeta(e, /*straight=*/false);
+        break;
+    case ToolId::WiresRun:
+        // The same bundle, running STRAIGHT. One object, one set of handles, one ribbon: what says
+        // which of the two it is, here and ever after, is the lay written on it.
+        if (draftPts_.size() < 2) { cancelDraw(); return; }
+        e.type = EntityType::TwistedPair;
+        e.points = draftPts_;
+        e.a = draftPts_.front();
+        e.b = draftPts_.back();
+        writeBundleMeta(e, /*straight=*/true);
         break;
     case ToolId::VolumeArrow:
         // A BLOCK ARROW, tail to tip. The object keeps the two ends and the outline is worked out when
@@ -10843,6 +10904,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::TwistedHarness:
     case ToolId::HeatshrinkRoute:
     case ToolId::TwistedHarnessRoute:
+    case ToolId::WiresRun:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
@@ -10906,6 +10968,11 @@ QString Editor::drawCommandHint() const {
     case ToolId::TwistedHarnessRoute:
         return QStringLiteral(
                    "TWISTED HARNESS ROUTE: click each knee  ·  Enter finishes  ·  %1 wires, all laid up")
+            .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
+    case ToolId::WiresRun:
+        return QStringLiteral(
+                   "WIRES RUN: click each knee  ·  Enter finishes  ·  %1 wires running straight  ·  "
+                   "Tab pins it to set it up on the ribbon")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
     case ToolId::HeatshrinkRoute:
         return QStringLiteral("HEATSHRINK: click along the run  ·  [U]ndo, Enter finishes  ·  "
@@ -11046,6 +11113,7 @@ bool Editor::commitDrawFields() {
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
     case ToolId::TwistedHarnessRoute:
+    case ToolId::WiresRun:
     case ToolId::HeatshrinkRoute:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
@@ -12505,6 +12573,11 @@ std::pair<double, double> nearestAlong(const std::vector<Vec2>& run, const Vec2&
 
 } // namespace
 
+// HOW NEAR AN END HAS TO BE to count as sitting on a line. A drawing's own units - a micron on a sheet
+// measured in millimetres - rather than a share of a length, because what is being asked is whether two
+// pieces of geometry touch, and that does not get more forgiving on a longer line.
+constexpr double kRailTouch = 1e-6;
+
 bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side, double alongPick,
                            const std::vector<Entity>& refs, QString* why) {
     auto say = [why](const QString& text) {
@@ -12521,8 +12594,27 @@ bool Editor::trimRailPiece(Entity& ent, const std::vector<Vec2>& rail, int side,
         for (size_t k = 1; k < segs.size(); k += 2) {
             double along = 0.0;
             for (size_t i = 1; i < rail.size(); ++i) {
-                if (auto x = segmentSegmentIntersection(segs[k - 1], segs[k], rail[i - 1], rail[i]))
+                if (auto x = segmentSegmentIntersection(segs[k - 1], segs[k], rail[i - 1], rail[i])) {
                     crossings.push_back({along + distance(rail[i - 1], *x), *x});
+                } else {
+                    // A BOUNDARY THAT ENDS ON THIS LINE STILL BOUNDS IT - a T, which is how a branch
+                    // meets a run on nearly every drawing there is, and the commonest thing there is
+                    // to trim back to.
+                    //
+                    // It has to be asked as a DISTANCE, not left to the crossing test above. That test
+                    // works in the two lines' own parameters and takes nothing outside 0..1: an end
+                    // sitting exactly on the line lands on the 0 boundary, where the last bit of the
+                    // arithmetic decides it. On the drawing this was found in, the end was ON the line
+                    // - zero distance, to the last digit - and its parameter came out as -1.5e-17, so
+                    // the junction was missed and there was nothing to trim the line back to. Measured
+                    // as a distance, an end that is on the line is on it whichever side of nothing the
+                    // parameter falls.
+                    for (const Vec2& tip : {segs[k - 1], segs[k]}) {
+                        const auto c = closestPointOnSegment(tip, rail[i - 1], rail[i]);
+                        if (c.distance > kRailTouch) continue;
+                        crossings.push_back({along + distance(rail[i - 1], c.point), c.point});
+                    }
+                }
                 along += distance(rail[i - 1], rail[i]);
             }
         }
@@ -12665,6 +12757,9 @@ bool Editor::trimOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
                                  const std::vector<Entity>& refs, QString* why) {
     const bool dbl = ent.type == EntityType::DoubleLine;
     const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
+    // A sleeve is one derived outline, not two independently trimmable rails; cutting its route
+    // below is what shortens it.
+    if (ent.meta.value(QStringLiteral("shrunkEnds")).toBool()) return false;
     if (!dbl && !dpoly) return false;
     const double gap = ent.meta.value("gap").toDouble(10.0);
     if (gap <= 0.0) return false;
@@ -12907,6 +13002,64 @@ std::optional<CutRecord> findCutAt(const Entity& ent, const QString& key, const 
     return r;
 }
 
+// WHICH OF THE TWO SLOTS AT AN END a sided cut goes in. Each end of a run keeps two, one per line, so
+// the two lines can stop at different things; what decides the slot is what is already there.
+void writeSidedCut(Entity& ent, const QString& key, const CutRecord& cut, int side) {
+    const bool haveA = ent.meta.value(key).toBool();
+    const int sideA = ent.meta.value(key + QStringLiteral("Side")).toInt();
+    if (!haveA || sideA == side) {      // free, or this line's own cut moving
+        writeCutSlot(ent, key, cut, side);
+        return;
+    }
+    // What is there applies to BOTH lines. The other line keeps it - so it becomes that line's - and
+    // this line's new cut goes in the second slot. Without this the other line's end would silently
+    // jump to wherever this one was just taken to.
+    if (sideA == 0) ent.meta.insert(key + QStringLiteral("Side"), -side);
+    writeCutSlot(ent, cutSlot2(key), cut, side);
+}
+
+// THE FIRST THING ONE LINE MEETS, carrying on beyond its own end. The whole-run extend asks this of
+// ModifyOps (rayToBoundary) and gets the target's WHOLE edge set back, so that each of the two lines
+// caps to the edge it crosses. One line on its own wants the opposite: the single edge it actually
+// reached. Handed the whole set, a line extended to the near side of a double run would jump the gap
+// and cap to the far side instead, because that edge is on the list too.
+bool railRayToBoundary(const Vec2& fixed, const Vec2& moving, const std::vector<Entity>& refs,
+                       const QString& selfId, CutRecord& out) {
+    const Vec2 d = moving - fixed;
+    if (d.length() < 1e-9) return false;
+    const Vec2 dir = d.normalized();
+    double bestT = 1e299;
+    bool found = false;
+    for (const Entity& e : refs) {
+        if (!selfId.isEmpty() && e.id == selfId) continue;
+        std::vector<Vec2> segs;
+        forEachCutSegmentOf(e, segs);
+        for (size_t i = 0; i + 1 < segs.size(); i += 2) {
+            const auto x = lineLineIntersection(fixed, moving, segs[i], segs[i + 1]);
+            if (!x) continue;
+            const double t = dot(*x - moving, dir);
+            if (t <= 1e-9) continue;   // it has to be BEYOND the end being extended
+            if (closestPointOnSegment(*x, segs[i], segs[i + 1]).distance > 1e-6) continue;
+            if (t >= bestT) continue;
+            bestT = t;
+            found = true;
+            out = CutRecord();
+            // A RING IS KEPT AS A RING. The flattened segments are how the boundary is FOUND - they
+            // are a many-sided polygon standing in for the curve - but a cap recorded from one of
+            // its chords would stop the line inside the curve, short of what it was extended to.
+            if (e.type == EntityType::Circle || e.type == EntityType::Arc) {
+                out.circle = true;
+                out.c = e.center;
+                out.r = e.radius;
+            } else {
+                out.a = segs[i];
+                out.b = segs[i + 1];
+            }
+        }
+    }
+    return found;
+}
+
 } // namespace
 
 void Editor::capDoubleEndAt(Entity& ent, const QString& key, const Vec2& at,
@@ -12921,35 +13074,70 @@ bool Editor::capDoubleRailAt(Entity& ent, const QString& key, const Vec2& at,
                              const std::vector<Entity>& refs, int side) {
     const auto cut = findCutAt(ent, key, at, refs, side);
     if (!cut) return false;
-    const QString slotB = cutSlot2(key);
-    const bool haveA = ent.meta.value(key).toBool();
-    const int sideA = ent.meta.value(key + QStringLiteral("Side")).toInt();
-    if (!haveA) {                       // nothing there yet
-        writeCutSlot(ent, key, *cut, side);
-        return true;
-    }
-    if (sideA == side) {                // this line already had one: it moves
-        writeCutSlot(ent, key, *cut, side);
-        return true;
-    }
-    if (sideA == 0) {
-        // What is there applies to BOTH lines. The other line keeps it - so it becomes that line's -
-        // and this line's new cut goes in the second slot. Without this the other line's end would
-        // silently jump to wherever this one was just trimmed to.
-        ent.meta.insert(key + QStringLiteral("Side"), -side);
-    }
-    writeCutSlot(ent, slotB, *cut, side);
+    writeSidedCut(ent, key, *cut, side);
     return true;
 }
 
 void Editor::recordCutMeta(Entity& ent, const QString& selfId, const std::vector<Entity>& joints) {
     Q_UNUSED(selfId); // capDoubleEndAt excludes ent by id
-    // Only meaningful for a DOUBLE entity (its physical runs get clipped to the cut).
+    // Only meaningful for a DOUBLE entity (its physical runs get clipped to the cut). A sleeve
+    // redraws itself from the route instead, so it does not keep a double-line cap behind.
+    if (ent.meta.value(QStringLiteral("shrunkEnds")).toBool()) return;
     const std::vector<Vec2> pts =
         (ent.type == EntityType::DoubleLine) ? std::vector<Vec2>{ent.a, ent.b} : ent.points;
     if (pts.size() < 2) return;
     capDoubleEndAt(ent, QStringLiteral("cutStart"), pts.front(), joints);
     capDoubleEndAt(ent, QStringLiteral("cutEnd"), pts.back(), joints);
+}
+
+// ONE LINE OF A DOUBLE RUN, EXTENDED ON ITS OWN.
+//
+// WHICH line is read off the fence, the way a trim reads it - see trimOneRailOfDouble. Crossing one of
+// the two lines means that line; crossing both means the whole run, and that is left to the centreline
+// path below. The centreline is deliberately not consulted: it is not drawn, and a fence drawn across
+// the near line of a run to reach something never goes near it.
+//
+// The line grows by a CUT CAP CARRYING ITS SIDE, not by moving the run's points. The points are the
+// centreline both lines are worked out from, so moving an end there takes the other line with it -
+// which is exactly the complaint: one line was wanted and both moved. A sided cap is what a trim
+// already writes, so everything that reads a run as it is DRAWN - the renderer, the snaps, the joints,
+// the DXF - follows this with nothing further to teach.
+bool Editor::extendOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
+                                   const std::vector<Entity>& refs) const {
+    const bool dbl = ent.type == EntityType::DoubleLine;
+    const bool dpoly = ent.type == EntityType::Polyline && ent.meta.value("double").toBool();
+    // A sleeve is one derived outline rather than two lines that can be moved apart.
+    if (ent.meta.value(QStringLiteral("shrunkEnds")).toBool()) return false;
+    if (!dbl && !dpoly) return false;
+    const double gap = ent.meta.value("gap").toDouble(10.0);
+    if (gap <= 0.0) return false;
+
+    int side = 0;
+    double alongPick = 0.0;
+    std::vector<Vec2> rail;
+    for (double s : {gap / 2.0, -gap / 2.0}) {
+        const std::vector<Vec2> r = doubleRunRail(ent, s);   // as DRAWN, caps and all
+        if (r.size() < 2) continue;
+        if (auto x = crossAlong(r, fa, fb)) {
+            if (side != 0) return false;   // both crossed: the whole run, not this gesture
+            side = s > 0 ? +1 : -1;
+            alongPick = x->first;
+            rail = r;
+        }
+    }
+    if (side == 0) return false;
+
+    // WHICH END grows: the one the fence crossed nearer, which is the rule the whole-run extend uses
+    // for its pick and the one a hand reaching for an end is following anyway.
+    const double railLen = polylineLength(rail);
+    const bool atStart = alongPick < railLen - alongPick;
+    const Vec2 moving = atStart ? rail.front() : rail.back();
+    const Vec2 fixed = atStart ? rail[1] : rail[rail.size() - 2];
+
+    CutRecord cut;
+    if (!railRayToBoundary(fixed, moving, refs, ent.id, cut)) return false;
+    writeSidedCut(ent, atStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), cut, side);
+    return true;
 }
 
 void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
@@ -12971,6 +13159,10 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
         const bool dbl = obj->type == EntityType::DoubleLine;
         const bool poly = obj->type == EntityType::Polyline;
         if (!line && !dbl && !poly) continue;
+        // ONE LINE OF A DOUBLE RUN FIRST. It has to be tried before the centreline, because a fence
+        // that reaches only one line of a run never crosses the centreline at all - so the object was
+        // skipped here and the gesture did nothing whatever.
+        if (extendOneRailOfDouble(*obj, a, b, refs)) { ++count; continue; }
         // The fence must cross the object's centreline.
         std::optional<Vec2> x;
         if (poly) {
@@ -15284,6 +15476,187 @@ Entity Editor::breakPreview() const {
     return e;
 }
 
+// A transition is marked out the same way a break is: draw a line across every rail it goes on. The
+// things it crosses must be the visible parallel lines themselves - separate lines or runs, or the
+// rails of double runs - and the sleeve is fitted to the end nearest that crossing. When the rails
+// are not the same length, the longest one is the datum the instruction asks for.
+bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
+    if (!doc_ || distance(a, b) < 1e-7) return false;
+    struct Crossed {
+        Vec2 at, a, b, unit, outward, end;
+        double length = 0.0, endDistance = 0.0;
+        QString owner;
+    };
+    std::vector<Crossed> crossed;
+    const auto tryLine = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
+        const double len = distance(p1, p2);
+        if (len < 1e-7) return;
+        const auto x = segmentSegmentIntersection(a, b, p1, p2);
+        if (!x) return;
+        const bool atStart = distance(*x, p1) <= distance(*x, p2);
+        const Vec2 end = atStart ? p1 : p2;
+        const Vec2 other = atStart ? p2 : p1;
+        const double endLen = distance(end, other);
+        if (endLen < 1e-7) return;
+        const Vec2 unit{(p2.x - p1.x) / len, (p2.y - p1.y) / len};
+        const Vec2 outward{(end.x - other.x) / endLen, (end.y - other.y) / endLen};
+        bool duplicate = false;
+        for (const Crossed& c : crossed) {
+            // Two segments of the same run meeting at a joint are one crossing, not two rails.
+            if (c.owner == e.id && distance(c.at, *x) < 1e-6) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate)
+            crossed.push_back({*x, p1, p2, unit, outward, end, len,
+                               distance(*x, end), e.id});
+    };
+    for (const auto& e : doc_->entities()) {
+        switch (e.type) {
+        case EntityType::Line:
+            tryLine(e, e.a, e.b);
+            break;
+        case EntityType::DoubleLine: {
+            const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+            const Vec2 off = (e.b - e.a).normalized().perp() * (gap / 2.0);
+            tryLine(e, e.a + off, e.b + off);
+            tryLine(e, e.a - off, e.b - off);
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Spline:
+            for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+            break;
+        case EntityType::Polyline:
+            // A sleeve is itself marked "double", but its centreline is not drawn linework. An
+            // ordinary double polyline contributes the rails the eye crossed; any other
+            // polyline contributes the segments it actually draws.
+            if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) break;
+            if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
+                const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
+                for (double side : {gap / 2.0, -gap / 2.0}) {
+                    const auto run = offsetPolyline(e.points, side);
+                    for (size_t i = 1; i < run.size(); ++i) tryLine(e, run[i - 1], run[i]);
+                }
+            } else {
+                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (crossed.size() < 2) return false;
+
+    // The mark may clip unrelated linework, so look for the one unambiguous family of mutually
+    // parallel rails it crossed. A single perpendicular line is simply not a rail in the fan.
+    const double parallel = std::cos(12.0 * M_PI / 180.0);
+    std::vector<std::vector<size_t>> parallelSets;
+    for (size_t i = 0; i < crossed.size(); ++i) {
+        std::vector<size_t> set;
+        for (size_t j = 0; j < crossed.size(); ++j)
+            if (std::abs(dot(crossed[i].unit, crossed[j].unit)) >= parallel) set.push_back(j);
+        if (set.size() < 2) continue;
+        bool everyPair = true;
+        for (size_t j : set)
+            for (size_t k : set)
+                if (std::abs(dot(crossed[j].unit, crossed[k].unit)) < parallel)
+                    everyPair = false;
+        if (!everyPair) continue;
+        bool known = false;
+        for (const auto& other : parallelSets) known = known || other == set;
+        if (!known) parallelSets.push_back(std::move(set));
+    }
+    std::sort(parallelSets.begin(), parallelSets.end(),
+              [](const auto& a, const auto& b) { return a.size() > b.size(); });
+    if (parallelSets.empty() ||
+        (parallelSets.size() > 1 && parallelSets[0].size() == parallelSets[1].size()))
+        return false;
+    const std::vector<size_t>& railsSet = parallelSets.front();
+
+    // Equal lengths use the closest end; unequal lengths use the longest line, as specified.
+    size_t host = railsSet.front();
+    for (size_t i : railsSet) {
+        if (crossed[i].length > crossed[host].length + 1e-6 ||
+            (std::abs(crossed[i].length - crossed[host].length) <= 1e-6 &&
+             crossed[i].endDistance < crossed[host].endDistance))
+            host = i;
+    }
+    const Crossed& on = crossed[host];
+    for (size_t i : railsSet)
+        if (dot(crossed[i].outward, on.outward) < 0.5)
+            return false; // nearest ends on opposite sides
+
+    // The sleeve's centreline is midway across ALL the rails at the host's own end. Projecting that
+    // longitudinal position onto each rail keeps staggered rails honest: shorter lines do not pull
+    // the face back, and the sleeve still covers the full fan.
+    const Vec2 perp = on.outward.perp();
+    double nearSide = 0.0, farSide = 0.0;
+    for (size_t i : railsSet) {
+        const Crossed& c = crossed[i];
+        const Vec2 endAt = c.a + c.unit * dot(on.end - c.a, c.unit);
+        const double side = dot(endAt - on.end, perp);
+        nearSide = std::min(nearSide, side);
+        farSide = std::max(farSide, side);
+    }
+    const double rails = farSide - nearSide;
+    if (rails < 1e-6) return false;
+    const Vec2 attach = on.end + perp * ((nearSide + farSide) * 0.5);
+    // WIDER THAN THE LINES IT GOES ON, by the standoff every sleeve keeps - see kSleeveStandoff.
+    // Fitted to the exact rail spread, the transition's sides came out on top of the outer lines,
+    // and a sleeve flush with what it covers does not read as being over it.
+    const double width = rails + 2.0 * std::max(kSleeveStandoff, rails * kSleeveStandoffFrac);
+
+    // HOW FAR IT REACHES is still a matter of what it is fitted over, not of how far it stands off it:
+    // the standoff is a millimetre or so of clearance, and it has no business lengthening the part.
+    const double length = std::max(8.0, rails * 3.0);
+    const std::vector<Vec2> route{attach, attach + on.outward * length};
+    out = heatshrinkFromRoute(route, width, {0.0, 0.0}, ShrinkRouteMode::Transition);
+    out.meta.insert(QStringLiteral("transitionHost"), on.owner);
+    return true;
+}
+
+Entity Editor::transitionPreview() const {
+    Entity e;
+    if (!transitionBandStarted()) return e;
+    Entity built;
+    if (transitionFromBand(wireBandStart_, cursor_, built)) return built;
+    return e;
+}
+
+void Editor::setTwistSpread(const QString& spread) {
+    const QString next = spread == QLatin1String("left") || spread == QLatin1String("right")
+                             ? spread
+                             : QStringLiteral("both");
+    if (twistSpread_ == next) return;
+    twistSpread_ = next;
+    // A pinned preview is the object being set up: changing the fan redraws it where it is pinned.
+    emit overlayChanged();
+}
+
+void Editor::writeBundleMeta(Entity& e, bool straight) const {
+    e.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
+    e.meta.insert(QStringLiteral("twistSpread"), twistSpread_);
+    e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
+    e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
+    e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+    // WHICH LAY, written even when it is the laid-up one. An object that says which of the two it is
+    // can be turned into the other from its properties; one that says nothing has to be guessed at,
+    // and the guess is wrong for exactly the drawings that have both on them.
+    e.meta.insert(QStringLiteral("twistStraight"), straight);
+    if (straight && twistLane_ > 1e-9)
+        e.meta.insert(QStringLiteral("twistLane"), twistLane_);
+}
+
+void Editor::setTwistLane(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistLane_ - next) < 1e-9) return;
+    twistLane_ = next;
+    // A pinned preview is the object being set up: changing the spread pitch redraws it where it is.
+    emit overlayChanged();
+}
+
 void Editor::freezeTwistedPreview() {
     // Pins the loose end where it is, so the bundle stops following the cursor while the number of
     // wires and the rest are tried on it. Nothing to pin before it has a start.
@@ -16432,7 +16805,21 @@ void Editor::paste() {
     placeRot_ = 0.0;      // something new picked up starts the way it was drawn
     pastePlacing_ = true; // the contents now follow the cursor until clicked to place
     pasteMirrorX_ = pasteMirrorY_ = false;
-    emit message(QStringLiteral("Specify insertion point — X / Y mirror before placing"));
+    emit message(QStringLiteral("Specify insertion point — X / Y mirror before placing, Esc to cancel"));
+    emit pastePlacementStarted();
+    emit overlayChanged();
+}
+
+void Editor::cancelPastePlacement() {
+    if (!pastePlacing_) return;
+    pastePlacing_ = false;
+    pasteMirrorX_ = pasteMirrorY_ = false;
+    placeRot_ = 0.0;
+    // A cancelled cut-paste must not take the originals away: they were only kept on this list so the
+    // landing could delete them at the last moment. Clearing it leaves them where they always were.
+    cutPending_.clear();
+    emit message(QStringLiteral("Placement cancelled"));
+    emit pastePlacementFinished(false);
     emit overlayChanged();
 }
 
@@ -16646,6 +17033,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         return true;
     }
     if (key == Qt::Key_Escape) {
+        // A paste or library part on the cursor is its own function: Esc lets go of the ghost without
+        // also treating the press as a general "clear the drawing state" command.
+        if (pastePlacing_) {
+            cancelPastePlacement();
+            return true;
+        }
         // Cancel any in-progress operation and clear the whole selection.
         // (Trim finishes here too: setTool(Select) below clears the reference/cut
         // line, so Esc ends the trim command.)
@@ -16883,6 +17276,27 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
             p.restore();
         }
+    }
+
+    if (transitionBandStarted()) {
+        // The marking line says which pair is being fitted; the ghost says which end won.
+        p.save();
+        QPen pv(paperInk(QColor(120, 200, 255, 200)));
+        pv.setCosmetic(true);
+        pv.setWidthF(1.4);
+        pv.setStyle(Qt::DashLine);
+        p.setPen(pv);
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(cursor_));
+        const Entity ghost = transitionPreview();
+        if (!ghost.points.empty()) {
+            for (const std::vector<Vec2>& run : shrunkSleeveRunsOf(ghost)) {
+                QPolygonF poly;
+                for (const Vec2& q : run) poly << vt.toScreen(q);
+                p.drawPolyline(poly);
+            }
+        }
+        p.restore();
     }
 
     // Twist / Screen: preview the crossing line, and (for Screen) a ghost ellipse + drain
@@ -17775,24 +18189,20 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.type = EntityType::TwistedPair;
             tp.a = pts[0];
             tp.b = twistedFrozen_ ? twistedFrozenAt_ : pts[1];
-            tp.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
-            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
-            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
-            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            writeBundleMeta(tp, /*straight=*/false);
             EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
-        } else if (tool_ == ToolId::TwistedHarnessRoute && pts.size() >= 2) {
+        } else if ((tool_ == ToolId::TwistedHarnessRoute || tool_ == ToolId::WiresRun) &&
+                   pts.size() >= 2) {
             // Both generalisations previewed together: the knees so far (route) as the object's
-            // points, and the bundle's wire count (harness) on it.
+            // points, and the bundle's wire count (harness) on it - in the lay the tool draws, so a
+            // straight run is previewed straight rather than shown laid up and landing straight.
             Entity tp;
             tp.type = EntityType::TwistedPair;
             tp.points = pts;
             if (twistedFrozen_) tp.points.back() = twistedFrozenAt_;
             tp.a = tp.points.front();
             tp.b = tp.points.back();
-            tp.meta.insert(QStringLiteral("twistWires"), std::clamp(twistWires_, 2, kTwistedMaxWires));
-            tp.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
-            tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
-            tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+            writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun);
             EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::HeatshrinkRoute && pts.size() >= 2) {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
@@ -18278,6 +18688,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 if (!ln && !dl && !pl) continue;
                 if (std::find(trimRefIds_.begin(), trimRefIds_.end(), e.id) != trimRefIds_.end())
                     continue;
+                // The single-line gesture is ghosted by the same call that will carry it out, so what
+                // is on the screen while the fence is being drawn is what lands.
+                Entity ghost = e;
+                if (extendOneRailOfDouble(ghost, trimFenceStart_, cursor_, refs)) {
+                    EntityRenderer::draw(p, ghost, *doc_, vt, gp.color());
+                    continue;
+                }
                 std::optional<Vec2> x;
                 if (pl) {
                     for (size_t i = 1; i < e.points.size() && !x; ++i)
@@ -18286,7 +18703,6 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     x = segmentSegmentIntersection(trimFenceStart_, cursor_, e.a, e.b);
                 }
                 if (!x) continue;
-                Entity ghost = e;
                 if (extendEntityTo(ghost, *x, refs)) EntityRenderer::draw(p, ghost, *doc_, vt, gp.color());
             }
         }

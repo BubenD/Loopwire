@@ -334,6 +334,14 @@ struct TwistFrames {
     double len = 0.0;
     double turn = 0.0;           // the length of one whole crossing, as actually used
     int turns = 0;
+    bool spreadStart = true;     // fan the wires out at the start end
+    bool spreadEnd = true;       // ...and at the other
+    // STRAIGHT, not laid up: the wires run parallel the whole way instead of crossing. A loom is
+    // mostly drawn this way - the wires only get laid up where the drawing says they are twisted -
+    // and the two are the same object with the same handles, so one can be made the other.
+    bool straight = false;
+    double lane = 0.0;           // between wires where they are spread out, centre to centre
+    double packed = 0.0;         // ...and the pitch they run at inside the bundle
 };
 
 bool twistFrames(const Entity& pair, TwistFrames& f) {
@@ -358,19 +366,64 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // the middle by whatever is left over. Two wires come out exactly where they did before this took a
     // count: a pair is the two-wire case of the same drawing, not a different drawing.
     f.wires = std::clamp(pair.meta.value(QStringLiteral("twistWires")).toInt(2), 2, kTwistedMaxWires);
-    f.thick = (w / (2.0 * f.wires)) * (1.0 - kTwistedPairPart * 2.0);
-    f.reach = half - f.thick;
+    // HOW BIG A WIRE IS, AND HOW FAR APART THEY RUN - and the two lays answer it oppositely.
+    //
+    // Laid up, the bundle is a cable of a given thickness and the wires share it out between them: a
+    // twelve-wire cable of that thickness has thinner wires in it than a four-wire one, which is what
+    // a cable is.
+    //
+    // Running straight there is no cable, only wires lying side by side - so the wire is the size a
+    // wire is, and six of them take up more room than three. Drawing those the first way made a run
+    // of many wires a bundle of hairs at the width of a run of few, which is not what any of the
+    // drawings this was taken from show.
+    if (pair.meta.value(QStringLiteral("twistStraight")).toBool()) {
+        const double wire =
+            std::max(0.1, pair.meta.value(QStringLiteral("twistWireWidth")).toDouble(kWiresRunWire));
+        f.thick = wire / 2.0;
+        f.packed = wire * (kWiresRunPitch / kWiresRunWire);
+        f.reach = f.wires > 1 ? f.packed * (f.wires - 1) / 2.0 : 0.0;
+    } else {
+        f.thick = (w / (2.0 * f.wires)) * (1.0 - kTwistedPairPart * 2.0);
+        f.reach = half - f.thick;
+        // The pitch they run at packed in the bundle, which is what the spread pitch falls back to a
+        // half as much again of.
+        f.packed = f.wires > 1 ? 2.0 * f.reach / (f.wires - 1) : 0.0;
+    }
     double period =
         std::max(0.05, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
     f.lead = std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
     // The two straight ends and at least one whole crossing have to fit in what was drawn; a pair drawn
     // shorter keeps its proportions rather than losing its weave or running past its own ends.
-    if (2.0 * f.lead + period > f.len) {
+    // The two straight ends have to fit in what was drawn. Laid up, a whole crossing has to fit
+    // between them as well; running straight there is no crossing to make room for, so the ends keep
+    // what they were asked for until they meet in the middle.
+    const bool straightLay = pair.meta.value(QStringLiteral("twistStraight")).toBool();
+    if (straightLay) {
+        f.lead = std::min(f.lead, f.len / 2.0);
+    } else if (2.0 * f.lead + period > f.len) {
         const double k = f.len / (2.0 * f.lead + period);
         f.lead *= k;
         period *= k;
     }
     const double woven = f.len - 2.0 * f.lead;
+    // The ends the wires fan out at. "Left" and "right" are sheet directions, not click order, so a
+    // run drawn right-to-left still spreads on the side asked for. On a vertical run there is no left
+    // or right end to tell apart; the first point takes "left" and the second "right".
+    const QString spread = twistedPairSpread(pair);
+    f.straight = pair.meta.value(QStringLiteral("twistStraight")).toBool();
+    // HOW FAR APART THE WIRES SIT WHERE THEY ARE SPREAD. In the bundle they are packed across its
+    // width, which is what the width is for; spread out at an end they go to a pitch of their own,
+    // because what settles that is the thing they are being landed on and not how thick the bundle
+    // is. Absent, it is half again the pitch they run at in the bundle - which is what the drawings
+    // this was taken from were drawn at.
+    f.lane = std::max(0.0, pair.meta.value(QStringLiteral("twistLane")).toDouble(0.0));   // 0 = the default below
+    const bool startIsLeft = path.front().x <= path.back().x;
+    f.spreadStart = spread == QLatin1String("both") ||
+                    (spread == QLatin1String("left") && startIsLeft) ||
+                    (spread == QLatin1String("right") && !startIsLeft);
+    f.spreadEnd = spread == QLatin1String("both") ||
+                  (spread == QLatin1String("right") && startIsLeft) ||
+                  (spread == QLatin1String("left") && !startIsLeft);
     // Whole crossings, so each wire comes back to the side it started on and runs level into the
     // straight end: half a crossing would leave the two wires swapped and the ends kinked.
     f.turns = std::max(1, static_cast<int>(std::llround(woven / period)));
@@ -439,18 +492,49 @@ double twistPhase(const TwistFrames& f, int k) {
 // are the same one, so a pair's ends run parallel as they always have.
 double twistOffset(const TwistFrames& f, int k, double u) {
     const double phase = twistPhase(f, k);
-    const double inWeave = f.reach * std::cos(phase);
+    // WHERE THE WIRE SITS ALONG THE BUNDLE, which is the one thing the two lays differ in.
+    //
+    // Laid up, a wire swings from side to side and is at its own phase of the crossing. Running
+    // straight it stays in its own lane the whole way - the wires never cross, so there is nothing to
+    // swing. Everything else about the two is the same: the same ends, the same fan out of them, the
+    // same width, the same handles - which is why this is one drawing with two lays and not two
+    // drawings.
+    const double lane = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
+    const double inRun = f.straight ? lane : f.reach * std::cos(phase);
     if (u > f.lead && u < f.len - f.lead)
-        return f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase);
-    const double spread = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
-    const double into = u <= f.lead ? u : f.len - u;
-    const double t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
-    return spread + (inWeave - spread) * t;
+        return f.straight ? lane
+                          : f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase);
+    // WHERE A SPREAD END PUTS IT. Laid up, the wires are spread evenly across the bundle - they are
+    // being stripped and landed, so they come out square. Running straight they open out to a pitch
+    // of their own instead, because the bundle's width is not what settles how far apart the things
+    // they land on are.
+    const double pitch = f.lane > 1e-9 ? f.lane : f.packed * 1.5;
+    const double spread =
+        f.wires > 1 ? (f.straight ? pitch * (double(f.wires - 1) / 2.0 - double(k)) : lane) : 0.0;
+    const double inWeave = inRun;
+    auto leadOffset = [&](double into, bool fan) {
+        // A spread end lands the wires evenly across the bundle. An unspread end simply carries each
+        // wire's woven place straight out to the end, so the bundle does not open there at all.
+        const double target = fan ? spread : inWeave;
+        double t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
+        // EASED where the wires run straight, so the fan leaves the bundle and settles into its lane
+        // on a curve rather than at two corners. A drawn-by-hand fan has a radius at each end of the
+        // slant - see the examples this was taken from - and a straight blend has neither; on the
+        // weave it does not arise, because the fan there runs into a cosine that is already turning.
+        if (f.straight) t = t * t * (3.0 - 2.0 * t);
+        return target + (inWeave - target) * t;
+    };
+    if (u <= f.lead) return leadOffset(u, f.spreadStart);
+    if (u >= f.len - f.lead) return leadOffset(f.len - u, f.spreadEnd);
+    return inWeave;
 }
 
 // How near the front of the bundle wire k is at distance u - the other half of going round, and what
 // says which wire hides which where they cross.
 double twistDepth(const TwistFrames& f, int k, double u) {
+    // Running straight, no wire is ever in front of another - they lie side by side the whole way -
+    // so the order is just the lanes, and it never changes along the run.
+    if (f.straight) return double(k);
     const double uu = std::clamp(u, f.lead, f.len - f.lead);
     return std::sin(2.0 * M_PI * (uu - f.lead) / f.turn + twistPhase(f, k));
 }
@@ -490,6 +574,11 @@ QString twistKey(const Entity& e) {
         k += QString::number(e.meta.value(QLatin1String(m)).toDouble(), 'g', 12);
         k += QLatin1Char('/');
     }
+    k += twistedPairSpread(e);
+    k += e.meta.value(QLatin1String("twistStraight")).toBool() ? QLatin1String("|straight")
+                                                                : QLatin1String("|laid");
+    k += QString::number(e.meta.value(QLatin1String("twistLane")).toDouble(), 'g', 12);
+    k += QString::number(e.meta.value(QLatin1String("twistWireWidth")).toDouble(), 'g', 12);
     return k;
 }
 
@@ -516,16 +605,30 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     return c ? c->strands : std::vector<std::vector<Vec2>>{};
 }
 
+QString twistedPairSpread(const Entity& pair) {
+    const QString spread =
+        pair.meta.value(QStringLiteral("twistSpread")).toString(QStringLiteral("both")).toLower();
+    if (spread == QLatin1String("left") || spread == QLatin1String("right"))
+        return spread;
+    return QStringLiteral("both");
+}
+
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* cached = twistCached(pair);
     if (!cached) return {};
     const TwistFrames& f = cached->frames;
     // Split every half turn - where the wires have just changed places - so which of them is in front
-    // is settled once per stretch, and changes where they are furthest apart.
-    std::vector<double> cuts{0.0, f.lead};
-    for (int k = 1; k < 2 * f.turns; ++k) cuts.push_back(f.lead + f.turn * k / 2.0);
-    cuts.push_back(f.len - f.lead);
+    // is settled once per stretch, and changes where they are furthest apart. A straight run is ONE
+    // stretch from end to end: nothing crosses, so there is no place along it where the answer to
+    // which wire is in front changes, and cutting it up anyway would only draw the same wires in the
+    // same order several times over.
+    std::vector<double> cuts{0.0};
+    if (!f.straight) {
+        cuts.push_back(f.lead);
+        for (int k = 1; k < 2 * f.turns; ++k) cuts.push_back(f.lead + f.turn * k / 2.0);
+        cuts.push_back(f.len - f.lead);
+    }
     cuts.push_back(f.len);
     cuts.erase(std::unique(cuts.begin(), cuts.end(),
                            [&](double a, double b) { return std::abs(a - b) < f.len * 1e-9; }),

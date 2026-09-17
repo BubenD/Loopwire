@@ -15,6 +15,7 @@
 #include "tools/QuickSelect.h"
 
 #include <QImage>
+#include <QObject>
 #include <QPointF>
 #include <QJsonArray>
 #include <QPainter>
@@ -2315,6 +2316,97 @@ int run_editor_tests() {
               "extend-double: physical runs are capped flush to the extend target");
     }
 
+    // --- ONE LINE of a double run, extended on its own. The drawing this comes from is a run
+    //     reaching a cable beside it: one of its two lines has something to reach there and the
+    //     other has not, and a gesture that moved both had to be pulled back by hand every time.
+    //     The fence says which line - crossing one of them means that line alone.
+    {
+        Document d; d.entities().clear();
+        Entity ref; ref.id = "ref"; ref.type = EntityType::DoubleLine;
+        ref.a = {-100, 0}; ref.b = {100, 0};
+        ref.meta.insert("gap", 20.0);          // its two lines at y = +10 and y = -10
+        Entity run; run.id = "run"; run.type = EntityType::Polyline;
+        run.points = {{0, 100}, {0, 40}};       // stops short of the cable, at y = 40
+        run.meta.insert("double", true);
+        run.meta.insert("gap", 10.0);          // its two lines at x = -5 and x = +5
+        d.entities().push_back(ref);
+        d.entities().push_back(run);
+        Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+        ed.selectById("ref");                  // the cable is the boundary
+        ed.setTool(ToolId::Extend);
+        // A fence across the x = +5 line and nothing else. It does not cross the centreline at all,
+        // which is why this gesture used to do nothing whatever.
+        ed.onPointerPress({2, 70}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({8, 70});
+        ed.onPointerPress({8, 70}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* r = nullptr;
+        for (const Entity& e : d.entities()) if (e.id == QLatin1String("run")) r = &e;
+        check(r && r->points.size() == 2 && near(r->points.back().y, 40.0),
+              "extend-one-line: the run's own points stay put - the centreline is not what grew");
+        if (r) {
+            std::vector<Vec2> plus = offsetPolyline(r->points, 5.0);
+            applyDoubleRunCuts(plus, *r, +1);
+            std::vector<Vec2> minus = offsetPolyline(r->points, -5.0);
+            applyDoubleRunCuts(minus, *r, -1);
+            // WHICH of the two it is follows offsetPolyline's own hand, so it is not spelt out here:
+            // that one line reached the cable and the other did not is the whole of the point.
+            check(near(std::min(plus.back().y, minus.back().y), 10.0),
+                  "extend-one-line: the crossed line reaches the near side of the cable");
+            check(near(std::max(plus.back().y, minus.back().y), 40.0),
+                  "extend-one-line: and the other line is left where it was");
+            check(r->meta.value(QStringLiteral("cutEnd")).toBool() &&
+                      r->meta.value(QStringLiteral("cutEndSide")).toInt() != 0,
+                  "extend-one-line: it is written as a cut cap carrying the line it belongs to");
+        }
+    }
+
+    // --- A TRANSITION SLEEVE is a boundary by the outline it draws, and its own route can be
+    //     extended without becoming a plain double run. The square face is at x=80 here.
+    {
+        Entity sleeve;
+        sleeve.id = QStringLiteral("transition");
+        sleeve.type = EntityType::Polyline;
+        sleeve.points = {{80.0, 0.0}, {104.0, 0.0}};
+        sleeve.meta.insert(QStringLiteral("double"), true);
+        sleeve.meta.insert(QStringLiteral("shrunkEnds"), true);
+        sleeve.meta.insert(QStringLiteral("shrinkTransition"), true);
+        sleeve.meta.insert(QStringLiteral("gap"), 10.0);
+        sleeve.meta.insert(QStringLiteral("shrinkFaceStart"), 10.0);
+        sleeve.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
+        sleeve.meta.insert(QStringLiteral("shrinkFaceEnd"), 8.2);
+        sleeve.meta.insert(QStringLiteral("shrinkTaperEnd"), 6.5);
+
+        Entity stub;
+        stub.id = QStringLiteral("stub");
+        stub.type = EntityType::Line;
+        stub.a = {0.0, 0.0};
+        stub.b = {60.0, 0.0};
+        check(extendEntityTo(stub, {60.0, 0.0}, {sleeve}) && near(stub.b.x, 80.0),
+              "extend-transition: another line extends to the sleeve's drawn face");
+
+        Entity boundary;
+        boundary.id = QStringLiteral("boundary");
+        boundary.type = EntityType::Line;
+        boundary.a = {150.0, -20.0};
+        boundary.b = {150.0, 20.0};
+        Entity grown = sleeve;
+        check(extendEntityTo(grown, {104.0, 0.0}, {boundary}) &&
+                  near(grown.points.back().x, 150.0) &&
+                  grown.meta.value(QStringLiteral("shrinkTransition")).toBool() &&
+                  !grown.meta.contains(QStringLiteral("cutEnd")),
+              "extend-transition: the sleeve route extends and stays a transition");
+
+        Entity span;
+        span.id = QStringLiteral("span");
+        span.type = EntityType::Line;
+        span.a = {70.0, 0.0};
+        span.b = {110.0, 0.0};
+        std::optional<Entity> extra;
+        check(trimLineQuick(span, {90.0, 0.0}, {sleeve}, extra) && extra &&
+                  near(span.b.x, 80.0) && near(extra->a.x, 104.0),
+              "trim-transition: its drawn outline cuts the line running through it");
+    }
+
     // --- Fillet radius 0 (AutoCAD): no arc; both lines are trimmed to meet at the
     //     corner.
     {
@@ -4165,6 +4257,70 @@ int run_editor_tests() {
                 check(distance(other.back(), r->b - o) < 1e-6,
                       "trim-extension: and the other line is untouched");
             }
+
+        // A LINE THAT ENDS ON ANOTHER ONE STILL CUTS IT. A branch meeting a run makes a T, and the
+        // stub of run left sticking out past the branch is the commonest thing on these drawings
+        // there is to trim off - and it could not be trimmed at all.
+        //
+        // The numbers are the ones out of the drawing this was found on (mytest3.dwx), to the last
+        // digit, because that is the whole of the fault: the branch's line ends ON the run's line -
+        // zero distance away, exactly - but the crossing test works in the two lines' own parameters
+        // and that end lands on the 0 boundary at -1.5e-17. Rounded numbers land on the other side of
+        // nothing and the fault does not show at all, so rounding them here would be testing something
+        // else.
+        {
+            Document d; d.entities().clear();
+            Entity cable;                       // the run: its lower line is the one with a stub
+            cable.id = QStringLiteral("cable");
+            cable.type = EntityType::DoubleLine;
+            cable.a = {115.05625423875296, 142.67544244801954};
+            cable.b = {269.3464118156991, 142.6754424480195};
+            cable.meta.insert(QStringLiteral("gap"), 2.0);
+            Entity branch;                      // the diagonal, landing on that lower line
+            branch.id = QStringLiteral("branch");
+            branch.type = EntityType::Polyline;
+            branch.points = {{115.5608365997794, 142.79366262884682},
+                             {105.04945916270319, 148.41616553589424},
+                             {84.71999979656371, 148.41616553589424}};
+            branch.meta.insert(QStringLiteral("double"), true);
+            branch.meta.insert(QStringLiteral("gap"), 2.0);
+            branch.meta.insert(QStringLiteral("cutStart"), true);
+            branch.meta.insert(QStringLiteral("cutStartKind"), QStringLiteral("line"));
+            branch.meta.insert(QStringLiteral("cutStartAx"), 115.05625423875296);
+            branch.meta.insert(QStringLiteral("cutStartAy"), 141.67544244801954);
+            branch.meta.insert(QStringLiteral("cutStartBx"), 269.3464118156991);
+            branch.meta.insert(QStringLiteral("cutStartBy"), 141.6754424480195);
+            branch.meta.insert(QStringLiteral("cutStartSide"), +1);
+            d.entities().push_back(cable);
+            d.entities().push_back(branch);
+            const Entity* c = nullptr;
+            for (const Entity& e : d.entities()) if (e.id == QLatin1String("cable")) c = &e;
+            auto lowerLine = [&c] {
+                const Vec2 off = (c->b - c->a).normalized().perp() * 1.0;
+                std::vector<Vec2> rail = {c->a - off, c->b - off};
+                applyDoubleRunCuts(rail, *c, -1);
+                return rail;
+            };
+            const double startedAt = lowerLine().front().x;
+            // Where the branch's own line comes down onto it - which is where the run should stop.
+            std::vector<Vec2> bl = offsetPolyline(branch.points, 1.0);
+            applyDoubleRunCuts(bl, branch, +1);
+            const Vec2 tee = bl.front();
+            check(near(closestPointOnSegment(tee, lowerLine().front(), lowerLine().back()).distance,
+                       0.0),
+                  "trim-tee: the branch's line really does end ON the run's line");
+            check(tee.x > startedAt + 1e-9, "trim-tee: and the run sticks out past it");
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(4);
+            ed.selectById(QStringLiteral("branch"));      // the branch is the boundary
+            ed.setTool(ToolId::Trim);
+            const Vec2 on{(startedAt + tee.x) / 2.0, lowerLine().front().y};   // across the stub
+            ed.onPointerPress({on.x, on.y - 0.3}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({on.x, on.y + 0.3});
+            ed.onPointerPress({on.x, on.y + 0.3}, Qt::LeftButton, Qt::NoModifier);
+            for (const Entity& e : d.entities()) if (e.id == QLatin1String("cable")) c = &e;
+            check(near(lowerLine().front().x, tee.x),
+                  "trim-tee: the stub comes off at the line that ends on it");
+        }
         }
 
         // A line crossed TWICE - once part way along and once at its own end, where it meets the body -
@@ -6007,12 +6163,212 @@ int run_editor_tests() {
         }
     }
 
+    // --- The harness fan-out can be put on the left end, the right end, or both.
+    {
+        auto makeBundle = [](const QString& spread, bool backwards = false) {
+            Entity e;
+            e.type = EntityType::TwistedPair;
+            e.a = backwards ? Vec2{200, 0} : Vec2{0, 0};
+            e.b = backwards ? Vec2{0, 0} : Vec2{200, 0};
+            e.meta.insert("twistWires", 6);
+            e.meta.insert("twistWidth", kTwistedPairWidth * 1.5);
+            e.meta.insert("twistPitch", kTwistedPairPitch);
+            e.meta.insert("twistEnds", kTwistedPairLead);
+            e.meta.insert("twistSpread", spread);
+            return e;
+        };
+        auto endCount = [](const Entity& e, bool atBack) {
+            const auto lines = twistedPairStrands(e);
+            std::vector<double> mids;
+            for (size_t k = 0; k + 1 < lines.size(); k += 2) {
+                const auto& a = lines[k];
+                const auto& b = lines[k + 1];
+                const Vec2 pa = atBack ? a.back() : a.front();
+                const Vec2 pb = atBack ? b.back() : b.front();
+                mids.push_back((pa.y + pb.y) * 0.5);
+            }
+            std::sort(mids.begin(), mids.end());
+            int count = 0;
+            for (double y : mids)
+                if (count == 0 || std::abs(y - mids[static_cast<size_t>(count - 1)]) > 1e-5)
+                    ++count;
+            return count;
+        };
+
+        const Entity both = makeBundle(QStringLiteral("both"));
+        check(endCount(both, false) == 6 && endCount(both, true) == 6,
+              "harness spread: Both fans the wires at both ends");
+        const Entity left = makeBundle(QStringLiteral("left"));
+        check(endCount(left, false) == 6 && endCount(left, true) < 6,
+              "harness spread: Left fans the wires at the left end only");
+        const Entity right = makeBundle(QStringLiteral("right"));
+        check(endCount(right, false) < 6 && endCount(right, true) == 6,
+              "harness spread: Right fans the wires at the right end only");
+        const Entity backwards = makeBundle(QStringLiteral("left"), true);
+        check(endCount(backwards, false) < 6 && endCount(backwards, true) == 6,
+              "harness spread: Left follows the sheet side, not the click order");
+        Entity missing = makeBundle(QStringLiteral("left"));
+        missing.meta.remove(QStringLiteral("twistSpread"));
+        check(twistedPairSpread(missing) == QLatin1String("both") &&
+                  endCount(missing, false) == 6 && endCount(missing, true) == 6,
+              "harness spread: a run without the setting still fans at both ends");
+        const Entity invalid = makeBundle(QStringLiteral("sideways"));
+        check(twistedPairSpread(invalid) == QLatin1String("both"),
+              "harness spread: a value that is not an end falls back to Both");
+
+        // The drawing tool writes the same setting the ribbon edits, and it survives the file round
+        // trip - so it can still be changed after the run has been placed.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.twistWires() = 6;
+        ed.setTwistSpread(QStringLiteral("right"));
+        ed.setTool(ToolId::TwistedHarness);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({200, 0});
+        ed.freezeTwistedPreview();
+        ed.onPointerPress({500, 90}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 1 &&
+                  d.entities()[0].meta.value(QStringLiteral("twistSpread")).toString() ==
+                      QLatin1String("right"),
+              "harness spread: the ribbon choice is stored on the placed run");
+        const Entity back = Entity::fromJson(d.entities()[0].toJson());
+        check(twistedPairSpread(back) == QLatin1String("right") && endCount(back, true) == 6,
+              "harness spread: saved and read back, the right-end fan is unchanged");
+
+        // What the Properties panel writes: the selected object's own metadata, live and undoable.
+        ed.selectById(d.entities()[0].id);
+        ed.setSelectionMeta(QStringLiteral("twistSpread"), QStringLiteral("left"));
+        ed.setSelectionMetaNumber(QStringLiteral("twistWires"), 7.0);
+        check(d.entities()[0].meta.value(QStringLiteral("twistSpread")).toString() ==
+                      QLatin1String("left") &&
+                  d.entities()[0].meta.value(QStringLiteral("twistWires")).toInt() == 7 &&
+                  twistedPairStrands(d.entities()[0]).size() == 14,
+              "harness spread: Properties edits re-lay the placed run immediately");
+    }
+
+    // --- A WIRES RUN: the same bundle, laid STRAIGHT. The wires keep their own lanes the whole way
+    //     instead of crossing, they spread out only at the end(s) asked for, and how far apart they
+    //     spread is its own figure - see the drawings this was taken from, where the run is packed
+    //     and the ends open out wider.
+    {
+        auto makeRun = [](bool straight, const QString& spread, double lane) {
+            Entity e;
+            e.type = EntityType::TwistedPair;
+            e.a = {0, 0};
+            e.b = {200, 0};
+            e.meta.insert("twistWires", 4);
+            e.meta.insert("twistWidth", kTwistedPairWidth * 1.5);
+            e.meta.insert("twistPitch", kTwistedPairPitch);
+            e.meta.insert("twistEnds", kTwistedPairLead);
+            e.meta.insert("twistSpread", spread);
+            e.meta.insert("twistStraight", straight);
+            if (lane > 0.0) e.meta.insert("twistLane", lane);
+            return e;
+        };
+        // Each wire is two lines; its middle is between them. Kept in WIRE ORDER unless asked to be
+        // sorted: sorting answers where the wires are, in wire order it answers where each one is,
+        // and only the second can tell a bundle that crossed from one that did not - a crossing
+        // leaves the same set of places occupied by different wires.
+        auto midsAt = [](const Entity& e, double x, bool sorted = false) {
+            const auto lines = twistedPairStrands(e);
+            std::vector<double> mids;
+            for (size_t k = 0; k + 1 < lines.size(); k += 2) {
+                auto yAt = [x](const std::vector<Vec2>& run) {
+                    double best = 0.0, bestD = 1e300;
+                    for (const Vec2& p : run)
+                        if (std::abs(p.x - x) < bestD) { bestD = std::abs(p.x - x); best = p.y; }
+                    return best;
+                };
+                mids.push_back((yAt(lines[k]) + yAt(lines[k + 1])) / 2.0);
+            }
+            if (sorted) std::sort(mids.begin(), mids.end());
+            return mids;
+        };
+
+        const Entity straight = makeRun(true, QStringLiteral("both"), 0.0);
+        // NOTHING CROSSES. Down the middle of the run, every wire is where it was a moment before:
+        // that is the whole difference from the laid-up bundle, which is swinging from side to side.
+        const std::vector<double> at80 = midsAt(straight, 80.0);
+        const std::vector<double> at120 = midsAt(straight, 120.0);
+        bool held = at80.size() == 4 && at120.size() == 4;
+        for (size_t i = 0; held && i < at80.size(); ++i)
+            if (std::abs(at80[i] - at120[i]) > 1e-6) held = false;
+        check(held, "wires run: the wires keep their lanes down the run instead of crossing");
+        const Entity laid = makeRun(false, QStringLiteral("both"), 0.0);
+        const std::vector<double> laid80 = midsAt(laid, 80.0), laid120 = midsAt(laid, 120.0);
+        bool moved = false;
+        for (size_t i = 0; i < laid80.size() && i < laid120.size(); ++i)
+            if (std::abs(laid80[i] - laid120[i]) > 1e-6) moved = true;
+        check(moved, "wires run: and the laid-up bundle beside it still crosses, as it did");
+
+        // SPREAD OUT AT THE END, and wider than the run is packed.
+        const std::vector<double> ends = midsAt(straight, 0.0, /*sorted=*/true);
+        const std::vector<double> packed80 = midsAt(straight, 80.0, /*sorted=*/true);
+        const double packedPitch = packed80.size() > 1 ? packed80[1] - packed80[0] : 0.0;
+        const double endPitch = ends.size() > 1 ? ends[1] - ends[0] : 0.0;
+        check(packedPitch > 1e-6 && endPitch > packedPitch + 1e-6,
+              "wires run: the ends open out wider than the wires run packed");
+        // ...by exactly the spacing asked for, when one is asked for.
+        const Entity spaced = makeRun(true, QStringLiteral("both"), 9.0);
+        const std::vector<double> spacedEnds = midsAt(spaced, 0.0, /*sorted=*/true);
+        bool evenly = spacedEnds.size() == 4;
+        for (size_t i = 1; evenly && i < spacedEnds.size(); ++i)
+            if (!near(spacedEnds[i] - spacedEnds[i - 1], 9.0)) evenly = false;
+        check(evenly, "wires run: spread wires sit exactly the spacing asked for apart");
+
+        // AND ONLY AT THE END ASKED FOR. The far end stays packed.
+        const Entity leftOnly = makeRun(true, QStringLiteral("left"), 9.0);
+        const std::vector<double> leftEnd = midsAt(leftOnly, 0.0, /*sorted=*/true);
+        const std::vector<double> rightEnd = midsAt(leftOnly, 200.0, /*sorted=*/true);
+        check(leftEnd.size() == 4 && near(leftEnd[1] - leftEnd[0], 9.0),
+              "wires run: the left end spreads when Left is asked for");
+        check(rightEnd.size() == 4 && near(rightEnd[1] - rightEnd[0], packedPitch),
+              "wires run: and the right end is left packed");
+
+        // The tool writes the lay, and it survives the file round trip so the Properties panel can
+        // still change it afterwards.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.twistWires() = 4;
+        ed.setTwistLane(9.0);
+        ed.setTool(ToolId::WiresRun);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100, 0});
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({200, 0});
+        ed.onPointerPress({200, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);   // Enter finishes the run
+        check(d.entities().size() == 1 &&
+                  d.entities()[0].meta.value(QStringLiteral("twistStraight")).toBool() &&
+                  near(d.entities()[0].meta.value(QStringLiteral("twistLane")).toDouble(), 9.0) &&
+                  d.entities()[0].points.size() == 3,
+              "wires run: the tool places a straight run through the knees it was clicked along");
+        if (d.entities().size() == 1) {
+            const Entity back = Entity::fromJson(d.entities()[0].toJson());
+            check(back.meta.value(QStringLiteral("twistStraight")).toBool() &&
+                      twistedPairStrands(back).size() == 8,
+                  "wires run: saved and read back, it is still a straight run of four wires");
+            // The Properties panel turns one lay into the other on the object itself.
+            ed.selectById(d.entities()[0].id);
+            ed.setSelectionMetaBool(QStringLiteral("twistStraight"), false);
+            const std::vector<double> a = midsAt(d.entities()[0], 80.0);
+            const std::vector<double> b = midsAt(d.entities()[0], 95.0);
+            bool nowCrosses = false;
+            for (size_t i = 0; i < a.size() && i < b.size(); ++i)
+                if (std::abs(a[i] - b[i]) > 1e-6) nowCrosses = true;
+            check(nowCrosses, "wires run: Properties can lay the same run up without redrawing it");
+        }
+    }
+
     // --- A twisted HARNESS ROUTED through knees: both generalisations together.
     {
         Document d;
         Editor ed;
         ed.setDocument(&d);
         ed.twistWires() = 5;
+        ed.setTwistSpread(QStringLiteral("left"));
         ed.setTool(ToolId::TwistedHarnessRoute);
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({100, 0});
@@ -6030,12 +6386,34 @@ int run_editor_tests() {
                   "twisted harness route: it keeps its knees, the same as a routed pair");
             check(bundle->meta.value("twistWires").toInt() == 5,
                   "twisted harness route: and carries the wire count, the same as a straight harness");
+            check(bundle->meta.value(QStringLiteral("twistSpread")).toString() ==
+                      QLatin1String("left"),
+                  "twisted harness route: and carries the spread side too");
             const auto lines = twistedPairStrands(*bundle);
             check(lines.size() == 10, "twisted harness route: five wires, two edges each");
             bool endsUpTheLeg = true;
             for (const auto& line : lines)
                 if (!near(line.back().y, 80.0)) endsUpTheLeg = false;
             check(endsUpTheLeg, "twisted harness route: every wire finishes at the end of the last leg");
+            auto endCount = [bundle](bool atBack) {
+                const auto runs = twistedPairStrands(*bundle);
+                std::vector<Vec2> mids;
+                for (size_t k = 0; k + 1 < runs.size(); k += 2) {
+                    const Vec2 a = atBack ? runs[k].back() : runs[k].front();
+                    const Vec2 b = atBack ? runs[k + 1].back() : runs[k + 1].front();
+                    mids.push_back((a + b) * 0.5);
+                }
+                int count = 0;
+                for (const Vec2& p : mids) {
+                    bool seen = false;
+                    for (size_t k = 0; k < static_cast<size_t>(count); ++k)
+                        if (distance(p, mids[k]) < 1e-5) { seen = true; break; }
+                    if (!seen) ++count;
+                }
+                return count;
+            };
+            check(endCount(false) == 5 && endCount(true) < 5,
+                  "twisted harness route: Left fans the left end after the knee too");
         }
     }
 
@@ -7363,6 +7741,43 @@ int run_editor_tests() {
               "turn while placing: the turn is forgotten once it is dropped");
         check(!ed.placementPreviewActive(),
               "turn while placing: and there is nothing held any more");
+    }
+
+    // --- Esc lets go of a part being placed, without putting it on the sheet.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        Entity arm;
+        arm.type = EntityType::Line;
+        arm.a = {0, 0};
+        arm.b = {10, 0};
+        int started = 0;
+        int finished = -1;
+        QObject::connect(&ed, &Editor::pastePlacementStarted, &ed,
+                         [&started] { ++started; });
+        QObject::connect(&ed, &Editor::pastePlacementFinished, &ed,
+                         [&finished](bool placed) { finished = placed ? 1 : 0; });
+
+        ed.placeEntities({arm});
+        check(started == 1,
+              "cancel placing: starting the ghost tells the window to hand the keys to the sheet");
+        check(ed.placingPaste() && ed.placementPreviewActive(),
+              "cancel placing: the library part is under the cursor");
+        check(ed.onKey(Qt::Key_Escape, Qt::NoModifier),
+              "cancel placing: Esc is answered while the ghost is being handled");
+        check(!ed.placingPaste() && !ed.placementPreviewActive(),
+              "cancel placing: and there is no ghost left to place");
+        check(d.entities().empty(), "cancel placing: nothing was written to the drawing");
+        check(finished == 0, "cancel placing: whoever handed it over is told it was cancelled");
+
+        // The thing was let go of, not thrown out of the clipboard: the same part can still be picked
+        // up again rather than having to be found in the library a second time.
+        ed.paste();
+        check(ed.placingPaste(), "cancel placing: Ctrl+V can pick the same part up again");
+        ed.onPointerPress({20.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 1 && finished == 1,
+              "cancel placing: and placing it afterwards still works");
     }
 
     // How far an object REACHES ON THE SHEET, which is the question the canvas has to ask before it
@@ -9463,6 +9878,143 @@ int run_editor_tests() {
             check(bentRuns.size() >= 2 && bentRuns[0].size() > 2 && bentRuns[1].size() > 2,
                   "end sleeves: both cable rails follow the knee");
         }
+    }
+
+    // ---- Transition heatshrink: cross the parallel lines, fit it to the nearer end ---------------
+    {
+        auto line = [](const QString& id, const Vec2& a, const Vec2& b) {
+            Entity e;
+            e.id = id;
+            e.type = EntityType::Line;
+            e.a = a;
+            e.b = b;
+            return e;
+        };
+        Document d;
+        d.entities().push_back(line(QStringLiteral("T1"), {0.0, 4.0}, {80.0, 4.0}));
+        d.entities().push_back(line(QStringLiteral("T2"), {0.0, -4.0}, {80.0, -4.0}));
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setShrinkRouteMode(ShrinkRouteMode::Transition);
+        ed.setTool(ToolId::HeatshrinkRoute);
+        ed.onPointerPress({70.0, -12.0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.transitionBandStarted(), "transition: the first click starts the crossing line");
+        ed.onPointerMove({70.0, 12.0});
+        const Entity preview = ed.transitionPreview();
+        check(preview.points.size() == 2 && near(preview.points.front().x, 80.0),
+              "transition: the ghost shows the sleeve the second click will place");
+        ed.onPointerPress({70.0, 12.0}, Qt::LeftButton, Qt::NoModifier);
+        check(d.entities().size() == 3, "transition: crossing the pair adds one sleeve");
+        if (d.entities().size() == 3) {
+            const Entity& s = d.entities().back();
+            check(s.meta.value(QStringLiteral("shrunkEnds")).toBool() &&
+                      s.meta.value(QStringLiteral("shrinkTransition")).toBool(),
+                  "transition: it is still the editable sleeve object");
+            check(s.points.size() == 2 && near(s.points.front().x, 80.0) &&
+                      near(s.points.front().y, 0.0) && near(s.points.back().x, 104.0) &&
+                      near(s.points.back().y, 0.0),
+                  "transition: it is fitted to the nearer right-hand end");
+            // A LITTLE WIDER THAN THE RAILS: 8 apart, plus a millimetre of standoff each side. Drawn
+            // to the rails' own 8 the sleeve came out flush with them and read as a piece butted
+            // between the two lines rather than a sleeve over them.
+            check(near(s.meta.value(QStringLiteral("gap")).toDouble(), 10.0) &&
+                      near(s.meta.value(QStringLiteral("shrinkFaceStart")).toDouble(), 10.0) &&
+                      near(s.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(), 0.0),
+                  "transition: square across the end the two lines meet, and standing clear of them");
+            // And its LENGTH is still what it is fitted over: the standoff is clearance, not size.
+            check(near(s.points.back().x, 104.0),
+                  "transition: standing off the rails does not lengthen the part");
+            const auto runs = shrunkSleeveRunsOf(s);
+            check(runs.size() == 1 && runs.front().size() >= 4 &&
+                      distance(runs.front().front(), runs.front().back()) < 1e-6,
+                  "transition: the derived outline is one closed sleeve");
+            check(ed.tool() == ToolId::Select, "transition: placing it returns to Select");
+        }
+
+        // EVERY PARALLEL LINE THE MARK CROSSES IS INSIDE THE SLEEVE - a fan of five, not only a
+        // pair. The vertical line sharing the mark's end is unrelated linework, not another rail.
+        Document many;
+        for (double y : {8.0, 4.0, 0.0, -4.0, -8.0})
+            many.entities().push_back(line(QStringLiteral("M%1").arg(y), {0.0, y}, {80.0, y}));
+        many.entities().push_back(line(QStringLiteral("V"), {70.0, -8.0}, {70.0, -30.0}));
+        Editor manyEd;
+        manyEd.setDocument(&many);
+        noSnap(manyEd);
+        manyEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+        manyEd.setTool(ToolId::HeatshrinkRoute);
+        manyEd.onPointerPress({60.0, 15.0}, Qt::LeftButton, Qt::NoModifier);
+        manyEd.onPointerPress({70.0, -8.0}, Qt::LeftButton, Qt::NoModifier);
+        check(many.entities().size() == 7,
+              "transition: every parallel line the mark crosses is covered");
+        if (many.entities().size() == 7) {
+            const Entity& s = many.entities().back();
+            check(s.meta.value(QStringLiteral("shrinkTransition")).toBool() &&
+                      near(s.points.front().x, 80.0) && near(s.points.front().y, 0.0) &&
+                      near(s.points.back().x, 128.0),
+                  "transition: the sleeve spans the whole fan and reaches from its common end");
+            check(near(s.meta.value(QStringLiteral("gap")).toDouble(), 19.84),
+                  "transition: its width is the outer rails' spread plus the normal standoff");
+        }
+
+        // THE TWO RAILS OF ONE DOUBLE RUN COUNT AS THE TWO LINES TOO - the drawing's usual way of
+        // putting a cable down is a single object with two visible sides.
+        Document rails;
+        Entity dl;
+        dl.id = QStringLiteral("D1");
+        dl.type = EntityType::DoubleLine;
+        dl.a = {0.0, 0.0};
+        dl.b = {80.0, 0.0};
+        dl.meta.insert(QStringLiteral("gap"), 8.0);
+        rails.entities().push_back(dl);
+        Editor railEd;
+        railEd.setDocument(&rails);
+        noSnap(railEd);
+        railEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+        railEd.setTool(ToolId::HeatshrinkRoute);
+        railEd.onPointerPress({70.0, -12.0}, Qt::LeftButton, Qt::NoModifier);
+        railEd.onPointerPress({70.0, 12.0}, Qt::LeftButton, Qt::NoModifier);
+        check(rails.entities().size() == 2 &&
+                  rails.entities().back().meta.value(QStringLiteral("shrinkTransition")).toBool() &&
+                  near(rails.entities().back().points.front().x, 80.0),
+              "transition: it can be fitted across the two sides of a double line");
+
+        // UNEQUAL LENGTHS: the longest line is the datum, not whichever end happened to be nearer the
+        // crossing. Here the lower rail is shorter and ends at x=60; the upper one runs to x=100, so
+        // the transition face belongs at x=100.
+        Document staggered;
+        staggered.entities().push_back(line(QStringLiteral("L1"), {0.0, 4.0}, {100.0, 4.0}));
+        staggered.entities().push_back(line(QStringLiteral("L2"), {0.0, -4.0}, {60.0, -4.0}));
+        Editor longEd;
+        longEd.setDocument(&staggered);
+        noSnap(longEd);
+        longEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+        longEd.setTool(ToolId::HeatshrinkRoute);
+        longEd.onPointerPress({55.0, -12.0}, Qt::LeftButton, Qt::NoModifier);
+        longEd.onPointerPress({55.0, 12.0}, Qt::LeftButton, Qt::NoModifier);
+        check(staggered.entities().size() == 3, "transition: unequal parallel lines are accepted");
+        if (staggered.entities().size() == 3) {
+            const Entity& s = staggered.entities().back();
+            check(s.meta.value(QStringLiteral("transitionHost")).toString() == QStringLiteral("L1"),
+                  "transition: the longest crossed line is the host");
+            check(near(s.points.front().x, 100.0) && near(s.points.front().y, 0.0),
+                  "transition: and its end decides where the sleeve starts");
+        }
+
+        // NOT PARALLEL IS NOT A TRANSITION: the second click leaves the crossing line armed so the
+        // user can try again rather than dropping a sleeve on unrelated geometry.
+        Document skew;
+        skew.entities().push_back(line(QStringLiteral("S1"), {0.0, 0.0}, {100.0, 0.0}));
+        skew.entities().push_back(line(QStringLiteral("S2"), {50.0, -40.0}, {50.0, 40.0}));
+        Editor skewEd;
+        skewEd.setDocument(&skew);
+        noSnap(skewEd);
+        skewEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+        skewEd.setTool(ToolId::HeatshrinkRoute);
+        skewEd.onPointerPress({40.0, -10.0}, Qt::LeftButton, Qt::NoModifier);
+        skewEd.onPointerPress({60.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        check(skew.entities().size() == 2 && skewEd.transitionBandStarted(),
+              "transition: non-parallel lines are refused without adding an object");
     }
 
     // ---- A sleeve's joints are on its corners, where there is something to take hold of ----------

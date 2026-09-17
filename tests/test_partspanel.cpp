@@ -1204,6 +1204,26 @@ int run_partspanel_tests() {
             ed->onKey(Qt::Key_Escape, Qt::NoModifier);
         }
 
+        // Placing FROM THE LIBRARY WINDOW hides it so the sheet can take the click. Esc lets the ghost go,
+        // so the same library comes back instead of leaving the user with neither window nor placement.
+        PartsLibraryDialog* library = win.partsLibraryDialogForTest();
+        check(library != nullptr, "library place: the library window is there");
+        if (library && ed) {
+            library->selectPart(QStringLiteral("P-FAN"));
+            library->show();
+            QApplication::processEvents();
+            library->insertIntoDrawing(false);
+            QApplication::processEvents();
+            check(ed->placingPaste() && library->isHidden(),
+                  "library place: the part is on the cursor and the library is out of the way");
+            check(QApplication::focusWidget() == win.findChild<CanvasWidget*>(),
+                  "library place: and the sheet owns the keyboard while it is there");
+            ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+            QApplication::processEvents();
+            check(!ed->placingPaste() && !library->isHidden(),
+                  "library place: Esc puts the ghost down and brings the library back");
+        }
+
         // AND THE OUTPUT FACE BUTTON WORKS ON A LIBRARY PART. It was greyed for a part session on the
         // reasoning that a connector has its own pins to say where the wires go - true of one built from
         // its data, no help at all for one traced off a supplier's drawing, which is most of them. A part

@@ -44,6 +44,11 @@ enum class ToolId {
     TwistedRoute,  // ... and the same pair routed through as many knees as it needs
     TwistedHarness,// ... and a whole bundle of them laid up together, however many wires it fans out to
     TwistedHarnessRoute, // ... and that bundle routed through as many knees as IT needs
+    // A bundle of wires running STRAIGHT - side by side the whole way rather than laid up round one
+    // another, which is how most of a loom is drawn. The same object as the laid-up bundle and the
+    // same handles on it: what differs is the lay, so one can be made the other without being drawn
+    // again. Routed, because a run that does not bend is the rare one.
+    WiresRun,
     // Heatshrink over a stretch of run, ROUTED like the twisted tools rather than stamped: a sleeve
     // covers a length of harness, and where that length bends the sleeve bends with it. A fixed-length
     // placement cannot say a sleeve round a corner at all.
@@ -130,6 +135,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedRoute: // as many points as the route needs, like a polyline
     case ToolId::TwistedHarness: // two clicks, and however many wires the ribbon says
     case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
+    case ToolId::WiresRun:            // as many knees as the run needs, and however many wires
     case ToolId::HeatshrinkRoute: // as many knees as the stretch it covers needs
     case ToolId::VolumeArrow:     // two clicks: the tail, then the tip
     case ToolId::AxisAngle:       // two clicks: the axis, then where the sweep starts
@@ -180,8 +186,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::LengthBreak: return QStringLiteral("Length break");
     case ToolId::TwistedPair: return QStringLiteral("Twisted pair");
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
-    case ToolId::TwistedHarness: return QStringLiteral("Twisted harness");
-    case ToolId::TwistedHarnessRoute: return QStringLiteral("Twisted harness route");
+    case ToolId::TwistedHarness: return QStringLiteral("Wires harness");
+    case ToolId::TwistedHarnessRoute: return QStringLiteral("Wires harness route");
+    case ToolId::WiresRun: return QStringLiteral("Wires run");
     case ToolId::HeatshrinkRoute: return QStringLiteral("Heatshrink over the run");
     case ToolId::VolumeArrow: return QStringLiteral("Volume arrow");
     case ToolId::AxisAngle: return QStringLiteral("Axis angle");

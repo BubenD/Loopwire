@@ -322,6 +322,8 @@ private:
     void refreshSubpartButton();
     // Blank the form for a step that has not been described yet.
     void clearDescribedFields();
+    // The side the first station is on, from which way the harness is being drawn.
+    QString initialEndSideName() const;
     // The figures shut, and said to be shut, when the step in front of you is a station with parts -
     // see stepHasSubparts. Called from both refreshers, so however the window got into that state the
     // fields agree with it.

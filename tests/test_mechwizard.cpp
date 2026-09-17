@@ -1320,14 +1320,9 @@ void testDirectionTurnsTheFirstPartRoundInThePreview() {
     check(std::abs(right) > 1e-6, "direction: the connector body is drawn off to one side of its node");
 
     // NOW PRESS LEFT. The whole harness is built the other way, so the body swings to the other side of
-    // the node - its output face still pointing the way the harness goes.
+    // the node - its output face still pointing the way the harness goes. setCurrentGoesRight settles
+    // the handedness itself on the first step: that is the same path the buttons and the tests take.
     w.setCurrentGoesRight(false);
-    // setCurrentGoesRight alone is the widget state; the button ALSO settles the handedness, which is
-    // what the drawing reads. Done here the way the button does it.
-    MechBuildScript flipped = w.script();
-    flipped.leftToRight = false;
-    w.setScript(flipped);
-    w.setCurrentCategory(Cat::Connector);
     check(!w.script().leftToRight, "direction: the script is now built right to left");
 
     const double left = bodySideOfNode(w.previewScript());
@@ -1339,6 +1334,59 @@ void testDirectionTurnsTheFirstPartRoundInThePreview() {
     const MechCompiled c = compileMechScript(w.previewScript());
     check(near(c.def.draw.baseDirectionDeg, 180.0),
           "direction: which is baseDirectionDeg, the figure the whole tree is laid from");
+}
+
+// ---- The first station is named for the end it starts on ------------------------------------------
+//
+// The first thing described is still the connector, terminal or run that was picked - the end-side
+// words are its place on the sheet, not a step of their own. Drawing rightwards starts at the LEFT
+// end; drawing leftwards starts at the RIGHT end. And once parts have been described against it the
+// end side is the heading the subparts were fitted to, so its own figures shut like any other
+// station's.
+void testTheFirstStationReadsAsTheEndSideAndLocksAsAHeading() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    MechWizardDialog w(&ed, nullptr);
+
+    w.setCurrentCategory(Cat::Connector);
+    QStringList rows = w.shownSteps();
+    check(rows.size() == 1 && rows.front().contains(QStringLiteral("Left end side")),
+          "end side: the first step being described is the left end when the harness goes right");
+    w.typeName(QStringLiteral("P1"));
+    w.commitStep();
+    rows = w.shownSteps();
+    check(!rows.isEmpty() && rows.front().contains(QStringLiteral("Left end side")),
+          "end side: and keeps that name once the connector is committed");
+    check(rows.front().contains(QStringLiteral("Connector")) &&
+              rows.front().contains(QStringLiteral("P1")),
+          "end side: while still saying which connector it is");
+
+    // Give that end a part and it stops being a form - the part was described against these figures.
+    const QString endSide = w.script().steps.front().id;
+    w.setCurrentCategory(Cat::Backshell);
+    w.typeName(QStringLiteral("BS1"));
+    w.commitSubpart();
+    check(w.stepHasSubparts(endSide), "end side: it now has a part of its own");
+    w.editStep(endSide);
+    check(w.editedStepIsLocked(), "end side: so its right-hand figures are not editable");
+
+    // The other way round names the OTHER end.
+    MechWizardDialog leftwards(&ed, nullptr);
+    leftwards.setCurrentCategory(Cat::Connector);
+    leftwards.setCurrentGoesRight(false);
+    const QStringList pendingLeft = leftwards.shownSteps();
+    check(!pendingLeft.isEmpty() &&
+              pendingLeft.front().contains(QStringLiteral("Right end side")),
+          "end side: and the pending row changes with the direction before anything is committed");
+    leftwards.typeName(QStringLiteral("P2"));
+    leftwards.commitStep();
+    const QStringList leftRows = leftwards.shownSteps();
+    check(!leftRows.isEmpty() && leftRows.front().contains(QStringLiteral("Right end side")),
+          "end side: drawing leftwards begins on the right end");
+    check(leftRows.front().contains(QStringLiteral("Connector")) &&
+              leftRows.front().contains(QStringLiteral("P2")),
+          "end side: and still names the part that is really there");
 }
 
 // ---- A described step is a ghost until it is applied ---------------------------------------------
@@ -3633,6 +3681,7 @@ int run_mechwizard_tests() {
     testBreakMarksAndBalloons();
     testARunLeavesItsOwnHousing();
     testDirectionTurnsTheFirstPartRoundInThePreview();
+    testTheFirstStationReadsAsTheEndSideAndLocksAsAHeading();
     testBalloonCanBeWithheldPerStep();
     testChoosingALibraryPartSticks();
     testChangingCategoryDropsAnUnrelatedPart();

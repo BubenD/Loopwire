@@ -164,6 +164,8 @@ private:
     void rebuildParamForm();
     LibraryPart* current();
     void touched(); // a field changed: keep the list and the file in step
+    // Hand entities to the cursor and step aside until they land or Esc puts the ghost down.
+    void beginPlacement(std::vector<Entity> entities);
 
     Editor* editor_ = nullptr;
     std::function<void(QString, LibraryPartDrawing)> onEdit_;

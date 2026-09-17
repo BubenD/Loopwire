@@ -529,7 +529,6 @@ QWidget* MechWizardDialog::buildFieldsPanel() {
     // way the harness is going - which is what somebody is looking at the preview to check.
     const auto pickDirection = [this](bool right) {
         setCurrentGoesRight(right);
-        if (directionSetsHandedness()) script_.leftToRight = right;
         fieldChanged();
     };
     connect(leftBtn_, &QToolButton::clicked, this, [pickDirection] { pickDirection(false); });
@@ -814,9 +813,16 @@ void MechWizardDialog::setCurrentCategory(Category c) {
 }
 
 void MechWizardDialog::setCurrentGoesRight(bool right) {
+    const bool setsHandedness = directionSetsHandedness();
     goRight_ = right;
     if (leftBtn_) leftBtn_->setChecked(!right);
     if (rightBtn_) rightBtn_->setChecked(right);
+    if (setsHandedness && script_.leftToRight != right) {
+        script_.leftToRight = right;
+        // The end side is named from this answer, so the row has to change at the same moment as the
+        // direction does rather than waiting until the step is committed.
+        if (stepList_) refreshStepList();
+    }
 }
 
 bool MechWizardDialog::inheritedGoesRight() const {
@@ -1859,6 +1865,13 @@ void MechWizardDialog::reorderFromList() {
     refreshIssues();
 }
 
+QString MechWizardDialog::initialEndSideName() const {
+    // The first station is the end the harness starts at, which is the OPPOSITE side from the way it
+    // is drawn: building rightwards begins on the left end, and building leftwards begins on the right.
+    return script_.leftToRight ? QStringLiteral("Left end side")
+                               : QStringLiteral("Right end side");
+}
+
 void MechWizardDialog::refreshStepList() {
     // Filling the list must not be read as the user picking a row. SAVED AND RESTORED rather than
     // set-then-cleared, because refreshFieldsForCategory calls this to keep the "being described" row
@@ -1885,6 +1898,7 @@ void MechWizardDialog::refreshStepList() {
 
     stepList_->clear();
     QHash<QString, QTreeWidgetItem*> itemOfStep;
+    const MechStep* initial = script_.firstStep();
     int n = 0;
     for (const MechStep& s : script_.steps) {
         ++n;
@@ -1896,6 +1910,11 @@ void MechWizardDialog::refreshStepList() {
         // wire list. An end with two housings on it names them all, because that end is both of them.
         QString what = partKindName(s.kind);
         if (!s.name.isEmpty()) what += QStringLiteral("  %1").arg(s.name);
+        // The first station is also the harness's near end: rightwards begins at the left end,
+        // leftwards at the right end. Said beside the part, not instead of it - the row still has
+        // to say what was fitted there.
+        if (&s == initial)
+            what = QStringLiteral("%1 — %2").arg(initialEndSideName(), what);
         if (mechStepRole(s.kind) == MechStepRole::Run && s.lengthMm > 0.0)
             what += QStringLiteral(", %1 mm").arg(s.lengthMm, 0, 'f', 0);
         if (s.turnDeg != 0.0) what += QStringLiteral("  (turns %1°)").arg(s.turnDeg, 0, 'f', 0);
@@ -1981,12 +2000,17 @@ void MechWizardDialog::refreshStepList() {
         // otherwise a part of whatever the anchor is a part of - see describingChild_.
         const bool willBeSubpart = at && (describingChild_ || at->isSubpart);
         const QString willHang = describingChild_ ? anchor_ : (at ? at->parentStep : QString());
+        // The same near-end wording belongs on the first step before it is committed, so changing the
+        // drawn direction changes what the row is called while it is still being described.
+        const QString pendingWhat = script_.steps.empty()
+                                        ? QStringLiteral("%1 — %2").arg(initialEndSideName(),
+                                                                       categoryName(category_))
+                                        : categoryName(category_);
         pendingRow->setText(0, willBeSubpart
-                                   ? QStringLiteral("%1 — being described").arg(
-                                         categoryName(category_))
+                                   ? QStringLiteral("%1 — being described").arg(pendingWhat)
                                    : QStringLiteral("%1  %2 — being described")
                                          .arg(n + 1)
-                                         .arg(categoryName(category_)));
+                                         .arg(pendingWhat));
         QTreeWidgetItem* under = willBeSubpart ? itemOfStep.value(willHang, nullptr) : nullptr;
         if (under) under->addChild(pendingRow);
         else stepList_->addTopLevelItem(pendingRow);

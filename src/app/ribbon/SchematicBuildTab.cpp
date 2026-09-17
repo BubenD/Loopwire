@@ -568,6 +568,7 @@ void MainWindow::buildSchematicBuildTab() {
         tg->addWidget(makeVoltageDropButton(tw), 0, 0);
         tg->addWidget(makeBundleDiameterButton(tw), 0, 1);
         tg->addWidget(makeThermalButton(tw), 0, 2);
+        tg->addWidget(makeCalculatorButton(tw), 0, 3);
         addGroup(lay, QStringLiteral("Tools"), tw);
     }
     lay->addStretch(1);

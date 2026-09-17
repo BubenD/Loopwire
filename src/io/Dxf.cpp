@@ -4,6 +4,7 @@
 #include <QRegularExpression>
 
 #include "geometry/Geometry.h"
+#include "harness/Harness.h"  // a twisted bundle exports the lines it is actually drawn with
 #include "model/Block.h"   // stampEntityGroup: a callout is one thing, not three
 #include "model/Document.h"
 
@@ -260,6 +261,12 @@ QString toDxf(const Document& doc) {
         case EntityType::Wire:
         case EntityType::Spline:
             L << dxfPolyline(e, doc, e.points, false);
+            break;
+        case EntityType::TwistedPair:
+            // Export what is drawn: every wire's two edges, fan-out and weave included. The object
+            // itself is parametric (route + count + spread), which DXF has no record type for.
+            for (const auto& strand : twistedPairStrands(e))
+                L << dxfPolyline(e, doc, strand, false);
             break;
         case EntityType::Polyline: {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);

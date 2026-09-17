@@ -64,6 +64,7 @@ class MechanicalBuilderDialog;
 class MechanicalValidationDialog;
 class BundleDiameterDialog;
 class ThermalModelDialog;
+class ScientificCalculatorDialog;
 class TemplateDialog;
 class BlockDialog;
 class OdaConverter;
@@ -267,9 +268,10 @@ private:
     void restyleViewPanelIcons();   // the View tab's panel glyphs, drawn again in the current scheme
     QIcon schemeIcon() const;       // the sun/moon glyph for the scheme button, in the scheme now set
     QToolButton* schemeButton_ = nullptr;
-    // The two panels the View tab adds: the parts of the library, and the blocks, as lists to place from.
+    // The extra panels the View tab adds: the parts and blocks to place from, and the calculator.
     QDockWidget* makePartsPanel();
     QDockWidget* makeBlocksPanel();
+    QDockWidget* makeCalculatorPanel();
     void refreshPartsPanel();
     // Which of the connected libraries the parts panel draws from. Remembered by path, so connecting
     // another library does not disturb what is in view.
@@ -529,6 +531,8 @@ private:
     // Likewise the voltage-drop button: the question gets asked from the schematic side and checked
     // again on the mechanical side, so both tabs carry it.
     QToolButton* makeVoltageDropButton(QWidget* parent);
+    // The calculator sits in the same shared Tools group on both harness tabs.
+    QToolButton* makeCalculatorButton(QWidget* parent);
     HarnessBuilderDialog* harnessDlg_ = nullptr;
     PartsLibraryDialog* libraryDlg_ = nullptr;
     QWidget* captureTab_ = nullptr;
@@ -637,6 +641,7 @@ private:
     // checked on the other.
     void showBundleDiameter();
     void showThermalModel();
+    void showCalculator();
     // The template module: what a new drawing starts as.
     void showTemplateDialog();
     void armMechModelAnchor(bool near);
@@ -825,6 +830,9 @@ private:
     // armed, like everything else on this tab (see updateMechanicalRibbonGroups).
     QWidget* twistOptionsGroup_ = nullptr;
     QSpinBox* twistWiresSpin_ = nullptr;
+    QComboBox* twistSpreadCombo_ = nullptr;
+    QDoubleSpinBox* twistLaneSpin_ = nullptr;   // spread pitch, straight runs only
+    QLabel* twistLaneLabel_ = nullptr;
     // The Harness-mechanical groups, so placing a break can take the tab over the way the twist tool
     // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.
@@ -883,6 +891,7 @@ private:
     QDockWidget* bomDock_ = nullptr;
     QDockWidget* partsDock_ = nullptr;
     QDockWidget* blocksDock_ = nullptr;
+    QDockWidget* calculatorDock_ = nullptr;
     QList<QPair<QString, QToolButton*>> viewPanelButtons_;
     // The shelf, as a table: the part, and a column each for the mechanical drawing, the schematic symbol
     // and the fanout. A tree rather than a list because several libraries in view are shown under their own

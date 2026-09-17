@@ -123,6 +123,8 @@ add_library(edraw_core STATIC
     src/app/MechModelsDialog.cpp
     src/app/OutputDialog.h
     src/app/OutputDialog.cpp
+    src/app/ScientificCalculatorDialog.h
+    src/app/ScientificCalculatorDialog.cpp
     src/app/MechWizardDialog.h
     src/app/MechWizardDialog.cpp
     src/app/OdaSetupDialog.h

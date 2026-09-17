@@ -156,10 +156,21 @@ inline constexpr double kTwistedPairPitch = 18.0; // the length of one whole cro
 inline constexpr double kTwistedPairLead = 6.0;   // the straight run at each end
 inline constexpr double kTwistedPairPart = 0.085; // half the parting between wires, in widths
 inline constexpr int kTwistedMaxWires = 12;       // as many as one bundle is drawn with
+// A WIRE OF A STRAIGHT RUN, and how far apart they are packed. A laid-up bundle is a cable of a
+// certain thickness that the wires share out between them - so more wires means thinner ones. A run of
+// wires lying side by side is the other way about: the wire is the size a wire is, and six of them are
+// wider than three. These are the figures the drawings are drawn at - a wire 2 across, on a 3 pitch.
+inline constexpr double kWiresRunWire = 2.0;
+inline constexpr double kWiresRunPitch = 3.0;
 // The four lines the pair is drawn with: each wire's two edges, each running the whole length. What a
 // click picks, what a zone catches and how far it reaches all come from these, so none of them can
 // drift from what is drawn.
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
+// Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -
+// including an older drawing with no value - reads as "both", which is what those drawings were made
+// with. Left and right mean the sheet ends, not the click order: a run drawn right-to-left still fans
+// on the left when asked to.
+QString twistedPairSpread(const Entity& pair);
 
 // The bundle as it is DRAWN: one stretch per half crossing, with that stretch's wires ordered BACK TO
 // FRONT. It reads as laid up only if a wire nearer the front hides the ones behind it - drawn as lines

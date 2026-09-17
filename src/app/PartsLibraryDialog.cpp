@@ -42,6 +42,7 @@
 #include <QHeaderView>
 #include <QListWidget>
 #include <QMenu>
+#include <QObject>
 #include <QProcess>
 #include <QCloseEvent>
 #include <QSettings>
@@ -2268,6 +2269,28 @@ void PartsLibraryDialog::captureFromSelection(bool mechanical) {
                                               : QStringLiteral("schematic")));
 }
 
+void PartsLibraryDialog::beginPlacement(std::vector<Entity> entities) {
+    if (!editor_) return;
+    editor_->placeEntities(std::move(entities));
+    if (!editor_->placingPaste()) return;   // nothing was handed over after all
+
+    // The library steps aside only while the ghost is being handled. A click leaves it hidden; Esc is
+    // the way out, so it brings the same part back rather than leaving the library closed behind it.
+    auto* placing = new QObject(this);
+    connect(editor_, &Editor::pastePlacementFinished, placing,
+            [this, placing](bool placed) {
+        placing->deleteLater();
+        if (placed) return;
+        if (summary_)
+            summary_->setText(QStringLiteral("Placement cancelled — nothing was put on the sheet."));
+        show();
+        raise();
+        activateWindow();
+    });
+
+    hide();
+}
+
 void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     LibraryPart* p = current();
     // The contact the part is used with, whichever drawing is being placed: it is a property of the
@@ -2289,7 +2312,7 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     // reads, it finds the same answer, and a block copied on the sheet carries its contact with it.
     if (!contactId.isEmpty())
         for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
-    editor_->placeEntities(std::move(block));
+    beginPlacement(std::move(block));
     const LibraryPart* contact = contactId.isEmpty() ? nullptr : catalog_.byId(contactId);
     if (summary_)
         summary_->setText(contact ? QStringLiteral("Click the sheet to place %1, with %2 — %3 of them on "
@@ -2297,8 +2320,6 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
                                         .arg(p->title(), contact->title())
                                         .arg(p->wayCount())
                                   : QStringLiteral("Click the sheet to place %1").arg(p->title()));
-    // The click that places it happens on the canvas, so the library gets out of the way.
-    hide();
     saveLibrary();
 }
 
@@ -2431,7 +2452,7 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
     const QString contactId = p->contactId();
     if (!contactId.isEmpty())
         for (Entity& e : block) e.meta.insert(QLatin1String(kContactPartKey), contactId);
-    editor_->placeEntities(std::move(block));
+    beginPlacement(std::move(block));
     // Mirroring turns the side it shows into the other one, and saying so is the whole point of the button.
     const QString shows = p->fanoutSide() == QStringLiteral("front")
                               ? (mirrored ? QStringLiteral("back") : QStringLiteral("front"))
@@ -2440,7 +2461,6 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
         summary_->setText(QStringLiteral("Click the sheet to place the fanout of %1 — the %2 of the "
                                          "connector")
                               .arg(p->title(), shows));
-    hide();
     saveLibrary();
 }
 
@@ -3040,7 +3060,8 @@ void PartsLibraryDialog::placeTicked() {
     const QString contactId = p->contactId();
     if (!contactId.isEmpty())
         for (Entity& e : all) e.meta.insert(QLatin1String(kContactPartKey), contactId);
-    if (editor_) editor_->placeEntities(all);
+    if (editor_) beginPlacement(std::move(all));
+    else hide();
     if (summary_)
         summary_->setText(
             QStringLiteral("Click the sheet to place %1%2")
@@ -3048,7 +3069,6 @@ void PartsLibraryDialog::placeTicked() {
                 .arg(missing.isEmpty() ? QString()
                                        : QStringLiteral("  (nothing drawn for %1)")
                                              .arg(missing.join(QStringLiteral(", ")))));
-    hide();   // the sheet is wanted now
 }
 
 void PartsLibraryDialog::clearDrawing(bool mechanical) {

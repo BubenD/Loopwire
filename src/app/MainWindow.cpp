@@ -22,6 +22,7 @@
 #include "app/MechanicalBuilderDialog.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/TemplateDialog.h"
+#include "app/ScientificCalculatorDialog.h"
 #include "model/Block.h"
 #include "model/Picture.h"
 #include "app/ThermalModelDialog.h"
@@ -2143,6 +2144,21 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         statusBar()->showMessage(m);
         // Option toggles (arc/fillet/…) emit messages — keep the hint in sync.
         if (cmdHintLabel_) cmdHintLabel_->setText(editor_->drawCommandHint());
+    });
+    // Something is now on the cursor waiting for its click. It is the sheet that answers Esc, Space
+    // and X/Y, so placement takes keyboard focus away from whichever ribbon button or dialog started it.
+    connect(editor_, &Editor::pastePlacementStarted, this, [this] {
+        if (!canvas_) return;
+        // The library window hides itself after handing the part over. Put the focus on the canvas on
+        // the next event turn, after that hide has settled, or Esc can still belong to a gone window.
+        QTimer::singleShot(0, canvas_, [this] {
+            if (!canvas_ || !editor_ || !editor_->placingPaste()) return;
+            if (QWidget* window = canvas_->window()) {
+                window->raise();
+                window->activateWindow();
+            }
+            canvas_->setFocus(Qt::OtherFocusReason);
+        });
     });
     connect(editor_, &Editor::changed, this, [this] {
         canvas_->update();
@@ -4403,12 +4419,28 @@ void MainWindow::syncBreakOptions() {
     if (!editor_) return;
     // Each function on this tab shows its own settings and only while it is armed.
     if (twistOptionsGroup_) {
+        const bool straightRun = editor_->tool() == ToolId::WiresRun;
         const bool twisting = editor_->tool() == ToolId::TwistedHarness ||
-                              editor_->tool() == ToolId::TwistedHarnessRoute;
+                              editor_->tool() == ToolId::TwistedHarnessRoute || straightRun;
         twistOptionsGroup_->setVisible(twisting);
         if (twisting && twistWiresSpin_) {
             QSignalBlocker b(twistWiresSpin_);
             twistWiresSpin_->setValue(editor_->twistWires());
+        }
+        if (twisting && twistSpreadCombo_) {
+            QSignalBlocker b(twistSpreadCombo_);
+            const int at = twistSpreadCombo_->findData(editor_->twistSpread());
+            twistSpreadCombo_->setCurrentIndex(at >= 0 ? at : 2);
+        }
+        // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
+        // so the row would be a setting that does nothing while its tool is armed.
+        if (twistLaneSpin_ && twistLaneLabel_) {
+            twistLaneSpin_->setVisible(straightRun);
+            twistLaneLabel_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistLaneSpin_);
+                twistLaneSpin_->setValue(editor_->twistLane());
+            }
         }
     }
     if (!breakOptionsGroup_) return;
@@ -6341,6 +6373,7 @@ void MainWindow::buildPanels() {
     // again - is a lot of work for a thing done twenty times an hour.
     partsDock_ = makePartsPanel();
     blocksDock_ = makeBlocksPanel();
+    calculatorDock_ = makeCalculatorPanel();
 
     // Pin / auto-hide acts on a whole side, and each side is independent: the left column (Properties)
     // and the right column (the bill of materials above the layers) each carry ONE pin - on the panel at
@@ -8953,6 +8986,52 @@ void MainWindow::refreshProperties() {
                [edit](double v) { edit([v](ConnectorSpec& s) { s.pnSize = std::max(1.0, v); }); });
     }
 
+    // A selected harness run is parametric: the route is its points, and these values are what the
+    // wires are laid out from. Changing either re-lays the same object rather than asking for it to be
+    // drawn again.
+    if (e && e->type == EntityType::TwistedPair) {
+        addHeader(QStringLiteral("Harness run"));
+        addNum(QStringLiteral("Wires"), mv(QStringLiteral("twistWires")).toDouble(2.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(
+                       QStringLiteral("twistWires"),
+                       std::clamp(static_cast<int>(std::lround(v)), 2, kTwistedMaxWires));
+               });
+        const QString spread = twistedPairSpread(*e);
+        const QString shown = spread == QLatin1String("left") ? QStringLiteral("Left")
+                              : spread == QLatin1String("right") ? QStringLiteral("Right")
+                                                                  : QStringLiteral("Both");
+        const QString current = mv(QStringLiteral("twistSpread")).isVaries()
+                                    ? QStringLiteral("#Value")
+                                    : shown;
+        addCombo(QStringLiteral("Spread wires"),
+                 {QStringLiteral("Left"), QStringLiteral("Right"), QStringLiteral("Both")}, current,
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMeta(QStringLiteral("twistSpread"), t.toLower());
+                 });
+        // WHICH LAY, and it can be changed here. The two are one object - the same route, the same
+        // count, the same ends - so a run drawn straight that turns out to be twisted after all is a
+        // value on it rather than a thing to delete and draw again.
+        const bool straight = e->meta.value(QStringLiteral("twistStraight")).toBool();
+        addCombo(QStringLiteral("Lay"),
+                 {QStringLiteral("Straight"), QStringLiteral("Laid up")},
+                 mv(QStringLiteral("twistStraight")).isVaries()
+                     ? QStringLiteral("#Value")
+                     : (straight ? QStringLiteral("Straight") : QStringLiteral("Laid up")),
+                 false, [this](const QString& t) {
+                     editor_->setSelectionMetaBool(QStringLiteral("twistStraight"),
+                                                   t == QLatin1String("Straight"));
+                 });
+        // And the spacing it spreads them out at, which only a straight run lays out from.
+        if (straight) {
+            addNum(QStringLiteral("Spread spacing"),
+                   mv(QStringLiteral("twistLane")).toDouble(0.0), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("twistLane"),
+                                                       std::max(0.0, v));
+                   });
+        }
+    }
+
     // A selected wire shows its harness attributes (number, gauge, colour, insulation,
     // conductor type/strand) plus its endpoints' connections.
     if (e && e->type == EntityType::Wire) {
@@ -10209,6 +10288,8 @@ void MainWindow::buildCommands() {
         {{"voltagedrop", "vdrop", "vd"}, "Harness",
          "Voltage drop: what arrives at the load, wire by wire",
          [this] { showVoltageDropDialog(); }},
+        {{"calculator", "calc", "scientific"}, "Tools",
+         "Scientific calculator", [this] { showCalculator(); }},
         {{"alignrouting", "align", "ar2"}, "Harness",
          "Align routing to a reference connector", [this] { editor_->beginAlignRouting(); }},
         {{"validate", "drc", "check"}, "Harness",
@@ -10352,7 +10433,8 @@ std::vector<KeyRow> keyboardReference() {
     std::vector<KeyRow> out;
     out.push_back(head("Getting out of things"));
     out.push_back(lit("Esc", "Cancel what is going on and drop the selection. A dragged joint goes "
-                             "back; a harness waiting to be placed returns to the builder"));
+                             "back; a part being placed is let go of; a harness returns to the "
+                             "builder"));
     out.push_back(lit("Enter", "Finish the object being drawn. Places a pinned preview, closes an "
                                "array, ends a Quick Select pick"));
     out.push_back(lit("Space", "With nothing going on: run the last tool again"));
@@ -11714,6 +11796,37 @@ QToolButton* MainWindow::makeVoltageDropButton(QWidget* parent) {
     return btn;
 }
 
+QToolButton* MainWindow::makeCalculatorButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Scientific\ncalculator"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "A scientific calculator - arithmetic, powers, roots, logs and trigonometry. It opens as a "
+        "side panel and can be moved, docked or floated like the other panels"));
+    {
+        // The calculator as a little body, a display and two rows of keys.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setBrush(Qt::NoBrush);
+        ip.drawRoundedRect(6, 3, 16, 22, 2, 2);
+        ip.drawRect(8, 6, 12, 4);
+        ip.setPen(QPen(QColor("#7ee0a0"), 1.2));
+        for (int y = 14; y <= 21; y += 4)
+            for (int x = 9; x <= 19; x += 5) ip.drawPoint(x, y);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] { showCalculator(); });
+    return btn;
+}
+
 void MainWindow::showPartsLibrary() {
     // Modeless and kept alive: a part is described while the sheet stays usable, which is what
     // lets a symbol be drawn, captured, and dropped back without closing anything.
@@ -12940,6 +13053,14 @@ void MainWindow::showThermalModel() {
     thermalDlg_->show();
     thermalDlg_->raise();
     thermalDlg_->activateWindow();
+}
+
+void MainWindow::showCalculator() {
+    if (!calculatorDock_) return;
+    calculatorDock_->setVisible(true);
+    calculatorDock_->raise();
+    if (auto* calc = calculatorDock_->findChild<ScientificCalculatorDialog*>())
+        calc->focusExpression();
 }
 
 void MainWindow::showMechanicalBuilder() {
@@ -14633,6 +14754,21 @@ QDockWidget* MainWindow::makeBlocksPanel() {
     addDockWidget(Qt::LeftDockWidgetArea, dock);
     dock->hide();
     refreshBlocksPanel();
+    return dock;
+}
+
+QDockWidget* MainWindow::makeCalculatorPanel() {
+    auto* dock = new AutoHideDock(QStringLiteral("CALCULATOR"), this);
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                      QDockWidget::DockWidgetClosable);
+    auto* calc = new ScientificCalculatorDialog(dock);
+    dock->setManaged(new DockTitleBar(dock, QStringLiteral("CALCULATOR")), calc);
+    // Off to begin with: it is a tool to reach for, not another panel taking room from a drawing
+    // that may not need it. The Tools button and the View tab bring it back.
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    if (layersDock_) splitDockWidget(layersDock_, dock, Qt::Vertical);
+    dock->hide();
     return dock;
 }
 
