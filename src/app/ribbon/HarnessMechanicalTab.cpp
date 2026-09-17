@@ -346,6 +346,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 auto* og = new QGridLayout(optW);
                 og->setContentsMargins(6, 0, 0, 0);
                 og->setSpacing(2);
+                // TWO COLUMNS OF PAIRS, not four rows. A ribbon group is about two rows tall, and
+                // four rows of label-and-box in one were drawn on top of each other - the four
+                // labels legible down the left and the four boxes piled up in one place. Laid out
+                // as two columns the whole set reads at a glance and every box can be got at.
+                og->setColumnMinimumWidth(2, 10);   // a gap between the two columns of settings
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -358,7 +363,10 @@ void MainWindow::buildHarnessMechanicalTab() {
                 og->addWidget(l, 0, 0);
                 og->addWidget(twistWiresSpin_, 0, 1);
                 connect(twistWiresSpin_, &QSpinBox::valueChanged, this, [this](int v) {
-                    editor_->twistWires() = v;
+                    editor_->setTwistWires(v);
+                    // Converge-to can never be more than there are, and past three the bundle is
+                    // drawn as fewer lines - both decided in the editor, shown here.
+                    syncBreakOptions();
                     canvas_->update();   // a pinned bundle re-draws with the new count
                     statusBar()->showMessage(
                         QStringLiteral("Wires harness: %1 wires").arg(v), 2000);
@@ -402,8 +410,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistLaneSpin_->setToolTip(QStringLiteral(
                     "How far apart the wires sit where they are spread out, centre to centre. Auto "
                     "is half again the pitch they run at packed in the run."));
-                og->addWidget(twistLaneLabel_, 2, 0);
-                og->addWidget(twistLaneSpin_, 2, 1);
+                og->addWidget(twistLaneLabel_, 0, 3);
+                og->addWidget(twistLaneSpin_, 0, 4);
                 connect(twistLaneSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistLane(v);
                     canvas_->update();   // a pinned run re-draws at the new spacing
@@ -427,8 +435,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "How many wires carry on through the run once the spread ones have converged. "
                     "The rest are drawn running into it and stopping, which is how a bundle of many "
                     "wires is drawn as a run of few. All keeps every wire."));
-                og->addWidget(twistTrunkLabel_, 3, 0);
-                og->addWidget(twistTrunkSpin_, 3, 1);
+                og->addWidget(twistTrunkLabel_, 1, 3);
+                og->addWidget(twistTrunkSpin_, 1, 4);
                 connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistTrunk(v);
                     canvas_->update();   // a pinned run re-draws with the new bundle

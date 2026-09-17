@@ -120,6 +120,10 @@ public:
 
     // How many wires a twisted bundle is drawn with (2..12), set on the ribbon while the tool is armed.
     int& twistWires() { return twistWires_; }
+    // HOW MANY WIRES THE FAN HAS. A setter rather than the bare reference above, because two other
+    // settings depend on it: how many carry on through the run can never be more than there are, and
+    // past three wires a bundle is drawn as fewer lines than it has. See the definition.
+    void setTwistWires(int wires);
     // Which end(s) it spreads them out at: "left", "right" or "both".
     QString twistSpread() const { return twistSpread_; }
     void setTwistSpread(const QString& spread);

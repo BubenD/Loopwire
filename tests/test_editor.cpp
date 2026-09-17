@@ -10269,6 +10269,50 @@ int run_editor_tests() {
               "placed part: and moves all of it, so the part keeps its shape");
     }
 
+    // ---- A wires run converges to fewer lines, and never to more than it has ----------------------
+    {
+        // Three lines say "a bundle"; eleven say nothing three do not, while being eleven things to
+        // keep tidy. So past three wires the run is drawn converged - and converging to MORE wires
+        // than the fan has cannot draw anything, so it is not offered.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+
+        // Under three, nothing converges: every wire carries on, which is what "All" means.
+        ed.setTwistWires(3);
+        std::printf("  converge: 3 wires -> converge-to %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() == 0, "converge: three wires or fewer keep every line");
+
+        // PAST THREE it converges to three, once, while the setting is still untouched.
+        ed.setTwistWires(8);
+        std::printf("  converge: 8 wires -> converge-to %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() == 3, "converge: more than three wires are drawn as three lines");
+
+        // SOMEBODY WHO SAYS OTHERWISE IS NOT OVERRULED. Asking for two, then raising the count
+        // again, leaves it at two: it has been decided.
+        ed.setTwistTrunk(2);
+        ed.setTwistWires(11);
+        std::printf("  converge: asked for 2, then 11 wires -> converge-to %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() == 2, "converge: a count somebody chose is left alone");
+
+        // NEVER MORE THAN THE FAN HAS. Asking for more draws nothing extra - there is nothing extra
+        // to draw - so it is held at the number of wires rather than accepted and ignored.
+        ed.setTwistTrunk(50);
+        std::printf("  converge: asked for 50 of 11 -> %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() == 11, "converge: it cannot be set above the number of wires");
+
+        // AND TAKING WIRES AWAY TAKES THE CONVERGENCE WITH THEM, rather than leaving a number that
+        // is now bigger than the fan.
+        ed.setTwistWires(4);
+        std::printf("  converge: down to 4 wires -> %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() <= 4, "converge: lowering the wire count brings it down too");
+
+        // The wire count itself stays inside what a bundle can be.
+        ed.setTwistWires(1);
+        check(ed.twistWires() == 2, "converge: two wires is the fewest a bundle can be");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,

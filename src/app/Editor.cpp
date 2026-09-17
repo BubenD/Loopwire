@@ -15659,8 +15659,29 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
 }
 
+// HOW MANY WIRES THE FAN HAS, and the two things that follow from it.
+//
+// CONVERGE-TO CAN NEVER BE MORE THAN THERE ARE. Setting it higher did not draw more wires - there
+// are not more to draw - so the number sat on the ribbon meaning nothing, which is worse than not
+// being offered: it reads as a setting that has been made and is being ignored.
+//
+// AND PAST THREE WIRES A BUNDLE IS DRAWN AS FEWER LINES THAN IT HAS. That is how one is drawn by
+// hand: three lines say "a bundle" and eleven say nothing that three do not, while being eleven
+// things to keep tidy. So raising the count past three converges it to three - once, while the
+// setting is still untouched. Somebody who then asks for all of them, or for two, has said so, and
+// is not overruled the next time the count changes.
+void Editor::setTwistWires(int wires) {
+    const int next = std::clamp(wires, 2, kTwistedMaxWires);
+    const bool grew = next > twistWires_;
+    twistWires_ = next;
+    if (twistTrunk_ > next) twistTrunk_ = next;
+    if (grew && next > 3 && twistTrunk_ == 0) twistTrunk_ = 3;
+    emit overlayChanged();
+}
+
 void Editor::setTwistTrunk(int wires) {
-    const int next = std::max(0, wires);
+    // Never more than the fan has. 0 is "all of them", which is always sayable.
+    const int next = std::clamp(std::max(0, wires), 0, std::max(2, twistWires_));
     if (twistTrunk_ == next) return;
     twistTrunk_ = next;
     emit overlayChanged();   // a pinned run re-draws with the new bundle

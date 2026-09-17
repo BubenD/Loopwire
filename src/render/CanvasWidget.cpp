@@ -1567,9 +1567,20 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     // Tab while a twisted bundle is being drawn: pin it, so the number of wires and the rest can be
     // set on the ribbon with the real thing on screen. Checked before the dynamic-input fields, because
     // for these tools pinning is what Tab is for. Nothing to pin -> falls through as usual.
-    if (editor_ && next && Editor::isTwistedTool(editor_->tool())) {
-        editor_->freezeTwistedPreview();
-        if (editor_->twistedFrozen()) return true;
+    if (editor_ && Editor::isTwistedTool(editor_->tool())) {
+        if (next) editor_->freezeTwistedPreview();
+        // SWALLOWED EITHER WAY, pinned or not.
+        //
+        // It used to fall through to focus traversal when there was nothing to pin - before the
+        // first click, or on Backtab - and traversal moves the keyboard off the canvas onto the
+        // ribbon. The drawing then looked frozen, and in every way that matters it was: the run was
+        // half drawn and neither Enter nor Esc reached it any more, so it could not be finished and
+        // could not be abandoned. The mouse still moved the preview, which made it worse - the
+        // thing plainly alive and taking no notice.
+        //
+        // While one of these tools is armed, Tab belongs to the tool. There is nowhere else on the
+        // ribbon a person wants it to go mid-run.
+        return true;
     }
     // Tab while placing a break mark: pin the preview so the ribbon's numbers can be tried on it.
     if (editor_ && next && editor_->tool() == ToolId::LengthBreak) {

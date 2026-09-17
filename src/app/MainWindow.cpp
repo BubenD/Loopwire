@@ -4447,6 +4447,10 @@ void MainWindow::syncBreakOptions() {
             twistTrunkLabel_->setVisible(straightRun);
             if (straightRun) {
                 QSignalBlocker b(twistTrunkSpin_);
+                // NEVER MORE THAN THE FAN HAS. A number above the wire count draws nothing extra -
+                // there is nothing extra to draw - so it is not offered rather than accepted and
+                // quietly ignored, which reads as a setting being disregarded.
+                twistTrunkSpin_->setMaximum(std::max(2, editor_->twistWires()));
                 twistTrunkSpin_->setValue(editor_->twistTrunk());
             }
         }
