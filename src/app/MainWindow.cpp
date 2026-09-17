@@ -4469,6 +4469,20 @@ void MainWindow::syncBreakOptions() {
                 twistLaneSpin_->setValue(editor_->twistLane());
             }
         }
+        // The fan is on every wires tool; the wire width is the straight run's, because a laid-up
+        // bundle takes its thickness from the bundle and not from one wire in it.
+        if (twistFanSpin_ && twistFanLabel_) {
+            QSignalBlocker b(twistFanSpin_);
+            twistFanSpin_->setValue(editor_->twistFan());
+        }
+        if (twistWireSpin_ && twistWireLabel_) {
+            twistWireSpin_->setVisible(straightRun);
+            twistWireLabel_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistWireSpin_);
+                twistWireSpin_->setValue(editor_->twistWireWidth());
+            }
+        }
         if (twistTrunkSpin_ && twistTrunkLabel_) {
             twistTrunkSpin_->setVisible(straightRun);
             twistTrunkLabel_->setVisible(straightRun);

@@ -141,6 +141,23 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
                 if (!t.isEmpty()) emit commandSubmitted(t);
                 return true;
             }
+            // TAB PINS A WIRES RUN, even with the typing box open - and especially then.
+            //
+            // The box takes the keyboard when it appears, so Tab was going to the line edit and
+            // from there to focus traversal: the run was never pinned, the cursor was never let go,
+            // and the keyboard ended up somewhere on the ribbon. Pressing Tab while drawing a
+            // harness did nothing at all except lose the drawing.
+            //
+            // Pinning is what Tab is FOR on these tools, so it comes first. The box goes away with
+            // it - it is asking for a length the run is no longer taking from the cursor - and the
+            // keyboard goes back to the drawing, which is what lets Esc and Enter work again.
+            if ((ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab) && editor_ &&
+                Editor::isTwistedTool(editor_->tool())) {
+                editor_->freezeTwistedPreview();
+                hideDynInput();
+                setFocus(Qt::OtherFocusReason);
+                return true;
+            }
             // Tab locks what's typed into the current reference field and moves to
             // the next one (Length->Angle, X radius->Y radius, ...) — the box stays
             // open so the next value can be typed.

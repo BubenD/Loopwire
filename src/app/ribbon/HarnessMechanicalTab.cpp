@@ -350,7 +350,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // four rows of label-and-box in one were drawn on top of each other - the four
                 // labels legible down the left and the four boxes piled up in one place. Laid out
                 // as two columns the whole set reads at a glance and every box can be got at.
-                og->setColumnMinimumWidth(2, 10);   // a gap between the two columns of settings
+                og->setColumnMinimumWidth(2, 10);   // a gap between the columns of settings
+                og->setColumnMinimumWidth(5, 10);
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -443,6 +444,57 @@ void MainWindow::buildHarnessMechanicalTab() {
                     statusBar()->showMessage(
                         v > 0 ? QStringLiteral("Wires run: %1 wire(s) carry on").arg(v)
                               : QStringLiteral("Wires run: every wire carries on"),
+                        2000);
+                });
+                // HOW LONG THE FAN IS, and HOW THICK ONE WIRE IS. Both are figures the drawing
+                // already knew how to read and neither had anywhere to be set from: the fan was
+                // whatever the default said, and the wire width - which on a straight run is also
+                // what settles how wide the bundle comes out - could only be changed by editing a
+                // placed object's properties afterwards.
+                twistFanLabel_ = new QLabel(QStringLiteral("Fan length"), optW);
+                twistFanLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistFanSpin_ = new QDoubleSpinBox(optW);
+                twistFanSpin_->setRange(0.0, 500.0);
+                twistFanSpin_->setDecimals(1);
+                twistFanSpin_->setSingleStep(1.0);
+                twistFanSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFanSpin_->setValue(editor_->twistFan());
+                twistFanSpin_->setMinimumWidth(64);
+                twistFanSpin_->setToolTip(QStringLiteral(
+                    "How long the fan is at each end - the stretch over which the wires open out of "
+                    "the bundle and settle into their lanes. Auto is the drawing's own figure."));
+                og->addWidget(twistFanLabel_, 0, 6);
+                og->addWidget(twistFanSpin_, 0, 7);
+                connect(twistFanSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistFan(v);
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        v > 1e-9 ? QStringLiteral("Wires run: the fan is %1 long").arg(v)
+                                 : QStringLiteral("Wires run: the drawing's own fan length"),
+                        2000);
+                });
+                twistWireLabel_ = new QLabel(QStringLiteral("Wire width"), optW);
+                twistWireLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistWireSpin_ = new QDoubleSpinBox(optW);
+                twistWireSpin_->setRange(0.0, 50.0);
+                twistWireSpin_->setDecimals(2);
+                twistWireSpin_->setSingleStep(0.1);
+                twistWireSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistWireSpin_->setValue(editor_->twistWireWidth());
+                twistWireSpin_->setMinimumWidth(64);
+                twistWireSpin_->setToolTip(QStringLiteral(
+                    "How thick one wire is drawn. Six wires take up more room than three, so this is "
+                    "also what settles how wide the bundle comes out. Auto is the drawing's own."));
+                og->addWidget(twistWireLabel_, 1, 6);
+                og->addWidget(twistWireSpin_, 1, 7);
+                connect(twistWireSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistWireWidth(v);
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        v > 1e-9 ? QStringLiteral("Wires run: wires drawn %1 across").arg(v)
+                                 : QStringLiteral("Wires run: the drawing's own wire width"),
                         2000);
                 });
                 optW->setVisible(false);

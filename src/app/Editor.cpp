@@ -243,6 +243,10 @@ bool circumcircle(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& center, dou
 // because picking - which runs above it - has to ask the question of a solid block arrow.
 bool pointInPolygon(const std::vector<Vec2>& poly, const Vec2& p);
 
+// Where a point falls ALONG a path and how far off it - declared here because the joints of a wires
+// run ask the question and are built further up the file than the answer is written.
+void placeOnPath(const std::vector<Vec2>& path, const Vec2& p, double& s, double& off);
+
 // Where an axis angle starts its sweep, and where it is on the sheet. Defined further down beside the
 // selection helpers; declared here because the hit test and the handles ask the same questions.
 double axisAngleStart(const Entity& e);
@@ -958,9 +962,14 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                 g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
             const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
             const Vec2 head = e.points.front(), tail = e.points.back();
-            const double span = distance(head, tail);
-            if (span > 1e-9 && strands.size() >= 2) {
-                const Vec2 u = (tail - head) / span;
+            // ALONG THE PATH, not along the line between its ends. A routed run bends, and a point
+            // measured against the chord from head to tail lands anywhere at all - on a run with one
+            // good corner in it every wire but one was judged to be somewhere in the middle and got
+            // no joint, which is how a six-wire harness came out with a single handle on it.
+            double pathLen = 0.0;
+            for (size_t i = 1; i < e.points.size(); ++i)
+                pathLen += distance(e.points[i - 1], e.points[i]);
+            if (pathLen > 1e-9 && strands.size() >= 2) {
                 const int last = static_cast<int>(e.points.size()) - 1;
                 // Two strands per wire, in order: take them in pairs and use the middle of each pair.
                 for (size_t k = 0; k + 1 < strands.size(); k += 2) {
@@ -970,10 +979,12 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                     for (const bool atFront : {true, false}) {
                         const Vec2 p = lerp(atFront ? a.front() : a.back(),
                                             atFront ? b.front() : b.back(), 0.5);
-                        // How far along the run it sits: an end is at one extreme or the other, and a
-                        // wire that has stopped in the middle is neither.
-                        const double t = dot(p - head, u) / span;
-                        if (t > 0.01 && t < 0.99) continue;
+                        // How far along the RUN it sits: an end is at one extreme or the other, and
+                        // a wire that has stopped in the middle of the bundle is neither.
+                        double s = 0.0, off = 0.0;
+                        placeOnPath(e.points, p, s, off);
+                        const double t = s / pathLen;
+                        if (t > 0.02 && t < 0.98) continue;
                         const bool atRunStart = t <= 0.5;
                         g.push_back({p, GripRole::Vertex, atRunStart ? 0 : last,
                                      p - (atRunStart ? head : tail)});
@@ -15717,6 +15728,12 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     e.meta.insert(QStringLiteral("twistStraight"), straight);
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
+    // THE FAN AND THE WIRE, where they have been set. Both are figures the drawing already knows how
+    // to read - they simply had nowhere to be set from. Written only when asked for, so a run drawn
+    // without touching them is the run that was always drawn.
+    if (twistFan_ > 1e-9) e.meta.insert(QStringLiteral("twistEnds"), twistFan_);
+    if (straight && twistWireWidth_ > 1e-9)
+        e.meta.insert(QStringLiteral("twistWireWidth"), twistWireWidth_);
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
@@ -15748,6 +15765,20 @@ void Editor::setTwistTrunk(int wires) {
     if (twistTrunk_ == next) return;
     twistTrunk_ = next;
     emit overlayChanged();   // a pinned run re-draws with the new bundle
+}
+
+void Editor::setTwistFan(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistFan_ - next) < 1e-9) return;
+    twistFan_ = next;
+    emit overlayChanged();   // a pinned run re-draws with the new fan
+}
+
+void Editor::setTwistWireWidth(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistWireWidth_ - next) < 1e-9) return;
+    twistWireWidth_ = next;
+    emit overlayChanged();   // and with the new wire
 }
 
 void Editor::setTwistLane(double mm) {
@@ -18295,13 +18326,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
             tp.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
             EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
+        // PINNED IS DRAWN AS A GHOST, in the two branches below. Tab holds the run still so the ribbon
+        // can be used on it, and until now the only sign anything had happened was that it stopped
+        // moving - which on a drawing being set up looks exactly like the application having stopped.
+        // Held, it is drawn the way everything else waiting to be put down is drawn.
         } else if (tool_ == ToolId::TwistedHarness && pts.size() >= 2) {
             Entity tp;
             tp.type = EntityType::TwistedPair;
             tp.a = pts[0];
             tp.b = twistedFrozen_ ? twistedFrozenAt_ : pts[1];
             writeBundleMeta(tp, /*straight=*/false);
-            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
+            EntityRenderer::draw(p, tp, *doc_, vt,
+                                 paperInk(twistedFrozen_ ? QColor(150, 162, 178, 170)
+                                                         : QColor("#ffffff")));
         } else if ((tool_ == ToolId::TwistedHarnessRoute || tool_ == ToolId::WiresRun) &&
                    pts.size() >= 2) {
             // Both generalisations previewed together: the knees so far (route) as the object's
@@ -18314,7 +18351,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.a = tp.points.front();
             tp.b = tp.points.back();
             writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun);
-            EntityRenderer::draw(p, tp, *doc_, vt, paperInk(QColor("#ffffff")));
+            EntityRenderer::draw(p, tp, *doc_, vt,
+                                 paperInk(twistedFrozen_ ? QColor(150, 162, 178, 170)
+                                                         : QColor("#ffffff")));
         } else if (tool_ == ToolId::HeatshrinkRoute && pts.size() >= 2) {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
             // screen while it is being drawn is what lands.

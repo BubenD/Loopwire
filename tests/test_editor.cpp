@@ -10447,6 +10447,95 @@ int run_editor_tests() {
             if (std::abs(j.x) < 1e-6) ++atStart;
         std::printf("  wire joints: %d at the start\n", atStart);
         check(atStart == 7, "wire joints: six wires and the route's own point, not twelve edges");
+
+        // ---- AND A RUN THAT BENDS gets them at both ends too ----
+        {
+            // This is the case that was wrong: the ends used to be judged by projecting onto the
+            // straight line between head and tail, and on a run with a corner in it that line runs
+            // through empty paper. Every wire but one was reckoned to be somewhere in the middle and
+            // got no joint - a six-wire harness with a single handle on it.
+            Document d2;
+            Entity r = d.entities().front();
+            r.id = QStringLiteral("BENT");
+            r.points = {{0.0, 0.0}, {200.0, 0.0}, {200.0, -150.0}};
+            r.a = r.points.front();
+            r.b = r.points.back();
+            d2.entities().push_back(r);
+            Editor ed2;
+            ed2.setDocument(&d2);
+            noSnap(ed2);
+            ed2.selectById(QStringLiteral("BENT"));
+            const std::vector<Vec2> bent = ed2.selectionGripPoints();
+            int atHead = 0, atTail = 0;
+            for (const Vec2& j : bent) {
+                if (distance(j, Vec2{0.0, 0.0}) < 40.0) ++atHead;
+                if (distance(j, Vec2{200.0, -150.0}) < 40.0) ++atTail;
+            }
+            std::printf("  wire joints: bent run has %d joint(s) - %d near the head, %d near the "
+                        "tail\n",
+                        int(bent.size()), atHead, atTail);
+            check(atHead >= 6, "wire joints: every wire is handled where the bent run starts");
+            check(atTail >= 6, "wire joints: and where it finishes, round the corner");
+        }
+    }
+
+    // ---- The fan length and the wire width are settings now, not constants ------------------------
+    {
+        // Both figures the drawing already knew how to read, and neither had anywhere to be set from:
+        // the fan was whatever the default said, and the wire width - which on a straight run is also
+        // what settles how wide the bundle comes out - could only be got at on a placed object.
+        auto runWith = [](double fan, double wire) {
+            Document d;
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTwistWires(6);
+            ed.setTwistFan(fan);
+            ed.setTwistWireWidth(wire);
+            ed.setTool(ToolId::WiresRun);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({300.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            return d.entities().empty() ? Entity() : d.entities().front();
+        };
+        // How far the wires reach across at an end, and where they stop fanning: the two things the
+        // settings are for. Measured off what is drawn rather than off the meta.
+        auto spreadOf = [](const Entity& e) {
+            double lo = 1e300, hi = -1e300;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                for (const Vec2& p : s) {
+                    if (p.x > 1.0) continue;          // at the very start of the run
+                    lo = std::min(lo, p.y);
+                    hi = std::max(hi, p.y);
+                }
+            return hi > lo ? hi - lo : 0.0;
+        };
+
+        const Entity base = runWith(0.0, 0.0);
+        check(!base.points.empty(), "fan: a run is drawn with the settings left alone");
+        if (base.points.empty()) return g_fail;
+        // UNSET IS THE DRAWING'S OWN. Nothing is written, so a run drawn without touching either is
+        // the run that was always drawn.
+        check(!base.meta.contains(QStringLiteral("twistWireWidth")),
+              "fan: untouched, the wire width is not written at all");
+
+        // THE FAN LENGTH REACHES THE OBJECT.
+        const Entity longFan = runWith(60.0, 0.0);
+        std::printf("  fan: asked for 60 -> twistEnds %.1f\n",
+                    longFan.meta.value(QStringLiteral("twistEnds")).toDouble());
+        check(std::abs(longFan.meta.value(QStringLiteral("twistEnds")).toDouble() - 60.0) < 1e-9,
+              "fan: the fan length is the one that was set");
+
+        // AND THE WIRE WIDTH CHANGES WHAT IS DRAWN: six fat wires take up more room than six thin
+        // ones, which is the whole reason a straight run is measured from the wire and not the
+        // bundle.
+        const Entity thin = runWith(0.0, 0.5);
+        const Entity fat = runWith(0.0, 2.0);
+        const double thinSpread = spreadOf(thin), fatSpread = spreadOf(fat);
+        std::printf("  fan: wires 0.5 across span %.2f, wires 2.0 across span %.2f\n", thinSpread,
+                    fatSpread);
+        check(fatSpread > thinSpread + 1e-6,
+              "fan: fatter wires make a wider bundle, as they do on paper");
     }
 
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------

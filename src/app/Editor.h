@@ -131,6 +131,14 @@ public:
     // own figure - half again the pitch they run at packed in the bundle - so a run drawn without
     // anybody setting this comes out the way these drawings are drawn by hand.
     double twistLane() const { return twistLane_; }
+    // HOW LONG THE FAN IS - the stretch at each end over which the wires open out of the bundle and
+    // settle into their lanes. 0 takes the drawing's own figure.
+    double twistFan() const { return twistFan_; }
+    void setTwistFan(double mm);
+    // HOW THICK ONE WIRE IS DRAWN. Six wires take up more room than three, so this is also what
+    // settles how wide the bundle comes out on a straight run. 0 takes the drawing's own figure.
+    double twistWireWidth() const { return twistWireWidth_; }
+    void setTwistWireWidth(double mm);
     void setTwistLane(double mm);
     // HOW MANY WIRES CARRY ON once the spread ones have converged. A bundle is drawn with the number
     // of lines it takes to read as a bundle rather than one per wire in it: the rest run into it and
@@ -1539,6 +1547,8 @@ private:
     int twistWires_ = 4;             // what a twisted harness fans out to, until the ribbon says otherwise
     QString twistSpread_ = QStringLiteral("both"); // which end(s) it fans out at
     double twistLane_ = 0.0;                       // spread pitch; 0 = the drawing's own figure
+    double twistFan_ = 0.0;                        // fan length at each end; 0 = the drawing's own
+    double twistWireWidth_ = 0.0;                  // one wire across; 0 = the drawing's own
     int twistTrunk_ = 0;                           // wires through the bundle; 0 = all of them
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
