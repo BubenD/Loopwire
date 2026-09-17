@@ -342,6 +342,13 @@ struct TwistFrames {
     bool straight = false;
     double lane = 0.0;           // between wires where they are spread out, centre to centre
     double packed = 0.0;         // ...and the pitch they run at inside the bundle
+    // HOW MANY WIRES CARRY ON once the spread ones have converged, and which trunk line each of them
+    // runs into. A bundle is drawn with the number of lines it takes to read as a bundle, not with one
+    // line per wire in it: five wires landing on pins converge into a trunk drawn as three, and the
+    // two that are not one of the three run into it and stop. That is how these drawings are drawn.
+    int trunk = 0;
+    std::vector<int> trunkLane;  // per wire: which trunk line it becomes, or -1 if it stops
+    double tail = 0.0;           // straight run at the very end, before the fan starts
 };
 
 bool twistFrames(const Entity& pair, TwistFrames& f) {
@@ -417,6 +424,26 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // is. Absent, it is half again the pitch they run at in the bundle - which is what the drawings
     // this was taken from were drawn at.
     f.lane = std::max(0.0, pair.meta.value(QStringLiteral("twistLane")).toDouble(0.0));   // 0 = the default below
+    if (f.lane < 1e-9) f.lane = f.packed * 1.5;
+    // AND HOW MANY OF THEM CARRY ON. All of them unless the drawing says fewer; never more than there
+    // are, and never none.
+    f.trunk = std::clamp(pair.meta.value(QStringLiteral("twistTrunkWires")).toInt(f.wires), 1,
+                         f.wires);
+    if (!f.straight) f.trunk = f.wires;   // a laid-up bundle is every wire in it, all the way
+    // WHICH of them carry on: spread evenly through the fan, so the ones that stop are the ones
+    // between them. Taking the first few instead would send the whole trunk to one side of the fan.
+    f.trunkLane.assign(static_cast<size_t>(f.wires), -1);
+    for (int j = 0; j < f.trunk; ++j) {
+        const int k = f.trunk > 1
+                          ? static_cast<int>(std::llround(double(j) * (f.wires - 1) / (f.trunk - 1)))
+                          : (f.wires - 1) / 2;
+        f.trunkLane[static_cast<size_t>(std::clamp(k, 0, f.wires - 1))] = j;
+    }
+    // THE STRAIGHT BIT AT THE VERY END. The wires are landed on something, and what they land on is
+    // square to the run - so they come out of the fan and run straight into it rather than arriving
+    // still spreading. The fan takes the part of the end nearer the bundle, the straight run the part
+    // nearer the end.
+    f.tail = f.straight ? f.lead * kWiresRunTailShare : 0.0;
     const bool startIsLeft = path.front().x <= path.back().x;
     f.spreadStart = spread == QLatin1String("both") ||
                     (spread == QLatin1String("left") && startIsLeft) ||
@@ -438,7 +465,22 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     const int perTurn = std::clamp(2400 / std::max(1, f.turns), 8, 24);
     const int grid = f.turns * perTurn;
     std::vector<double> us{0.0, f.len};
-    for (int i = 0; i <= grid; ++i) us.push_back(f.lead + woven * i / grid);
+    if (f.straight) {
+        // MEASURED WHERE THE SHAPE IS, which for a straight run is the two ENDS. The middle is one
+        // straight stretch and needs nothing but its knees; the fan is a curve and needs a place
+        // every degree or so of it, and it used to get none at all - the grid below covers the
+        // weave, which a straight run has not got, so the fan was drawn as one flat slant and the
+        // easing on it never showed.
+        us.push_back(f.lead);
+        us.push_back(f.len - f.lead);
+        for (int i = 0; i <= 24; ++i) {
+            const double into = f.lead * i / 24.0;
+            us.push_back(into);
+            us.push_back(f.len - into);
+        }
+    } else {
+        for (int i = 0; i <= grid; ++i) us.push_back(f.lead + woven * i / grid);
+    }
     for (size_t i = 1; i + 1 < path.size(); ++i) us.push_back(at[i]);
     std::sort(us.begin(), us.end());
     us.erase(std::unique(us.begin(), us.end(),
@@ -492,14 +534,30 @@ double twistPhase(const TwistFrames& f, int k) {
 // are the same one, so a pair's ends run parallel as they always have.
 double twistOffset(const TwistFrames& f, int k, double u) {
     const double phase = twistPhase(f, k);
-    // WHERE THE WIRE SITS ALONG THE BUNDLE, which is the one thing the two lays differ in.
+    // WHERE THE WIRE SITS ACROSS THE RUN, which is the one thing the two lays differ in.
     //
     // Laid up, a wire swings from side to side and is at its own phase of the crossing. Running
-    // straight it stays in its own lane the whole way - the wires never cross, so there is nothing to
-    // swing. Everything else about the two is the same: the same ends, the same fan out of them, the
-    // same width, the same handles - which is why this is one drawing with two lays and not two
-    // drawings.
-    const double lane = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
+    // straight it stays in its own lane - the wires never cross, so there is nothing to swing.
+    // Everything else about the two is the same: the same ends, the same fan, the same handles.
+    //
+    // IN THE BUNDLE, a straight run sits in one of the TRUNK lines rather than in a line of its own:
+    // a wire that is not one of them is drawn running into the bundle and stopping (see the ranges in
+    // twistCached), and until it stops it is heading for the trunk line nearest it.
+    double lane;
+    if (!f.straight) {
+        lane = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
+    } else {
+        const int mine = k < static_cast<int>(f.trunkLane.size()) ? f.trunkLane[size_t(k)] : -1;
+        const double half = f.packed * (f.trunk - 1) / 2.0;
+        int j = mine;
+        if (j < 0) {
+            // Not one of the trunk lines: head for the nearest one, worked out from where it sits in
+            // the fan, so it runs in alongside its neighbours rather than across them.
+            const double where = f.wires > 1 ? double(k) * (f.trunk - 1) / (f.wires - 1) : 0.0;
+            j = std::clamp(static_cast<int>(std::llround(where)), 0, std::max(0, f.trunk - 1));
+        }
+        lane = half - f.packed * j;
+    }
     const double inRun = f.straight ? lane : f.reach * std::cos(phase);
     if (u > f.lead && u < f.len - f.lead)
         return f.straight ? lane
@@ -508,25 +566,32 @@ double twistOffset(const TwistFrames& f, int k, double u) {
     // being stripped and landed, so they come out square. Running straight they open out to a pitch
     // of their own instead, because the bundle's width is not what settles how far apart the things
     // they land on are.
-    const double pitch = f.lane > 1e-9 ? f.lane : f.packed * 1.5;
-    const double spread =
-        f.wires > 1 ? (f.straight ? pitch * (double(f.wires - 1) / 2.0 - double(k)) : lane) : 0.0;
-    const double inWeave = inRun;
+    const double spread = f.wires > 1
+                              ? (f.straight ? f.lane * (double(f.wires - 1) / 2.0 - double(k))
+                                            : f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)))
+                              : 0.0;
     auto leadOffset = [&](double into, bool fan) {
         // A spread end lands the wires evenly across the bundle. An unspread end simply carries each
-        // wire's woven place straight out to the end, so the bundle does not open there at all.
-        const double target = fan ? spread : inWeave;
-        double t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
-        // EASED where the wires run straight, so the fan leaves the bundle and settles into its lane
-        // on a curve rather than at two corners. A drawn-by-hand fan has a radius at each end of the
-        // slant - see the examples this was taken from - and a straight blend has neither; on the
-        // weave it does not arise, because the fan there runs into a cosine that is already turning.
-        if (f.straight) t = t * t * (3.0 - 2.0 * t);
-        return target + (inWeave - target) * t;
+        // wire's place in the run straight out to the end, so the bundle does not open there at all.
+        const double target = fan ? spread : inRun;
+        double t;
+        if (f.straight) {
+            // THE STRAIGHT BIT FIRST, THEN THE FAN. Out to the tail the wire is where it is landed and
+            // does not move at all; from there it fans back into the run. Without it the wires arrive
+            // at the end still spreading, and a run drawn along the sheet does not end level.
+            const double fanLen = std::max(1e-9, f.lead - f.tail);
+            t = std::clamp((into - f.tail) / fanLen, 0.0, 1.0);
+            // Eased, so it leaves the bundle and settles into its lane on a curve rather than at two
+            // corners - a fan drawn by hand has a radius at each end of the slant.
+            t = t * t * (3.0 - 2.0 * t);
+        } else {
+            t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
+        }
+        return target + (inRun - target) * t;
     };
     if (u <= f.lead) return leadOffset(u, f.spreadStart);
     if (u >= f.len - f.lead) return leadOffset(f.len - u, f.spreadEnd);
-    return inWeave;
+    return inRun;
 }
 
 // How near the front of the bundle wire k is at distance u - the other half of going round, and what
@@ -579,6 +644,7 @@ QString twistKey(const Entity& e) {
                                                                 : QLatin1String("|laid");
     k += QString::number(e.meta.value(QLatin1String("twistLane")).toDouble(), 'g', 12);
     k += QString::number(e.meta.value(QLatin1String("twistWireWidth")).toDouble(), 'g', 12);
+    k += QString::number(e.meta.value(QLatin1String("twistTrunkWires")).toInt());
     return k;
 }
 
@@ -589,9 +655,45 @@ const TwistCached* twistCached(const Entity& pair) {
     if (it != cache.constEnd()) return &*it;
     TwistCached c;
     if (!twistFrames(pair, c.frames)) return nullptr;
-    for (int k = 0; k < c.frames.wires; ++k)
-        for (const double edge : {1.0, -1.0})
-            c.strands.push_back(twistEdge(c.frames, k, edge, 0, c.frames.pos.size() - 1));
+    const TwistFrames& f = c.frames;
+    // HOW MUCH OF THE RUN EACH WIRE IS DRAWN OVER.
+    //
+    // Every wire of a laid-up bundle runs the whole length of it. A straight run is drawn the way
+    // these drawings are drawn: the bundle carries the number of lines it takes to read as a bundle,
+    // and a wire that is not one of them is drawn coming out of the end it is landed at, running into
+    // the bundle, and stopping there. So it exists over the END it fans at, and nowhere else - and at
+    // an end that does not fan there is nothing but the bundle itself.
+    // The measured place a span starts or stops at. Asked for as AT OR BEFORE / AT OR AFTER, never as
+    // "the one before": the middle of a straight run is not measured at all - it is one straight
+    // stretch and needs nothing - so the place before the far end's fan is the NEAR end's fan, and a
+    // span started there ran the whole way through the bundle instead of stopping at it.
+    auto lastAtOrBefore = [&f](double u) {
+        size_t best = 0;
+        for (size_t i = 0; i < f.u.size(); ++i)
+            if (f.u[i] <= u + 1e-9) best = i;
+        return best;
+    };
+    auto firstAtOrAfter = [&f](double u) {
+        for (size_t i = 0; i < f.u.size(); ++i)
+            if (f.u[i] >= u - 1e-9) return i;
+        return f.u.empty() ? size_t(0) : f.u.size() - 1;
+    };
+    for (int k = 0; k < f.wires; ++k) {
+        std::vector<std::pair<size_t, size_t>> spans;
+        const bool carriesOn =
+            !f.straight || (k < static_cast<int>(f.trunkLane.size()) && f.trunkLane[size_t(k)] >= 0);
+        if (carriesOn) {
+            spans.push_back({0, f.pos.size() - 1});
+        } else {
+            if (f.spreadStart) spans.push_back({0, lastAtOrBefore(f.lead)});
+            if (f.spreadEnd) spans.push_back({firstAtOrAfter(f.len - f.lead), f.pos.size() - 1});
+        }
+        for (const auto& span : spans) {
+            if (span.second <= span.first) continue;
+            for (const double edge : {1.0, -1.0})
+                c.strands.push_back(twistEdge(f, k, edge, span.first, span.second));
+        }
+    }
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
     if (cache.size() > 64) cache.clear();
     return &*cache.insert(key, std::move(c));

@@ -413,6 +413,30 @@ void MainWindow::buildHarnessMechanicalTab() {
                                                   "spacing"),
                         2000);
                 });
+                // HOW MANY CARRY ON past the fan. A bundle is drawn with the number of lines it takes
+                // to read as one, not with a line per wire: the rest run into it and stop.
+                twistTrunkLabel_ = new QLabel(QStringLiteral("Converge to"), optW);
+                twistTrunkLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistTrunkSpin_ = new QSpinBox(optW);
+                twistTrunkSpin_->setRange(0, kTwistedMaxWires);
+                twistTrunkSpin_->setSpecialValueText(QStringLiteral("All"));
+                twistTrunkSpin_->setValue(editor_->twistTrunk());
+                twistTrunkSpin_->setMinimumWidth(56);
+                twistTrunkSpin_->setToolTip(QStringLiteral(
+                    "How many wires carry on through the run once the spread ones have converged. "
+                    "The rest are drawn running into it and stopping, which is how a bundle of many "
+                    "wires is drawn as a run of few. All keeps every wire."));
+                og->addWidget(twistTrunkLabel_, 3, 0);
+                og->addWidget(twistTrunkSpin_, 3, 1);
+                connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+                    editor_->setTwistTrunk(v);
+                    canvas_->update();   // a pinned run re-draws with the new bundle
+                    statusBar()->showMessage(
+                        v > 0 ? QStringLiteral("Wires run: %1 wire(s) carry on").arg(v)
+                              : QStringLiteral("Wires run: every wire carries on"),
+                        2000);
+                });
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);

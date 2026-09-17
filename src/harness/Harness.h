@@ -162,6 +162,13 @@ inline constexpr int kTwistedMaxWires = 12;       // as many as one bundle is dr
 // wider than three. These are the figures the drawings are drawn at - a wire 2 across, on a 3 pitch.
 inline constexpr double kWiresRunWire = 2.0;
 inline constexpr double kWiresRunPitch = 3.0;
+// How much of the end a straight run gives to the STRAIGHT bit before the fan. The wires are landed on
+// something square to the run, so they leave the fan and go into it straight rather than arriving
+// still spreading - the drawings show about two parts straight to one part fan.
+inline constexpr double kWiresRunTailShare = 0.6;
+// And what a straight run's ends are, unless the drawing says otherwise: long enough for that straight
+// bit to read as one. The laid-up bundle's own figure is the length of its lead-in and is shorter.
+inline constexpr double kWiresRunEnd = 15.0;
 // The four lines the pair is drawn with: each wire's two edges, each running the whole length. What a
 // click picks, what a zone catches and how far it reaches all come from these, so none of them can
 // drift from what is drawn.

@@ -4442,6 +4442,14 @@ void MainWindow::syncBreakOptions() {
                 twistLaneSpin_->setValue(editor_->twistLane());
             }
         }
+        if (twistTrunkSpin_ && twistTrunkLabel_) {
+            twistTrunkSpin_->setVisible(straightRun);
+            twistTrunkLabel_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistTrunkSpin_);
+                twistTrunkSpin_->setValue(editor_->twistTrunk());
+            }
+        }
     }
     if (!breakOptionsGroup_) return;
     const bool armed = editor_->tool() == ToolId::LengthBreak;
@@ -9022,12 +9030,21 @@ void MainWindow::refreshProperties() {
                      editor_->setSelectionMetaBool(QStringLiteral("twistStraight"),
                                                    t == QLatin1String("Straight"));
                  });
-        // And the spacing it spreads them out at, which only a straight run lays out from.
+        // And the two a straight run lays itself out from: how far apart the spread wires sit, and
+        // how many of them carry on through the bundle.
         if (straight) {
             addNum(QStringLiteral("Spread spacing"),
                    mv(QStringLiteral("twistLane")).toDouble(0.0), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistLane"),
                                                        std::max(0.0, v));
+                   });
+            addNum(QStringLiteral("Converge to"),
+                   mv(QStringLiteral("twistTrunkWires"))
+                       .toDouble(mv(QStringLiteral("twistWires")).toDouble(2.0)),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(
+                           QStringLiteral("twistTrunkWires"),
+                           std::clamp(static_cast<int>(std::lround(v)), 1, kTwistedMaxWires));
                    });
         }
     }

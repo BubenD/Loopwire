@@ -6362,6 +6362,107 @@ int run_editor_tests() {
         }
     }
 
+    // --- A straight run STARTS AND ENDS LEVEL, and converges to a bundle of however many lines the
+    //     drawing says. Both are what the drawings show: the wires are landed on something square to
+    //     the run, so they come out of the fan and go into it straight; and a bundle is drawn with
+    //     the number of lines it takes to read as a bundle, the rest running into it and stopping.
+    {
+        auto makeRun = [](int wires, int trunk, const QString& spread) {
+            Entity e;
+            e.type = EntityType::TwistedPair;
+            e.points = {{0, 0}, {200, 0}};
+            e.a = e.points.front();
+            e.b = e.points.back();
+            e.meta.insert("twistWires", wires);
+            e.meta.insert("twistWidth", kTwistedPairWidth * 1.5);
+            e.meta.insert("twistPitch", kTwistedPairPitch);
+            e.meta.insert("twistEnds", kWiresRunEnd);
+            e.meta.insert("twistSpread", spread);
+            e.meta.insert("twistStraight", true);
+            if (trunk > 0) e.meta.insert("twistTrunkWires", trunk);
+            return e;
+        };
+        // How many wires the run is drawn with at a given distance along it: the lines that reach
+        // that far, counted by the places they sit at (the two edges of one wire are close together).
+        auto wiresAt = [](const Entity& e, double x) {
+            const auto lines = twistedPairStrands(e);
+            std::vector<double> ys;
+            for (const auto& run : lines) {
+                for (size_t i = 1; i < run.size(); ++i) {
+                    if ((run[i - 1].x - x) * (run[i].x - x) > 0.0) continue;
+                    ys.push_back(run[i].y);
+                    break;
+                }
+            }
+            // Every wire that reaches here contributes its TWO edges, so the wires are half the
+            // lines. Counting the places instead would count each wire twice over: a wire's two
+            // edges are its own width apart, the same order as the gap to the next wire along.
+            return static_cast<int>(ys.size()) / 2;
+        };
+
+        const Entity run = makeRun(5, 3, QStringLiteral("both"));
+        check(wiresAt(run, 100.0) == 3,
+              "wires run: the bundle carries the number of wires it was told to converge to");
+        check(wiresAt(run, 1.0) == 5,
+              "wires run: and every wire is still there at the end they are landed at");
+        const Entity all = makeRun(5, 0, QStringLiteral("both"));
+        check(wiresAt(all, 100.0) == 5,
+              "wires run: told nothing, every wire carries on as it did");
+
+        // LEVEL AT THE ENDS. Each line arrives running ALONG the route rather than still spreading
+        // across it, so a run drawn along the sheet starts and ends horizontal.
+        const auto lines = twistedPairStrands(run);
+        int ends = 0;
+        bool level = !lines.empty();
+        for (const auto& line : lines) {
+            if (line.size() < 2) { level = false; break; }
+            // Only where a line actually REACHES an end of the route. A wire that stops in the
+            // bundle has a cut end in the middle of the fan, and that one is on the slant by design.
+            for (const bool atBack : {false, true}) {
+                const Vec2 tip = atBack ? line.back() : line.front();
+                const Vec2 next = atBack ? line[line.size() - 2] : line[1];
+                if (std::abs(tip.x) > 1e-6 && std::abs(tip.x - 200.0) > 1e-6) continue;
+                ++ends;
+                if (std::abs(tip.y - next.y) > 1e-6) level = false;
+            }
+        }
+        check(ends > 0, "wires run: some wires do reach the ends of the route");
+        check(level, "wires run: every wire runs level into both ends instead of arriving on the slant");
+
+        // A wire that does not carry on is drawn from the end it is landed at INTO the bundle and
+        // stops there; at an end that does not fan there is nothing but the bundle.
+        const Entity oneEnd = makeRun(5, 3, QStringLiteral("left"));
+        check(wiresAt(oneEnd, 1.0) == 5 && wiresAt(oneEnd, 100.0) == 3 &&
+                  wiresAt(oneEnd, 199.0) == 3,
+              "wires run: spread at one end only, the other end is just the bundle");
+    }
+
+    // --- Tab pins a run part way through drawing it, so the ribbon can be used on the real thing.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.twistWires() = 4;
+        ed.setTool(ToolId::WiresRun);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100, 0});
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);   // a knee
+        ed.onPointerMove({160, 0});
+        ed.freezeTwistedPreview();
+        check(ed.twistedFrozen(), "wires run: Tab pins the run part way through drawing it");
+        // Off to the ribbon and back: the pointer crosses the drawing on the way, and the run must
+        // not follow it - being held still is the whole point of pinning it.
+        ed.onPointerMove({400, 300});
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d.entities().size() == 1, "wires run: Enter finishes the pinned run");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.points.size() == 3 && near(e.points.back().x, 160.0) &&
+                      near(e.points.back().y, 0.0),
+                  "wires run: it ends where it was pinned, not where the pointer wandered off to");
+        }
+    }
+
     // --- A twisted HARNESS ROUTED through knees: both generalisations together.
     {
         Document d;

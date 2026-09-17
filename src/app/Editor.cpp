@@ -9523,6 +9523,12 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::WiresRun:
         // The same run, laid STRAIGHT: the wires keep their own lanes the whole way instead of being
         // laid up round one another.
+        //
+        // PINNED (Tab), the first click back on the drawing is the one that UNPINS it: the run was
+        // held still so the ribbon could be used, and coming back to the drawing is the end of that.
+        // The click still says where the next knee goes, which is what a click on a routed tool has
+        // always meant - it is only the pin that it clears.
+        twistedFrozen_ = false;
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(QStringLiteral(
@@ -15640,13 +15646,24 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     e.meta.insert(QStringLiteral("twistSpread"), twistSpread_);
     e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
     e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
-    e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+    e.meta.insert(QStringLiteral("twistEnds"),
+                  straight ? kWiresRunEnd : kTwistedPairLead);
     // WHICH LAY, written even when it is the laid-up one. An object that says which of the two it is
     // can be turned into the other from its properties; one that says nothing has to be guessed at,
     // and the guess is wrong for exactly the drawings that have both on them.
     e.meta.insert(QStringLiteral("twistStraight"), straight);
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
+    if (straight && twistTrunk_ > 0)
+        e.meta.insert(QStringLiteral("twistTrunkWires"),
+                      std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
+}
+
+void Editor::setTwistTrunk(int wires) {
+    const int next = std::max(0, wires);
+    if (twistTrunk_ == next) return;
+    twistTrunk_ = next;
+    emit overlayChanged();   // a pinned run re-draws with the new bundle
 }
 
 void Editor::setTwistLane(double mm) {
@@ -15664,7 +15681,8 @@ void Editor::freezeTwistedPreview() {
     twistedFrozen_ = true;
     twistedFrozenAt_ = cursor_;
     emit message(QStringLiteral(
-        "Pinned - set it up on the ribbon; click the drawing (or Enter) to place it"));
+        "Pinned — the run is held while you set it up on the ribbon; click the drawing to carry "
+        "on, or Enter to finish it here"));
     emit overlayChanged();
 }
 
@@ -17179,6 +17197,15 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // the end from where it was pinned or from the cursor.
         if (isTwistedTool(tool_) && drafting_ && draftPts_.size() == 1) {
             draftPts_.push_back(twistedFrozen_ ? twistedFrozenAt_ : cursor_);
+            twistedFrozen_ = false;
+            finishDraw();
+            return true;
+        }
+        // A ROUTED one with knees already down and a PINNED end: Enter finishes it at the pin. The
+        // end was pinned so the ribbon could be used on the real thing; without this the run was
+        // finished at the knees it had and the pinned end - the one on the screen - was dropped.
+        if (isTwistedTool(tool_) && drafting_ && twistedFrozen_ && draftPts_.size() >= 2) {
+            draftPts_.push_back(twistedFrozenAt_);
             twistedFrozen_ = false;
             finishDraw();
             return true;

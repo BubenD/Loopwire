@@ -833,6 +833,8 @@ private:
     QComboBox* twistSpreadCombo_ = nullptr;
     QDoubleSpinBox* twistLaneSpin_ = nullptr;   // spread pitch, straight runs only
     QLabel* twistLaneLabel_ = nullptr;
+    QSpinBox* twistTrunkSpin_ = nullptr;        // wires through the bundle, straight runs only
+    QLabel* twistTrunkLabel_ = nullptr;
     // The Harness-mechanical groups, so placing a break can take the tab over the way the twist tool
     // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.

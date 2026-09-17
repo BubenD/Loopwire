@@ -128,6 +128,11 @@ public:
     // anybody setting this comes out the way these drawings are drawn by hand.
     double twistLane() const { return twistLane_; }
     void setTwistLane(double mm);
+    // HOW MANY WIRES CARRY ON once the spread ones have converged. A bundle is drawn with the number
+    // of lines it takes to read as a bundle rather than one per wire in it: the rest run into it and
+    // stop. Nought means all of them.
+    int twistTrunk() const { return twistTrunk_; }
+    void setTwistTrunk(int wires);
     // Tab while one is being drawn PINS it where it is, so the count and the rest can be tried on the
     // real thing without the cursor moving it. The next click, or Enter, places it.
     void freezeTwistedPreview();
@@ -1530,6 +1535,7 @@ private:
     int twistWires_ = 4;             // what a twisted harness fans out to, until the ribbon says otherwise
     QString twistSpread_ = QStringLiteral("both"); // which end(s) it fans out at
     double twistLane_ = 0.0;                       // spread pitch; 0 = the drawing's own figure
+    int twistTrunk_ = 0;                           // wires through the bundle; 0 = all of them
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
