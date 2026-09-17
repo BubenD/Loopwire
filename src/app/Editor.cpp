@@ -15734,6 +15734,7 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     if (twistFan_ > 1e-9) e.meta.insert(QStringLiteral("twistEnds"), twistFan_);
     if (straight && twistWireWidth_ > 1e-9)
         e.meta.insert(QStringLiteral("twistWireWidth"), twistWireWidth_);
+    if (twistKnee_ > 1e-9) e.meta.insert(QStringLiteral("twistKnee"), twistKnee_);
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
@@ -15772,6 +15773,13 @@ void Editor::setTwistFan(double mm) {
     if (std::abs(twistFan_ - next) < 1e-9) return;
     twistFan_ = next;
     emit overlayChanged();   // a pinned run re-draws with the new fan
+}
+
+void Editor::setTwistKnee(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistKnee_ - next) < 1e-9) return;
+    twistKnee_ = next;
+    emit overlayChanged();   // a pinned run re-draws turning the new way
 }
 
 void Editor::setTwistWireWidth(double mm) {

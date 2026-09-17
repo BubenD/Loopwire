@@ -360,7 +360,15 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         std::max(0.2, pair.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth));
     // A cable does not kink at a corner, it bends - and a bend keeps the two wires from folding over
     // each other on the inside of the turn, which a sharp corner cannot.
-    if (path.size() > 2) path = roundedPolyline(path, w * 1.2, 10);
+    // HOW TIGHTLY IT TURNS AT A KNEE. A cable does not kink at a corner, it bends - and a bend keeps
+    // the wires from folding over one another on the inside of the turn, which a sharp corner cannot.
+    //
+    // The radius used to be a fixed share of the bundle width, which is a reasonable guess and only
+    // that: how tightly a loom may be turned is set by what is in it and by what it is being dressed
+    // round, and neither of those is the width of the line on the paper. Absent, the old figure
+    // stands, so every run drawn before this turns exactly as it did.
+    const double knee = pair.meta.value(QStringLiteral("twistKnee")).toDouble(0.0);
+    if (path.size() > 2) path = roundedPolyline(path, knee > 1e-9 ? knee : w * 1.2, 10);
 
     std::vector<double> at{0.0};
     for (size_t i = 1; i < path.size(); ++i)
@@ -645,6 +653,7 @@ QString twistKey(const Entity& e) {
     k += QString::number(e.meta.value(QLatin1String("twistLane")).toDouble(), 'g', 12);
     k += QString::number(e.meta.value(QLatin1String("twistWireWidth")).toDouble(), 'g', 12);
     k += QString::number(e.meta.value(QLatin1String("twistTrunkWires")).toInt());
+    k += QString::number(e.meta.value(QLatin1String("twistKnee")).toDouble(), 'g', 12);
     return k;
 }
 

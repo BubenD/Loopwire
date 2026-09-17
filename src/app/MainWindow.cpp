@@ -4470,7 +4470,18 @@ void MainWindow::syncBreakOptions() {
             }
         }
         // The fan is on every wires tool; the wire width is the straight run's, because a laid-up
-        // bundle takes its thickness from the bundle and not from one wire in it.
+        // bundle takes its thickness from the bundle and not from one wire in it. The knee radius
+        // belongs to the ROUTED tools: a run drawn between two points has no knee to turn at.
+        const bool routed = editor_->tool() == ToolId::TwistedHarnessRoute ||
+                            editor_->tool() == ToolId::WiresRun;
+        if (twistKneeSpin_ && twistKneeLabel_) {
+            twistKneeSpin_->setVisible(routed);
+            twistKneeLabel_->setVisible(routed);
+            if (routed) {
+                QSignalBlocker b(twistKneeSpin_);
+                twistKneeSpin_->setValue(editor_->twistKnee());
+            }
+        }
         if (twistFanSpin_ && twistFanLabel_) {
             QSignalBlocker b(twistFanSpin_);
             twistFanSpin_->setValue(editor_->twistFan());

@@ -835,6 +835,8 @@ private:
     QLabel* twistLaneLabel_ = nullptr;
     QDoubleSpinBox* twistFanSpin_ = nullptr;
     QLabel* twistFanLabel_ = nullptr;
+    QDoubleSpinBox* twistKneeSpin_ = nullptr;
+    QLabel* twistKneeLabel_ = nullptr;
     QDoubleSpinBox* twistWireSpin_ = nullptr;
     QLabel* twistWireLabel_ = nullptr;
     QSpinBox* twistTrunkSpin_ = nullptr;        // wires through the bundle, straight runs only

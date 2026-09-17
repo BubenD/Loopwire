@@ -139,6 +139,10 @@ public:
     // settles how wide the bundle comes out on a straight run. 0 takes the drawing's own figure.
     double twistWireWidth() const { return twistWireWidth_; }
     void setTwistWireWidth(double mm);
+    // HOW TIGHTLY THE RUN TURNS AT A KNEE, once it is past the fan. 0 takes the drawing's own figure,
+    // which is a share of the bundle width - a reasonable guess and only that.
+    double twistKnee() const { return twistKnee_; }
+    void setTwistKnee(double mm);
     void setTwistLane(double mm);
     // HOW MANY WIRES CARRY ON once the spread ones have converged. A bundle is drawn with the number
     // of lines it takes to read as a bundle rather than one per wire in it: the rest run into it and
@@ -1549,6 +1553,7 @@ private:
     double twistLane_ = 0.0;                       // spread pitch; 0 = the drawing's own figure
     double twistFan_ = 0.0;                        // fan length at each end; 0 = the drawing's own
     double twistWireWidth_ = 0.0;                  // one wire across; 0 = the drawing's own
+    double twistKnee_ = 0.0;                       // fillet at a knee; 0 = the drawing's own
     int twistTrunk_ = 0;                           // wires through the bundle; 0 = all of them
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point

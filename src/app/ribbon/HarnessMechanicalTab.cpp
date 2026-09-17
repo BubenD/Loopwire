@@ -352,6 +352,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // as two columns the whole set reads at a glance and every box can be got at.
                 og->setColumnMinimumWidth(2, 10);   // a gap between the columns of settings
                 og->setColumnMinimumWidth(5, 10);
+                og->setColumnMinimumWidth(8, 10);
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -495,6 +496,33 @@ void MainWindow::buildHarnessMechanicalTab() {
                     statusBar()->showMessage(
                         v > 1e-9 ? QStringLiteral("Wires run: wires drawn %1 across").arg(v)
                                  : QStringLiteral("Wires run: the drawing's own wire width"),
+                        2000);
+                });
+                // AND HOW TIGHTLY IT TURNS at a knee, past the fan. Only the routed runs have knees
+                // to turn at - a run drawn between two points has none - so the field shows for those
+                // and stands down for the straight one rather than sitting there doing nothing.
+                twistKneeLabel_ = new QLabel(QStringLiteral("Knee radius"), optW);
+                twistKneeLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistKneeSpin_ = new QDoubleSpinBox(optW);
+                twistKneeSpin_->setRange(0.0, 500.0);
+                twistKneeSpin_->setDecimals(1);
+                twistKneeSpin_->setSingleStep(1.0);
+                twistKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistKneeSpin_->setValue(editor_->twistKnee());
+                twistKneeSpin_->setMinimumWidth(64);
+                twistKneeSpin_->setToolTip(QStringLiteral(
+                    "How tightly the run turns where it bends. A loom does not kink at a corner, it "
+                    "bends - and how far it may be bent is set by what is in it, not by how wide the "
+                    "line is. Auto is a share of the bundle width."));
+                og->addWidget(twistKneeLabel_, 0, 9);
+                og->addWidget(twistKneeSpin_, 0, 10);
+                connect(twistKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistKnee(v);
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        v > 1e-9 ? QStringLiteral("Wires run: knees turn on a %1 radius").arg(v)
+                                 : QStringLiteral("Wires run: the drawing's own knee radius"),
                         2000);
                 });
                 optW->setVisible(false);

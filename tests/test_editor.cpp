@@ -10538,6 +10538,48 @@ int run_editor_tests() {
               "fan: fatter wires make a wider bundle, as they do on paper");
     }
 
+    // ---- How tightly a run turns at a knee is a figure, not a fixed share of its width ------------
+    {
+        // A loom does not kink at a corner, it bends - and how far it may be bent is set by what is
+        // inside it and by what it is being dressed round, neither of which is the width of the line
+        // on the paper. The radius used to be 1.2 times the bundle width and nothing else.
+        auto bentRun = [](double knee) {
+            Entity w;
+            w.id = QStringLiteral("BENT");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 4);
+            w.meta.insert(QStringLiteral("twistWidth"), 10.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            if (knee > 0.0) w.meta.insert(QStringLiteral("twistKnee"), knee);
+            return w;
+        };
+        // HOW ROUND THE CORNER IS, measured off what is drawn: how far the strands keep away from the
+        // sharp corner the route has at (200,0). A tighter radius hugs it; a wider one swings clear.
+        auto clearance = [](const Entity& e) {
+            double best = 1e300;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                for (const Vec2& p : s) best = std::min(best, distance(p, Vec2{200.0, 0.0}));
+            return best;
+        };
+
+        const double loose = clearance(bentRun(60.0));
+        const double tight = clearance(bentRun(5.0));
+        const double byDefault = clearance(bentRun(0.0));
+        std::printf("  knee: radius 5 keeps %.2f from the corner, radius 60 keeps %.2f, auto %.2f\n",
+                    tight, loose, byDefault);
+        check(loose > tight + 1.0, "knee: a wider radius swings the run clear of the corner");
+        // AND UNSET IS WHAT IT ALWAYS WAS - a share of the bundle width - so every run drawn before
+        // this turns exactly as it did.
+        const double asBefore = clearance(bentRun(10.0 * 1.2));
+        std::printf("  knee: auto %.2f against the old figure %.2f\n", byDefault, asBefore);
+        check(std::abs(byDefault - asBefore) < 1e-6,
+              "knee: left alone it turns the way it always turned");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,
