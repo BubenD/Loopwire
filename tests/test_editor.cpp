@@ -10358,6 +10358,45 @@ int run_editor_tests() {
         }
     }
 
+    // ---- Tab holds the run still, and lets go of the cursor until the drawing is clicked ----------
+    {
+        // Tab pins the run so the ribbon can be used with it on screen. Pinned, the run stops
+        // following the cursor - which is the point: the ribbon is across the window from the
+        // drawing and the mouse has to get there without dragging the run along behind it. It takes
+        // the cursor up again at the next click on the drawing.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::WiresRun);
+
+        // Nothing started: there is nothing to pin, and asking does not pretend otherwise.
+        ed.freezeTwistedPreview();
+        check(!ed.twistedFrozen(), "wires pin: nothing to pin before the run has a start");
+
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100.0, 0.0});
+        ed.freezeTwistedPreview();
+        check(ed.twistedFrozen(), "wires pin: Tab pins it once the run has a start");
+
+        // THE CURSOR IS RELEASED: moving it does not take the pin off, so the run is still being
+        // held while the mouse travels to the ribbon and back.
+        ed.onPointerMove({400.0, 250.0});
+        ed.onPointerMove({-50.0, 90.0});
+        check(ed.twistedFrozen(), "wires pin: it stays pinned however far the cursor goes");
+
+        // AND THE CLICK ON THE DRAWING TAKES IT UP AGAIN - the same click that says where the next
+        // knee goes, because coming back to the drawing is the end of setting it up.
+        ed.onPointerPress({200.0, 40.0}, Qt::LeftButton, Qt::NoModifier);
+        check(!ed.twistedFrozen(), "wires pin: a click on the drawing unpins it");
+
+        // Pinning twice over is not a way to lose the first one.
+        ed.freezeTwistedPreview();
+        const bool once = ed.twistedFrozen();
+        ed.freezeTwistedPreview();
+        check(once && ed.twistedFrozen(), "wires pin: asking again while pinned changes nothing");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,

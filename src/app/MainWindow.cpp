@@ -4383,6 +4383,33 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // label branch above puts away everything, Special included, so it is turned back on here by name:
     // without this, fitting one label hid the button that places the next one.
     if (mechBreakGroup_) mechBreakGroup_->setVisible(true);
+    // AND THE OTHER ICONS ON IT STAND DOWN while one of them is in use. The rule for this tab is that
+    // a function in progress shows its own settings and nothing else - every other group obeys it, and
+    // this was the one that did not: the two fields that matter appeared beside the whole row of tools
+    // that cannot be used until this one is finished.
+    //
+    // The tool BEING used keeps its icon, because that is what says which function the fields belong
+    // to. Found by asking each cell which tool its button carries rather than by remembering an index,
+    // so re-ordering the group cannot quietly hide the wrong one.
+    for (QWidget* cell : mechSpecialCells_) {
+        if (!cell) continue;
+        bool mine = false;
+        for (QToolButton* b : cell->findChildren<QToolButton*>())
+            if (QAction* a = b->defaultAction();
+                a && a->data().isValid() &&
+                static_cast<ToolId>(a->data().toInt()) == editor_->tool())
+                mine = true;
+        // AND THE CELL CARRYING THE SETTINGS STAYS, whichever tool they belong to. The wires fields
+        // live inside the Wires-harness button's cell but serve all three wires tools, so hiding
+        // that cell while the straight run was armed took the fields away with it - the group came
+        // out empty and invisible, which is the opposite of what this is for.
+        const bool carriesSettings =
+            (twistOptionsGroup_ && twistOptionsGroup_->isVisible() &&
+             cell->isAncestorOf(twistOptionsGroup_)) ||
+            (breakOptionsGroup_ && breakOptionsGroup_->isVisible() &&
+             cell->isAncestorOf(breakOptionsGroup_));
+        cell->setVisible(!armed || mine || carriesSettings);
+    }
     if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
 }
 

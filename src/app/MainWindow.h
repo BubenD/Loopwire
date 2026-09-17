@@ -839,6 +839,11 @@ private:
     // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.
     QVector<QWidget*> mechGroups_;
+    // The icons in the Special group, one cell each. Kept so that while one of them is being USED the
+    // others can stand down: the rule for this tab is that a function in progress shows its own
+    // settings and nothing else, and the group holding the tool was the one place still showing
+    // forty buttons beside the two fields that matter.
+    QVector<QWidget*> mechSpecialCells_;
     QVector<QWidget*> mechModelHiddenGroups_;
     QWidget* mechBreakGroup_ = nullptr;
     // THE LABEL'S OWN GROUP, and nothing else on the tab while a label is being fitted. The stroke

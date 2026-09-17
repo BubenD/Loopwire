@@ -661,6 +661,8 @@ void MainWindow::buildHarnessMechanicalTab() {
             for (int col = 0; col < cols; ++col)
                 lg->setColumnMinimumWidth(col, kSpecialCell.width());
         }
+        mechSpecialCells_.clear();
+        for (QWidget* w : specialCells) mechSpecialCells_ << w;
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
     }
