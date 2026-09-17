@@ -937,12 +937,49 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
         break;
     case EntityType::TwistedPair:
-        // A routed pair is held by its knees, like a polyline; a straight one by its two ends. Either
-        // way the pair is re-laid along whatever the path becomes - it is a length of twisted pair,
-        // not a drawn shape.
+        // A routed run is held by its knees, like a polyline; a straight one by its two ends. Either
+        // way the run is re-laid along whatever the path becomes - it is a length of wire, not a
+        // drawn shape.
+        //
+        // AND EVERY WIRE IN IT GETS A JOINT AT THE ENDS, on the wire itself.
+        //
+        // The points above are the ROUTE down the middle of the bundle, and the route is never drawn:
+        // on a finished harness the only handles were on a line nobody can see, sitting between the
+        // wires and on none of them. What is drawn is the wires, and those are what a person reaches
+        // for - to line an end up on a connector, to snap it to a pin.
+        //
+        // ONLY PHYSICAL WIRES. The strands come two per wire - the two edges of it - so a wire's own
+        // centre is the midpoint of its pair, and one joint is put there rather than two on its
+        // edges. A wire that stops part way into the bundle contributes a stop point as well, and
+        // that is not an end anybody drags: only the endpoints that are actually at an end of the run
+        // are offered, which is what the projection below decides.
         if (e.points.size() >= 2) {
             for (size_t i = 0; i < e.points.size(); ++i)
                 g.push_back({e.points[i], GripRole::Vertex, static_cast<int>(i)});
+            const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
+            const Vec2 head = e.points.front(), tail = e.points.back();
+            const double span = distance(head, tail);
+            if (span > 1e-9 && strands.size() >= 2) {
+                const Vec2 u = (tail - head) / span;
+                const int last = static_cast<int>(e.points.size()) - 1;
+                // Two strands per wire, in order: take them in pairs and use the middle of each pair.
+                for (size_t k = 0; k + 1 < strands.size(); k += 2) {
+                    const std::vector<Vec2>& a = strands[k];
+                    const std::vector<Vec2>& b = strands[k + 1];
+                    if (a.empty() || b.empty()) continue;
+                    for (const bool atFront : {true, false}) {
+                        const Vec2 p = lerp(atFront ? a.front() : a.back(),
+                                            atFront ? b.front() : b.back(), 0.5);
+                        // How far along the run it sits: an end is at one extreme or the other, and a
+                        // wire that has stopped in the middle is neither.
+                        const double t = dot(p - head, u) / span;
+                        if (t > 0.01 && t < 0.99) continue;
+                        const bool atRunStart = t <= 0.5;
+                        g.push_back({p, GripRole::Vertex, atRunStart ? 0 : last,
+                                     p - (atRunStart ? head : tail)});
+                    }
+                }
+            }
         } else {
             g.push_back({e.a, GripRole::LineA, 0});
             g.push_back({e.b, GripRole::LineB, 0});

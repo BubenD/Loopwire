@@ -10397,6 +10397,58 @@ int run_editor_tests() {
         check(once && ed.twistedFrozen(), "wires pin: asking again while pinned changes nothing");
     }
 
+    // ---- A finished wires run has a joint on every wire, at the ends ------------------------------
+    {
+        // Its stored points are the ROUTE down the middle of the bundle, and the route is never
+        // drawn: the only handles were on a line nobody can see, sitting between the wires and on
+        // none of them. What is drawn is the wires, and those are what a person reaches for.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("RUN");
+        w.type = EntityType::TwistedPair;
+        w.a = {0.0, 0.0};
+        w.b = {200.0, 0.0};
+        w.points = {{0.0, 0.0}, {200.0, 0.0}};
+        w.meta.insert(QStringLiteral("twistStraight"), true);
+        w.meta.insert(QStringLiteral("twistWires"), 6);
+        w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+        w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.selectById(QStringLiteral("RUN"));
+
+        const std::vector<Vec2> joints = ed.selectionGripPoints();
+        const std::vector<std::vector<Vec2>> strands = twistedPairStrands(d.entities().front());
+        std::printf("  wire joints: %d strand(s), %d joint(s)\n", int(strands.size()),
+                    int(joints.size()));
+        // Six wires, two ends each, plus the route's own two: fourteen.
+        check(joints.size() == 14, "wire joints: one per wire at each end, and the route's two");
+
+        // OFF THE CENTRELINE. The bundle is 12 across, so its wires are spread either side of y = 0;
+        // handles all sitting at y = 0 would be the old ones on the route.
+        int offAxis = 0;
+        for (const Vec2& j : joints)
+            if (std::abs(j.y) > 1e-6) ++offAxis;
+        std::printf("  wire joints: %d of them are off the centreline\n", offAxis);
+        check(offAxis >= 10, "wire joints: they sit on the wires, not on the line between them");
+
+        // AT THE ENDS, not strung along the run: every one is at x = 0 or x = 200.
+        bool allAtEnds = true;
+        for (const Vec2& j : joints)
+            if (std::abs(j.x) > 1e-6 && std::abs(j.x - 200.0) > 1e-6) allAtEnds = false;
+        check(allAtEnds, "wire joints: at the two ends of the run and nowhere in between");
+
+        // ONE PER WIRE, not one per drawn edge. The strands come two to a wire - its two sides - and
+        // a handle on each would be twelve at one end where there are six wires.
+        int atStart = 0;
+        for (const Vec2& j : joints)
+            if (std::abs(j.x) < 1e-6) ++atStart;
+        std::printf("  wire joints: %d at the start\n", atStart);
+        check(atStart == 7, "wire joints: six wires and the route's own point, not twelve edges");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,
