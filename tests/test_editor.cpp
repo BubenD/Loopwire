@@ -10313,6 +10313,51 @@ int run_editor_tests() {
         check(ed.twistWires() == 2, "converge: two wires is the fewest a bundle can be");
     }
 
+    // ---- The tools that act on wire runs act on a wires run too -----------------------------------
+    {
+        // A wires run is the object most of a loom is drawn with, and it was the one object the
+        // stroke-and-band tools could not see: they test Line, DoubleLine, Wire, Spline, Arc and
+        // Polyline, and a wires run is none of those. A stroke drawn squarely across a bundle of
+        // eight crossed nothing and placed nothing.
+        auto runDoc = [](Document& d) {
+            d.entities().clear();
+            Entity w;
+            w.id = QStringLiteral("RUN");
+            w.type = EntityType::TwistedPair;
+            w.a = {0.0, 0.0};
+            w.b = {200.0, 0.0};
+            w.points = {{0.0, 0.0}, {200.0, 0.0}};
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            d.entities().push_back(w);
+        };
+        // It really does draw strands - otherwise the checks below would be testing nothing.
+        Document d;
+        runDoc(d);
+        const auto strands = twistedPairStrands(d.entities().front());
+        std::printf("  run tools: the run draws %d strand(s)\n", int(strands.size()));
+        check(strands.size() >= 2, "run tools: a wires run is drawn as several runs of wire");
+
+        // ---- THE TRANSITION HEATSHRINK, and the break mark: both are bands drawn across runs, and
+        // both are the same switch the label stroke uses - see the matching case there.
+        {
+            Document d2;
+            runDoc(d2);
+            Editor ed;
+            ed.setDocument(&d2);
+            noSnap(ed);
+            Entity sleeve, mark;
+            const bool gotSleeve = ed.transitionFromBand({100.0, -20.0}, {100.0, 20.0}, sleeve);
+            const bool gotBreak = ed.breakFromBand({100.0, -20.0}, {100.0, 20.0}, mark);
+            std::printf("  run tools: transition heatshrink %s, break mark %s\n",
+                        gotSleeve ? "fits" : "finds nothing", gotBreak ? "fits" : "finds nothing");
+            check(gotSleeve, "run tools: a transition heatshrink can be put over a wires run");
+            check(gotBreak, "run tools: and a break mark across it");
+        }
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,

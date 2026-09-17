@@ -3281,6 +3281,18 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e.points[i - 1], e.points[i]);
             ownPath(was, e.id);
             break;
+        case EntityType::TwistedPair: {
+            // A WIRES RUN IS RUNS OF WIRE, and a label goes on it like any other.
+            //
+            // It was not tested at all, so a stroke drawn squarely across a bundle of eight wires
+            // crossed nothing and placed nothing - on the one object on the sheet most likely to be
+            // labelled. Its own points are the ROUTE down the middle, which is not drawn; what is
+            // drawn is the strands, so those are what a stroke crosses.
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                for (size_t i = 1; i < strand.size(); ++i) tryLine(strand[i - 1], strand[i]);
+            ownPath(was, e.id);
+            break;
+        }
         case EntityType::Arc: {
             // AN ARC IS PART OF A RUN when it is the fillet on a corner - which is the one place a label is
             // most likely to be put and was the one place the stroke could not catch anything, because arcs
@@ -15416,6 +15428,13 @@ bool Editor::breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
         case EntityType::Spline:
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
             break;
+        case EntityType::TwistedPair: {
+            // A WIRES RUN IS RUNS OF WIRE - see the same case in the label stroke. Its own points are
+            // the route down the middle, which is never drawn; the strands are what a band crosses.
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                for (size_t i = 1; i < strand.size(); ++i) tryLine(e, strand[i - 1], strand[i]);
+            break;
+        }
         case EntityType::Polyline: {
             if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
                 const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
@@ -15534,6 +15553,13 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
         case EntityType::Spline:
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
             break;
+        case EntityType::TwistedPair: {
+            // A WIRES RUN IS RUNS OF WIRE - see the same case in the label stroke. Its own points are
+            // the route down the middle, which is never drawn; the strands are what a band crosses.
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                for (size_t i = 1; i < strand.size(); ++i) tryLine(e, strand[i - 1], strand[i]);
+            break;
+        }
         case EntityType::Polyline:
             // A sleeve is itself marked "double", but its centreline is not drawn linework. An
             // ordinary double polyline contributes the rails the eye crossed; any other
