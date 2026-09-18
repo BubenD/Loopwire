@@ -10412,6 +10412,47 @@ int run_editor_tests() {
         check(once && ed.twistedFrozen(), "wires pin: asking again while pinned changes nothing");
     }
 
+    // ---- The click that comes back from the ribbon only unpins: it puts no knee down -------------
+    {
+        // The pin holds the run still so the ribbon can be reached, and lets go of the cursor. The
+        // cursor then goes somewhere else entirely - across the window, onto a spin box - and
+        // wherever it lands on the way back is not a place anybody chose to put a knee. Taking the
+        // knee as well put one wherever the eye happened to return to, every time.
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::WiresRun);
+        ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({100.0, 0.0});
+        ed.freezeTwistedPreview();
+        check(ed.twistedFrozen(), "wires pin: it is pinned to start with");
+        // Back from the ribbon, landing nowhere in particular.
+        ed.onPointerPress({63.0, 41.0}, Qt::LeftButton, Qt::NoModifier);
+        check(!ed.twistedFrozen(), "wires pin: the click back on the drawing unpins it");
+        // Then the knee that WAS chosen, and finish.
+        ed.onPointerMove({300.0, 0.0});
+        ed.onPointerPress({300.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* run = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::TwistedPair) run = &e;
+        check(run != nullptr, "wires pin: the run was drawn");
+        if (run) {
+            QStringList where;
+            for (const Vec2& v : run->points)
+                where << QStringLiteral("%1,%2").arg(v.x, 0, 'f', 0).arg(v.y, 0, 'f', 0);
+            std::printf("  wires pin: the run came out as %s\n",
+                        qPrintable(where.join(QStringLiteral(" -> "))));
+            check(run->points.size() == 2,
+                  "wires pin: two knees - the one clicked before pinning and the one clicked after, "
+                  "and none where the cursor came back");
+            check(!run->points.empty() && std::abs(run->points.back().x - 300.0) < 1e-6 &&
+                      std::abs(run->points.back().y) < 1e-6,
+                  "wires pin: and it ends where the second knee was clicked");
+        }
+    }
+
     // ---- A finished wires run has a joint on every wire, at the ends ------------------------------
     {
         // Its stored points are the ROUTE down the middle of the bundle, and the route is never
@@ -10436,10 +10477,17 @@ int run_editor_tests() {
 
         const std::vector<Vec2> joints = ed.selectionGripPoints();
         const std::vector<std::vector<Vec2>> strands = twistedPairStrands(d.entities().front());
-        std::printf("  wire joints: %d strand(s), %d joint(s)\n", int(strands.size()),
-                    int(joints.size()));
-        // Six wires, two ends each, plus the route's own two: fourteen.
-        check(joints.size() == 14, "wire joints: one per wire at each end, and the route's two");
+        const std::vector<std::pair<Vec2, Vec2>> straights =
+            twistedPairStraights(d.entities().front());
+        std::printf("  wire joints: %d strand(s), %d joint(s), %d straight stretch(es)\n",
+                    int(strands.size()), int(joints.size()), int(straights.size()));
+        // Six wires, two ends each, plus the route's own two: fourteen - and then one in the middle
+        // of every straight stretch there is, which is where a line is picked up to be moved.
+        check(joints.size() == 14 + straights.size(),
+              "wire joints: one per wire at each end, the route's two, and one in the middle of "
+              "every straight stretch");
+        check(!straights.empty(),
+              "wire joints: a run has straight stretches in it to put those middles on");
 
         // OFF THE CENTRELINE. The bundle is 12 across, so its wires are spread either side of y = 0;
         // handles all sitting at y = 0 would be the old ones on the route.
@@ -10449,11 +10497,19 @@ int run_editor_tests() {
         std::printf("  wire joints: %d of them are off the centreline\n", offAxis);
         check(offAxis >= 10, "wire joints: they sit on the wires, not on the line between them");
 
-        // AT THE ENDS, not strung along the run: every one is at x = 0 or x = 200.
-        bool allAtEnds = true;
-        for (const Vec2& j : joints)
-            if (std::abs(j.x) > 1e-6 && std::abs(j.x - 200.0) > 1e-6) allAtEnds = false;
-        check(allAtEnds, "wire joints: at the two ends of the run and nowhere in between");
+        // AT THE ENDS, OR AT THE MIDDLE OF A STRAIGHT, and nowhere else: a joint strung along a run
+        // at no particular place is a handle nobody asked for.
+        bool allPlaced = true;
+        for (const Vec2& j : joints) {
+            if (std::abs(j.x) < 1e-6 || std::abs(j.x - 200.0) < 1e-6) continue;
+            bool isMiddle = false;
+            for (const auto& seg : straights)
+                if (distance(j, lerp(seg.first, seg.second, 0.5)) < 1e-6) isMiddle = true;
+            if (!isMiddle) allPlaced = false;
+        }
+        check(allPlaced,
+              "wire joints: at the two ends of the run, or the middle of a straight, and nowhere "
+              "else");
 
         // ONE PER WIRE, not one per drawn edge. The strands come two to a wire - its two sides - and
         // a handle on each would be twelve at one end where there are six wires.
@@ -10733,6 +10789,134 @@ int run_editor_tests() {
               "fan: rounding the corners does not move the wire ends");
     }
 
+    // ---- The harness snaps on its wires, and trims and extends like the run it is ----------------
+    {
+        // A harness offered the snap system its ROUTE - the line down the middle of the bundle,
+        // which is never drawn. So the cursor caught something between the wires and on none of
+        // them, and the wires, the only part of a harness anybody measures from or lands anything
+        // on, could not be snapped to at all.
+        auto aRun = [](const QString& id, const std::vector<Vec2>& route) {
+            Entity w;
+            w.id = id;
+            w.type = EntityType::TwistedPair;
+            w.points = route;
+            w.a = route.front();
+            w.b = route.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 40.0);
+            w.meta.insert(QStringLiteral("twistLane"), 10.0);
+            return w;
+        };
+
+        // THE STRETCHES IT OFFERS ARE THE DRAWN LINES. Every one of them lies on a wire: the middle
+        // of each is a point on a line somebody can see, which the middle of the route never was.
+        const Entity run = aRun(QStringLiteral("SNAPRUN"), {{0.0, 0.0}, {300.0, 0.0}});
+        const std::vector<std::pair<Vec2, Vec2>> straights = twistedPairStraights(run);
+        const std::vector<std::vector<Vec2>> strands = twistedPairStrands(run);
+        std::printf("  harness snap: %d straight stretch(es) off %d drawn line(s)\n",
+                    int(straights.size()), int(strands.size()));
+        check(!straights.empty(), "harness snap: a run offers the straight stretches it is drawn as");
+        int offAxis = 0;
+        double furthest = 0.0;
+        for (const auto& seg : straights) {
+            const Vec2 mid = lerp(seg.first, seg.second, 0.5);
+            if (std::abs(mid.y) > 1e-6) ++offAxis;
+            // How far the middle of the stretch is from the nearest drawn line.
+            double best = 1e300;
+            for (const std::vector<Vec2>& line : strands)
+                for (size_t i = 1; i < line.size(); ++i)
+                    best = std::min(best, closestPointOnSegment(mid, line[i - 1], line[i]).distance);
+            furthest = std::max(furthest, best);
+        }
+        std::printf("  harness snap: %d of the middles are off the route, the furthest %.4f from a "
+                    "drawn line\n",
+                    offAxis, furthest);
+        check(offAxis == int(straights.size()),
+              "harness snap: not one of them is the route, which runs down y = 0 and is not drawn");
+        check(furthest < 1e-6, "harness snap: every one of them is ON a line the drawing shows");
+        // AND A LAID-UP BUNDLE OFFERS NONE, because a weave has no straight in it to speak of - it
+        // keeps the route it always had rather than handing over a few hundred little facets.
+        Entity laid = run;
+        laid.id = QStringLiteral("LAID");
+        laid.meta.insert(QStringLiteral("twistStraight"), false);
+        check(twistedPairStraights(laid).empty(),
+              "harness snap: a laid-up bundle offers none, and keeps the route it always had");
+
+        // ---- TRIMMED, like the run it is ----
+        {
+            // A harness is parametric - a route and the figures the wires are laid out from - so
+            // cutting it back means cutting the ROUTE back and letting the wires, the fan and the cut
+            // ends be laid out again from what is left. Cutting the drawn wires instead would leave a
+            // bundle of loose lines that is no longer a harness at all.
+            Document d;
+            d.entities().push_back(aRun(QStringLiteral("RUN"), {{0.0, 0.0}, {300.0, 0.0}}));
+            Entity wall;
+            wall.id = QStringLiteral("WALL");
+            wall.type = EntityType::Line;
+            wall.a = {200.0, -60.0};
+            wall.b = {200.0, 60.0};
+            d.entities().push_back(wall);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({200.0, 55.0}, Qt::LeftButton, Qt::NoModifier);   // the wall is the edge
+            // A fence drawn across the far half of the run: that is the piece that goes.
+            ed.onPointerPress({260.0, -40.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({260.0, 40.0}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* left = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.type == EntityType::TwistedPair) left = &e;
+            check(left != nullptr, "harness trim: the run is still a harness afterwards");
+            if (left) {
+                std::printf("  harness trim: 0..300 cut at a wall on x = 200 now runs to %.1f\n",
+                            left->points.back().x);
+                check(std::abs(left->points.back().x - 200.0) < 1e-6,
+                      "harness trim: it comes back to the boundary, like any other run");
+                check(std::abs(left->b.x - 200.0) < 1e-6,
+                      "harness trim: and its stored far end comes with it");
+                check(!twistedPairStrands(*left).empty(),
+                      "harness trim: the shorter run still draws its wires");
+            }
+        }
+
+        // ---- AND EXTENDED ----
+        {
+            Document d;
+            d.entities().push_back(aRun(QStringLiteral("RUN"), {{0.0, 0.0}, {200.0, 0.0}}));
+            Entity wall;
+            wall.id = QStringLiteral("WALL");
+            wall.type = EntityType::Line;
+            wall.a = {300.0, -60.0};
+            wall.b = {300.0, 60.0};
+            d.entities().push_back(wall);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::Extend);
+            ed.onPointerPress({300.0, 55.0}, Qt::LeftButton, Qt::NoModifier);   // the wall to reach
+            ed.onPointerPress({190.0, -40.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({190.0, 40.0}, Qt::LeftButton, Qt::NoModifier);
+            const Entity* grown = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.type == EntityType::TwistedPair) grown = &e;
+            check(grown != nullptr, "harness extend: the run is still there");
+            if (grown) {
+                std::printf("  harness extend: 0..200 reaching for a wall on x = 300 now runs to "
+                            "%.1f\n",
+                            grown->points.back().x);
+                check(std::abs(grown->points.back().x - 300.0) < 1e-6,
+                      "harness extend: it reaches the boundary, like any other run");
+                check(std::abs(grown->b.x - 300.0) < 1e-6,
+                      "harness extend: and its stored far end goes with it");
+            }
+        }
+    }
+
     // ---- The fan ends flush, and every wire is cut with a line across it -------------------------
     {
         // A fan ends with a straight stretch where every wire is parallel to the run again, so every
@@ -10848,6 +11032,57 @@ int run_editor_tests() {
         std::printf("  flush: asked for 500 on a 60 fan, level for %.1f\n", greedy);
         check(greedy > 50.0 && greedy < 60.0,
               "flush: more than the fan can give leaves the fan a stretch to spread in");
+
+        // ---- AND THE ENDS CAN BE DRAWN STRIPPED ----
+        {
+            // A wire is landed by taking the insulation off the last few millimetres of it and
+            // crimping the bare conductor into a contact, and a harness drawing says how much comes
+            // off: the strip length. It is drawn as a second line across the wire that far back from
+            // the cut, so the bare part between the two is what the eye sees.
+            Entity bare = run(1, 0.0, QStringLiteral("both"), 0);
+            bare.id = QStringLiteral("STRIP");
+            bare.meta.insert(QStringLiteral("twistStrip"), true);
+            bare.meta.insert(QStringLiteral("twistStripLen"), 7.0);
+            const std::vector<std::vector<Vec2>> marks = twistedPairEndCaps(bare);
+            std::printf("  strip: %d line(s) across the ends, against %d cut alone\n",
+                        int(marks.size()), int(twistedPairEndCaps(both).size()));
+            check(marks.size() == 2 * twistedPairEndCaps(both).size(),
+                  "strip: two lines across each end now - where it is cut and where the insulation "
+                  "stops");
+            // SEVEN MILLIMETRES BACK, on both ends, and square across the run like the cut is.
+            int atSeven = 0, leaning = 0;
+            for (const std::vector<Vec2>& m : marks) {
+                if (m.size() != 2) continue;
+                if (std::abs(m.front().x - m.back().x) > 1e-6) ++leaning;
+                const double from = std::min(std::abs(m.front().x - 0.0),
+                                             std::abs(m.front().x - 300.0));
+                if (std::abs(from - 7.0) < 1e-6) ++atSeven;
+            }
+            std::printf("  strip: %d of them are 7 back from an end, %d lean\n", atSeven, leaning);
+            check(atSeven == int(marks.size()) / 2,
+                  "strip: one of each pair is the strip length back from the cut");
+            check(leaning == 0, "strip: and both are square across the run, as the cut is");
+            // SAYING NOTHING LEAVES THE ENDS CUT AND NOTHING ELSE, which is what a drawing that does
+            // not call out a strip length shows.
+            Entity plain = bare;
+            plain.id = QStringLiteral("NOSTRIP");
+            plain.meta.remove(QStringLiteral("twistStrip"));
+            check(twistedPairEndCaps(plain).size() == twistedPairEndCaps(both).size(),
+                  "strip: unasked for, the ends are drawn cut and nothing else");
+            // AND IT NEVER REACHES PAST THE END IT IS PART OF: a strip mark out on the bundle is a
+            // mark on the bundle.
+            Entity greedyStrip = bare;
+            greedyStrip.id = QStringLiteral("GREEDY");
+            greedyStrip.meta.insert(QStringLiteral("twistStripLen"), 500.0);
+            double deepest = 0.0;
+            for (const std::vector<Vec2>& m : twistedPairEndCaps(greedyStrip))
+                if (m.size() == 2)
+                    deepest = std::max(deepest, std::min(std::abs(m.front().x),
+                                                         std::abs(m.front().x - 300.0)));
+            std::printf("  strip: asked for 500 on a 60 fan, the deepest mark is %.1f in\n", deepest);
+            check(deepest <= 60.0 * 0.9 + 1e-6,
+                  "strip: more than the end can spare stops at the end, not out on the bundle");
+        }
     }
 
     // ---- Nought is a sharp corner on the run's knee as well --------------------------------------

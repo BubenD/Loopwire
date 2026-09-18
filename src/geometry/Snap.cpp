@@ -55,12 +55,25 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         out.emplace_back(e.a, e.b);
         break;
     case EntityType::TwistedPair: {
-        // The route it runs along, not the weave. The weave is hundreds of little segments - a
-        // decorative crossing of two wires - and offering all of them to the snap system swamped it:
-        // every one becomes a midpoint, a perpendicular foot and a candidate for every intersection
-        // test, and a sheet with a few pairs on it took a quarter of a second per mouse movement. What
-        // a drawing actually measures from is where the pair RUNS and where it ENDS, and the ends are
-        // offered separately below.
+        // THE LINES THE HARNESS IS DRAWN AS, where they are straight.
+        //
+        // It used to be the ROUTE: the line down the middle of the bundle, which is never drawn. So
+        // the cursor caught something between the wires and on none of them, and the wires - the
+        // only part of a harness anybody measures from or lands anything on - could not be snapped
+        // to at all. That was done because the weave is hundreds of little facets and offering all
+        // of them swamped the snap system: every one becomes a midpoint, a perpendicular foot and a
+        // candidate for every crossing test, and a sheet with a few pairs on it took a quarter of a
+        // second per mouse movement.
+        //
+        // The answer is neither: it is the STRAIGHT STRETCHES of the drawn lines - the bundle, the
+        // slants of the fan, the flush ends - which is what a harness is nearly all of, and is a
+        // handful of segments rather than hundreds. A laid-up bundle has none to speak of and keeps
+        // its route, which is what it always had.
+        const std::vector<std::pair<Vec2, Vec2>> straights = twistedPairStraights(e);
+        if (!straights.empty()) {
+            for (const auto& seg : straights) out.emplace_back(seg.first, seg.second);
+            break;
+        }
         const std::vector<Vec2>& along =
             e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
         for (size_t i = 1; i < along.size(); ++i) out.emplace_back(along[i - 1], along[i]);

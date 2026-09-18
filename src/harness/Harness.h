@@ -182,6 +182,12 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
 // Kept apart from the strands above because the strands come strictly TWO PER WIRE, and everything
 // that walks them in pairs - the joints on every wire, for one - would take a cut end for an edge.
 std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair);
+// THE STRAIGHT STRETCHES OF THE DRAWN LINES: one segment per stretch of wire that is actually
+// straight, with the little facets an arc is drawn as left out and anything too short to be worth
+// marking dropped. A harness is mostly straight line - the bundle, the slants of the fan, the flush
+// ends - and this is that, which is what a drawing measures from and snaps to and puts a joint on
+// the middle of. Empty for a laid-up bundle: a weave has no straight in it to speak of.
+std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -
 // including an older drawing with no value - reads as "both", which is what those drawings were made
 // with. Left and right mean the sheet ends, not the click order: a run drawn right-to-left still fans

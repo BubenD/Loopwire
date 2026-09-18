@@ -374,6 +374,12 @@ struct TwistFrames {
     std::vector<int> trunkLane;  // per wire: which trunk line it becomes, or -1 if it stops
     double tail = 0.0;           // straight run at the very end, before the fan starts
     double tailB = 0.0;          // ...at the finish end
+    // HOW MUCH INSULATION IS OFF THE END OF EACH WIRE. A wire is landed by stripping the last few
+    // millimetres of it back to bare conductor and crimping that into a contact, and a harness
+    // drawing says how much: it is the strip length, and it is a made figure like any other. Nought
+    // is a drawing that does not say - the wires are drawn cut and nothing else.
+    double strip = 0.0;
+    double stripB = 0.0;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -577,6 +583,20 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     };
     f.tail = flushOf(false);
     f.tailB = flushOf(true);
+    // AND HOW MUCH OF THE INSULATION IS OFF THE END. Asked for, it is a length; left to the drawing
+    // it is five millimetres or whatever the end can spare, which is what these are stripped to.
+    // Never more than the end is long: a strip mark past the fan is a mark on the bundle.
+    auto stripOf = [&](bool finish) {
+        if (!f.straight) return 0.0;
+        if (!sideValue(QStringLiteral("twistStrip"), finish).toBool(false)) return 0.0;
+        const double lead = finish ? f.leadB : f.lead;
+        const QJsonValue asked = sideValue(QStringLiteral("twistStripLen"), finish);
+        const double want = asked.isUndefined() ? std::min(5.0, lead * 0.4)
+                                                : std::max(0.0, asked.toDouble(0.0));
+        return std::min(want, lead * 0.9);
+    };
+    f.strip = stripOf(false);
+    f.stripB = stripOf(true);
     // AND HOW TIGHTLY THE FAN'S OWN CORNERS TURN, which is not the run's knee radius: the run
     // bends where the loom is routed round something, the fan bends where a wire leaves the bundle
     // for its pin. They are set on different things and are different sizes, and one figure for
@@ -953,9 +973,10 @@ QString twistKey(const Entity& e) {
                                                                 : QLatin1String("|laid");
     for (const char* m : {"twistLane", "twistWireWidth", "twistTrunkWires", "twistKnee",
                           "twistFanKnee", "twistLaneFinish", "twistEndsFinish",
-                          "twistFanKneeFinish", "twistFlushLen", "twistFlushLenFinish"})
+                          "twistFanKneeFinish", "twistFlushLen", "twistFlushLenFinish",
+                          "twistStripLen", "twistStripLenFinish"})
         put(m);
-    for (const char* m : {"twistFlush", "twistFlushFinish"})
+    for (const char* m : {"twistFlush", "twistFlushFinish", "twistStrip", "twistStripFinish"})
         k += e.meta.contains(QLatin1String(m))
                  ? (e.meta.value(QLatin1String(m)).toBool() ? QLatin1String("|f1")
                                                             : QLatin1String("|f0"))
@@ -1013,9 +1034,41 @@ const TwistCached* twistCached(const Entity& pair) {
             // cut there - it is carrying on inside the lines the bundle is drawn as - so it gets no
             // line across it, and a wire landed on a pin gets one.
             if (!edgeA.empty() && !edgeB.empty()) {
-                if (span.first == 0) c.caps.push_back({edgeA.front(), edgeB.front()});
-                if (span.second + 1 == f.pos.size())
+                // AND WHERE THE INSULATION STOPS, when the drawing says the end is stripped: a
+                // second line across the wire, that far back from the cut, so the bare conductor
+                // between the two of them is what the eye sees and what a length can be put on.
+                auto backFrom = [](const std::vector<Vec2>& line, bool fromFront, double by) {
+                    if (line.size() < 2) return line.empty() ? Vec2{} : line.front();
+                    double left = by;
+                    if (fromFront) {
+                        for (size_t i = 1; i < line.size(); ++i) {
+                            const double seg = distance(line[i - 1], line[i]);
+                            if (seg >= left)
+                                return lerp(line[i - 1], line[i], seg > 1e-12 ? left / seg : 0.0);
+                            left -= seg;
+                        }
+                        return line.back();
+                    }
+                    for (size_t i = line.size() - 1; i > 0; --i) {
+                        const double seg = distance(line[i], line[i - 1]);
+                        if (seg >= left)
+                            return lerp(line[i], line[i - 1], seg > 1e-12 ? left / seg : 0.0);
+                        left -= seg;
+                    }
+                    return line.front();
+                };
+                if (span.first == 0) {
+                    c.caps.push_back({edgeA.front(), edgeB.front()});
+                    if (f.strip > 1e-9)
+                        c.caps.push_back({backFrom(edgeA, true, f.strip),
+                                          backFrom(edgeB, true, f.strip)});
+                }
+                if (span.second + 1 == f.pos.size()) {
                     c.caps.push_back({edgeA.back(), edgeB.back()});
+                    if (f.stripB > 1e-9)
+                        c.caps.push_back({backFrom(edgeA, false, f.stripB),
+                                          backFrom(edgeB, false, f.stripB)});
+                }
             }
             c.strands.push_back(std::move(edgeA));
             c.strands.push_back(std::move(edgeB));
@@ -1038,6 +1091,44 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);
     return c ? c->caps : std::vector<std::vector<Vec2>>{};
+}
+
+std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair) {
+    std::vector<std::pair<Vec2, Vec2>> out;
+    if (pair.type != EntityType::TwistedPair) return out;
+    const TwistCached* c = twistCached(pair);
+    // A LAID-UP BUNDLE HAS NO STRAIGHT IN IT TO SPEAK OF. The weave is a cosine drawn as a few
+    // hundred little facets, and none of them is a stretch of anything: taking every one of them for
+    // a straight would hand the snap system hundreds of segments per pair, each with a midpoint and
+    // a perpendicular foot and a place in every crossing test, which is what it used to cost.
+    if (!c || !c->frames.straight) return out;
+    const TwistFrames& f = c->frames;
+    // Straight to within a hundred-thousandth of the run, which a drawn arc's facets are not - they
+    // stand off their own chord by a good fraction of a wire. And long enough to be worth marking:
+    // four wire widths, or a hundredth of the run, whichever is the more.
+    const double tol = std::max(1e-9, f.len * 1e-5);
+    const double atLeast = std::max(f.thick * 8.0, f.len * 0.01);
+    for (const std::vector<Vec2>& line : c->strands) {
+        if (line.size() < 2) continue;
+        size_t from = 0;
+        auto keep = [&](size_t a, size_t b) {
+            if (b > a && distance(line[a], line[b]) >= atLeast)
+                out.emplace_back(line[a], line[b]);
+        };
+        for (size_t i = 2; i < line.size(); ++i) {
+            // Does everything between where this stretch started and here still lie on the line
+            // between the two of them? The moment one does not, the stretch ended at the one before.
+            bool onIt = distance(line[from], line[i]) > 1e-12;
+            for (size_t j = from + 1; onIt && j < i; ++j)
+                onIt = closestPointOnSegment(line[j], line[from], line[i]).distance <= tol;
+            if (!onIt) {
+                keep(from, i - 1);
+                from = i - 1;
+            }
+        }
+        keep(from, line.size() - 1);
+    }
+    return out;
 }
 
 QString twistedPairSpread(const Entity& pair) {

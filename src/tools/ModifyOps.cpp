@@ -103,6 +103,16 @@ void forEachCutSegment(const Entity& e, F&& f) {
     case EntityType::Wire:
         for (size_t i = 1; i < e.points.size(); ++i) f(e.points[i - 1], e.points[i]);
         break;
+    case EntityType::TwistedPair:
+        // A harness cuts with the WIRES it draws, not with its route. The route is the line down the
+        // middle of the bundle and is never drawn: a boundary nobody can see is a boundary nothing
+        // appears to stop at. Its cut ends count too - they are drawn, and something extended to the
+        // end of a harness stops at the line across it.
+        for (const auto& strand : twistedPairStrands(e))
+            for (size_t i = 1; i < strand.size(); ++i) f(strand[i - 1], strand[i]);
+        for (const auto& cap : twistedPairEndCaps(e))
+            if (cap.size() == 2) f(cap.front(), cap.back());
+        break;
     case EntityType::Rect:
     case EntityType::Polygon:
         for (size_t i = 0; i < e.points.size(); ++i)
@@ -956,6 +966,32 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
         }
         return false;
     }
+    // A HARNESS IS THE WIRES IT DRAWS, for the same reason a sleeve is its outline: its route runs
+    // down the middle of the bundle and is never drawn, so asking whether THAT meets the reference
+    // answers about a line nobody can see. A harness laid across a boundary meets it where its wires
+    // do, which is what the eye is looking at.
+    if (e.type == EntityType::TwistedPair) {
+        for (const auto& strand : twistedPairStrands(e))
+            for (size_t i = 1; i < strand.size(); ++i) {
+                const Vec2 A = strand[i - 1], B = strand[i], D = B - A;
+                const double L2 = D.lengthSq();
+                for (const auto& c : others) {
+                    if (!e.id.isEmpty() && c.id == e.id) continue;
+                    if (isCurvedCutter(c) && L2 > 1e-12) {
+                        std::vector<double> ts;
+                        appendCurvedCuts(c, A, D, L2, 0.0, ts);
+                        if (!ts.empty()) return true;
+                        continue;
+                    }
+                    bool hit = false;
+                    forEachCutSegment(c, [&](const Vec2& p1, const Vec2& p2) {
+                        if (segmentSegmentIntersection(A, B, p1, p2)) hit = true;
+                    });
+                    if (hit) return true;
+                }
+            }
+        return false;
+    }
     // A DOUBLE run IS its two physical lines: they are what is drawn, and they are what a reference
     // meets. Asking its centreline instead answers "they do not meet" for a run whose two lines straddle
     // the reference - which is most of them, the centreline being half a gap away from each line - and
@@ -1447,6 +1483,25 @@ bool extendEntityTo(Entity& e, const Vec2& pick, const std::vector<Entity>& othe
         // Cap the double line's physical runs flush to the boundary it reached.
         if (e.type == EntityType::DoubleLine)
             setExtendCap(e, extendA ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), *r);
+        return true;
+    }
+    // A HARNESS IS ITS ROUTE. The object is parametric - a route and the figures the wires are laid
+    // out from - so making it longer means making the route longer, and the wires, the fan and the
+    // cut ends are all laid out again from it. Its a and b are the route's two ends and are kept
+    // level with it, because everything that reads a run's ends without unpacking it reads those.
+    if (e.type == EntityType::TwistedPair) {
+        std::vector<Vec2> route = e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
+        const int n = static_cast<int>(route.size());
+        if (n < 2) return false;
+        const bool front = distance(pick, route.front()) < distance(pick, route.back());
+        const Vec2 moving = front ? route.front() : route.back();
+        const Vec2 fixed = front ? route[1] : route[n - 2];
+        auto r = rayToBoundary(fixed, moving, others, e.id);
+        if (!r) return false;
+        if (front) route.front() = r->pt; else route.back() = r->pt;
+        e.points = route;
+        e.a = route.front();
+        e.b = route.back();
         return true;
     }
     if (e.type == EntityType::Polyline || e.type == EntityType::Spline ||

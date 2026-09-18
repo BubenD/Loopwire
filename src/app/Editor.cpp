@@ -991,6 +991,14 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
                     }
                 }
             }
+            // AND ONE IN THE MIDDLE OF EVERY STRAIGHT STRETCH THERE IS. A harness is nearly all
+            // straight line - the bundle, the slants of the fan, the flush ends - and the middle of
+            // a line is the place a drawing reaches for after its two ends: it is where a line is
+            // picked up to be moved, which is what this one does, and it is the point everything
+            // else on the sheet lines up against. Every other line on the sheet has had one since
+            // the beginning; the harness had handles at its ends and nothing in between.
+            for (const auto& seg : twistedPairStraights(e))
+                g.push_back({lerp(seg.first, seg.second, 0.5), GripRole::LineMid, 0});
         } else {
             g.push_back({e.a, GripRole::LineA, 0});
             g.push_back({e.b, GripRole::LineB, 0});
@@ -9566,6 +9574,13 @@ void Editor::handleDrawPress(const Vec2& p) {
     }
     case ToolId::TwistedRoute:
         // Like a polyline: each click adds a knee and the pair keeps going until Enter.
+        //
+        // PINNED (Tab), THE CLICK THAT COMES BACK ONLY UNPINS IT. See the wires run below.
+        if (twistedFrozen_) {
+            twistedFrozen_ = false;
+            emit overlayChanged();
+            break;
+        }
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(QStringLiteral(
@@ -9574,7 +9589,12 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::TwistedHarnessRoute:
         // The whole bundle (twistWires_ of them), routed like TwistedRoute rather than laid
         // straight between two points like TwistedHarness - a loom rarely goes straight from
-        // one end to the other either.
+        // one end to the other either. Pinned, the click that comes back only unpins it.
+        if (twistedFrozen_) {
+            twistedFrozen_ = false;
+            emit overlayChanged();
+            break;
+        }
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(QStringLiteral(
@@ -9584,11 +9604,19 @@ void Editor::handleDrawPress(const Vec2& p) {
         // The same run, laid STRAIGHT: the wires keep their own lanes the whole way instead of being
         // laid up round one another.
         //
-        // PINNED (Tab), the first click back on the drawing is the one that UNPINS it: the run was
-        // held still so the ribbon could be used, and coming back to the drawing is the end of that.
-        // The click still says where the next knee goes, which is what a click on a routed tool has
-        // always meant - it is only the pin that it clears.
-        twistedFrozen_ = false;
+        // PINNED (Tab), THE CLICK THAT COMES BACK ONLY UNPINS IT, and puts no knee down.
+        //
+        // The pin holds the run still so the ribbon can be reached, and the cursor is let go of.
+        // Coming back to the drawing is the end of that, and it is the only thing that click means:
+        // the cursor has been somewhere else entirely - across the window, on a spin box - and
+        // wherever it lands on the way back is not a place anybody chose to put a knee. Taking the
+        // knee as well put one wherever the eye happened to return to, every time.
+        if (twistedFrozen_) {
+            twistedFrozen_ = false;
+            emit overlayChanged();
+            emit message(QStringLiteral("Wires run: back to the drawing - click the next knee"));
+            break;
+        }
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(QStringLiteral(
@@ -12368,6 +12396,35 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
                 storeCutMeta(rem, selfId);
                 additions.push_back(std::move(rem));
             }
+        } else if (obj->type == EntityType::TwistedPair) {
+            // A HARNESS IS ITS ROUTE, the same way a double run is its centreline: the object is
+            // parametric, so cutting it back means cutting the route back and letting the wires, the
+            // fan and the cut ends be laid out again from what is left. Cutting the drawn wires
+            // instead would leave a bundle of loose lines that is no longer a harness at all.
+            //
+            // The fence has to cross the route, which is inside the bundle - so a line drawn across
+            // the wires crosses it, which is the gesture anybody makes.
+            const std::vector<Vec2> route =
+                obj->points.size() >= 2 ? obj->points : std::vector<Vec2>{obj->a, obj->b};
+            auto pick = cutCrossOn(route);
+            if (!pick || !objectCrosses(*obj, refs)) continue;
+            const QString selfId = obj->id;
+            auto pieces = trimPolylinePieces(route, *pick, joints, selfId);
+            if (pieces.empty()) continue;
+            obj->points = pieces[0];
+            obj->a = obj->points.front();
+            obj->b = obj->points.back();
+            storeCutMeta(*obj, selfId);
+            ++count;
+            if (pieces.size() == 2) {
+                Entity rem = *obj;
+                rem.id.clear();
+                rem.points = pieces[1];
+                rem.a = rem.points.front();
+                rem.b = rem.points.back();
+                storeCutMeta(rem, selfId);
+                additions.push_back(std::move(rem));
+            }
         } else if (obj->type == EntityType::Rect || obj->type == EntityType::Polygon) {
             // A closed shape is trimmed as the run of its own edges, and what is left is open - so it
             // becomes a polyline, which is what an open run IS. (The same thing every CAD does with a
@@ -13224,14 +13281,19 @@ void Editor::applyExtendFence(const Vec2& a, const Vec2& b) {
         const bool line = obj->type == EntityType::Line;
         const bool dbl = obj->type == EntityType::DoubleLine;
         const bool poly = obj->type == EntityType::Polyline;
-        if (!line && !dbl && !poly) continue;
+        // A HARNESS REACHES A BOUNDARY LIKE ANY OTHER RUN. It is parametric - a route and the
+        // figures its wires are laid out from - so it stretches by its route stretching, and the
+        // wires, the fan and the cut ends are laid out again from what it becomes.
+        const bool harness = obj->type == EntityType::TwistedPair;
+        if (!line && !dbl && !poly && !harness) continue;
         // ONE LINE OF A DOUBLE RUN FIRST. It has to be tried before the centreline, because a fence
         // that reaches only one line of a run never crosses the centreline at all - so the object was
         // skipped here and the gesture did nothing whatever.
         if (extendOneRailOfDouble(*obj, a, b, refs)) { ++count; continue; }
-        // The fence must cross the object's centreline.
+        // The fence must cross the object's centreline - which for a harness is its route, and a
+        // fence drawn across the wires crosses that, the route being inside the bundle.
         std::optional<Vec2> x;
-        if (poly) {
+        if (poly || (harness && obj->points.size() >= 2)) {
             for (size_t i = 1; i < obj->points.size() && !x; ++i)
                 x = segmentSegmentIntersection(a, b, obj->points[i - 1], obj->points[i]);
         } else {
@@ -15763,6 +15825,12 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     if (straight && !twistFlush_) e.meta.insert(QStringLiteral("twistFlush"), false);
     if (straight && twistFlush_ && twistFlushLen_ > 1e-9)
         e.meta.insert(QStringLiteral("twistFlushLen"), twistFlushLen_);
+    // THE STRIPPED ENDS, written only when the drawing says the ends are stripped - which most do
+    // not, so most runs carry nothing extra.
+    if (straight && twistStrip_) {
+        e.meta.insert(QStringLiteral("twistStrip"), true);
+        if (twistStripLen_ > 1e-9) e.meta.insert(QStringLiteral("twistStripLen"), twistStripLen_);
+    }
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
@@ -15836,6 +15904,19 @@ void Editor::setTwistFlushLen(double mm) {
     const double next = std::max(0.0, mm);
     if (std::abs(twistFlushLen_ - next) < 1e-9) return;
     twistFlushLen_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistStrip(bool on) {
+    if (twistStrip_ == on) return;
+    twistStrip_ = on;
+    emit overlayChanged();   // a pinned run re-draws with its ends stripped, or not
+}
+
+void Editor::setTwistStripLen(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistStripLen_ - next) < 1e-9) return;
+    twistStripLen_ = next;
     emit overlayChanged();
 }
 

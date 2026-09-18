@@ -162,6 +162,13 @@ public:
     void setTwistFlush(bool on);
     double twistFlushLen() const { return twistFlushLen_; }
     void setTwistFlushLen(double mm);
+    // STRIPPED ENDS: the last few millimetres of each wire with the insulation off, back to bare
+    // conductor, which is how a wire is landed in a contact. The STRIP LENGTH is how much - a made
+    // figure a harness drawing states. 0 for the length takes the drawing's own.
+    bool twistStrip() const { return twistStrip_; }
+    void setTwistStrip(bool on);
+    double twistStripLen() const { return twistStripLen_; }
+    void setTwistStripLen(double mm);
     double twistLaneFinish() const { return twistLaneFinish_; }
     void setTwistLaneFinish(double mm);
     double twistFanFinish() const { return twistFanFinish_; }
@@ -1586,6 +1593,8 @@ private:
     bool twistSidesSame_ = true;                   // the finish end repeats the start
     bool twistFlush_ = true;                       // the ends are cut square across the fan
     double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
+    bool twistStrip_ = false;                      // the insulation is off the last of each wire
+    double twistStripLen_ = 0.0;                   // how much; 0 = the drawing's own
     double twistLaneFinish_ = 0.0;                 // and these three are its own, when it does not
     double twistFanFinish_ = 0.0;
     double twistFanKneeFinish_ = -1.0;

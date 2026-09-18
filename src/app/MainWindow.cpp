@@ -4596,6 +4596,24 @@ void MainWindow::syncBreakOptions() {
                 twistFlushSpin_->setValue(editor_->twistFlushLen());
             }
         }
+        // The stripped end is the straight run's, like the flush one: a laid-up bundle has no wire
+        // ends of its own on show to strip.
+        if (twistStripCheck_) {
+            twistStripCheck_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistStripCheck_);
+                twistStripCheck_->setChecked(editor_->twistStrip());
+            }
+        }
+        if (twistStripSpin_ && twistStripLabel_) {
+            const bool stripping = straightRun && editor_->twistStrip();
+            twistStripLabel_->setVisible(stripping);
+            autoFieldCell(twistStripSpin_)->setVisible(stripping);
+            if (stripping) {
+                QSignalBlocker b(twistStripSpin_);
+                twistStripSpin_->setValue(editor_->twistStripLen());
+            }
+        }
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -9278,6 +9296,24 @@ void MainWindow::refreshProperties() {
                 addNum(QStringLiteral("Flush length"),
                        mv(QStringLiteral("twistFlushLen")).toDouble(0.0), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistFlushLen"),
+                                                           std::max(0.0, v));
+                       });
+            // AND WHETHER THE ENDS ARE STRIPPED, and by how much: the insulation off the last of
+            // each wire, back to bare conductor, which is how a wire is landed in a contact.
+            const bool stripping = e->meta.value(QStringLiteral("twistStrip")).toBool();
+            addCombo(QStringLiteral("Stripped ends"),
+                     {QStringLiteral("Yes"), QStringLiteral("No")},
+                     mv(QStringLiteral("twistStrip")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (stripping ? QStringLiteral("Yes") : QStringLiteral("No")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistStrip"),
+                                                       t == QLatin1String("Yes"));
+                     });
+            if (stripping)
+                addNum(QStringLiteral("Strip length"),
+                       mv(QStringLiteral("twistStripLen")).toDouble(0.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistStripLen"),
                                                            std::max(0.0, v));
                        });
         }

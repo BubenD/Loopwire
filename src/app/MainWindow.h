@@ -843,6 +843,9 @@ private:
     QCheckBox* twistFlushCheck_ = nullptr;
     QDoubleSpinBox* twistFlushSpin_ = nullptr;
     QLabel* twistFlushLabel_ = nullptr;
+    QCheckBox* twistStripCheck_ = nullptr;
+    QDoubleSpinBox* twistStripSpin_ = nullptr;
+    QLabel* twistStripLabel_ = nullptr;
     // A FIELD WHOSE LOWEST VALUE IS "AUTO" GETS A LITTLE A BESIDE IT. Auto is at the bottom of the
     // range, so the only way back to it was to hold the down arrow, or to know that typing a number
     // below the minimum lands there - neither of which is a thing to expect anybody to know. The A
