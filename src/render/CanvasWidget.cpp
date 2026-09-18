@@ -1577,28 +1577,23 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
 }
 
 bool CanvasWidget::focusNextPrevChild(bool next) {
+    // PINNING COMES FIRST ON THE WIRES TOOLS, before the field-cycling below.
+    //
+    // A wires run has TWO dynamic-input fields - a length and an angle - so the check underneath
+    // caught it first, refused traversal, and let Tab fall through to keyPressEvent, which cycled
+    // the fields and opened the typing box. Only the SECOND Tab, now landing in that box, reached
+    // the filter that pins. Pinning took two presses and the first one looked like it had done
+    // nothing but pop a box up.
+    if (editor_ && Editor::isTwistedTool(editor_->tool())) {
+        if (next) editor_->freezeTwistedPreview();
+        // Swallowed either way, pinned or not: traversal would move the keyboard off the canvas and
+        // leave a half-drawn run that neither Enter nor Esc could reach.
+        return true;
+    }
     // While drafting with more than one dynamic-input field (Length/Angle, radius/
     // angle, ...), Tab/Backtab must cycle those fields — so refuse focus traversal and
     // let the key fall through to keyPressEvent (Qt tries focus nav BEFORE keyPress).
     if (editor_ && editor_->drawInputFieldLabels().size() > 1) return false;
-    // Tab while a twisted bundle is being drawn: pin it, so the number of wires and the rest can be
-    // set on the ribbon with the real thing on screen. Checked before the dynamic-input fields, because
-    // for these tools pinning is what Tab is for. Nothing to pin -> falls through as usual.
-    if (editor_ && Editor::isTwistedTool(editor_->tool())) {
-        if (next) editor_->freezeTwistedPreview();
-        // SWALLOWED EITHER WAY, pinned or not.
-        //
-        // It used to fall through to focus traversal when there was nothing to pin - before the
-        // first click, or on Backtab - and traversal moves the keyboard off the canvas onto the
-        // ribbon. The drawing then looked frozen, and in every way that matters it was: the run was
-        // half drawn and neither Enter nor Esc reached it any more, so it could not be finished and
-        // could not be abandoned. The mouse still moved the preview, which made it worse - the
-        // thing plainly alive and taking no notice.
-        //
-        // While one of these tools is armed, Tab belongs to the tool. There is nowhere else on the
-        // ribbon a person wants it to go mid-run.
-        return true;
-    }
     // Tab while placing a break mark: pin the preview so the ribbon's numbers can be tried on it.
     if (editor_ && next && editor_->tool() == ToolId::LengthBreak) {
         editor_->freezeBreakPreview();

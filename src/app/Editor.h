@@ -1554,7 +1554,10 @@ private:
     double twistFan_ = 0.0;                        // fan length at each end; 0 = the drawing's own
     double twistWireWidth_ = 0.0;                  // one wire across; 0 = the drawing's own
     double twistKnee_ = 0.0;                       // fillet at a knee; 0 = the drawing's own
-    int twistTrunk_ = 0;                           // wires through the bundle; 0 = all of them
+    // HOW MANY LINES THE BUNDLE IS DRAWN AS once the fan has converged. Two: that is what a run of
+    // many wires is drawn as on a released sheet. 0 would be every wire, which is a picture of the
+    // wires rather than of the harness.
+    int twistTrunk_ = 2;
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};

@@ -399,7 +399,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // HOW FAR APART THE SPREAD WIRES SIT. Only the straight run uses it - a laid-up
                 // bundle spreads its wires across its own width, which is what its width is for -
                 // so the row is hidden for the other tools rather than sitting there doing nothing.
-                twistLaneLabel_ = new QLabel(QStringLiteral("Spacing"), optW);
+                // NAMED FOR WHAT IT SETS. "Spacing" could be the pitch in the bundle, the pitch in
+                // the fan, or the gap between runs; it is the fan's, and the field now says so.
+                twistLaneLabel_ = new QLabel(QStringLiteral("Fan pitch"), optW);
                 twistLaneLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistLaneSpin_ = new QDoubleSpinBox(optW);

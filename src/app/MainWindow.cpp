@@ -4388,17 +4388,12 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // this was the one that did not: the two fields that matter appeared beside the whole row of tools
     // that cannot be used until this one is finished.
     //
-    // The tool BEING used keeps its icon, because that is what says which function the fields belong
-    // to. Found by asking each cell which tool its button carries rather than by remembering an index,
-    // so re-ordering the group cannot quietly hide the wrong one.
+    // INCLUDING THE ONE BEING USED. Its icon was kept at first, on the grounds that it says which
+    // function the fields belong to - but it does not say that: it is the same icon whether the tool
+    // is armed or not, and the fields beside it name themselves. What it did do was take a cell's
+    // width from settings that have none to spare.
     for (QWidget* cell : mechSpecialCells_) {
         if (!cell) continue;
-        bool mine = false;
-        for (QToolButton* b : cell->findChildren<QToolButton*>())
-            if (QAction* a = b->defaultAction();
-                a && a->data().isValid() &&
-                static_cast<ToolId>(a->data().toInt()) == editor_->tool())
-                mine = true;
         // AND THE CELL CARRYING THE SETTINGS STAYS, whichever tool they belong to. The wires fields
         // live inside the Wires-harness button's cell but serve all three wires tools, so hiding
         // that cell while the straight run was armed took the fields away with it - the group came
@@ -4408,7 +4403,11 @@ void MainWindow::updateMechanicalRibbonGroups() {
              cell->isAncestorOf(twistOptionsGroup_)) ||
             (breakOptionsGroup_ && breakOptionsGroup_->isVisible() &&
              cell->isAncestorOf(breakOptionsGroup_));
-        cell->setVisible(!armed || mine || carriesSettings);
+        cell->setVisible(!armed || carriesSettings);
+        // The cell that carries the settings has to stay, but its BUTTON does not: that is the one
+        // icon that was still on the ribbon beside the fields, kept alive by the cell around it.
+        for (QToolButton* b : cell->findChildren<QToolButton*>())
+            b->setVisible(!armed);
     }
     if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
 }

@@ -6347,8 +6347,13 @@ int run_editor_tests() {
               "wires run: the tool places a straight run through the knees it was clicked along");
         if (d.entities().size() == 1) {
             const Entity back = Entity::fromJson(d.entities()[0].toJson());
+            // What the round trip is about: it comes back the same OBJECT - a straight run of four
+            // wires that still draws. Not a strand count: how many lines a bundle is drawn as is
+            // the convergence setting's business and changes with it, which has nothing to do with
+            // whether the object survived being written to a file.
             check(back.meta.value(QStringLiteral("twistStraight")).toBool() &&
-                      twistedPairStrands(back).size() == 8,
+                      back.meta.value(QStringLiteral("twistWires")).toInt() == 4 &&
+                      !twistedPairStrands(back).empty(),
                   "wires run: saved and read back, it is still a straight run of four wires");
             // The Properties panel turns one lay into the other on the object itself.
             ed.selectById(d.entities()[0].id);
@@ -10279,15 +10284,14 @@ int run_editor_tests() {
         ed.setDocument(&d);
         noSnap(ed);
 
-        // Under three, nothing converges: every wire carries on, which is what "All" means.
-        ed.setTwistWires(3);
-        std::printf("  converge: 3 wires -> converge-to %d\n", ed.twistTrunk());
-        check(ed.twistTrunk() == 0, "converge: three wires or fewer keep every line");
-
-        // PAST THREE it converges to three, once, while the setting is still untouched.
+        // TWO, out of the box. That is what a run of many wires is drawn as on a released sheet:
+        // "All" would be a picture of the wires rather than of the harness.
+        std::printf("  converge: to begin with, converge-to %d\n", ed.twistTrunk());
+        check(ed.twistTrunk() == 2,
+              "converge: a bundle is drawn as two lines unless it is told otherwise");
         ed.setTwistWires(8);
         std::printf("  converge: 8 wires -> converge-to %d\n", ed.twistTrunk());
-        check(ed.twistTrunk() == 3, "converge: more than three wires are drawn as three lines");
+        check(ed.twistTrunk() == 2, "converge: and raising the wire count leaves that alone");
 
         // SOMEBODY WHO SAYS OTHERWISE IS NOT OVERRULED. Asking for two, then raising the count
         // again, leaves it at two: it has been decided.

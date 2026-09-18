@@ -15756,7 +15756,7 @@ void Editor::setTwistWires(int wires) {
     const bool grew = next > twistWires_;
     twistWires_ = next;
     if (twistTrunk_ > next) twistTrunk_ = next;
-    if (grew && next > 3 && twistTrunk_ == 0) twistTrunk_ = 3;
+    if (grew && next > 3 && twistTrunk_ == 0) twistTrunk_ = 2;
     emit overlayChanged();
 }
 
