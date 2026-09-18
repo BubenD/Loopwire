@@ -173,6 +173,15 @@ inline constexpr double kWiresRunEnd = 15.0;
 // click picks, what a zone catches and how far it reaches all come from these, so none of them can
 // drift from what is drawn.
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
+// AND THE LINE ACROSS THE END OF EACH WIRE, where it is cut. A wire drawn as its two edges and
+// nothing else is an open channel: the eye reads the two lines as a wire only because they run
+// together, and at the end they simply stop. A cut end is a line, and a harness drawing shows it.
+// One segment per wire per end, at the ends of the RUN only - a wire that runs into the bundle and
+// stops there is not cut, it is carrying on inside the lines the bundle is drawn as.
+//
+// Kept apart from the strands above because the strands come strictly TWO PER WIRE, and everything
+// that walks them in pairs - the joints on every wire, for one - would take a cut end for an edge.
+std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -
 // including an older drawing with no value - reads as "both", which is what those drawings were made
 // with. Left and right mean the sheet ends, not the click order: a run drawn right-to-left still fans

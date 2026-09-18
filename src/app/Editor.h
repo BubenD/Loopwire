@@ -154,6 +154,14 @@ public:
     // start and there is one set of figures; unticked, the finish end takes its own.
     bool twistSidesSame() const { return twistSidesSame_; }
     void setTwistSidesSame(bool same);
+    // THE FLUSH END: the straight stretch at the very end of a fan, where every wire is parallel to
+    // the run again and so every cut end lines up square across it. On unless it is turned off - a
+    // drawing that wants the wires cut where they are still spreading says so. 0 for its length
+    // takes the drawing's own share of the fan.
+    bool twistFlush() const { return twistFlush_; }
+    void setTwistFlush(bool on);
+    double twistFlushLen() const { return twistFlushLen_; }
+    void setTwistFlushLen(double mm);
     double twistLaneFinish() const { return twistLaneFinish_; }
     void setTwistLaneFinish(double mm);
     double twistFanFinish() const { return twistFanFinish_; }
@@ -1576,6 +1584,8 @@ private:
     double twistKnee_ = -1.0;                      // fillet at a knee; <0 = the drawing's own
     double twistFanKnee_ = -1.0;                   // fillet at a fan corner; <0 = eased across it
     bool twistSidesSame_ = true;                   // the finish end repeats the start
+    bool twistFlush_ = true;                       // the ends are cut square across the fan
+    double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
     double twistLaneFinish_ = 0.0;                 // and these three are its own, when it does not
     double twistFanFinish_ = 0.0;
     double twistFanKneeFinish_ = -1.0;

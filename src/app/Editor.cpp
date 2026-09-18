@@ -15758,6 +15758,11 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     if (twistKnee_ >= 0.0) e.meta.insert(QStringLiteral("twistKnee"), twistKnee_);
     if (straight && twistFanKnee_ >= 0.0)
         e.meta.insert(QStringLiteral("twistFanKnee"), twistFanKnee_);
+    // THE FLUSH END. Written only when it is not the ordinary answer - off, or a length asked for -
+    // so a run drawn without touching either is the run that was always drawn.
+    if (straight && !twistFlush_) e.meta.insert(QStringLiteral("twistFlush"), false);
+    if (straight && twistFlush_ && twistFlushLen_ > 1e-9)
+        e.meta.insert(QStringLiteral("twistFlushLen"), twistFlushLen_);
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
@@ -15818,6 +15823,19 @@ void Editor::setTwistFanKnee(double mm) {
 void Editor::setTwistSidesSame(bool same) {
     if (twistSidesSame_ == same) return;
     twistSidesSame_ = same;
+    emit overlayChanged();
+}
+
+void Editor::setTwistFlush(bool on) {
+    if (twistFlush_ == on) return;
+    twistFlush_ = on;
+    emit overlayChanged();   // a pinned run re-draws cut square, or cut where it is still spreading
+}
+
+void Editor::setTwistFlushLen(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistFlushLen_ - next) < 1e-9) return;
+    twistFlushLen_ = next;
     emit overlayChanged();
 }
 

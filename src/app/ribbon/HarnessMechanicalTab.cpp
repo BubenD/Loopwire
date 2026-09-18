@@ -130,7 +130,17 @@ void MainWindow::buildHarnessMechanicalTab() {
                 b->setIconSize(QSize(26, 26));
                 b->setFixedSize(kSpecialCell);
             };
-            for (QToolButton* b : w->findChildren<QToolButton*>()) oneButton(b);
+            // EXCEPT THE LITTLE A ON A FIELD. It is a tool button because that is what a
+            // two-letter button is made of, and this sweep turns every tool button in the cell into
+            // a forty-pixel icon-only square - which took the A's letter away and made it the size
+            // of a tool. It belongs to the field beside it, not to the row of icons; it is told
+            // apart by the cell it sits in, the same way the sweep that hides them is.
+            for (QToolButton* b : w->findChildren<QToolButton*>()) {
+                if (b->parentWidget() &&
+                    b->parentWidget()->objectName() == QLatin1String("autoFieldCell"))
+                    continue;
+                oneButton(b);
+            }
             if (auto* b = qobject_cast<QToolButton*>(w)) oneButton(b);
         };
         // COLLECTED FIRST, PLACED AFTERWARDS. Which cell a button belongs in cannot be worked out while
@@ -353,6 +363,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 og->setColumnMinimumWidth(2, 10);   // a gap between the columns of settings
                 og->setColumnMinimumWidth(5, 10);
                 og->setColumnMinimumWidth(8, 10);
+                og->setColumnMinimumWidth(11, 10);
+                og->setColumnMinimumWidth(14, 10);
+                og->setColumnMinimumWidth(17, 10);
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -594,16 +607,56 @@ void MainWindow::buildHarnessMechanicalTab() {
                     og->addWidget(autoBeside(spin), row, col + 1);
                 };
                 addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish pitch"), 0.0,
-                          editor_->twistLaneFinish(), 1, 12,
+                          editor_->twistLaneFinish(), 1, 15,
                           QStringLiteral("How far apart the wires sit where they are spread at the "
                                          "FINISH end of the run."));
                 addFinish(twistFanBLabel_, twistFanBSpin_, QStringLiteral("Finish fan"), 0.0,
-                          editor_->twistFanFinish(), 0, 15,
+                          editor_->twistFanFinish(), 0, 18,
                           QStringLiteral("How long the fan is at the FINISH end of the run."));
                 addFinish(twistFanKneeBLabel_, twistFanKneeBSpin_, QStringLiteral("Finish knee"),
-                          -1.0, editor_->twistFanKneeFinish(), 1, 15,
+                          -1.0, editor_->twistFanKneeFinish(), 1, 18,
                           QStringLiteral("How tightly the fan turns at the FINISH end. 0 is sharp "
                                          "corners, Auto eases it all."));
+                // THE FLUSH END: the straight stretch at the very end of the fan, where every wire is
+                // parallel to the run again so every cut end lines up square across it. That is how
+                // a fan is drawn and it was always on and always the same share of the fan - a
+                // drawing that wants a stated length of parallel wire to land, or wants the wires cut
+                // where they are still spreading, had no way to say either.
+                twistFlushCheck_ = new QCheckBox(QStringLiteral("Flush ends"), optW);
+                twistFlushCheck_->setChecked(editor_->twistFlush());
+                twistFlushCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistFlushCheck_->setToolTip(QStringLiteral(
+                    "End the fan with a straight stretch, so every wire is parallel to the run where "
+                    "it is cut and all the cut ends line up square across the fan. Unticked, the "
+                    "wires are cut where they are still spreading."));
+                og->addWidget(twistFlushCheck_, 1, 12, 1, 2);
+                twistFlushLabel_ = new QLabel(QStringLiteral("Flush length"), optW);
+                twistFlushLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistFlushSpin_ = new QDoubleSpinBox(optW);
+                twistFlushSpin_->setRange(0.0, 500.0);
+                twistFlushSpin_->setDecimals(1);
+                twistFlushSpin_->setSingleStep(1.0);
+                twistFlushSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFlushSpin_->setValue(editor_->twistFlushLen());
+                twistFlushSpin_->setMinimumWidth(64);
+                twistFlushSpin_->setToolTip(QStringLiteral(
+                    "How long that straight stretch is - how much parallel wire there is to land. "
+                    "Auto is the drawing's own share of the fan."));
+                og->addWidget(twistFlushLabel_, 0, 15);
+                og->addWidget(autoBeside(twistFlushSpin_), 0, 16);
+                connect(twistFlushCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistFlush(on);
+                    syncBreakOptions();   // the length comes and goes with it
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: the ends are cut square across the fan")
+                           : QStringLiteral("Wires run: the ends are cut where they are spreading"),
+                        2000);
+                });
+                connect(twistFlushSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistFlushLen(v); canvas_->update(); });
                 connect(twistSidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistSidesSame(on);
                     syncBreakOptions();   // the finish end's fields come and go with it

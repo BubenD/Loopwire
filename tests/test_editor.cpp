@@ -10733,6 +10733,123 @@ int run_editor_tests() {
               "fan: rounding the corners does not move the wire ends");
     }
 
+    // ---- The fan ends flush, and every wire is cut with a line across it -------------------------
+    {
+        // A fan ends with a straight stretch where every wire is parallel to the run again, so every
+        // cut end lines up square across it - flush. That is how a fan is drawn, and it was always on
+        // and always the same share of the fan: a drawing wanting a stated length of parallel wire to
+        // land, or wanting the wires cut where they are still spreading, could say neither.
+        //
+        // AND A CUT END IS A LINE. Two edges and nothing else is an open channel - the eye reads them
+        // as a wire because they run together, and then they simply stop.
+        auto run = [](int flush, double flushLen, const QString& spread, int trunk) {
+            Entity w;
+            w.id = QStringLiteral("FLUSH%1-%2-%3-%4")
+                       .arg(flush)
+                       .arg(flushLen)
+                       .arg(spread)
+                       .arg(trunk);
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {300.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 60.0);
+            w.meta.insert(QStringLiteral("twistLane"), 12.0);
+            w.meta.insert(QStringLiteral("twistSpread"), spread);
+            if (trunk > 0) w.meta.insert(QStringLiteral("twistTrunkWires"), trunk);
+            if (flush == 0) w.meta.insert(QStringLiteral("twistFlush"), false);
+            if (flushLen > 0.0) w.meta.insert(QStringLiteral("twistFlushLen"), flushLen);
+            return w;
+        };
+
+        // ONE LINE ACROSS EACH WIRE AT EACH END IT IS CUT AT. Six wires fanning both ends is twelve.
+        const Entity both = run(1, 0.0, QStringLiteral("both"), 0);
+        const std::vector<std::vector<Vec2>> caps = twistedPairEndCaps(both);
+        std::printf("  flush: %d line(s) across the ends of 6 wires fanning both ends\n",
+                    int(caps.size()));
+        check(caps.size() == 12, "flush: one line across each wire at each end it is cut at");
+        // AND THEY ARE SQUARE ACROSS THE RUN, which is what flush means: the wire is parallel to the
+        // run where it is cut, so the line across it is not.
+        double leanest = 0.0, shortest = 1e300, longest = 0.0;
+        for (const std::vector<Vec2>& c : caps) {
+            if (c.size() != 2) continue;
+            leanest = std::max(leanest, std::abs(c.front().x - c.back().x));
+            const double len = distance(c.front(), c.back());
+            shortest = std::min(shortest, len);
+            longest = std::max(longest, len);
+        }
+        std::printf("  flush: the lines lean %.4f across the run and are %.3f to %.3f long\n",
+                    leanest, shortest, longest);
+        check(leanest < 1e-6, "flush: each line is square across the run, not across a slant");
+        check(std::abs(shortest - 2.0) < 1e-6 && std::abs(longest - 2.0) < 1e-6,
+              "flush: and exactly one wire wide, because that is what it closes");
+        // And they sit AT the ends of the run, which is where the wires are cut.
+        double nearest = 1e300;
+        for (const std::vector<Vec2>& c : caps)
+            if (c.size() == 2)
+                nearest = std::min(nearest, std::min(c.front().x, 300.0 - c.front().x));
+        check(nearest < 1e-6, "flush: on the ends of the run, where the wires are landed");
+
+        // A WIRE THAT STOPS INSIDE THE BUNDLE IS NOT CUT THERE. Converged to two, four of the six
+        // run into the bundle and stop - and get no line across them where they do, because they are
+        // carrying on inside the lines the bundle is drawn as. Fanning one end only, each of those
+        // four is cut once and the two that carry on are cut twice.
+        const Entity oneEnd = run(1, 0.0, QStringLiteral("left"), 2);
+        std::printf("  flush: converged to 2 and fanning one end, %d line(s)\n",
+                    int(twistedPairEndCaps(oneEnd).size()));
+        check(twistedPairEndCaps(oneEnd).size() == 8,
+              "flush: a wire that stops in the bundle is not cut there - four cut once, two twice");
+
+        // HOW LONG THE FLUSH STRETCH IS can be asked for. The outermost wire is level from the end
+        // until the fan starts, and that is what the figure sets.
+        auto levelFor = [](const Entity& e) {
+            const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+            if (s.empty()) return -1.0;
+            const std::vector<Vec2>& a = s.front();
+            if (a.empty()) return -1.0;
+            const double endY = a.front().y;
+            double level = 0.0;
+            for (const Vec2& v : a) {
+                if (v.x > 150.0) break;
+                if (std::abs(v.y - endY) < 1e-6) level = std::max(level, v.x);
+            }
+            return level;
+        };
+        const double byDefault = levelFor(both);
+        const double asked = levelFor(run(1, 45.0, QStringLiteral("both"), 0));
+        std::printf("  flush: level for %.1f left alone, %.1f when 45 is asked for\n", byDefault,
+                    asked);
+        // Read off the drawing, so it is only as fine as the places the fan is measured at - one
+        // every lead/24, which is 2.5 here.
+        check(std::abs(byDefault - 60.0 * kWiresRunTailShare) < 2.6,
+              "flush: left alone it is the share of the fan it always was");
+        check(std::abs(asked - 45.0) < 2.6, "flush: and asked for, it is the length asked for");
+
+        // TURNED OFF, THE WIRES ARE CUT WHERE THEY ARE STILL SPREADING - so there is no level
+        // stretch at all, and the line across each wire leans with it.
+        const Entity loose = run(0, 0.0, QStringLiteral("both"), 0);
+        double lean = 0.0;
+        for (const std::vector<Vec2>& c : twistedPairEndCaps(loose))
+            if (c.size() == 2) lean = std::max(lean, std::abs(c.front().x - c.back().x));
+        std::printf("  flush: unticked, level for %.1f and the lines lean %.3f\n", levelFor(loose),
+                    lean);
+        check(levelFor(loose) < 0.6,
+              "flush: unticked, the wires are cut where they are still spreading");
+        check(lean > 0.1, "flush: and the line across a slanting wire leans with it");
+
+        // AND ASKING FOR MORE THAN THE FAN HAS does not leave the wires nowhere to spread: the fan
+        // keeps a stretch of its own whatever is asked for.
+        const double greedy = levelFor(run(1, 500.0, QStringLiteral("both"), 0));
+        std::printf("  flush: asked for 500 on a 60 fan, level for %.1f\n", greedy);
+        check(greedy > 50.0 && greedy < 60.0,
+              "flush: more than the fan can give leaves the fan a stretch to spread in");
+    }
+
     // ---- Nought is a sharp corner on the run's knee as well --------------------------------------
     {
         // Nought used to mean "nobody has said" on both radii, which left no way at all to ask for a

@@ -2708,6 +2708,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 stroke(wire.edgeA);
                 stroke(wire.edgeB);
             }
+        // AND THE LINE ACROSS EACH WIRE WHERE IT IS CUT. Two edges and nothing else is an open
+        // channel: the eye reads them as a wire because they run together, and then they simply
+        // stop. A cut end is a line, and a harness drawing shows it. Drawn last, over the fill of
+        // whatever the weave laid down.
+        for (const std::vector<Vec2>& cap : twistedPairEndCaps(e)) stroke(cap);
         break;
     }
 

@@ -263,10 +263,13 @@ QString toDxf(const Document& doc) {
             L << dxfPolyline(e, doc, e.points, false);
             break;
         case EntityType::TwistedPair:
-            // Export what is drawn: every wire's two edges, fan-out and weave included. The object
-            // itself is parametric (route + count + spread), which DXF has no record type for.
+            // Export what is drawn: every wire's two edges, fan-out and weave included, and the line
+            // across each wire where it is cut. The object itself is parametric (route + count +
+            // spread), which DXF has no record type for.
             for (const auto& strand : twistedPairStrands(e))
                 L << dxfPolyline(e, doc, strand, false);
+            for (const auto& cap : twistedPairEndCaps(e))
+                L << dxfPolyline(e, doc, cap, false);
             break;
         case EntityType::Polyline: {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);

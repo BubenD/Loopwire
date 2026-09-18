@@ -4335,14 +4335,21 @@ QWidget* MainWindow::autoBeside(QAbstractSpinBox* field) {
     mark->setText(QStringLiteral("A"));
     mark->setCheckable(true);
     mark->setFocusPolicy(Qt::NoFocus);
-    mark->setFixedWidth(18);
+    // IT IS A LETTER, AND IT HAS TO SAY SO. A tool button shows its icon and not its text unless it
+    // is told otherwise - that is Qt's default - and this one has no icon at all, so what it shows
+    // is whatever the style makes of a button with neither.
+    mark->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    // AS SMALL AS A MARK ON A FIELD, because that is what it is: it sits beside the arrows and
+    // belongs to the field, and at the size of a button it read as another control on the ribbon
+    // and took width from fields that have none to spare.
+    mark->setFixedSize(13, 13);
     mark->setToolTip(QStringLiteral("Auto - leave this one to the drawing"));
     mark->setStyleSheet(QStringLiteral(
-        "QToolButton{color:#9fb3c8;background:#2a3644;border:1px solid #3a4756;border-radius:3px;"
-        "font-size:10px;font-weight:bold;padding:0px;}"
+        "QToolButton{color:#9fb3c8;background:#2a3644;border:1px solid #3a4756;border-radius:2px;"
+        "font-size:8px;font-weight:bold;padding:0px;margin:0px;}"
         "QToolButton:hover{background:#35435a;color:#e6e9ef;}"
         "QToolButton:checked{background:#3d6ea5;border-color:#5b93cf;color:#ffffff;}"));
-    row->addWidget(mark);
+    row->addWidget(mark, 0, Qt::AlignVCenter);
     // Whether it IS on Auto, and putting it there. Both spin kinds carry their own sort of number,
     // and "the lowest it goes" is the same idea in either.
     auto onAuto = [field] {
@@ -4571,6 +4578,24 @@ void MainWindow::syncBreakOptions() {
         // THE FINISH END'S OWN THREE, which are there only when it has any: ticked, the finish end
         // repeats the start and three fields showing the same figures twice would be three more
         // things to keep in step and nothing gained.
+        // The flush end is the straight run's: a laid-up bundle does not fan, so it has no cut ends
+        // to line up. The length only means something while there is one.
+        if (twistFlushCheck_) {
+            twistFlushCheck_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistFlushCheck_);
+                twistFlushCheck_->setChecked(editor_->twistFlush());
+            }
+        }
+        if (twistFlushSpin_ && twistFlushLabel_) {
+            const bool flushing = straightRun && editor_->twistFlush();
+            twistFlushLabel_->setVisible(flushing);
+            autoFieldCell(twistFlushSpin_)->setVisible(flushing);
+            if (flushing) {
+                QSignalBlocker b(twistFlushSpin_);
+                twistFlushSpin_->setValue(editor_->twistFlushLen());
+            }
+        }
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -9236,6 +9261,25 @@ void MainWindow::refreshProperties() {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistFanKnee"),
                                                        std::max(-1.0, v));
                    }, autoTip);
+            // THE FLUSH END, and how long it is: the straight stretch where every wire is parallel
+            // to the run again, so every cut end lines up square across the fan.
+            const bool flushing = !e->meta.contains(QStringLiteral("twistFlush")) ||
+                                  e->meta.value(QStringLiteral("twistFlush")).toBool();
+            addCombo(QStringLiteral("Flush ends"),
+                     {QStringLiteral("Yes"), QStringLiteral("No")},
+                     mv(QStringLiteral("twistFlush")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (flushing ? QStringLiteral("Yes") : QStringLiteral("No")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistFlush"),
+                                                       t == QLatin1String("Yes"));
+                     });
+            if (flushing)
+                addNum(QStringLiteral("Flush length"),
+                       mv(QStringLiteral("twistFlushLen")).toDouble(0.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistFlushLen"),
+                                                           std::max(0.0, v));
+                       });
         }
         if (e->points.size() > 2)
             addNum(QStringLiteral("Knee radius"), mv(QStringLiteral("twistKnee")).toDouble(-1.0),

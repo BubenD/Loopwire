@@ -554,12 +554,29 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
                           : (f.wires - 1) / 2;
         f.trunkLane[static_cast<size_t>(std::clamp(k, 0, f.wires - 1))] = j;
     }
-    // THE STRAIGHT BIT AT THE VERY END. The wires are landed on something, and what they land on is
-    // square to the run - so they come out of the fan and run straight into it rather than arriving
-    // still spreading. The fan takes the part of the end nearer the bundle, the straight run the part
-    // nearer the end.
-    f.tail = f.straight ? f.lead * kWiresRunTailShare : 0.0;
-    f.tailB = f.straight ? f.leadB * kWiresRunTailShare : 0.0;
+    // THE STRAIGHT BIT AT THE VERY END - the FLUSH END. The wires are landed on something, and what
+    // they land on is square to the run, so they come out of the fan and run straight into it rather
+    // than arriving still spreading. Every wire is then parallel to the run where it is cut, so
+    // every cut end lines up square across the fan: flush. The fan takes the part of the end nearer
+    // the bundle, the flush run the part nearer the end.
+    //
+    // HOW LONG IT IS can be asked for, and it can be turned off. It was a fixed share of the fan and
+    // neither: a drawing that wants the wires cut where they are still spreading - fanned right to
+    // the pins - had no way to say so, and one that wants a stated length of parallel wire to land
+    // had no way to say that either. Left alone it is the share it always was.
+    auto flushOf = [&](bool finish) {
+        if (!f.straight) return 0.0;
+        if (!sideValue(QStringLiteral("twistFlush"), finish).toBool(true)) return 0.0;
+        const double lead = finish ? f.leadB : f.lead;
+        const QJsonValue asked = sideValue(QStringLiteral("twistFlushLen"), finish);
+        const double want =
+            asked.isUndefined() ? lead * kWiresRunTailShare : std::max(0.0, asked.toDouble(0.0));
+        // Never the whole end: the wires still have to get to their lanes, and a fan of no length at
+        // all is a corner where the drawing wanted a fan.
+        return std::min(want, lead * 0.95);
+    };
+    f.tail = flushOf(false);
+    f.tailB = flushOf(true);
     // AND HOW TIGHTLY THE FAN'S OWN CORNERS TURN, which is not the run's knee radius: the run
     // bends where the loom is routed round something, the fan bends where a wire leaves the bundle
     // for its pin. They are set on different things and are different sizes, and one figure for
@@ -785,7 +802,7 @@ double twistOffset(const TwistFrames& f, int k, double u) {
                            ? std::clamp(fanKnee * std::tan(turn / 2.0) / fanLen, 0.0, 0.5)
                            : 0.0;
             }
-            if (ease > 1e-9) {
+            if (ease > 1e-9 && tail > 1e-9) {
                 // Turn in over the first ease of the fan, run straight, turn out over the last - how
                 // far a thing gets at a speed that ramps up, holds, and ramps down again.
                 const double raw = t < ease ? t * t / (2.0 * ease)
@@ -793,6 +810,17 @@ double twistOffset(const TwistFrames& f, int k, double u) {
                                        ? 1.0 - ease - (1.0 - t) * (1.0 - t) / (2.0 * ease)
                                        : t - ease / 2.0;
                 t = raw / (1.0 - ease);
+            } else if (ease > 1e-9) {
+                // NO FLUSH END, SO NO CORNER AT THAT END TO ROUND. A fillet rounds the corner where
+                // the slant meets the straight, and with the flush end turned off there is no
+                // straight for it to meet - the wire is cut while it is still crossing. Rounding it
+                // anyway levelled the wire off over the last millimetre or two, which is the one
+                // thing turning the flush end off is asking not to happen. The corner into the
+                // bundle is still a corner, and still rounded.
+                const double raw = t > 1.0 - ease
+                                       ? 1.0 - ease / 2.0 - (1.0 - t) * (1.0 - t) / (2.0 * ease)
+                                       : t;
+                t = raw / (1.0 - ease / 2.0);
             }
         } else {
             t = lead > 1e-9 ? std::clamp(into / lead, 0.0, 1.0) : 1.0;
@@ -897,6 +925,7 @@ std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t fro
 struct TwistCached {
     TwistFrames frames;
     std::vector<std::vector<Vec2>> strands;
+    std::vector<std::vector<Vec2>> caps;   // the line across each wire where it is cut
 };
 
 QString twistKey(const Entity& e) {
@@ -924,8 +953,13 @@ QString twistKey(const Entity& e) {
                                                                 : QLatin1String("|laid");
     for (const char* m : {"twistLane", "twistWireWidth", "twistTrunkWires", "twistKnee",
                           "twistFanKnee", "twistLaneFinish", "twistEndsFinish",
-                          "twistFanKneeFinish"})
+                          "twistFanKneeFinish", "twistFlushLen", "twistFlushLenFinish"})
         put(m);
+    for (const char* m : {"twistFlush", "twistFlushFinish"})
+        k += e.meta.contains(QLatin1String(m))
+                 ? (e.meta.value(QLatin1String(m)).toBool() ? QLatin1String("|f1")
+                                                            : QLatin1String("|f0"))
+                 : QLatin1String("|f-");
     k += e.meta.value(QLatin1String("twistSidesSame")).toBool(true) ? QLatin1String("|same")
                                                                    : QLatin1String("|apart");
     return k;
@@ -973,8 +1007,18 @@ const TwistCached* twistCached(const Entity& pair) {
         }
         for (const auto& span : spans) {
             if (span.second <= span.first) continue;
-            for (const double edge : {1.0, -1.0})
-                c.strands.push_back(twistEdge(f, k, edge, span.first, span.second));
+            std::vector<Vec2> edgeA = twistEdge(f, k, 1.0, span.first, span.second);
+            std::vector<Vec2> edgeB = twistEdge(f, k, -1.0, span.first, span.second);
+            // THE CUT ENDS, at the ends of the RUN only. A wire that stops inside the bundle is not
+            // cut there - it is carrying on inside the lines the bundle is drawn as - so it gets no
+            // line across it, and a wire landed on a pin gets one.
+            if (!edgeA.empty() && !edgeB.empty()) {
+                if (span.first == 0) c.caps.push_back({edgeA.front(), edgeB.front()});
+                if (span.second + 1 == f.pos.size())
+                    c.caps.push_back({edgeA.back(), edgeB.back()});
+            }
+            c.strands.push_back(std::move(edgeA));
+            c.strands.push_back(std::move(edgeB));
         }
     }
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
@@ -988,6 +1032,12 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);
     return c ? c->strands : std::vector<std::vector<Vec2>>{};
+}
+
+std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair) return {};
+    const TwistCached* c = twistCached(pair);
+    return c ? c->caps : std::vector<std::vector<Vec2>>{};
 }
 
 QString twistedPairSpread(const Entity& pair) {

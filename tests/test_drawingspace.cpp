@@ -1001,6 +1001,17 @@ int run_drawingspace_tests() {
         check(withA == autoFields.size(),
               "auto: every field on screen that can be left to the drawing shows an A to leave it "
               "there - including on the ribbon, with the tool that uses it armed");
+        // AND IT IS A MARK ON A FIELD, not another tool on the ribbon. The Special group sizes every
+        // tool button in a cell to a forty-pixel icon-only square, which took the A's letter away
+        // and made it the size of the tools it sits among.
+        if (anA) {
+            std::printf("  auto: the A is %dx%d and %s its letter\n", anA->width(), anA->height(),
+                        anA->toolButtonStyle() == Qt::ToolButtonIconOnly ? "hides" : "shows");
+            check(anA->width() <= 16 && anA->height() <= 16,
+                  "auto: the A is the size of a mark on a field, not the size of a tool");
+            check(anA->toolButtonStyle() != Qt::ToolButtonIconOnly,
+                  "auto: and it shows its letter, which is the whole of what it says");
+        }
 
         // AND IT PUTS THE FIELD BACK TO AUTO, and lights up while the field is on it.
         if (anA && itsField) {
