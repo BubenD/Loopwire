@@ -15566,7 +15566,13 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
         if (len < 1e-7) return;
         const auto x = segmentSegmentIntersection(a, b, p1, p2);
         if (!x) return;
-        const bool atStart = distance(*x, p1) <= distance(*x, p2);
+        // WHICH END IT IS NEARER, and a band across the middle is nearer NEITHER. Left to the
+        // floating point, a crossing a hair off the middle of one rail and a hair the other way on
+        // the next put the two rails' near ends at opposite ends of the same run, and the band was
+        // then read as crossing two families of linework rather than one. So a crossing within a
+        // whisker of the middle is settled the same way every time instead of by the last bit.
+        const double d1 = distance(*x, p1), d2 = distance(*x, p2);
+        const bool atStart = d1 <= d2 + len * 1e-6;
         const Vec2 end = atStart ? p1 : p2;
         const Vec2 other = atStart ? p2 : p1;
         const double endLen = distance(end, other);
@@ -15728,14 +15734,29 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     e.meta.insert(QStringLiteral("twistStraight"), straight);
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
+    // WHETHER THE FINISH END REPEATS THE START, and what it says instead when it does not. Written
+    // only when they have been parted, so a run drawn the ordinary way carries nothing extra and
+    // reads on an older build exactly as it does here.
+    if (straight && !twistSidesSame_) {
+        e.meta.insert(QStringLiteral("twistSidesSame"), false);
+        if (twistLaneFinish_ > 1e-9)
+            e.meta.insert(QStringLiteral("twistLaneFinish"), twistLaneFinish_);
+        if (twistFanFinish_ > 1e-9)
+            e.meta.insert(QStringLiteral("twistEndsFinish"), twistFanFinish_);
+        if (twistFanKneeFinish_ >= 0.0)
+            e.meta.insert(QStringLiteral("twistFanKneeFinish"), twistFanKneeFinish_);
+    }
     // THE FAN AND THE WIRE, where they have been set. Both are figures the drawing already knows how
     // to read - they simply had nowhere to be set from. Written only when asked for, so a run drawn
     // without touching them is the run that was always drawn.
     if (twistFan_ > 1e-9) e.meta.insert(QStringLiteral("twistEnds"), twistFan_);
     if (straight && twistWireWidth_ > 1e-9)
         e.meta.insert(QStringLiteral("twistWireWidth"), twistWireWidth_);
-    if (twistKnee_ > 1e-9) e.meta.insert(QStringLiteral("twistKnee"), twistKnee_);
-    if (straight && twistFanKnee_ > 1e-9)
+    // THE TWO RADII, written whenever they have been SAID - nought included, because nought is a
+    // sharp corner and not a shrug. Below nought is the shrug, and then nothing is written and the
+    // drawing decides, which is what a run drawn without touching either of them has always done.
+    if (twistKnee_ >= 0.0) e.meta.insert(QStringLiteral("twistKnee"), twistKnee_);
+    if (straight && twistFanKnee_ >= 0.0)
         e.meta.insert(QStringLiteral("twistFanKnee"), twistFanKnee_);
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
@@ -15778,17 +15799,47 @@ void Editor::setTwistFan(double mm) {
 }
 
 void Editor::setTwistKnee(double mm) {
-    const double next = std::max(0.0, mm);
+    const double next = std::max(-1.0, mm);   // below nought is "the drawing's own"
     if (std::abs(twistKnee_ - next) < 1e-9) return;
     twistKnee_ = next;
     emit overlayChanged();   // a pinned run re-draws turning the new way
 }
 
 void Editor::setTwistFanKnee(double mm) {
-    const double next = std::max(0.0, mm);
+    const double next = std::max(-1.0, mm);
     if (std::abs(twistFanKnee_ - next) < 1e-9) return;
     twistFanKnee_ = next;
     emit overlayChanged();   // a pinned run re-draws with the new fan corners
+}
+
+// THE FINISH END'S OWN THREE, and the tick that says whether it has any. Ticked - which is how it
+// starts and how nearly every run is drawn - the finish end repeats the start and these are not
+// looked at; unticked, each is the finish end's answer to the field of the same name.
+void Editor::setTwistSidesSame(bool same) {
+    if (twistSidesSame_ == same) return;
+    twistSidesSame_ = same;
+    emit overlayChanged();
+}
+
+void Editor::setTwistLaneFinish(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistLaneFinish_ - next) < 1e-9) return;
+    twistLaneFinish_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistFanFinish(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistFanFinish_ - next) < 1e-9) return;
+    twistFanFinish_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistFanKneeFinish(double mm) {
+    const double next = std::max(-1.0, mm);
+    if (std::abs(twistFanKneeFinish_ - next) < 1e-9) return;
+    twistFanKneeFinish_ = next;
+    emit overlayChanged();
 }
 
 void Editor::setTwistWireWidth(double mm) {

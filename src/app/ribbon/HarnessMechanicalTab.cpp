@@ -506,8 +506,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistKneeLabel_ = new QLabel(QStringLiteral("Knee radius"), optW);
                 twistKneeLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
+                // AUTO SITS BELOW NOUGHT, so that nought can mean what it says. While Auto was
+                // nought there was no way to ask for a sharp corner at all: every run was bent,
+                // whether the drawing wanted it bent or not.
                 twistKneeSpin_ = new QDoubleSpinBox(optW);
-                twistKneeSpin_->setRange(0.0, 500.0);
+                twistKneeSpin_->setRange(-1.0, 500.0);
                 twistKneeSpin_->setDecimals(1);
                 twistKneeSpin_->setSingleStep(1.0);
                 twistKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
@@ -516,15 +519,17 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistKneeSpin_->setToolTip(QStringLiteral(
                     "How tightly the run turns where it bends. A loom does not kink at a corner, it "
                     "bends - and how far it may be bent is set by what is in it, not by how wide the "
-                    "line is. Auto is a share of the bundle width."));
+                    "line is. It is the TIGHTEST radius in the bundle, so no wire bends inside it. "
+                    "0 is a sharp corner; Auto is a share of the bundle width."));
                 og->addWidget(twistKneeLabel_, 0, 9);
                 og->addWidget(twistKneeSpin_, 0, 10);
                 connect(twistKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistKnee(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9 ? QStringLiteral("Wires run: knees turn on a %1 radius").arg(v)
-                                 : QStringLiteral("Wires run: the drawing's own knee radius"),
+                        v > 1e-9  ? QStringLiteral("Wires run: knees turn on a %1 radius").arg(v)
+                        : v < 0.0 ? QStringLiteral("Wires run: the drawing's own knee radius")
+                                  : QStringLiteral("Wires run: knees are sharp corners"),
                         2000);
                 });
                 // AND THE FAN'S OWN CORNERS, which is a different radius from the one above. The
@@ -535,7 +540,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFanKneeLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistFanKneeSpin_ = new QDoubleSpinBox(optW);
-                twistFanKneeSpin_->setRange(0.0, 500.0);
+                twistFanKneeSpin_->setRange(-1.0, 500.0);
                 twistFanKneeSpin_->setDecimals(1);
                 twistFanKneeSpin_->setSingleStep(0.5);
                 twistFanKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
@@ -544,18 +549,76 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFanKneeSpin_->setToolTip(QStringLiteral(
                     "How tightly the fan turns where a wire leaves the bundle and where it settles "
                     "into its lane. Asked for, the slant runs straight between two corners of that "
-                    "radius; more than the fan can hold rounds the whole of it. Auto eases it all."));
+                    "radius; more than the fan can hold rounds the whole of it. 0 is sharp corners, "
+                    "Auto eases it all."));
                 og->addWidget(twistFanKneeLabel_, 1, 9);
                 og->addWidget(twistFanKneeSpin_, 1, 10);
                 connect(twistFanKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFanKnee(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9
-                            ? QStringLiteral("Wires run: the fan turns on a %1 radius").arg(v)
-                            : QStringLiteral("Wires run: the fan is eased end to end"),
+                        v > 1e-9  ? QStringLiteral("Wires run: the fan turns on a %1 radius").arg(v)
+                        : v < 0.0 ? QStringLiteral("Wires run: the fan is eased end to end")
+                                  : QStringLiteral("Wires run: the fan has sharp corners"),
                         2000);
                 });
+                // THE TWO ENDS OF THE RUN. It leaves one thing and arrives at another, and the two
+                // need not fan alike: eight ways out of a header at one end and two into a ring
+                // terminal at the other is one run, not two runs that meet. Ticked - which is how
+                // it starts, because nearly every run IS drawn alike at both ends - the finish end
+                // repeats the start and there is one set of figures to keep. Unticked, the three
+                // that describe a fan are asked again for the finish end.
+                twistSidesCheck_ = new QCheckBox(QStringLiteral("Both sides"), optW);
+                twistSidesCheck_->setChecked(editor_->twistSidesSame());
+                twistSidesCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistSidesCheck_->setToolTip(QStringLiteral(
+                    "The finish end of the run repeats the start end. Untick it to give the finish "
+                    "end its own pitch, fan length and fan knee - a run out of a header into a ring "
+                    "terminal fans quite differently at the two ends."));
+                og->addWidget(twistSidesCheck_, 0, 12, 1, 2);
+                auto addFinish = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
+                                     double lo, double value, int row, int col,
+                                     const QString& tip) {
+                    label = new QLabel(text, optW);
+                    label->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                    spin = new QDoubleSpinBox(optW);
+                    spin->setRange(lo, 500.0);
+                    spin->setDecimals(1);
+                    spin->setSingleStep(1.0);
+                    spin->setSpecialValueText(QStringLiteral("Auto"));
+                    spin->setValue(value);
+                    spin->setMinimumWidth(64);
+                    spin->setToolTip(tip);
+                    og->addWidget(label, row, col);
+                    og->addWidget(spin, row, col + 1);
+                };
+                addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish pitch"), 0.0,
+                          editor_->twistLaneFinish(), 1, 12,
+                          QStringLiteral("How far apart the wires sit where they are spread at the "
+                                         "FINISH end of the run."));
+                addFinish(twistFanBLabel_, twistFanBSpin_, QStringLiteral("Finish fan"), 0.0,
+                          editor_->twistFanFinish(), 0, 15,
+                          QStringLiteral("How long the fan is at the FINISH end of the run."));
+                addFinish(twistFanKneeBLabel_, twistFanKneeBSpin_, QStringLiteral("Finish knee"),
+                          -1.0, editor_->twistFanKneeFinish(), 1, 15,
+                          QStringLiteral("How tightly the fan turns at the FINISH end. 0 is sharp "
+                                         "corners, Auto eases it all."));
+                connect(twistSidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistSidesSame(on);
+                    syncBreakOptions();   // the finish end's fields come and go with it
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: both ends fan alike")
+                           : QStringLiteral("Wires run: each end fans its own way"),
+                        2000);
+                });
+                connect(twistLaneBSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistLaneFinish(v); canvas_->update(); });
+                connect(twistFanBSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistFanFinish(v); canvas_->update(); });
+                connect(twistFanKneeBSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistFanKneeFinish(v); canvas_->update(); });
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);

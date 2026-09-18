@@ -4495,6 +4495,28 @@ void MainWindow::syncBreakOptions() {
                 twistFanKneeSpin_->setValue(editor_->twistFanKnee());
             }
         }
+        // THE FINISH END'S OWN THREE, which are there only when it has any: ticked, the finish end
+        // repeats the start and three fields showing the same figures twice would be three more
+        // things to keep in step and nothing gained.
+        if (twistSidesCheck_) {
+            twistSidesCheck_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistSidesCheck_);
+                twistSidesCheck_->setChecked(editor_->twistSidesSame());
+            }
+        }
+        const bool apart = straightRun && !editor_->twistSidesSame();
+        auto finishField = [&](QLabel* label, QDoubleSpinBox* spin, double value) {
+            if (!label || !spin) return;
+            label->setVisible(apart);
+            spin->setVisible(apart);
+            if (!apart) return;
+            QSignalBlocker b(spin);
+            spin->setValue(value);
+        };
+        finishField(twistLaneBLabel_, twistLaneBSpin_, editor_->twistLaneFinish());
+        finishField(twistFanBLabel_, twistFanBSpin_, editor_->twistFanFinish());
+        finishField(twistFanKneeBLabel_, twistFanKneeBSpin_, editor_->twistFanKneeFinish());
         if (twistWireSpin_ && twistWireLabel_) {
             twistWireSpin_->setVisible(straightRun);
             twistWireLabel_->setVisible(straightRun);
@@ -9121,6 +9143,11 @@ void MainWindow::refreshProperties() {
         // lays, the wire and the fan's corners are the straight run's - a laid-up bundle takes its
         // thickness from the cable and its wires cross the whole way - and the knee radius belongs
         // to a routed run, because a run between two points has no knee to turn at.
+        // A RADIUS BELOW NOUGHT IS THE DRAWING'S OWN and nought is a sharp corner, which is the same
+        // thing the ribbon's Auto says - a drawing that wants a knee shown as a corner can say so,
+        // and one that says nothing still gets the bend it always got.
+        const QString autoTip = QStringLiteral(
+            "-1 leaves it to the drawing; 0 is a sharp corner; anything above is the radius.");
         addNum(QStringLiteral("Fan length"), mv(QStringLiteral("twistEnds")).toDouble(0.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("twistEnds"), std::max(0.0, v));
@@ -9131,18 +9158,50 @@ void MainWindow::refreshProperties() {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistWireWidth"),
                                                        std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Fan knee"), mv(QStringLiteral("twistFanKnee")).toDouble(0.0),
+            addNum(QStringLiteral("Fan knee"), mv(QStringLiteral("twistFanKnee")).toDouble(-1.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistFanKnee"),
-                                                       std::max(0.0, v));
-                   });
+                                                       std::max(-1.0, v));
+                   }, autoTip);
         }
         if (e->points.size() > 2)
-            addNum(QStringLiteral("Knee radius"), mv(QStringLiteral("twistKnee")).toDouble(0.0),
+            addNum(QStringLiteral("Knee radius"), mv(QStringLiteral("twistKnee")).toDouble(-1.0),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistKnee"),
-                                                       std::max(0.0, v));
-                   });
+                                                       std::max(-1.0, v));
+                   }, autoTip);
+        // AND THE FINISH END, when it is not simply repeating the start. The run leaves one thing
+        // and arrives at another; the tick says whether that shows in how it fans.
+        if (straight) {
+            const bool same = !e->meta.contains(QStringLiteral("twistSidesSame")) ||
+                              e->meta.value(QStringLiteral("twistSidesSame")).toBool();
+            addCombo(QStringLiteral("Both sides"),
+                     {QStringLiteral("Alike"), QStringLiteral("Each its own")},
+                     mv(QStringLiteral("twistSidesSame")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (same ? QStringLiteral("Alike") : QStringLiteral("Each its own")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistSidesSame"),
+                                                       t == QLatin1String("Alike"));
+                     });
+            if (!same) {
+                addNum(QStringLiteral("Finish pitch"),
+                       mv(QStringLiteral("twistLaneFinish")).toDouble(0.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistLaneFinish"),
+                                                           std::max(0.0, v));
+                       });
+                addNum(QStringLiteral("Finish fan"),
+                       mv(QStringLiteral("twistEndsFinish")).toDouble(0.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistEndsFinish"),
+                                                           std::max(0.0, v));
+                       });
+                addNum(QStringLiteral("Finish knee"),
+                       mv(QStringLiteral("twistFanKneeFinish")).toDouble(-1.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistFanKneeFinish"),
+                                                           std::max(-1.0, v));
+                       }, autoTip);
+            }
+        }
     }
 
     // A selected wire shows its harness attributes (number, gauge, colour, insulation,

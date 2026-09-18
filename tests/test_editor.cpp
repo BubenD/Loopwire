@@ -6274,7 +6274,18 @@ int run_editor_tests() {
             const auto lines = twistedPairStrands(e);
             std::vector<double> mids;
             for (size_t k = 0; k + 1 < lines.size(); k += 2) {
+                // WHERE THE LINE IS AT x, which is between the places it was measured and not at one
+                // of them: down the middle of a run there is nothing to measure for a hundred
+                // millimetres at a time, so the nearest measured place is a hundred millimetres away
+                // and in the fan. Interpolated along the step that spans x, with the nearest place
+                // only as a last resort for an x the line does not reach.
                 auto yAt = [x](const std::vector<Vec2>& run) {
+                    for (size_t i = 1; i < run.size(); ++i) {
+                        const Vec2 p = run[i - 1], q = run[i];
+                        if ((p.x - x) * (q.x - x) > 0.0) continue;
+                        const double span = q.x - p.x;
+                        return std::abs(span) < 1e-12 ? p.y : p.y + (q.y - p.y) * (x - p.x) / span;
+                    }
                     double best = 0.0, bestD = 1e300;
                     for (const Vec2& p : run)
                         if (std::abs(p.x - x) < bestD) { bestD = std::abs(p.x - x); best = p.y; }
@@ -10616,14 +10627,14 @@ int run_editor_tests() {
               "knee: left alone it turns the way it always turned");
     }
 
-    // ---- The fan's corners turn on a radius of their own ------------------------------------------
+    // ---- The fan is a straight slant with a radius at each end of it -----------------------------
     {
         // A fan has two corners in it: where a wire leaves the bundle, and where it settles into the
-        // lane it lands in. Both were rounded across the WHOLE fan - one long ease end to end - so
-        // there was no straight slant anywhere in it and no way to ask for one. A fan drawn by hand is
-        // a straight run of wire with a radius at each end, and how big that radius is is a length
-        // like every other radius on the sheet. It is NOT the run's knee radius: that one is the loom
-        // being dressed round the shape of the car, this one is a wire reaching a pin.
+        // lane it lands in. Both used to be rounded across the WHOLE fan - one long S with no
+        // straight anywhere in it - which reads as a wire bending the entire way to its pin rather
+        // than going there. What a fan looks like on paper, and in a loom, is a straight run of wire
+        // with a radius at each end, and how big that radius is is a length like every other radius
+        // on the sheet: asked for, or left to the drawing, or NOUGHT, which is a corner.
         auto fanned = [](double fanKnee) {
             Entity w;
             w.id = QStringLiteral("FAN");
@@ -10637,39 +10648,66 @@ int run_editor_tests() {
             w.meta.insert(QStringLiteral("twistPitch"), 8.0);
             w.meta.insert(QStringLiteral("twistEnds"), 60.0);
             w.meta.insert(QStringLiteral("twistLane"), 12.0);
-            if (fanKnee > 0.0) w.meta.insert(QStringLiteral("twistFanKnee"), fanKnee);
+            if (fanKnee > -0.5) w.meta.insert(QStringLiteral("twistFanKnee"), fanKnee);
             return w;
         };
-        // HOW STRAIGHT THE SLANT IS: take the outermost wire through the fan and measure how much its
-        // direction changes from one step to the next. A curve turns a little at every step; a
-        // straight slant between two corners turns at the corners and nowhere in between, so most of
-        // its steps turn by nothing at all.
-        auto straightShare = [](const Entity& e) {
-            const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
-            if (strands.empty()) return 0.0;
-            const std::vector<Vec2>& s = strands.front();
-            int flat = 0, counted = 0;
-            for (size_t i = 2; i < s.size(); ++i) {
-                if (s[i].x > 60.0) break;   // the fan only
-                const Vec2 d1 = s[i - 1] - s[i - 2], d2 = s[i] - s[i - 1];
-                if (d1.length() < 1e-9 || d2.length() < 1e-9) continue;
-                const double turn = std::abs(std::atan2(d2.y, d2.x) - std::atan2(d1.y, d1.x));
-                ++counted;
-                if (turn < 1e-4) ++flat;
-            }
-            return counted > 0 ? double(flat) / counted : 0.0;
+        // HOW BENT THE MIDDLE OF THE SLANT IS. The outermost wire's own centre line - the midpoint
+        // of its two edges, which is where the wire is - taken across the middle half of the fan and
+        // measured against the straight line between its two ends. A slant is straight when that
+        // comes to nothing; a fan rounded end to end bows away from it.
+        auto slantBow = [](const Entity& e) {
+            const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+            if (s.size() < 2) return -1.0;
+            std::vector<Vec2> mid;
+            for (size_t i = 0; i < s[0].size() && i < s[1].size(); ++i)
+                mid.push_back(lerp(s[0][i], s[1][i], 0.5));
+            // The fan runs from the tail (0.6 of the lead) to the lead; take the middle half of it.
+            std::vector<Vec2> slant;
+            for (const Vec2& v : mid)
+                if (v.x > 36.0 + 0.25 * 24.0 && v.x < 36.0 + 0.75 * 24.0) slant.push_back(v);
+            if (slant.size() < 3) return -1.0;
+            double bow = 0.0;
+            for (size_t i = 1; i + 1 < slant.size(); ++i)
+                bow = std::max(bow,
+                               closestPointOnSegment(slant[i], slant.front(), slant.back()).distance);
+            return bow;
         };
-        const double eased = straightShare(fanned(0.0));
-        const double filleted = straightShare(fanned(8.0));
-        std::printf("  fan knee: eased end to end %.0f%% straight, on an 8 mm radius %.0f%%\n",
-                    eased * 100.0, filleted * 100.0);
-        check(filleted > eased + 0.2,
-              "fan knee: a radius leaves a straight slant between the two corners");
-        // A BIGGER RADIUS EATS MORE OF THE FAN, so less of it is left straight - and asking for more
-        // than the fan can hold rounds the whole thing rather than overshooting it.
-        const double wide = straightShare(fanned(40.0));
-        std::printf("  fan knee: on a 40 mm radius %.0f%% straight\n", wide * 100.0);
-        check(wide < filleted - 1e-9, "fan knee: a wider radius leaves less of it straight");
+        const double bowAuto = slantBow(fanned(-1.0));
+        const double bowSharp = slantBow(fanned(0.0));
+        const double bowWide = slantBow(fanned(40.0));
+        std::printf("  fan: the middle of the slant bows %.4f left alone, %.4f at 0, %.4f at 40\n",
+                    bowAuto, bowSharp, bowWide);
+        check(bowSharp >= 0.0 && bowSharp < 1e-6,
+              "fan: a radius of nought draws the slant dead straight, corner to corner");
+        check(bowAuto >= 0.0 && bowAuto < 1e-6,
+              "fan: and left alone the middle of the slant is straight too - the radius is at the "
+              "ends of it, which is where a fan is drawn with one");
+        check(bowWide > bowAuto + 1e-6,
+              "fan: a radius too big for the fan to hold rounds the whole of it, as it must");
+
+        // AND THE CORNER IS A CORNER when nought is asked for, where otherwise it is a bend. Measured
+        // at the bundle end of the slant: how sharply the wire's own line turns there.
+        auto cornerTurn = [](const Entity& e) {
+            const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+            if (s.size() < 2) return 0.0;
+            std::vector<Vec2> mid;
+            for (size_t i = 0; i < s[0].size() && i < s[1].size(); ++i)
+                mid.push_back(lerp(s[0][i], s[1][i], 0.5));
+            double sharpest = 0.0;
+            for (size_t i = 2; i < mid.size(); ++i) {
+                if (mid[i].x > 70.0) break;
+                const Vec2 d1 = mid[i - 1] - mid[i - 2], d2 = mid[i] - mid[i - 1];
+                if (d1.length() < 1e-9 || d2.length() < 1e-9) continue;
+                sharpest = std::max(sharpest, std::abs(angleOf(d2) - angleOf(d1)));
+            }
+            return sharpest * 180.0 / M_PI;
+        };
+        const double turnSharp = cornerTurn(fanned(0.0)), turnRound = cornerTurn(fanned(20.0));
+        std::printf("  fan: the sharpest turn in it is %.1f deg at 0, %.1f deg on a 20 radius\n",
+                    turnSharp, turnRound);
+        check(turnSharp > turnRound + 5.0,
+              "fan: nought turns the whole corner at once - a corner - and a radius spreads it");
+
         // AND THE WIRES STILL LAND WHERE THEY LAND. The radius rounds the corners of the fan; it does
         // not move the end of the wire, which is on a pin.
         auto endSpread = [](const Entity& e) {
@@ -10678,11 +10716,132 @@ int run_editor_tests() {
                 if (!s.empty()) { lo = std::min(lo, s.front().y); hi = std::max(hi, s.front().y); }
             return hi - lo;
         };
-        const double spreadEased = endSpread(fanned(0.0)), spreadKnee = endSpread(fanned(8.0));
-        std::printf("  fan knee: the end spreads %.2f eased, %.2f filleted\n", spreadEased,
+        const double spreadAuto = endSpread(fanned(-1.0)), spreadKnee = endSpread(fanned(8.0));
+        std::printf("  fan: the end spreads %.2f left alone, %.2f filleted\n", spreadAuto,
                     spreadKnee);
-        check(std::abs(spreadEased - spreadKnee) < 0.05,
-              "fan knee: rounding the corners does not move the wire ends");
+        check(std::abs(spreadAuto - spreadKnee) < 0.05,
+              "fan: rounding the corners does not move the wire ends");
+    }
+
+    // ---- Nought is a sharp corner on the run's knee as well --------------------------------------
+    {
+        // Nought used to mean "nobody has said" on both radii, which left no way at all to ask for a
+        // corner: every run was bent whether the drawing wanted it bent or not. Saying nothing is now
+        // saying nothing - and every run drawn before this said nothing, so none of them moves.
+        auto bentRun = [](double knee, bool say) {
+            Entity w;
+            w.id = QStringLiteral("SHARP");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 4);
+            w.meta.insert(QStringLiteral("twistWidth"), 10.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            if (say) w.meta.insert(QStringLiteral("twistKnee"), knee);
+            return w;
+        };
+        // How sharply the bundle turns at the knee: a corner turns the whole ninety degrees between
+        // one step and the next, a bend spreads it over the ten steps an arc is drawn with.
+        auto sharpestTurn = [](const Entity& e) {
+            double sharpest = 0.0;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                for (size_t i = 2; i < s.size(); ++i) {
+                    if (distance(s[i - 1], Vec2{200.0, 0.0}) > 120.0) continue;
+                    const Vec2 d1 = s[i - 1] - s[i - 2], d2 = s[i] - s[i - 1];
+                    if (d1.length() < 1e-9 || d2.length() < 1e-9) continue;
+                    sharpest = std::max(sharpest, std::abs(angleOf(d2) - angleOf(d1)));
+                }
+            return sharpest * 180.0 / M_PI;
+        };
+        const double said0 = sharpestTurn(bentRun(0.0, true));
+        const double said30 = sharpestTurn(bentRun(30.0, true));
+        const double saidNothing = sharpestTurn(bentRun(0.0, false));
+        std::printf("  sharp: the knee turns %.1f deg at 0, %.1f deg at 30, %.1f deg unsaid\n", said0,
+                    said30, saidNothing);
+        check(said0 > 80.0, "sharp: a knee radius of nought is a corner, which is a thing a drawing "
+                            "can want and could not be asked for");
+        check(said30 < 30.0, "sharp: and a radius is still a bend");
+        check(saidNothing < 30.0,
+              "sharp: saying nothing still leaves the drawing to decide, so nothing already drawn "
+              "turns into a corner");
+    }
+
+    // ---- The finish end of a run need not fan like the start end ---------------------------------
+    {
+        // A run leaves one thing and arrives at another: eight ways out of a header at one end and
+        // two into a ring terminal at the other is one run, not two runs that meet. Nearly every run
+        // IS drawn alike at both ends, so that is what it does unless told otherwise - and that is
+        // what every run already on a sheet does.
+        auto sided = [](bool same, double finishFan, double finishPitch) {
+            Entity w;
+            w.id = QStringLiteral("SIDES");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {400.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 40.0);
+            w.meta.insert(QStringLiteral("twistLane"), 10.0);
+            if (!same) {
+                w.meta.insert(QStringLiteral("twistSidesSame"), false);
+                w.meta.insert(QStringLiteral("twistEndsFinish"), finishFan);
+                w.meta.insert(QStringLiteral("twistLaneFinish"), finishPitch);
+            }
+            return w;
+        };
+        // How far apart the wires are where they land, at each end, and how far in from that end the
+        // fan reaches - the two things the finish end is now allowed its own answer to.
+        auto spreadAt = [](const Entity& e, bool atStart) {
+            double lo = 1e300, hi = -1e300;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e)) {
+                if (s.empty()) continue;
+                const Vec2 p = atStart ? s.front() : s.back();
+                lo = std::min(lo, p.y);
+                hi = std::max(hi, p.y);
+            }
+            return hi - lo;
+        };
+        auto fanReach = [](const Entity& e, bool atStart) {
+            // The outermost wire is level where it is landed and level again in the bundle; how far
+            // from the end it stops moving is where its fan ends.
+            const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+            if (s.empty()) return 0.0;
+            const std::vector<Vec2>& a = s.front();
+            const double endY = atStart ? a.front().y : a.back().y;
+            double reach = 0.0;
+            for (const Vec2& p : a) {
+                // Its OWN half of the run: the other end is off level too, and it is not this fan.
+                const double from = atStart ? p.x : 400.0 - p.x;
+                if (from > 200.0) continue;
+                if (std::abs(p.y - endY) > 1e-6) reach = std::max(reach, from);
+            }
+            return reach;
+        };
+
+        const Entity alike = sided(true, 0.0, 0.0);
+        std::printf("  sides: alike - spreads %.2f and %.2f, fans reach %.1f and %.1f\n",
+                    spreadAt(alike, true), spreadAt(alike, false), fanReach(alike, true),
+                    fanReach(alike, false));
+        check(std::abs(spreadAt(alike, true) - spreadAt(alike, false)) < 1e-6 &&
+                  std::abs(fanReach(alike, true) - fanReach(alike, false)) < 1e-6,
+              "sides: said once, the finish end fans exactly as the start end does");
+
+        const Entity apart = sided(false, 90.0, 24.0);
+        const double startSpread = spreadAt(apart, true), finishSpread = spreadAt(apart, false);
+        const double startReach = fanReach(apart, true), finishReach = fanReach(apart, false);
+        std::printf("  sides: apart - spreads %.2f and %.2f, fans reach %.1f and %.1f\n",
+                    startSpread, finishSpread, startReach, finishReach);
+        check(std::abs(startSpread - spreadAt(alike, true)) < 1e-6,
+              "sides: parting them leaves the start end exactly where it was");
+        check(finishSpread > startSpread + 1.0,
+              "sides: and the finish end spreads to its own pitch");
+        check(finishReach > startReach + 10.0,
+              "sides: over its own fan length, which is the other half of a run having two ends");
     }
 
     // ---- A wire keeps its width where it slants through the fan -----------------------------------
@@ -10715,10 +10874,23 @@ int run_editor_tests() {
             if (2 * wire + 1 >= s.size()) return 0.0;
             const std::vector<Vec2>& a = s[2 * wire];
             const std::vector<Vec2>& b = s[2 * wire + 1];
+            // The point on the first edge AT x, interpolated along the step that spans it. Taking
+            // the nearest measured place instead answers about somewhere else entirely: the middle
+            // of a run is one long step with nothing measured inside it, so "nearest to the middle"
+            // is the end of the fan, a hundred millimetres away and on a curve.
             Vec2 on{0.0, 0.0};
             double bestDx = 1e300;
-            for (const Vec2& p : a)
-                if (std::abs(p.x - x) < bestDx) { bestDx = std::abs(p.x - x); on = p; }
+            for (size_t i = 1; i < a.size(); ++i) {
+                const Vec2 p = a[i - 1], q = a[i];
+                if ((p.x - x) * (q.x - x) > 0.0) continue;
+                const double span = q.x - p.x;
+                on = std::abs(span) < 1e-12 ? p : lerp(p, q, (x - p.x) / span);
+                bestDx = 0.0;
+                break;
+            }
+            if (bestDx > 1e299)
+                for (const Vec2& p : a)
+                    if (std::abs(p.x - x) < bestDx) { bestDx = std::abs(p.x - x); on = p; }
             double best = 1e300;
             for (size_t i = 1; i < b.size(); ++i)
                 best = std::min(best, closestPointOnSegment(on, b[i - 1], b[i]).distance);

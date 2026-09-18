@@ -148,6 +148,18 @@ public:
     // to reach a connector, and the two are nothing like the same size. 0 eases the whole fan.
     double twistFanKnee() const { return twistFanKnee_; }
     void setTwistFanKnee(double mm);
+    // THE TWO ENDS OF A RUN, DESCRIBED ONCE OR TWICE. A run leaves one thing and arrives at another
+    // and the two need not fan alike - eight ways out of a header at one end and two into a ring
+    // terminal at the other is one run. Ticked, which is how it starts, the finish end repeats the
+    // start and there is one set of figures; unticked, the finish end takes its own.
+    bool twistSidesSame() const { return twistSidesSame_; }
+    void setTwistSidesSame(bool same);
+    double twistLaneFinish() const { return twistLaneFinish_; }
+    void setTwistLaneFinish(double mm);
+    double twistFanFinish() const { return twistFanFinish_; }
+    void setTwistFanFinish(double mm);
+    double twistFanKneeFinish() const { return twistFanKneeFinish_; }
+    void setTwistFanKneeFinish(double mm);
     void setTwistLane(double mm);
     // HOW MANY WIRES CARRY ON once the spread ones have converged. A bundle is drawn with the number
     // of lines it takes to read as a bundle rather than one per wire in it: the rest run into it and
@@ -1558,8 +1570,15 @@ private:
     double twistLane_ = 0.0;                       // spread pitch; 0 = the drawing's own figure
     double twistFan_ = 0.0;                        // fan length at each end; 0 = the drawing's own
     double twistWireWidth_ = 0.0;                  // one wire across; 0 = the drawing's own
-    double twistKnee_ = 0.0;                       // fillet at a knee; 0 = the drawing's own
-    double twistFanKnee_ = 0.0;                    // fillet at a fan corner; 0 = eased across it
+    // THE TWO RADII, AND WHAT NOUGHT MEANS ON THEM. Below nought is nobody having said, and the
+    // drawing's own figure stands; NOUGHT IS A SHARP CORNER, which is a thing a drawing can want and
+    // which could not be asked for at all while nought meant "you decide".
+    double twistKnee_ = -1.0;                      // fillet at a knee; <0 = the drawing's own
+    double twistFanKnee_ = -1.0;                   // fillet at a fan corner; <0 = eased across it
+    bool twistSidesSame_ = true;                   // the finish end repeats the start
+    double twistLaneFinish_ = 0.0;                 // and these three are its own, when it does not
+    double twistFanFinish_ = 0.0;
+    double twistFanKneeFinish_ = -1.0;
     // HOW MANY LINES THE BUNDLE IS DRAWN AS once the fan has converged. Two: that is what a run of
     // many wires is drawn as on a released sheet. 0 would be every wire, which is a picture of the
     // wires rather than of the harness.
