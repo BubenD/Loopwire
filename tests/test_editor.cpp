@@ -10576,12 +10576,113 @@ int run_editor_tests() {
         std::printf("  knee: radius 5 keeps %.2f from the corner, radius 60 keeps %.2f, auto %.2f\n",
                     tight, loose, byDefault);
         check(loose > tight + 1.0, "knee: a wider radius swings the run clear of the corner");
+        // THE FIGURE ASKED FOR IS THE SMALLEST RADIUS IN THE BUNDLE, not the centreline's.
+        //
+        // Every wire runs alongside the centreline, so on the inside of a turn a wire bends tighter
+        // than the line down the middle by however far off it sits. A radius is a build constraint -
+        // the tightest the loom may be bent ANYWHERE in it - so reading it as the centreline's let
+        // the inner wires bend tighter than the number somebody had just typed in to stop that.
+        //
+        // Measured off what is drawn, by how tightly the wires actually curve rather than by where
+        // they pass: the tightest bend anywhere in the bundle is what a radius is a limit on. Three
+        // points off a strand give the radius of the circle through them, so the smallest of those
+        // over every strand near the corner is the tightest bend the drawing has.
+        auto tightestBend = [](const Entity& e) {
+            double best = 1e300;
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                for (size_t i = 2; i < strand.size(); ++i) {
+                    const Vec2 &p = strand[i - 2], &q = strand[i - 1], &t = strand[i];
+                    if (distance(q, Vec2{200.0, 0.0}) > 120.0) continue;   // the corner, not the fans
+                    const double a = distance(p, q), b = distance(q, t), c = distance(p, t);
+                    const double area =
+                        std::abs((q.x - p.x) * (t.y - p.y) - (t.x - p.x) * (q.y - p.y)) / 2.0;
+                    if (area < 1e-9 || a < 1e-9 || b < 1e-9) continue;   // straight: no bend at all
+                    best = std::min(best, a * b * c / (4.0 * area));
+                }
+            return best;
+        };
+        for (const double r : {20.0, 40.0, 60.0}) {
+            const double bent = tightestBend(bentRun(r));
+            std::printf("  knee: asked %.0f, the tightest wire in it bends on %.2f\n", r, bent);
+            check(bent > r - 0.5, "knee: no wire bends tighter than the radius asked for");
+        }
         // AND UNSET IS WHAT IT ALWAYS WAS - a share of the bundle width - so every run drawn before
-        // this turns exactly as it did.
-        const double asBefore = clearance(bentRun(10.0 * 1.2));
+        // this turns exactly as it did. Asking for that same figure LESS half the bundle comes to the
+        // same centreline, which is what says the default has not quietly moved with the rest of this.
+        const double bundle = 2.0 * (kWiresRunPitch * 3.0 / 2.0) + kWiresRunWire;   // four wires
+        const double asBefore = clearance(bentRun(10.0 * 1.2 - bundle / 2.0));
         std::printf("  knee: auto %.2f against the old figure %.2f\n", byDefault, asBefore);
         check(std::abs(byDefault - asBefore) < 1e-6,
               "knee: left alone it turns the way it always turned");
+    }
+
+    // ---- The fan's corners turn on a radius of their own ------------------------------------------
+    {
+        // A fan has two corners in it: where a wire leaves the bundle, and where it settles into the
+        // lane it lands in. Both were rounded across the WHOLE fan - one long ease end to end - so
+        // there was no straight slant anywhere in it and no way to ask for one. A fan drawn by hand is
+        // a straight run of wire with a radius at each end, and how big that radius is is a length
+        // like every other radius on the sheet. It is NOT the run's knee radius: that one is the loom
+        // being dressed round the shape of the car, this one is a wire reaching a pin.
+        auto fanned = [](double fanKnee) {
+            Entity w;
+            w.id = QStringLiteral("FAN");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {300.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 60.0);
+            w.meta.insert(QStringLiteral("twistLane"), 12.0);
+            if (fanKnee > 0.0) w.meta.insert(QStringLiteral("twistFanKnee"), fanKnee);
+            return w;
+        };
+        // HOW STRAIGHT THE SLANT IS: take the outermost wire through the fan and measure how much its
+        // direction changes from one step to the next. A curve turns a little at every step; a
+        // straight slant between two corners turns at the corners and nowhere in between, so most of
+        // its steps turn by nothing at all.
+        auto straightShare = [](const Entity& e) {
+            const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
+            if (strands.empty()) return 0.0;
+            const std::vector<Vec2>& s = strands.front();
+            int flat = 0, counted = 0;
+            for (size_t i = 2; i < s.size(); ++i) {
+                if (s[i].x > 60.0) break;   // the fan only
+                const Vec2 d1 = s[i - 1] - s[i - 2], d2 = s[i] - s[i - 1];
+                if (d1.length() < 1e-9 || d2.length() < 1e-9) continue;
+                const double turn = std::abs(std::atan2(d2.y, d2.x) - std::atan2(d1.y, d1.x));
+                ++counted;
+                if (turn < 1e-4) ++flat;
+            }
+            return counted > 0 ? double(flat) / counted : 0.0;
+        };
+        const double eased = straightShare(fanned(0.0));
+        const double filleted = straightShare(fanned(8.0));
+        std::printf("  fan knee: eased end to end %.0f%% straight, on an 8 mm radius %.0f%%\n",
+                    eased * 100.0, filleted * 100.0);
+        check(filleted > eased + 0.2,
+              "fan knee: a radius leaves a straight slant between the two corners");
+        // A BIGGER RADIUS EATS MORE OF THE FAN, so less of it is left straight - and asking for more
+        // than the fan can hold rounds the whole thing rather than overshooting it.
+        const double wide = straightShare(fanned(40.0));
+        std::printf("  fan knee: on a 40 mm radius %.0f%% straight\n", wide * 100.0);
+        check(wide < filleted - 1e-9, "fan knee: a wider radius leaves less of it straight");
+        // AND THE WIRES STILL LAND WHERE THEY LAND. The radius rounds the corners of the fan; it does
+        // not move the end of the wire, which is on a pin.
+        auto endSpread = [](const Entity& e) {
+            double lo = 1e300, hi = -1e300;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                if (!s.empty()) { lo = std::min(lo, s.front().y); hi = std::max(hi, s.front().y); }
+            return hi - lo;
+        };
+        const double spreadEased = endSpread(fanned(0.0)), spreadKnee = endSpread(fanned(8.0));
+        std::printf("  fan knee: the end spreads %.2f eased, %.2f filleted\n", spreadEased,
+                    spreadKnee);
+        check(std::abs(spreadEased - spreadKnee) < 0.05,
+              "fan knee: rounding the corners does not move the wire ends");
     }
 
     // ---- A wire keeps its width where it slants through the fan -----------------------------------
@@ -10646,6 +10747,49 @@ int run_editor_tests() {
               "wire width: a tight fan draws the wire at the width it was given");
         check(std::abs(slantPart - 2.0) < 0.2,
               "wire width: and so does a wide one - opening the pitch does not thin them");
+    }
+
+    // ---- A fan too short for its pitch loses width, it does not grow spikes -----------------------
+    {
+        // Asking for a 5 mm fan and a wide pitch is asking the wires to cross the run almost square.
+        // The width correction is one over the cosine of that slant, which runs away to infinity as
+        // the wire approaches square - so uncapped it threw the edges out in long spikes past the
+        // knee, far outside the bundle they belong to.
+        auto run = [](double fan, double pitch) {
+            Entity w;
+            w.id = QStringLiteral("RUN");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {300.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 8);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+            w.meta.insert(QStringLiteral("twistEnds"), fan);     // an explicit, punishing fan length
+            w.meta.insert(QStringLiteral("twistLane"), pitch);
+            return w;
+        };
+        // How far the drawing reaches across, against how far the wires are meant to spread. A spike
+        // shows up as a line a long way outside the fan it belongs to.
+        auto reach = [](const Entity& e) {
+            double most = 0.0;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                for (const Vec2& p : s) most = std::max(most, std::abs(p.y));
+            return most;
+        };
+        const double pitch = 20.0;
+        const double wanted = pitch * (8 - 1) / 2.0 + 1.0;   // the outermost lane, plus half a wire
+        const double cruel = reach(run(5.0, pitch));
+        const double easy = reach(run(80.0, pitch));
+        std::printf("  fan spike: wires spread to %.1f; a 5 mm fan reaches %.1f, an 80 mm fan %.1f\n",
+                    wanted, cruel, easy);
+        check(easy < wanted + 1.0, "fan spike: a fan with room reaches exactly as far as its wires do");
+        // The punishing one may not reach appreciably further. Before the cap it ran to several times
+        // the spread.
+        check(cruel < wanted + 2.0,
+              "fan spike: and a fan with no room stays inside the spread rather than spiking past it");
     }
 
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------

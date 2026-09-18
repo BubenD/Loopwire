@@ -836,6 +836,8 @@ private:
     QDoubleSpinBox* twistFanSpin_ = nullptr;
     QLabel* twistFanLabel_ = nullptr;
     QDoubleSpinBox* twistKneeSpin_ = nullptr;
+    QDoubleSpinBox* twistFanKneeSpin_ = nullptr;
+    QLabel* twistFanKneeLabel_ = nullptr;
     QLabel* twistKneeLabel_ = nullptr;
     QDoubleSpinBox* twistWireSpin_ = nullptr;
     QLabel* twistWireLabel_ = nullptr;

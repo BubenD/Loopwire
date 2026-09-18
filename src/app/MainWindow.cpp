@@ -4485,6 +4485,16 @@ void MainWindow::syncBreakOptions() {
             QSignalBlocker b(twistFanSpin_);
             twistFanSpin_->setValue(editor_->twistFan());
         }
+        // The fan's own corner radius is the straight run's, for the same reason the wire width is:
+        // a laid-up bundle has no fan corners to round, its wires cross the whole way.
+        if (twistFanKneeSpin_ && twistFanKneeLabel_) {
+            twistFanKneeSpin_->setVisible(straightRun);
+            twistFanKneeLabel_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistFanKneeSpin_);
+                twistFanKneeSpin_->setValue(editor_->twistFanKnee());
+            }
+        }
         if (twistWireSpin_ && twistWireLabel_) {
             twistWireSpin_->setVisible(straightRun);
             twistWireLabel_->setVisible(straightRun);
@@ -8823,8 +8833,8 @@ void MainWindow::refreshProperties() {
            sel.empty() ? QStringLiteral("No selection")
                        : (multi ? QStringLiteral("%1 x %2")
                                       .arg(sel.size())
-                                      .arg(entityTypeToString(e->type))
-                                : (e ? entityTypeToString(e->type)
+                                      .arg(entityTypeDisplayName(e->type))
+                                : (e ? entityTypeDisplayName(e->type)
                                      : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
     if (gen) {
         QStringList layerNames;

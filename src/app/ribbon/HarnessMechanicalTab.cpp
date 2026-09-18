@@ -527,6 +527,35 @@ void MainWindow::buildHarnessMechanicalTab() {
                                  : QStringLiteral("Wires run: the drawing's own knee radius"),
                         2000);
                 });
+                // AND THE FAN'S OWN CORNERS, which is a different radius from the one above. The
+                // knee is where the loom is routed round the shape of the car; this is where a wire
+                // leaves the bundle for its pin, over a few millimetres rather than tens of them.
+                // One field for both would be wrong for whichever of the two it was not set for.
+                twistFanKneeLabel_ = new QLabel(QStringLiteral("Fan knee"), optW);
+                twistFanKneeLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistFanKneeSpin_ = new QDoubleSpinBox(optW);
+                twistFanKneeSpin_->setRange(0.0, 500.0);
+                twistFanKneeSpin_->setDecimals(1);
+                twistFanKneeSpin_->setSingleStep(0.5);
+                twistFanKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFanKneeSpin_->setValue(editor_->twistFanKnee());
+                twistFanKneeSpin_->setMinimumWidth(64);
+                twistFanKneeSpin_->setToolTip(QStringLiteral(
+                    "How tightly the fan turns where a wire leaves the bundle and where it settles "
+                    "into its lane. Asked for, the slant runs straight between two corners of that "
+                    "radius; more than the fan can hold rounds the whole of it. Auto eases it all."));
+                og->addWidget(twistFanKneeLabel_, 1, 9);
+                og->addWidget(twistFanKneeSpin_, 1, 10);
+                connect(twistFanKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistFanKnee(v);
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        v > 1e-9
+                            ? QStringLiteral("Wires run: the fan turns on a %1 radius").arg(v)
+                            : QStringLiteral("Wires run: the fan is eased end to end"),
+                        2000);
+                });
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);

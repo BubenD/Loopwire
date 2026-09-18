@@ -71,6 +71,14 @@ enum class EntityType {
 
 EntityType entityTypeFromString(const QString& s);
 QString entityTypeToString(EntityType t);
+// WHAT AN OBJECT IS CALLED WHERE A PERSON READS IT, which is not always what it is called in the file.
+//
+// The stored name is part of the format and cannot move: a drawing written today has to open in a
+// version written before it. The name on the properties panel is a different thing, answerable to
+// whoever is looking at the sheet - and "twistedpair" is what this object was when it could only be a
+// pair. It is a harness now: two wires laid up, twelve running straight, a bundle fanning out at both
+// ends. Nobody drawing one of those is drawing a twisted pair.
+QString entityTypeDisplayName(EntityType t);
 
 // A single drawing entity. The model deliberately follows Edraw's dynamic
 // object: a typed common core plus shared geometry holders, with `meta` carrying

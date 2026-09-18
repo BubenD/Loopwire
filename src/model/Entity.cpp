@@ -52,6 +52,13 @@ EntityType entityTypeFromString(const QString& s) {
     return EntityType::Unknown;
 }
 
+QString entityTypeDisplayName(EntityType t) {
+    // Only where the stored name would mislead; everything else is called what it has always been
+    // called, so this cannot quietly rename half the application.
+    if (t == EntityType::TwistedPair) return QStringLiteral("harness");
+    return entityTypeToString(t);
+}
+
 QString entityTypeToString(EntityType t) {
     for (const auto& tn : kTypeNames)
         if (t == tn.type) return QString::fromLatin1(tn.name);

@@ -349,6 +349,7 @@ struct TwistFrames {
     int trunk = 0;
     std::vector<int> trunkLane;  // per wire: which trunk line it becomes, or -1 if it stops
     double tail = 0.0;           // straight run at the very end, before the fan starts
+    double fanKnee = 0.0;        // radius the fan's own corners turn on; 0 = eased across it
 };
 
 bool twistFrames(const Entity& pair, TwistFrames& f) {
@@ -358,24 +359,6 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         pair.points.size() >= 2 ? pair.points : std::vector<Vec2>{pair.a, pair.b};
     const double w =
         std::max(0.2, pair.meta.value(QStringLiteral("twistWidth")).toDouble(kTwistedPairWidth));
-    // A cable does not kink at a corner, it bends - and a bend keeps the two wires from folding over
-    // each other on the inside of the turn, which a sharp corner cannot.
-    // HOW TIGHTLY IT TURNS AT A KNEE. A cable does not kink at a corner, it bends - and a bend keeps
-    // the wires from folding over one another on the inside of the turn, which a sharp corner cannot.
-    //
-    // The radius used to be a fixed share of the bundle width, which is a reasonable guess and only
-    // that: how tightly a loom may be turned is set by what is in it and by what it is being dressed
-    // round, and neither of those is the width of the line on the paper. Absent, the old figure
-    // stands, so every run drawn before this turns exactly as it did.
-    const double knee = pair.meta.value(QStringLiteral("twistKnee")).toDouble(0.0);
-    if (path.size() > 2) path = roundedPolyline(path, knee > 1e-9 ? knee : w * 1.2, 10);
-
-    std::vector<double> at{0.0};
-    for (size_t i = 1; i < path.size(); ++i)
-        at.push_back(at.back() + (path[i] - path[i - 1]).length());
-    f.len = at.back();
-    if (f.len < 1e-9) return false;
-
     const double half = w / 2.0;
     // Every wire gets the same share of the bundle, with a parting either side of it, and swings from
     // the middle by whatever is left over. Two wires come out exactly where they did before this took a
@@ -404,6 +387,36 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // half as much again of.
         f.packed = f.wires > 1 ? 2.0 * f.reach / (f.wires - 1) : 0.0;
     }
+
+    // HOW TIGHTLY IT TURNS AT A KNEE. A cable does not kink at a corner, it bends - and a bend keeps
+    // the wires from folding over one another on the inside of the turn, which a sharp corner cannot.
+    //
+    // The radius used to be a fixed share of the bundle width, which is a reasonable guess and only
+    // that: how tightly a loom may be turned is set by what is in it and by what it is being dressed
+    // round, and neither of those is the width of the line on the paper. Absent, the old figure
+    // stands, so every run drawn before this turns exactly as it did.
+    // THE RADIUS ASKED FOR IS THE SMALLEST ONE IN THE BUNDLE, not the centreline's.
+    //
+    // Every wire follows the centreline offset sideways by its own lane, so on the inside of a turn a
+    // wire bends TIGHTER than the centreline by however far off it sits - half a bundle, at the
+    // worst. A radius is a build constraint: it is the tightest the harness may be bent anywhere in
+    // it, which is the innermost wire and never the line down the middle. Taking the figure as the
+    // centreline's let the inner wires bend tighter than the number somebody had just typed in to
+    // stop exactly that.
+    //
+    // So the centreline is rounded at the radius plus half the bundle as drawn - which on a
+    // straight run is the wires side by side, not the cable width - and every wire in it then
+    // turns on that radius or wider. Unset, the old figure stands and nothing already drawn moves.
+    const double knee = pair.meta.value(QStringLiteral("twistKnee")).toDouble(0.0);
+    if (path.size() > 2)
+        path = roundedPolyline(path, knee > 1e-9 ? knee + f.reach + f.thick : w * 1.2, 10);
+
+    std::vector<double> at{0.0};
+    for (size_t i = 1; i < path.size(); ++i)
+        at.push_back(at.back() + (path[i] - path[i - 1]).length());
+    f.len = at.back();
+    if (f.len < 1e-9) return false;
+
     double period =
         std::max(0.05, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
     f.lead = std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
@@ -470,6 +483,12 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // still spreading. The fan takes the part of the end nearer the bundle, the straight run the part
     // nearer the end.
     f.tail = f.straight ? f.lead * kWiresRunTailShare : 0.0;
+    // AND HOW TIGHTLY THE FAN'S OWN CORNERS TURN, which is not the run's knee radius: the run
+    // bends where the loom is routed round something, the fan bends where a wire leaves the bundle
+    // for its pin. They are set on different things and are different sizes, and one figure for
+    // both would be wrong for whichever of them it was not chosen for. Unset, the fan is eased
+    // across its whole length, which is what every run drawn so far has.
+    f.fanKnee = std::max(0.0, pair.meta.value(QStringLiteral("twistFanKnee")).toDouble(0.0));
     const bool startIsLeft = path.front().x <= path.back().x;
     f.spreadStart = spread == QLatin1String("both") ||
                     (spread == QLatin1String("left") && startIsLeft) ||
@@ -609,7 +628,31 @@ double twistOffset(const TwistFrames& f, int k, double u) {
             t = std::clamp((into - f.tail) / fanLen, 0.0, 1.0);
             // Eased, so it leaves the bundle and settles into its lane on a curve rather than at two
             // corners - a fan drawn by hand has a radius at each end of the slant.
-            t = t * t * (3.0 - 2.0 * t);
+            //
+            // HOW BIG THAT RADIUS IS CAN BE ASKED FOR, and then it is a length, like every other
+            // radius on the sheet, rather than a share of whatever the fan happens to be. A fillet
+            // of radius r at a corner turning through an angle takes r*tan(angle/2) of run either
+            // side of the corner, so that is how much of the fan each of its two corners is given
+            // and the stretch between them is the straight slant. A wire with further to travel
+            // slants more steeply and so spends more of the fan on the same radius, which is what a
+            // fillet does. Ask for more than the fan can hold and the two corners meet in the
+            // middle: one curve end to end, and no tighter than that.
+            double ease = 0.0;
+            if (f.fanKnee > 1e-9) {
+                const double turn = std::atan(std::abs(inRun - target) / fanLen);
+                ease = std::clamp(f.fanKnee * std::tan(turn / 2.0) / fanLen, 0.0, 0.5);
+            }
+            if (f.fanKnee <= 1e-9) {
+                t = t * t * (3.0 - 2.0 * t);
+            } else if (ease > 1e-9) {
+                // Turn in over the first ease of the fan, run straight, turn out over the last - how
+                // far a thing gets at a speed that ramps up, holds, and ramps down again.
+                const double raw = t < ease ? t * t / (2.0 * ease)
+                                   : t > 1.0 - ease
+                                       ? 1.0 - ease - (1.0 - t) * (1.0 - t) / (2.0 * ease)
+                                       : t - ease / 2.0;
+                t = raw / (1.0 - ease);
+            }
         } else {
             t = f.lead > 1e-9 ? std::clamp(into / f.lead, 0.0, 1.0) : 1.0;
         }
@@ -634,37 +677,35 @@ double twistDepth(const TwistFrames& f, int k, double u) {
 std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t from, size_t to) {
     std::vector<Vec2> line;
     line.reserve(to - from + 1);
-    // A WIRE KEEPS ITS WIDTH WHERE IT SLANTS.
+    // A WIRE KEEPS ITS WIDTH WHERE IT SLANTS - and a fan too short for its pitch loses a little width
+    // rather than growing spikes.
     //
-    // Both edges of a wire are offset from its centre along the normal to the RUN, which is right
-    // wherever the wire is going the same way the run is. In the fan it is not: it is crossing the run
-    // to reach its lane, and a pair of lines held a fixed distance apart measured ACROSS the run are
-    // closer than that measured across the wire itself - by the cosine of the slant. So the diagonal
-    // part of every fan came out thinner than the straight parts at either end of it, and the steeper
-    // the fan the thinner it got. Widening the pitch made it worse, because a wider pitch is a steeper
-    // slant.
+    // Both edges sit half a width either side of the wire's centre, measured along the normal to the
+    // RUN. Where the wire crosses the run to reach its lane, two lines a fixed distance apart across
+    // the RUN are closer than that across the WIRE, by the cosine of the slant - so the fan drew
+    // thinner than the straight ends either side of it. Stretching the offset by one over that cosine
+    // puts the width back.
     //
-    // The offset is stretched by 1/cos of the slant, which is sqrt(1 + slope squared) - the same
-    // mitre a stroked polyline uses at a corner. The two edges stay parallel to the wire and the width
-    // measured across the wire is the width it is supposed to be.
+    // CAPPED AT TWICE, which is a wire at sixty degrees to the run. One over the cosine runs away to
+    // infinity as a wire approaches square, so an uncapped stretch threw the edges out in long spikes
+    // past the knee the moment somebody set a 5 mm fan or opened the pitch wide. Beyond the cap the
+    // wire is drawn slightly thin, which nobody notices, instead of slightly enormous, which is the
+    // whole drawing.
     //
-    // Capped only against the absurd - a wire crossing the run dead square would stretch without
-    // limit and draw an edge across the sheet. The cap was four, which sounds generous and is not: a
-    // six-wire fan opened to a 24 mm pitch over a short lead slants at six to one, so the cap bit and
-    // the wires came out thinner the wider the pitch was set - the very thing this is here to stop.
-    //
-    // ON A STRAIGHT RUN ONLY. A laid-up bundle is a cable of a stated thickness with its wires woven
-    // inside it, and the one thing it must not do is draw outside its own width - the wires cross
-    // steeply there all the way along, so widening them would put the weave outside the cable. A
-    // straight run has no such outline: it IS its wires, and they are what the width belongs to.
+    // Offsetting perpendicular to the WIRE instead was tried and is worse: it is exact, and it moves
+    // the ends of every strand ALONG the run, so the wires no longer finish flush with the run they
+    // belong to - three other things that rely on that, from the spread at the far end to a
+    // heatshrink band catching the run, stopped working at once.
     const double h = std::max(1e-6, f.len * 1e-4);
     for (size_t i = from; i <= to && i < f.pos.size(); ++i) {
         const double u = f.u[i];
-        const double ahead = twistOffset(f, k, std::min(f.len, u + h));
-        const double behind = twistOffset(f, k, std::max(0.0, u - h));
-        const double slope = (ahead - behind) / (std::min(f.len, u + h) - std::max(0.0, u - h) + 1e-12);
-        const double widen =
-            f.straight ? std::min(12.0, std::sqrt(1.0 + slope * slope)) : 1.0;
+        double widen = 1.0;
+        if (f.straight) {
+            const double lo = std::max(0.0, u - h), hi = std::min(f.len, u + h);
+            const double slope =
+                hi > lo ? (twistOffset(f, k, hi) - twistOffset(f, k, lo)) / (hi - lo) : 0.0;
+            widen = std::min(2.0, std::sqrt(1.0 + slope * slope));
+        }
         line.push_back(f.pos[i] + f.n[i] * (twistOffset(f, k, u) + edge * f.thick * widen));
     }
     return line;
@@ -703,6 +744,7 @@ QString twistKey(const Entity& e) {
     k += QString::number(e.meta.value(QLatin1String("twistWireWidth")).toDouble(), 'g', 12);
     k += QString::number(e.meta.value(QLatin1String("twistTrunkWires")).toInt());
     k += QString::number(e.meta.value(QLatin1String("twistKnee")).toDouble(), 'g', 12);
+    k += QString::number(e.meta.value(QLatin1String("twistFanKnee")).toDouble(), 'g', 12);
     return k;
 }
 

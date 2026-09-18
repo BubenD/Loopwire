@@ -143,6 +143,11 @@ public:
     // which is a share of the bundle width - a reasonable guess and only that.
     double twistKnee() const { return twistKnee_; }
     void setTwistKnee(double mm);
+    // AND HOW TIGHTLY THE FAN'S OWN CORNERS TURN, where a wire leaves the bundle for its pin. A
+    // separate figure from the knee above: the loom bends round the shape of the car, the fan bends
+    // to reach a connector, and the two are nothing like the same size. 0 eases the whole fan.
+    double twistFanKnee() const { return twistFanKnee_; }
+    void setTwistFanKnee(double mm);
     void setTwistLane(double mm);
     // HOW MANY WIRES CARRY ON once the spread ones have converged. A bundle is drawn with the number
     // of lines it takes to read as a bundle rather than one per wire in it: the rest run into it and
@@ -1554,6 +1559,7 @@ private:
     double twistFan_ = 0.0;                        // fan length at each end; 0 = the drawing's own
     double twistWireWidth_ = 0.0;                  // one wire across; 0 = the drawing's own
     double twistKnee_ = 0.0;                       // fillet at a knee; 0 = the drawing's own
+    double twistFanKnee_ = 0.0;                    // fillet at a fan corner; 0 = eased across it
     // HOW MANY LINES THE BUNDLE IS DRAWN AS once the fan has converged. Two: that is what a run of
     // many wires is drawn as on a released sheet. 0 would be every wire, which is a picture of the
     // wires rather than of the harness.
