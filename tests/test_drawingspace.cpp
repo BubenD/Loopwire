@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QCursor>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QImage>
 #include <QKeyEvent>
@@ -949,6 +950,76 @@ int run_drawingspace_tests() {
                         props->item(r, 1) && props->item(r, 1)->text().contains(QStringLiteral("mixed")))
                         saysMixed = true;
             check(saysMixed, "mixed: the Type row still says the selection is of several kinds");
+
+            editor->selectAll();
+            editor->deleteSelected();
+            QApplication::processEvents();
+        }
+    }
+
+    // ---- a placed harness run can be set from the panel, not only from the ribbon -----------------
+    {
+        // The ribbon fields are the settings the NEXT run is drawn with. The values on the run in
+        // front of you are the panel's, and four of the ribbon's seven had no row there at all - so
+        // a fan length or a knee radius was settable up to the moment the run was placed and not
+        // one moment afterwards, and getting one wrong meant deleting the run and drawing it again.
+        Editor* editor = win.findChild<Editor*>();
+        check(editor != nullptr, "harness panel: there is an editor");
+        if (editor) {
+            editor->selectAll();
+            editor->deleteSelected();
+            Entity run;
+            run.type = EntityType::TwistedPair;
+            run.id = QStringLiteral("panel-run");
+            run.points = {{0.0, 0.0}, {200.0, 0.0}, {200.0, -160.0}};   // routed: it has a knee
+            run.a = run.points.front();
+            run.b = run.points.back();
+            run.meta.insert(QStringLiteral("twistStraight"), true);
+            run.meta.insert(QStringLiteral("twistWires"), 6);
+            run.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            run.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            editor->appendEntities({run});
+            editor->selectById(QStringLiteral("panel-run"));
+            QApplication::processEvents();
+
+            QTableWidget* props = nullptr;
+            for (QDockWidget* d : win.findChildren<QDockWidget*>())
+                if (d->windowTitle() == QStringLiteral("PROPERTIES"))
+                    props = d->findChild<QTableWidget*>();
+            check(props != nullptr, "harness panel: the properties panel is there");
+            QStringList rows;
+            QWidget* fanCell = nullptr;
+            if (props)
+                for (int r = 0; r < props->rowCount(); ++r) {
+                    const QString key = props->item(r, 0) ? props->item(r, 0)->text() : QString();
+                    rows << key;
+                    if (key == QStringLiteral("Fan length")) fanCell = props->cellWidget(r, 1);
+                }
+            std::printf("  harness panel: a run selected, the panel offers %s\n",
+                        qPrintable(rows.join(QStringLiteral(", "))));
+            for (const QString& want : {QStringLiteral("Fan length"), QStringLiteral("Wire width"),
+                                        QStringLiteral("Fan knee"), QStringLiteral("Knee radius")})
+                check(rows.contains(want),
+                      qPrintable(QStringLiteral("harness panel: %1 can be set on a placed run")
+                                     .arg(want)));
+
+            // AND SETTING ONE RE-LAYS THE RUN, which is the point of it being a value on the object
+            // rather than a shape that has been drawn: the wires move, they are not redrawn.
+            if (QDoubleSpinBox* fan = qobject_cast<QDoubleSpinBox*>(fanCell)) {
+                fan->setValue(48.0);
+                emit fan->editingFinished();   // the panel applies on finishing, not per keystroke
+                QApplication::processEvents();
+                QApplication::processEvents();   // the apply is deferred
+                double wrote = 0.0;
+                for (const Entity& e : editor->document()->entities())
+                    if (e.id == QStringLiteral("panel-run"))
+                        wrote = e.meta.value(QStringLiteral("twistEnds")).toDouble();
+                std::printf("  harness panel: asked for a 48 mm fan, the run says %.1f\n", wrote);
+                check(std::abs(wrote - 48.0) < 1e-6,
+                      "harness panel: the fan length typed into the panel lands on the run");
+            } else {
+                check(false, "harness panel: the Fan length row is a number to type in");
+            }
 
             editor->selectAll();
             editor->deleteSelected();

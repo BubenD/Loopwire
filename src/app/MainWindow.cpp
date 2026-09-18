@@ -9112,6 +9112,37 @@ void MainWindow::refreshProperties() {
                            std::clamp(static_cast<int>(std::lround(v)), 1, kTwistedMaxWires));
                    });
         }
+        // AND EVERYTHING THE RIBBON OFFERS WHILE ONE IS BEING DRAWN, because the ribbon fields are
+        // the settings the NEXT run is drawn with and these are the values on the run in front of
+        // you. Every one of them was settable up to the moment the run was placed and not one
+        // afterwards, so getting a fan length wrong meant deleting the run and drawing it again.
+        //
+        // Each shows where it means something, the same as on the ribbon: the fan belongs to both
+        // lays, the wire and the fan's corners are the straight run's - a laid-up bundle takes its
+        // thickness from the cable and its wires cross the whole way - and the knee radius belongs
+        // to a routed run, because a run between two points has no knee to turn at.
+        addNum(QStringLiteral("Fan length"), mv(QStringLiteral("twistEnds")).toDouble(0.0),
+               [this](double v) {
+                   editor_->setSelectionMetaNumber(QStringLiteral("twistEnds"), std::max(0.0, v));
+               });
+        if (straight) {
+            addNum(QStringLiteral("Wire width"),
+                   mv(QStringLiteral("twistWireWidth")).toDouble(0.0), [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("twistWireWidth"),
+                                                       std::max(0.0, v));
+                   });
+            addNum(QStringLiteral("Fan knee"), mv(QStringLiteral("twistFanKnee")).toDouble(0.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("twistFanKnee"),
+                                                       std::max(0.0, v));
+                   });
+        }
+        if (e->points.size() > 2)
+            addNum(QStringLiteral("Knee radius"), mv(QStringLiteral("twistKnee")).toDouble(0.0),
+                   [this](double v) {
+                       editor_->setSelectionMetaNumber(QStringLiteral("twistKnee"),
+                                                       std::max(0.0, v));
+                   });
     }
 
     // A selected wire shows its harness attributes (number, gauge, colour, insulation,
