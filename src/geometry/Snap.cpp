@@ -72,6 +72,11 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         const std::vector<std::pair<Vec2, Vec2>> straights = twistedPairStraights(e);
         if (!straights.empty()) {
             for (const auto& seg : straights) out.emplace_back(seg.first, seg.second);
+            // AND THE LINES ACROSS THE ENDS, which are drawn and are lines: the cut end of a wire is
+            // a place a drawing measures to as much as the run of it is, and it was the one part of
+            // a harness the cursor went straight through.
+            for (const auto& cap : twistedPairEndCaps(e))
+                if (cap.size() == 2) out.emplace_back(cap.front(), cap.back());
             break;
         }
         const std::vector<Vec2>& along =

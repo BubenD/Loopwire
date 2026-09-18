@@ -380,6 +380,11 @@ struct TwistFrames {
     // is a drawing that does not say - the wires are drawn cut and nothing else.
     double strip = 0.0;
     double stripB = 0.0;
+    // AND THE TWO RADII AS THEY CAME OUT, which is not what was asked for when nothing was: they are
+    // worked out from the bundle and from the fan, and a field that says "Auto" has to be able to
+    // show the figure it stands for. Both are the radius a WIRE turns on, not the centreline's.
+    double kneeUsed = 0.0;
+    double fanKneeUsed = 0.0;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -458,11 +463,12 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     const QJsonValue kneeAsked = pair.meta.value(QStringLiteral("twistKnee"));
     const double knee = kneeAsked.isUndefined() ? -1.0 : std::max(0.0, kneeAsked.toDouble(0.0));
     f.bendsRounded = path.size() > 2 && knee != 0.0;
+    const double kneeCentre = knee > 0.0 ? knee + bundleHalf : std::max(w * 1.2, bundleHalf * 2.4);
+    // What a WIRE turns on, which is the centreline's radius less how far off the middle the
+    // innermost of them sits. Nought where a corner was asked for, because a corner is nought.
+    f.kneeUsed = knee == 0.0 ? 0.0 : std::max(0.0, kneeCentre - bundleHalf);
     std::vector<double> pathBend(path.size(), 0.0);
-    if (f.bendsRounded)
-        path = roundedPolyline(path,
-                               knee > 0.0 ? knee + bundleHalf : std::max(w * 1.2, bundleHalf * 2.4),
-                               10, &pathBend);
+    if (f.bendsRounded) path = roundedPolyline(path, kneeCentre, 10, &pathBend);
 
     std::vector<double> at{0.0};
     for (size_t i = 1; i < path.size(); ++i)
@@ -597,6 +603,21 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     };
     f.strip = stripOf(false);
     f.stripB = stripOf(true);
+    // AND WHAT RADIUS THE FAN'S CORNERS CAME OUT ON, for the outermost wire - the one that travels
+    // furthest and so is the one a radius is read off. Left alone the fan gives a quarter of the
+    // slant to each corner, and this is the length that share comes to.
+    {
+        const double fanLen = std::max(1e-9, f.lead - f.tail);
+        const double spread0 = f.wires > 1 ? f.lane * (f.wires - 1) / 2.0 : 0.0;
+        const double inRun0 = f.packed * (f.trunk - 1) / 2.0;
+        const double turn0 = std::atan(std::abs(inRun0 - spread0) / fanLen);
+        const double half0 = std::tan(turn0 / 2.0);
+        const double ease0 =
+            f.fanKnee < 0.0
+                ? 0.25
+                : (f.fanKnee > 1e-9 ? std::clamp(f.fanKnee * half0 / fanLen, 0.0, 0.5) : 0.0);
+        f.fanKneeUsed = half0 > 1e-9 ? ease0 * fanLen / half0 : 0.0;
+    }
     // AND HOW TIGHTLY THE FAN'S OWN CORNERS TURN, which is not the run's knee radius: the run
     // bends where the loom is routed round something, the fan bends where a wire leaves the bundle
     // for its pin. They are set on different things and are different sizes, and one figure for
@@ -637,6 +658,10 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // easing on it never showed.
         us.push_back(f.lead);
         us.push_back(f.len - f.leadB);
+        // AND WHERE THE INSULATION STOPS, exactly, so the wire can step in to its bare conductor
+        // there rather than somewhere near there.
+        if (f.strip > 1e-9) us.push_back(f.strip);
+        if (f.stripB > 1e-9) us.push_back(f.len - f.stripB);
         for (int i = 0; i <= 24; ++i) {
             us.push_back(f.lead * i / 24.0);
             us.push_back(f.len - f.leadB * i / 24.0);
@@ -898,16 +923,48 @@ std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t fro
     };
     const size_t last = std::min(to, f.pos.size() - 1);
     if (f.pos.empty() || last < from) return line;
-    // WHERE THE WIRE ACTUALLY IS, at each place, held back where the bend cannot carry it.
-    const size_t count = last - from + 1;
-    std::vector<Vec2> mid(count);
-    for (size_t i = from; i <= last; ++i)
-        mid[i - from] = f.pos[i] + f.n[i] * held(twistOffset(f, k, f.u[i]), i);
+    // WHERE THE WIRE ACTUALLY IS, at each place, held back where the bend cannot carry it - and HOW
+    // THICK IT IS DRAWN THERE, which is not the same all the way along.
+    //
+    // A STRIPPED END IS THINNER THAN THE WIRE. What is left when the insulation comes off is the
+    // strands, and they are thinner than the wire was: that is the whole of how the eye tells the
+    // bare part from the insulated part. So over the stripped length the edge runs in at the
+    // conductor's half width, and at the place the insulation stops it STEPS - the same place
+    // appears twice, once at each width, and the little line between the two of them is the end of
+    // the insulation. One polyline, still, so a wire is still its two edges and everything that
+    // walks them in pairs still can.
+    std::vector<Vec2> mid;
+    std::vector<double> half;
+    mid.reserve(last - from + 3);
+    half.reserve(last - from + 3);
+    const double bare = f.thick * kWiresRunConductor;
+    const double eps = std::max(1e-9, f.len * 1e-9);
+    for (size_t i = from; i <= last; ++i) {
+        const double u = f.u[i];
+        const Vec2 at = f.pos[i] + f.n[i] * held(twistOffset(f, k, u), i);
+        const bool stripped = (f.strip > 1e-9 && u < f.strip - eps) ||
+                              (f.stripB > 1e-9 && u > f.len - f.stripB + eps);
+        // The step itself: at the start end the bare part is BEHIND this place, at the finish end it
+        // is ahead, so which width comes first is which way the wire is being walked.
+        const bool stepHere = (f.strip > 1e-9 && std::abs(u - f.strip) <= eps) ||
+                              (f.stripB > 1e-9 && std::abs(u - (f.len - f.stripB)) <= eps);
+        if (stepHere) {
+            const bool bareFirst = std::abs(u - f.strip) <= eps;
+            mid.push_back(at);
+            half.push_back(bareFirst ? bare : f.thick);
+            mid.push_back(at);
+            half.push_back(bareFirst ? f.thick : bare);
+            continue;
+        }
+        mid.push_back(at);
+        half.push_back(stripped ? bare : f.thick);
+    }
+    const size_t count = mid.size();
     // Laid up, the offset stays along the run's normal exactly as it always was. A woven pair is a
     // cable of a stated width and the drawing of it is that width; the wires crossing inside it are
     // not landed on anything and their edges were never the thing being read.
     if (!f.straight || count < 2) {
-        for (size_t j = 0; j < count; ++j) line.push_back(mid[j] + f.n[from + j] * (edge * f.thick));
+        for (size_t j = 0; j < count; ++j) line.push_back(mid[j] + f.n[from + j] * (edge * half[j]));
         return line;
     }
     // WHICH WAY IS ACROSS EACH STEP of the wire, taken the same way round as the run's own normal so
@@ -930,7 +987,7 @@ std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t fro
         // cosine of HALF the turn. Capped at four, so a wire doubling back on itself is blunted
         // rather than thrown out to infinity.
         const double cosHalf = std::max(0.25, dot(m, step));
-        line.push_back(mid[j] + m * (edge * f.thick / cosHalf));
+        line.push_back(mid[j] + m * (edge * half[j] / cosHalf));
     }
     return line;
 }
@@ -1034,41 +1091,12 @@ const TwistCached* twistCached(const Entity& pair) {
             // cut there - it is carrying on inside the lines the bundle is drawn as - so it gets no
             // line across it, and a wire landed on a pin gets one.
             if (!edgeA.empty() && !edgeB.empty()) {
-                // AND WHERE THE INSULATION STOPS, when the drawing says the end is stripped: a
-                // second line across the wire, that far back from the cut, so the bare conductor
-                // between the two of them is what the eye sees and what a length can be put on.
-                auto backFrom = [](const std::vector<Vec2>& line, bool fromFront, double by) {
-                    if (line.size() < 2) return line.empty() ? Vec2{} : line.front();
-                    double left = by;
-                    if (fromFront) {
-                        for (size_t i = 1; i < line.size(); ++i) {
-                            const double seg = distance(line[i - 1], line[i]);
-                            if (seg >= left)
-                                return lerp(line[i - 1], line[i], seg > 1e-12 ? left / seg : 0.0);
-                            left -= seg;
-                        }
-                        return line.back();
-                    }
-                    for (size_t i = line.size() - 1; i > 0; --i) {
-                        const double seg = distance(line[i], line[i - 1]);
-                        if (seg >= left)
-                            return lerp(line[i], line[i - 1], seg > 1e-12 ? left / seg : 0.0);
-                        left -= seg;
-                    }
-                    return line.front();
-                };
-                if (span.first == 0) {
-                    c.caps.push_back({edgeA.front(), edgeB.front()});
-                    if (f.strip > 1e-9)
-                        c.caps.push_back({backFrom(edgeA, true, f.strip),
-                                          backFrom(edgeB, true, f.strip)});
-                }
-                if (span.second + 1 == f.pos.size()) {
+                // The insulation's own end needs no line of its own: the edge STEPS in there, from
+                // the wire's half width to the conductor's, and the two steps either side of the
+                // wire are that end. See twistEdge.
+                if (span.first == 0) c.caps.push_back({edgeA.front(), edgeB.front()});
+                if (span.second + 1 == f.pos.size())
                     c.caps.push_back({edgeA.back(), edgeB.back()});
-                    if (f.stripB > 1e-9)
-                        c.caps.push_back({backFrom(edgeA, false, f.stripB),
-                                          backFrom(edgeB, false, f.stripB)});
-                }
             }
             c.strands.push_back(std::move(edgeA));
             c.strands.push_back(std::move(edgeB));
@@ -1093,6 +1121,24 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair) {
     return c ? c->caps : std::vector<std::vector<Vec2>>{};
 }
 
+TwistFigures twistedPairFigures(const Entity& pair) {
+    TwistFigures out;
+    if (pair.type != EntityType::TwistedPair) return out;
+    const TwistCached* c = twistCached(pair);
+    if (!c) return out;
+    const TwistFrames& f = c->frames;
+    out.ok = true;
+    out.lane = f.lane;
+    out.fanLen = f.lead;
+    out.wireWidth = f.thick * 2.0;
+    out.kneeRadius = f.kneeUsed;
+    out.fanKnee = f.fanKneeUsed;
+    out.flushLen = f.tail;
+    out.stripLen = f.strip;
+    out.trunk = f.trunk;
+    return out;
+}
+
 std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair) {
     std::vector<std::pair<Vec2, Vec2>> out;
     if (pair.type != EntityType::TwistedPair) return out;
@@ -1104,10 +1150,14 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair) {
     if (!c || !c->frames.straight) return out;
     const TwistFrames& f = c->frames;
     // Straight to within a hundred-thousandth of the run, which a drawn arc's facets are not - they
-    // stand off their own chord by a good fraction of a wire. And long enough to be worth marking:
-    // four wire widths, or a hundredth of the run, whichever is the more.
+    // stand off their own chord by a good fraction of a wire.
+    //
+    // AND LONG ENOUGH TO BE A STRETCH OF ANYTHING, which is a wire and a half - short enough that a
+    // slant on a small fan is one, long enough that the ten little facets a fillet is drawn as are
+    // not. A floor of four wires was leaving the short ones out, and a short slant is a line on the
+    // drawing like any other.
     const double tol = std::max(1e-9, f.len * 1e-5);
-    const double atLeast = std::max(f.thick * 8.0, f.len * 0.01);
+    const double atLeast = std::max(f.thick * 3.0, f.len * 0.004);
     for (const std::vector<Vec2>& line : c->strands) {
         if (line.size() < 2) continue;
         size_t from = 0;

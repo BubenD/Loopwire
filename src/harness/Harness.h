@@ -166,6 +166,10 @@ inline constexpr double kWiresRunPitch = 3.0;
 // something square to the run, so they leave the fan and go into it straight rather than arriving
 // still spreading - the drawings show about two parts straight to one part fan.
 inline constexpr double kWiresRunTailShare = 0.6;
+// HOW THICK THE BARE CONDUCTOR IS, against the wire it comes out of. A stripped end is the strands
+// without their insulation round them, so it is thinner than the wire - which is the whole of how
+// the eye tells one from the other on a drawing. Half is what these drawings show.
+inline constexpr double kWiresRunConductor = 0.5;
 // And what a straight run's ends are, unless the drawing says otherwise: long enough for that straight
 // bit to read as one. The laid-up bundle's own figure is the length of its lead-in and is shorter.
 inline constexpr double kWiresRunEnd = 15.0;
@@ -188,6 +192,26 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair);
 // ends - and this is that, which is what a drawing measures from and snaps to and puts a joint on
 // the middle of. Empty for a laid-up bundle: a weave has no straight in it to speak of.
 std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
+
+// THE FIGURES A RUN ACTUALLY CAME OUT WITH, whether they were asked for or left to the drawing.
+//
+// Half of these settings can be left alone, and then the drawing works one out - a fan as long as
+// its pitch needs, a knee radius off the bundle width, five millimetres of strip. Which is right,
+// and leaves nowhere to READ the figure: the field says "Auto" and the number it stands for is
+// somewhere in here. This is that number, taken from the laid-out run rather than worked out a
+// second time beside it, so what a field shows and what the drawing did cannot disagree.
+struct TwistFigures {
+    bool ok = false;
+    double lane = 0.0;        // between the wires where they are spread
+    double fanLen = 0.0;      // and how long the fan is
+    double wireWidth = 0.0;   // one wire across
+    double kneeRadius = 0.0;  // the tightest radius in the bundle where the run bends
+    double fanKnee = 0.0;     // the radius the fan's own corners turn on
+    double flushLen = 0.0;    // the straight stretch at the very end
+    double stripLen = 0.0;    // and how much insulation is off it
+    int trunk = 0;            // how many lines the bundle is drawn as
+};
+TwistFigures twistedPairFigures(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -
 // including an older drawing with no value - reads as "both", which is what those drawings were made
 // with. Left and right mean the sheet ends, not the click order: a run drawn right-to-left still fans

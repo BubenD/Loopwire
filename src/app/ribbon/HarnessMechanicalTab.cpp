@@ -367,6 +367,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 og->setColumnMinimumWidth(14, 10);
                 og->setColumnMinimumWidth(17, 10);
                 og->setColumnMinimumWidth(20, 10);
+                og->setColumnMinimumWidth(22, 10);
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -422,14 +423,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistLaneSpin_->setRange(0.0, 200.0);
                 twistLaneSpin_->setDecimals(1);
                 twistLaneSpin_->setSingleStep(0.5);
-                twistLaneSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistLaneSpin_->setKeyboardTracking(false);
                 twistLaneSpin_->setValue(editor_->twistLane());
                 twistLaneSpin_->setMinimumWidth(64);
                 twistLaneSpin_->setToolTip(QStringLiteral(
                     "How far apart the wires sit where they are spread out, centre to centre. Auto "
                     "is half again the pitch they run at packed in the run."));
                 og->addWidget(twistLaneLabel_, 0, 3);
-                og->addWidget(autoBeside(twistLaneSpin_), 0, 4);
+                og->addWidget(autoBeside(twistLaneSpin_, [this] { editor_->setTwistLane(0.0); syncBreakOptions(); }), 0,
+                              4);
                 connect(twistLaneSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistLane(v);
                     canvas_->update();   // a pinned run re-draws at the new spacing
@@ -475,14 +477,14 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFanSpin_->setRange(0.0, 500.0);
                 twistFanSpin_->setDecimals(1);
                 twistFanSpin_->setSingleStep(1.0);
-                twistFanSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFanSpin_->setKeyboardTracking(false);
                 twistFanSpin_->setValue(editor_->twistFan());
                 twistFanSpin_->setMinimumWidth(64);
                 twistFanSpin_->setToolTip(QStringLiteral(
                     "How long the fan is at each end - the stretch over which the wires open out of "
                     "the bundle and settle into their lanes. Auto is the drawing's own figure."));
                 og->addWidget(twistFanLabel_, 0, 6);
-                og->addWidget(autoBeside(twistFanSpin_), 0, 7);
+                og->addWidget(autoBeside(twistFanSpin_, [this] { editor_->setTwistFan(0.0); syncBreakOptions(); }), 0, 7);
                 connect(twistFanSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFan(v);
                     canvas_->update();
@@ -498,14 +500,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistWireSpin_->setRange(0.0, 50.0);
                 twistWireSpin_->setDecimals(2);
                 twistWireSpin_->setSingleStep(0.1);
-                twistWireSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistWireSpin_->setKeyboardTracking(false);
                 twistWireSpin_->setValue(editor_->twistWireWidth());
                 twistWireSpin_->setMinimumWidth(64);
                 twistWireSpin_->setToolTip(QStringLiteral(
                     "How thick one wire is drawn. Six wires take up more room than three, so this is "
                     "also what settles how wide the bundle comes out. Auto is the drawing's own."));
                 og->addWidget(twistWireLabel_, 1, 6);
-                og->addWidget(autoBeside(twistWireSpin_), 1, 7);
+                og->addWidget(
+                    autoBeside(twistWireSpin_, [this] { editor_->setTwistWireWidth(0.0); syncBreakOptions(); }), 1, 7);
                 connect(twistWireSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistWireWidth(v);
                     canvas_->update();
@@ -527,7 +530,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistKneeSpin_->setRange(-1.0, 500.0);
                 twistKneeSpin_->setDecimals(1);
                 twistKneeSpin_->setSingleStep(1.0);
-                twistKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistKneeSpin_->setKeyboardTracking(false);
                 twistKneeSpin_->setValue(editor_->twistKnee());
                 twistKneeSpin_->setMinimumWidth(64);
                 twistKneeSpin_->setToolTip(QStringLiteral(
@@ -535,8 +538,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "bends - and how far it may be bent is set by what is in it, not by how wide the "
                     "line is. It is the TIGHTEST radius in the bundle, so no wire bends inside it. "
                     "0 is a sharp corner; Auto is a share of the bundle width."));
-                og->addWidget(twistKneeLabel_, 0, 15);
-                og->addWidget(autoBeside(twistKneeSpin_), 0, 16);
+                og->addWidget(twistKneeLabel_, 0, 12);
+                og->addWidget(autoBeside(twistKneeSpin_, [this] { editor_->setTwistKnee(-1.0); syncBreakOptions(); }), 0,
+                              13);
                 connect(twistKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistKnee(v);
                     canvas_->update();
@@ -557,7 +561,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFanKneeSpin_->setRange(-1.0, 500.0);
                 twistFanKneeSpin_->setDecimals(1);
                 twistFanKneeSpin_->setSingleStep(0.5);
-                twistFanKneeSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFanKneeSpin_->setKeyboardTracking(false);
                 twistFanKneeSpin_->setValue(editor_->twistFanKnee());
                 twistFanKneeSpin_->setMinimumWidth(64);
                 twistFanKneeSpin_->setToolTip(QStringLiteral(
@@ -565,8 +569,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "into its lane. Asked for, the slant runs straight between two corners of that "
                     "radius; more than the fan can hold rounds the whole of it. 0 is sharp corners, "
                     "Auto eases it all."));
-                og->addWidget(twistFanKneeLabel_, 1, 15);
-                og->addWidget(autoBeside(twistFanKneeSpin_), 1, 16);
+                og->addWidget(twistFanKneeLabel_, 1, 12);
+                og->addWidget(
+                    autoBeside(twistFanKneeSpin_, [this] { editor_->setTwistFanKnee(-1.0); syncBreakOptions(); }), 1, 13);
                 connect(twistFanKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFanKnee(v);
                     canvas_->update();
@@ -590,7 +595,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "The finish end of the run repeats the start end. Untick it to give the finish "
                     "end its own pitch, fan length and fan knee - a run out of a header into a ring "
                     "terminal fans quite differently at the two ends."));
-                og->addWidget(twistSidesCheck_, 0, 18, 1, 2);
+                og->addWidget(twistSidesCheck_, 0, 23, 1, 2);
                 auto addFinish = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
                                      double lo, double value, int row, int col,
                                      const QString& tip) {
@@ -600,22 +605,23 @@ void MainWindow::buildHarnessMechanicalTab() {
                     spin->setRange(lo, 500.0);
                     spin->setDecimals(1);
                     spin->setSingleStep(1.0);
-                    spin->setSpecialValueText(QStringLiteral("Auto"));
+                    spin->setKeyboardTracking(false);
                     spin->setValue(value);
                     spin->setMinimumWidth(64);
                     spin->setToolTip(tip);
                     og->addWidget(label, row, col);
-                    og->addWidget(autoBeside(spin), row, col + 1);
+                    og->addWidget(autoBeside(spin, [this, spin, lo] { spin->setValue(lo); syncBreakOptions(); }), row,
+                                  col + 1);
                 };
                 addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish pitch"), 0.0,
-                          editor_->twistLaneFinish(), 1, 18,
+                          editor_->twistLaneFinish(), 0, 15,
                           QStringLiteral("How far apart the wires sit where they are spread at the "
                                          "FINISH end of the run."));
                 addFinish(twistFanBLabel_, twistFanBSpin_, QStringLiteral("Finish fan"), 0.0,
-                          editor_->twistFanFinish(), 0, 21,
+                          editor_->twistFanFinish(), 1, 15,
                           QStringLiteral("How long the fan is at the FINISH end of the run."));
                 addFinish(twistFanKneeBLabel_, twistFanKneeBSpin_, QStringLiteral("Finish knee"),
-                          -1.0, editor_->twistFanKneeFinish(), 1, 21,
+                          -1.0, editor_->twistFanKneeFinish(), 0, 18,
                           QStringLiteral("How tightly the fan turns at the FINISH end. 0 is sharp "
                                          "corners, Auto eases it all."));
                 // THE FLUSH END: the straight stretch at the very end of the fan, where every wire is
@@ -631,7 +637,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "End the fan with a straight stretch, so every wire is parallel to the run where "
                     "it is cut and all the cut ends line up square across the fan. Unticked, the "
                     "wires are cut where they are still spreading."));
-                og->addWidget(twistFlushCheck_, 1, 9, 1, 2);
+                og->addWidget(twistFlushCheck_, 0, 21, 1, 2);
                 twistFlushLabel_ = new QLabel(QStringLiteral("Flush length"), optW);
                 twistFlushLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -639,14 +645,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFlushSpin_->setRange(0.0, 500.0);
                 twistFlushSpin_->setDecimals(1);
                 twistFlushSpin_->setSingleStep(1.0);
-                twistFlushSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistFlushSpin_->setKeyboardTracking(false);
                 twistFlushSpin_->setValue(editor_->twistFlushLen());
                 twistFlushSpin_->setMinimumWidth(64);
                 twistFlushSpin_->setToolTip(QStringLiteral(
                     "How long that straight stretch is - how much parallel wire there is to land. "
                     "Auto is the drawing's own share of the fan."));
                 og->addWidget(twistFlushLabel_, 0, 9);
-                og->addWidget(autoBeside(twistFlushSpin_), 0, 10);
+                og->addWidget(
+                    autoBeside(twistFlushSpin_, [this] { editor_->setTwistFlushLen(0.0); syncBreakOptions(); }), 0, 10);
                 connect(twistFlushCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistFlush(on);
                     syncBreakOptions();   // the length comes and goes with it
@@ -671,7 +678,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "Show the insulation stripped off the end of each wire, back to bare conductor - "
                     "which is how a wire is landed in a contact. A second line across each wire marks "
                     "where the insulation stops."));
-                og->addWidget(twistStripCheck_, 1, 12, 1, 2);
+                og->addWidget(twistStripCheck_, 1, 21, 1, 2);
                 twistStripLabel_ = new QLabel(QStringLiteral("Strip length"), optW);
                 twistStripLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -679,14 +686,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistStripSpin_->setRange(0.0, 500.0);
                 twistStripSpin_->setDecimals(1);
                 twistStripSpin_->setSingleStep(0.5);
-                twistStripSpin_->setSpecialValueText(QStringLiteral("Auto"));
+                twistStripSpin_->setKeyboardTracking(false);
                 twistStripSpin_->setValue(editor_->twistStripLen());
                 twistStripSpin_->setMinimumWidth(64);
                 twistStripSpin_->setToolTip(QStringLiteral(
                     "How much insulation comes off the end of each wire. Auto is five millimetres, or "
                     "whatever the end can spare."));
-                og->addWidget(twistStripLabel_, 0, 12);
-                og->addWidget(autoBeside(twistStripSpin_), 0, 13);
+                og->addWidget(twistStripLabel_, 1, 9);
+                og->addWidget(
+                    autoBeside(twistStripSpin_, [this] { editor_->setTwistStripLen(0.0); syncBreakOptions(); }), 1, 10);
                 connect(twistStripCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistStrip(on);
                     syncBreakOptions();   // the length comes and goes with it

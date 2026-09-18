@@ -165,6 +165,11 @@ public:
     // STRIPPED ENDS: the last few millimetres of each wire with the insulation off, back to bare
     // conductor, which is how a wire is landed in a contact. The STRIP LENGTH is how much - a made
     // figure a harness drawing states. 0 for the length takes the drawing's own.
+    // WHAT A RUN DRAWN WITH THESE SETTINGS WOULD ACTUALLY COME OUT WITH. Half of them can be left
+    // alone, and then the drawing works the figure out - so a field that says "Auto" is standing for
+    // a number nobody can read. This is that number, taken off a run laid out with the settings as
+    // they stand rather than worked out a second time beside them.
+    TwistFigures twistPreviewFigures() const;
     bool twistStrip() const { return twistStrip_; }
     void setTwistStrip(bool on);
     double twistStripLen() const { return twistStripLen_; }

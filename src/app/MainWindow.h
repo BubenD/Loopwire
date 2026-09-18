@@ -851,8 +851,13 @@ private:
     // below the minimum lands there - neither of which is a thing to expect anybody to know. The A
     // puts the field back to Auto in one click and lights up while it is there, so the field also
     // says which it is at a glance.
-    QWidget* autoBeside(QAbstractSpinBox* field);
+    QWidget* autoBeside(QAbstractSpinBox* field, std::function<void()> onAuto = {});
     static QWidget* autoFieldCell(QWidget* field);
+    // The A beside a field, so the figure it is showing and whether it is lit can be set together.
+    static QToolButton* autoMarkOf(QWidget* field);
+    // Show a field: the figure, and whether it is the drawing's own. Lit, the field shows what the
+    // drawing worked out; dark, it shows what was typed.
+    void showAutoField(QDoubleSpinBox* field, QLabel* label, bool shown, bool isAuto, double value);
     QDoubleSpinBox* twistLaneBSpin_ = nullptr;
     QLabel* twistLaneBLabel_ = nullptr;
     QDoubleSpinBox* twistFanBSpin_ = nullptr;

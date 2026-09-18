@@ -12397,34 +12397,113 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
                 additions.push_back(std::move(rem));
             }
         } else if (obj->type == EntityType::TwistedPair) {
-            // A HARNESS IS ITS ROUTE, the same way a double run is its centreline: the object is
-            // parametric, so cutting it back means cutting the route back and letting the wires, the
-            // fan and the cut ends be laid out again from what is left. Cutting the drawn wires
-            // instead would leave a bundle of loose lines that is no longer a harness at all.
+            // A HARNESS CUT ANYWHERE STOPS BEING A HARNESS, and comes apart into the lines it draws.
             //
-            // The fence has to cross the route, which is inside the bundle - so a line drawn across
-            // the wires crosses it, which is the gesture anybody makes.
+            // It is a parametric thing: a route, a wire count, a pitch, a fan at each end. Cutting
+            // the ROUTE back and letting it lay itself out again keeps all of that and is the wrong
+            // answer - the fan picks itself up and moves to the new end, so a cut through the middle
+            // of a bundle draws a whole fresh fan-out where the cut is, which is not what was asked
+            // for and not what a cut looks like. There is no such thing as half a harness: what is
+            // left is a set of cut wires, and the honest way to draw cut wires is as cut wires.
+            //
+            // So it is broken into its drawn lines - every wire's two edges and the line across each
+            // end - and those are then cut the way any other line is, each one keeping the part the
+            // fence was not drawn over. The fence has to cross the route, which is inside the
+            // bundle, so a line drawn across the wires crosses it: the gesture anybody makes.
             const std::vector<Vec2> route =
                 obj->points.size() >= 2 ? obj->points : std::vector<Vec2>{obj->a, obj->b};
             auto pick = cutCrossOn(route);
             if (!pick || !objectCrosses(*obj, refs)) continue;
             const QString selfId = obj->id;
-            auto pieces = trimPolylinePieces(route, *pick, joints, selfId);
-            if (pieces.empty()) continue;
-            obj->points = pieces[0];
-            obj->a = obj->points.front();
-            obj->b = obj->points.back();
-            storeCutMeta(*obj, selfId);
-            ++count;
-            if (pieces.size() == 2) {
-                Entity rem = *obj;
-                rem.id.clear();
-                rem.points = pieces[1];
-                rem.a = rem.points.front();
-                rem.b = rem.points.back();
-                storeCutMeta(rem, selfId);
-                additions.push_back(std::move(rem));
+            // WHICH PART OF THE RUN SURVIVES, said once, in distance along its route.
+            //
+            // The fence crosses the wires and it crosses the route, but it does NOT cross the line
+            // drawn across the far end of the run - so cutting each piece only where the fence
+            // touches it left those hanging in space a foot beyond everything else, the last trace
+            // of a harness that had been cut back. Anything belonging to the part that went has to
+            // go with it, whether the fence reached it or not, and where it belongs is where it
+            // sits ALONG the run.
+            std::vector<std::pair<double, double>> alive;
+            for (const std::vector<Vec2>& piece : trimPolylinePieces(route, *pick, joints, selfId)) {
+                if (piece.size() < 2) continue;
+                double s0 = 0.0, s1 = 0.0, off = 0.0;
+                placeOnPath(route, piece.front(), s0, off);
+                placeOnPath(route, piece.back(), s1, off);
+                alive.emplace_back(std::min(s0, s1), std::max(s0, s1));
             }
+            auto survives = [&](const Vec2& p) {
+                if (alive.empty()) return true;
+                double s = 0.0, off = 0.0;
+                placeOnPath(route, p, s, off);
+                for (const auto& span : alive)
+                    if (s >= span.first - 1e-6 && s <= span.second + 1e-6) return true;
+                return false;
+            };
+            // EACH WIRE COMES APART AS ONE LINE, not as the fifty little steps it is measured at.
+            // Cut a wire into its steps first and the fence only crosses ONE of them, so one step
+            // goes and the rest of the piece stays: the far half of the run survives as a row of
+            // fragments with a notch in it. A wire is one line and is cut like one.
+            std::vector<Entity> parts;
+            for (const std::vector<Vec2>& strand : twistedPairStrands(*obj)) {
+                if (strand.size() < 2) continue;
+                Entity wire = *obj;
+                wire.id.clear();
+                wire.type = EntityType::Polyline;
+                wire.meta = QJsonObject();
+                wire.points = strand;
+                wire.a = strand.front();
+                wire.b = strand.back();
+                parts.push_back(std::move(wire));
+            }
+            for (const std::vector<Vec2>& cap : twistedPairEndCaps(*obj)) {
+                if (cap.size() != 2) continue;
+                Entity across = *obj;
+                across.id.clear();
+                across.type = EntityType::Line;
+                across.meta = QJsonObject();
+                across.points.clear();
+                across.a = cap.front();
+                across.b = cap.back();
+                parts.push_back(std::move(across));
+            }
+            bool cutAny = false;
+            std::vector<Entity> kept;
+            for (Entity& part : parts) {
+                const std::vector<Vec2> line =
+                    part.type == EntityType::Polyline ? part.points : std::vector<Vec2>{part.a, part.b};
+                auto at = cutCrossOn(line);
+                if (!at || !objectCrosses(part, refs)) {
+                    // Untouched by the fence, so it stands or falls by where it sits along the run.
+                    if (survives(lerp(line.front(), line.back(), 0.5))) kept.push_back(std::move(part));
+                    else cutAny = true;
+                    continue;
+                }
+                auto bits = trimPolylinePieces(line, *at, joints, selfId);
+                if (bits.empty()) {
+                    if (survives(lerp(line.front(), line.back(), 0.5))) kept.push_back(std::move(part));
+                    else cutAny = true;
+                    continue;
+                }
+                cutAny = true;
+                for (const std::vector<Vec2>& bit : bits) {
+                    if (bit.size() < 2) continue;
+                    if (!survives(lerp(bit.front(), bit.back(), 0.5))) continue;
+                    Entity piece = part;
+                    piece.id.clear();
+                    piece.type = EntityType::Polyline;
+                    piece.points = bit;
+                    piece.a = bit.front();
+                    piece.b = bit.back();
+                    kept.push_back(std::move(piece));
+                }
+            }
+            if (!cutAny || kept.empty()) continue;
+            for (Entity& piece : kept) {
+                piece.id.clear();
+                additions.push_back(std::move(piece));
+            }
+            removals.push_back(id);
+            ++count;
         } else if (obj->type == EntityType::Rect || obj->type == EntityType::Polygon) {
             // A closed shape is trimmed as the run of its own edges, and what is left is open - so it
             // becomes a polyline, which is what an open run IS. (The same thing every CAD does with a
@@ -15781,6 +15860,21 @@ void Editor::setTwistSpread(const QString& spread) {
     twistSpread_ = next;
     // A pinned preview is the object being set up: changing the fan redraws it where it is pinned.
     emit overlayChanged();
+}
+
+TwistFigures Editor::twistPreviewFigures() const {
+    // A LONG STRAIGHT RUN, so nothing is clamped for want of room: the figures wanted are the ones
+    // the settings ask for, not the ones a short run would have to cut them back to. The id is
+    // fixed and the settings are all in the key, so this is one cache entry however often it is
+    // asked - which is every time the ribbon is synced.
+    Entity e;
+    e.id = QStringLiteral("__twist_preview__");
+    e.type = EntityType::TwistedPair;
+    e.a = {0.0, 0.0};
+    e.b = {2000.0, 0.0};
+    e.points = {e.a, e.b};
+    writeBundleMeta(e, /*straight=*/true);
+    return twistedPairFigures(e);
 }
 
 void Editor::writeBundleMeta(Entity& e, bool straight) const {

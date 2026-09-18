@@ -10868,20 +10868,28 @@ int run_editor_tests() {
             // A fence drawn across the far half of the run: that is the piece that goes.
             ed.onPointerPress({260.0, -40.0}, Qt::LeftButton, Qt::NoModifier);
             ed.onPointerPress({260.0, 40.0}, Qt::LeftButton, Qt::NoModifier);
-            const Entity* left = nullptr;
-            for (const Entity& e : d.entities())
-                if (e.type == EntityType::TwistedPair) left = &e;
-            check(left != nullptr, "harness trim: the run is still a harness afterwards");
-            if (left) {
-                std::printf("  harness trim: 0..300 cut at a wall on x = 200 now runs to %.1f\n",
-                            left->points.back().x);
-                check(std::abs(left->points.back().x - 200.0) < 1e-6,
-                      "harness trim: it comes back to the boundary, like any other run");
-                check(std::abs(left->b.x - 200.0) < 1e-6,
-                      "harness trim: and its stored far end comes with it");
-                check(!twistedPairStrands(*left).empty(),
-                      "harness trim: the shorter run still draws its wires");
+            // THERE IS NO SUCH THING AS HALF A HARNESS. It is a parametric object - a route, a wire
+            // count, a fan at each end - and cutting the route back and letting it lay itself out
+            // again picks the fan up and moves it to the cut, which is not what a cut looks like.
+            // What is left is a set of cut wires, so that is what it becomes: the lines it draws.
+            int harnesses = 0, lines = 0;
+            double furthest = 0.0;
+            for (const Entity& e : d.entities()) {
+                if (e.type == EntityType::TwistedPair) ++harnesses;
+                if (e.id == QStringLiteral("WALL")) continue;
+                if (e.type != EntityType::Line && e.type != EntityType::Polyline) continue;
+                ++lines;
+                for (const Vec2& v : e.points) furthest = std::max(furthest, v.x);
+                furthest = std::max({furthest, e.a.x, e.b.x});
             }
+            std::printf("  harness trim: %d harness(es) and %d line(s) left, reaching to x %.1f\n",
+                        harnesses, lines, furthest);
+            check(harnesses == 0,
+                  "harness trim: cut anywhere, it stops being a harness - there is no half of one");
+            check(lines >= 12,
+                  "harness trim: what is left is the lines it drew, which is what cut wires are");
+            check(furthest <= 200.0 + 1e-6,
+                  "harness trim: and none of them reaches past the boundary it was cut at");
         }
 
         // ---- AND EXTENDED ----
@@ -11037,50 +11045,63 @@ int run_editor_tests() {
         {
             // A wire is landed by taking the insulation off the last few millimetres of it and
             // crimping the bare conductor into a contact, and a harness drawing says how much comes
-            // off: the strip length. It is drawn as a second line across the wire that far back from
-            // the cut, so the bare part between the two is what the eye sees.
+            // off: the strip length. THE BARE PART IS THINNER THAN THE WIRE - what is left when the
+            // insulation comes off is the strands - and that is the whole of how the eye tells one
+            // from the other. The edge steps in where the insulation stops.
             Entity bare = run(1, 0.0, QStringLiteral("both"), 0);
             bare.id = QStringLiteral("STRIP");
             bare.meta.insert(QStringLiteral("twistStrip"), true);
             bare.meta.insert(QStringLiteral("twistStripLen"), 7.0);
-            const std::vector<std::vector<Vec2>> marks = twistedPairEndCaps(bare);
-            std::printf("  strip: %d line(s) across the ends, against %d cut alone\n",
-                        int(marks.size()), int(twistedPairEndCaps(both).size()));
-            check(marks.size() == 2 * twistedPairEndCaps(both).size(),
-                  "strip: two lines across each end now - where it is cut and where the insulation "
-                  "stops");
-            // SEVEN MILLIMETRES BACK, on both ends, and square across the run like the cut is.
-            int atSeven = 0, leaning = 0;
-            for (const std::vector<Vec2>& m : marks) {
-                if (m.size() != 2) continue;
-                if (std::abs(m.front().x - m.back().x) > 1e-6) ++leaning;
-                const double from = std::min(std::abs(m.front().x - 0.0),
-                                             std::abs(m.front().x - 300.0));
-                if (std::abs(from - 7.0) < 1e-6) ++atSeven;
-            }
-            std::printf("  strip: %d of them are 7 back from an end, %d lean\n", atSeven, leaning);
-            check(atSeven == int(marks.size()) / 2,
-                  "strip: one of each pair is the strip length back from the cut");
-            check(leaning == 0, "strip: and both are square across the run, as the cut is");
-            // SAYING NOTHING LEAVES THE ENDS CUT AND NOTHING ELSE, which is what a drawing that does
-            // not call out a strip length shows.
+            // How wide one wire is drawn at a given x, between its two edges.
+            auto wideAt = [](const Entity& e, double x) {
+                const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+                if (s.size() < 2) return -1.0;
+                auto yAt = [x](const std::vector<Vec2>& line) {
+                    for (size_t i = 1; i < line.size(); ++i) {
+                        const Vec2 p = line[i - 1], q = line[i];
+                        if ((p.x - x) * (q.x - x) > 0.0) continue;
+                        const double span = q.x - p.x;
+                        return std::abs(span) < 1e-12 ? p.y
+                                                      : p.y + (q.y - p.y) * (x - p.x) / span;
+                    }
+                    return 0.0;
+                };
+                return std::abs(yAt(s[0]) - yAt(s[1]));
+            };
+            const double atTip = wideAt(bare, 2.0);
+            const double pastIt = wideAt(bare, 20.0);
+            std::printf("  strip: the wire is %.2f across 2 in and %.2f across 20 in\n", atTip,
+                        pastIt);
+            check(std::abs(pastIt - 2.0) < 1e-6,
+                  "strip: past the strip length the wire is the width it is");
+            check(std::abs(atTip - 1.0) < 1e-6,
+                  "strip: and over the stripped part it is the conductor, which is thinner");
+            // THE LINE ACROSS THE CUT IS THE CONDUCTOR'S WIDTH TOO, because that is what it closes.
+            double widest = 0.0;
+            for (const std::vector<Vec2>& m : twistedPairEndCaps(bare))
+                if (m.size() == 2) widest = std::max(widest, distance(m.front(), m.back()));
+            std::printf("  strip: the line across the cut is %.2f long\n", widest);
+            check(std::abs(widest - 1.0) < 1e-6,
+                  "strip: the line across the cut closes the conductor, not the wire");
+            // SAYING NOTHING LEAVES THE WIRE ITS OWN WIDTH ALL THE WAY OUT, which is what a drawing
+            // that does not call out a strip length shows.
             Entity plain = bare;
             plain.id = QStringLiteral("NOSTRIP");
             plain.meta.remove(QStringLiteral("twistStrip"));
-            check(twistedPairEndCaps(plain).size() == twistedPairEndCaps(both).size(),
-                  "strip: unasked for, the ends are drawn cut and nothing else");
-            // AND IT NEVER REACHES PAST THE END IT IS PART OF: a strip mark out on the bundle is a
-            // mark on the bundle.
+            check(std::abs(wideAt(plain, 2.0) - 2.0) < 1e-6,
+                  "strip: unasked for, the wire is its own width right to the cut");
+            // AND IT NEVER REACHES PAST THE END IT IS PART OF: a stripped stretch out on the bundle
+            // is a thin bundle.
             Entity greedyStrip = bare;
             greedyStrip.id = QStringLiteral("GREEDY");
             greedyStrip.meta.insert(QStringLiteral("twistStripLen"), 500.0);
-            double deepest = 0.0;
-            for (const std::vector<Vec2>& m : twistedPairEndCaps(greedyStrip))
-                if (m.size() == 2)
-                    deepest = std::max(deepest, std::min(std::abs(m.front().x),
-                                                         std::abs(m.front().x - 300.0)));
-            std::printf("  strip: asked for 500 on a 60 fan, the deepest mark is %.1f in\n", deepest);
-            check(deepest <= 60.0 * 0.9 + 1e-6,
+            // Measured a little past the end the strip belongs to. The wire is slanting through the
+            // fan there, so the gap straight up the page is a touch more than the wire is wide - what
+            // says the strip stopped is that it is a wire and not a conductor.
+            const double onTheBundle = wideAt(greedyStrip, 58.0);
+            std::printf("  strip: asked for 500 on a 60 fan, the wire is %.2f across 58 in\n",
+                        onTheBundle);
+            check(onTheBundle > 1.8,
                   "strip: more than the end can spare stops at the end, not out on the bundle");
         }
     }

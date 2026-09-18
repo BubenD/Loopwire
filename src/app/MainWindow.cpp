@@ -4322,7 +4322,7 @@ void MainWindow::updateModelRibbonTabs() {
 // number has been typed in, getting back to Auto means holding the down arrow to the end of the
 // range or knowing that a number below the minimum lands there. The A does it in one click, and it
 // lights up while the field is on Auto, so the field says which it is without being read.
-QWidget* MainWindow::autoBeside(QAbstractSpinBox* field) {
+QWidget* MainWindow::autoBeside(QAbstractSpinBox* field, std::function<void()> onAuto) {
     if (!field) return nullptr;
     auto* cell = new QWidget(field->parentWidget());
     cell->setObjectName(QStringLiteral("autoFieldCell"));
@@ -4350,17 +4350,42 @@ QWidget* MainWindow::autoBeside(QAbstractSpinBox* field) {
         "QToolButton:hover{background:#35435a;color:#e6e9ef;}"
         "QToolButton:checked{background:#3d6ea5;border-color:#5b93cf;color:#ffffff;}"));
     row->addWidget(mark, 0, Qt::AlignVCenter);
-    // Whether it IS on Auto, and putting it there. Both spin kinds carry their own sort of number,
-    // and "the lowest it goes" is the same idea in either.
-    auto onAuto = [field] {
+    // WHAT CLICKING IT DOES, and how it knows to be lit.
+    //
+    // A field that is DRIVEN - one whose caller told us what "leave it to the drawing" means for it -
+    // shows the figure the drawing worked out while it is on Auto, and its A is lit or dark by
+    // whoever is showing it. That is the whole point: a field saying "Auto" is standing for a number
+    // nobody can read, and a field showing the number it stands for is the same field doing its job.
+    // Clicking the A puts it back to the drawing's own; typing over the figure takes it off Auto,
+    // and the A goes dark, because a typed number is a number somebody meant.
+    //
+    // A field that is NOT driven still works the old way: Auto is the bottom of its range, the A
+    // takes it there, and it lights when it is there.
+    if (onAuto) {
+        connect(mark, &QToolButton::clicked, field, [onAuto] { onAuto(); });
+        // AND IT GOES DARK THE MOMENT SOMEBODY TYPES, not at the next time the ribbon is synced.
+        // Anything that reaches here is a person changing the field: every time the field is set
+        // from the settings it is set with its signals blocked, exactly so that this can tell the
+        // difference between a figure being shown and a figure being chosen.
+        auto darken = [mark] {
+            QSignalBlocker block(mark);
+            mark->setChecked(false);
+        };
+        if (auto* d = qobject_cast<QDoubleSpinBox*>(field))
+            connect(d, &QDoubleSpinBox::valueChanged, mark, [darken](double) { darken(); });
+        else if (auto* i = qobject_cast<QSpinBox*>(field))
+            connect(i, &QSpinBox::valueChanged, mark, [darken](int) { darken(); });
+        return cell;
+    }
+    auto atBottom = [field] {
         if (auto* d = qobject_cast<QDoubleSpinBox*>(field))
             return d->value() <= d->minimum() + 1e-9;
         if (auto* i = qobject_cast<QSpinBox*>(field)) return i->value() <= i->minimum();
         return false;
     };
-    auto show = [mark, onAuto] {
+    auto show = [mark, atBottom] {
         QSignalBlocker block(mark);
-        mark->setChecked(onAuto());
+        mark->setChecked(atBottom());
     };
     if (auto* d = qobject_cast<QDoubleSpinBox*>(field))
         connect(d, &QDoubleSpinBox::valueChanged, mark, [show](double) { show(); });
@@ -4375,6 +4400,28 @@ QWidget* MainWindow::autoBeside(QAbstractSpinBox* field) {
     });
     show();
     return cell;
+}
+
+QToolButton* MainWindow::autoMarkOf(QWidget* field) {
+    QWidget* cell = autoFieldCell(field);
+    if (!cell || cell == field) return nullptr;
+    for (QToolButton* b : cell->findChildren<QToolButton*>())
+        if (b->text() == QStringLiteral("A")) return b;
+    return nullptr;
+}
+
+void MainWindow::showAutoField(QDoubleSpinBox* field, QLabel* label, bool shown, bool isAuto,
+                               double value) {
+    if (!field) return;
+    if (label) label->setVisible(shown);
+    if (QWidget* cell = autoFieldCell(field)) cell->setVisible(shown);
+    if (!shown) return;
+    QSignalBlocker block(field);
+    field->setValue(value);
+    if (QToolButton* mark = autoMarkOf(field)) {
+        QSignalBlocker lit(mark);
+        mark->setChecked(isAuto);
+    }
 }
 
 // The thing to show and hide for such a field: the field and its A together, not the field alone -
@@ -4538,43 +4585,29 @@ void MainWindow::syncBreakOptions() {
             const int at = twistSpreadCombo_->findData(editor_->twistSpread());
             twistSpreadCombo_->setCurrentIndex(at >= 0 ? at : 2);
         }
+        // WHAT A RUN DRAWN WITH THESE SETTINGS WOULD ACTUALLY COME OUT WITH, so a field left to the
+        // drawing can show the figure the drawing worked out instead of the word "Auto". That is the
+        // whole of what the little A says now: lit, this field is the drawing's own and the number
+        // beside it is what the drawing made of it; dark, the number is one somebody typed.
+        const TwistFigures fig = editor_->twistPreviewFigures();
         // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
         // so the row would be a setting that does nothing while its tool is armed.
-        if (twistLaneSpin_ && twistLaneLabel_) {
-            autoFieldCell(twistLaneSpin_)->setVisible(straightRun);
-            twistLaneLabel_->setVisible(straightRun);
-            if (straightRun) {
-                QSignalBlocker b(twistLaneSpin_);
-                twistLaneSpin_->setValue(editor_->twistLane());
-            }
-        }
+        showAutoField(twistLaneSpin_, twistLaneLabel_, straightRun, editor_->twistLane() <= 1e-9,
+                      editor_->twistLane() > 1e-9 ? editor_->twistLane() : fig.lane);
         // The fan is on every wires tool; the wire width is the straight run's, because a laid-up
         // bundle takes its thickness from the bundle and not from one wire in it. The knee radius
         // belongs to the ROUTED tools: a run drawn between two points has no knee to turn at.
         const bool routed = editor_->tool() == ToolId::TwistedHarnessRoute ||
                             editor_->tool() == ToolId::WiresRun;
-        if (twistKneeSpin_ && twistKneeLabel_) {
-            autoFieldCell(twistKneeSpin_)->setVisible(routed);
-            twistKneeLabel_->setVisible(routed);
-            if (routed) {
-                QSignalBlocker b(twistKneeSpin_);
-                twistKneeSpin_->setValue(editor_->twistKnee());
-            }
-        }
-        if (twistFanSpin_ && twistFanLabel_) {
-            QSignalBlocker b(twistFanSpin_);
-            twistFanSpin_->setValue(editor_->twistFan());
-        }
+        showAutoField(twistKneeSpin_, twistKneeLabel_, routed, editor_->twistKnee() < 0.0,
+                      editor_->twistKnee() >= 0.0 ? editor_->twistKnee() : fig.kneeRadius);
+        showAutoField(twistFanSpin_, twistFanLabel_, true, editor_->twistFan() <= 1e-9,
+                      editor_->twistFan() > 1e-9 ? editor_->twistFan() : fig.fanLen);
         // The fan's own corner radius is the straight run's, for the same reason the wire width is:
         // a laid-up bundle has no fan corners to round, its wires cross the whole way.
-        if (twistFanKneeSpin_ && twistFanKneeLabel_) {
-            autoFieldCell(twistFanKneeSpin_)->setVisible(straightRun);
-            twistFanKneeLabel_->setVisible(straightRun);
-            if (straightRun) {
-                QSignalBlocker b(twistFanKneeSpin_);
-                twistFanKneeSpin_->setValue(editor_->twistFanKnee());
-            }
-        }
+        showAutoField(twistFanKneeSpin_, twistFanKneeLabel_, straightRun,
+                      editor_->twistFanKnee() < 0.0,
+                      editor_->twistFanKnee() >= 0.0 ? editor_->twistFanKnee() : fig.fanKnee);
         // THE FINISH END'S OWN THREE, which are there only when it has any: ticked, the finish end
         // repeats the start and three fields showing the same figures twice would be three more
         // things to keep in step and nothing gained.
@@ -4587,15 +4620,9 @@ void MainWindow::syncBreakOptions() {
                 twistFlushCheck_->setChecked(editor_->twistFlush());
             }
         }
-        if (twistFlushSpin_ && twistFlushLabel_) {
-            const bool flushing = straightRun && editor_->twistFlush();
-            twistFlushLabel_->setVisible(flushing);
-            autoFieldCell(twistFlushSpin_)->setVisible(flushing);
-            if (flushing) {
-                QSignalBlocker b(twistFlushSpin_);
-                twistFlushSpin_->setValue(editor_->twistFlushLen());
-            }
-        }
+        showAutoField(twistFlushSpin_, twistFlushLabel_, straightRun && editor_->twistFlush(),
+                      editor_->twistFlushLen() <= 1e-9,
+                      editor_->twistFlushLen() > 1e-9 ? editor_->twistFlushLen() : fig.flushLen);
         // The stripped end is the straight run's, like the flush one: a laid-up bundle has no wire
         // ends of its own on show to strip.
         if (twistStripCheck_) {
@@ -4605,15 +4632,9 @@ void MainWindow::syncBreakOptions() {
                 twistStripCheck_->setChecked(editor_->twistStrip());
             }
         }
-        if (twistStripSpin_ && twistStripLabel_) {
-            const bool stripping = straightRun && editor_->twistStrip();
-            twistStripLabel_->setVisible(stripping);
-            autoFieldCell(twistStripSpin_)->setVisible(stripping);
-            if (stripping) {
-                QSignalBlocker b(twistStripSpin_);
-                twistStripSpin_->setValue(editor_->twistStripLen());
-            }
-        }
+        showAutoField(twistStripSpin_, twistStripLabel_, straightRun && editor_->twistStrip(),
+                      editor_->twistStripLen() <= 1e-9,
+                      editor_->twistStripLen() > 1e-9 ? editor_->twistStripLen() : fig.stripLen);
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -4622,25 +4643,20 @@ void MainWindow::syncBreakOptions() {
             }
         }
         const bool apart = straightRun && !editor_->twistSidesSame();
-        auto finishField = [&](QLabel* label, QDoubleSpinBox* spin, double value) {
-            if (!label || !spin) return;
-            label->setVisible(apart);
-            autoFieldCell(spin)->setVisible(apart);
-            if (!apart) return;
-            QSignalBlocker b(spin);
-            spin->setValue(value);
-        };
-        finishField(twistLaneBLabel_, twistLaneBSpin_, editor_->twistLaneFinish());
-        finishField(twistFanBLabel_, twistFanBSpin_, editor_->twistFanFinish());
-        finishField(twistFanKneeBLabel_, twistFanKneeBSpin_, editor_->twistFanKneeFinish());
-        if (twistWireSpin_ && twistWireLabel_) {
-            autoFieldCell(twistWireSpin_)->setVisible(straightRun);
-            twistWireLabel_->setVisible(straightRun);
-            if (straightRun) {
-                QSignalBlocker b(twistWireSpin_);
-                twistWireSpin_->setValue(editor_->twistWireWidth());
-            }
-        }
+        // The finish end's three, shown the same way: its own figure where it has one, and the
+        // start's - which is what it falls back to - where it has not.
+        showAutoField(twistLaneBSpin_, twistLaneBLabel_, apart, editor_->twistLaneFinish() <= 1e-9,
+                      editor_->twistLaneFinish() > 1e-9 ? editor_->twistLaneFinish() : fig.lane);
+        showAutoField(twistFanBSpin_, twistFanBLabel_, apart, editor_->twistFanFinish() <= 1e-9,
+                      editor_->twistFanFinish() > 1e-9 ? editor_->twistFanFinish() : fig.fanLen);
+        showAutoField(twistFanKneeBSpin_, twistFanKneeBLabel_, apart,
+                      editor_->twistFanKneeFinish() < 0.0,
+                      editor_->twistFanKneeFinish() >= 0.0 ? editor_->twistFanKneeFinish()
+                                                           : fig.fanKnee);
+        showAutoField(twistWireSpin_, twistWireLabel_, straightRun,
+                      editor_->twistWireWidth() <= 1e-9,
+                      editor_->twistWireWidth() > 1e-9 ? editor_->twistWireWidth()
+                                                       : fig.wireWidth);
         if (twistTrunkSpin_ && twistTrunkLabel_) {
             autoFieldCell(twistTrunkSpin_)->setVisible(straightRun);
             twistTrunkLabel_->setVisible(straightRun);

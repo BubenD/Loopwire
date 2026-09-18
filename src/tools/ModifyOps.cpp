@@ -1835,6 +1835,18 @@ std::vector<Entity> explodeEntity(const Entity& e) {
     case EntityType::Wire:
         polylineToLines(e.points, false);
         break;
+    case EntityType::TwistedPair:
+        // A HARNESS COMES APART INTO THE LINES IT DRAWS: every wire's two edges, and the line across
+        // each end where it is cut. Not into its route, which is never drawn - a harness broken into
+        // a single invisible line down the middle of where it used to be is not what anybody means.
+        //
+        // What comes out is no longer a harness: the wires are lines now, and the count and the
+        // pitch and the fan that made them are gone with the object. That is what breaking a thing
+        // apart IS, and it is the only honest thing to do with half a harness - see the trim.
+        for (const auto& strand : twistedPairStrands(e)) polylineToLines(strand, false);
+        for (const auto& cap : twistedPairEndCaps(e))
+            if (cap.size() == 2) makeLine(cap.front(), cap.back());
+        break;
     case EntityType::Rect:
     case EntityType::Polygon:
         polylineToLines(e.points, true);

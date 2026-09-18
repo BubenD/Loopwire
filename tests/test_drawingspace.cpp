@@ -957,17 +957,17 @@ int run_drawingspace_tests() {
         }
     }
 
-    // ---- a field whose lowest value is Auto has an A beside it to put it back there --------------
+    // ---- a field left to the drawing shows the figure the drawing made of it ---------------------
     {
-        // Auto lives at the BOTTOM of the range on these fields, which is fine for reading and
-        // hopeless for setting: once a number has been typed in, the only ways back to Auto were to
-        // hold the down arrow all the way to the end of the range, or to know that typing a number
-        // below the minimum lands there. Neither is a thing to expect anybody to know.
+        // Half of these settings can be left alone, and then the drawing works the figure out - a fan
+        // as long as its pitch needs, a knee radius off the bundle width, five millimetres of strip.
+        // The field said "Auto" and the number it stood for was nowhere on screen. It now shows that
+        // number, and the little A beside it says which it is: lit, the field is the drawing's own;
+        // dark, the number is one somebody typed. Clicking the A hands it back to the drawing.
         //
-        // WITH A TOOL ARMED, which is the only way these fields are ever seen. The Special group
-        // puts its icons away while a tool is in use, and it did that by hiding every tool button in
-        // the cell - which is what an A is made of, so on the ribbon it never appeared at all. A
-        // test that looks at the fields with nothing armed does not see that, and did not.
+        // WITH A TOOL ARMED, which is the only way these fields are ever seen. The Special group puts
+        // its icons away while a tool is in use, and it did that by hiding - and resizing - every
+        // tool button in the cell, which is what an A is made of.
         for (QTabWidget* tw : win.findChildren<QTabWidget*>())
             for (int i = 0; i < tw->count(); ++i)
                 if (tw->tabText(i).contains(QStringLiteral("Harness"), Qt::CaseInsensitive) &&
@@ -975,65 +975,66 @@ int run_drawingspace_tests() {
                     tw->setCurrentIndex(i);
         if (Editor* ed = win.findChild<Editor*>()) ed->setTool(ToolId::WiresRun);
         QApplication::processEvents();
-        QList<QDoubleSpinBox*> autoFields;
-        for (QDoubleSpinBox* s : win.findChildren<QDoubleSpinBox*>())
-            if (s->specialValueText() == QStringLiteral("Auto") && s->isVisible())
-                autoFields << s;
-        std::printf("  auto: %lld field(s) whose lowest value is Auto\n",
-                    static_cast<long long>(autoFields.size()));
-        check(!autoFields.isEmpty(), "auto: there are fields that can be left to the drawing");
 
-        // EVERY one of them has an A beside it, in the same cell, so none is the odd one out.
-        int withA = 0;
-        QToolButton* anA = nullptr;
-        QDoubleSpinBox* itsField = nullptr;
-        for (QDoubleSpinBox* s : autoFields) {
-            QWidget* cell = s->parentWidget();
-            if (!cell) continue;
-            for (QToolButton* b : cell->findChildren<QToolButton*>())
+        // A field that can be left to the drawing is one with an A beside it, in its own cell.
+        QList<QDoubleSpinBox*> autoFields;
+        QList<QToolButton*> marks;
+        for (QDoubleSpinBox* s : win.findChildren<QDoubleSpinBox*>()) {
+            if (!s->isVisible() || !s->parentWidget()) continue;
+            if (s->parentWidget()->objectName() != QStringLiteral("autoFieldCell")) continue;
+            for (QToolButton* b : s->parentWidget()->findChildren<QToolButton*>())
                 if (b->text() == QStringLiteral("A") && b->isVisible()) {
-                    ++withA;
-                    if (!anA) { anA = b; itsField = s; }
+                    autoFields << s;
+                    marks << b;
                     break;
                 }
         }
-        std::printf("  auto: %d of them show an A beside the arrows\n", withA);
-        check(withA == autoFields.size(),
-              "auto: every field on screen that can be left to the drawing shows an A to leave it "
-              "there - including on the ribbon, with the tool that uses it armed");
-        // AND IT IS A MARK ON A FIELD, not another tool on the ribbon. The Special group sizes every
-        // tool button in a cell to a forty-pixel icon-only square, which took the A's letter away
-        // and made it the size of the tools it sits among.
-        if (anA) {
-            std::printf("  auto: the A is %dx%d and %s its letter\n", anA->width(), anA->height(),
-                        anA->toolButtonStyle() == Qt::ToolButtonIconOnly ? "hides" : "shows");
-            check(anA->width() <= 16 && anA->height() <= 16,
-                  "auto: the A is the size of a mark on a field, not the size of a tool");
-            check(anA->toolButtonStyle() != Qt::ToolButtonIconOnly,
-                  "auto: and it shows its letter, which is the whole of what it says");
-        }
+        std::printf("  auto: %lld field(s) on screen with an A beside them\n",
+                    static_cast<long long>(autoFields.size()));
+        check(autoFields.size() >= 5,
+              "auto: the fields that can be left to the drawing each have an A beside them");
+        if (autoFields.isEmpty()) return spaceFailures;
 
-        // AND IT PUTS THE FIELD BACK TO AUTO, and lights up while the field is on it.
-        if (anA && itsField) {
-            itsField->setValue(itsField->minimum() + 17.0);
-            QApplication::processEvents();
-            const bool offWhileSet = !anA->isChecked();
-            anA->click();
-            QApplication::processEvents();
-            std::printf("  auto: set to %.1f the A was %s; clicked, the field reads %.1f and the A is %s\n",
-                        itsField->minimum() + 17.0, offWhileSet ? "dark" : "lit",
-                        itsField->value(), anA->isChecked() ? "lit" : "dark");
-            check(std::abs(itsField->value() - itsField->minimum()) < 1e-9,
-                  "auto: clicking the A puts the field back to Auto");
-            check(offWhileSet && anA->isChecked(),
-                  "auto: and it is lit while the field is on Auto and dark while it is not, so the "
-                  "field says which it is without being read");
-            // Clicking it again means Auto again, not Auto turned off into some number nobody chose.
-            anA->click();
-            QApplication::processEvents();
-            check(std::abs(itsField->value() - itsField->minimum()) < 1e-9 && anA->isChecked(),
-                  "auto: clicking it again leaves it on Auto rather than turning Auto off");
-        }
+        // AND IT IS A MARK ON A FIELD, not another tool on the ribbon: the Special group sizes every
+        // tool button in a cell to a forty-pixel icon-only square.
+        QToolButton* anA = marks.front();
+        QDoubleSpinBox* itsField = autoFields.front();
+        std::printf("  auto: the A is %dx%d and %s its letter\n", anA->width(), anA->height(),
+                    anA->toolButtonStyle() == Qt::ToolButtonIconOnly ? "hides" : "shows");
+        check(anA->width() <= 16 && anA->height() <= 16,
+              "auto: the A is the size of a mark on a field, not the size of a tool");
+        check(anA->toolButtonStyle() != Qt::ToolButtonIconOnly,
+              "auto: and it shows its letter, which is the whole of what it says");
+
+        // LIT TO START WITH, because nothing has been typed into any of them - and showing a real
+        // figure rather than the word "Auto", which is the point of the whole thing.
+        const double drawingsOwn = itsField->value();
+        std::printf("  auto: left alone the field reads %.2f and the A is %s\n", drawingsOwn,
+                    anA->isChecked() ? "lit" : "dark");
+        check(anA->isChecked(), "auto: a field nobody has typed into is the drawing's own, and lit");
+        check(drawingsOwn > 0.0,
+              "auto: and it shows the figure the drawing made of it, not the word Auto");
+        check(itsField->specialValueText().isEmpty() ||
+                  std::abs(drawingsOwn - itsField->minimum()) > 1e-9,
+              "auto: which is a number on the field, not its bottom stop standing in for one");
+
+        // TYPED INTO, IT GOES DARK: a number somebody meant is not the drawing's own.
+        itsField->setValue(drawingsOwn + 9.0);
+        QApplication::processEvents();
+        std::printf("  auto: typed %.2f, the A is %s\n", itsField->value(),
+                    anA->isChecked() ? "lit" : "dark");
+        check(!anA->isChecked(), "auto: typing a figure into it takes it off the drawing's own");
+        check(std::abs(itsField->value() - (drawingsOwn + 9.0)) < 1e-6,
+              "auto: and the field keeps what was typed");
+
+        // AND CLICKING THE A HANDS IT BACK, figure and all.
+        anA->click();
+        QApplication::processEvents();
+        std::printf("  auto: clicked the A, the field reads %.2f and the A is %s\n",
+                    itsField->value(), anA->isChecked() ? "lit" : "dark");
+        check(anA->isChecked(), "auto: clicking the A hands the field back to the drawing");
+        check(std::abs(itsField->value() - drawingsOwn) < 1e-6,
+              "auto: and the figure it shows is the drawing's own again");
     }
 
     // ---- a placed harness run can be set from the panel, not only from the ribbon -----------------
