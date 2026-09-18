@@ -407,6 +407,24 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     double period =
         std::max(0.05, pair.meta.value(QStringLiteral("twistPitch")).toDouble(kTwistedPairPitch));
     f.lead = std::max(0.0, pair.meta.value(QStringLiteral("twistEnds")).toDouble(kTwistedPairLead));
+    // A FAN NOBODY HAS SIZED IS AS LONG AS IT NEEDS TO BE.
+    //
+    // The default lead is a fixed length, which is fine while the wires only have to move a little
+    // way apart. Open the pitch up and they have the same short stretch to travel much further in,
+    // so they cross the run at seventy or eighty degrees - and a wire slanting that steeply is drawn
+    // either far too wide or, once the widening is capped, thinner the wider the pitch is set. That
+    // is the wrong answer to a pitch: opening a fan out should spread the wires, not pinch them.
+    //
+    // So where no fan length has been asked for, it grows with the distance the outermost wire has
+    // to cover. Roughly one across to one along, which is the slant a fan is drawn at by hand.
+    // Asking for a length still gets exactly that length - somebody who sets one has said so.
+    if (pair.meta.value(QStringLiteral("twistStraight")).toBool() &&
+        !pair.meta.contains(QStringLiteral("twistEnds"))) {
+        const double lane = std::max(0.0, pair.meta.value(QStringLiteral("twistLane")).toDouble(0.0));
+        const double pitch = lane > 1e-9 ? lane : f.packed * 1.5;
+        const double travel = f.wires > 1 ? pitch * (f.wires - 1) / 2.0 : 0.0;
+        f.lead = std::max(f.lead, travel);
+    }
     // The two straight ends and at least one whole crossing have to fit in what was drawn; a pair drawn
     // shorter keeps its proportions rather than losing its weave or running past its own ends.
     // The two straight ends have to fit in what was drawn. Laid up, a whole crossing has to fit
@@ -616,8 +634,39 @@ double twistDepth(const TwistFrames& f, int k, double u) {
 std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t from, size_t to) {
     std::vector<Vec2> line;
     line.reserve(to - from + 1);
-    for (size_t i = from; i <= to && i < f.pos.size(); ++i)
-        line.push_back(f.pos[i] + f.n[i] * (twistOffset(f, k, f.u[i]) + edge * f.thick));
+    // A WIRE KEEPS ITS WIDTH WHERE IT SLANTS.
+    //
+    // Both edges of a wire are offset from its centre along the normal to the RUN, which is right
+    // wherever the wire is going the same way the run is. In the fan it is not: it is crossing the run
+    // to reach its lane, and a pair of lines held a fixed distance apart measured ACROSS the run are
+    // closer than that measured across the wire itself - by the cosine of the slant. So the diagonal
+    // part of every fan came out thinner than the straight parts at either end of it, and the steeper
+    // the fan the thinner it got. Widening the pitch made it worse, because a wider pitch is a steeper
+    // slant.
+    //
+    // The offset is stretched by 1/cos of the slant, which is sqrt(1 + slope squared) - the same
+    // mitre a stroked polyline uses at a corner. The two edges stay parallel to the wire and the width
+    // measured across the wire is the width it is supposed to be.
+    //
+    // Capped only against the absurd - a wire crossing the run dead square would stretch without
+    // limit and draw an edge across the sheet. The cap was four, which sounds generous and is not: a
+    // six-wire fan opened to a 24 mm pitch over a short lead slants at six to one, so the cap bit and
+    // the wires came out thinner the wider the pitch was set - the very thing this is here to stop.
+    //
+    // ON A STRAIGHT RUN ONLY. A laid-up bundle is a cable of a stated thickness with its wires woven
+    // inside it, and the one thing it must not do is draw outside its own width - the wires cross
+    // steeply there all the way along, so widening them would put the weave outside the cable. A
+    // straight run has no such outline: it IS its wires, and they are what the width belongs to.
+    const double h = std::max(1e-6, f.len * 1e-4);
+    for (size_t i = from; i <= to && i < f.pos.size(); ++i) {
+        const double u = f.u[i];
+        const double ahead = twistOffset(f, k, std::min(f.len, u + h));
+        const double behind = twistOffset(f, k, std::max(0.0, u - h));
+        const double slope = (ahead - behind) / (std::min(f.len, u + h) - std::max(0.0, u - h) + 1e-12);
+        const double widen =
+            f.straight ? std::min(12.0, std::sqrt(1.0 + slope * slope)) : 1.0;
+        line.push_back(f.pos[i] + f.n[i] * (twistOffset(f, k, u) + edge * f.thick * widen));
+    }
     return line;
 }
 

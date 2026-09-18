@@ -10584,6 +10584,70 @@ int run_editor_tests() {
               "knee: left alone it turns the way it always turned");
     }
 
+    // ---- A wire keeps its width where it slants through the fan -----------------------------------
+    {
+        // Both edges of a wire are offset from its centre along the normal to the RUN. In the fan the
+        // wire is crossing the run to reach its lane, and two lines held a fixed distance apart
+        // measured ACROSS the run are closer than that measured across the wire itself - by the
+        // cosine of the slant. So the diagonal part of every fan came out thinner than the straight
+        // parts at either end of it, and widening the pitch made it worse, because a wider pitch is a
+        // steeper slant.
+        auto run = [](double pitch) {
+            Entity w;
+            w.id = QStringLiteral("RUN");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {300.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+            w.meta.insert(QStringLiteral("twistLane"), pitch);
+            return w;
+        };
+        // How wide one wire is drawn at a given x, measured between its two edges ACROSS THE WIRE -
+        // the shortest distance from a point on one edge to the other, which is what the eye sees.
+        auto widthAt = [](const Entity& e, size_t wire, double x) {
+            const std::vector<std::vector<Vec2>> s = twistedPairStrands(e);
+            if (2 * wire + 1 >= s.size()) return 0.0;
+            const std::vector<Vec2>& a = s[2 * wire];
+            const std::vector<Vec2>& b = s[2 * wire + 1];
+            Vec2 on{0.0, 0.0};
+            double bestDx = 1e300;
+            for (const Vec2& p : a)
+                if (std::abs(p.x - x) < bestDx) { bestDx = std::abs(p.x - x); on = p; }
+            double best = 1e300;
+            for (size_t i = 1; i < b.size(); ++i)
+                best = std::min(best, closestPointOnSegment(on, b[i - 1], b[i]).distance);
+            return best;
+        };
+
+        const Entity wide = run(24.0);
+        // The outermost wire slants hardest, so it is the one that showed the fault. In the middle of
+        // the run it is straight; a quarter of the way in it is crossing the fan.
+        const double straightPart = widthAt(wide, 0, 150.0);
+        const double slantPart = widthAt(wide, 0, 20.0);
+        std::printf("  wire width: straight %.3f, through the slant %.3f\n", straightPart, slantPart);
+        check(straightPart > 1e-6, "wire width: the wire is drawn with a width at all");
+        check(std::abs(slantPart - straightPart) < 0.15 * straightPart,
+              "wire width: it is the same width through the slant as along the straight");
+
+        // AND A WIDER PITCH DOES NOT THIN IT. A wider pitch is a steeper fan, which is exactly when
+        // the old drawing pinched hardest.
+        const double tightSlant = widthAt(run(8.0), 0, 20.0);
+        std::printf("  wire width: pitch 8 %.3f, pitch 24 %.3f - the wire itself is 2.00\n",
+                    tightSlant, slantPart);
+        // THE WIRE IS THE WIDTH IT IS, whatever the fan is set to. Opening the pitch used to pinch
+        // it: the wires had the same short stretch to travel further in, so they crossed the run at
+        // seventy degrees and the widening was capped rather than drawn.
+        check(std::abs(tightSlant - 2.0) < 0.2,
+              "wire width: a tight fan draws the wire at the width it was given");
+        check(std::abs(slantPart - 2.0) < 0.2,
+              "wire width: and so does a wide one - opening the pitch does not thin them");
+    }
+
     // ---- A click on a harness picks the PART, not the one line under the cursor ------------------
     {
         // A generated harness is not one thing and it is not fifty things. It is a handful of parts,
