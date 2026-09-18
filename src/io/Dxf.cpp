@@ -270,6 +270,8 @@ QString toDxf(const Document& doc) {
                 L << dxfPolyline(e, doc, strand, false);
             for (const auto& cap : twistedPairEndCaps(e))
                 L << dxfPolyline(e, doc, cap, false);
+            for (const auto& outline : twistedPairBody(e))
+                L << dxfPolyline(e, doc, outline, false);
             break;
         case EntityType::Polyline: {
             const double cr = e.meta.value("cornerRadius").toDouble(0.0);

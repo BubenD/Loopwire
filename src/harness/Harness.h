@@ -193,6 +193,15 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair);
 // the middle of. Empty for a laid-up bundle: a weave has no straight in it to speak of.
 std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
 
+// THE CONVERGED STRETCH DRAWN AS A BODY, when the run is told to be one: a cable under heatshrink
+// rather than the two or three lines the bundle is otherwise drawn as. The FANS ARE UNTOUCHED - the
+// wires come out of it at both ends exactly as they did - and what changes is only the part between
+// them, where a loom is a covered thing and not a set of visible wires. Drawn the way any sleeve on
+// this drawing is: standing a little off what it covers and recovered onto it at each end.
+//
+// Empty unless the run asks for it, and empty for a laid-up bundle, which is a cable already.
+std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair);
+
 // THE FIGURES A RUN ACTUALLY CAME OUT WITH, whether they were asked for or left to the drawing.
 //
 // Half of these settings can be left alone, and then the drawing works one out - a fan as long as

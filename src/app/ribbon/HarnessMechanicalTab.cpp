@@ -706,6 +706,29 @@ void MainWindow::buildHarnessMechanicalTab() {
                 });
                 connect(twistStripSpin_, &QDoubleSpinBox::valueChanged, this,
                         [this](double v) { editor_->setTwistStripLen(v); canvas_->update(); });
+                // THE CONVERGED STRETCH AS A CABLE UNDER HEATSHRINK. A loom between its two fans is
+                // a covered thing - a cable, or a sleeve over the bundle - and drawing the two or
+                // three lines its wires make there says the wires are on show when they are not.
+                // The FANS ARE UNTOUCHED: the wires come out of it at both ends exactly as before,
+                // and the ends of the cover are drawn recovered onto what they cover, which is what
+                // a shrunk end looks like.
+                twistCableCheck_ = new QCheckBox(QStringLiteral("Cable body"), optW);
+                twistCableCheck_->setChecked(editor_->twistCableBody());
+                twistCableCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistCableCheck_->setToolTip(QStringLiteral(
+                    "Draw the converged stretch between the two fans as a cable under heatshrink "
+                    "rather than as the lines its wires make: one body, standing a little off what "
+                    "it covers and shrunk onto it at each end. The fans are unchanged."));
+                og->addWidget(twistCableCheck_, 1, 23, 1, 2);
+                connect(twistCableCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistCableBody(on);
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: covered between the fans")
+                           : QStringLiteral("Wires run: the wires show the whole way"),
+                        2000);
+                });
                 connect(twistSidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistSidesSame(on);
                     syncBreakOptions();   // the finish end's fields come and go with it

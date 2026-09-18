@@ -2713,6 +2713,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // stop. A cut end is a line, and a harness drawing shows it. Drawn last, over the fill of
         // whatever the weave laid down.
         for (const std::vector<Vec2>& cap : twistedPairEndCaps(e)) stroke(cap);
+        // AND THE BODY OVER THE CONVERGED STRETCH, where the run is drawn as a cable rather than as
+        // the lines its wires make. Filled with the background first, like a wire is, so what runs
+        // behind it is covered: a sleeve is a thing over the top of what it covers.
+        for (const std::vector<Vec2>& outline : twistedPairBody(e)) {
+            if (outline.size() < 3) continue;
+            QPolygonF fill;
+            fill.reserve(static_cast<int>(outline.size()));
+            for (const Vec2& v : outline) fill << vt.toScreen(v);
+            p.setPen(Qt::NoPen);
+            p.setBrush(g_bgColor);
+            p.drawPolygon(fill);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(wirePen);
+            stroke(outline);
+        }
         break;
     }
 

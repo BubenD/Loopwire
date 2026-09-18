@@ -385,6 +385,9 @@ struct TwistFrames {
     // show the figure it stands for. Both are the radius a WIRE turns on, not the centreline's.
     double kneeUsed = 0.0;
     double fanKneeUsed = 0.0;
+    // THE CONVERGED STRETCH IS A BODY, not the lines the wires make: a cable under heatshrink. The
+    // fans are untouched either way - it is the part between them that this is about.
+    bool cableBody = false;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -603,6 +606,9 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     };
     f.strip = stripOf(false);
     f.stripB = stripOf(true);
+    f.cableBody =
+        f.straight &&
+        pair.meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable");
     // AND WHAT RADIUS THE FAN'S CORNERS CAME OUT ON, for the outermost wire - the one that travels
     // furthest and so is the one a radius is read off. Left alone the fan gives a quarter of the
     // slant to each corner, and this is the length that share comes to.
@@ -911,16 +917,22 @@ double twistDepth(const TwistFrames& f, int k, double u) {
 // The ENDS do not move, which is what this has to leave alone: a wire is landed square, so it runs
 // parallel to the run where it ends and across the wire and across the run are the same direction
 // there. The strand still finishes flush with the run it belongs to.
+// Where wire k's middle is at the place measured at i - its lane, held back where the bend cannot
+// carry it. Asked in one place because the edges are drawn off it and the lines across the wire are
+// drawn off it, and the two must agree to the last figure or the end of a wire is drawn open.
+Vec2 twistCentre(const TwistFrames& f, int k, size_t i) {
+    if (i >= f.pos.size()) return {};
+    double off = twistOffset(f, k, f.u[i]);
+    if (i < f.holdHi.size()) off = std::clamp(off, f.holdLo[i], f.holdHi[i]);
+    return f.pos[i] + f.n[i] * off;
+}
+
 std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t from, size_t to) {
     std::vector<Vec2> line;
     line.reserve(to - from + 1);
     //
     // AND NO WIRE IS BENT BACKWARDS - see holdHi and holdLo, which say how far off the middle a wire
-    // may sit at each place for the turn there to be able to carry it.
-    auto held = [&](double want, size_t i) {
-        if (i >= f.holdHi.size()) return want;
-        return std::clamp(want, f.holdLo[i], f.holdHi[i]);
-    };
+    // may sit at each place for the turn there to be able to carry it. That is in twistCentre.
     const size_t last = std::min(to, f.pos.size() - 1);
     if (f.pos.empty() || last < from) return line;
     // WHERE THE WIRE ACTUALLY IS, at each place, held back where the bend cannot carry it - and HOW
@@ -941,7 +953,7 @@ std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t fro
     const double eps = std::max(1e-9, f.len * 1e-9);
     for (size_t i = from; i <= last; ++i) {
         const double u = f.u[i];
-        const Vec2 at = f.pos[i] + f.n[i] * held(twistOffset(f, k, u), i);
+        const Vec2 at = twistCentre(f, k, i);
         const bool stripped = (f.strip > 1e-9 && u < f.strip - eps) ||
                               (f.stripB > 1e-9 && u > f.len - f.stripB + eps);
         // The step itself: at the start end the bare part is BEHIND this place, at the finish end it
@@ -1003,6 +1015,7 @@ struct TwistCached {
     TwistFrames frames;
     std::vector<std::vector<Vec2>> strands;
     std::vector<std::vector<Vec2>> caps;   // the line across each wire where it is cut
+    std::vector<std::vector<Vec2>> body;   // and the converged stretch, where it is drawn as one
 };
 
 QString twistKey(const Entity& e) {
@@ -1040,6 +1053,7 @@ QString twistKey(const Entity& e) {
                  : QLatin1String("|f-");
     k += e.meta.value(QLatin1String("twistSidesSame")).toBool(true) ? QLatin1String("|same")
                                                                    : QLatin1String("|apart");
+    k += e.meta.value(QLatin1String("twistBody")).toString();
     return k;
 }
 
@@ -1073,11 +1087,29 @@ const TwistCached* twistCached(const Entity& pair) {
             if (f.u[i] >= u - 1e-9) return i;
         return f.u.empty() ? size_t(0) : f.u.size() - 1;
     };
+    // Where the insulation stops, as a measured place: twistFrames puts one exactly there, so this
+    // finds it rather than settling for the nearest.
+    auto placeAt = [&f](double u) {
+        size_t best = f.pos.size();
+        double bestOff = 1e300;
+        for (size_t i = 0; i < f.u.size(); ++i) {
+            const double off = std::abs(f.u[i] - u);
+            if (off < bestOff) {
+                bestOff = off;
+                best = i;
+            }
+        }
+        return bestOff <= std::max(1e-6, f.len * 1e-9) ? best : f.pos.size();
+    };
+    const size_t stripStart = f.strip > 1e-9 ? placeAt(f.strip) : f.pos.size();
+    const size_t stripEnd = f.stripB > 1e-9 ? placeAt(f.len - f.stripB) : f.pos.size();
     for (int k = 0; k < f.wires; ++k) {
         std::vector<std::pair<size_t, size_t>> spans;
         const bool carriesOn =
             !f.straight || (k < static_cast<int>(f.trunkLane.size()) && f.trunkLane[size_t(k)] >= 0);
-        if (carriesOn) {
+        // DRAWN AS A BODY, every wire stops at the fan: what runs between the two fans is the body,
+        // and a wire drawn through it as well would be a wire drawn through a cable.
+        if (carriesOn && !f.cableBody) {
             spans.push_back({0, f.pos.size() - 1});
         } else {
             if (f.spreadStart) spans.push_back({0, lastAtOrBefore(f.lead)});
@@ -1091,15 +1123,50 @@ const TwistCached* twistCached(const Entity& pair) {
             // cut there - it is carrying on inside the lines the bundle is drawn as - so it gets no
             // line across it, and a wire landed on a pin gets one.
             if (!edgeA.empty() && !edgeB.empty()) {
-                // The insulation's own end needs no line of its own: the edge STEPS in there, from
-                // the wire's half width to the conductor's, and the two steps either side of the
-                // wire are that end. See twistEdge.
-                if (span.first == 0) c.caps.push_back({edgeA.front(), edgeB.front()});
-                if (span.second + 1 == f.pos.size())
+                // AND WHERE THE INSULATION ENDS, ONE LINE RIGHT ACROSS THE WIRE.
+                //
+                // The edges step in there, from the wire's half width to the conductor's, and those
+                // two little steps are most of that end - but not the middle of it, where the bare
+                // conductor passes through. Two stubs with a gap between them is not what the end of
+                // an insulation looks like and is not something the cursor can catch: it is one line
+                // across the wire, and it is drawn as one.
+                auto acrossAt = [&](size_t i) {
+                    const Vec2 mid = twistCentre(f, k, i);
+                    return std::vector<Vec2>{mid + f.n[i] * f.thick, mid - f.n[i] * f.thick};
+                };
+                if (span.first == 0) {
+                    c.caps.push_back({edgeA.front(), edgeB.front()});
+                    if (f.strip > 1e-9 && stripStart < f.pos.size())
+                        c.caps.push_back(acrossAt(stripStart));
+                }
+                if (span.second + 1 == f.pos.size()) {
                     c.caps.push_back({edgeA.back(), edgeB.back()});
+                    if (f.stripB > 1e-9 && stripEnd < f.pos.size())
+                        c.caps.push_back(acrossAt(stripEnd));
+                }
             }
             c.strands.push_back(std::move(edgeA));
             c.strands.push_back(std::move(edgeB));
+        }
+    }
+    // THE BODY OVER THE CONVERGED STRETCH, from the end of one fan to the start of the other. Its
+    // own centre line is the route between those two places, knees and all, so a run that bends
+    // bends its cable with it.
+    if (f.cableBody) {
+        const size_t from = firstAtOrAfter(f.lead), to = lastAtOrBefore(f.len - f.leadB);
+        if (to > from) {
+            std::vector<Vec2> along;
+            for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
+            // A sleeve stands a little off what it covers and is recovered onto it at each end -
+            // "shrunk ends" - so the body is a touch wider than the bundle and comes down to it.
+            const double bundleHalf = f.reach + f.thick;
+            const double over = std::max(0.2, f.thick * 0.8);
+            std::vector<Vec2> outline = shrunkSleeveOutline(along, bundleHalf + over, bundleHalf,
+                                                            bundleHalf, over * 3.0, over * 3.0);
+            if (outline.size() >= 3) {
+                outline.push_back(outline.front());   // closed: it is a body, not a run of lines
+                c.body.push_back(std::move(outline));
+            }
         }
     }
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
@@ -1119,6 +1186,12 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);
     return c ? c->caps : std::vector<std::vector<Vec2>>{};
+}
+
+std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair) return {};
+    const TwistCached* c = twistCached(pair);
+    return c ? c->body : std::vector<std::vector<Vec2>>{};
 }
 
 TwistFigures twistedPairFigures(const Entity& pair) {

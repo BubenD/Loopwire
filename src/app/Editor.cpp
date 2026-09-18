@@ -12455,6 +12455,17 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
                 wire.b = strand.back();
                 parts.push_back(std::move(wire));
             }
+            for (const std::vector<Vec2>& outline : twistedPairBody(*obj)) {
+                if (outline.size() < 3) continue;
+                Entity shell = *obj;
+                shell.id.clear();
+                shell.type = EntityType::Polyline;
+                shell.meta = QJsonObject();
+                shell.points = outline;
+                shell.a = outline.front();
+                shell.b = outline.back();
+                parts.push_back(std::move(shell));
+            }
             for (const std::vector<Vec2>& cap : twistedPairEndCaps(*obj)) {
                 if (cap.size() != 2) continue;
                 Entity across = *obj;
@@ -15921,6 +15932,10 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         e.meta.insert(QStringLiteral("twistFlushLen"), twistFlushLen_);
     // THE STRIPPED ENDS, written only when the drawing says the ends are stripped - which most do
     // not, so most runs carry nothing extra.
+    // AND WHETHER THE CONVERGED STRETCH IS A CABLE. Written only when it is, so an ordinary run
+    // carries nothing extra and opens on an older build as the run it always was.
+    if (straight && twistCableBody_)
+        e.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
     if (straight && twistStrip_) {
         e.meta.insert(QStringLiteral("twistStrip"), true);
         if (twistStripLen_ > 1e-9) e.meta.insert(QStringLiteral("twistStripLen"), twistStripLen_);
@@ -15999,6 +16014,12 @@ void Editor::setTwistFlushLen(double mm) {
     if (std::abs(twistFlushLen_ - next) < 1e-9) return;
     twistFlushLen_ = next;
     emit overlayChanged();
+}
+
+void Editor::setTwistCableBody(bool on) {
+    if (twistCableBody_ == on) return;
+    twistCableBody_ = on;
+    emit overlayChanged();   // a pinned run re-draws covered, or as its wires
 }
 
 void Editor::setTwistStrip(bool on) {

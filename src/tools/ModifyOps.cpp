@@ -112,6 +112,8 @@ void forEachCutSegment(const Entity& e, F&& f) {
             for (size_t i = 1; i < strand.size(); ++i) f(strand[i - 1], strand[i]);
         for (const auto& cap : twistedPairEndCaps(e))
             if (cap.size() == 2) f(cap.front(), cap.back());
+        for (const auto& outline : twistedPairBody(e))
+            for (size_t i = 1; i < outline.size(); ++i) f(outline[i - 1], outline[i]);
         break;
     case EntityType::Rect:
     case EntityType::Polygon:
@@ -971,7 +973,9 @@ bool objectCrosses(const Entity& e, const std::vector<Entity>& others) {
     // answers about a line nobody can see. A harness laid across a boundary meets it where its wires
     // do, which is what the eye is looking at.
     if (e.type == EntityType::TwistedPair) {
-        for (const auto& strand : twistedPairStrands(e))
+        std::vector<std::vector<Vec2>> drawn = twistedPairStrands(e);
+        for (auto& outline : twistedPairBody(e)) drawn.push_back(outline);
+        for (const auto& strand : drawn)
             for (size_t i = 1; i < strand.size(); ++i) {
                 const Vec2 A = strand[i - 1], B = strand[i], D = B - A;
                 const double L2 = D.lengthSq();
@@ -1846,6 +1850,7 @@ std::vector<Entity> explodeEntity(const Entity& e) {
         for (const auto& strand : twistedPairStrands(e)) polylineToLines(strand, false);
         for (const auto& cap : twistedPairEndCaps(e))
             if (cap.size() == 2) makeLine(cap.front(), cap.back());
+        for (const auto& outline : twistedPairBody(e)) polylineToLines(outline, false);
         break;
     case EntityType::Rect:
     case EntityType::Polygon:

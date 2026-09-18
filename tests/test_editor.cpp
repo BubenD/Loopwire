@@ -11076,13 +11076,60 @@ int run_editor_tests() {
                   "strip: past the strip length the wire is the width it is");
             check(std::abs(atTip - 1.0) < 1e-6,
                   "strip: and over the stripped part it is the conductor, which is thinner");
-            // THE LINE ACROSS THE CUT IS THE CONDUCTOR'S WIDTH TOO, because that is what it closes.
-            double widest = 0.0;
-            for (const std::vector<Vec2>& m : twistedPairEndCaps(bare))
-                if (m.size() == 2) widest = std::max(widest, distance(m.front(), m.back()));
-            std::printf("  strip: the line across the cut is %.2f long\n", widest);
-            check(std::abs(widest - 1.0) < 1e-6,
+            // TWO LINES ACROSS EACH END: the cut, which closes the CONDUCTOR, and the end of the
+            // insulation, which goes right across the WIRE. The edges step in where the insulation
+            // stops and those two little steps are most of that end - but not the middle of it,
+            // where the bare conductor passes through, and two stubs with a gap between them is
+            // neither what it looks like nor something the cursor can catch.
+            double atCut = 0.0, atInsulation = 0.0;
+            int acrossTheWire = 0;
+            for (const std::vector<Vec2>& m : twistedPairEndCaps(bare)) {
+                if (m.size() != 2) continue;
+                const double len = distance(m.front(), m.back());
+                const double from = std::min(std::abs(m.front().x), std::abs(m.front().x - 300.0));
+                if (from < 1e-6) atCut = len;
+                if (std::abs(from - 7.0) < 1e-6) {
+                    atInsulation = len;
+                    ++acrossTheWire;
+                }
+            }
+            std::printf("  strip: the line across the cut is %.2f, the one at the insulation %.2f, "
+                        "and there are %d of the latter\n",
+                        atCut, atInsulation, acrossTheWire);
+            check(std::abs(atCut - 1.0) < 1e-6,
                   "strip: the line across the cut closes the conductor, not the wire");
+            check(std::abs(atInsulation - 2.0) < 1e-6,
+                  "strip: and the one where the insulation ends goes right across the wire");
+            check(acrossTheWire == 12,
+                  "strip: one for each of the six wires at each of its two ends");
+            // WHICH MEANS THE CURSOR CAN CATCH IT. Every line across an end is offered to the snap
+            // system, so the split between insulation and conductor is a place to measure from.
+            {
+                Document snapDoc;
+                snapDoc.entities().push_back(bare);
+                SnapSettings only;
+                only.snapEndpoint = false;
+                only.snapMidpoint = true;
+                only.snapNearest = false;
+                only.snapCenter = false;
+                only.snapGeometricCenter = false;
+                only.snapNode = false;
+                only.snapIntersection = false;
+                only.snapPerpendicular = false;
+                only.snapTangent = false;
+                only.snapQuadrant = false;
+                // The middle of the line where the insulation ends on the outermost wire.
+                double wantY = 0.0;
+                for (const std::vector<Vec2>& m : twistedPairEndCaps(bare))
+                    if (m.size() == 2 && std::abs(m.front().x - 7.0) < 1e-6)
+                        wantY = std::max(wantY, (m.front().y + m.back().y) / 2.0);
+                const auto hit = resolveSnap(snapDoc, {7.4, wantY + 0.4}, std::nullopt, 3.0, only, {});
+                std::printf("  strip: asked near the split at 7.0,%.2f and caught %s at %.2f,%.2f\n",
+                            wantY, hit.snapped ? "a point" : "nothing", hit.point.x, hit.point.y);
+                check(hit.snapped && std::abs(hit.point.x - 7.0) < 1e-6 &&
+                          std::abs(hit.point.y - wantY) < 1e-6,
+                      "strip: the cursor catches the line that splits insulation from conductor");
+            }
             // SAYING NOTHING LEAVES THE WIRE ITS OWN WIDTH ALL THE WAY OUT, which is what a drawing
             // that does not call out a strip length shows.
             Entity plain = bare;
@@ -11103,6 +11150,104 @@ int run_editor_tests() {
                         onTheBundle);
             check(onTheBundle > 1.8,
                   "strip: more than the end can spare stops at the end, not out on the bundle");
+        }
+    }
+
+    // ---- The converged stretch can be a cable under heatshrink instead of loose wires ------------
+    {
+        // A loom between its two fans is a covered thing - a cable, or a sleeve over the bundle -
+        // and drawing the two or three lines its wires make there says the wires are on show when
+        // they are not. THE FANS ARE UNTOUCHED: the wires come out of it at both ends exactly as they
+        // did, and what changes is only the part between them.
+        auto run = [](bool cable) {
+            Entity w;
+            w.id = cable ? QStringLiteral("CABLE") : QStringLiteral("WIRES");
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {320.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 8);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.5);
+            w.meta.insert(QStringLiteral("twistTrunkWires"), 3);
+            w.meta.insert(QStringLiteral("twistLane"), 11.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 55.0);
+            if (cable) w.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
+            return w;
+        };
+        const Entity wires = run(false), cable = run(true);
+        const std::vector<std::vector<Vec2>> body = twistedPairBody(cable);
+        std::printf("  cable body: %d outline(s) asked for, %d when it is not\n", int(body.size()),
+                    int(twistedPairBody(wires).size()));
+        check(twistedPairBody(wires).empty(),
+              "cable body: a run drawn as its wires has no body, which is what it always was");
+        check(body.size() == 1, "cable body: asked for, the converged stretch is one body");
+        if (body.size() == 1) {
+        const std::vector<Vec2>& shell = body.front();
+        check(shell.size() > 3 && distance(shell.front(), shell.back()) < 1e-9,
+              "cable body: and it is closed, because it is a body and not a run of lines");
+
+        // IT STANDS A LITTLE OFF WHAT IT COVERS AND IS SHRUNK ONTO IT AT EACH END - eight 2.5 mm
+        // wires at a 3.75 pitch make a bundle 28.75 across, so half of it is 14.375, and the cover
+        // is a wire's width more than that in the middle and back down to it at the ends.
+        double widest = 0.0, atTheEnd = 0.0;
+        double from = 1e300, to = 0.0;
+        for (const Vec2& v : shell) {
+            widest = std::max(widest, std::abs(v.y));
+            from = std::min(from, v.x);
+            to = std::max(to, v.x);
+            if (std::abs(v.x - 55.0) < 1e-6) atTheEnd = std::max(atTheEnd, std::abs(v.y));
+        }
+        std::printf("  cable body: %.1f..%.1f along the run, %.3f half-width in the middle and "
+                    "%.3f where it meets the fan\n",
+                    from, to, widest, atTheEnd);
+        check(std::abs(from - 55.0) < 1e-6 && std::abs(to - 265.0) < 1e-6,
+              "cable body: it runs from the end of one fan to the start of the other, and no further");
+        check(std::abs(widest - 15.375) < 1e-6,
+              "cable body: standing a wire's width off the bundle it covers");
+        check(std::abs(atTheEnd - 14.375) < 1e-6,
+              "cable body: and shrunk back onto the bundle where it meets the fan");
+
+        // AND NO WIRE RUNS THROUGH IT. A wire drawn through a cable is a wire drawn through a cable.
+        // Counted by what CROSSES the middle, not by points landing in it: down the bundle a wire is
+        // one straight step from fan to fan with nothing measured along the way.
+        auto crossing = [](const Entity& e, double x) {
+            int n = 0;
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                for (size_t i = 1; i < strand.size(); ++i)
+                    if ((strand[i - 1].x - x) * (strand[i].x - x) <= 0.0 &&
+                        std::abs(strand[i - 1].x - strand[i].x) > 1e-9) {
+                        ++n;
+                        break;
+                    }
+            return n;
+        };
+        const int inTheMiddle = crossing(cable, 160.0);
+        const int wiresInTheMiddle = crossing(wires, 160.0);
+        std::printf("  cable body: %d wire line(s) cross the middle, against %d without it\n",
+                    inTheMiddle, wiresInTheMiddle);
+        check(inTheMiddle == 0, "cable body: no wire is drawn through the cable");
+        check(wiresInTheMiddle > 0,
+              "cable body: where it is not asked for, the wires run the whole way as before");
+
+        // THE FANS ARE UNTOUCHED, which is the whole condition on this: every wire end is where it
+        // was, so nothing landed on a pin has moved.
+        auto endsOf = [](const Entity& e) {
+            std::vector<double> ys;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                if (!s.empty() && s.front().x < 1e-6) ys.push_back(s.front().y);
+            std::sort(ys.begin(), ys.end());
+            return ys;
+        };
+        const std::vector<double> wasThere = endsOf(wires), stillThere = endsOf(cable);
+        bool same = wasThere.size() == stillThere.size() && !wasThere.empty();
+        for (size_t i = 0; same && i < wasThere.size(); ++i)
+            if (std::abs(wasThere[i] - stillThere[i]) > 1e-9) same = false;
+        std::printf("  cable body: %d wire end(s) at the start, and they %s where they were\n",
+                    int(stillThere.size()), same ? "are" : "are NOT");
+        check(same, "cable body: the fan is untouched - every wire ends where it always did");
         }
     }
 

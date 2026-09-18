@@ -4635,6 +4635,13 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistStripSpin_, twistStripLabel_, straightRun && editor_->twistStrip(),
                       editor_->twistStripLen() <= 1e-9,
                       editor_->twistStripLen() > 1e-9 ? editor_->twistStripLen() : fig.stripLen);
+        if (twistCableCheck_) {
+            twistCableCheck_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistCableCheck_);
+                twistCableCheck_->setChecked(editor_->twistCableBody());
+            }
+        }
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -9314,6 +9321,20 @@ void MainWindow::refreshProperties() {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistFlushLen"),
                                                            std::max(0.0, v));
                        });
+            // WHETHER THE CONVERGED STRETCH IS A CABLE under heatshrink, or the lines its wires make.
+            const bool covered =
+                e->meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable");
+            addCombo(QStringLiteral("Between the fans"),
+                     {QStringLiteral("Wires"), QStringLiteral("Cable body")},
+                     mv(QStringLiteral("twistBody")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (covered ? QStringLiteral("Cable body") : QStringLiteral("Wires")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMeta(QStringLiteral("twistBody"),
+                                                   t == QLatin1String("Cable body")
+                                                       ? QStringLiteral("cable")
+                                                       : QString());
+                     });
             // AND WHETHER THE ENDS ARE STRIPPED, and by how much: the insulation off the last of
             // each wire, back to bare conductor, which is how a wire is landed in a contact.
             const bool stripping = e->meta.value(QStringLiteral("twistStrip")).toBool();
