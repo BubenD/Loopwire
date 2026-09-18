@@ -6324,13 +6324,21 @@ int run_harness_tests() {
     {
         const PartsLibrary seed = seedLibrary();
         const std::vector<const LibraryPart*> allWires = seed.ofKind(PartKind::Wire);
-        // THE ALPHA WIRE HOOK-UP SHELF, which is what every figure below belongs to. The seed carries
-        // the Raychem Spec 55 shelf as well now - 600 V crosslinked ETFE, its own part numbers and its
-        // own resistances - and holding those up against Alpha's data sheet proved nothing except that
-        // they are not Alpha's. They have a shelf test of their own.
+        // THE ORIGINAL ALPHA HOOK-UP SET, which is what every figure below belongs to: the 300 V
+        // 1550-series wire the seed started life with, in 14 through 30 AWG.
+        //
+        // The seed carries two other shelves now, and neither answers to these figures. The Raychem
+        // Spec 55 shelf is 600 V crosslinked ETFE with its own part numbers and resistances. And
+        // Alpha's own 2626 and 3079 are 600 V, bend on five times their diameter rather than ten,
+        // and are 26 and 14 AWG only - they are Alpha Wire, so a test that picks its parts by the
+        // maker's name picks them up, and every figure here is wrong for them. Both have a shelf
+        // test of their own; this one is about the set it has always been about.
         std::vector<const LibraryPart*> wires;
         for (const LibraryPart* p : allWires)
-            if (p->mfrName == QLatin1String("Alpha Wire")) wires.push_back(p);
+            if (p->mfrName == QLatin1String("Alpha Wire") &&
+                !p->mfrPn.startsWith(QLatin1String("2626 ")) &&
+                !p->mfrPn.startsWith(QLatin1String("3079 ")))
+                wires.push_back(p);
         std::printf("    (seed library: %d part(s), %d of them wire, %d of those Alpha)\n",
                     int(seed.parts.size()), int(allWires.size()), int(wires.size()));
         check(wires.size() >= 10, "seed: ten wires to start from");
@@ -6340,6 +6348,13 @@ int run_harness_tests() {
             if (p->mfrPn.startsWith(QLatin1String("55A0111-"))) ++spec55;
         check(spec55 == 36,
               "seed: and the Spec 55 wire shelf beside it, twelve sizes in three colours");
+        // And Alpha's own 2626 and 3079, in every colour each is made in - eight and fifteen.
+        int alpha = 0;
+        for (const LibraryPart* p : allWires)
+            if (p->mfrPn.startsWith(QLatin1String("2626 ")) ||
+                p->mfrPn.startsWith(QLatin1String("3079 ")))
+                ++alpha;
+        check(alpha == 23, "seed: and the Alpha hook-up shelf, 2626 and 3079 in all their colours");
         // Every gauge from 14 to 30, and every one of them a real Alpha Wire part number with the
         // figures its data sheet gives.
         QSet<int> gauges;

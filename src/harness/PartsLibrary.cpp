@@ -14,6 +14,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <iterator>
+
 namespace Edraw_Desktop {
 namespace {
 
@@ -990,6 +992,7 @@ QJsonObject PartsLibrary::toJson() const {
     root[QStringLiteral("standardHeatshrink")] = standardHeatshrink;
     root[QStringLiteral("standardCables")] = standardCables;
     root[QStringLiteral("standardSpec55")] = standardSpec55;
+    root[QStringLiteral("standardAlphaHookup")] = standardAlphaHookup;
     QJsonArray arr;
     for (const LibraryPart& p : parts) {
         QJsonObject o;
@@ -1044,6 +1047,7 @@ void PartsLibrary::fromJson(const QJsonObject& root) {
     standardHeatshrink = root.value(QStringLiteral("standardHeatshrink")).toBool(false);
     standardCables = root.value(QStringLiteral("standardCables")).toBool(false);
     standardSpec55 = root.value(QStringLiteral("standardSpec55")).toBool(false);
+    standardAlphaHookup = root.value(QStringLiteral("standardAlphaHookup")).toBool(false);
     for (const auto& v : root.value(QStringLiteral("parts")).toArray()) {
         const QJsonObject o = v.toObject();
         LibraryPart p;
@@ -1462,6 +1466,9 @@ void PartsCatalog::openRemembered() {
         // And the Spec 55 shelf, for the same reason again: a library made before it existed has no
         // 55A0111 in it, and that is the wire half these harnesses are built from.
         if (p == def) stocked += ensureStandardSpec55(lib);
+        // And the Alpha hook-up shelf, which is the other half: 2626 where it is hot, 3079 where
+        // the current is.
+        if (p == def) stocked += ensureStandardAlphaHookup(lib);
         if (p == def && stocked > 0) lib.save(p);
         paths_ << p;
         libs_.push_back(lib);
@@ -1849,6 +1856,159 @@ int ensureStandardSpec55(PartsLibrary& lib) {
     if (lib.standardSpec55) return 0;
     const int added = addStandardSpec55(lib);
     lib.standardSpec55 = true;   // done, and recorded in the file: a size somebody deleted stays gone
+    return added;
+}
+
+// ---- Alpha Wire hook-up: 2626 and 3079, every colour --------------------------------------------
+//
+// Two wires and nothing between them, which is the point of stocking both: 2626 is 26 AWG on
+// nickel-plated strands under a fluoropolymer wall and goes to 300 C, and 3079 is 14 AWG on tinned
+// strands under a PVC wall and carries thirty times the current at a tenth of the temperature. A
+// harness wants the first where it runs past something hot and the second where it feeds something.
+//
+// Every figure is read off Alpha's own customer specification for the part - conductor, wall,
+// finished diameter, resistance, temperature range and bend radius - and converted once, in code,
+// from the inches it is written in. Nothing here is worked out from anything else.
+int addStandardAlphaHookup(PartsLibrary& lib) {
+    // A COLOUR AS ALPHA WRITES IT, and the two-letter code that goes in the part number.
+    //
+    // The code is NOT on the specification - the specification names the colours in words - so it is
+    // filled in here only for the ten solid colours whose Alpha code is the standard one every
+    // manufacturer of hook-up wire uses. For the light blue and the four striped colours it is left
+    // empty on purpose: the part is still stocked, because the specification says the wire is made
+    // in it, but the part number carries the colour in the words the specification uses rather than
+    // a suffix nobody has checked. A part number that is obviously a description is a question; one
+    // that looks like a code and is wrong is a wrong reel.
+    struct Colour {
+        const char* code;    // Alpha's suffix, or nullptr where it is not known here
+        const char* onSpec;  // exactly as the specification names it
+        const char* name;    // as a drawing office would write it
+    };
+    const Colour kWhite{"WH", "WHITE", "White"};
+    const Colour kBlack{"BK", "BLACK", "Black"};
+    const Colour kRed{"RD", "RED", "Red"};
+    const Colour kGreen{"GR", "GREEN", "Green"};
+    const Colour kYellow{"YL", "YELLOW", "Yellow"};
+    const Colour kBlue{"BL", "BLUE", "Blue"};
+    const Colour kBrown{"BR", "BROWN", "Brown"};
+    const Colour kOrange{"OR", "ORANGE", "Orange"};
+    const Colour kSlate{"SL", "SLATE", "Slate"};
+    const Colour kViolet{"VI", "VIOLET", "Violet"};
+    // 2626: the eight the specification lists.
+    const Colour colours2626[] = {kWhite, kBlack,  kRed,   kGreen,
+                                  kYellow, kBlue,  kBrown, kOrange};
+    // 3079: fifteen, the last five of them without a code here - see above.
+    const Colour colours3079[] = {kWhite,
+                                  kBlack,
+                                  kRed,
+                                  kGreen,
+                                  kYellow,
+                                  kBlue,
+                                  kBrown,
+                                  kOrange,
+                                  kSlate,
+                                  kViolet,
+                                  {nullptr, "LT BLUE", "Light blue"},
+                                  {nullptr, "GREEN/YELLOW", "Green/yellow"},
+                                  {nullptr, "YELLOW/GREEN", "Yellow/green"},
+                                  {nullptr, "WHITE/BLUE", "White/blue"},
+                                  {nullptr, "WHITE/BLACK", "White/black"}};
+
+    const double kKftToM = 304.8;   // the specifications give ohms per 1000 ft
+    auto mm = [](double in) { return QString::number(in * 25.4, 'f', 2); };
+    auto in3 = [](double in) { return QString::number(in, 'f', 3); };
+    const QString putUp = QStringLiteral("005");
+    const QString unchecked = QStringLiteral(
+        "ALPHA'S COLOUR SUFFIX FOR THIS COLOUR IS NOT ON THE SPECIFICATION, which names the colours "
+        "in words. The part number here carries the colour in those words rather than a code nobody "
+        "has checked; put Alpha's own suffix in before ordering against it.");
+
+    // One wire, everything about it that does not change with the colour.
+    struct Hookup {
+        const char* base;
+        int awg;
+        const char* stranding;
+        double condIn;        // bare conductor diameter
+        double wallIn;        // insulation wall, nominal
+        double odIn;          // finished diameter, nominal
+        double odTolIn;       // and what the specification allows either way
+        double dcrPerKft;     // conductor resistance at 20 C, nominal
+        const char* material;
+        const char* insulation;
+        const char* temp;
+        const char* spec;
+        const char* what;
+        const Colour* colours;
+        int count;
+    };
+    const Hookup wires[] = {
+        {"2626", 26, "19 x 38", 0.019, 0.007, 0.033, 0.002, 40.0,
+         "Nickel-plated copper (10 per cent)", "Fluoropolymer, 0.007 in wall", "-150 to +300",
+         "UL AWM style 11905 or 11540, 300 C / 600 V; sunlight, chemical and water resistant; CE "
+         "Low Voltage Directive 2014/35/EU",
+         "Alpha Wire 2626 hook-up wire, 26 AWG, fluoropolymer over nickel-plated copper, 300 C",
+         colours2626, int(std::size(colours2626))},
+        {"3079", 14, "41 x 30", 0.074, 0.032, 0.138, 0.004, 2.8, "Tinned copper",
+         "PVC, 0.032 in wall", "-40 to +105",
+         "UL AWM style 1015 and 1230, MTW, TW, VW-1, 600 V; CSA TEW-105 and AWM I A/B, FT1; IEC EN "
+         "60332-1; CE Low Voltage Directive 2014/35/EU",
+         "Alpha Wire 3079 hook-up wire, 14 AWG, PVC over tinned copper, 105 C", colours3079,
+         int(std::size(colours3079))}};
+
+    int added = 0;
+    for (const Hookup& w : wires) {
+        for (int i = 0; i < w.count; ++i) {
+            const Colour& c = w.colours[i];
+            const QString base = QString::fromLatin1(w.base);
+            const QString pn =
+                c.code ? QStringLiteral("%1 %2%3").arg(base, QString::fromLatin1(c.code), putUp)
+                       : QStringLiteral("%1 %2 %3").arg(base, QString::fromLatin1(c.onSpec), putUp);
+            if (hasPn(lib, pn)) continue;
+            LibraryPart& p = lib.add(PartKind::Wire);
+            p.description = QStringLiteral("%1, %2")
+                                .arg(QString::fromLatin1(w.what),
+                                     QString::fromLatin1(c.name).toLower());
+            p.mfrName = QStringLiteral("Alpha Wire");
+            p.mfrPn = pn;
+            p.unit = QStringLiteral("m");
+            p.params.insert(QStringLiteral("gaugeMode"), QStringLiteral("AWG"));
+            p.params.insert(QStringLiteral("gauge"), QString::number(w.awg));
+            p.params.insert(QStringLiteral("material"), QString::fromLatin1(w.material));
+            p.params.insert(QStringLiteral("conductor"), QStringLiteral("Stranded"));
+            p.params.insert(QStringLiteral("strands"), QString::fromLatin1(w.stranding));
+            p.params.insert(QStringLiteral("insulation"), QString::fromLatin1(w.insulation));
+            p.params.insert(QStringLiteral("voltage"), QStringLiteral("600"));
+            p.params.insert(QStringLiteral("od"), mm(w.odIn));
+            p.params.insert(QStringLiteral("resistance"),
+                            QString::number(w.dcrPerKft / kKftToM, 'f', 4));
+            // FIVE TIMES THE DIAMETER, which is what Alpha's own specification says for both of
+            // these - not the ten times the rest of the shelf assumes for want of being told.
+            p.params.insert(QStringLiteral("bendRadius"),
+                            QString::number(w.odIn * 25.4 * 5.0, 'f', 1));
+            p.params.insert(QStringLiteral("colour"), QString::fromLatin1(c.name));
+            p.params.insert(QStringLiteral("temp"), QString::fromLatin1(w.temp));
+            p.params.insert(QStringLiteral("spec"), QString::fromLatin1(w.spec));
+            QString notes =
+                QStringLiteral("Conductor %1 AWG, stranding %2, bare diameter %3 in (%4 mm). "
+                               "Insulation %5. Finished diameter %6 in +/- %7 in (%8 mm). Conductor "
+                               "resistance %9 ohm/1000 ft at 20 C, nominal. Bend radius 5 x the "
+                               "finished diameter. Colour on the specification: %10.")
+                    .arg(QString::number(w.awg), QString::fromLatin1(w.stranding), in3(w.condIn),
+                         mm(w.condIn), QString::fromLatin1(w.insulation), in3(w.odIn),
+                         in3(w.odTolIn), mm(w.odIn), QString::number(w.dcrPerKft, 'f', 1),
+                         QString::fromLatin1(c.onSpec));
+            if (!c.code) notes += QStringLiteral(" ") + unchecked;
+            p.params.insert(QStringLiteral("notes"), notes);
+            ++added;
+        }
+    }
+    return added;
+}
+
+int ensureStandardAlphaHookup(PartsLibrary& lib) {
+    if (lib.standardAlphaHookup) return 0;
+    const int added = addStandardAlphaHookup(lib);
+    lib.standardAlphaHookup = true;   // once, and recorded: a colour somebody deleted stays gone
     return added;
 }
 
@@ -2242,6 +2402,8 @@ PartsLibrary seedLibrary() {
     ensureStandardCables(lib);
     // And the Spec 55 shelf: 55A0111 wire, and the pair and screened pair built from it.
     ensureStandardSpec55(lib);
+    // And the Alpha hook-up shelf: 2626 and 3079, in every colour each is made in.
+    ensureStandardAlphaHookup(lib);
     return lib;
 }
 

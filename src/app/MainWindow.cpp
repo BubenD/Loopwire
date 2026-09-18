@@ -4469,8 +4469,18 @@ void MainWindow::updateMechanicalRibbonGroups() {
         cell->setVisible(!armed || carriesSettings);
         // The cell that carries the settings has to stay, but its BUTTON does not: that is the one
         // icon that was still on the ribbon beside the fields, kept alive by the cell around it.
-        for (QToolButton* b : cell->findChildren<QToolButton*>())
+        //
+        // EXCEPT THE LITTLE A ON A FIELD, which is part of the field and not one of the icons this
+        // is putting away. It is a tool button because that is what a two-letter button is made of,
+        // and sweeping up every tool button in the cell swept up all eight of them - so on the
+        // ribbon, where the fields are only ever seen with a tool armed, the A never appeared at
+        // all. It is told apart by the cell it sits in; see autoBeside.
+        for (QToolButton* b : cell->findChildren<QToolButton*>()) {
+            if (b->parentWidget() &&
+                b->parentWidget()->objectName() == QLatin1String("autoFieldCell"))
+                continue;
             b->setVisible(!armed);
+        }
     }
     if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(false);
 }

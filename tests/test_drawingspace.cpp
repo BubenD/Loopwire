@@ -963,9 +963,22 @@ int run_drawingspace_tests() {
         // hopeless for setting: once a number has been typed in, the only ways back to Auto were to
         // hold the down arrow all the way to the end of the range, or to know that typing a number
         // below the minimum lands there. Neither is a thing to expect anybody to know.
+        //
+        // WITH A TOOL ARMED, which is the only way these fields are ever seen. The Special group
+        // puts its icons away while a tool is in use, and it did that by hiding every tool button in
+        // the cell - which is what an A is made of, so on the ribbon it never appeared at all. A
+        // test that looks at the fields with nothing armed does not see that, and did not.
+        for (QTabWidget* tw : win.findChildren<QTabWidget*>())
+            for (int i = 0; i < tw->count(); ++i)
+                if (tw->tabText(i).contains(QStringLiteral("Harness"), Qt::CaseInsensitive) &&
+                    tw->tabText(i).contains(QStringLiteral("mech"), Qt::CaseInsensitive))
+                    tw->setCurrentIndex(i);
+        if (Editor* ed = win.findChild<Editor*>()) ed->setTool(ToolId::WiresRun);
+        QApplication::processEvents();
         QList<QDoubleSpinBox*> autoFields;
         for (QDoubleSpinBox* s : win.findChildren<QDoubleSpinBox*>())
-            if (s->specialValueText() == QStringLiteral("Auto")) autoFields << s;
+            if (s->specialValueText() == QStringLiteral("Auto") && s->isVisible())
+                autoFields << s;
         std::printf("  auto: %lld field(s) whose lowest value is Auto\n",
                     static_cast<long long>(autoFields.size()));
         check(!autoFields.isEmpty(), "auto: there are fields that can be left to the drawing");
@@ -978,15 +991,16 @@ int run_drawingspace_tests() {
             QWidget* cell = s->parentWidget();
             if (!cell) continue;
             for (QToolButton* b : cell->findChildren<QToolButton*>())
-                if (b->text() == QStringLiteral("A")) {
+                if (b->text() == QStringLiteral("A") && b->isVisible()) {
                     ++withA;
                     if (!anA) { anA = b; itsField = s; }
                     break;
                 }
         }
-        std::printf("  auto: %d of them have an A beside the arrows\n", withA);
+        std::printf("  auto: %d of them show an A beside the arrows\n", withA);
         check(withA == autoFields.size(),
-              "auto: every field that can be left to the drawing has an A to leave it there");
+              "auto: every field on screen that can be left to the drawing shows an A to leave it "
+              "there - including on the ribbon, with the tool that uses it armed");
 
         // AND IT PUTS THE FIELD BACK TO AUTO, and lights up while the field is on it.
         if (anA && itsField) {

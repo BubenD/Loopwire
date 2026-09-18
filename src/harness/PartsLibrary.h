@@ -262,6 +262,8 @@ struct PartsLibrary {
     bool standardCables = false;
     // And the Spec 55 shelf: 55A0111 wire, 55A0121 pair and 55A1121 screened pair, every size.
     bool standardSpec55 = false;
+    // And the Alpha Wire hook-up shelf: 2626 and 3079, in every colour each is made in.
+    bool standardAlphaHookup = false;
 
     // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
@@ -368,6 +370,12 @@ int addStandardCables(PartsLibrary& lib);
 // written in - the outside diameters above all, since that is what a bundle is added up from.
 int addStandardSpec55(PartsLibrary& lib);
 
+// THE ALPHA WIRE HOOK-UP SHELF: 2626, the 26 AWG nickel-plated PTFE wire that goes where it is hot,
+// and 3079, the 14 AWG tinned PVC wire that carries the current - each in every colour Alpha's own
+// specification lists it in, which is what "all colours" means for these two. The figures are read
+// off Alpha's customer specifications and converted from the inches they are written in.
+int addStandardAlphaHookup(PartsLibrary& lib);
+
 // Tie a connector and a contact together, from whichever end the user was looking at. Writes BOTH sides where
 // both parts can be reached, so the tie shows on either part when it is opened on its own; passing an empty
 // contact unties whatever the connector had, and the other way about.
@@ -387,6 +395,8 @@ int ensureStandardHeatshrink(PartsLibrary& lib);
 int ensureStandardCables(PartsLibrary& lib);
 // And the same for the Spec 55 shelf: once per library, recorded in the file.
 int ensureStandardSpec55(PartsLibrary& lib);
+// And the same for the Alpha hook-up shelf: once per library, recorded in the file.
+int ensureStandardAlphaHookup(PartsLibrary& lib);
 
 // The standard schematic symbol for the kinds that have one - the components a harness carries in
 // line: a resistor, a capacitor, a coil, a ferrite bead. Drawn to the same scale as the rest of the

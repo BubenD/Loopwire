@@ -350,6 +350,110 @@ int run_heatshrink_tests() {
               "spec55: a freshly seeded library has the shelf on it");
     }
 
+    // ---- the Alpha hook-up shelf: 2626 and 3079, in every colour they are made in ----------------
+    {
+        // Two wires at the far ends of what a harness needs: 2626 is 26 AWG on nickel-plated strands
+        // under a fluoropolymer wall and goes to 300 C, and 3079 is 14 AWG on tinned strands under
+        // PVC and carries the current. Every figure checked here is off Alpha's own customer
+        // specification for the part, because the outside diameter is what a bundle is added up from.
+        PartsLibrary lib;
+        const int added = addStandardAlphaHookup(lib);
+        const auto a2626 = family(lib, QStringLiteral("2626 "));
+        const auto a3079 = family(lib, QStringLiteral("3079 "));
+        std::printf("  alpha: %d parts - %d of 2626, %d of 3079\n", added, int(a2626.size()),
+                    int(a3079.size()));
+        // The specification lists eight colours for 2626 and fifteen for 3079.
+        check(a2626.size() == 8, "alpha: 2626 in the eight colours its specification lists");
+        check(a3079.size() == 15, "alpha: 3079 in the fifteen its specification lists");
+        check(added == 23, "alpha: and that is the whole shelf");
+
+        auto byPn = [&lib](const QString& pn) -> const LibraryPart* {
+            for (const LibraryPart& p : lib.parts)
+                if (p.mfrPn == pn) return &p;
+            return nullptr;
+        };
+        // THE TWO PART NUMBERS THAT WERE ASKED FOR BY NAME are spelled the way they were asked for.
+        const LibraryPart* red = byPn(QStringLiteral("2626 RD005"));
+        const LibraryPart* black = byPn(QStringLiteral("3079 BK005"));
+        check(red && black, "alpha: 2626 RD005 and 3079 BK005 are on the shelf, spelled that way");
+        if (!red || !black) return shrinkFailures;
+
+        // AND THE FIGURES ARE THE SPECIFICATION'S, CONVERTED ONCE. 2626 is .033 in over the
+        // insulation, which is 0.84 mm; 3079 is .138 in, which is 3.51 mm. Resistance is given per
+        // 1000 ft and kept per metre: 40 / 304.8 and 2.8 / 304.8.
+        std::printf("  alpha: 2626 od %s mm R %s ohm/m; 3079 od %s mm R %s ohm/m\n",
+                    qPrintable(red->params.value(QStringLiteral("od"))),
+                    qPrintable(red->params.value(QStringLiteral("resistance"))),
+                    qPrintable(black->params.value(QStringLiteral("od"))),
+                    qPrintable(black->params.value(QStringLiteral("resistance"))));
+        check(red->params.value(QStringLiteral("od")) == QLatin1String("0.84"),
+              "alpha: .033 in over 2626 is 0.84 mm");
+        check(black->params.value(QStringLiteral("od")) == QLatin1String("3.51"),
+              "alpha: .138 in over 3079 is 3.51 mm");
+        check(red->params.value(QStringLiteral("resistance")) == QLatin1String("0.1312"),
+              "alpha: 40 ohm/1000 ft is 0.1312 ohm/m");
+        check(black->params.value(QStringLiteral("resistance")) == QLatin1String("0.0092"),
+              "alpha: and 2.8 ohm/1000 ft is 0.0092 ohm/m");
+        check(red->params.value(QStringLiteral("gauge")) == QLatin1String("26") &&
+                  red->params.value(QStringLiteral("strands")) == QLatin1String("19 x 38"),
+              "alpha: 2626 is 26 AWG, 19 x 38");
+        check(black->params.value(QStringLiteral("gauge")) == QLatin1String("14") &&
+                  black->params.value(QStringLiteral("strands")) == QLatin1String("41 x 30"),
+              "alpha: 3079 is 14 AWG, 41 x 30");
+        check(red->params.value(QStringLiteral("temp")) == QLatin1String("-150 to +300") &&
+                  black->params.value(QStringLiteral("temp")) == QLatin1String("-40 to +105"),
+              "alpha: with the temperature range each is rated over");
+        // FIVE TIMES THE DIAMETER, which is what both specifications say - the rest of the shelf
+        // assumes ten for want of being told, and these were told.
+        check(red->params.value(QStringLiteral("bendRadius")) == QLatin1String("4.2") &&
+                  black->params.value(QStringLiteral("bendRadius")) == QLatin1String("17.5"),
+              "alpha: and a bend radius of five times the finished diameter, as each says");
+        check(red->kind == PartKind::Wire && black->kind == PartKind::Wire,
+              "alpha: both are filed as wire, so the bundle tool offers them as wire");
+
+        // A COLOUR WHOSE ALPHA SUFFIX IS NOT ON THE SPECIFICATION IS NOT GIVEN ONE HERE. The
+        // specification names its colours in words; the two-letter suffix is Alpha's own and is not
+        // on it. For the ten solid colours the suffix is the standard one, and for the light blue
+        // and the four striped ones it is not filled in with a guess: the part is stocked, because
+        // the specification says the wire is made in it, and the part number carries the colour in
+        // the specification's own words so that it reads as a question rather than as a code.
+        const LibraryPart* lightBlue = byPn(QStringLiteral("3079 LT BLUE 005"));
+        check(lightBlue != nullptr,
+              "alpha: the light blue 3079 is stocked, because the specification says it is made");
+        check(lightBlue &&
+                  lightBlue->params.value(QStringLiteral("notes"))
+                      .contains(QLatin1String("NOT ON THE SPECIFICATION")),
+              "alpha: and it says so, rather than carrying a suffix nobody has checked");
+        check(byPn(QStringLiteral("3079 GREEN/YELLOW 005")) &&
+                  byPn(QStringLiteral("3079 WHITE/BLACK 005")),
+              "alpha: the striped colours are stocked the same way");
+        check(byPn(QStringLiteral("3079 SL005")) && byPn(QStringLiteral("3079 VI005")),
+              "alpha: and slate and violet, which 3079 has and 2626 has not, carry their suffixes");
+        check(byPn(QStringLiteral("2626 SL005")) == nullptr,
+              "alpha: 2626 is not stocked in a colour its specification does not list");
+
+        // ADDING IT TWICE DOES NOT PUT A SECOND ONE ON EVERY BILL OF MATERIALS.
+        const size_t was = lib.parts.size();
+        check(addStandardAlphaHookup(lib) == 0 && lib.parts.size() == was,
+              "alpha: putting the shelf in again adds nothing");
+
+        // A LIBRARY MADE BEFORE THE SHELF EXISTED gets it once, and remembers.
+        PartsLibrary old;
+        check(!old.standardAlphaHookup, "alpha: a library written before it has no flag");
+        check(ensureStandardAlphaHookup(old) == 23 && old.standardAlphaHookup,
+              "alpha: opening it puts the shelf in and records that it was done");
+        check(ensureStandardAlphaHookup(old) == 0, "alpha: opening it again adds nothing");
+        PartsLibrary reread;
+        reread.fromJson(old.toJson());
+        check(reread.standardAlphaHookup, "alpha: the flag is written and read back");
+
+        // AND A LIBRARY THAT STARTS FROM NOTHING STARTS WITH IT.
+        const PartsLibrary fresh = seedLibrary();
+        check(!family(fresh, QStringLiteral("2626 ")).empty() &&
+                  !family(fresh, QStringLiteral("3079 ")).empty(),
+              "alpha: a freshly seeded library has both of them on it");
+    }
+
     if (shrinkFailures == 0) std::printf("  -> ok\n");
     else std::printf("  -> %d failed\n", shrinkFailures);
     return shrinkFailures;
