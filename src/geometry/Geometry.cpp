@@ -292,13 +292,22 @@ bool filletRadiusFits(const std::vector<Vec2>& pts, double radius) {
 
 std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
                                            const std::vector<double>& radii,
-                                           int arcSegments) {
+                                           int arcSegments,
+                                           std::vector<double>* bentAt) {
     const int n = static_cast<int>(pts.size());
+    if (bentAt) bentAt->assign(pts.size(), 0.0);
     if (n < 3) return pts;
     constexpr double kPi = 3.14159265358979323846;
 
     std::vector<Vec2> out;
-    out.push_back(pts[0]);
+    // How tightly the route turns at each point that comes out, signed by which way it turns. Nought
+    // on the straight runs and on the joints at either end of an arc.
+    std::vector<double> bent;
+    auto emit = [&](const Vec2& p, double r) {
+        out.push_back(p);
+        bent.push_back(r);
+    };
+    emit(pts[0], 0.0);
     for (int i = 1; i < n - 1; ++i) {
         const double radius = (i < static_cast<int>(radii.size())) ? radii[i] : 0.0;
         const Vec2 p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
@@ -307,7 +316,7 @@ std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
         const double cosT = std::clamp(dot(d1, d2), -1.0, 1.0);
         const double theta = std::acos(cosT);   // interior angle at the corner
         if (radius <= 0.0 || theta < 1e-3 || theta > kPi - 1e-3) {
-            out.push_back(p1);
+            emit(p1, 0.0);
             continue;
         }
 
@@ -327,14 +336,18 @@ std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
         while (sweep <= -kPi) sweep += 2 * kPi;
         while (sweep > kPi) sweep -= 2 * kPi;
 
-        out.push_back(t1); // arc starts tangent to the straight run coming in
+        // Signed by which way the arc goes round: to the left is positive, which is the side a
+        // left-hand normal points to.
+        const double signedR = sweep >= 0.0 ? r : -r;
+        emit(t1, signedR); // arc starts tangent to the straight run coming in
         for (int s = 1; s < arcSegments; ++s) {
             const double a = a1 + sweep * s / arcSegments;
-            out.push_back({c.x + r * std::cos(a), c.y + r * std::sin(a)});
+            emit({c.x + r * std::cos(a), c.y + r * std::sin(a)}, signedR);
         }
-        out.push_back(t2); // arc ends tangent to the straight run going out
+        emit(t2, signedR); // arc ends tangent to the straight run going out
     }
-    out.push_back(pts[n - 1]);
+    emit(pts[n - 1], 0.0);
+    if (bentAt) *bentAt = bent;
     return out;
 }
 
@@ -380,9 +393,11 @@ std::vector<Vec2> roundedPolygonPerCorner(const std::vector<Vec2>& pts,
 }
 
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
-                                  int arcSegments) {
+                                  int arcSegments, std::vector<double>* bentAt) {
+    if (bentAt) bentAt->assign(pts.size(), 0.0);
     if (radius <= 0.0) return pts;
-    return roundedPolylinePerCorner(pts, std::vector<double>(pts.size(), radius), arcSegments);
+    return roundedPolylinePerCorner(pts, std::vector<double>(pts.size(), radius), arcSegments,
+                                    bentAt);
 }
 
 namespace {

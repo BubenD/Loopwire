@@ -328,6 +328,22 @@ struct TwistFrames {
     std::vector<Vec2> pos;       // where the path is, at each place it is measured
     std::vector<Vec2> n;         // and which way is across it
     std::vector<double> u;       // how far along it that is
+    // HOW TIGHTLY THE ROUTE ITSELF IS TURNING at each of those places: the radius of the circle
+    // through it and its two neighbours, signed - positive with the centre of the turn on the side
+    // the normal points to. Nought is straight. A wire sitting further off the middle than that
+    // radius would have to bend backwards to stay in its lane, which draws as a loop.
+    std::vector<double> bend;
+    // ...and, worked out from it once for the whole run, how far off the middle a wire is ALLOWED to
+    // sit at each place, either side. A wire further off than the turn's own radius would have to
+    // bend backwards to stay in its lane, and draws as a loop. The limits ease in and out, so the
+    // wires crowd together going into a tight bend and open again coming out, which is what a loom
+    // does; stepping straight to the limit at one place and back at the next draws a burst of
+    // crossed lines at exactly the corner that needed the holding.
+    std::vector<double> holdHi, holdLo;
+    // ...and whether the route was ROUNDED at all. Where a corner has been asked for, a corner is
+    // what the wires make of it; the holding-back below is for bends too tight to carry a bundle,
+    // not for corners somebody has asked for.
+    bool bendsRounded = false;
     int wires = 2;               // how many are laid up together
     double reach = 0.0;          // how far a wire's middle swings from the middle of the bundle
     double thick = 0.0;          // half a wire's own thickness
@@ -422,13 +438,25 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // straight run is the wires side by side, not the cable width - and every wire in it then
     // turns on that radius or wider. Unset, the old figure stands and nothing already drawn moves.
     //
+    // AND UNSET IS 1.2 TIMES THE BUNDLE AS DRAWN, which for a laid-up pair is the figure it always
+    // was and for a straight run is not. A straight run's width is its wires side by side and has
+    // nothing to do with the cable width the old figure was taken from: nine four-millimetre wires
+    // are fifty-two across and were being turned on a ten-millimetre radius, so the wires on the
+    // inside of the corner were bent round a radius of MINUS thirteen - inside out - which is where
+    // the little triangles at every knee of a wide run came from.
+    //
     // AND NOUGHT IS A SHARP CORNER. Nought used to mean "nobody has said", which left no way at all
     // to ask for a corner - every run was bent whether the drawing wanted it bent or not. Saying
     // nothing is now saying nothing, and nought is a figure like any other: no fillet.
+    const double bundleHalf = f.reach + f.thick;
     const QJsonValue kneeAsked = pair.meta.value(QStringLiteral("twistKnee"));
     const double knee = kneeAsked.isUndefined() ? -1.0 : std::max(0.0, kneeAsked.toDouble(0.0));
-    if (path.size() > 2 && knee != 0.0)
-        path = roundedPolyline(path, knee > 0.0 ? knee + f.reach + f.thick : w * 1.2, 10);
+    f.bendsRounded = path.size() > 2 && knee != 0.0;
+    std::vector<double> pathBend(path.size(), 0.0);
+    if (f.bendsRounded)
+        path = roundedPolyline(path,
+                               knee > 0.0 ? knee + bundleHalf : std::max(w * 1.2, bundleHalf * 2.4),
+                               10, &pathBend);
 
     std::vector<double> at{0.0};
     for (size_t i = 1; i < path.size(); ++i)
@@ -604,12 +632,61 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     const double delta = std::max(1e-9, std::min(0.02 * f.len, 0.05 * w));
     f.pos.reserve(us.size());
     f.n.reserve(us.size());
+    f.bend.reserve(us.size());
     f.u = us;
+    // HOW TIGHTLY THE ROUTE TURNS at a distance along it, taken from the rounding that made it. It
+    // cannot be measured off the result: the result is a polyline, and three points off it a
+    // millimetre apart describe the corner between two of an arc's own ten segments rather than the
+    // arc - which reads as a radius of three where the arc is twenty-five.
+    auto bendAt = [&](double u) {
+        const double uu = std::clamp(u, 0.0, f.len);
+        size_t seg = static_cast<size_t>(std::upper_bound(at.begin(), at.end(), uu) - at.begin());
+        if (seg > 0) --seg;
+        seg = std::min(seg, path.size() - 2);
+        const double a = pathBend[seg], b = pathBend[seg + 1];
+        // A step with a straight end is a straight step: the joints at either end of an arc carry
+        // nought, so the run up to a bend is not treated as part of it.
+        if (std::abs(a) < 1e-12 || std::abs(b) < 1e-12) return 0.0;
+        return std::abs(a) < std::abs(b) ? a : b;
+    };
     for (const double u : us) {
         f.pos.push_back(posAt(u));
         Vec2 d = posAt(u + delta) - posAt(u - delta);
         const double dl = d.length();
         f.n.push_back(dl < 1e-12 ? Vec2{0.0, 1.0} : Vec2{d.x / dl, d.y / dl}.perp());
+        f.bend.push_back(bendAt(u));
+    }
+
+    // HOW FAR OFF THE MIDDLE A WIRE MAY SIT, at each place. Its own radius is the middle's less how
+    // far off it is, so a wire further off than the middle's radius is turning on a NEGATIVE one -
+    // inside out - and draws as a loop round the corner, one loop per wire. That is the spiral a run
+    // turned back on itself a few millimetres from where it started used to make, and the little
+    // triangles at the knee of any run wide enough for its bend. A loom cannot do it either: the
+    // wires on the inside of a tight bend crowd together, so that is what is drawn.
+    //
+    // Only where the route was BENT. Somebody who asked for a corner is asking for what a corner
+    // does to the wires round it, and gets it.
+    const double hold = f.thick * 1.5;
+    const size_t places = f.bend.size();
+    f.holdHi.assign(places, 1e18);
+    f.holdLo.assign(places, -1e18);
+    if (f.bendsRounded)
+        for (size_t i = 0; i < places; ++i) {
+            const double r = f.bend[i];
+            if (r > 1e-9) f.holdHi[i] = std::max(0.0, r - hold);
+            else if (r < -1e-9) f.holdLo[i] = std::min(0.0, r + hold);
+        }
+    // AND IT COMES ON GRADUALLY: a wire closes on the bundle at no more than one across to one
+    // along, coming and going, which is the slant everything else in the drawing crowds at.
+    for (size_t i = 1; i < places; ++i) {
+        const double reach = f.u[i] - f.u[i - 1];
+        f.holdHi[i] = std::min(f.holdHi[i], f.holdHi[i - 1] + reach);
+        f.holdLo[i] = std::max(f.holdLo[i], f.holdLo[i - 1] - reach);
+    }
+    for (size_t i = places; i-- > 1;) {
+        const double reach = f.u[i] - f.u[i - 1];
+        f.holdHi[i - 1] = std::min(f.holdHi[i - 1], f.holdHi[i] + reach);
+        f.holdLo[i - 1] = std::max(f.holdLo[i - 1], f.holdLo[i] - reach);
     }
     return true;
 }
@@ -750,54 +827,62 @@ double twistDepth(const TwistFrames& f, int k, double u) {
 // stretch changes over the corner faster than the wire turns. Capping the stretch stopped the lips
 // being spikes; it did not stop them being lips.
 //
-// Across the wire is where the wire is GOING, turned by a right angle. It is going one step along
-// the run for every step the fan moves it across - the slope below, which is the same figure the
-// stretch was worked out from - so the wire runs along (T + n*slope) and across it is that turned,
-// which is (n - T*slope), both over the length of it. On a straight slant that is one direction the
-// whole way, so the edges are straight and exactly a width apart. Through a curve it turns with the
-// curve, so they are parallel to it and no wider. And the drawn width is now right everywhere
-// rather than right up to a cap, so nothing has to be capped and nothing spikes.
+// So the wire's own line is walked first and then OFFSET, the way any line is offset: across each
+// STEP of it, and at each place the mitre of the two steps meeting there - reaching out by one over
+// the cosine of half the turn, which is what keeps both edges half a width from the wire on both
+// sides of it. On a straight slant every mitre is one and the edges are exactly parallel to the
+// wire, so a straight slant is drawn straight. Through a curve they turn with it and are no wider.
+// Nothing is capped except the mitre itself, at four, so a wire doubling back is blunted rather
+// than thrown out to infinity - and nothing spikes.
 //
 // The ENDS do not move, which is what this has to leave alone: a wire is landed square, so it runs
-// parallel to the run where it ends, the slope there is nought, and across the wire and across the
-// run are the same direction. The strand still finishes flush with the run it belongs to.
-//
-// Laid up, the offset stays along the run's normal exactly as it was. A woven pair is a cable of a
-// stated width and the drawing of it is that width; the wires crossing inside it are not landed on
-// anything and their edges were never the thing being read.
+// parallel to the run where it ends and across the wire and across the run are the same direction
+// there. The strand still finishes flush with the run it belongs to.
 std::vector<Vec2> twistEdge(const TwistFrames& f, int k, double edge, size_t from, size_t to) {
     std::vector<Vec2> line;
     line.reserve(to - from + 1);
-    // MEASURED WITHIN THE STRETCH THE PLACE IS IN, never across the join between two of them.
     //
-    // A run is a fan, then the bundle, then the other fan, and the wire changes what it is doing at
-    // each join. A step measured across one of those reads as a wire half-turning where it is in
-    // fact straight: at the end of an eased fan the wire has settled level, and a step that reaches
-    // past it into the bundle averages the last of the fan with the bundle and finds a slant that is
-    // not there. It is a thousandth of a millimetre, and a thousandth of a millimetre is enough to
-    // make the two ends of the bundle no longer the same distance from the middle of it - which is
-    // how a band dropped exactly across the middle of a run came to find half its wires pointing one
-    // way and half the other, and fitted nothing.
-    const double h = std::max(1e-6, f.len * 1e-4);
-    for (size_t i = from; i <= to && i < f.pos.size(); ++i) {
-        const double u = f.u[i];
-        const Vec2 n = f.n[i];
-        Vec2 side = n;
-        if (f.straight) {
-            double lo = u, hi = u;
-            if (u <= f.lead) {
-                lo = std::max(0.0, u - h);
-                hi = std::min(f.lead, u + h);
-            } else if (u >= f.len - f.leadB) {
-                lo = std::max(f.len - f.leadB, u - h);
-                hi = std::min(f.len, u + h);
-            }
-            const double slope =
-                hi > lo ? (twistOffset(f, k, hi) - twistOffset(f, k, lo)) / (hi - lo) : 0.0;
-            const Vec2 along = n.perp() * -1.0;   // perp of the normal is the run, backwards
-            side = (n - along * slope) / std::sqrt(1.0 + slope * slope);
-        }
-        line.push_back(f.pos[i] + n * twistOffset(f, k, u) + side * (edge * f.thick));
+    // AND NO WIRE IS BENT BACKWARDS - see holdHi and holdLo, which say how far off the middle a wire
+    // may sit at each place for the turn there to be able to carry it.
+    auto held = [&](double want, size_t i) {
+        if (i >= f.holdHi.size()) return want;
+        return std::clamp(want, f.holdLo[i], f.holdHi[i]);
+    };
+    const size_t last = std::min(to, f.pos.size() - 1);
+    if (f.pos.empty() || last < from) return line;
+    // WHERE THE WIRE ACTUALLY IS, at each place, held back where the bend cannot carry it.
+    const size_t count = last - from + 1;
+    std::vector<Vec2> mid(count);
+    for (size_t i = from; i <= last; ++i)
+        mid[i - from] = f.pos[i] + f.n[i] * held(twistOffset(f, k, f.u[i]), i);
+    // Laid up, the offset stays along the run's normal exactly as it always was. A woven pair is a
+    // cable of a stated width and the drawing of it is that width; the wires crossing inside it are
+    // not landed on anything and their edges were never the thing being read.
+    if (!f.straight || count < 2) {
+        for (size_t j = 0; j < count; ++j) line.push_back(mid[j] + f.n[from + j] * (edge * f.thick));
+        return line;
+    }
+    // WHICH WAY IS ACROSS EACH STEP of the wire, taken the same way round as the run's own normal so
+    // that the two edges stay the same two edges they were.
+    std::vector<Vec2> across(count - 1);
+    for (size_t j = 0; j + 1 < count; ++j) {
+        const Vec2 d = mid[j + 1] - mid[j];
+        const double dl = d.length();
+        across[j] = dl < 1e-12 ? (j > 0 ? across[j - 1] : f.n[from]) : (d / dl).perp();
+    }
+    for (size_t j = 0; j < count; ++j) {
+        const Vec2& step = across[std::min(j, across.size() - 1)];
+        Vec2 m = j == 0 ? across.front()
+                 : j + 1 == count ? across.back()
+                                  : across[j - 1] + across[j];
+        const double ml = m.length();
+        m = ml < 1e-12 ? step : m / ml;
+        // THE MITRE: at a place where the wire turns, an edge has to reach further out than half a
+        // width to stay half a width from the wire on both sides of the turn - by one over the
+        // cosine of HALF the turn. Capped at four, so a wire doubling back on itself is blunted
+        // rather than thrown out to infinity.
+        const double cosHalf = std::max(0.25, dot(m, step));
+        line.push_back(mid[j] + m * (edge * f.thick / cosHalf));
     }
     return line;
 }

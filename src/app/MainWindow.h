@@ -44,6 +44,7 @@ class QToolButton;
 class QPlainTextEdit;
 class QFontComboBox;
 class QDoubleSpinBox;
+class QAbstractSpinBox;
 class QSpinBox;
 class QButtonGroup;
 class QHBoxLayout;
@@ -839,6 +840,13 @@ private:
     QDoubleSpinBox* twistFanKneeSpin_ = nullptr;
     QLabel* twistFanKneeLabel_ = nullptr;
     QCheckBox* twistSidesCheck_ = nullptr;
+    // A FIELD WHOSE LOWEST VALUE IS "AUTO" GETS A LITTLE A BESIDE IT. Auto is at the bottom of the
+    // range, so the only way back to it was to hold the down arrow, or to know that typing a number
+    // below the minimum lands there - neither of which is a thing to expect anybody to know. The A
+    // puts the field back to Auto in one click and lights up while it is there, so the field also
+    // says which it is at a glance.
+    QWidget* autoBeside(QAbstractSpinBox* field);
+    static QWidget* autoFieldCell(QWidget* field);
     QDoubleSpinBox* twistLaneBSpin_ = nullptr;
     QLabel* twistLaneBLabel_ = nullptr;
     QDoubleSpinBox* twistFanBSpin_ = nullptr;

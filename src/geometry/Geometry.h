@@ -91,15 +91,20 @@ std::vector<Vec2> offsetClosedPolygon(const std::vector<Vec2>& pts, double dist)
 // Replace each interior corner of a polyline with a tangent fillet arc of the
 // given radius (arc approximated by line segments). radius <= 0 returns the
 // points unchanged. The setback is clamped to neighbouring segment lengths.
+// bentAt, if given, comes back the same length as the result: for each point, the SIGNED radius of
+// the arc it belongs to - positive where the turn is to the left - and nought where the polyline is
+// straight there. Anything that has to know how tightly a route turns needs to be told: measuring it
+// off the result finds the corner between two of an arc's own segments, not the arc.
 std::vector<Vec2> roundedPolyline(const std::vector<Vec2>& pts, double radius,
-                                  int arcSegments = 10);
+                                  int arcSegments = 10, std::vector<double>* bentAt = nullptr);
 
 // Like roundedPolyline but with an independent radius per interior corner.
 // radii[i] is the fillet radius at vertex i (0 = sharp); entries [0] and the last
 // (the endpoints) are ignored. Each arc is tangent to both adjoining straight runs.
 std::vector<Vec2> roundedPolylinePerCorner(const std::vector<Vec2>& pts,
                                            const std::vector<double>& radii,
-                                           int arcSegments = 10);
+                                           int arcSegments = 10,
+                                           std::vector<double>* bentAt = nullptr);
 
 // Like roundedPolylinePerCorner but for a CLOSED polygon: EVERY vertex is a corner
 // (the loop wraps), so rects/polygons can have per-corner fillets. Returns the

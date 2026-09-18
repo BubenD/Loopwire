@@ -257,7 +257,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 s->setMinimumWidth(66);
                 s->setSpecialValueText(QStringLiteral("auto"));
                 og->addWidget(l, row, 0);
-                og->addWidget(s, row, 1);
+                og->addWidget(autoBeside(s), row, 1);
                 *out = s;
                 return s;
             };
@@ -415,7 +415,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "How far apart the wires sit where they are spread out, centre to centre. Auto "
                     "is half again the pitch they run at packed in the run."));
                 og->addWidget(twistLaneLabel_, 0, 3);
-                og->addWidget(twistLaneSpin_, 0, 4);
+                og->addWidget(autoBeside(twistLaneSpin_), 0, 4);
                 connect(twistLaneSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistLane(v);
                     canvas_->update();   // a pinned run re-draws at the new spacing
@@ -440,7 +440,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "The rest are drawn running into it and stopping, which is how a bundle of many "
                     "wires is drawn as a run of few. All keeps every wire."));
                 og->addWidget(twistTrunkLabel_, 1, 3);
-                og->addWidget(twistTrunkSpin_, 1, 4);
+                og->addWidget(autoBeside(twistTrunkSpin_), 1, 4);
                 connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistTrunk(v);
                     canvas_->update();   // a pinned run re-draws with the new bundle
@@ -468,7 +468,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "How long the fan is at each end - the stretch over which the wires open out of "
                     "the bundle and settle into their lanes. Auto is the drawing's own figure."));
                 og->addWidget(twistFanLabel_, 0, 6);
-                og->addWidget(twistFanSpin_, 0, 7);
+                og->addWidget(autoBeside(twistFanSpin_), 0, 7);
                 connect(twistFanSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFan(v);
                     canvas_->update();
@@ -491,7 +491,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "How thick one wire is drawn. Six wires take up more room than three, so this is "
                     "also what settles how wide the bundle comes out. Auto is the drawing's own."));
                 og->addWidget(twistWireLabel_, 1, 6);
-                og->addWidget(twistWireSpin_, 1, 7);
+                og->addWidget(autoBeside(twistWireSpin_), 1, 7);
                 connect(twistWireSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistWireWidth(v);
                     canvas_->update();
@@ -522,7 +522,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "line is. It is the TIGHTEST radius in the bundle, so no wire bends inside it. "
                     "0 is a sharp corner; Auto is a share of the bundle width."));
                 og->addWidget(twistKneeLabel_, 0, 9);
-                og->addWidget(twistKneeSpin_, 0, 10);
+                og->addWidget(autoBeside(twistKneeSpin_), 0, 10);
                 connect(twistKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistKnee(v);
                     canvas_->update();
@@ -552,7 +552,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "radius; more than the fan can hold rounds the whole of it. 0 is sharp corners, "
                     "Auto eases it all."));
                 og->addWidget(twistFanKneeLabel_, 1, 9);
-                og->addWidget(twistFanKneeSpin_, 1, 10);
+                og->addWidget(autoBeside(twistFanKneeSpin_), 1, 10);
                 connect(twistFanKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFanKnee(v);
                     canvas_->update();
@@ -591,7 +591,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     spin->setMinimumWidth(64);
                     spin->setToolTip(tip);
                     og->addWidget(label, row, col);
-                    og->addWidget(spin, row, col + 1);
+                    og->addWidget(autoBeside(spin), row, col + 1);
                 };
                 addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish pitch"), 0.0,
                           editor_->twistLaneFinish(), 1, 12,

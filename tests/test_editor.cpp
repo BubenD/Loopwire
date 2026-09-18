@@ -10558,7 +10558,7 @@ int run_editor_tests() {
         // A loom does not kink at a corner, it bends - and how far it may be bent is set by what is
         // inside it and by what it is being dressed round, neither of which is the width of the line
         // on the paper. The radius used to be 1.2 times the bundle width and nothing else.
-        auto bentRun = [](double knee) {
+        auto bentRun = [](double knee, bool unset = false) {
             Entity w;
             w.id = QStringLiteral("BENT");
             w.type = EntityType::TwistedPair;
@@ -10569,7 +10569,7 @@ int run_editor_tests() {
             w.meta.insert(QStringLiteral("twistWires"), 4);
             w.meta.insert(QStringLiteral("twistWidth"), 10.0);
             w.meta.insert(QStringLiteral("twistPitch"), 8.0);
-            if (knee > 0.0) w.meta.insert(QStringLiteral("twistKnee"), knee);
+            if (!unset) w.meta.insert(QStringLiteral("twistKnee"), knee);
             return w;
         };
         // HOW ROUND THE CORNER IS, measured off what is drawn: how far the strands keep away from the
@@ -10583,7 +10583,7 @@ int run_editor_tests() {
 
         const double loose = clearance(bentRun(60.0));
         const double tight = clearance(bentRun(5.0));
-        const double byDefault = clearance(bentRun(0.0));
+        const double byDefault = clearance(bentRun(0.0, /*unset*/ true));
         std::printf("  knee: radius 5 keeps %.2f from the corner, radius 60 keeps %.2f, auto %.2f\n",
                     tight, loose, byDefault);
         check(loose > tight + 1.0, "knee: a wider radius swings the run clear of the corner");
@@ -10617,14 +10617,24 @@ int run_editor_tests() {
             std::printf("  knee: asked %.0f, the tightest wire in it bends on %.2f\n", r, bent);
             check(bent > r - 0.5, "knee: no wire bends tighter than the radius asked for");
         }
-        // AND UNSET IS WHAT IT ALWAYS WAS - a share of the bundle width - so every run drawn before
-        // this turns exactly as it did. Asking for that same figure LESS half the bundle comes to the
-        // same centreline, which is what says the default has not quietly moved with the rest of this.
+        // AND UNSET IS 1.2 TIMES THE BUNDLE AS IT IS DRAWN, which is not the same thing as 1.2 times
+        // the cable width it used to be taken from. A straight run's width is its wires side by side
+        // and has nothing to do with a cable width it does not use: nine four-millimetre wires are
+        // fifty-two across and were being turned on a ten-millimetre radius, so the wires on the
+        // inside of the corner were going round a radius of minus thirteen - inside out - which is
+        // where the little triangles at the knee of a wide run came from. Asking for that same figure
+        // LESS half the bundle comes to the same centreline, which is what pins it here.
         const double bundle = 2.0 * (kWiresRunPitch * 3.0 / 2.0) + kWiresRunWire;   // four wires
-        const double asBefore = clearance(bentRun(10.0 * 1.2 - bundle / 2.0));
-        std::printf("  knee: auto %.2f against the old figure %.2f\n", byDefault, asBefore);
-        check(std::abs(byDefault - asBefore) < 1e-6,
-              "knee: left alone it turns the way it always turned");
+        const double asAsked = clearance(bentRun(std::max(10.0 * 1.2, bundle * 1.2) - bundle / 2.0));
+        std::printf("  knee: auto %.2f against 1.2 bundles asked for %.2f\n", byDefault, asAsked);
+        check(std::abs(byDefault - asAsked) < 1e-6,
+              "knee: left alone, a run turns on 1.2 times the bundle it is drawn as");
+        // AND NO WIRE IS BENT INSIDE OUT BY IT, which is the whole point of taking it off the bundle:
+        // the innermost wire of a run left alone still turns on a radius, not on a loop.
+        const double innermost = tightestBend(bentRun(0.0, /*unset*/ true));
+        std::printf("  knee: left alone, the tightest wire in it bends on %.2f\n", innermost);
+        check(innermost > bundle / 2.0,
+              "knee: and left alone no wire in it is bent tighter than the bundle is wide");
     }
 
     // ---- The fan is a straight slant with a radius at each end of it -----------------------------

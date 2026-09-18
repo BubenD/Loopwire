@@ -4316,6 +4316,69 @@ void MainWindow::updateModelRibbonTabs() {
     normaliseRibbonPages();
 }
 
+// A FIELD WHOSE LOWEST VALUE IS "AUTO", with the little A that puts it back there.
+//
+// Auto lives at the bottom of the range, which is fine for reading and hopeless for setting: once a
+// number has been typed in, getting back to Auto means holding the down arrow to the end of the
+// range or knowing that a number below the minimum lands there. The A does it in one click, and it
+// lights up while the field is on Auto, so the field says which it is without being read.
+QWidget* MainWindow::autoBeside(QAbstractSpinBox* field) {
+    if (!field) return nullptr;
+    auto* cell = new QWidget(field->parentWidget());
+    cell->setObjectName(QStringLiteral("autoFieldCell"));
+    auto* row = new QHBoxLayout(cell);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(2);
+    field->setParent(cell);
+    row->addWidget(field);
+    auto* mark = new QToolButton(cell);
+    mark->setText(QStringLiteral("A"));
+    mark->setCheckable(true);
+    mark->setFocusPolicy(Qt::NoFocus);
+    mark->setFixedWidth(18);
+    mark->setToolTip(QStringLiteral("Auto - leave this one to the drawing"));
+    mark->setStyleSheet(QStringLiteral(
+        "QToolButton{color:#9fb3c8;background:#2a3644;border:1px solid #3a4756;border-radius:3px;"
+        "font-size:10px;font-weight:bold;padding:0px;}"
+        "QToolButton:hover{background:#35435a;color:#e6e9ef;}"
+        "QToolButton:checked{background:#3d6ea5;border-color:#5b93cf;color:#ffffff;}"));
+    row->addWidget(mark);
+    // Whether it IS on Auto, and putting it there. Both spin kinds carry their own sort of number,
+    // and "the lowest it goes" is the same idea in either.
+    auto onAuto = [field] {
+        if (auto* d = qobject_cast<QDoubleSpinBox*>(field))
+            return d->value() <= d->minimum() + 1e-9;
+        if (auto* i = qobject_cast<QSpinBox*>(field)) return i->value() <= i->minimum();
+        return false;
+    };
+    auto show = [mark, onAuto] {
+        QSignalBlocker block(mark);
+        mark->setChecked(onAuto());
+    };
+    if (auto* d = qobject_cast<QDoubleSpinBox*>(field))
+        connect(d, &QDoubleSpinBox::valueChanged, mark, [show](double) { show(); });
+    else if (auto* i = qobject_cast<QSpinBox*>(field))
+        connect(i, &QSpinBox::valueChanged, mark, [show](int) { show(); });
+    connect(mark, &QToolButton::clicked, field, [field, show] {
+        // Clicking it always means Auto, so clicking it again while it is on Auto changes nothing
+        // rather than turning Auto off into some number nobody chose.
+        if (auto* d = qobject_cast<QDoubleSpinBox*>(field)) d->setValue(d->minimum());
+        else if (auto* i = qobject_cast<QSpinBox*>(field)) i->setValue(i->minimum());
+        show();
+    });
+    show();
+    return cell;
+}
+
+// The thing to show and hide for such a field: the field and its A together, not the field alone -
+// hiding the field on its own leaves the A behind with nothing beside it.
+QWidget* MainWindow::autoFieldCell(QWidget* field) {
+    if (field && field->parentWidget() &&
+        field->parentWidget()->objectName() == QLatin1String("autoFieldCell"))
+        return field->parentWidget();
+    return field;
+}
+
 void MainWindow::updateMechanicalRibbonGroups() {
     if (!editor_) return;
     // The rule for this application: while a function is being used, the ribbon shows THAT FUNCTION'S
@@ -4461,7 +4524,7 @@ void MainWindow::syncBreakOptions() {
         // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
         // so the row would be a setting that does nothing while its tool is armed.
         if (twistLaneSpin_ && twistLaneLabel_) {
-            twistLaneSpin_->setVisible(straightRun);
+            autoFieldCell(twistLaneSpin_)->setVisible(straightRun);
             twistLaneLabel_->setVisible(straightRun);
             if (straightRun) {
                 QSignalBlocker b(twistLaneSpin_);
@@ -4474,7 +4537,7 @@ void MainWindow::syncBreakOptions() {
         const bool routed = editor_->tool() == ToolId::TwistedHarnessRoute ||
                             editor_->tool() == ToolId::WiresRun;
         if (twistKneeSpin_ && twistKneeLabel_) {
-            twistKneeSpin_->setVisible(routed);
+            autoFieldCell(twistKneeSpin_)->setVisible(routed);
             twistKneeLabel_->setVisible(routed);
             if (routed) {
                 QSignalBlocker b(twistKneeSpin_);
@@ -4488,7 +4551,7 @@ void MainWindow::syncBreakOptions() {
         // The fan's own corner radius is the straight run's, for the same reason the wire width is:
         // a laid-up bundle has no fan corners to round, its wires cross the whole way.
         if (twistFanKneeSpin_ && twistFanKneeLabel_) {
-            twistFanKneeSpin_->setVisible(straightRun);
+            autoFieldCell(twistFanKneeSpin_)->setVisible(straightRun);
             twistFanKneeLabel_->setVisible(straightRun);
             if (straightRun) {
                 QSignalBlocker b(twistFanKneeSpin_);
@@ -4509,7 +4572,7 @@ void MainWindow::syncBreakOptions() {
         auto finishField = [&](QLabel* label, QDoubleSpinBox* spin, double value) {
             if (!label || !spin) return;
             label->setVisible(apart);
-            spin->setVisible(apart);
+            autoFieldCell(spin)->setVisible(apart);
             if (!apart) return;
             QSignalBlocker b(spin);
             spin->setValue(value);
@@ -4518,7 +4581,7 @@ void MainWindow::syncBreakOptions() {
         finishField(twistFanBLabel_, twistFanBSpin_, editor_->twistFanFinish());
         finishField(twistFanKneeBLabel_, twistFanKneeBSpin_, editor_->twistFanKneeFinish());
         if (twistWireSpin_ && twistWireLabel_) {
-            twistWireSpin_->setVisible(straightRun);
+            autoFieldCell(twistWireSpin_)->setVisible(straightRun);
             twistWireLabel_->setVisible(straightRun);
             if (straightRun) {
                 QSignalBlocker b(twistWireSpin_);
@@ -4526,7 +4589,7 @@ void MainWindow::syncBreakOptions() {
             }
         }
         if (twistTrunkSpin_ && twistTrunkLabel_) {
-            twistTrunkSpin_->setVisible(straightRun);
+            autoFieldCell(twistTrunkSpin_)->setVisible(straightRun);
             twistTrunkLabel_->setVisible(straightRun);
             if (straightRun) {
                 QSignalBlocker b(twistTrunkSpin_);

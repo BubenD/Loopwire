@@ -957,6 +957,60 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- a field whose lowest value is Auto has an A beside it to put it back there --------------
+    {
+        // Auto lives at the BOTTOM of the range on these fields, which is fine for reading and
+        // hopeless for setting: once a number has been typed in, the only ways back to Auto were to
+        // hold the down arrow all the way to the end of the range, or to know that typing a number
+        // below the minimum lands there. Neither is a thing to expect anybody to know.
+        QList<QDoubleSpinBox*> autoFields;
+        for (QDoubleSpinBox* s : win.findChildren<QDoubleSpinBox*>())
+            if (s->specialValueText() == QStringLiteral("Auto")) autoFields << s;
+        std::printf("  auto: %lld field(s) whose lowest value is Auto\n",
+                    static_cast<long long>(autoFields.size()));
+        check(!autoFields.isEmpty(), "auto: there are fields that can be left to the drawing");
+
+        // EVERY one of them has an A beside it, in the same cell, so none is the odd one out.
+        int withA = 0;
+        QToolButton* anA = nullptr;
+        QDoubleSpinBox* itsField = nullptr;
+        for (QDoubleSpinBox* s : autoFields) {
+            QWidget* cell = s->parentWidget();
+            if (!cell) continue;
+            for (QToolButton* b : cell->findChildren<QToolButton*>())
+                if (b->text() == QStringLiteral("A")) {
+                    ++withA;
+                    if (!anA) { anA = b; itsField = s; }
+                    break;
+                }
+        }
+        std::printf("  auto: %d of them have an A beside the arrows\n", withA);
+        check(withA == autoFields.size(),
+              "auto: every field that can be left to the drawing has an A to leave it there");
+
+        // AND IT PUTS THE FIELD BACK TO AUTO, and lights up while the field is on it.
+        if (anA && itsField) {
+            itsField->setValue(itsField->minimum() + 17.0);
+            QApplication::processEvents();
+            const bool offWhileSet = !anA->isChecked();
+            anA->click();
+            QApplication::processEvents();
+            std::printf("  auto: set to %.1f the A was %s; clicked, the field reads %.1f and the A is %s\n",
+                        itsField->minimum() + 17.0, offWhileSet ? "dark" : "lit",
+                        itsField->value(), anA->isChecked() ? "lit" : "dark");
+            check(std::abs(itsField->value() - itsField->minimum()) < 1e-9,
+                  "auto: clicking the A puts the field back to Auto");
+            check(offWhileSet && anA->isChecked(),
+                  "auto: and it is lit while the field is on Auto and dark while it is not, so the "
+                  "field says which it is without being read");
+            // Clicking it again means Auto again, not Auto turned off into some number nobody chose.
+            anA->click();
+            QApplication::processEvents();
+            check(std::abs(itsField->value() - itsField->minimum()) < 1e-9 && anA->isChecked(),
+                  "auto: clicking it again leaves it on Auto rather than turning Auto off");
+        }
+    }
+
     // ---- a placed harness run can be set from the panel, not only from the ribbon -----------------
     {
         // The ribbon fields are the settings the NEXT run is drawn with. The values on the run in
