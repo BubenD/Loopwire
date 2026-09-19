@@ -228,8 +228,15 @@ RunBody runBodyOf(const Entity& pair);
 // where a corner was meant to be. Which is right as a last resort and wrong as something to draw on
 // purpose, so the tool asks this before it lets a knee be put down.
 //
+// AND THE FAN NEEDS A STRAIGHT TO STAND ON. The wires open out over the first stretch at each end,
+// and that stretch has to be straight: a knee inside it is a knee through the middle of a fan-out,
+// where the wires are at their furthest from the route and every one of them is turning on a
+// different radius. That is the mess a fan drawn too close to a corner makes. Pass the fan length
+// at each end and the first and last legs are held to it; pass nought and they are not.
+//
 // `why` comes back with the reason when the answer is no, for the message the tool shows.
-bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString* why = nullptr);
+bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, double fanStart = 0.0,
+                     double fanEnd = 0.0, QString* why = nullptr);
 
 // THE FIGURES A RUN ACTUALLY CAME OUT WITH, whether they were asked for or left to the drawing.
 //

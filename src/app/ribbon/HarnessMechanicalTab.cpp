@@ -373,7 +373,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 //
                 // Eighteen settings in one unbroken row read as eighteen settings. Boxed, they read
                 // as three questions, and a drawing office asking one of them can see where to look.
-                auto boxed = [optW](QGridLayout** into) {
+                // EACH BOX SAYS WHAT IT IS. A border groups them and a name tells you which group
+                // you are looking at - a box of eight figures with nothing on it is a box of eight
+                // figures. Set small and dim, under the fields, the way a ribbon group's own name is:
+                // it is there to be found rather than read every time.
+                auto boxed = [optW](QGridLayout** into, const QString& name, int across) {
                     auto* box = new QFrame(optW);
                     box->setObjectName(QStringLiteral("harnessSection"));
                     box->setStyleSheet(QStringLiteral(
@@ -382,13 +386,19 @@ void MainWindow::buildHarnessMechanicalTab() {
                     auto* grid = new QGridLayout(box);
                     grid->setContentsMargins(6, 1, 6, 1);
                     grid->setSpacing(2);
+                    auto* caption = new QLabel(name, box);
+                    caption->setObjectName(QStringLiteral("harnessSectionName"));
+                    caption->setAlignment(Qt::AlignHCenter);
+                    caption->setStyleSheet(QStringLiteral(
+                        "color:#8b9bb0;background:transparent;font-size:9px;border:none;"));
+                    grid->addWidget(caption, 2, 0, 1, across);
                     *into = grid;
                     return box;
                 };
                 QGridLayout* fg = nullptr;
                 QGridLayout* bg = nullptr;
-                QFrame* fanBox = boxed(&fg);
-                QFrame* bodyBox = boxed(&bg);
+                QFrame* fanBox = boxed(&fg, QStringLiteral("Fan out"), 17);
+                QFrame* bodyBox = boxed(&bg, QStringLiteral("Body"), 14);
                 og->addWidget(fanBox, 0, 6, 2, 1);
                 og->addWidget(bodyBox, 0, 8, 2, 1);
                 for (int gap : {2, 5, 8, 11, 14}) fg->setColumnMinimumWidth(gap, 10);

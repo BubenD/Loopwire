@@ -4264,7 +4264,9 @@ void Editor::onPointerMove(const Vec2& raw) {
         std::vector<Vec2> route = draftPts_;
         route.push_back(cursor_);
         QString why;
-        if (runRouteCarries(route, twistedBundleWidth(), &why)) {
+        const TwistFigures fig = twistPreviewFigures();
+        const double fan = fig.ok ? fig.fanLen : 0.0;
+        if (runRouteCarries(route, twistedBundleWidth(), fan, fan, &why)) {
             twistedHeld_ = false;
             twistedHeldAt_ = cursor_;
         } else if (!twistedHeld_) {

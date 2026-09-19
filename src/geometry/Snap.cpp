@@ -77,11 +77,6 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
             // a harness the cursor went straight through.
             for (const auto& cap : twistedPairEndCaps(e))
                 if (cap.size() == 2) out.emplace_back(cap.front(), cap.back());
-            // And the body over the converged stretch, where the run is drawn as a cable: it is what
-            // is drawn there, so it is what the cursor has to be able to catch.
-            for (const auto& outline : twistedPairBody(e))
-                for (size_t i = 1; i < outline.size(); ++i)
-                    out.emplace_back(outline[i - 1], outline[i]);
             break;
         }
         const std::vector<Vec2>& along =

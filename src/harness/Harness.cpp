@@ -1167,13 +1167,33 @@ const TwistCached* twistCached(const Entity& pair) {
     };
     const size_t stripStart = f.strip > 1e-9 ? placeAt(f.strip) : f.pos.size();
     const size_t stripEnd = f.stripB > 1e-9 ? placeAt(f.len - f.stripB) : f.pos.size();
+    // CAN THE ROUTE CARRY THE BODY AT ALL?
+    //
+    // The tool will not let a run be drawn round a corner the bundle cannot take - but a drawing
+    // made before it would, or one a route was pulled about under afterwards, still has to be
+    // opened. A cover is one long shape with a taper at each end, and on a route that doubles back
+    // inside its own width that shape turns itself inside out: what came out was a line leaving the
+    // sheet altogether, which is worse than any pinch.
+    //
+    // So where the converged stretch cannot carry the cover, the run is drawn as its WIRES. They are
+    // held off their lanes at a bend too tight for them (see holdHi) and so stay on the paper
+    // whatever the route does. A bundle drawn as wires where a cover was asked for says something is
+    // wrong with the route, which is true; a line across the drawing says nothing at all.
+    std::vector<Vec2> along;
+    bool drawBody = f.cableBody;
+    if (drawBody) {
+        const size_t from = firstAtOrAfter(f.lead), to = lastAtOrBefore(f.len - f.leadB);
+        if (to > from)
+            for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
+        drawBody = along.size() >= 2 && runRouteCarries(along, f.bodyHalf * 2.0);
+    }
     for (int k = 0; k < f.wires; ++k) {
         std::vector<std::pair<size_t, size_t>> spans;
         const bool carriesOn =
             !f.straight || (k < static_cast<int>(f.trunkLane.size()) && f.trunkLane[size_t(k)] >= 0);
         // DRAWN AS A BODY, every wire stops at the fan: what runs between the two fans is the body,
         // and a wire drawn through it as well would be a wire drawn through a cable.
-        if (carriesOn && !f.cableBody) {
+        if (carriesOn && !drawBody) {
             spans.push_back({0, f.pos.size() - 1});
         } else {
             if (f.spreadStart) spans.push_back({0, lastAtOrBefore(f.lead)});
@@ -1229,11 +1249,8 @@ const TwistCached* twistCached(const Entity& pair) {
     // THE BODY OVER THE CONVERGED STRETCH, from the end of one fan to the start of the other. Its
     // own centre line is the route between those two places, knees and all, so a run that bends
     // bends its cable with it.
-    if (f.cableBody) {
-        const size_t from = firstAtOrAfter(f.lead), to = lastAtOrBefore(f.len - f.leadB);
-        if (to > from) {
-            std::vector<Vec2> along;
-            for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
+    if (drawBody) {
+        {
             // A CABLE IS CUT SQUARE AND A HEATSHRINK IS RECOVERED. A cable running the length of the
             // run does not shrink onto anything: it is one width end to end and it stops at a face
             // square across it, and what takes it down to the wires is the BOOT at each end. A
@@ -1307,7 +1324,8 @@ RunBody runBodyOf(const Entity& pair) {
     return RunBody::Wires;
 }
 
-bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString* why) {
+bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, double fanStart,
+                     double fanEnd, QString* why) {
     auto no = [why](const QString& reason) {
         if (why) *why = reason;
         return false;
@@ -1338,6 +1356,23 @@ bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString
             return no(QStringLiteral("a %1 degree turn is too sharp for a %2 mm bundle here")
                           .arg(turn * 180.0 / M_PI, 0, 'f', 0)
                           .arg(bundleWidth, 0, 'f', 1));
+    }
+    // AND THE FAN AT EACH END NEEDS ITS OWN STRAIGHT. The wires open out over the first stretch of
+    // the run and that stretch has to BE a stretch: a knee inside it bends the fan-out itself, where
+    // every wire is at its furthest from the route and each is turning on a radius of its own. A fan
+    // drawn across a corner is the worst of the two things this refuses, and it is the one that
+    // looks like a mistake rather than like a tight bend.
+    if (route.size() > 2) {
+        const double first = distance(route[0], route[1]);
+        const double last = distance(route[route.size() - 2], route.back());
+        if (fanStart > 1e-9 && first < fanStart)
+            return no(QStringLiteral("the %1 mm fan does not fit in a %2 mm first leg")
+                          .arg(fanStart, 0, 'f', 1)
+                          .arg(first, 0, 'f', 1));
+        if (fanEnd > 1e-9 && last < fanEnd)
+            return no(QStringLiteral("the %1 mm fan does not fit in a %2 mm last leg")
+                          .arg(fanEnd, 0, 'f', 1)
+                          .arg(last, 0, 'f', 1));
     }
     return true;
 }
@@ -1383,7 +1418,13 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair) {
     // drawing like any other.
     const double tol = std::max(1e-9, f.len * 1e-5);
     const double atLeast = std::max(f.thick * 3.0, f.len * 0.004);
-    for (const std::vector<Vec2>& line : c->strands) {
+    // EVERYTHING THE RUN DRAWS, not only its wires. Where the stretch between the fans is a cable or
+    // a length of tubing there are no wires along it at all - the body is what is there, and it was
+    // the one part of such a run with nothing to catch and nothing to take hold of. A body is
+    // mostly straight line like everything else here.
+    std::vector<std::vector<Vec2>> drawn = c->strands;
+    for (const std::vector<Vec2>& outline : c->body) drawn.push_back(outline);
+    for (const std::vector<Vec2>& line : drawn) {
         if (line.size() < 2) continue;
         size_t from = 0;
         auto keep = [&](size_t a, size_t b) {

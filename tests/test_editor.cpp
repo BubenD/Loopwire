@@ -10892,6 +10892,52 @@ int run_editor_tests() {
                   "harness trim: and none of them reaches past the boundary it was cut at");
         }
 
+        // ---- AND A COVERED RUN COMES APART THE SAME WAY ----
+        {
+            // A cable or a length of tubing over the converged stretch is as much a part of what the
+            // run draws as its wires are, so it is cut with them: what is left is the lines that
+            // were there, whichever sort they came from. A body left behind whole beside cut wires
+            // would be a cover over nothing.
+            for (const char* sort : {"cable", "heatshrink"}) {
+                Document d;
+                Entity covered = aRun(QStringLiteral("RUN"), {{0.0, 0.0}, {300.0, 0.0}});
+                covered.meta.insert(QStringLiteral("twistBody"), QString::fromLatin1(sort));
+                d.entities().push_back(covered);
+                Entity wall;
+                wall.id = QStringLiteral("WALL");
+                wall.type = EntityType::Line;
+                wall.a = {200.0, -60.0};
+                wall.b = {200.0, 60.0};
+                d.entities().push_back(wall);
+                Editor ed;
+                ed.setDocument(&d);
+                noSnap(ed);
+                ed.setTool(ToolId::Trim);
+                ed.onPointerPress({200.0, 55.0}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerPress({260.0, -40.0}, Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerPress({260.0, 40.0}, Qt::LeftButton, Qt::NoModifier);
+                int harnesses = 0, pieces = 0;
+                double furthest = 0.0;
+                for (const Entity& e : d.entities()) {
+                    if (e.type == EntityType::TwistedPair) ++harnesses;
+                    if (e.id == QStringLiteral("WALL")) continue;
+                    if (e.type != EntityType::Line && e.type != EntityType::Polyline) continue;
+                    ++pieces;
+                    for (const Vec2& v : e.points) furthest = std::max(furthest, v.x);
+                    furthest = std::max({furthest, e.a.x, e.b.x});
+                }
+                std::printf("  covered trim: %s - %d harness(es), %d piece(s), reaching x %.1f\n",
+                            sort, harnesses, pieces, furthest);
+                check(harnesses == 0,
+                      "covered trim: a covered run cut anywhere stops being a harness too");
+                check(pieces >= 6,
+                      "covered trim: and what is left is the lines it drew, cover and all");
+                check(furthest <= 200.0 + 1e-6,
+                      "covered trim: with none of them past the boundary - the cover is cut with "
+                      "the wires, not left hanging whole beside them");
+            }
+        }
+
         // ---- AND EXTENDED ----
         {
             Document d;
@@ -11399,6 +11445,39 @@ int run_editor_tests() {
             check(overTheFan == 2,
                   "cable: each boot flares from the cable out over the fan, which is a breakout");
             }
+
+            // AND THE BODY IS A DRAWN THING LIKE THE WIRES: it takes a joint in the middle of every
+            // straight of it and the cursor catches it. Where the stretch between the fans is a
+            // cable there are no wires along it at all, so the body is the only thing there - and
+            // it was the one part of such a run with nothing to take hold of and nothing to catch.
+            for (const char* sort : {"cable", "heatshrink"}) {
+                Document d;
+                Entity e = run(sort);
+                e.id = QStringLiteral("BODY");
+                d.entities().push_back(e);
+                Editor ed;
+                ed.setDocument(&d);
+                noSnap(ed);
+                ed.selectById(QStringLiteral("BODY"));
+                const std::vector<std::pair<Vec2, Vec2>> straights = twistedPairStraights(e);
+                // A straight of the body: one that runs along the middle of the run, where no wire
+                // goes once the stretch is covered.
+                int alongTheBody = 0;
+                for (const auto& seg : straights) {
+                    const Vec2 mid = lerp(seg.first, seg.second, 0.5);
+                    if (mid.x > 80.0 && mid.x < 240.0) ++alongTheBody;
+                }
+                const std::vector<Vec2> joints = ed.selectionGripPoints();
+                int onTheBody = 0;
+                for (const Vec2& j : joints)
+                    if (j.x > 80.0 && j.x < 240.0) ++onTheBody;
+                std::printf("  body: %s - %d straight(s) along it, %d joint(s) on it\n", sort,
+                            alongTheBody, onTheBody);
+                check(alongTheBody >= 2,
+                      "body: its two sides are straights of the run, which is what a cursor catches");
+                check(onTheBody >= 2,
+                      "body: and each takes a joint in its middle, like every other line here");
+            }
         }
     }
 
@@ -11410,17 +11489,17 @@ int run_editor_tests() {
         // them turns inside out, and what comes out is a knot where a corner was meant to be. That
         // is the right last resort and the wrong thing to draw on purpose.
         QString why;
-        check(runRouteCarries({{0.0, 0.0}, {300.0, 0.0}}, 12.0, &why),
+        check(runRouteCarries({{0.0, 0.0}, {300.0, 0.0}}, 12.0, 0.0, 0.0, &why),
               "carries: a straight run of three hundred carries a twelve-wide bundle");
-        check(runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}}, 12.0, &why),
+        check(runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}}, 12.0, 0.0, 0.0, &why),
               "carries: and a right angle with two hundred either side of it");
         // A LEG SHORTER THAN THE BUNDLE IS WIDE is not a leg.
-        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {204.0, 0.0}}, 12.0, &why),
+        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {204.0, 0.0}}, 12.0, 0.0, 0.0, &why),
               "carries: a four-millimetre leg does not carry a twelve-wide bundle");
         std::printf("  carries: the short leg is refused - %s\n", qPrintable(why));
         check(why.contains(QLatin1String("shorter")), "carries: and it says which it was");
         // AND A TURN TOO SHARP FOR THE BUNDLE. Doubling back is the extreme of it.
-        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {40.0, 6.0}}, 12.0, &why),
+        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {40.0, 6.0}}, 12.0, 0.0, 0.0, &why),
               "carries: and a run doubling back on itself does not either");
         std::printf("  carries: the hairpin is refused - %s\n", qPrintable(why));
         // THE ONE IN test1.dwx, WHICH IS WHERE THIS CAME FROM: out 172, back 17 and down 22, then a
@@ -11430,9 +11509,25 @@ int run_editor_tests() {
                                         {-193.89950611156704, 146.0},
                                         {-210.90909998587227, 124.07577689776151},
                                         {-209.6674505782298, 124.69660160158277}};
-        check(!runRouteCarries(asDrawn, 9.0, &why),
+        check(!runRouteCarries(asDrawn, 9.0, 0.0, 0.0, &why),
               "carries: the route that drew the anomaly is refused, which is where this came from");
         std::printf("  carries: test1's route is refused - %s\n", qPrintable(why));
+        // AND THE FAN NEEDS A STRAIGHT TO STAND ON. The wires open out over the first stretch at
+        // each end, and a knee inside that stretch is a knee through the middle of a fan-out, where
+        // every wire is at its furthest from the route and each is turning on a radius of its own.
+        // That is the mess a fan drawn too close to a corner makes, and it looks like a mistake
+        // rather than like a tight bend.
+        const std::vector<Vec2> kneeSoon{{0.0, 0.0}, {30.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}};
+        check(runRouteCarries(kneeSoon, 9.0, 0.0, 0.0, &why),
+              "carries: with no fan to fit, a knee thirty along is a knee like any other");
+        check(!runRouteCarries(kneeSoon, 9.0, 55.0, 55.0, &why),
+              "carries: but a fifty-five millimetre fan does not fit in a thirty millimetre leg");
+        std::printf("  carries: the knee inside the fan is refused - %s\n", qPrintable(why));
+        check(why.contains(QLatin1String("fan")), "carries: and it says it was the fan");
+        // The far end is held to its own fan the same way.
+        const std::vector<Vec2> kneeLate{{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}, {230.0, -200.0}};
+        check(!runRouteCarries(kneeLate, 9.0, 55.0, 55.0, &why),
+              "carries: and the fan at the far end wants its own straight just as much");
 
         // ---- AND THE TOOL HOLDS THE RUN THERE ----
         {
@@ -11472,7 +11567,7 @@ int run_editor_tests() {
                 check(distance(run->points.back(), heldAt) < 1e-6,
                       "held: a click while held puts the knee where the run is, not where the "
                       "cursor wandered to");
-                check(runRouteCarries(run->points, 9.0, nullptr),
+                check(runRouteCarries(run->points, 9.0, 0.0, 0.0, nullptr),
                       "held: so what comes out is a route the bundle can be taken round");
             }
         }
