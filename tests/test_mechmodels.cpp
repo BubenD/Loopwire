@@ -538,6 +538,8 @@ int run_mechmodels_tests() {
         // The stroke: down through all three wires at x = 50.
         ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         check(ed.labelStrokeStarted(), "label: the first click starts the stroke");
+        check(!ed.labelBreaksToo(),
+              "label: and nothing is being laid with it until Shift says so");
         ed.onPointerMove({50.0, 11.0});
         ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
         check(!ed.placingLabel(), "label: the second click places it");
@@ -659,6 +661,71 @@ int run_mechmodels_tests() {
         e2.onPointerPress({10.0, 30.0}, Qt::LeftButton, Qt::NoModifier);
         check(empty.entities().empty(), "label: a stroke across nothing places nothing");
         check(e2.placingLabel(), "label: and it is still in hand, waiting for a stroke that crosses");
+    }
+
+    // ---- Shift lays the break mark on the same stroke, as one part -------------------------------
+    {
+        // A label and a length break go on the same way: draw a line across the runs, click. It is
+        // one gesture drawn with one dashed line, and on a real drawing the two go together - the
+        // label says what the run is, the break says the drawing is not showing all of it. Held down
+        // while the stroke is drawn, Shift lays the pair of them, stamped into one group so they are
+        // picked up, slid and deleted as the one thing they read as.
+        Document d;
+        for (int i = 0; i < 3; ++i) {
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 4.0};
+            w.b = {100.0, static_cast<double>(i) * 4.0};
+            d.entities().push_back(w);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::ShiftModifier);
+        ed.onPointerMove({50.0, 11.0});
+        ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity* mark = nullptr;
+        const Entity* piece = nullptr;
+        for (const Entity& e : d.entities()) {
+            if (e.type == EntityType::LengthBreak) mark = &e;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) piece = &e;
+        }
+        std::printf("  label+break: %s, %s, group %s\n", mark ? "a break mark" : "NO break mark",
+                    piece ? "a label" : "NO label",
+                    mark && piece && entityBlockInstance(*mark) == entityBlockInstance(*piece)
+                        ? "shared"
+                        : "apart");
+        check(mark != nullptr, "label+break: Shift lays the break mark on the same stroke");
+        check(piece != nullptr, "label+break: and the label with it");
+        if (mark && piece)
+            check(!entityBlockInstance(*mark).isEmpty() &&
+                      entityBlockInstance(*mark) == entityBlockInstance(*piece),
+                  "label+break: stamped into one group, so the pair is one part afterwards");
+        // AND WITHOUT SHIFT, ONLY THE LABEL. The break mark is something asked for, not something
+        // that comes with every label - most labels are nowhere near a break.
+        Document plain;
+        for (int i = 0; i < 3; ++i) {
+            Entity w;
+            w.id = QStringLiteral("p%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 4.0};
+            w.b = {100.0, static_cast<double>(i) * 4.0};
+            plain.entities().push_back(w);
+        }
+        Editor e2;
+        e2.setDocument(&plain);
+        noSnap(e2);
+        e2.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        e2.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({50.0, 11.0});
+        e2.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
+        int marks = 0;
+        for (const Entity& e : plain.entities())
+            if (e.type == EntityType::LengthBreak) ++marks;
+        std::printf("  label+break: %d break mark(s) without Shift\n", marks);
+        check(marks == 0, "label+break: without Shift a label is a label, and nothing else goes on");
     }
 
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------

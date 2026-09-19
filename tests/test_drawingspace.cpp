@@ -1514,35 +1514,48 @@ int run_drawingspace_tests() {
             check(fg && fg->rowCount() == 4,
                   "boxes: three lines of fields, and the name of the box under them");
 
-            // AND THE SIZE DOES NOT MOVE. Every sort of body, and the flush end both ways.
+            // AND THE SIZE IS SETTLED BY THE SORT OF BODY, not by which ticks happen to be set. A
+            // field a tick has taken away keeps its room - ticking Flush ends off must not take the
+            // strip in by the width of a field and shuffle everything to the right of it - while a
+            // sort with nothing to set takes no room for the fields it will never show.
+            QCheckBox* transition = nullptr;
+            for (QCheckBox* c : win.findChildren<QCheckBox*>())
+                if (c->text() == QStringLiteral("Transition heatshrink")) transition = c;
             struct Shot { QSize fan, body; };
-            std::vector<Shot> shots;
+            std::vector<Shot> ticked;
             auto snap = [&] {
                 QApplication::processEvents();
-                shots.push_back({fanBox->sizeHint(), bodyBox->sizeHint()});
+                ticked.push_back({fanBox->sizeHint(), bodyBox->sizeHint()});
             };
-            for (const char* sort : {"Hook-up wires", "Cable", "Heatshrink"}) {
-                body->setCurrentIndex(body->findText(QString::fromUtf8(sort)));
-                snap();
-            }
             body->setCurrentIndex(body->findText(QStringLiteral("Cable")));
-            flush->click();   // the flush length goes away
+            snap();
+            flush->click();       // the flush length goes
             snap();
             flush->click();
-            snap();
+            if (transition) {
+                transition->click();   // and the two boot lengths
+                snap();
+                transition->click();
+            }
             bool steady = true;
-            for (const Shot& s : shots)
-                steady = steady && s.fan == shots.front().fan && s.body == shots.front().body;
+            for (const Shot& s : ticked)
+                steady = steady && s.fan == ticked.front().fan && s.body == ticked.front().body;
             QStringList said;
-            for (const Shot& s : shots)
+            for (const Shot& s : ticked)
                 said << QStringLiteral("%1x%2/%3x%4")
                             .arg(s.fan.width()).arg(s.fan.height())
                             .arg(s.body.width()).arg(s.body.height());
-            std::printf("  boxes: fan/body across five settings - %s\n",
-                        qPrintable(said.join(QStringLiteral(", "))));
-            check(steady,
-                  "boxes: neither box changes size when the fields inside it come and go");
+            const int asCable = bodyBox->sizeHint().width();
             body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
+            QApplication::processEvents();
+            const int asWires = bodyBox->sizeHint().width();
+            std::printf("  boxes: a cable, ticks either way - %s; the body box is %d wide for a "
+                        "cable and %d for hook-up wires\n",
+                        qPrintable(said.join(QStringLiteral(", "))), asCable, asWires);
+            check(steady,
+                  "boxes: a tick taking a field away does not change the size of either box");
+            check(asWires < asCable / 2,
+                  "boxes: and a sort with nothing to set takes no room for what it cannot show");
         }
     }
 

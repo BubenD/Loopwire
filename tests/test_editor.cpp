@@ -11600,6 +11600,11 @@ int run_editor_tests() {
                   "transition: and standing wider over the rest of itself, being fitted over it");
             check(atTheFan < widest - 1e-6 && atTheFan > 1e-6,
                   "transition: the end facing the fan is the shrunk one - that is the end that grips");
+            // AND IT IS AS LONG AS A PART LIKE THIS COMES: three times across the face it grips.
+            // Taken off the length of the FAN instead, as it was, the same boot grew and shrank
+            // with a figure that has nothing to do with it.
+            check(std::abs((hi - lo) - 3.0 * 2.0 * atTheFan) < 0.5,
+                  "transition: and three times across that face long, which is how one is sized");
             check(std::abs(cableFrom - hi) < 1e-6,
                   "transition: the cable starts where the boot grips it, so that face is drawn once");
             check(std::abs(wireTo - bareTo) < 0.5,

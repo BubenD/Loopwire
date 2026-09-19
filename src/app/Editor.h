@@ -611,6 +611,9 @@ public:
     // The mark a line drawn from `a` to `b` across the runs describes: where it sits, which way it
     // lies, how far it reaches, and which run it belongs to. False when the line crossed nothing.
     bool breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
+    // The break mark the label's own stroke would place, kept in step with the cursor and with
+    // whether Shift is down.
+    void refreshLabelBreakPreview();
     // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
     // parallel line segments; false for any other catch.
     bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
@@ -731,6 +734,13 @@ public:
     void beginLabelPlacement(const std::vector<Entity>& drawing, double exceedMm = 0.0);
     bool placingLabel() const { return labelPlacing_; }
     bool labelStrokeStarted() const { return labelPlacing_ && labelStrokeHasStart_; }
+    // A LABEL AND THE BREAK MARK, ON THE ONE STROKE. Both go on by drawing a line across the runs -
+    // it is the same gesture, drawn with the same dashed line - so holding SHIFT while that line is
+    // drawn lays the two of them together and stamps them into one group: one part, picked up and
+    // slid and deleted as the one thing it reads as on the sheet. The mark is drawn in whichever
+    // style the ribbon is set to, straight strokes or S-curves.
+    bool labelBreaksToo() const { return labelWithBreak_; }
+    const Entity& labelBreakPreview() const { return labelBreakPreview_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
     Vec2 labelStrokeEnd() const;
     // Tab pins the preview, so the two sizes can be tried on the real thing instead of on something
@@ -1697,6 +1707,8 @@ private:
     // runs it goes on, and what it looks like for that stroke - worked out on every move, because what it
     // has to cover changes as the stroke is drawn.
     bool labelPlacing_ = false;
+    bool labelWithBreak_ = false;   // Shift: the break mark goes on with the label
+    Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
     bool labelStrokeHasStart_ = false;
     bool labelFrozen_ = false;      // the stroke pinned with Tab, so the ribbon can be used on it
     Vec2 labelStrokeStart_;
@@ -1774,7 +1786,7 @@ private:
     std::vector<Entity> labelEntitiesRaw(const LabelFit& fit, std::vector<Vec2>& covers) const;
     // The four corners of the ground a label covers, turned with it.
     static std::vector<Vec2> labelMaskQuad(const LabelFit& fit);
-    void commitLabel();
+    void commitLabel(bool withBreak, const Vec2& strokeEnd);
     // The fit written on to every piece of the label, so it travels with the label in the file: a label
     // that has to be re-measured off the sheet before it can be resized is a label that cannot be resized
     // once the drawing has been closed and opened.

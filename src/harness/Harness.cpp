@@ -688,7 +688,10 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // boot. Sat back on the cable instead, the whole fan is on show and it starts at one
         // vertical face, which is the face of the transition.
         //
-        // Left alone the boot is a third of the fan long, which is the size one reads as.
+        // Left alone it is three times across the face it grips - which is how a part like this is
+        // sized: long enough to hold, and in proportion to the thing it is holding. Taken off the
+        // fan's length instead, the same boot grew and shrank with a figure that has nothing to do
+        // with it.
         f.bodyOverCable = f.body == RunBody::Heatshrink &&
                           pair.meta.value(QStringLiteral("twistBodyOverCable")).toBool();
         // EVERY WIRE HAS ITS OWN PLACE AT THE FACE. Converging onto a few trunk lines is how a
@@ -707,8 +710,8 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
             if (!transition) return 0.0;
             if (!(finish ? f.spreadEnd : f.spreadStart)) return 0.0;
             const QJsonValue v = bodySide(QStringLiteral("twistBoot"), finish);
-            const double fan = finish ? f.leadB : f.lead;
-            const double want = v.isUndefined() ? fan / 3.0 : std::max(0.0, v.toDouble(0.0));
+            const double face = 2.0 * (finish ? f.bodyFaceB : f.bodyFace);
+            const double want = v.isUndefined() ? face * 3.0 : std::max(0.0, v.toDouble(0.0));
             // Never more than its share of the CABLE, which is what it sits on: two boots on a
             // short run would otherwise meet in the middle and be drawn as one solid thing.
             return std::min(want, std::max(0.0, f.len - f.lead - f.leadB) * 0.45);

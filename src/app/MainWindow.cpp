@@ -4590,6 +4590,38 @@ void MainWindow::syncBreakOptions() {
         // whole of what the little A says now: lit, this field is the drawing's own and the number
         // beside it is what the drawing made of it; dark, the number is one somebody typed.
         const TwistFigures fig = editor_->twistPreviewFigures();
+        // WHICH FIELDS THIS SORT OF RUN CAN EVER SHOW, as against which it is showing now.
+        //
+        // A field hidden by a TICK keeps its room: ticking Flush ends off must not take the strip in
+        // by the width of a field and shuffle everything to the right of it, because a ribbon is a
+        // place on the screen you learn. A field the sort of run or body has no use for AT ALL gives
+        // its room up, so a box is only as big as what can be in it - hook-up wires have no cover to
+        // size and no boot to measure, and eight fields' worth of empty frame said they had.
+        auto room = [](QWidget* w, bool keep) {
+            if (!w) return;
+            QSizePolicy sp = w->sizePolicy();
+            if (sp.retainSizeWhenHidden() == keep) return;
+            sp.setRetainSizeWhenHidden(keep);
+            w->setSizePolicy(sp);
+        };
+        auto fieldRoom = [&room](QWidget* field, QLabel* label, bool keep) {
+            room(autoFieldCell(field), keep);
+            room(label, keep);
+        };
+        // The fan-out box belongs to a run that fans, and every field in it either stands for the
+        // whole of that box or comes and goes with a tick inside it.
+        fieldRoom(twistLaneSpin_, twistLaneLabel_, straightRun);
+        fieldRoom(twistFanSpin_, twistFanLabel_, true);
+        fieldRoom(twistFanKneeSpin_, twistFanKneeLabel_, straightRun);
+        fieldRoom(twistFlushSpin_, twistFlushLabel_, straightRun);
+        fieldRoom(twistStripSpin_, twistStripLabel_, straightRun);
+        fieldRoom(twistLaneBSpin_, twistLaneBLabel_, straightRun);
+        fieldRoom(twistFanBSpin_, twistFanBLabel_, straightRun);
+        fieldRoom(twistFanKneeBSpin_, twistFanKneeBLabel_, straightRun);
+        room(twistFlushCheck_, straightRun);
+        room(twistStripCheck_, straightRun);
+        room(twistSidesCheck_, straightRun);
+        room(twistSpreadCombo_, straightRun);
         // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
         // so the row would be a setting that does nothing while its tool is armed.
         showAutoField(twistLaneSpin_, twistLaneLabel_, straightRun, editor_->twistLane() <= 1e-9,
@@ -4652,6 +4684,16 @@ void MainWindow::syncBreakOptions() {
         const bool asCable = straightRun && kind == RunBody::Cable;
         const bool asSleeve = straightRun && kind == RunBody::Heatshrink;
         const bool endsApart = covered && !editor_->twistBodySidesSame();
+        fieldRoom(twistBodyWidthSpin_, twistBodyWidthLabel_, covered);
+        fieldRoom(twistBodyFaceSpin_, twistBodyFaceLabel_, covered);
+        fieldRoom(twistBodyShrinkSpin_, twistBodyShrinkLabel_, covered);
+        fieldRoom(twistBodyFaceBSpin_, twistBodyFaceBLabel_, covered);
+        fieldRoom(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, covered);
+        fieldRoom(twistBootSpin_, twistBootLabel_, covered);
+        fieldRoom(twistBootBSpin_, twistBootBLabel_, covered);
+        room(twistBodySidesCheck_, covered);
+        room(twistBodyTransitionCheck_, asCable);
+        room(twistBodyOverCableCheck_, asSleeve);
         if (twistBodySidesCheck_) {
             twistBodySidesCheck_->setVisible(covered);
             if (covered) {
@@ -4733,6 +4775,7 @@ void MainWindow::syncBreakOptions() {
         // by a length of tubing draws none of them at all. Offered against a cover it was a setting
         // that changed nothing on the sheet.
         const bool loose = straightRun && kind == RunBody::Wires;
+        fieldRoom(twistTrunkSpin_, twistTrunkLabel_, loose);
         if (twistTrunkSpin_ && twistTrunkLabel_) {
             autoFieldCell(twistTrunkSpin_)->setVisible(loose);
             twistTrunkLabel_->setVisible(loose);

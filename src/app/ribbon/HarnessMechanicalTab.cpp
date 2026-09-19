@@ -953,26 +953,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // jumped sideways. A ribbon is a place on the screen you learn: a field that moves
                 // because a different field went away has to be found again every time.
                 //
-                // So a field that goes away KEEPS ITS ROOM. Said to each of them rather than
-                // reserved column by column in pixels: the layout then reads exactly the same
-                // whichever fields are on show, and a field renamed or a tick added cannot quietly
-                // start the frame breathing again.
-                {
-                    auto keepRoom = [](QGridLayout* g) {
-                        for (int i = 0; i < g->count(); ++i) {
-                            QWidget* w = g->itemAt(i)->widget();
-                            if (!w) continue;
-                            QSizePolicy sp = w->sizePolicy();
-                            sp.setRetainSizeWhenHidden(true);
-                            w->setSizePolicy(sp);
-                        }
-                    };
-                    keepRoom(fg);
-                    keepRoom(bg);
-                    // And the settings the boxes stand beside, for the same reason: the knee radius
-                    // is only there for a routed run, and the boxes used to slide left without it.
-                    keepRoom(og);
-                }
+                // So a field hidden by a TICK keeps its room, and a field the sort of body in the
+                // box has no use for at all gives its room up - which is settled field by field in
+                // syncBreakOptions, because only that knows which sort is in the box. What is done
+                // here is the standing furniture: the labels and the wire settings, which are
+                // either there for a bundle tool or not there at all.
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
                 tg->addWidget(optW);

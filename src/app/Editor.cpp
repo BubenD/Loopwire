@@ -3251,6 +3251,8 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exce
     labelProto_ = drawing;
     labelPlacing_ = true;
     labelStrokeHasStart_ = false;
+    labelWithBreak_ = false;
+    labelBreakPreview_ = Entity();
     labelFrozen_ = false;
     labelPreview_.clear();
     labelCovers_.clear();
@@ -3259,7 +3261,7 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exce
     labelAlongManual_ = false;    // and the length follows it, so the label keeps its shape
     setTool(ToolId::Select);
     emit message(QStringLiteral(
-        "Draw a stroke across the runs the label goes on — Tab pins it so the ribbon's size can be set"));
+        "Draw a stroke across the runs the label goes on — Tab pins it, Shift lays a break mark with it"));
     emit labelChanged();
     emit overlayChanged();
 }
@@ -3709,7 +3711,22 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
     }
 }
 
-void Editor::commitLabel() {
+// WHAT SHIFT WOULD ADD, asked of the keyboard itself rather than remembered from a click: the
+// gesture is two clicks with a drag between them, and whether the pair goes on is a thing the hand
+// changes its mind about while the stroke is being drawn. Read live, the mark appears and disappears
+// under the cursor as the key is held and let go, which is what says the two are going on together.
+void Editor::refreshLabelBreakPreview() {
+    const bool shift =
+        QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+    labelWithBreak_ = shift;
+    labelBreakPreview_ = Entity();
+    if (!shift || !labelPlacing_ || !labelStrokeHasStart_) return;
+    Entity mark;
+    if (breakFromBand(labelStrokeStart_, labelStrokeEnd(), mark))
+        labelBreakPreview_ = std::move(mark);
+}
+
+void Editor::commitLabel(bool withBreak, const Vec2& strokeEnd) {
     if (!doc_ || labelPreview_.empty()) return;
     pushUndo();
     labelLiveIds_.clear();
@@ -3750,19 +3767,43 @@ void Editor::commitLabel() {
         labelLiveIds_.push_back(e.id);
         doc_->entities().push_back(std::move(e));
     }
+    // AND THE BREAK MARK ON THE SAME STROKE, where the drawing asked for one. A label and a length
+    // break go on by drawing the same line across the same runs, so they are one gesture; stamped
+    // into the label's own group they are one part afterwards as well, and the pair is picked up,
+    // slid and deleted together. The mark is NOT given the label's fit: it belongs to the runs it
+    // breaks and not to the drawing the label was laid from, so resizing the label leaves it where
+    // the wires are.
+    QString brokeAt;
+    if (withBreak) {
+        Entity mark;
+        if (breakFromBand(labelStrokeStart_, strokeEnd, mark)) {
+            mark.id = uid();
+            mark.layer = doc_->activeLayer();
+            stampEntityGroup(mark, labelGroup_);
+            brokeAt = mark.id;
+            doc_->entities().push_back(std::move(mark));
+        }
+    }
     labelPlacing_ = false;
     labelStrokeHasStart_ = false;
+    labelWithBreak_ = false;
+    labelBreakPreview_ = Entity();
     labelFrozen_ = false;
     labelPreview_.clear();
     labelCovers_.clear();
     selected_ = labelLiveIds_;
+    if (!brokeAt.isEmpty()) selected_.push_back(brokeAt);
     doc_->setDirty(true);
     // The label's ribbon group goes away with the click that places it. Its two fields are for BEFORE the
     // click - that is what pinning with Tab is for - and a group that stays up afterwards leaves the tab
     // taken over by a function that has finished. The sizes are still there in the properties, and the
     // label is still in hand, so it can be dragged along the runs straight away.
-    emit message(QStringLiteral(
-        "Label placed — drag it along the runs, or set its width and height in the properties"));
+    emit message(
+        brokeAt.isEmpty()
+            ? QStringLiteral(
+                  "Label placed — drag it along the runs, or set its width and height in the "
+                  "properties")
+            : QStringLiteral("Label and break mark placed as one part — drag them along the runs"));
     emit labelChanged();
     emit selectionChanged();
     emit changed();
@@ -4282,6 +4323,7 @@ void Editor::onPointerMove(const Vec2& raw) {
         labelFit_ = labelFitFor(labelStrokeStart_, cursor_);
         labelPreview_ = labelEntities(labelFit_, labelCovers_);
         if (labelPreview_.empty()) labelCovers_.clear();
+        refreshLabelBreakPreview();   // and the break mark that Shift would lay on the same stroke
         emit labelChanged();   // the ribbon shows the size that has just been measured
         emit overlayChanged();
     }
@@ -4523,8 +4565,10 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         if (!labelStrokeHasStart_) {
             labelStrokeStart_ = p;
             labelStrokeHasStart_ = true;
+            labelWithBreak_ = mods.testFlag(Qt::ShiftModifier);
             emit message(QStringLiteral(
-                "Now draw across the runs the label covers, and click to place it"));
+                "Now draw across the runs the label covers, and click to place it — Shift lays a "
+                "break mark with it"));
             emit overlayChanged();
             return;
         }
@@ -4540,7 +4584,10 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             emit overlayChanged();
             return;
         }
-        commitLabel();
+        // Shift at the click that lays it, or Shift seen while the stroke was drawn: either is
+        // somebody asking for the two of them, and the second is what the preview has been showing.
+        commitLabel(labelWithBreak_ || mods.testFlag(Qt::ShiftModifier),
+                    labelFrozen_ ? labelFrozenAt_ : p);
         return;
     }
     // A DETAIL VIEW goes on in three clicks, because it is three separate decisions: WHAT is wanted (the
@@ -18307,6 +18354,23 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
         const QColor ink = paperInk(QColor("#8fd3ff"));
         for (const Entity& e : labelPreview_) EntityRenderer::draw(p, e, *doc_, vt, ink);
+    }
+    // AND THE BREAK MARK GOING ON WITH IT, while Shift is held: the pair is laid by the one stroke,
+    // so the pair is what the stroke shows.
+    if (labelPlacing_ && labelBreakPreview_.type == EntityType::LengthBreak) {
+        p.save();
+        QPen pv(paperInk(QColor(120, 200, 255, 190)));
+        pv.setCosmetic(true);
+        pv.setWidthF(1.4);
+        pv.setStyle(Qt::DashLine);
+        p.setPen(pv);
+        p.setBrush(Qt::NoBrush);
+        for (const std::vector<Vec2>& stroke : breakStrokes(labelBreakPreview_)) {
+            QPolygonF poly;
+            for (const Vec2& q : stroke) poly << vt.toScreen(q);
+            p.drawPolyline(poly);
+        }
+        p.restore();
     }
 
     // Moving a balloon's leader where it MEETS the balloon: dropped inside another balloon it takes the
