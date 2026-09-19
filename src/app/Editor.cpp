@@ -4251,6 +4251,28 @@ void Editor::onPointerMove(const Vec2& raw) {
         cursor_ = mapped;
     }
 
+    // A LOOM THAT CANNOT GO THERE STOPS WHERE IT CAN.
+    //
+    // The bundle has a width, and a width cannot be bent round a corner tighter than half of it nor
+    // sent down a leg shorter than it is. Asked to, the drawing does not fail - it pinches: the bend
+    // is clamped to whatever fits and the wires are held off their lanes so none of them turns
+    // inside out, and what comes out is a knot where a corner was meant to be. That is the right
+    // last resort and the wrong thing to draw on purpose, so the run now stops at the last place it
+    // could go and waits there. The cursor carries on; the run does not follow it until it is
+    // somewhere the bundle can be taken, which is the engineer changing direction.
+    if (isTwistedTool(tool_) && drafting_ && !draftPts_.empty() && !twistedFrozen_) {
+        std::vector<Vec2> route = draftPts_;
+        route.push_back(cursor_);
+        QString why;
+        if (runRouteCarries(route, twistedBundleWidth(), &why)) {
+            twistedHeld_ = false;
+            twistedHeldAt_ = cursor_;
+        } else if (!twistedHeld_) {
+            twistedHeld_ = true;
+            emit message(QStringLiteral("Wires run: held - %1. Come back round and it follows again.")
+                             .arg(why));
+        }
+    }
     // A label being STROKED on is re-measured on every move: the stroke grows as the cursor moves, so the
     // runs it crosses - and therefore how wide the label has to be - is a question the cursor keeps
     // changing the answer to.
@@ -9617,7 +9639,10 @@ void Editor::handleDrawPress(const Vec2& p) {
             emit message(QStringLiteral("Wires run: back to the drawing - click the next knee"));
             break;
         }
-        draftPts_.push_back(p);
+        // AND A KNEE IS NOT PUT WHERE THE RUN IS NOT. Held back, the run is drawn at the last place
+        // the bundle could be taken and the cursor is somewhere else: clicking means the place on
+        // screen, which is the held one.
+        draftPts_.push_back(twistedHeldFor(p));
         drafting_ = true;
         emit message(QStringLiteral(
             "Wires run: click the next knee — Enter finishes the run, Esc exits"));
@@ -10891,6 +10916,7 @@ void Editor::finishDraw() {
 void Editor::cancelDraw() {
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
+    twistedHeld_ = false;     // nor held back
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
     dpolyLsArm_ = false;  // forget a pending/active line-start reference
@@ -15873,6 +15899,17 @@ void Editor::setTwistSpread(const QString& spread) {
     emit overlayChanged();
 }
 
+double Editor::twistedBundleWidth() const {
+    const TwistFigures fig = twistPreviewFigures();
+    // Every wire side by side, plus whatever is drawn over them: a covered run is as wide as its
+    // cover, and it is the cover that has to go round the corner.
+    const int wires = std::clamp(twistWires_, 2, kTwistedMaxWires);
+    const double wire = fig.ok && fig.wireWidth > 1e-9 ? fig.wireWidth : kWiresRunWire;
+    const double packed = wire * (kWiresRunPitch / kWiresRunWire);
+    const double bundle = packed * (wires - 1) + wire;
+    return twistCableBody_ && fig.ok && fig.bodyWidth > bundle ? fig.bodyWidth : bundle;
+}
+
 TwistFigures Editor::twistPreviewFigures() const {
     // A LONG STRAIGHT RUN, so nothing is clamped for want of room: the figures wanted are the ones
     // the settings ask for, not the ones a short run would have to cut them back to. The id is
@@ -18672,7 +18709,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             Entity tp;
             tp.type = EntityType::TwistedPair;
             tp.a = pts[0];
-            tp.b = twistedFrozen_ ? twistedFrozenAt_ : pts[1];
+            tp.b = twistedFrozen_ ? twistedFrozenAt_ : twistedHeldFor(pts[1]);
             writeBundleMeta(tp, /*straight=*/false);
             EntityRenderer::draw(p, tp, *doc_, vt,
                                  paperInk(twistedFrozen_ ? QColor(150, 162, 178, 170)
@@ -18686,6 +18723,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.type = EntityType::TwistedPair;
             tp.points = pts;
             if (twistedFrozen_) tp.points.back() = twistedFrozenAt_;
+            else tp.points.back() = twistedHeldFor(tp.points.back());
             tp.a = tp.points.front();
             tp.b = tp.points.back();
             writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun);

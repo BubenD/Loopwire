@@ -1240,6 +1240,41 @@ std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
     return c ? c->body : std::vector<std::vector<Vec2>>{};
 }
 
+bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString* why) {
+    auto no = [why](const QString& reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (route.size() < 2) return true;
+    const double half = std::max(0.05, bundleWidth / 2.0);
+    // A LEG SHORTER THAN THE BUNDLE IS WIDE is not a leg: there is nowhere in it for the bundle to
+    // be straight, and two corners' worth of bend would have to share it.
+    for (size_t i = 1; i < route.size(); ++i) {
+        const double leg = distance(route[i - 1], route[i]);
+        if (leg < bundleWidth)
+            return no(QStringLiteral("a %1 mm leg is shorter than the %2 mm bundle is wide")
+                          .arg(leg, 0, 'f', 1)
+                          .arg(bundleWidth, 0, 'f', 1));
+    }
+    // AND A CORNER HAS TO HAVE ROOM FOR THE BEND. The tightest the bundle may be bent is half its
+    // own width; that bend eats R/tan(T/2) of the straight either side of the corner, and it may
+    // not eat more than half of either leg - the other half belongs to whatever is at the far end
+    // of it.
+    for (size_t i = 1; i + 1 < route.size(); ++i) {
+        const Vec2 back = route[i - 1] - route[i], on = route[i + 1] - route[i];
+        const double lb = back.length(), lo = on.length();
+        if (lb < 1e-9 || lo < 1e-9) continue;
+        const double turn = std::acos(std::clamp(dot(back / lb, on / lo), -1.0, 1.0));
+        if (turn > M_PI - 1e-3) continue;   // straight through: no corner at all
+        const double eats = half / std::max(1e-6, std::tan(turn / 2.0));
+        if (eats > 0.5 * std::min(lb, lo))
+            return no(QStringLiteral("a %1 degree turn is too sharp for a %2 mm bundle here")
+                          .arg(turn * 180.0 / M_PI, 0, 'f', 0)
+                          .arg(bundleWidth, 0, 'f', 1));
+    }
+    return true;
+}
+
 TwistFigures twistedPairFigures(const Entity& pair) {
     TwistFigures out;
     if (pair.type != EntityType::TwistedPair) return out;

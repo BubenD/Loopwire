@@ -211,6 +211,15 @@ public:
     // Tab while one is being drawn PINS it where it is, so the count and the rest can be tried on the
     // real thing without the cursor moving it. The next click, or Enter, places it.
     void freezeTwistedPreview();
+    // Where the run is being held back, and whether it is - see twistedHeld_.
+    bool twistedHeld() const { return twistedHeld_; }
+    Vec2 twistedHeldAt() const { return twistedHeldAt_; }
+    // How wide the bundle the settings describe comes out, which is what a route has to be able to
+    // carry. Taken off a run laid out with them rather than worked out a second time beside them.
+    double twistedBundleWidth() const;
+    // The place a click means while the run is being held: where the run IS, not where the cursor
+    // wandered to.
+    Vec2 twistedHeldFor(const Vec2& p) const { return twistedHeld_ ? twistedHeldAt_ : p; }
     bool twistedFrozen() const { return twistedFrozen_; }
     // Is a bundle of wires being drawn - laid up (pair / route / harness / harness route) or running
     // straight (wires run)? They are the same object with the same ribbon and the same Tab, so
@@ -1637,6 +1646,11 @@ private:
     // wires rather than of the harness.
     int twistTrunk_ = 2;
     bool twistedFrozen_ = false;     // Tab pinned a twisted bundle being drawn
+    // AND HELD, which is not the same thing: a loom cannot go round a corner tighter than half its
+    // own width nor down a leg shorter than it is wide, so the run stops at the last place it could
+    // and waits there until the cursor is somewhere it can follow. The pin is on purpose; this is not.
+    bool twistedHeld_ = false;
+    Vec2 twistedHeldAt_;
     Vec2 twistedFrozenAt_{0.0, 0.0}; // ... at this end point
     Vec2 breakFrozenAt_{0.0, 0.0};
     // The sheet and its windows, as things to snap to. Empty in model space.

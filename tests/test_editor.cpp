@@ -11342,6 +11342,82 @@ int run_editor_tests() {
         }
     }
 
+    // ---- A loom that cannot go there stops where it can ------------------------------------------
+    {
+        // The bundle has a width, and a width cannot be bent round a corner tighter than half of it
+        // nor sent down a leg shorter than it is. Asked to, the drawing does not fail - it pinches:
+        // the bend is clamped to whatever fits and the wires are held off their lanes so none of
+        // them turns inside out, and what comes out is a knot where a corner was meant to be. That
+        // is the right last resort and the wrong thing to draw on purpose.
+        QString why;
+        check(runRouteCarries({{0.0, 0.0}, {300.0, 0.0}}, 12.0, &why),
+              "carries: a straight run of three hundred carries a twelve-wide bundle");
+        check(runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {200.0, -200.0}}, 12.0, &why),
+              "carries: and a right angle with two hundred either side of it");
+        // A LEG SHORTER THAN THE BUNDLE IS WIDE is not a leg.
+        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {204.0, 0.0}}, 12.0, &why),
+              "carries: a four-millimetre leg does not carry a twelve-wide bundle");
+        std::printf("  carries: the short leg is refused - %s\n", qPrintable(why));
+        check(why.contains(QLatin1String("shorter")), "carries: and it says which it was");
+        // AND A TURN TOO SHARP FOR THE BUNDLE. Doubling back is the extreme of it.
+        check(!runRouteCarries({{0.0, 0.0}, {200.0, 0.0}, {40.0, 6.0}}, 12.0, &why),
+              "carries: and a run doubling back on itself does not either");
+        std::printf("  carries: the hairpin is refused - %s\n", qPrintable(why));
+        // THE ONE IN test1.dwx, WHICH IS WHERE THIS CAME FROM: out 172, back 17 and down 22, then a
+        // millimetre and a half further on. Four wires of the ordinary size make a bundle nine
+        // across, and that route cannot carry it.
+        const std::vector<Vec2> asDrawn{{-366.0, 146.0},
+                                        {-193.89950611156704, 146.0},
+                                        {-210.90909998587227, 124.07577689776151},
+                                        {-209.6674505782298, 124.69660160158277}};
+        check(!runRouteCarries(asDrawn, 9.0, &why),
+              "carries: the route that drew the anomaly is refused, which is where this came from");
+        std::printf("  carries: test1's route is refused - %s\n", qPrintable(why));
+
+        // ---- AND THE TOOL HOLDS THE RUN THERE ----
+        {
+            // The cursor carries on; the run does not follow it until it is somewhere the bundle can
+            // be taken, which is the engineer changing direction.
+            Document d;
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::WiresRun);
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({200.0, 0.0});
+            check(!ed.twistedHeld(), "held: a run going somewhere it can go is not held");
+            ed.onPointerPress({200.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            // Now back on itself, which the bundle cannot do.
+            ed.onPointerMove({40.0, 6.0});
+            std::printf("  held: doubling back, the run is %s at %.1f,%.1f\n",
+                        ed.twistedHeld() ? "held" : "following", ed.twistedHeldAt().x,
+                        ed.twistedHeldAt().y);
+            check(ed.twistedHeld(), "held: doubling back, the run stops where it was");
+            // AND IT TAKES IT UP AGAIN the moment the cursor is somewhere it can follow.
+            ed.onPointerMove({200.0, -200.0});
+            check(!ed.twistedHeld(), "held: and follows again once the cursor comes back round");
+            // A KNEE IS NOT PUT WHERE THE RUN IS NOT: clicking while held means the place on screen.
+            ed.onPointerMove({40.0, 6.0});
+            const Vec2 heldAt = ed.twistedHeldAt();
+            ed.onPointerPress({40.0, 6.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* run = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.type == EntityType::TwistedPair) run = &e;
+            check(run != nullptr, "held: the run was drawn");
+            if (run) {
+                std::printf("  held: clicked at 40,6 while held at %.1f,%.1f - the run ends at "
+                            "%.1f,%.1f\n",
+                            heldAt.x, heldAt.y, run->points.back().x, run->points.back().y);
+                check(distance(run->points.back(), heldAt) < 1e-6,
+                      "held: a click while held puts the knee where the run is, not where the "
+                      "cursor wandered to");
+                check(runRouteCarries(run->points, 9.0, nullptr),
+                      "held: so what comes out is a route the bundle can be taken round");
+            }
+        }
+    }
+
     // ---- Nought is a sharp corner on the run's knee as well --------------------------------------
     {
         // Nought used to mean "nobody has said" on both radii, which left no way at all to ask for a

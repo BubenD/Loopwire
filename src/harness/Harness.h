@@ -202,6 +202,22 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
 // Empty unless the run asks for it, and empty for a laid-up bundle, which is a cable already.
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair);
 
+// CAN A BUNDLE THIS WIDE ACTUALLY GO ROUND THIS ROUTE?
+//
+// A loom is not a line. Where a route turns, every wire in the bundle turns with it on a radius its
+// own lane's worth tighter or wider than the middle - so a corner has to be given room: the bend
+// needs a radius of at least half the bundle for the innermost wire not to be turning inside out,
+// and a bend of radius R at a corner of interior angle T eats R/tan(T/2) of the straight either side
+// of it. Two corners cannot each eat more than half the leg between them.
+//
+// Fail that and the drawing does not fail - it degrades: the radius is clamped down to what fits,
+// the wires are held back off their lanes so none of them inverts, and what comes out is a pinch
+// where a corner was meant to be. Which is right as a last resort and wrong as something to draw on
+// purpose, so the tool asks this before it lets a knee be put down.
+//
+// `why` comes back with the reason when the answer is no, for the message the tool shows.
+bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString* why = nullptr);
+
 // THE FIGURES A RUN ACTUALLY CAME OUT WITH, whether they were asked for or left to the drawing.
 //
 // Half of these settings can be left alone, and then the drawing works one out - a fan as long as
