@@ -4713,10 +4713,15 @@ void MainWindow::syncBreakOptions() {
                       editor_->twistWireWidth() <= 1e-9,
                       editor_->twistWireWidth() > 1e-9 ? editor_->twistWireWidth()
                                                        : fig.wireWidth);
+        // HOW MANY WIRES CARRY ON is a figure of the hook-up-wires body and of no other: it says how
+        // many lines the stretch between the fans is drawn as, and a stretch covered by a cable or
+        // by a length of tubing draws none of them at all. Offered against a cover it was a setting
+        // that changed nothing on the sheet.
+        const bool loose = straightRun && kind == RunBody::Wires;
         if (twistTrunkSpin_ && twistTrunkLabel_) {
-            autoFieldCell(twistTrunkSpin_)->setVisible(straightRun);
-            twistTrunkLabel_->setVisible(straightRun);
-            if (straightRun) {
+            autoFieldCell(twistTrunkSpin_)->setVisible(loose);
+            twistTrunkLabel_->setVisible(loose);
+            if (loose) {
                 QSignalBlocker b(twistTrunkSpin_);
                 // NEVER MORE THAN THE FAN HAS. A number above the wire count draws nothing extra -
                 // there is nothing extra to draw - so it is not offered rather than accepted and

@@ -11394,9 +11394,9 @@ int run_editor_tests() {
         {
             // A cable running the length of the run does not shrink onto anything: it is one width
             // end to end and it stops at a face square across it. What takes it down to the wires is
-            // the TRANSITION HEATSHRINK at each end - the boot - flaring from the cable out over the
-            // first of the fan. That is what a breakout looks like, and it is the difference between
-            // this sort and the length of tubing above.
+            // the TRANSITION HEATSHRINK at each end - the boot - sat on the end of the cable and
+            // opening out to the face the fan starts from. That is what a breakout looks like, and
+            // it is the difference between this sort and the length of tubing above.
             const Entity asCable = run("cable");
             const std::vector<std::vector<Vec2>> drawn = twistedPairBody(asCable);
             std::printf("  cable: %d outline(s) - a body and a boot at each end\n",
@@ -11421,7 +11421,7 @@ int run_editor_tests() {
             check(std::abs(widest - atEnds) < 1e-6,
                   "cable: one width end to end, cut square, not recovered onto anything");
 
-            // AND THE BOOTS REACH OUT OVER THE FAN, one at each end, flaring from the cable.
+            // AND THE BOOTS SIT ON THE ENDS OF THE CABLE, one at each, opening out to the fan.
             int overTheFan = 0;
             for (size_t i = 1; i < drawn.size(); ++i) {
                 double lo = 1e300, hi = -1e300, atCable = 0.0, atMouth = 0.0;
@@ -11443,7 +11443,7 @@ int run_editor_tests() {
                 if (atMouth > atCable + 1e-6) ++overTheFan;
             }
             check(overTheFan == 2,
-                  "cable: each boot flares from the cable out over the fan, which is a breakout");
+                  "cable: each boot grips the cable and opens out to the fan, which is a breakout");
             }
 
             // AND THE BODY IS A DRAWN THING LIKE THE WIRES: it takes a joint in the middle of every
@@ -11544,10 +11544,12 @@ int run_editor_tests() {
         check(twistedPairBody(covered(QStringLiteral("TUBE"), flat, "heatshrink", true)).size() == 1,
               "transition: a length of tubing over the run has none either way");
 
-        // AND IT IS A SLEEVE OVER THE JOIN. It laps back over the end of the cable and is shrunk
-        // down onto it there; it is wider than the cable over the rest of itself; and it stops
-        // square at the mouth, which is where the WIRES START. A wire drawn on through the boot is
-        // a wire drawn through the part that is covering it.
+        // AND IT IS A SLEEVE OVER THE END OF THE CABLE. It reaches back ALONG the cable and is
+        // shrunk down onto it there; it is wider than the cable over the rest of itself; and the
+        // end facing the wires is its MOUTH, cut square, with the fan starting at that face. Fitted
+        // the other way round it stood over the first of the fan and hid it - the wires came out
+        // already spread, and the part of the drawing that says how they get there was underneath
+        // the boot.
         const std::vector<std::vector<Vec2>> parts = twistedPairBody(booted);
         if (parts.size() == 3) {
             double cableFrom = 1e300, cableHalf = 0.0;
@@ -11585,18 +11587,20 @@ int run_editor_tests() {
             std::printf("  transition: the boot runs %.2f..%.2f, %.2f across, %.2f where it grips "
                         "the %.2f cable, and the wires stop at %.2f against %.2f with no boot\n",
                         lo, hi, widest * 2.0, onTheCable * 2.0, cableHalf * 2.0, wireTo, bareTo);
+            check(std::abs(lo - 40.0) < 1e-6,
+                  "transition: its mouth is the end of the cable, where the fan begins");
             check(hi > 40.0 + 1e-6,
-                  "transition: it laps back over the end of the cable, which is what it grips");
+                  "transition: and it reaches back ALONG the cable, which is what it grips");
             check(std::abs(onTheCable - cableHalf) < 1e-6,
-                  "transition: and is shrunk down onto it there, to the width of the cable itself");
+                  "transition: shrunk down onto it at that end, to the width of the cable itself");
             check(widest > cableHalf + 1e-6,
-                  "transition: over the rest of itself it stands wider, being fitted over it");
+                  "transition: and standing wider over the rest of itself, being fitted over it");
             check(std::abs(cableFrom - hi) < 1e-6,
-                  "transition: the cable stops where the boot grips it, so that face is drawn once");
-            check(wireTo < lo + 1.5 && wireTo > lo - 1.5,
-                  "transition: and the wires come out of its mouth, not from under it");
-            check(bareTo > 40.0 - 1.5,
-                  "transition: with no boot they run right up to the end of the cable, as before");
+                  "transition: the cable starts where the boot grips it, so that face is drawn once");
+            check(std::abs(wireTo - bareTo) < 1e-9,
+                  "transition: and the whole fan is on show - the boot covers cable, not wires");
+            check(wireTo > lo - 1.5,
+                  "transition: which the wires run right up to, the fan starting at that face");
         }
 
         // AND THE STRIPPED ENDS BELONG TO THE ENDS THAT FAN. An end that does not fan has no wire

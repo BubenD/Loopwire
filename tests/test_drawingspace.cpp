@@ -1491,6 +1491,30 @@ int run_drawingspace_tests() {
                   "transition tick: unticking it takes the boots off the cable");
             tick->click();
             QApplication::processEvents();
+            // AND CONVERGE-TO IS A FIGURE OF THE HOOK-UP-WIRES BODY AND OF NO OTHER: it says how
+            // many lines the stretch between the fans is drawn as, and a stretch covered by a cable
+            // or by a length of tubing draws none of them. So it stands in the Body box with the
+            // sort it belongs to, and it comes and goes with it.
+            QLabel* converge = nullptr;
+            for (QLabel* l : win.findChildren<QLabel*>())
+                if (l->text() == QStringLiteral("Converge to")) converge = l;
+            check(converge != nullptr, "converge: the field is on the ribbon");
+            if (converge) {
+                QStringList boxedWith;
+                if (QWidget* box = converge->parentWidget())
+                    for (QLabel* l : box->findChildren<QLabel*>()) boxedWith << l->text();
+                const bool onACover = !converge->isHidden();
+                body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
+                QApplication::processEvents();
+                const bool onWires = !converge->isHidden();
+                std::printf("  converge: boxed with [%s], shown for wires %d, for a cable %d\n",
+                            qPrintable(boxedWith.join(QStringLiteral(", "))), onWires ? 1 : 0,
+                            onACover ? 1 : 0);
+                check(boxedWith.contains(QStringLiteral("Body")),
+                      "converge: it stands in the Body box, with the sort of body it belongs to");
+                check(onWires && !onACover,
+                      "converge: offered for hook-up wires, and not against a cover that hides them");
+            }
             body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
         }
     }

@@ -438,8 +438,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistSpreadCombo_->setMinimumWidth(64);
                 twistSpreadCombo_->setToolTip(QStringLiteral(
                     "Which end of the run the wires fan out at: the left end, the right end, or both."));
-                og->addWidget(sl, 1, 0);
-                og->addWidget(twistSpreadCombo_, 1, 1);
+                // WHICH END FANS IS A FAN-OUT SETTING, so it is in that box with the rest of them.
+                // It also settles which end has wire ends to flush and to strip, which are the two
+                // fields beside it there.
+                fg->addWidget(sl, 1, 0);
+                fg->addWidget(twistSpreadCombo_, 1, 1);
                 connect(twistSpreadCombo_, &QComboBox::currentIndexChanged, this,
                         [this](int index) {
                             const QString spread =
@@ -495,8 +498,13 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "How many wires carry on through the run once the spread ones have converged. "
                     "The rest are drawn running into it and stopping, which is how a bundle of many "
                     "wires is drawn as a run of few. All keeps every wire."));
-                fg->addWidget(twistTrunkLabel_, 1, 0);
-                fg->addWidget(autoBeside(twistTrunkSpin_), 1, 1);
+                // IN THE BODY BOX, because it is a figure of the hook-up-wires body and of no other:
+                // it says how many lines the bundle between the fans is drawn as, and a stretch
+                // covered by a cable or a length of tubing draws none of them. It shares its cell
+                // with the cover width, which is the same question asked of the other two sorts -
+                // one of the two is on show at a time, never both.
+                bg->addWidget(twistTrunkLabel_, 1, 0);
+                bg->addWidget(autoBeside(twistTrunkSpin_), 1, 1);
                 connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistTrunk(v);
                     canvas_->update();   // a pinned run re-draws with the new bundle
@@ -546,9 +554,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistWireSpin_->setToolTip(QStringLiteral(
                     "How thick one wire is drawn. Six wires take up more room than three, so this is "
                     "also what settles how wide the bundle comes out. Auto is the drawing's own."));
-                og->addWidget(twistWireLabel_, 1, 3);
+                og->addWidget(twistWireLabel_, 1, 0);
                 og->addWidget(
-                    autoBeside(twistWireSpin_, [this] { editor_->setTwistWireWidth(0.0); syncBreakOptions(); }), 1, 4);
+                    autoBeside(twistWireSpin_, [this] { editor_->setTwistWireWidth(0.0); syncBreakOptions(); }), 1, 1);
                 connect(twistWireSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistWireWidth(v);
                     canvas_->update();
@@ -833,7 +841,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                 bodyField(twistBootLabel_, twistBootSpin_, QStringLiteral("Boot length"), 0.0,
                           editor_->twistBoot(), 0, 3,
                           QStringLiteral("How far the transition heatshrink at each end of the cable "
-                                         "reaches out over the fan. Auto is a third of the fan."),
+                                         "reaches back along the cable. The fan starts at its face. "
+                                         "Auto is a third of the fan."),
                           [this] { editor_->setTwistBoot(0.0); syncBreakOptions(); });
                 bodyField(twistBootBLabel_, twistBootBSpin_, QStringLiteral("Finish boot"), 0.0,
                           editor_->twistBootFinish(), 1, 3,
@@ -863,9 +872,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistBodyTransitionCheck_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistBodyTransitionCheck_->setToolTip(QStringLiteral(
-                    "A boot over each end of the cable: shrunk down onto the cable where it grips "
-                    "it, out over the first of the fan at one width, and the wires come out of its "
-                    "mouth. Untick it and the cable runs straight out into its wires."));
+                    "A boot over each end of the cable: sat back along the cable, shrunk down onto "
+                    "it where it grips, and cut square at the mouth the fan starts from. Untick it "
+                    "and the cable runs straight out into its wires."));
                 bg->addWidget(twistBodyTransitionCheck_, 1, 12, 1, 2);
                 connect(twistBodyTransitionCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistBodyTransition(on);
