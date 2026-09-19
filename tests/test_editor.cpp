@@ -11394,9 +11394,10 @@ int run_editor_tests() {
         {
             // A cable running the length of the run does not shrink onto anything: it is one width
             // end to end and it stops at a face square across it. What takes it down to the wires is
-            // the TRANSITION HEATSHRINK at each end - the boot - sat on the end of the cable and
-            // opening out to the face the fan starts from. That is what a breakout looks like, and
-            // it is the difference between this sort and the length of tubing above.
+            // the TRANSITION HEATSHRINK at each end - the boot - fitted over the end of the cable,
+            // standing proud of it, and shrunk down at the end facing the fan. That is what a
+            // breakout looks like, and it is the difference between this sort and the length of
+            // tubing above.
             const Entity asCable = run("cable");
             const std::vector<std::vector<Vec2>> drawn = twistedPairBody(asCable);
             std::printf("  cable: %d outline(s) - a body and a boot at each end\n",
@@ -11421,7 +11422,7 @@ int run_editor_tests() {
             check(std::abs(widest - atEnds) < 1e-6,
                   "cable: one width end to end, cut square, not recovered onto anything");
 
-            // AND THE BOOTS SIT ON THE ENDS OF THE CABLE, one at each, opening out to the fan.
+            // AND THE BOOTS SIT ON THE ENDS OF THE CABLE, one at each, shrunk toward the fan.
             int overTheFan = 0;
             for (size_t i = 1; i < drawn.size(); ++i) {
                 double lo = 1e300, hi = -1e300, atCable = 0.0, atMouth = 0.0;
@@ -11437,13 +11438,13 @@ int run_editor_tests() {
                     if (std::abs(v.x - cableSide) < 1e-6) atCable = std::max(atCable, std::abs(v.y));
                     if (std::abs(v.x - mouthSide) < 1e-6) atMouth = std::max(atMouth, std::abs(v.y));
                 }
-                std::printf("  cable: a boot from %.1f to %.1f, %.2f across at the cable and %.2f at "
-                            "the fan\n",
+                std::printf("  cable: a boot from %.1f to %.1f, %.2f across on the cable and %.2f "
+                            "at the shrunk end\n",
                             lo, hi, atCable * 2.0, atMouth * 2.0);
-                if (atMouth > atCable + 1e-6) ++overTheFan;
+                if (atCable > atMouth + 1e-6) ++overTheFan;
             }
             check(overTheFan == 2,
-                  "cable: each boot grips the cable and opens out to the fan, which is a breakout");
+                  "cable: each boot stands over the cable and shrinks toward the fan - a breakout");
             }
 
             // AND THE BODY IS A DRAWN THING LIKE THE WIRES: it takes a joint in the middle of every
@@ -11544,12 +11545,11 @@ int run_editor_tests() {
         check(twistedPairBody(covered(QStringLiteral("TUBE"), flat, "heatshrink", true)).size() == 1,
               "transition: a length of tubing over the run has none either way");
 
-        // AND IT IS A SLEEVE OVER THE END OF THE CABLE. It reaches back ALONG the cable and is
-        // shrunk down onto it there; it is wider than the cable over the rest of itself; and the
-        // end facing the wires is its MOUTH, cut square, with the fan starting at that face. Fitted
-        // the other way round it stood over the first of the fan and hid it - the wires came out
-        // already spread, and the part of the drawing that says how they get there was underneath
-        // the boot.
+        // AND IT IS A SLEEVE OVER THE END OF THE CABLE. It reaches back ALONG the cable, standing
+        // proud of it, and it steps straight onto the cable at the body end - that end is not
+        // recovered, it is where the part begins, and the step is drawn at the cable's own width so
+        // that face and the cable's are one line. THE SHRUNK END IS THE ONE FACING THE FAN, because
+        // that is the end that grips what comes out of it.
         const std::vector<std::vector<Vec2>> parts = twistedPairBody(booted);
         if (parts.size() == 3) {
             double cableFrom = 1e300, cableHalf = 0.0;
@@ -11558,7 +11558,7 @@ int run_editor_tests() {
                 cableHalf = std::max(cableHalf, std::abs(v.y));
             }
             // The boot at the START end: the one whose points are all before the middle of the run.
-            double lo = 1e300, hi = -1e300, widest = 0.0, onTheCable = 0.0;
+            double lo = 1e300, hi = -1e300, widest = 0.0, onTheCable = 1e300, atTheFan = 0.0;
             for (size_t i = 1; i < parts.size(); ++i) {
                 double least = 1e300, most = -1e300;
                 for (const Vec2& v : parts[i]) {
@@ -11570,7 +11570,10 @@ int run_editor_tests() {
                 hi = most;
                 for (const Vec2& v : parts[i]) {
                     widest = std::max(widest, std::abs(v.y));
-                    if (std::abs(v.x - most) < 1e-6) onTheCable = std::max(onTheCable, std::abs(v.y));
+                    // The step onto the cable is the NARROWEST the outline gets at that end - the
+                    // widest there is the sleeve itself, which stands proud of it.
+                    if (std::abs(v.x - most) < 1e-6) onTheCable = std::min(onTheCable, std::abs(v.y));
+                    if (std::abs(v.x - least) < 1e-6) atTheFan = std::max(atTheFan, std::abs(v.y));
                 }
             }
             // How far into the run the wires at the start end are drawn - where the fan comes out.
@@ -11588,19 +11591,105 @@ int run_editor_tests() {
                         "the %.2f cable, and the wires stop at %.2f against %.2f with no boot\n",
                         lo, hi, widest * 2.0, onTheCable * 2.0, cableHalf * 2.0, wireTo, bareTo);
             check(std::abs(lo - 40.0) < 1e-6,
-                  "transition: its mouth is the end of the cable, where the fan begins");
+                  "transition: it begins at the end of the cable, where the fan begins");
             check(hi > 40.0 + 1e-6,
-                  "transition: and it reaches back ALONG the cable, which is what it grips");
+                  "transition: and it reaches back ALONG the cable, which is what it is fitted to");
             check(std::abs(onTheCable - cableHalf) < 1e-6,
-                  "transition: shrunk down onto it at that end, to the width of the cable itself");
+                  "transition: stepping onto it at that end at the width of the cable itself");
             check(widest > cableHalf + 1e-6,
                   "transition: and standing wider over the rest of itself, being fitted over it");
+            check(atTheFan < widest - 1e-6 && atTheFan > 1e-6,
+                  "transition: the end facing the fan is the shrunk one - that is the end that grips");
             check(std::abs(cableFrom - hi) < 1e-6,
                   "transition: the cable starts where the boot grips it, so that face is drawn once");
             check(std::abs(wireTo - bareTo) < 1e-9,
                   "transition: and the whole fan is on show - the boot covers cable, not wires");
             check(wireTo > lo - 1.5,
                   "transition: which the wires run right up to, the fan starting at that face");
+        }
+
+        // AND THE SHRUNK LENGTH IS MEASURED FROM THAT FACE INWARD. Asked for more of it, the
+        // shoulder moves toward the BODY and the face stays where the wires leave: a shrunk length
+        // that moved the face would move the place the fan comes from every time it was set.
+        {
+            auto shoulderAt = [&](double shrink) {
+                Entity e = covered(QStringLiteral("SHRUNK%1").arg(shrink), flat, "cable", true);
+                e.meta.insert(QStringLiteral("twistBodyShrink"), shrink);
+                double face = 0.0, shoulder = 0.0;
+                for (const std::vector<Vec2>& o : twistedPairBody(e)) {
+                    double least = 1e300, most = -1e300, wide = 0.0;
+                    for (const Vec2& v : o) {
+                        least = std::min(least, v.x);
+                        most = std::max(most, v.x);
+                        wide = std::max(wide, std::abs(v.y));
+                    }
+                    if (most > 150.0 || least > 45.0) continue;   // the start end's boot, only
+                    face = least;
+                    shoulder = most;
+                    for (const Vec2& v : o)
+                        if (std::abs(std::abs(v.y) - wide) < 1e-6) shoulder = std::min(shoulder, v.x);
+                }
+                return std::make_pair(face, shoulder);
+            };
+            const auto few = shoulderAt(4.0), lots = shoulderAt(12.0);
+            std::printf("  transition: a 4 shrink has its face at %.2f and its shoulder at %.2f; a "
+                        "12 shrink, %.2f and %.2f\n",
+                        few.first, few.second, lots.first, lots.second);
+            check(std::abs(few.first - lots.first) < 1e-9,
+                  "transition: the face stays at the end of the cable whatever the shrink is set to");
+            check(lots.second > few.second + 1.0,
+                  "transition: and the shoulder moves toward the body as the shrink is lengthened");
+        }
+
+        // AND A LENGTH OF TUBING COMES TWO WAYS. ALONG the run - one sleeve, recovered at each end,
+        // which is what a heatshrink has always been here - or OVER a cable: the cable is drawn and
+        // the heatshrink is a piece fitted over each of its ends, the same part a cable takes.
+        {
+            Entity overCable = covered(QStringLiteral("OVER"), flat, "heatshrink", true);
+            overCable.meta.insert(QStringLiteral("twistBodyOverCable"), true);
+            const std::vector<std::vector<Vec2>> twoWays = twistedPairBody(overCable);
+            double atTheEnd = 0.0, inTheMiddle = 0.0;
+            if (!twoWays.empty()) {
+                double least = 1e300;
+                for (const Vec2& v : twoWays.front()) {
+                    inTheMiddle = std::max(inTheMiddle, std::abs(v.y));
+                    least = std::min(least, v.x);
+                }
+                for (const Vec2& v : twoWays.front())
+                    if (std::abs(v.x - least) < 1e-6) atTheEnd = std::max(atTheEnd, std::abs(v.y));
+            }
+            std::printf("  over the cable: %d outline(s), the body %.2f across and %.2f at its "
+                        "end\n", int(twoWays.size()), inTheMiddle * 2.0, atTheEnd * 2.0);
+            check(twoWays.size() == 3,
+                  "over the cable: a cable, and a piece of heatshrink over each end of it");
+            check(std::abs(inTheMiddle - atTheEnd) < 1e-6,
+                  "over the cable: the cable under it is cut square, being what the pieces grip");
+            check(twistedPairBody(covered(QStringLiteral("ALONG"), flat, "heatshrink", true))
+                          .size() == 1,
+                  "over the cable: unticked, it is still one sleeve along the whole run");
+        }
+
+        // AND A GREEN ZONE LAID ACROSS THE CABLE HAS TOUCHED THE RUN. A covered run draws no wires
+        // at all along its converged stretch - the cover is the only thing there - so a crossing
+        // zone over the cable touched nothing that answered for the run, and the only way to catch
+        // one was to reach a fan at an end of it.
+        for (const char* sort : {"cable", "heatshrink"}) {
+            Document d;
+            d.entities().push_back(covered(QStringLiteral("RUN"), flat, sort, true));
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::Select);
+            // Right to left is a CROSSING zone: over the middle of the cable, nowhere near a fan.
+            // Swept as a rectangle is drawn - the opposite corner settles it.
+            ed.onPointerPress({170.0, 20.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({130.0, -20.0});
+            ed.onPointerRelease({130.0, -20.0}, Qt::LeftButton);
+            ed.onPointerPress({130.0, -20.0}, Qt::LeftButton, Qt::NoModifier);
+            std::printf("  cable pick: %s - %d selected by a zone over the cable alone\n", sort,
+                        int(ed.selection().size()));
+            check(ed.selection().size() == 1,
+                  "cable pick: a zone that touches only the cable is enough to select the run");
         }
 
         // AND THE STRIPPED ENDS BELONG TO THE ENDS THAT FAN. An end that does not fan has no wire

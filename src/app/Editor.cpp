@@ -5257,8 +5257,16 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         pts = {e.a, lerp(e.a, e.b, 0.5), e.b};
         break;
     case EntityType::TwistedPair:
+        // EVERYTHING THE RUN DRAWS, not only its wires. A run covered by a cable or by a length of
+        // tubing has no wires at all along the converged stretch - the cover is the only thing
+        // there - so a green zone laid across the cable touched nothing and the run could only be
+        // caught by reaching a fan at one end of it.
         for (const auto& strand : twistedPairStrands(e))
             for (const Vec2& v : strand) pts.push_back(v);
+        for (const auto& outline : twistedPairBody(e))
+            for (const Vec2& v : outline) pts.push_back(v);
+        for (const auto& cap : twistedPairEndCaps(e))
+            for (const Vec2& v : cap) pts.push_back(v);
         if (pts.empty()) pts = {e.a, e.b};
         break;
     case EntityType::Dimension:
@@ -5445,9 +5453,15 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
         segs.emplace_back(e.a, e.b);
         break;
     case EntityType::TwistedPair:
+        // Every line of it, cover and end caps included - see entitySelectPoints.
         for (const auto& strand : twistedPairStrands(e))
             for (size_t i = 1; i < strand.size(); ++i)
                 segs.emplace_back(strand[i - 1], strand[i]);
+        for (const auto& outline : twistedPairBody(e))
+            for (size_t i = 1; i < outline.size(); ++i)
+                segs.emplace_back(outline[i - 1], outline[i]);
+        for (const auto& cap : twistedPairEndCaps(e))
+            for (size_t i = 1; i < cap.size(); ++i) segs.emplace_back(cap[i - 1], cap[i]);
         break;
     case EntityType::Dimension:
         // The real drawn lines, so a green crossing zone touching ANY of them selects.
@@ -16022,6 +16036,10 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         // build had one too.
         if (twistBodyKind_ == RunBody::Cable && !twistBodyTransition_)
             e.meta.insert(QStringLiteral("twistBodyTransition"), false);
+        // And which sort of tubing, written only where it is the newer one - so a sleeve drawn
+        // without touching it is the sleeve this has always drawn.
+        if (twistBodyKind_ == RunBody::Heatshrink && twistBodyOverCable_)
+            e.meta.insert(QStringLiteral("twistBodyOverCable"), true);
         if (!twistBodySidesSame_) {
             e.meta.insert(QStringLiteral("twistBodySidesSame"), false);
             if (twistBodyFaceFinish_ > 1e-9)
@@ -16149,6 +16167,12 @@ void Editor::setTwistBodyTransition(bool on) {
     if (twistBodyTransition_ == on) return;
     twistBodyTransition_ = on;
     emit overlayChanged();   // the boots come and go, and the fans are drawn from a new place
+}
+
+void Editor::setTwistBodyOverCable(bool on) {
+    if (twistBodyOverCable_ == on) return;
+    twistBodyOverCable_ = on;
+    emit overlayChanged();   // one sleeve becomes a cable and two
 }
 
 void Editor::setTwistBodyFace(double mm) {

@@ -199,6 +199,10 @@ public:
     // into its own fan. Only a cable: a length of tubing over the whole run IS the transition.
     bool twistBodyTransition() const { return twistBodyTransition_; }
     void setTwistBodyTransition(bool on);
+    // AND WHICH OF THE TWO SORTS OF TUBING a heatshrink body is: one sleeve ALONG the run, which is
+    // what it has always been, or a cable with a piece fitted OVER each of its ends.
+    bool twistBodyOverCable() const { return twistBodyOverCable_; }
+    void setTwistBodyOverCable(bool on);
     double twistBodyFace() const { return twistBodyFace_; }
     void setTwistBodyFace(double mm);
     double twistBodyShrink() const { return twistBodyShrink_; }
@@ -1649,6 +1653,7 @@ private:
     double twistBodyWidth_ = 0.0;                  // how wide; 0 = the drawing's own
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
     bool twistBodyTransition_ = true;              // a cable has a boot at each end of it
+    bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own
     double twistBodyFaceFinish_ = 0.0;

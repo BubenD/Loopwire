@@ -396,9 +396,15 @@ struct TwistFrames {
     double bodyHalf = 0.0;
     double bodyFace = 0.0, bodyFaceB = 0.0;
     double bodyShrink = 0.0, bodyShrinkB = 0.0;
-    // AND HOW FAR THE BOOT REACHES at each end of a cable: the transition heatshrink that takes the
-    // bundle of wires down to the one cable, measured from the cable's end out into the fan.
+    // AND HOW FAR THE BOOT REACHES back along the cable at each end: the transition heatshrink that
+    // takes the one cable down to the bundle of wires, measured from the cable's end inward.
     double bootA = 0.0, bootB = 0.0;
+    // A LENGTH OF TUBING COMES TWO WAYS. ALONG the cable - one sleeve the whole converged stretch
+    // is made of, recovered at each end onto the fan - or OVER it: the cable is drawn, and the
+    // heatshrink is a piece fitted over each of its ends, standing proud of it and recovered down
+    // toward the fan. The second is the part that grips a breakout, which is why a cable has one
+    // of its own.
+    bool bodyOverCable = false;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -679,10 +685,13 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // vertical face, which is the face of the transition.
         //
         // Left alone the boot is a third of the fan long, which is the size one reads as.
+        f.bodyOverCable = f.body == RunBody::Heatshrink &&
+                          pair.meta.value(QStringLiteral("twistBodyOverCable")).toBool();
         const bool transition =
-            f.body == RunBody::Cable &&
-            (!pair.meta.contains(QStringLiteral("twistBodyTransition")) ||
-             pair.meta.value(QStringLiteral("twistBodyTransition")).toBool());
+            f.body == RunBody::Cable
+                ? (!pair.meta.contains(QStringLiteral("twistBodyTransition")) ||
+                   pair.meta.value(QStringLiteral("twistBodyTransition")).toBool())
+                : f.bodyOverCable;
         auto bootOf = [&](bool finish) {
             if (!transition) return 0.0;
             if (!(finish ? f.spreadEnd : f.spreadStart)) return 0.0;
@@ -1140,6 +1149,8 @@ QString twistKey(const Entity& e) {
         put(m);
     k += e.meta.value(QLatin1String("twistBodyTransition")).toBool(true) ? QLatin1String("|tr")
                                                                         : QLatin1String("|nt");
+    k += e.meta.value(QLatin1String("twistBodyOverCable")).toBool() ? QLatin1String("|oc")
+                                                                   : QLatin1String("|al");
     k += e.meta.value(QLatin1String("twistBodySidesSame")).toBool(true) ? QLatin1String("|bs")
                                                                        : QLatin1String("|ba");
     return k;
@@ -1204,6 +1215,11 @@ const TwistCached* twistCached(const Entity& pair) {
         }
         return f.pos.back();
     };
+    // CUT SQUARE, OR RECOVERED. A cable does not shrink onto anything and neither does the cable a
+    // length of tubing is fitted OVER - both stop at a face square across them, and what takes
+    // either down to the wires is the boot. A sleeve laid ALONG the run is the cover itself and is
+    // recovered at each end, because there is nothing else there to do it.
+    const bool squareBody = f.body == RunBody::Cable || f.bodyOverCable;
     // CAN THE ROUTE CARRY THE BODY AT ALL?
     //
     // The tool will not let a run be drawn round a corner the bundle cannot take - but a drawing
@@ -1244,7 +1260,7 @@ const TwistCached* twistCached(const Entity& pair) {
             along.push_back(posOn(bodyTo));
         }
         if (along.size() >= 2)
-            cover = f.body == RunBody::Cable
+            cover = squareBody
                         ? shrunkSleeveOutline(along, f.bodyHalf, f.bodyHalf, f.bodyHalf, 0.0, 0.0)
                         : shrunkSleeveOutline(along, f.bodyHalf, f.bodyFace, f.bodyFaceB,
                                               f.bodyShrink, f.bodyShrinkB);
@@ -1320,7 +1336,7 @@ const TwistCached* twistCached(const Entity& pair) {
             // square across it, and what takes it down to the wires is the BOOT at each end. A
             // length of tubing over the run has no boot and does shrink onto what it grips, which is
             // the face and the shrunk length.
-            const bool square = f.body == RunBody::Cable;
+            const bool square = squareBody;
             std::vector<Vec2> outline = cover;
             if (outline.size() >= 3) {
                 outline.push_back(outline.front());   // closed: it is a body, not a run of lines
@@ -1336,26 +1352,33 @@ const TwistCached* twistCached(const Entity& pair) {
                         most = std::max(most, std::abs(twistOffset(f, k, u)));
                     return most + f.thick;
                 };
-                // IT IS A SLEEVE OVER THE END OF THE CABLE, sat back along the cable and shrunk
-                // down onto it at its far end - that is the end that grips. The end facing the
-                // wires is the MOUTH: full width, cut square, one line right across the run, and
-                // the fan starts at it. Which is the shape the Heatshrink tool draws for a cable
-                // with heatshrink on its ends, because it is the same part.
-                auto bootAt = [&](double atFan, double reach, double intoTheBody) {
+                // IT IS A SLEEVE OVER THE END OF THE CABLE. It is fitted over the cable, standing
+                // proud of it, and it steps straight onto it at the end that sits on the body -
+                // that end is not recovered, it is simply where the part begins. THE SHRUNK END IS
+                // THE ONE FACING THE FAN, because that is the end that grips: a transition pulls in
+                // onto what comes out of it. So the shrunk length is measured from the fan face
+                // INWARD, and setting a longer one moves the shoulder toward the body while the
+                // face stays where the wires leave.
+                //
+                // The step at the body end is drawn at the width of the cable, which is exactly
+                // where the cable stops: the two faces are one line, drawn twice in the same place,
+                // rather than a short line nested inside a tall one.
+                auto bootAt = [&](double atFan, double reach, double face, double shrink,
+                                  double intoTheBody) {
                     if (reach < 1e-6) return;
                     const double onCable = atFan + intoTheBody * reach;
                     // Wide enough to read as a part fitted over the cable, and wide enough to take
-                    // the wires where it lets go of them.
+                    // the wires where they gather into it.
                     const double mouth = std::max(f.bodyHalf * 1.25, spreadHalfAt(atFan));
                     std::vector<Vec2> run{posOn(atFan), posOn(onCable)};
-                    std::vector<Vec2> boot =
-                        shrunkSleeveOutline(run, mouth, mouth, f.bodyHalf, 0.0, reach * 0.35);
+                    std::vector<Vec2> boot = shrunkSleeveOutline(run, mouth, std::min(face, mouth),
+                                                                 f.bodyHalf, shrink, 0.0);
                     if (boot.size() < 3) return;
                     boot.push_back(boot.front());
                     c.body.push_back(std::move(boot));
                 };
-                bootAt(f.lead, f.bootA, +1.0);
-                bootAt(f.len - f.leadB, f.bootB, -1.0);
+                bootAt(f.lead, f.bootA, f.bodyFace, f.bodyShrink, +1.0);
+                bootAt(f.len - f.leadB, f.bootB, f.bodyFaceB, f.bodyShrinkB, -1.0);
             }
         }
     }

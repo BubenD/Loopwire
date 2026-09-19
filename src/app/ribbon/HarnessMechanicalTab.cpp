@@ -876,6 +876,25 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "it where it grips, and cut square at the mouth the fan starts from. Untick it "
                     "and the cable runs straight out into its wires."));
                 bg->addWidget(twistBodyTransitionCheck_, 1, 12, 1, 2);
+                twistBodyOverCableCheck_ = new QCheckBox(QStringLiteral("Over the cable"), optW);
+                twistBodyOverCableCheck_->setChecked(editor_->twistBodyOverCable());
+                twistBodyOverCableCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistBodyOverCableCheck_->setToolTip(QStringLiteral(
+                    "Which of the two sorts of tubing. Unticked, one sleeve runs ALONG the whole "
+                    "converged stretch and is the body itself. Ticked, the body is a cable and the "
+                    "heatshrink is a piece fitted OVER each of its ends: standing proud of the "
+                    "cable, stepping onto it at the body end and shrunk down toward the fan."));
+                bg->addWidget(twistBodyOverCableCheck_, 1, 12, 1, 2);
+                connect(twistBodyOverCableCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistBodyOverCable(on);
+                    syncBreakOptions();
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: heatshrink over the cable, at each end")
+                           : QStringLiteral("Wires run: heatshrink along the whole run"),
+                        2000);
+                });
                 connect(twistBodyTransitionCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistBodyTransition(on);
                     syncBreakOptions();   // the boot lengths come and go with it

@@ -4662,22 +4662,9 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistBodyWidthSpin_, twistBodyWidthLabel_, covered,
                       editor_->twistBodyWidth() <= 1e-9,
                       editor_->twistBodyWidth() > 1e-9 ? editor_->twistBodyWidth() : fig.bodyWidth);
-        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, asSleeve,
-                      editor_->twistBodyFace() <= 1e-9,
-                      editor_->twistBodyFace() > 1e-9 ? editor_->twistBodyFace() : fig.bodyFace);
-        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, asSleeve,
-                      editor_->twistBodyShrink() < 0.0,
-                      editor_->twistBodyShrink() >= 0.0 ? editor_->twistBodyShrink()
-                                                        : fig.bodyShrink);
-        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, asSleeve && endsApart,
-                      editor_->twistBodyFaceFinish() <= 1e-9,
-                      editor_->twistBodyFaceFinish() > 1e-9 ? editor_->twistBodyFaceFinish()
-                                                            : fig.bodyFace);
-        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, asSleeve && endsApart,
-                      editor_->twistBodyShrinkFinish() < 0.0,
-                      editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
-                                                              : fig.bodyShrink);
-        // The transition is a cable thing, and its two lengths mean nothing while it is off.
+        // THE TRANSITION IS A CABLE THING, and which of the two sorts of tubing is a heatshrink
+        // thing. They ask the same question of the two sorts - is there a boot at each end - so
+        // they stand in the same place, and only one of them is ever on show.
         if (twistBodyTransitionCheck_) {
             twistBodyTransitionCheck_->setVisible(asCable);
             if (asCable) {
@@ -4685,7 +4672,35 @@ void MainWindow::syncBreakOptions() {
                 twistBodyTransitionCheck_->setChecked(editor_->twistBodyTransition());
             }
         }
-        const bool booted = asCable && editor_->twistBodyTransition();
+        if (twistBodyOverCableCheck_) {
+            twistBodyOverCableCheck_->setVisible(asSleeve);
+            if (asSleeve) {
+                QSignalBlocker b(twistBodyOverCableCheck_);
+                twistBodyOverCableCheck_->setChecked(editor_->twistBodyOverCable());
+            }
+        }
+        const bool booted = (asCable && editor_->twistBodyTransition()) ||
+                            (asSleeve && editor_->twistBodyOverCable());
+        // AND THE RECOVERED END IS WHEREVER SOMETHING IS RECOVERED: the ends of a sleeve laid along
+        // the run, or the fan-facing end of the boot at each end of a cable. The same two figures
+        // describe both, because it is the same thing being asked - how far across the end is, and
+        // over what length it comes down to that.
+        const bool recovered = (asSleeve && !editor_->twistBodyOverCable()) || booted;
+        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, recovered,
+                      editor_->twistBodyFace() <= 1e-9,
+                      editor_->twistBodyFace() > 1e-9 ? editor_->twistBodyFace() : fig.bodyFace);
+        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, recovered,
+                      editor_->twistBodyShrink() < 0.0,
+                      editor_->twistBodyShrink() >= 0.0 ? editor_->twistBodyShrink()
+                                                        : fig.bodyShrink);
+        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, recovered && endsApart,
+                      editor_->twistBodyFaceFinish() <= 1e-9,
+                      editor_->twistBodyFaceFinish() > 1e-9 ? editor_->twistBodyFaceFinish()
+                                                            : fig.bodyFace);
+        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, recovered && endsApart,
+                      editor_->twistBodyShrinkFinish() < 0.0,
+                      editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
+                                                              : fig.bodyShrink);
         showAutoField(twistBootSpin_, twistBootLabel_, booted, editor_->twistBoot() <= 1e-9,
                       editor_->twistBoot() > 1e-9 ? editor_->twistBoot() : fig.boot);
         showAutoField(twistBootBSpin_, twistBootBLabel_, booted && endsApart,

@@ -1476,9 +1476,20 @@ int run_drawingspace_tests() {
             body->setCurrentIndex(body->findText(QStringLiteral("Heatshrink")));
             QApplication::processEvents();
             const bool onTubing = !tick->isHidden();
+            // AND THE TUBING HAS A TICK OF ITS OWN IN THE SAME PLACE: which of its two sorts it is.
+            QCheckBox* overCable = nullptr;
+            for (QCheckBox* c : win.findChildren<QCheckBox*>())
+                if (c->text() == QStringLiteral("Over the cable")) overCable = c;
+            check(overCable != nullptr, "over the cable: the tubing offers its two sorts");
+            const bool sortOnTubing = overCable && !overCable->isHidden();
             body->setCurrentIndex(body->findText(QStringLiteral("Cable")));
             QApplication::processEvents();
             const bool onCable = !tick->isHidden();
+            const bool sortOnCable = overCable && !overCable->isHidden();
+            std::printf("  over the cable: shown for tubing %d, for a cable %d\n",
+                        sortOnTubing ? 1 : 0, sortOnCable ? 1 : 0);
+            check(sortOnTubing && !sortOnCable,
+                  "over the cable: it is a tubing question, and stands where the cable asks its own");
             std::printf("  transition tick: shown for a cable %d, for tubing %d, ticked %d\n",
                         onCable ? 1 : 0, onTubing ? 1 : 0, tick->isChecked() ? 1 : 0);
             check(onCable && !onTubing,
